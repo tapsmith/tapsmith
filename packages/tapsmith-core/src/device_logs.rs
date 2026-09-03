@@ -22,6 +22,41 @@ pub struct LogStreamHandle {
     _cancel_tx: oneshot::Sender<()>,
 }
 
+/// Owns a log subprocess and kills it when the streaming task ends *or* is
+/// dropped.
+///
+/// These children are `std::process::Child`, which has no kill-on-drop, so
+/// every exit path had to remember to kill them by hand — and one path never
+/// ran at all. On daemon shutdown the tokio runtime drops these detached tasks
+/// instead of polling them to completion, so the trailing kill was skipped and
+/// the `adb logcat` / `log stream` child was reparented to PID 1 and left
+/// running forever. They accumulated at roughly one per run, indefinitely.
+///
+/// A `Drop` impl covers both paths, including runtime teardown, and means new
+/// exit paths cannot reintroduce the leak by forgetting to clean up.
+struct ChildGuard(Option<std::process::Child>);
+
+impl ChildGuard {
+    fn take_stdout(&mut self) -> Option<std::process::ChildStdout> {
+        self.0.as_mut().and_then(|child| child.stdout.take())
+    }
+
+    /// Kill and reap now, for the paths that must have the child gone before
+    /// they continue. Idempotent, so the `Drop` that follows is a no-op.
+    fn kill_now(&mut self) {
+        if let Some(mut child) = self.0.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+impl Drop for ChildGuard {
+    fn drop(&mut self) {
+        self.kill_now();
+    }
+}
+
 pub async fn start(
     serial: String,
     platform: Platform,
@@ -72,7 +107,7 @@ async fn stream_android(
     })
     .await
     {
-        Ok(Ok(child)) => child,
+        Ok(Ok(child)) => ChildGuard(Some(child)),
         Ok(Err(e)) => {
             warn!("Failed to spawn logcat: {e}");
             return;
@@ -83,7 +118,7 @@ async fn stream_android(
         }
     };
 
-    let stdout = child.stdout.take().unwrap();
+    let stdout = child.take_stdout().expect("log subprocess stdout is piped");
     let pids = std::sync::Arc::new(std::sync::RwLock::new(pids));
     let pids_reader = pids.clone();
 
@@ -143,12 +178,7 @@ async fn stream_android(
 
     refresh_handle.abort();
 
-    tokio::task::spawn_blocking(move || {
-        let _ = child.kill();
-        let _ = child.wait();
-    })
-    .await
-    .ok();
+    // `child` is dropped here, which kills and reaps the subprocess.
 }
 
 async fn resolve_all_pids(serial: &str, package_name: &str) -> Vec<i32> {
@@ -276,7 +306,7 @@ async fn stream_ios(
     })
     .await
     {
-        Ok(Ok(child)) => child,
+        Ok(Ok(child)) => ChildGuard(Some(child)),
         Ok(Err(e)) => {
             warn!("Failed to spawn iOS log stream: {e}");
             stream_ios_compact(udid, predicate, tx, cancel_rx).await;
@@ -289,7 +319,7 @@ async fn stream_ios(
         }
     };
 
-    let stdout = child.stdout.take().unwrap();
+    let stdout = child.take_stdout().expect("log subprocess stdout is piped");
     let (line_tx, mut line_rx) = mpsc::channel::<ParsedLogEntry>(512);
 
     std::thread::spawn(move || {
@@ -320,13 +350,9 @@ async fn stream_ios(
                         }
                     }
                     None => {
-                        // Reader thread exited — might be ndjson unsupported
-                        tokio::task::spawn_blocking(move || {
-                            let _ = child.kill();
-                            let _ = child.wait();
-                        })
-                        .await
-                        .ok();
+                        // Reader thread exited — might be ndjson unsupported.
+                        // Retire this child before the retry spawns its own.
+                        child.kill_now();
                         stream_ios_compact(udid, predicate, tx, cancel_rx).await;
                         return;
                     }
@@ -336,12 +362,7 @@ async fn stream_ios(
         }
     }
 
-    tokio::task::spawn_blocking(move || {
-        let _ = child.kill();
-        let _ = child.wait();
-    })
-    .await
-    .ok();
+    // `child` is dropped here, which kills and reaps the subprocess.
 }
 
 fn now_epoch_ms() -> u64 {
@@ -409,7 +430,7 @@ async fn stream_ios_compact(
     })
     .await
     {
-        Ok(Ok(child)) => child,
+        Ok(Ok(child)) => ChildGuard(Some(child)),
         Ok(Err(e)) => {
             warn!("Failed to spawn iOS log stream (compact fallback): {e}");
             return;
@@ -420,7 +441,7 @@ async fn stream_ios_compact(
         }
     };
 
-    let stdout = child.stdout.take().unwrap();
+    let stdout = child.take_stdout().expect("log subprocess stdout is piped");
     let (line_tx, mut line_rx) = mpsc::channel::<ParsedLogEntry>(512);
 
     std::thread::spawn(move || {
@@ -454,12 +475,7 @@ async fn stream_ios_compact(
         }
     }
 
-    tokio::task::spawn_blocking(move || {
-        let _ = child.kill();
-        let _ = child.wait();
-    })
-    .await
-    .ok();
+    // `child` is dropped here, which kills and reaps the subprocess.
 }
 
 /// Parse the ISO 8601 timestamp from ndjson log entries (includes timezone offset).
@@ -625,5 +641,57 @@ mod tests {
         let entry = parse_ios_ndjson_line(line).unwrap();
         assert_eq!(entry.level, "log");
         assert_eq!(entry.message, "Hello world");
+    }
+
+    /// True while `pid` names a live *or* unreaped process.
+    fn pid_is_alive(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &pid.to_string()])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    /// Regression: log subprocesses were killed only on the streaming task's
+    /// normal exit path. On daemon shutdown the runtime drops those tasks
+    /// instead of polling them, so the kill never ran and the child was
+    /// orphaned to PID 1 — one leaked `adb logcat` per live stream, every run.
+    #[test]
+    fn child_guard_kills_subprocess_on_drop() {
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        let guard = ChildGuard(Some(child));
+
+        assert!(pid_is_alive(pid), "subprocess should run before the drop");
+        drop(guard);
+        // Also covers reaping: a killed-but-unreaped child stays a zombie,
+        // which `kill -0` still reports as alive.
+        assert!(
+            !pid_is_alive(pid),
+            "ChildGuard::drop must kill and reap the subprocess"
+        );
+    }
+
+    /// The iOS ndjson fallback kills explicitly before retrying in compact
+    /// format, and the guard is dropped afterwards — the second cleanup must
+    /// not wait on an already-reaped pid.
+    #[test]
+    fn child_guard_kill_now_is_idempotent() {
+        let child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id();
+        let mut guard = ChildGuard(Some(child));
+
+        guard.kill_now();
+        assert!(!pid_is_alive(pid), "kill_now must kill and reap");
+        guard.kill_now();
+        drop(guard);
     }
 }
