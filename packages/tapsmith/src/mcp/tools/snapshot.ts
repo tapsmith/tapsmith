@@ -8,7 +8,7 @@ import { formatHierarchy } from '../hierarchy-formatter.js';
 export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_snapshot',
-    'Get the current screen\'s accessibility tree with copy-paste-ready Tapsmith selectors for each interactive element. Suggested selectors are validated to resolve to exactly one element under runtime matching (getByText is substring by default; ambiguous selectors throw a strict mode violation when acted on). Use this first when writing tests to see what\'s on screen. Then validate selectors with tapsmith_test_selector before putting them in test code.',
+    'Get the current screen\'s accessibility tree with copy-paste-ready Tapsmith locators for each interactive element. Suggested locators are validated to resolve to exactly one element under runtime matching (getByText is substring by default; ambiguous locators throw a strict mode violation when acted on). Use this first when writing tests to see what\'s on screen. Then validate locators with tapsmith_test_locator before putting them in test code.',
     {
       device: z.string().optional().describe(DEVICE_ARG_DESCRIPTION),
       project: z.string().optional().describe(PROJECT_ARG_DESCRIPTION),
@@ -22,10 +22,10 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
       }
 
       const roots = parseHierarchyXml(hierarchyXml);
-      const { tree, selectors } = formatHierarchy(roots);
+      const { tree, locators } = formatHierarchy(roots);
 
-      const output = selectors.length > 0
-        ? `${tree}\n\n## Suggested Selectors\n${selectors.join('\n')}`
+      const output = locators.length > 0
+        ? `${tree}\n\n## Suggested Locators\n${locators.join('\n')}`
         : tree || '(empty screen)';
 
       return { content: [{ type: 'text' as const, text: output }] };

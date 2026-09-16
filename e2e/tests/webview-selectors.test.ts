@@ -1,11 +1,11 @@
 /**
- * Verify that every selector the Selector Playground would suggest
+ * Verify that every locator the Locator Playground would suggest
  * for WebView elements actually works at runtime.
  */
 import { beforeAll, describe, expect, test } from "tapsmith"
 import { openScreen } from "../utils/app-reset.js"
 
-describe("WebView selector playground parity", () => {
+describe("WebView locator playground parity", () => {
   test.use({ timeout: 90_000 })
 
   beforeAll(async ({ device }) => {

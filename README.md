@@ -19,7 +19,7 @@ test("user can log in", async ({ device }) => {
 ## Key Features
 
 - **Auto-waiting** -- every action waits for the element to be visible, enabled, and stable. No manual sleeps.
-- **Accessible selectors** -- find elements by role, text, label, placeholder, and description. An ESLint plugin steers you toward best practices.
+- **Accessible locators** -- find elements by role, text, label, placeholder, and description. An ESLint plugin steers you toward best practices.
 - **Trace viewer** -- step-by-step replay of every action with before/after screenshots, view hierarchy, console output, and network requests.
 - **Network interception** -- Playwright-style `device.route()` to mock, modify, or abort HTTP/HTTPS requests that trust Tapsmith's MITM CA, with passthrough markers for configured hosts and detected h2/gRPC cert rejects.
 - **Video recording** -- continuous MP4 capture of the device screen, retained on failure or always.
@@ -158,7 +158,7 @@ npx tapsmith test --ui
 - [Writing Tests](docs/writing-tests.md) -- best practices, screen objects, test isolation, authentication patterns
 
 ### Guides
-- [Selectors Guide](docs/selectors.md) -- choosing the right selectors, cross-platform considerations
+- [Locators Guide](docs/locators.md) -- choosing the right locators, cross-platform considerations
 - [Network Interception](docs/network.md) -- mocking, modifying, and capturing HTTP traffic
 - [WebView Testing](docs/webview.md) -- testing hybrid apps with WebView contexts
 - [Trace Viewer](docs/trace-viewer.md) -- recording and inspecting step-by-step traces

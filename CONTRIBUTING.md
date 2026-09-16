@@ -265,7 +265,7 @@ If you change public API -- a new method on `Device` or `ElementHandle`, a new a
 new type -- update [`docs/api-reference.md`](docs/api-reference.md) in the same pull request.
 It is the single source of truth for users.
 
-The other docs (`getting-started.md`, `selectors.md`, `configuration.md`, `ci-setup.md`) only
+The other docs (`getting-started.md`, `locators.md`, `configuration.md`, `ci-setup.md`) only
 need updating if you've changed a user-facing workflow.
 
 ## Pull requests

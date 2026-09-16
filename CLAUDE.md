@@ -80,7 +80,7 @@ Hermetic Playwright suites for the two web apps — **no device or daemon needed
 them. Two projects: `ui-mode` drives the SPA through an intercepted WebSocket
 (`page.routeWebSocket()`); `trace-viewer` drives the standalone viewer through an intercepted trace
 archive. The inspection components both apps share (DetailTabs, NetworkTab, HierarchyTree,
-SelectorPlayground, ActionsPanel, ScreenshotPanel) are covered via `trace-viewer`, where a static
+LocatorPlayground, ActionsPanel, ScreenshotPanel) are covered via `trace-viewer`, where a static
 archive is much less setup than a live session.
 
 Both suites test the **built bundles**, so `npm run build` in `packages/tapsmith` must run first —
@@ -196,7 +196,7 @@ add anything identifying — `docs/telemetry.md` is the public contract.
 ## Documentation
 
 - **Keep `docs/api-reference.md` up to date** when adding or changing public API (new methods on Device, ElementHandle, new assertions, new types, etc.). This is the single source of truth for users.
-- Other docs (`getting-started.md`, `selectors.md`, `configuration.md`, `ci-setup.md`) only need updates if the feature changes user-facing workflows.
+- Other docs (`getting-started.md`, `locators.md`, `configuration.md`, `ci-setup.md`) only need updates if the feature changes user-facing workflows.
 
 ## Commit style
 

@@ -79,7 +79,7 @@ This starts a local server and opens the trace viewer in your browser.
 
 Chronological list of all actions and assertions. Each entry shows:
 - Action icon and name (tap, type, swipe, etc.)
-- Selector used
+- Locator used
 - Wall-clock duration in milliseconds, including time between trace actions
 - Pass/fail status (red highlight for failures)
 
@@ -100,7 +100,7 @@ Shows before/after screenshots for the selected action:
 
 ### Detail Tabs (right)
 
-- **Call** — Action type, selector, bounds, wall time, raw action/assertion time, wait time, retry count
+- **Call** — Action type, locator, bounds, wall time, raw action/assertion time, wait time, retry count
 - **Console** — Test code `console.log/warn/error` and device logcat output, color-coded by level. Each entry is timestamped — toggle between the offset from test start (`+1.234s`) and absolute wall-clock time with the `relative` / `absolute` pills; hovering shows the other format. Click a column header (Time, Level, Source, Message) to sort by it; click again to reverse. Timestamps are the time Tapsmith received the line, so device logcat entries — which arrive in batches — share a timestamp with the rest of their batch. In [UI mode](ui-mode.md) the live session isn't told when the test began, so offsets there are relative to the first console entry rather than to the test start
 - **Source** — The actual source file for the selected step — test, helper, page object, or fixture — with the relevant line highlighted. When a step has a multi-frame call stack, a clickable call-stack pane lets you walk up the stack and view each frame's file. Files are captured at run time, so the code shown matches what actually ran even if you edit afterwards.
 - **Hierarchy** — Android view hierarchy XML with searchable tree view

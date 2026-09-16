@@ -94,7 +94,7 @@ describe('resolveActionHierarchy', () => {
     expect(resolveActionHierarchy(hierarchies, screenshots, 1, 'after')).toBeUndefined();
   });
 
-  it('keeps the selector playground working on screenshot-less traces', () => {
+  it('keeps the locator playground working on screenshot-less traces', () => {
     const hierarchies = new Map([hier(1, 'before', '<own />')]);
 
     expect(resolveActionHierarchy(hierarchies, new Map(), 1, 'after')).toEqual({ xml: '<own />' });

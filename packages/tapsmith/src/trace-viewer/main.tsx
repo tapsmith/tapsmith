@@ -23,11 +23,11 @@ import { TimelineFilmstrip } from "./components/TimelineFilmstrip.js";
 import { ResizeHandle } from "./components/ResizeHandle.js";
 import { TopBar, type Theme } from "./components/TopBar.js";
 import {
-  SelectorTab,
+  LocatorTab,
   computeSelectorHighlights,
   handlePickFromScreenshot,
   handleHoverFromScreenshot,
-} from "./components/SelectorPlayground.js";
+} from "./components/LocatorPlayground.js";
 import { parseHierarchyXml } from "./components/hierarchy-utils.js";
 import { resolveActionHierarchy } from "../ui-mode/hooks/use-trace-data.js";
 import {
@@ -534,7 +534,7 @@ function App() {
   // picks on a before-screenshot would hit-test the after-hierarchy.
   const [screenshotVariant, setScreenshotVariant] = useState<'before' | 'after'>('before');
 
-  // Hierarchy for the current action (used by selector playground) — resolved
+  // Hierarchy for the current action (used by locator playground) — resolved
   // to depict the same moment as the displayed screenshot, borrowing for
   // actions that capture none (network family). PILOT-302.
   const currentHierarchy = useMemo(() => {
@@ -685,7 +685,7 @@ function App() {
             screenshotVariant={screenshotVariant}
             locatorTab={
 
-              <SelectorTab
+              <LocatorTab
                 hierarchyXml={currentHierarchyXml}
                 pickedNode={pickedNode}
                 selector={selectorText}

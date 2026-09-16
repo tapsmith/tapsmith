@@ -103,7 +103,7 @@ if os.path.exists('pick-frames/meta.json'):
     pmeta = json.load(open('pick-frames/meta.json'))
     pk = pmeta['marks']
     pend = pmeta['frames'][-1]['t']
-    # Selector playground: chip click -> hovers with green highlight -> pick ->
+    # Locator playground: chip click -> hovers with green highlight -> pick ->
     # locator list fills -> option interactions. Target ~10.9s.
     # Speeds solved from per-segment targets (total ~11.2s = the S3.7 scene).
     def pcapped(t0, t1, cap):

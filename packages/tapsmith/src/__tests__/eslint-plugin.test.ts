@@ -256,10 +256,10 @@ describe('no-bare-locator-xpath rule', () => {
   });
 });
 
-// ─── prefer-accessible-selectors ───
+// ─── prefer-accessible-locators ───
 
-describe('prefer-accessible-selectors rule', () => {
-  const rule = plugin.rules['prefer-accessible-selectors'];
+describe('prefer-accessible-locators rule', () => {
+  const rule = plugin.rules['prefer-accessible-locators'];
 
   it('has correct metadata', () => {
     expect(rule.meta.type).toBe('suggestion');
@@ -459,7 +459,7 @@ describe('plugin exports', () => {
     expect(plugin.rules).toBeDefined();
     expect(plugin.rules['prefer-role']).toBeDefined();
     expect(plugin.rules['no-bare-locator-xpath']).toBeDefined();
-    expect(plugin.rules['prefer-accessible-selectors']).toBeDefined();
+    expect(plugin.rules['prefer-accessible-locators']).toBeDefined();
     expect(plugin.rules['prefer-app-reset-option']).toBeDefined();
   });
 
@@ -469,7 +469,7 @@ describe('plugin exports', () => {
     expect(plugin.configs.recommended.rules).toEqual({
       'tapsmith/prefer-role': 'warn',
       'tapsmith/no-bare-locator-xpath': 'error',
-      'tapsmith/prefer-accessible-selectors': 'warn',
+      'tapsmith/prefer-accessible-locators': 'warn',
       'tapsmith/prefer-app-reset-option': 'warn',
     });
   });

@@ -185,7 +185,7 @@ test("can navigate to settings", async ({ device }) => {
 A few things to note:
 
 - Tests receive a `device` fixture automatically. This is your primary interface for interacting with the app.
-- `getByText()`, `getByRole()`, and the other `getBy*` methods are Playwright-style locators that identify UI elements. See the [Selectors Guide](selectors.md) for the full list.
+- `getByText()`, `getByRole()`, and the other `getBy*` methods are Playwright-style locators that identify UI elements. See the [Locators Guide](locators.md) for the full list.
 - `expect()` creates assertions that auto-wait. `toBeVisible()` polls until the element appears or the timeout expires.
 
 ## Run Your Tests
@@ -285,7 +285,7 @@ describe("Login flow", () => {
 
 ## Next Steps
 
-- Learn about choosing the right selectors in the [Selectors Guide](selectors.md).
+- Learn about choosing the right locators in the [Locators Guide](locators.md).
 - Read the [Writing Tests](writing-tests.md) guide for best practices, screen objects, and test isolation.
 - Browse the complete [API Reference](api-reference.md).
 - Configure Tapsmith for your project in the [Configuration](configuration.md) guide.

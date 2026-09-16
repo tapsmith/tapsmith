@@ -45,7 +45,7 @@ This starts a local server and opens the trace viewer in your browser. You can a
 The left panel shows a chronological list of every action and assertion your test performed. Each entry displays:
 
 - An icon for the action type (tap, type, swipe, assertion, etc.)
-- The selector used (e.g., `getByText("Submit")`)
+- The locator used (e.g., `getByText("Submit")`)
 - Duration in milliseconds
 - Pass/fail status -- failed actions are highlighted in red
 
@@ -69,7 +69,7 @@ The right sidebar has several tabs:
 
 **Source tab** -- Shows your test source code with the current line highlighted. Useful for understanding which part of the test you are looking at.
 
-**Hierarchy tab** -- Displays the view hierarchy (Android XML or iOS accessibility tree) at the moment of the selected action. The tree is searchable -- type a text string or class name to find elements. This is essential for understanding _why_ a selector did not match: you can see exactly what elements were present and what their properties were.
+**Hierarchy tab** -- Displays the view hierarchy (Android XML or iOS accessibility tree) at the moment of the selected action. The tree is searchable -- type a text string or class name to find elements. This is essential for understanding _why_ a locator did not match: you can see exactly what elements were present and what their properties were.
 
 **Console tab** -- Shows `console.log`, `console.warn`, and `console.error` output from your test code, along with device logs (Android logcat or iOS syslog) captured during the test. Messages are color-coded by level. If your test logs diagnostic information, it will appear here timestamped alongside the actions.
 
@@ -261,7 +261,7 @@ See [Environment Variables for Debugging](#environment-variables-for-debugging) 
 Element {"text":"Submit"} was not found after waiting 30000ms
 ```
 
-**What happened:** Tapsmith polled the UI hierarchy for 30 seconds and never found an element matching your selector.
+**What happened:** Tapsmith polled the UI hierarchy for 30 seconds and never found an element matching your locator.
 
 **Common causes and fixes:**
 
@@ -270,7 +270,7 @@ Element {"text":"Submit"} was not found after waiting 30000ms
   await device.getByText("Products").waitFor()
   await device.getByText("Submit", { exact: true }).tap()
   ```
-- **The selector is wrong** -- the text does not match exactly, or the element uses a different role. Use the trace viewer's Hierarchy tab or the `tapsmith_snapshot` MCP tool to inspect what is actually on screen.
+- **The locator is wrong** -- the text does not match exactly, or the element uses a different role. Use the trace viewer's Hierarchy tab or the `tapsmith_snapshot` MCP tool to inspect what is actually on screen.
 - **The element is off-screen** -- it exists in the hierarchy but is not scrolled into view. Use `scrollIntoView()`:
   ```typescript
   await device.getByText("Submit", { exact: true }).scrollIntoView()
@@ -330,9 +330,9 @@ Error: 14 UNAVAILABLE: failed to connect to all addresses
 3. Check that no other process is using port 50051 (the default daemon port)
 4. If using a custom `daemonAddress`, verify the daemon is running at that address
 
-## Debugging Selectors
+## Debugging Locators
 
-When a test fails because an element was not found, the next step is usually figuring out _what elements are actually on screen_ and _what selectors would match them_.
+When a test fails because an element was not found, the next step is usually figuring out _what elements are actually on screen_ and _what locators would match them_.
 
 ### Using the trace viewer Hierarchy tab
 
@@ -340,7 +340,7 @@ If you have a trace, open it and select the action that failed. The Hierarchy ta
 
 ### Using the MCP server snapshot tool
 
-When working interactively (with `--ui` mode or an AI coding agent), the `tapsmith_snapshot` tool returns the accessibility tree with suggested selectors for each interactive element:
+When working interactively (with `--ui` mode or an AI coding agent), the `tapsmith_snapshot` tool returns the accessibility tree with suggested locators for each interactive element:
 
 ```
 $ tapsmith_snapshot
@@ -351,11 +351,11 @@ text "Welcome back, Sam" - device.getByText("Welcome back, Sam")
 switch "Dark Mode" [checked] - device.getByRole("switch", { name: "Dark Mode" })
 ```
 
-This shows you exactly which selectors Tapsmith would use for each element on screen. See [MCP Server](mcp-server.md) for setup.
+This shows you exactly which locators Tapsmith would use for each element on screen. See [MCP Server](mcp-server.md) for setup.
 
-### Checking selector matches programmatically
+### Checking locator matches programmatically
 
-Use `.exists()` and `.count()` to debug selector issues in your test code:
+Use `.exists()` and `.count()` to debug locator issues in your test code:
 
 ```typescript
 // Does the element exist at all?
@@ -376,7 +376,7 @@ for (const btn of buttons) {
 
 ### The escape hatch: `device.locator()`
 
-When `getByRole()`, `getByText()`, and other accessible selectors do not work, `device.locator()` gives you access to native identifiers:
+When `getByRole()`, `getByText()`, and other accessible locators do not work, `device.locator()` gives you access to native identifiers:
 
 ```typescript
 // By resource ID (Android) or accessibility identifier (iOS)
@@ -391,11 +391,11 @@ await device.locator({
 }).tap()
 ```
 
-See the [Selectors Guide](selectors.md) for the full priority hierarchy and when to use each approach.
+See the [Locators Guide](locators.md) for the full priority hierarchy and when to use each approach.
 
 ### The ESLint plugin
 
-Tapsmith's ESLint plugin warns when you use low-priority selectors (test IDs, resource IDs, XPath) where a higher-priority accessible selector would work:
+Tapsmith's ESLint plugin warns when you use low-priority locators (test IDs, resource IDs, XPath) where a higher-priority accessible locator would work:
 
 ```javascript
 // eslint.config.js
@@ -412,7 +412,7 @@ export default [
 | Rule | What it catches |
 |------|----------------|
 | `tapsmith/prefer-role` | `locator({ className })` for standard widgets that have roles |
-| `tapsmith/prefer-accessible-selectors` | `getByTestId()` or `locator({ id })` when accessible selectors exist |
+| `tapsmith/prefer-accessible-locators` | `getByTestId()` or `locator({ id })` when accessible locators exist |
 | `tapsmith/no-bare-locator-xpath` | `locator({ xpath })` without an explanatory comment |
 | `tapsmith/prefer-app-reset-option` | a `beforeEach` that only restarts/clears the app — declare `test.use({ appReset })` instead |
 

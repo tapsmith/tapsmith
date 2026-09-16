@@ -3827,7 +3827,7 @@ describe('same-target duplicate collapsing', () => {
 });
 
 describe('strict violation suggestion escaping', () => {
-  it('escapes quotes/backslashes/newlines in suggested selectors', async () => {
+  it('escapes quotes/backslashes/newlines in suggested locators', async () => {
     const elements = [
       makeElementInfo({ text: 'Say "hi"\nnow', bounds: { left: 0, top: 0, right: 10, bottom: 10 } }),
       makeElementInfo({ text: 'Say "hi" later', bounds: { left: 0, top: 20, right: 10, bottom: 30 } }),

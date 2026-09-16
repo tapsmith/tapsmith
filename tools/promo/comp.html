@@ -265,7 +265,7 @@
       </div>
       <video id="v-pick" src="clip-pick.mp4" muted preload="auto"></video>
     </div>
-    <div class="scene-label" id="l37"><div class="pin"></div>Selector playground — point, click, locate</div>
+    <div class="scene-label" id="l37"><div class="pin"></div>Locator playground — point, click, locate</div>
   </div>
 
   <div class="scene" id="s38">
@@ -624,7 +624,7 @@ window.seekComp = async function(t) {
     // seek to mid-frame so the displayed video frame always equals clipFrame
     jobs.push(seekVideo($('v-ui'), (clipFrame + 0.5) / 30));
   }
-  // ── S3.7 selector playground ──
+  // ── S3.7 locator playground ──
   if (t >= T.s37[0] - 0.3 && t < T.s37[1] + 0.4) {
     const s = $('s37');
     const S = T.s37[0];

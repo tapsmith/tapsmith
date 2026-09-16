@@ -20,7 +20,7 @@ describe('renderAgentsSection()', () => {
     expect(section).toContain("dependencies: ['auth-setup']");
     expect(section).toContain('appState');
     expect(section).toContain('tapsmith_snapshot');
-    expect(section).toContain('tapsmith_test_selector');
+    expect(section).toContain('tapsmith_test_locator');
     expect(section).toContain('waitForTimeout');
     expect(section).toContain('tapsmith doctor --json');
   });

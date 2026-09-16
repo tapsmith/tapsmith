@@ -102,13 +102,13 @@ describe('disambiguateSelectors (PILOT-226)', () => {
   });
 });
 
-describe('formatHierarchy suggested selectors (PILOT-226)', () => {
-  it('emits a uniquely resolving selector for every ref on the sign-in screen', () => {
+describe('formatHierarchy suggested locators (PILOT-226)', () => {
+  it('emits a uniquely resolving locator for every ref on the sign-in screen', () => {
     const { roots } = signInScreen();
-    const { selectors } = formatHierarchy(roots);
-    const buttonRef = selectors.find((s) => s.includes('Sign in') && !s.includes('continue'));
+    const { locators } = formatHierarchy(roots);
+    const buttonRef = locators.find((l) => l.includes('Sign in') && !l.includes('continue'));
     expect(buttonRef).toBeDefined();
-    // Must NOT be the ambiguous substring selector that broke story-app
+    // Must NOT be the ambiguous substring locator that broke story-app
     expect(buttonRef).not.toContain('device.getByText("Sign in")\n');
     expect(buttonRef).toMatch(/getByRole\("button", \{ name: "Sign in" \}\)|getByText\("Sign in", \{ exact: true \}\)/);
   });
@@ -117,10 +117,10 @@ describe('formatHierarchy suggested selectors (PILOT-226)', () => {
     const itemA = makeNode('node', { class: 'android.widget.TextView', text: 'Item', clickable: 'true' });
     const itemB = makeNode('node', { class: 'android.widget.TextView', text: 'Item', clickable: 'true' });
     const root = makeNode('node', { class: 'android.view.ViewGroup' }, [itemA, itemB]);
-    const { selectors } = formatHierarchy([root]);
-    expect(selectors.length).toBeGreaterThanOrEqual(2);
-    expect(selectors[0]).toContain('.first()');
-    expect(selectors[1]).toContain('.last()');
+    const { locators } = formatHierarchy([root]);
+    expect(locators.length).toBeGreaterThanOrEqual(2);
+    expect(locators[0]).toContain('.first()');
+    expect(locators[1]).toContain('.last()');
   });
 });
 

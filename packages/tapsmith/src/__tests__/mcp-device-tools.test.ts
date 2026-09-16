@@ -7,7 +7,7 @@ import type { DeviceInfoProto, ElementInfo, TapsmithGrpcClient } from '../grpc-c
 import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
-// swipe, press_key, launch_app, list_devices, test_selector, watch — had no
+// swipe, press_key, launch_app, list_devices, test_locator, watch — had no
 // coverage at the tool boundary: only the helpers underneath it did. These
 // drive the real server through a real MCP client, so a tool that fails to
 // register, a schema that stops validating, or an error path that silently
@@ -169,7 +169,7 @@ function text(res: CallToolResult): string {
     .join('\n');
 }
 
-/** The iOS sign-in screen the selector fixtures use, as agent hierarchy XML. */
+/** The iOS sign-in screen the locator fixtures use, as agent hierarchy XML. */
 const SIGN_IN_XML = `
 <XCUIElementTypeApplication type="XCUIElementTypeApplication">
   <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="Sign in to continue to DreamSpinner" clickable="false" />
@@ -186,13 +186,13 @@ beforeEach(() => {
 // ─── tapsmith_snapshot ───
 
 describe('tapsmith_snapshot', () => {
-  it('returns the tree and the selectors an agent is meant to copy', async () => {
+  it('returns the tree and the locators an agent is meant to copy', async () => {
     hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML }).client;
     const res = await callTool('tapsmith_snapshot');
     expect(res.isError).toBeFalsy();
     const out = text(res);
     expect(out).toContain('Sign in to continue to DreamSpinner');
-    expect(out).toContain('## Suggested Selectors');
+    expect(out).toContain('## Suggested Locators');
     expect(out).toContain('device.getByRole("button", { name: "Sign in" })');
   });
 
@@ -256,10 +256,10 @@ describe('tapsmith_screenshot', () => {
 // ─── tapsmith_tap ───
 
 describe('tapsmith_tap', () => {
-  it('taps a unique match by selector', async () => {
+  it('taps a unique match by locator', async () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Sign in' })] });
     hoisted.client = daemon.client;
-    const res = await callTool('tapsmith_tap', { selector: 'device.getByText("Sign in")' });
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Sign in")' });
     expect(res.isError).toBeFalsy();
     expect(text(res)).toBe('OK');
     expect(daemon.tap).toHaveBeenCalledTimes(1);
@@ -268,7 +268,7 @@ describe('tapsmith_tap', () => {
     expect(elementId).toBeUndefined();
   });
 
-  it('refuses an ambiguous selector and taps nothing (PILOT-226)', async () => {
+  it('refuses an ambiguous locator and taps nothing (PILOT-226)', async () => {
     // Strict mode is only worth anything if the tap does not happen. Before
     // this path existed the agent tapped the first match — the subtitle, not
     // the button — and the run failed several steps later.
@@ -279,7 +279,7 @@ describe('tapsmith_tap', () => {
       ],
     });
     hoisted.client = daemon.client;
-    const res = await callTool('tapsmith_tap', { selector: 'device.getByText("Sign in")' });
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Sign in")' });
     expect(res.isError).toBe(true);
     expect(text(res)).toMatch(/strict mode violation/);
     expect(text(res)).toContain('resolved to 2 elements');
@@ -287,7 +287,7 @@ describe('tapsmith_tap', () => {
   });
 
   it('taps the exact element a positional chain resolved, by id', async () => {
-    // Both matches share the text, so a selector would land on the first one.
+    // Both matches share the text, so a locator would land on the first one.
     const daemon = makeDaemon({
       elements: [
         makeElement({ elementId: 'el-1', text: 'Sign in' }),
@@ -295,7 +295,7 @@ describe('tapsmith_tap', () => {
       ],
     });
     hoisted.client = daemon.client;
-    const res = await callTool('tapsmith_tap', { selector: 'device.getByText("Sign in").nth(1)' });
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Sign in").nth(1)' });
     expect(res.isError).toBeFalsy();
     const [selector, , elementId] = daemon.tap.mock.calls[0];
     expect(selector).toBeUndefined();
@@ -307,15 +307,15 @@ describe('tapsmith_tap', () => {
       elements: [makeElement({ text: 'Sign in' })],
       actionError: 'element not clickable',
     }).client;
-    const res = await callTool('tapsmith_tap', { selector: 'device.getByText("Sign in")' });
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Sign in")' });
     expect(res.isError).toBe(true);
     expect(text(res)).toBe('Error: element not clickable');
   });
 
-  it('requires a selector, and says which argument is missing', async () => {
+  it('requires a locator, and says which argument is missing', async () => {
     const res = await callTool('tapsmith_tap', {});
     expect(res.isError).toBe(true);
-    expect(text(res)).toContain('selector');
+    expect(text(res)).toContain('locator');
   });
 });
 
@@ -326,7 +326,7 @@ describe('tapsmith_type', () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Email' })] });
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_type', {
-      selector: 'device.getByText("Email")',
+      locator: 'device.getByText("Email")',
       text: 'sam@example.com',
     });
     expect(text(res)).toBe('OK');
@@ -338,7 +338,7 @@ describe('tapsmith_type', () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Email' })] });
     hoisted.client = daemon.client;
     await callTool('tapsmith_type', {
-      selector: 'device.getByText("Email")',
+      locator: 'device.getByText("Email")',
       text: 'new',
       clear: true,
     });
@@ -346,7 +346,7 @@ describe('tapsmith_type', () => {
   });
 
   it('clears the same element it types into', async () => {
-    // A positional target types by id; clearing by selector instead would wipe
+    // A positional target types by id; clearing by locator instead would wipe
     // the first match and type into the second.
     const daemon = makeDaemon({
       elements: [
@@ -356,7 +356,7 @@ describe('tapsmith_type', () => {
     });
     hoisted.client = daemon.client;
     await callTool('tapsmith_type', {
-      selector: 'device.getByText("Code").nth(1)',
+      locator: 'device.getByText("Code").nth(1)',
       text: '2',
       clear: true,
     });
@@ -365,7 +365,7 @@ describe('tapsmith_type', () => {
     expect(daemon.typeText.mock.calls[0][4]).toBe('el-2');
   });
 
-  it('refuses an ambiguous selector and types nothing', async () => {
+  it('refuses an ambiguous locator and types nothing', async () => {
     const daemon = makeDaemon({
       elements: [
         makeElement({ elementId: 'el-1', text: 'Email address' }),
@@ -374,7 +374,7 @@ describe('tapsmith_type', () => {
     });
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_type', {
-      selector: 'device.getByText("Email")',
+      locator: 'device.getByText("Email")',
       text: 'sam@example.com',
     });
     expect(res.isError).toBe(true);
@@ -513,14 +513,14 @@ describe('tapsmith_list_devices', () => {
   });
 });
 
-// ─── tapsmith_test_selector ───
+// ─── tapsmith_test_locator ───
 
-describe('tapsmith_test_selector', () => {
+describe('tapsmith_test_locator', () => {
   it('reports a unique match', async () => {
     hoisted.client = makeDaemon({
       elements: [makeElement({ text: 'Sign in', role: 'button' })],
     }).client;
-    const res = await callTool('tapsmith_test_selector', { selector: 'device.getByText("Sign in")' });
+    const res = await callTool('tapsmith_test_locator', { locator: 'device.getByText("Sign in")' });
     expect(res.isError).toBeFalsy();
     expect(JSON.parse(text(res))).toMatchObject({
       matched: true,
@@ -529,15 +529,15 @@ describe('tapsmith_test_selector', () => {
     });
   });
 
-  it('warns that an ambiguous selector will throw at runtime', async () => {
+  it('warns that an ambiguous locator will throw at runtime', async () => {
     hoisted.client = makeDaemon({
       elements: [
         makeElement({ elementId: 'el-1', text: 'Sign in to continue' }),
         makeElement({ elementId: 'el-2', text: 'Sign in' }),
       ],
     }).client;
-    const result = JSON.parse(text(await callTool('tapsmith_test_selector', {
-      selector: 'device.getByText("Sign in")',
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', {
+      locator: 'device.getByText("Sign in")',
     })));
     expect(result.count).toBe(2);
     expect(result.strictModeWarning).toMatch(/strict mode violation/);
@@ -551,30 +551,30 @@ describe('tapsmith_test_selector', () => {
         makeElement({ elementId: 'el-3', text: 'Item 3' }),
       ],
     }).client;
-    const result = JSON.parse(text(await callTool('tapsmith_test_selector', {
-      selector: 'device.getByText("Item").first()',
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', {
+      locator: 'device.getByText("Item").first()',
     })));
     expect(result).toMatchObject({ matched: true, count: 1, totalMatches: 3 });
     expect(result.strictModeWarning).toBeUndefined();
   });
 
   it('reports no match without calling it an error', async () => {
-    const result = JSON.parse(text(await callTool('tapsmith_test_selector', {
-      selector: 'device.getByText("Ghost")',
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', {
+      locator: 'device.getByText("Ghost")',
     })));
     expect(result).toMatchObject({ matched: false, count: 0 });
   });
 
-  it('rejects a string that is not a selector, and says what is valid', async () => {
-    const res = await callTool('tapsmith_test_selector', { selector: 'click the login button' });
+  it('rejects a string that is not a locator, and says what is valid', async () => {
+    const res = await callTool('tapsmith_test_locator', { locator: 'click the login button' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toContain('Invalid selector');
+    expect(text(res)).toContain('Invalid locator');
     expect(text(res)).toContain('getByTestId()');
   });
 
   it('surfaces a daemon error instead of reporting no match', async () => {
     hoisted.client = makeDaemon({ findError: 'agent not responding' }).client;
-    const res = await callTool('tapsmith_test_selector', { selector: 'device.getByText("Sign in")' });
+    const res = await callTool('tapsmith_test_locator', { locator: 'device.getByText("Sign in")' });
     expect(res.isError).toBe(true);
     expect(text(res)).toBe('Error: agent not responding');
   });
@@ -643,13 +643,13 @@ describe('the device tools the server advertises', () => {
         'tapsmith_suite_status',
         'tapsmith_swipe',
         'tapsmith_tap',
-        'tapsmith_test_selector',
+        'tapsmith_test_locator',
         'tapsmith_type',
         'tapsmith_watch',
       ]);
 
       for (const name of [
-        'tapsmith_snapshot', 'tapsmith_screenshot', 'tapsmith_test_selector',
+        'tapsmith_snapshot', 'tapsmith_screenshot', 'tapsmith_test_locator',
         'tapsmith_tap', 'tapsmith_type', 'tapsmith_swipe', 'tapsmith_press_key',
         'tapsmith_launch_app', 'tapsmith_list_devices', 'tapsmith_watch',
       ]) {

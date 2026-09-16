@@ -1,8 +1,8 @@
 /**
- * Screenshot pick/hover handlers for the selector playground (PILOT-226).
+ * Screenshot pick/hover handlers for the locator playground (PILOT-226).
  *
  * Plain TS (no JSX) so the logic is unit-testable under the non-JSX
- * tsconfig; SelectorPlayground.tsx re-exports for its UI consumers.
+ * tsconfig; LocatorPlayground.tsx re-exports for its UI consumers.
  */
 
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';

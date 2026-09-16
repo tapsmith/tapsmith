@@ -45,7 +45,7 @@ npx tapsmith test --reporter json     # writes tapsmith-results/results.json
 ## MCP server (recommended)
 
 For richer agent workflows — inspecting the live accessibility tree, validating
-selectors before committing them, running tests, reading traces — register the
+locators before committing them, running tests, reading traces — register the
 MCP server:
 
 ```bash
@@ -53,8 +53,8 @@ claude mcp add tapsmith -- npx tapsmith mcp-server   # Claude Code
 codex mcp add tapsmith -- npx tapsmith mcp-server    # Codex
 ```
 
-Key tools: `tapsmith_snapshot` (accessibility tree with suggested selectors),
-`tapsmith_test_selector`, `tapsmith_run_tests`, `tapsmith_read_trace`,
+Key tools: `tapsmith_snapshot` (accessibility tree with suggested locators),
+`tapsmith_test_locator`, `tapsmith_run_tests`, `tapsmith_read_trace`,
 `tapsmith_screenshot`. The full API reference is exposed as the MCP resource
 `tapsmith://api-reference`.
 
@@ -64,9 +64,9 @@ a bare fragment like `"submits the form"` is enough. If it matches nothing the
 tool returns an *error* listing the available tests — it never silently reports a
 green run. Use `tapsmith_list_tests` to see exact names.
 
-## Writing good tests (selector philosophy)
+## Writing good tests (locator philosophy)
 
-Prefer accessibility-first selectors — they survive refactors and match how
+Prefer accessibility-first locators — they survive refactors and match how
 users perceive the app:
 
 ```typescript
@@ -74,4 +74,4 @@ device.getByRole('button', { name: 'Login' })   // best
 device.getByText('Welcome')                      // good
 ```
 
-Avoid className/xpath selectors. Assertions auto-wait — no manual sleeps.
+Avoid className/xpath locators. Assertions auto-wait — no manual sleeps.
