@@ -15,9 +15,7 @@ export default defineConfig({
         dark: './src/assets/logo-dark.png',
         replacesTitle: true,
       },
-      social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/tapsmith/tapsmith' },
-      ],
+      social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/tapsmith/tapsmith' }],
       plugins: [starlightLinksValidator(), starlightImageZoom()],
       customCss: ['./src/styles/global.css'],
       expressiveCode: {
