@@ -16,7 +16,7 @@ export default defineConfig({
         replacesTitle: true,
       },
       social: [
-        { icon: 'github', label: 'GitHub', href: 'https://github.com/samsmithyeah/tapsmith' },
+        { icon: 'github', label: 'GitHub', href: 'https://github.com/tapsmith/tapsmith' },
       ],
       plugins: [starlightLinksValidator(), starlightImageZoom()],
       customCss: ['./src/styles/global.css'],

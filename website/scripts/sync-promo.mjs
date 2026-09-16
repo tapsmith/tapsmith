@@ -17,7 +17,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { join, resolve } from 'node:path'
 
-const REPO = 'samsmithyeah/tapsmith'
+const REPO = 'tapsmith/tapsmith'
 const URL = `https://github.com/${REPO}/releases/download/promo-video/promo.mp4`
 const OUT = join(resolve(import.meta.dirname, '..', 'public'), 'promo.mp4')
 

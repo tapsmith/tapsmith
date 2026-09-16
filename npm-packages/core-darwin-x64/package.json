@@ -8,7 +8,7 @@
   "preferUnplugged": true,
   "repository": {
     "type": "git",
-    "url": "https://github.com/samsmithyeah/tapsmith.git",
+    "url": "https://github.com/tapsmith/tapsmith.git",
     "directory": "npm-packages/core-darwin-x64"
   },
   "license": "Apache-2.0",

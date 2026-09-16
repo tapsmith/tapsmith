@@ -16,7 +16,7 @@ import { writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 
 // Matches the GitHub link in astro.config.mjs.
-const REPO = 'samsmithyeah/tapsmith'
+const REPO = 'tapsmith/tapsmith'
 const OUT_DIR = resolve(import.meta.dirname, '..', 'src', 'content', 'docs')
 const OUT_FILE = join(OUT_DIR, 'changelog.md')
 

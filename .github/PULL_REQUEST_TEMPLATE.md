@@ -22,7 +22,7 @@ platform and whether it was an emulator/simulator or a physical device.
 
 <!-- If an item genuinely doesn't apply, write [na] instead of ticking it. -->
 
-- [ ] My contributions are signed off (`git commit -s`, or individual remediation) -- see [the contribution guide](https://github.com/samsmithyeah/tapsmith/blob/main/CONTRIBUTING.md#sign-off-your-commits)
+- [ ] My contributions are signed off (`git commit -s`, or individual remediation) -- see [the contribution guide](https://github.com/tapsmith/tapsmith/blob/main/CONTRIBUTING.md#sign-off-your-commits)
 - [ ] Existing tests pass
 - [ ] New behaviour is tested at the lowest tier that can actually cover it -- a Vitest unit
       test if it needs no device, an `e2e/` test if it does. Some changes (the Android and iOS
