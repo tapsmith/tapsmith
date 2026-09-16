@@ -566,3 +566,22 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run deploy-website.yml --ref main
+
+      # The promo video is a build artifact on the rolling `promo-video`
+      # release, rendered by promo-video.yml. Re-render and republish it (which
+      # redeploys the website again afterwards) only when its inputs changed
+      # since the previous release. README and the docs-screenshot tooling live
+      # in tools/promo too but do not affect the render.
+      - name: Republish the promo video if it changed since the previous release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PREV=$(git tag --list 'v*' --sort=-version:refname | awk -v cur="$TAG" '$0==cur{f=1;next} f{print;exit}')
+          if [ -n "$PREV" ] && git diff --quiet "$PREV" "$TAG" -- tools/promo ':!tools/promo/README.md' ':!tools/promo/docs-shots'; then
+            echo "tools/promo unchanged since $PREV; keeping the published video."
+          else
+            echo "tools/promo changed since ${PREV:-<no previous tag>}; re-rendering."
+            gh workflow run promo-video.yml --ref main -f publish=true
+            echo "Dispatched promo-video.yml (render + publish + website redeploy, ~30 min)."
+          fi

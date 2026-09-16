@@ -16,15 +16,20 @@ on:
         description: Upload promo.mp4 to the promo-video release and redeploy the website
         type: boolean
         default: false
-  # Any branch: a PR that touches the pipeline gets a rendered artifact to
-  # review. Publishing is only ever the manual dispatch with `publish` ticked.
-  push:
+  # A PR that touches the pipeline gets a rendered artifact to review. No push
+  # trigger: `paths` filters are ignored for tag pushes, so one would render
+  # on every release tag, and the merge to main is rendered again by the
+  # publish run anyway. Publishing is the dispatch with `publish` ticked —
+  # by hand, or from release.yml when tools/promo changed since the previous
+  # release.
+  pull_request:
     paths:
       - tools/promo/**
       - .github/workflows/promo-video.yml
 
+# One render per branch; a newer push to the same PR supersedes the old render.
 concurrency:
-  group: promo-video
+  group: promo-video-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
