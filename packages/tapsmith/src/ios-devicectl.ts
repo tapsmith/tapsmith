@@ -100,6 +100,13 @@ export function parseDevicectlDeviceList(json: string): PhysicalDeviceInfo[] {
 
     // Only iOS devices — devicectl also lists watchOS/macOS/tvOS.
     if (hwProps['platform'] !== 'iOS') continue;
+    // Only physical hardware — from Xcode 27 devicectl lists simulators too
+    // (`reality: "simulated"`, served by the CoreSimulator provider). Letting
+    // one through makes every simulator session look for a device-slice
+    // xctestrun and abort.
+    if (hwProps['reality'] === 'simulated') continue;
+    const provider = typeof devProps['provider'] === 'string' ? (devProps['provider'] as string) : '';
+    if (provider.includes('CoreSimulator')) continue;
 
     const udid = typeof hwProps['udid'] === 'string' ? (hwProps['udid'] as string) : '';
     if (!udid) continue;
