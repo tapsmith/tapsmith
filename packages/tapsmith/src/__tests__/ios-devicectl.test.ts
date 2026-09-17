@@ -97,6 +97,34 @@ describe('parseDevicectlDeviceList', () => {
     expect(result.map((d) => d.udid)).toEqual(['IOS-UDID']);
   });
 
+  it('filters out simulators (Xcode 27 devicectl lists them as reality: simulated)', () => {
+    const json = JSON.stringify({
+      result: {
+        devices: [
+          {
+            hardwareProperties: { platform: 'iOS', udid: 'REAL-UDID', reality: 'physical' },
+            deviceProperties: { name: 'iPhone', bootState: 'booted' },
+            connectionProperties: { pairingState: 'paired' },
+          },
+          {
+            hardwareProperties: { platform: 'iOS', udid: 'SIM-UDID', reality: 'simulated' },
+            deviceProperties: { name: 'iPhone 17', bootState: 'booted' },
+            connectionProperties: { pairingState: 'paired' },
+          },
+          {
+            // The deprecated top-level dictionaries gone, the flag only under
+            // the replacement `properties.hardware`.
+            hardwareProperties: { platform: 'iOS', udid: 'SIM-2-UDID' },
+            properties: { hardware: { reality: 'simulated' } },
+            deviceProperties: { name: 'iPhone 17 Pro', bootState: 'booted' },
+            connectionProperties: {},
+          },
+        ],
+      },
+    });
+    expect(parseDevicectlDeviceList(json).map((d) => d.udid)).toEqual(['REAL-UDID']);
+  });
+
   it('returns empty array for missing / malformed result', () => {
     expect(parseDevicectlDeviceList('{}')).toEqual([]);
     expect(parseDevicectlDeviceList('{"result":{"devices":"not-an-array"}}')).toEqual([]);
