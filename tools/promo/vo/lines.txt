@@ -2,9 +2,9 @@
 2a|Tapsmith is the next step.
 2b|As readable as a YAML flow file — but real TypeScript: autocomplete, type safety, reusable helpers. One API for iOS and Android — and one npm install. No server, no drivers.
 3|This is the Tapsmith UI mode. Pick a test and watch it run live: every tap, assertion, and network call streaming in, with the full accessibility tree a click away.
-4|No more selector guesswork. Point at an element on the live mirror, and the playground hands you a robust, accessibility-first locator — every match highlighted live.
+4|No more locator guesswork. Point at an element on the live mirror, and the playground hands you a robust, accessibility-first locator — every match highlighted live.
 5|Need two users in one test? Declare two devices, and Tapsmith drives both at once — Alice sends, Bob receives — with every step recorded side by side.
 6|UI mode isn't just for humans — it's an MCP server. Connect Claude Code, and your agent discovers your tests, inspects the live screen, writes a new one — network mock included — and verifies it passes.
 7|And when a test fails on CI, you don't guess. Download the trace, open it in the trace viewer, and time-travel through screenshots, actions and network calls to see exactly what broke.
-8|Auto-waiting assertions. In-test network mocking. Accessibility-first selectors. Parallel workers. Multi-device tests. Save and restore app state. An MCP server for AI agents. Built for CI from day one.
+8|Auto-waiting assertions. In-test network mocking. Accessibility-first locators. Parallel workers. Multi-device tests. Save and restore app state. An MCP server for AI agents. Built for CI from day one.
 9|Tapsmith. Mobile testing that finally feels modern. Get started at tapsmith dot dev.
