@@ -501,12 +501,36 @@ export function collapseSameTargetDuplicates(elements: ElementInfo[]): ElementIn
       result.push(el);
       continue;
     }
-    const key = `${b.left},${b.top},${b.right},${b.bottom}|${el.text}`;
+    const key = sameTargetKey(el);
     if (seen.has(key)) continue;
     seen.add(key);
     result.push(el);
   }
   return result;
+}
+
+/**
+ * Identity of an element across two reads of the same hierarchy.
+ *
+ * `elementId` is NOT that identity: both agents mint a fresh id on every
+ * `findElements` (Android `ElementFinder.cacheAndConvert`, iOS
+ * `ElementFinder`/`SnapshotElementFinder`), so the same element read twice
+ * never shares an id. Anything that combines two reads — `and()` intersects
+ * its operands, `or()` de-duplicates their union — has to key on what IS
+ * stable within one hierarchy: the element's bounds and text, the same "same
+ * visual target" notion `collapseSameTargetDuplicates` uses (PILOT-349).
+ *
+ * An element without bounds cannot be placed, so it only matches itself (its
+ * id). Zero-size bounds are keyed like any other: two reads of an off-screen
+ * element still intersect, where the collapser deliberately keeps zero-size
+ * same-text entries apart for strict-mode counting.
+ *
+ * @internal
+ */
+export function sameTargetKey(el: ElementInfo): string {
+  const b = el.bounds;
+  if (!b) return `id:${el.elementId}`;
+  return `${b.left},${b.top},${b.right},${b.bottom}|${el.text}`;
 }
 
 /**
@@ -754,8 +778,12 @@ export class ElementHandle {
         this._options.andHandle._resolveAll(),
       ]);
 
-      const rightIds = new Set(rightEls.map((e) => e.elementId));
-      let elements = leftEls.filter((e) => rightIds.has(e.elementId));
+      // Each operand is its own hierarchy read, and the agents mint a fresh
+      // elementId per read, so intersect by the element's stable identity
+      // (bounds + text), not by id (PILOT-349). The left operand's entries
+      // are kept, preserving call order.
+      const rightKeys = new Set(rightEls.map(sameTargetKey));
+      let elements = leftEls.filter((e) => rightKeys.has(sameTargetKey(e)));
 
       // Apply post-combination filters (from .and(b).filter(F))
       if (this._options.filters) {
@@ -774,10 +802,18 @@ export class ElementHandle {
         this._options.orHandle._resolveAll(),
       ]);
 
-      const combined = [...leftEls, ...rightEls];
-      let elements = Array.from(
-        new Map(combined.map((el) => [el.elementId, el])).values(),
-      );
+      // De-duplicate by stable identity, not by the per-read elementId
+      // (PILOT-349): an element both operands match would otherwise appear
+      // twice and turn every single-element use into a strict-mode
+      // violation. First occurrence wins — left operand first, in order.
+      const seen = new Set<string>();
+      let elements: ElementInfo[] = [];
+      for (const el of [...leftEls, ...rightEls]) {
+        const key = sameTargetKey(el);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        elements.push(el);
+      }
 
       // Apply post-combination filters (from .or(b).filter(F))
       if (this._options.filters) {

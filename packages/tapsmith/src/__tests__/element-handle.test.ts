@@ -2503,7 +2503,7 @@ describe('filter()', () => {
 // ─── and() (PILOT-17) ───
 
 describe('and()', () => {
-  it('returns elements matching both selectors (intersection by elementId)', async () => {
+  it('returns elements matching both selectors (intersection)', async () => {
     const buttonsEls: ElementInfo[] = [
       makeElementInfo({ elementId: 'e1', text: 'Submit', resourceId: 'btn1' }),
       makeElementInfo({ elementId: 'e2', text: 'Cancel', resourceId: 'btn2' }),
@@ -2556,6 +2556,81 @@ describe('and()', () => {
 
     // and() is a modified handle → dispatches by the resolved element's id.
     expect(tap).toHaveBeenCalledWith(undefined, expect.any(Number), 'e1');
+  });
+
+  // PILOT-349: both agents mint a fresh elementId on every findElements, so
+  // the two operand reads never share an id. The mock below behaves like a
+  // real agent — same elements, new ids each read — which is what the
+  // id-reusing mocks above never exercised.
+  describe('on a device that mints a fresh elementId per read (PILOT-349)', () => {
+    const ROW = { left: 0, top: 100, right: 400, bottom: 160 };
+    const OTHER_ROW = { left: 0, top: 160, right: 400, bottom: 220 };
+    let nextId = 0;
+    const churn = (els: ElementInfo[]) => els.map((e) => ({ ...e, elementId: `id-${++nextId}` }));
+
+    it('intersects operands by stable identity (bounds + text), not by id', async () => {
+      const buttons = [
+        makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 6', role: 'button', bounds: OTHER_ROW }),
+      ];
+      const item5 = [makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW })];
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(selectorToProto(selector).text === 'Item 5' ? item5 : buttons)));
+      const client = makeMockClient({ findElements });
+
+      const handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('Item 5'), 5000));
+      const els = await handle._resolveAll();
+      expect(els.map((e) => e.text)).toEqual(['Item 5']);
+      // The left operand's entry (and therefore its id) is the one kept, so
+      // the action that follows addresses the element the left read saw.
+      expect(els[0].elementId).toMatch(/^id-/);
+      expect(els[0].role).toBe('button');
+    });
+
+    it('does not conflate same-text elements at different bounds', async () => {
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(
+          selectorToProto(selector).text === 'Save'
+            ? [makeElementInfo({ text: 'Save', bounds: OTHER_ROW })]
+            : [makeElementInfo({ text: 'Save', role: 'button', bounds: ROW })])));
+      const client = makeMockClient({ findElements });
+      const handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('Save'), 5000));
+      expect(await handle._resolveAll()).toEqual([]);
+    });
+
+    it('still intersects an off-screen element reported with zero-size bounds', async () => {
+      const ZERO = { left: 0, top: 0, right: 0, bottom: 0 };
+      const findElements = vi.fn(async () =>
+        makeFindElementsResponse(churn([makeElementInfo({ text: 'Item 25', role: 'button', bounds: ZERO, visible: false })])));
+      const client = makeMockClient({ findElements });
+      const handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('Item 25'), 5000));
+      expect((await handle._resolveAll()).map((e) => e.text)).toEqual(['Item 25']);
+    });
+
+    it('an element without bounds only matches itself (by id)', async () => {
+      // No bounds → no stable identity. Mocks that reuse ids still intersect
+      // (the behaviour every other test here relies on); churned ids do not.
+      const stable = [makeElementInfo({ elementId: 'fixed', text: 'A' })];
+      let client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse(stable)) });
+      let handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('A'), 5000));
+      expect(await handle._resolveAll()).toHaveLength(1);
+
+      client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse(churn(stable))) });
+      handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('A'), 5000));
+      expect(await handle._resolveAll()).toEqual([]);
+    });
+
+    it('count(), find() and tap() all see the intersection', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const findElements = vi.fn(async () =>
+        makeFindElementsResponse(churn([makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW })])));
+      const client = makeMockClient({ findElements, tap });
+      const handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('Item 5'), 5000));
+      expect(await handle.count()).toBe(1);
+      expect((await handle.find()).text).toBe('Item 5');
+      await handle.tap();
+      expect(tap).toHaveBeenCalledWith(undefined, expect.any(Number), expect.stringMatching(/^id-/));
+    });
   });
 });
 
@@ -2619,6 +2694,46 @@ describe('or()', () => {
     const a = new ElementHandle(client, _text('OK'), 300);
     const b = new ElementHandle(client, _text('Confirm'), 300);
     await expect(withFakeClock(5000, () => a.or(b).find())).rejects.toThrow(/was not found after waiting 300ms/);
+  });
+
+  // PILOT-349: see the matching and() block — real agents mint a fresh id per
+  // read, so an element both operands match used to appear twice.
+  describe('on a device that mints a fresh elementId per read (PILOT-349)', () => {
+    const ROW = { left: 0, top: 100, right: 400, bottom: 160 };
+    const OTHER_ROW = { left: 0, top: 160, right: 400, bottom: 220 };
+    let nextId = 0;
+    const churn = (els: ElementInfo[]) => els.map((e) => ({ ...e, elementId: `id-${++nextId}` }));
+
+    it('de-duplicates an element both operands match, keeping the left read first', async () => {
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(
+          selectorToProto(selector).text === 'Item 5'
+            ? [makeElementInfo({ text: 'Item 5', bounds: ROW })]
+            : [makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW }), makeElementInfo({ text: 'Item 6', role: 'button', bounds: OTHER_ROW })])));
+      const client = makeMockClient({ findElements });
+
+      // Same element via two selectors → one match, not a strict-mode violation.
+      const same = new ElementHandle(client, _text('Item 5'), 5000).or(new ElementHandle(client, _text('Item 5'), 5000));
+      expect(await same.count()).toBe(1);
+      expect((await same.find()).text).toBe('Item 5');
+
+      // Overlapping unions keep the left operand's entry, then the right's extras.
+      const union = new ElementHandle(client, _role('button'), 5000).or(new ElementHandle(client, _text('Item 5'), 5000));
+      const els = await union._resolveAll();
+      expect(els.map((e) => e.text)).toEqual(['Item 5', 'Item 6']);
+      expect(els[0].role).toBe('button');
+    });
+
+    it('keeps distinct same-text elements at different bounds apart', async () => {
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(
+          selectorToProto(selector).text === 'Save'
+            ? [makeElementInfo({ text: 'Save', bounds: OTHER_ROW })]
+            : [makeElementInfo({ text: 'Save', role: 'button', bounds: ROW })])));
+      const client = makeMockClient({ findElements });
+      const handle = new ElementHandle(client, _role('button'), 5000).or(new ElementHandle(client, _text('Save'), 5000));
+      expect(await handle.count()).toBe(2);
+    });
   });
 });
 
