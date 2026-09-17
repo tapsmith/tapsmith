@@ -59,6 +59,53 @@ describe("List screen", () => {
   });
 });
 
+// PILOT-349: and()/or() combine two separate hierarchy reads, and both agents
+// mint a fresh elementId on every read. Keyed by id, and() was always empty
+// and or() kept a shared match twice (a strict-mode violation on any
+// single-element use) — on every device, for as long as the API existed. The
+// unit mocks reuse ids across reads, so this is the only place the real
+// contract is exercised: the operands must be combined by what is stable
+// within one hierarchy (bounds + text), and this file is where that shows.
+describe("List screen — and()/or() on a device", () => {
+  // Before the all() describe on purpose: that one leaves focus in the search
+  // box (Android's keyboard then covers the lower rows) and, on iOS, the list
+  // scrolled a few rows — where XCUITest still reports the scrolled-off rows
+  // as visible at frames under the header, so a tap on one lands on the
+  // header instead (PILOT-223, PILOT-348). Here the list is as the deep link
+  // mounted it.
+  test.beforeAll(async ({ device }) => {
+    await device.openDeepLink("tapsmithtest:///list")
+  })
+
+  test("and() intersects its operands", async ({ device, listScreen }) => {
+    // getByRole("button") alone is ambiguous (every rendered row, plus the
+    // header's back button); intersected with one row's label it is that row.
+    const row = device.getByRole("button").and(listScreen.item(2))
+    await expect(row).toHaveCount(1)
+    await expect(row).toBeVisible()
+    // Disjoint operands: the item-count text is not a button.
+    await expect(device.getByRole("button").and(listScreen.itemCount)).toHaveCount(0)
+  })
+
+  test("an action through and() lands on the intersected element", async ({ device, listScreen }) => {
+    const row = device.getByRole("button").and(listScreen.item(2))
+    await row.tap()
+    await expect(listScreen.selectedCount).toContainText("1 selected")
+    await row.tap() // deselect, leave the screen as we found it
+    await expect(listScreen.selectedCount).toContainText("0 selected")
+  })
+
+  test("or() unites its operands without duplicating a shared match", async ({ device, listScreen }) => {
+    // The same row reached through two different selectors is ONE match, so
+    // a single-element use of the union is not a strict-mode violation.
+    const sameRow = listScreen.item(2).or(device.getByTestId("item-2"))
+    await expect(sameRow).toHaveCount(1)
+    await expect(sameRow).toBeVisible()
+    // Distinct rows add up.
+    await expect(listScreen.item(2).or(listScreen.item(3))).toHaveCount(2)
+  })
+})
+
 // PILOT-287 follow-up: the all() snapshot contract, on a device. Handles from
 // all() answer from the capture they were created from, children scoped off
 // them resolve the row LIVE by index (like .nth(i)), and expect() re-queries.
@@ -117,53 +164,6 @@ describe("List screen — all() snapshot semantics", () => {
       await search.clear()
       await expect(listScreen.itemCount).toHaveText("30 items")
     }
-  })
-})
-
-// PILOT-349: and()/or() combine two separate hierarchy reads, and both agents
-// mint a fresh elementId on every read. Keyed by id, and() was always empty
-// and or() kept a shared match twice (a strict-mode violation on any
-// single-element use) — on every device, for as long as the API existed. The
-// unit mocks reuse ids across reads, so this is the only place the real
-// contract is exercised: the operands must be combined by what is stable
-// within one hierarchy (bounds + text), and this file is where that shows.
-describe("List screen — and()/or() on a device", () => {
-  test.beforeAll(async ({ device }) => {
-    await device.openDeepLink("tapsmithtest:///list")
-    // The all() describe above leaves focus in the search box; on Android the
-    // keyboard then covers the lower rows and a tap on one lands on the
-    // keyboard instead (PILOT-223, PILOT-348). Item 2 sits above the keyboard
-    // on both CI form factors regardless, so a hide that does not take
-    // cannot fail these tests on its own.
-    await device.hideKeyboard()
-  })
-
-  test("and() intersects its operands", async ({ device, listScreen }) => {
-    // getByRole("button") alone is ambiguous (every rendered row, plus the
-    // header's back button); intersected with one row's label it is that row.
-    const row = device.getByRole("button").and(listScreen.item(2))
-    await expect(row).toHaveCount(1)
-    await expect(row).toBeVisible()
-    // Disjoint operands: the item-count text is not a button.
-    await expect(device.getByRole("button").and(listScreen.itemCount)).toHaveCount(0)
-  })
-
-  test("an action through and() lands on the intersected element", async ({ device, listScreen }) => {
-    const row = device.getByRole("button").and(listScreen.item(2))
-    await row.tap()
-    await expect(listScreen.selectedCount).toContainText("1 selected")
-    await row.tap() // deselect, leave the screen as we found it
-    await expect(listScreen.selectedCount).toContainText("0 selected")
-  })
-
-  test("or() unites its operands without duplicating a shared match", async ({ device, listScreen }) => {
-    // The same row reached through two different selectors is ONE match, so
-    // a single-element use of the union is not a strict-mode violation.
-    const sameRow = listScreen.item(2).or(device.getByTestId("item-2"))
-    await expect(sameRow).toHaveCount(1)
-    await expect(sameRow).toBeVisible()
-    // Distinct rows add up.
-    await expect(listScreen.item(2).or(listScreen.item(3))).toHaveCount(2)
   })
 })
 
