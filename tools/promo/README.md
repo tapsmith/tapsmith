@@ -1,7 +1,7 @@
 # Promo video pipeline
 
 Generates `tapsmith-promo.mp4` — a ~132s promotional video (1080p30, voiceover,
-music, real screen recordings of UI mode, the selector playground, a two-device
+music, real screen recordings of UI mode, the locator playground, a two-device
 run and the trace viewer, plus synthetic scenes: a YAML-flow -> TypeScript
 morph with an autocomplete moment, and an MCP-server scene showing an agent
 inspecting the screen, writing and running a test).
@@ -164,11 +164,11 @@ python3 build-clips.py            # -> clip-mcp.mp4 (right-column crop) + sessio
 rm ../../e2e/tests/api-error.test.ts
 ```
 
-**Selector playground** (the S3.7 scene; claims the simulator): same server
+**Locator playground** (the S3.7 scene; claims the simulator): same server
 setup as the MCP recording, then `node record-pick.mjs` — it warms the
 session with a headless MCP run (set `SKIP_RUN=1` if the app is already on
 the API Calls screen), toggles pick mode, hovers the mirror, and picks the
-"Fetch 404" button so the Locator tab fills with generated selectors.
+"Fetch 404" button so the Locator tab fills with generated locators.
 `probe-pick.mjs` captures the mirror-canvas rect + a screenshot for
 recalibrating the hover fractions if the app layout changes.
 
@@ -176,7 +176,7 @@ recalibrating the hover fractions if the app layout changes.
 MCP client (SDK from packages/tapsmith) that presents itself as `claude-code`
 and executes `tapsmith_list_tests` / `tapsmith_snapshot` /
 `tapsmith_run_tests` on cue — every feed entry in the footage is a real tool
-call. The snapshot beat is deliberate: validated selector suggestions and
+call. The snapshot beat is deliberate: validated locator suggestions and
 trace reading are what set Tapsmith's MCP apart from the device-driving MCPs
 Maestro and Appium ship, so the agent is shown reading the live screen before
 it writes the test. A passing run's feed shows no absolute paths (verified); a FAILED run
@@ -268,7 +268,7 @@ If the opening frames changed, also refresh the poster:
 | `clip-ui.mp4` / `clip-trace.mp4` | Finished screen-recording clips |
 | `clip-ui-session.mp4` | Full UI-mode session archive (source for future re-cuts) |
 | `clip-mcp.mp4` / `clip-mcp-session.mp4` / `clip-mcp-full.mp4` | MCP-panel footage (crop cut, full-frame archive, full-window intro) |
-| `clip-pick.mp4` / `clip-pick-session.mp4` | Selector-playground footage (scene cut + archive) |
+| `clip-pick.mp4` / `clip-pick-session.mp4` | Locator-playground footage (scene cut + archive) |
 | `clip-multi.mp4` / `clip-multi-session.mp4` | Two-device chat-test footage (scene cut + archive) |
 | `probe-shot.mjs` | One-off screenshot of the running UI server (layout check before recording) |
 | `demo-trace.zip` | Scrubbed failing trace driving the trace-viewer recording |
