@@ -328,7 +328,7 @@ function formatToolArgs(tool: string, args: Record<string, unknown>): string {
     return `Running ${names.join(', ')}`;
   }
   if (tool === 'tapsmith_tap' || tool === 'tapsmith_type') {
-    return String(args.selector ?? '');
+    return String(args.locator ?? '');
   }
   return '';
 }
