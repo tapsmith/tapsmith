@@ -109,4 +109,14 @@ test.describe("Device activity feed", () => {
     await expect(mcp.entries).toContainText("running…")
     await expect(mcp.entries).toContainText('device.getByText("Login")')
   })
+
+  // Events can arrive from a separately installed `tapsmith mcp-server` that
+  // predates the rename and still sends `selector`, so the row stays readable.
+  test("an older mcp-server's pre-rename `selector` argument still renders", async ({ app, mcp }) => {
+    const ui = app
+    await mcp.open()
+
+    ui.send({ type: "mcp-tool-call", id: "c1", tool: "tapsmith_tap", args: { selector: 'device.getByText("Login")' }, status: "started", timestamp: T0 })
+    await expect(mcp.entries).toContainText('device.getByText("Login")')
+  })
 })

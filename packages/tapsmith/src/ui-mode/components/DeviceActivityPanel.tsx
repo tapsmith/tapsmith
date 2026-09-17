@@ -328,7 +328,11 @@ function formatToolArgs(tool: string, args: Record<string, unknown>): string {
     return `Running ${names.join(', ')}`;
   }
   if (tool === 'tapsmith_tap' || tool === 'tapsmith_type') {
-    return String(args.locator ?? '');
+    // `selector` is the pre-rename argument name. Events reach this panel over
+    // HTTP from a separately installed `tapsmith mcp-server` (ui-server.ts's
+    // /mcp-events ingest), which can be an older build than the UI server, so
+    // the older key stays readable rather than rendering a blank row.
+    return String(args.locator ?? args.selector ?? '');
   }
   return '';
 }
