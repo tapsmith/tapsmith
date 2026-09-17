@@ -1,6 +1,6 @@
-// Record the locator playground: after a warm run leaves the app on the API
+// Record the selector playground: after a warm run leaves the app on the API
 // Calls screen, toggle pick mode on the live mirror, hover elements (green
-// highlight), pick one, and let the Locator tab fill with generated locators
+// highlight), pick one, and let the Locator tab fill with generated selectors
 // and purple match highlights. Frames land in pick-frames/.
 import puppeteer from 'puppeteer-core';
 import { spawn } from 'node:child_process';
@@ -171,7 +171,7 @@ await hoverScreen(0.815, 0.265, 800);  // "Fetch 404" button
 await sleep(1000);
 mark('hover2');
 
-// 3. Pick it — Locator tab opens with generated locators + purple matches
+// 3. Pick it — Locator tab opens with generated selectors + purple matches
 await click();
 mark('picked');
 await sleep(2600);
