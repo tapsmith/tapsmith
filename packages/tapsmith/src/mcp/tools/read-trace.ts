@@ -7,7 +7,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 export function registerReadTraceTool(server: McpServer): void {
   server.tool(
     'tapsmith_read_trace',
-    'Read a Tapsmith trace archive (.zip) and get step-by-step test execution data. Returns actions with their selectors, durations, and pass/fail status. Use to debug why a test failed.',
+    'Read a Tapsmith trace archive (.zip) and get step-by-step test execution data. Returns actions with their locators, durations, and pass/fail status. Use to debug why a test failed.',
     {
       path: z.string().describe('Path to the trace .zip file'),
       include_screenshots: z.boolean().optional().describe('Include base64 screenshots for each step (default false)'),
@@ -83,7 +83,7 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
 
       if (event.type === 'action') {
         lines.push(`${i + 1}. [${status}] ${who}${event.action ?? 'action'}${duration}`);
-        if (event.selector) lines.push(`   Selector: ${event.selector}`);
+        if (event.selector) lines.push(`   Locator: ${event.selector}`);
         if (event.error) lines.push(`   Error: ${event.error}`);
       } else if (event.type === 'assertion') {
         lines.push(`${i + 1}. [${status}] ${who}expect ${event.assertion ?? 'assertion'}${duration}`);

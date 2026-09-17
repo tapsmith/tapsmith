@@ -15,23 +15,23 @@ import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 describe('summarizeResult()', () => {
-  it('summarizes snapshot with element and selector counts', () => {
-    const result = '- [1] Button "Login"\n- [2] TextField\n\n## Suggested Selectors\ndevice.getByRole("button")\ndevice.getByText("Login")';
-    expect(summarizeResult('tapsmith_snapshot', result)).toBe('2 elements, 2 selectors');
+  it('summarizes snapshot with element and locator counts', () => {
+    const result = '- [1] Button "Login"\n- [2] TextField\n\n## Suggested Locators\ndevice.getByRole("button")\ndevice.getByText("Login")';
+    expect(summarizeResult('tapsmith_snapshot', result)).toBe('2 elements, 2 locators');
   });
 
   it('returns "PNG image captured" for screenshot', () => {
     expect(summarizeResult('tapsmith_screenshot', '')).toBe('PNG image captured');
   });
 
-  it('summarizes test_selector match', () => {
+  it('summarizes test_locator match', () => {
     const result = JSON.stringify({ matched: true, count: 3, elements: [] });
-    expect(summarizeResult('tapsmith_test_selector', result)).toBe('matched 3 elements');
+    expect(summarizeResult('tapsmith_test_locator', result)).toBe('matched 3 elements');
   });
 
-  it('summarizes test_selector no match', () => {
+  it('summarizes test_locator no match', () => {
     const result = JSON.stringify({ matched: false, count: 0, elements: [] });
-    expect(summarizeResult('tapsmith_test_selector', result)).toBe('no match');
+    expect(summarizeResult('tapsmith_test_locator', result)).toBe('no match');
   });
 
   it('summarizes list_devices with platform counts', () => {

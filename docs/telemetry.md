@@ -86,7 +86,7 @@ That is the complete list. The payload is a closed set of fields, and Tapsmith's
 ## What is never collected
 
 - Test names, describe names, or the contents of test files
-- Selectors, element text, screenshots, hierarchies, or traces
+- Locators, element text, screenshots, hierarchies, or traces
 - App identifiers (`package`, bundle ids), APK/app paths, or anything from your config other than the boolean `telemetry` key
 - File paths, project names, or repository names
 - Device serials, UDIDs, device names, hostnames, usernames, or email addresses

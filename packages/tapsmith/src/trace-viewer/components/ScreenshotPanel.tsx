@@ -61,7 +61,7 @@ interface Props {
   onScreenshotHover?: (point: { x: number; y: number } | null) => void
   pickMode?: boolean
   onPickModeToggle?: () => void
-  /** Set when the selector playground is hit-testing a hierarchy borrowed
+  /** Set when the locator playground is hit-testing a hierarchy borrowed
    * from an earlier step because this action captured none (network-family
    * actions). Value is the source step's actionIndex; rendered as an honest
    * note next to the pick controls. */
@@ -71,7 +71,7 @@ interface Props {
    * falling back to earlier steps. */
   pickUnavailable?: boolean
   /** Reports whether the displayed screenshot is the before- or after-state of
-   * the action, so the host can bind the selector playground to the hierarchy
+   * the action, so the host can bind the locator playground to the hierarchy
    * captured at the same moment (picking on a before-screenshot must not
    * hit-test the after-hierarchy — the action may have changed the screen). */
   onDisplayedVariantChange?: (variant: 'before' | 'after') => void
@@ -188,7 +188,7 @@ export function ScreenshotPanel({ event, screenshots, highlightBounds, selectorH
   }, [event, screenshots, afterActionIndex, group]);
 
   // Mirrors the currentUrl resolution below: which moment does the displayed
-  // screenshot show? Reported to the host so the selector playground binds to
+  // screenshot show? Reported to the host so the locator playground binds to
   // the hierarchy captured at the same moment.
   const displayedVariant: 'before' | 'after' = useMemo(() => {
     if (!event || !shotUrls) return 'before';

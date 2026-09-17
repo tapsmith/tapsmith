@@ -141,7 +141,7 @@ await waitChild('done:list');
 mark('listCalled');
 await sleep(1800);
 
-// 4b. snapshot — the agent reads the live screen (validated selectors) before writing
+// 4b. snapshot — the agent reads the live screen (validated locators) before writing
 child.stdin.write('snap\n');
 await waitChild('done:snap');
 mark('snapCalled');

@@ -49,7 +49,7 @@ test.describe("Device activity feed", () => {
   test("interleaves MCP calls and device activity by time, and Clear empties both", async ({ app, mcp }) => {
     const ui = app
     await mcp.open()
-    ui.send({ type: "mcp-tool-call", id: "c1", tool: "tapsmith_tap", args: { selector: "Login" }, status: "completed", durationMs: 120, timestamp: T0 + 5_000 })
+    ui.send({ type: "mcp-tool-call", id: "c1", tool: "tapsmith_tap", args: { locator: "Login" }, status: "completed", durationMs: 120, timestamp: T0 + 5_000 })
     ui.send({ type: "device-activity", id: "mirror-0-1", workerId: 0, kind: "mirror", status: "completed", label: "Mirror: 2 taps", timestamp: T0 + 1_000, durationMs: 300 })
     ui.send(prepare("completed", { durationMs: 9_800 }))
 
@@ -67,7 +67,7 @@ test.describe("Device activity feed", () => {
   test("the source filter shows one stream at a time and never hides rows silently", async ({ app, mcp }) => {
     const ui = app
     await mcp.open()
-    ui.send({ type: "mcp-tool-call", id: "c1", tool: "tapsmith_tap", args: { selector: "Login" }, status: "completed", durationMs: 120, timestamp: T0 + 5_000 })
+    ui.send({ type: "mcp-tool-call", id: "c1", tool: "tapsmith_tap", args: { locator: "Login" }, status: "completed", durationMs: 120, timestamp: T0 + 5_000 })
     ui.send(prepare("completed", { durationMs: 9_800 }))
     const rows = mcp.feed.locator("[data-testid='mcp-entry'], [data-testid='activity-entry']")
     await expect(rows).toHaveCount(2)
@@ -96,5 +96,27 @@ test.describe("Device activity feed", () => {
     await ui.open()
     await mcp.open()
     await expect(mcp.activityOfKind("prepare")).toHaveCount(1)
+  })
+
+  // The in-progress summary reads the tool's own argument key, so renaming that
+  // key without updating the panel renders a blank row (it did, for `locator`).
+  test("an in-progress tap names the locator it is acting on", async ({ app, mcp }) => {
+    const ui = app
+    await mcp.open()
+
+    ui.send({ type: "mcp-tool-call", id: "c1", tool: "tapsmith_tap", args: { locator: 'device.getByText("Login")' }, status: "started", timestamp: T0 })
+    await expect(mcp.entries).toHaveCount(1)
+    await expect(mcp.entries).toContainText("running…")
+    await expect(mcp.entries).toContainText('device.getByText("Login")')
+  })
+
+  // Events can arrive from a separately installed `tapsmith mcp-server` that
+  // predates the rename and still sends `selector`, so the row stays readable.
+  test("an older mcp-server's pre-rename `selector` argument still renders", async ({ app, mcp }) => {
+    const ui = app
+    await mcp.open()
+
+    ui.send({ type: "mcp-tool-call", id: "c1", tool: "tapsmith_tap", args: { selector: 'device.getByText("Login")' }, status: "started", timestamp: T0 })
+    await expect(mcp.entries).toContainText('device.getByText("Login")')
   })
 })

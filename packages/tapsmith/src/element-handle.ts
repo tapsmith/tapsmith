@@ -445,7 +445,7 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
  * `options` lets non-native surfaces (WebView locators, PILOT-227) reuse the
  * same message format: `totalCount` when `elements` is a truncated sample of
  * a larger match set, and `suggest` to override the per-element unambiguous
- * locator suggestion (the default suggests native `device.getBy*` selectors).
+ * locator suggestion (the default suggests native `device.getBy*` locators).
  */
 export function buildStrictModeViolationError(
   selectorDescription: string,

@@ -4,7 +4,7 @@
  * `test()` once the underlying behavior is implemented and the assertion
  * makes sense as a real regression check.
  *
- * Bugs that have been fixed already live in `selector-regressions.test.ts`.
+ * Bugs that have been fixed already live in `locator-regressions.test.ts`.
  */
 import { describe, test } from "tapsmith"
 

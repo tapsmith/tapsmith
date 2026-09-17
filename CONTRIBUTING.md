@@ -116,7 +116,7 @@ request.
 
 | Path | What it is |
 | --- | --- |
-| `packages/tapsmith/` | TypeScript SDK -- selectors, element handles, assertions, runner, CLI |
+| `packages/tapsmith/` | TypeScript SDK -- locators, element handles, assertions, runner, CLI |
 | `packages/tapsmith-core/` | Rust daemon -- gRPC server, ADB/simctl bridge, device management |
 | `agent/` | Android agent -- Kotlin, UIAutomator2 instrumentation |
 | `ios-agent/` | iOS agent -- Swift, XCUITest instrumentation |
@@ -265,7 +265,7 @@ If you change public API -- a new method on `Device` or `ElementHandle`, a new a
 new type -- update [`docs/api-reference.md`](docs/api-reference.md) in the same pull request.
 It is the single source of truth for users.
 
-The other docs (`getting-started.md`, `selectors.md`, `configuration.md`, `ci-setup.md`) only
+The other docs (`getting-started.md`, `locators.md`, `configuration.md`, `ci-setup.md`) only
 need updating if you've changed a user-facing workflow.
 
 ## Pull requests

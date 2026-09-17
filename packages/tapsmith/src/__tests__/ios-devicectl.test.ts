@@ -97,6 +97,32 @@ describe('parseDevicectlDeviceList', () => {
     expect(result.map((d) => d.udid)).toEqual(['IOS-UDID']);
   });
 
+  it('filters out simulators, which devicectl lists from Xcode 27 (reality: simulated)', () => {
+    const json = JSON.stringify({
+      result: {
+        devices: [
+          {
+            hardwareProperties: { platform: 'iOS', udid: 'PHONE-UDID', reality: 'physical' },
+            deviceProperties: { name: 'iPhone', bootState: 'booted', provider: 'com.apple.CoreDevice.RemotePairingDeviceProvider' },
+            connectionProperties: { pairingState: 'paired', transportType: 'wired' },
+          },
+          {
+            hardwareProperties: { platform: 'iOS', udid: '4324E8D7-E006-4766-94FF-F6FD9655320F', reality: 'simulated' },
+            deviceProperties: { name: 'iPhone 17', bootState: 'booted', provider: 'com.apple.CoreSimulator.SimulatorCoreDevicePlugin' },
+            connectionProperties: { pairingState: 'paired', transportType: 'sameMachine' },
+          },
+          {
+            // older devicectl without `reality`: the CoreSimulator provider alone marks it
+            hardwareProperties: { platform: 'iOS', udid: 'SIM-2' },
+            deviceProperties: { name: 'iPhone 16', bootState: 'shutdown', provider: 'com.apple.CoreSimulator.SimulatorCoreDevicePlugin' },
+            connectionProperties: { pairingState: 'paired', transportType: 'sameMachine' },
+          },
+        ],
+      },
+    });
+    expect(parseDevicectlDeviceList(json).map((d) => d.udid)).toEqual(['PHONE-UDID']);
+  });
+
   it('returns empty array for missing / malformed result', () => {
     expect(parseDevicectlDeviceList('{}')).toEqual([]);
     expect(parseDevicectlDeviceList('{"result":{"devices":"not-an-array"}}')).toEqual([]);

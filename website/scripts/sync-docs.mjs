@@ -10,7 +10,7 @@
 //   2. Splits api-reference.md into 11 focused sub-pages under
 //      src/content/docs/reference/api/.
 //   3. Rewrites internal cross-reference links to match Starlight's
-//      URL scheme (e.g. `selectors.md` → `/guides/selectors/`).
+//      URL scheme (e.g. `locators.md` → `/guides/locators/`).
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync, rmSync, cpSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -35,10 +35,10 @@ const FILES = [
     desc: 'Learn how to structure tests, use screen objects, manage test state, and follow best practices.',
   },
   {
-    src: 'selectors.md',
-    dest: 'guides/selectors.md',
-    title: 'Selectors',
-    desc: 'Choose the right selector strategy for reliable, accessible mobile element queries.',
+    src: 'locators.md',
+    dest: 'guides/locators.md',
+    title: 'Locators',
+    desc: 'Choose the right locator strategy for reliable, accessible mobile element queries.',
   },
   {
     src: 'network.md',
@@ -240,7 +240,7 @@ const API_SPLITS = [
 // The rewriter handles both `(file.md)` and `(./file.md)` forms,
 // and strips any trailing `#anchor` since anchors rarely survive the split.
 const LINK_MAP = {
-  'selectors.md': '/guides/selectors/',
+  'locators.md': '/guides/locators/',
   'network.md': '/guides/network/',
   'webview.md': '/guides/webview/',
   'trace-viewer.md': '/guides/trace-viewer/',

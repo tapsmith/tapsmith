@@ -1,4 +1,4 @@
-// Locator tab — the selector playground: type a locator, see how many elements
+// Locator tab — the locator playground: type a locator, see how many elements
 // it matches, or pick one from the suggestions generated for a hierarchy node.
 
 import type { Page } from "@playwright/test"
@@ -7,7 +7,7 @@ export class LocatorPane {
   constructor(private page: Page) {}
 
   get input() {
-    return this.page.getByRole("textbox", { name: "Selector" })
+    return this.page.getByRole("textbox", { name: "Locator" })
   }
 
   /**
@@ -38,12 +38,12 @@ export class LocatorPane {
 
   /** "1 match" / "3 matches" / empty when nothing has been typed. */
   get matchCount() {
-    return this.page.getByTestId("selector-match-count")
+    return this.page.getByTestId("locator-match-count")
   }
 
-  /** Shown when an ambiguous selector has no positional chain (PILOT-226). */
+  /** Shown when an ambiguous locator has no positional chain (PILOT-226). */
   get strictWarning() {
-    return this.page.getByTestId("selector-strict-warning")
+    return this.page.getByTestId("locator-strict-warning")
   }
 
   /** Trace vs Live hierarchy source, in UI mode only. */

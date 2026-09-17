@@ -6,7 +6,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerSnapshotTool } from './tools/snapshot.js';
 import { registerScreenshotTool } from './tools/screenshot.js';
-import { registerTestSelectorTool } from './tools/test-selector.js';
+import { registerTestLocatorTool } from './tools/test-locator.js';
 import { registerDeviceActionTools } from './tools/device-actions.js';
 import { registerAppControlTools } from './tools/app-control.js';
 import { registerListDevicesTool } from './tools/list-devices.js';
@@ -81,7 +81,7 @@ export function createMcpServer(options?: McpServerOptions): McpServer {
   // the same way runs are routed.
   registerSnapshotTool(server, dispatcher);
   registerScreenshotTool(server, dispatcher);
-  registerTestSelectorTool(server, dispatcher);
+  registerTestLocatorTool(server, dispatcher);
   registerDeviceActionTools(server, dispatcher);
   registerAppControlTools(server, dispatcher);
   registerListDevicesTool(server, dispatcher);

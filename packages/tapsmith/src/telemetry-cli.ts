@@ -128,7 +128,7 @@ function describe(view: ConfigView): string {
       ? 'Telemetry is enabled in dry-run mode: TAPSMITH_TELEMETRY_DEBUG is set, so events print to stderr and nothing is sent.'
       : 'Telemetry is enabled.');
     lines.push('  One anonymous event per test-file run: run mode, platform, pass/fail counts, SDK/Node/OS versions.');
-    lines.push('  Never test names, selectors, app identifiers, or file paths.');
+    lines.push('  Never test names, locators, app identifiers, or file paths.');
     lines.push(`  Anonymous id: ${status.anonymousId ?? '(none yet — created on the first run)'}  (${tilde(status.stateFile)})`);
     lines.push('  Disable: tapsmith telemetry disable · TAPSMITH_TELEMETRY=0 · telemetry: false in tapsmith.config.ts');
   } else {

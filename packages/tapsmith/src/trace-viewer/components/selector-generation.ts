@@ -383,5 +383,5 @@ export function generateBestSelector(node: HierarchyNode): string {
     const descSelectors = generateSelectors(descendant);
     if (descSelectors.length > 0) return descSelectors[0].code;
   }
-  return selectors.length > 0 ? selectors[0].code : `// No selector available`;
+  return selectors.length > 0 ? selectors[0].code : `// No locator available`;
 }
