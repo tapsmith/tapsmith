@@ -789,7 +789,7 @@ class CommandHandler {
 
             // Single-line UITextField treats Return as submit/blur. After that
             // the original field no longer receives trailing input, so preserve
-            // the existing iOS behavior tested by selector-regressions.
+            // the existing iOS behavior tested by locator-regressions.
             if next == "\n" && initialElement.className != "XCUIElementTypeTextView" {
                 if !actionExecutor.typeViaEventSynthesizer(next) {
                     throw AgentError.actionFailed("typeText failed to synthesize Return key")

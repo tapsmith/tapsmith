@@ -156,7 +156,7 @@ function mapWebViewMethod(method: string, value: string, name?: string, exact?: 
 // fall back to the `value` attribute the iOS agent emits. Remaining fidelity
 // gaps vs the on-device matcher (title attribute, auto-concatenated child
 // labels, trailing-punctuation tolerance) are accepted here — native selector
-// VALIDATION goes through the real runtime via findElements (test_selector);
+// VALIDATION goes through the real runtime via findElements (tapsmith_test_locator);
 // this TS matcher only powers the browser-side trace viewer/playground.
 function getNodeText(node: HierarchyNode): string {
   return node.attributes.get('text') ?? node.attributes.get('label') ?? node.attributes.get('value') ?? '';

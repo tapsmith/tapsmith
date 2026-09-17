@@ -128,7 +128,7 @@ const preferRole: RuleModule = {
     },
     messages: {
       preferRole:
-        'Use getByRole("{{role}}") instead of locator({ className: "{{className}}" }). Role-based selectors are more resilient to implementation changes.',
+        'Use getByRole("{{role}}") instead of locator({ className: "{{className}}" }). Role-based locators are more resilient to implementation changes.',
     },
     schema: [],
   },
@@ -158,12 +158,12 @@ const noBareLocatorXpath: RuleModule = {
     type: 'problem',
     docs: {
       description:
-        'Require an explanatory comment when using locator({ xpath }) selectors',
+        'Require an explanatory comment when using locator({ xpath })',
       recommended: true,
     },
     messages: {
       noBareLocatorXpath:
-        'locator({ xpath }) must have an explanatory comment on the same or preceding line. XPath selectors are fragile and Android-only — document why this is necessary.',
+        'locator({ xpath }) must have an explanatory comment on the same or preceding line. XPath locators are fragile and Android-only — document why this is necessary.',
     },
     schema: [],
   },

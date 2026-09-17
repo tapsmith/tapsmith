@@ -116,7 +116,7 @@ request.
 
 | Path | What it is |
 | --- | --- |
-| `packages/tapsmith/` | TypeScript SDK -- selectors, element handles, assertions, runner, CLI |
+| `packages/tapsmith/` | TypeScript SDK -- locators, element handles, assertions, runner, CLI |
 | `packages/tapsmith-core/` | Rust daemon -- gRPC server, ADB/simctl bridge, device management |
 | `agent/` | Android agent -- Kotlin, UIAutomator2 instrumentation |
 | `ios-agent/` | iOS agent -- Swift, XCUITest instrumentation |

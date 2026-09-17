@@ -6,7 +6,7 @@ Mobile app testing framework with a Playwright-inspired API. Three-tier architec
 ## Project structure
 
 ```
-packages/tapsmith/        # TypeScript SDK — selectors, element handles, assertions, runner, CLI
+packages/tapsmith/        # TypeScript SDK — locators, element handles, assertions, runner, CLI
 packages/tapsmith-core/   # Rust daemon — gRPC server, ADB/simctl bridge, device management
 agent/                    # Android Kotlin agent — UIAutomator2 instrumentation
 ios-agent/                # iOS Swift agent — XCUITest instrumentation

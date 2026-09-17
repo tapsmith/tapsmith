@@ -9,6 +9,7 @@
 import { useRef, useEffect, useState, useCallback } from 'preact/hooks';
 import type { McpToolCallMessage, DeviceActivityMessage } from '../ui-protocol.js';
 import { groupAgents, agentsTooltip, type McpAgent } from '../mcp-agents.js';
+import { formatToolArgs } from './tool-args.js';
 
 interface DeviceActivityPanelProps {
   mcpUrl?: string
@@ -316,23 +317,4 @@ function mergeToolCalls(calls: McpToolCallMessage[]): McpToolCallMessage[] {
     }
   }
   return Array.from(byId.values());
-}
-
-function formatToolArgs(tool: string, args: Record<string, unknown>): string {
-  if (tool === 'tapsmith_run_tests' && Array.isArray(args.files)) {
-    const files = args.files as string[];
-    const names = files.map(f => {
-      const parts = String(f).split('/');
-      return parts[parts.length - 1];
-    });
-    return `Running ${names.join(', ')}`;
-  }
-  if (tool === 'tapsmith_tap' || tool === 'tapsmith_type') {
-    // `selector` is the pre-rename argument name. Events reach this panel over
-    // HTTP from a separately installed `tapsmith mcp-server` (ui-server.ts's
-    // /mcp-events ingest), which can be an older build than the UI server, so
-    // the older key stays readable rather than rendering a blank row.
-    return String(args.locator ?? args.selector ?? '');
-  }
-  return '';
 }

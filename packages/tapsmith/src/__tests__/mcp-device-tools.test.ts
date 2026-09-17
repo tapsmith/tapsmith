@@ -5,6 +5,8 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { selectorToProto } from '../selectors.js';
 import type { DeviceInfoProto, ElementInfo, TapsmithGrpcClient } from '../grpc-client.js';
 import type { TestDispatcher } from '../mcp/test-dispatcher.js';
+import { summarizeResult } from '../mcp/events.js';
+import { formatToolArgs } from '../ui-mode/components/tool-args.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
 // swipe, press_key, launch_app, list_devices, test_locator, watch — had no
@@ -194,6 +196,24 @@ describe('tapsmith_snapshot', () => {
     expect(out).toContain('Sign in to continue to DreamSpinner');
     expect(out).toContain('## Suggested Locators');
     expect(out).toContain('device.getByRole("button", { name: "Sign in" })');
+  });
+
+  // The section heading is a literal in two places: emitted by snapshot.ts and
+  // parsed back out by summarizeResult (mcp/events.ts) for the activity feed.
+  // Each side has its own test with its own copy of the string, so editing one
+  // leaves both green while the feed silently reports 0 locators. Pipe the real
+  // snapshot output through the real summariser so the two stay tied.
+  it('produces output the activity-feed summariser can still count', async () => {
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML }).client;
+    const out = text(await callTool('tapsmith_snapshot'));
+
+    // Parse the count rather than substring-matching it: '10 locators' contains
+    // '0 locators', so a negative substring assertion would fire on a fixture that
+    // happens to suggest a multiple of ten.
+    const summary = summarizeResult('tapsmith_snapshot', out);
+    const counts = /^(\d+) elements, (\d+) locators$/.exec(summary);
+    expect(counts, `summariser could not parse: ${summary}`).not.toBeNull();
+    expect(Number(counts![2])).toBeGreaterThan(0);
   });
 
   it('reports a daemon error instead of an empty screen', async () => {
@@ -529,6 +549,22 @@ describe('tapsmith_test_locator', () => {
     });
   });
 
+  // The tool name is a literal in two places: the registration in
+  // mcp/tools/test-locator.ts and the `case` summarizeResult (mcp/events.ts)
+  // switches on for the activity feed. ONE constant is used for both calls below
+  // on purpose: renaming the tool in source makes callTool fail, and updating this
+  // constant to match then makes summarizeResult fall through to its default arm —
+  // so the divergence cannot be repaired into a false green.
+  it('produces a result the activity-feed summariser recognises by name', async () => {
+    const TOOL = 'tapsmith_test_locator';
+    hoisted.client = makeDaemon({
+      elements: [makeElement({ text: 'Sign in', role: 'button' })],
+    }).client;
+    const out = text(await callTool(TOOL, { locator: 'device.getByText("Sign in")' }));
+
+    expect(summarizeResult(TOOL, out)).toBe('matched 1 element');
+  });
+
   it('warns that an ambiguous locator will throw at runtime', async () => {
     hoisted.client = makeDaemon({
       elements: [
@@ -669,6 +705,28 @@ describe('the device tools the server advertises', () => {
         expect(schema.required ?? []).not.toContain('device');
         expect(schema.required ?? []).not.toContain('project');
       }
+
+      // UI mode's Device Activity feed reads the target argument out of the
+      // event it is sent, so the key is a literal shared between each tool's
+      // schema and formatToolArgs. Read the key the tool ACTUALLY advertises
+      // and feed the reader that — renaming the argument on one side alone
+      // then blanks the row here instead of silently in the live feed.
+      for (const name of ['tapsmith_tap', 'tapsmith_type']) {
+        const props = (byName.get(name)!.inputSchema as { properties: Record<string, unknown> }).properties;
+        const targetArg = Object.keys(props).find((k) => k !== 'device' && k !== 'project' && k !== 'text' && k !== 'clear');
+        expect(targetArg, `${name} advertises no target argument`).toBeDefined();
+        expect(formatToolArgs(name, { [targetArg!]: 'device.getByText("Login")' }))
+          .toBe('device.getByText("Login")');
+      }
+
+      // Same tie for the feed's other summarised row, which reads a different key.
+      const runProps = (byName.get('tapsmith_run_tests')!.inputSchema as {
+        properties: Record<string, { type?: string }>
+      }).properties;
+      const filesArg = Object.keys(runProps).find((k) => runProps[k]?.type === 'array');
+      expect(filesArg, 'tapsmith_run_tests advertises no array argument').toBeDefined();
+      expect(formatToolArgs('tapsmith_run_tests', { [filesArg!]: ['/proj/e2e/login.test.ts'] }))
+        .toBe('Running login.test.ts');
     } finally {
       await client.close();
       await server.close();
