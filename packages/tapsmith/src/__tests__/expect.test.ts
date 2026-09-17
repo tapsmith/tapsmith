@@ -1,7 +1,7 @@
 import { describe, it, expect as vitestExpect, vi } from "vitest";
 import { expect as tapsmithExpect } from "../expect.js";
 import { ElementHandle } from "../element-handle.js";
-import { _text } from "../selectors.js";
+import { _role, _text, selectorToProto, type Selector } from "../selectors.js";
 import type {
   TapsmithGrpcClient,
   FindElementResponse,
@@ -815,6 +815,34 @@ describe("toHaveCount()", () => {
     await vitestExpect(
       tapsmithExpect(handle).toHaveCount(5, { timeout: 50 }),
     ).rejects.toThrow("found 2");
+  });
+
+  it("counts the handle's modified match set, not its raw selector (PILOT-349 follow-up)", async () => {
+    // Real agents mint a fresh elementId per read: churn ids so the and()
+    // below can only intersect by stable identity.
+    let nextId = 0;
+    const row = (text: string, top: number) =>
+      makeElementInfo({ elementId: `id-${++nextId}`, text, role: "button", bounds: { left: 0, top, right: 400, bottom: top + 60 } });
+    const findElements = vi.fn(async (selector: Selector) => ({
+      requestId: "1",
+      elements: selectorToProto(selector).text === "Item 5"
+        ? [row("Item 5", 100)]
+        : [row("Back", 0), row("Item 5", 100), row("Item 6", 160)],
+      errorMessage: "",
+    }));
+    const client = {
+      findElement: vi.fn(async () => ({ requestId: "1", found: true, element: makeElementInfo(), errorMessage: "" })),
+      findElements,
+    } as unknown as TapsmithGrpcClient;
+    const buttons = new ElementHandle(client, _role("button"), 5000);
+    const item5 = new ElementHandle(client, _text("Item 5"), 5000);
+    await tapsmithExpect(buttons.and(item5)).toHaveCount(1, { timeout: 200 });
+    await tapsmithExpect(buttons.or(item5)).toHaveCount(3, { timeout: 200 });
+    await tapsmithExpect(buttons.filter({ hasText: "Item" })).toHaveCount(2, { timeout: 200 });
+    await tapsmithExpect(buttons.first()).toHaveCount(1, { timeout: 200 });
+    await vitestExpect(
+      tapsmithExpect(buttons.and(item5)).toHaveCount(3, { timeout: 100 }),
+    ).rejects.toThrow("to have count 3, but found 1");
   });
 
   it("not.toHaveCount() passes when count differs", async () => {

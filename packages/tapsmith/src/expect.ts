@@ -691,13 +691,13 @@ function createAssertions(
       const desc = selectorDescription(handle);
       let lastCount = 0;
       const result = await poll(async () => {
-        try {
-          const res = await handle._client.findElements(handle._selector, POLL_FIND_TIMEOUT_MS);
-          lastCount = res.elements?.length ?? 0;
-          return lastCount === count;
-        } catch {
-          return false;
-        }
+        // Non-strict: a count is a multi-element query. Resolved through the
+        // handle, not its raw selector, so filter()/and()/or()/scope and the
+        // positional index all apply — `expect(a.and(b)).toHaveCount(1)` used
+        // to count every match of `a` (found alongside PILOT-349).
+        const els = await resolveTick(handle, false);
+        lastCount = els.length;
+        return lastCount === count;
       }, timeout, negated);
 
       if (!negated && !result) {

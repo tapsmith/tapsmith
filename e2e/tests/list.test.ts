@@ -130,12 +130,18 @@ describe("List screen — all() snapshot semantics", () => {
 describe("List screen — and()/or() on a device", () => {
   test.beforeAll(async ({ device }) => {
     await device.openDeepLink("tapsmithtest:///list")
+    // The all() describe above leaves focus in the search box; on Android the
+    // keyboard then covers the lower rows and a tap on one lands on the
+    // keyboard instead (PILOT-223, PILOT-348). Item 2 sits above the keyboard
+    // on both CI form factors regardless, so a hide that does not take
+    // cannot fail these tests on its own.
+    await device.hideKeyboard()
   })
 
   test("and() intersects its operands", async ({ device, listScreen }) => {
     // getByRole("button") alone is ambiguous (every rendered row, plus the
     // header's back button); intersected with one row's label it is that row.
-    const row = device.getByRole("button").and(listScreen.item(5))
+    const row = device.getByRole("button").and(listScreen.item(2))
     await expect(row).toHaveCount(1)
     await expect(row).toBeVisible()
     // Disjoint operands: the item-count text is not a button.
@@ -143,7 +149,7 @@ describe("List screen — and()/or() on a device", () => {
   })
 
   test("an action through and() lands on the intersected element", async ({ device, listScreen }) => {
-    const row = device.getByRole("button").and(listScreen.item(5))
+    const row = device.getByRole("button").and(listScreen.item(2))
     await row.tap()
     await expect(listScreen.selectedCount).toContainText("1 selected")
     await row.tap() // deselect, leave the screen as we found it
@@ -153,11 +159,11 @@ describe("List screen — and()/or() on a device", () => {
   test("or() unites its operands without duplicating a shared match", async ({ device, listScreen }) => {
     // The same row reached through two different selectors is ONE match, so
     // a single-element use of the union is not a strict-mode violation.
-    const sameRow = listScreen.item(5).or(device.getByTestId("item-5"))
+    const sameRow = listScreen.item(2).or(device.getByTestId("item-2"))
     await expect(sameRow).toHaveCount(1)
     await expect(sameRow).toBeVisible()
     // Distinct rows add up.
-    await expect(listScreen.item(5).or(listScreen.item(6))).toHaveCount(2)
+    await expect(listScreen.item(2).or(listScreen.item(3))).toHaveCount(2)
   })
 })
 
