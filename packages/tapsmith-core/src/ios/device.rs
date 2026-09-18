@@ -241,6 +241,21 @@ fn parse_devicectl_devices(json_str: &str) -> Result<Vec<IosDevice>> {
         if platform != "iOS" {
             continue;
         }
+        // Only real hardware. From Xcode 27 devicectl lists every simulator
+        // too, flagged `reality: "simulated"`. Without this, list_all_devices
+        // returned each simulator twice — once from simctl as a simulator and
+        // once from here as a physical iPhone. DeviceManager de-duplicates
+        // booted ones by serial but skips non-booted simulators from the
+        // simctl half, so every shutdown simulator surfaced as a physical
+        // device. Read from the same dictionary as every other field (the
+        // replacement `properties` tree is a whole-parser migration).
+        let reality = device
+            .pointer("/hardwareProperties/reality")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if reality == "simulated" {
+            continue;
+        }
 
         let udid = device
             .pointer("/hardwareProperties/udid")
@@ -1677,6 +1692,37 @@ mod tests {
         let devices = parse_devicectl_devices(json).unwrap();
         assert_eq!(devices.len(), 1);
         assert_eq!(devices[0].udid, "IPHONE-UDID");
+    }
+
+    #[test]
+    fn parse_devicectl_devices_filters_simulators_xcode27() {
+        // Xcode 27's devicectl lists simulators alongside real hardware,
+        // flagged `reality: "simulated"`. Only real hardware — flagged
+        // "physical", or unflagged on older Xcode — must survive.
+        let json = r#"{
+          "result": {
+            "devices": [
+              {
+                "hardwareProperties": { "platform": "iOS", "udid": "REAL-UDID", "reality": "physical" },
+                "deviceProperties": { "name": "iPhone", "bootState": "booted" },
+                "connectionProperties": { "pairingState": "paired" }
+              },
+              {
+                "hardwareProperties": { "platform": "iOS", "udid": "SIM-UDID", "reality": "simulated" },
+                "deviceProperties": { "name": "iPhone 17", "bootState": "shutdown" },
+                "connectionProperties": { "pairingState": "paired" }
+              },
+              {
+                "hardwareProperties": { "platform": "iOS", "udid": "OLD-XCODE-UDID" },
+                "deviceProperties": { "name": "iPhone 15", "bootState": "booted" },
+                "connectionProperties": {}
+              }
+            ]
+          }
+        }"#;
+        let devices = parse_devicectl_devices(json).unwrap();
+        let udids: Vec<&str> = devices.iter().map(|d| d.udid.as_str()).collect();
+        assert_eq!(udids, vec!["REAL-UDID", "OLD-XCODE-UDID"]);
     }
 
     #[test]
