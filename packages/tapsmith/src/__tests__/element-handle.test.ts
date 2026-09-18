@@ -2738,6 +2738,75 @@ describe('and()', () => {
       expect(await buttons.nth(1).and(items).nth(1).count()).toBe(0);
     });
 
+    it('an out-of-range or negative operand index narrows that operand to nothing / the counted-from-end match', async () => {
+      const rows = [
+        makeElementInfo({ text: 'Item 1', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 2', role: 'button', bounds: OTHER_ROW }),
+        makeElementInfo({ text: 'Item 3', role: 'button', bounds: { left: 0, top: 220, right: 400, bottom: 280 } }),
+      ];
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(formatSelector(selector).includes('getByRole') ? rows : rows.slice(1))));
+      const client = makeMockClient({ findElements });
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      const items = new ElementHandle(client, _text('Item'), 5000);
+      // Out of range on either side: that operand is empty, so the
+      // intersection is empty — a count/exists answer, never a throw.
+      expect(await buttons.nth(7).and(items).count()).toBe(0);
+      expect(await buttons.and(items.nth(7)).count()).toBe(0);
+      expect(await buttons.nth(-9).and(items).exists()).toBe(false);
+      // A negative index counts from the end of the OPERAND's matches.
+      expect((await buttons.nth(-2).and(items)._resolveAll()).map((e) => e.text)).toEqual(['Item 2']);
+    });
+
+    it('a nested combinator keeps its own positional index when it becomes an operand', async () => {
+      const rows = [
+        makeElementInfo({ text: 'Item 1', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 2', role: 'button', bounds: OTHER_ROW }),
+        makeElementInfo({ text: 'Item 3', role: 'button', bounds: { left: 0, top: 220, right: 400, bottom: 280 } }),
+      ];
+      const findElements = vi.fn(async (selector: Selector) => {
+        const f = formatSelector(selector);
+        if (f.includes('getByRole')) return makeFindElementsResponse(churn(rows));
+        if (f.includes('"Item 3"')) return makeFindElementsResponse(churn([rows[2]]));
+        return makeFindElementsResponse(churn(rows.slice(1)));
+      });
+      const client = makeMockClient({ findElements });
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      const items = new ElementHandle(client, _text('Item'), 5000);
+      const item3 = new ElementHandle(client, _text('Item 3'), 5000);
+      // (buttons ∪ items).first() is Item 1, which items does not match.
+      expect(await buttons.or(items).first().and(items).count()).toBe(0);
+      // (buttons.first() ∪ item3) = [Item 1, Item 3]; ∩ items keeps Item 3.
+      expect((await buttons.first().or(item3).and(items)._resolveAll()).map((e) => e.text)).toEqual(['Item 3']);
+      // (buttons ∩ items).last() is Item 3; ∪ item3 de-duplicates to one.
+      expect(await buttons.and(items).last().or(item3).count()).toBe(1);
+    });
+
+    it('a getBy* scoped under a combinator resolves the operand index before scoping by containment', async () => {
+      const rows = [
+        makeElementInfo({ text: 'Item 1', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 2', role: 'button', bounds: OTHER_ROW }),
+      ];
+      const labels = [
+        makeElementInfo({ text: 'Label', bounds: { left: 10, top: 110, right: 100, bottom: 150 } }),
+        makeElementInfo({ text: 'Label', bounds: { left: 10, top: 170, right: 100, bottom: 210 } }),
+      ];
+      const findElements = vi.fn(async (selector: Selector) => {
+        const f = formatSelector(selector);
+        if (f.includes('"Label"')) return makeFindElementsResponse(churn(labels));
+        if (f.includes('getByRole')) return makeFindElementsResponse(churn(rows));
+        return makeFindElementsResponse(churn(rows.slice(1))); // items: Item 2 only
+      });
+      const client = makeMockClient({ findElements });
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      const items = new ElementHandle(client, _text('Item'), 5000);
+      // buttons.nth(1) ∩ items is Item 2: only the label inside THAT row is in scope.
+      const inScope = await buttons.nth(1).and(items).getByText('Label')._resolveAll();
+      expect(inScope.map((e) => e.bounds!.top)).toEqual([170]);
+      // An empty intersection scopes to nothing rather than to every row.
+      expect(await buttons.first().and(items).getByText('Label').count()).toBe(0);
+    });
+
     it('refuses an xpath operand on either side (its text and bounds come from a different agent read)', () => {
       const client = makeMockClient();
       const byXpath = new ElementHandle(client, _xpath('//android.widget.Button'), 5000);
@@ -2977,6 +3046,22 @@ describe('or()', () => {
       // the topmost match regardless of which operand contributed it.
       expect((await buttons.first().or(help).last().find()).text).toBe('Help');
       expect((await help.or(buttons.first()).first().find()).text).toBe('Item 1');
+    });
+
+    it('an out-of-range operand index leaves the union to the other operand', async () => {
+      const rows = [
+        makeElementInfo({ text: 'Item 1', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 2', role: 'button', bounds: OTHER_ROW }),
+      ];
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(formatSelector(selector).includes('getByRole') ? rows : [makeElementInfo({ text: 'Help', bounds: { left: 0, top: 300, right: 400, bottom: 340 } })])));
+      const client = makeMockClient({ findElements });
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      const help = new ElementHandle(client, _text('Help'), 5000);
+      expect((await buttons.nth(7).or(help)._resolveAll()).map((e) => e.text)).toEqual(['Help']);
+      expect((await help.or(buttons.nth(-9))._resolveAll()).map((e) => e.text)).toEqual(['Help']);
+      // Both operands empty: an empty union, reported — not thrown — by count().
+      expect(await buttons.nth(7).or(help.nth(3)).count()).toBe(0);
     });
   });
 });
