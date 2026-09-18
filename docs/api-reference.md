@@ -126,7 +126,7 @@ This is the safety net for the substring default of `getByText` — without it, 
 | Positive assertions (`toBeVisible`, `toHaveText`, `toBeChecked`, …) | Yes |
 | `waitFor({ state: "hidden" \| "detached" })` | No — absence is evaluated over all matches |
 | `toBeHidden`, `not.toBeVisible`, `not.toExist` | No — absence is evaluated over all matches |
-| `count()`, `all()`, `exists()`, `toHaveCount` | No — inherently multi-element |
+| `count()`, `all()`, `allTextContents()`, `exists()`, `toHaveCount` | No — inherently multi-element |
 | Locators narrowed with `.first()` / `.last()` / `.nth(n)` | Exempt — they target one match by definition |
 
 To handle a violation programmatically, import the error class or the cross-realm-safe guard:
@@ -942,10 +942,22 @@ positional locator: `list.nth(1).filter(…)` means "row 1 if it matches", not "
 row" — put the filter first (`list.filter(…).nth(1)`) for the latter. `list.first().all()` (or
 `.nth(i)`/`.last()`) yields that one locator, or an empty array.
 
-Each call on a handle from `all()` is one hierarchy read. To read many rows at once, iterate `all()`
-only when you need per-row actions; for a batch read prefer a single query (`count()`, or an
-assertion such as `toHaveCount`) and keep the loop small — a 30-row `for (const row of rows) await
-row.getText()` is 30 hierarchy reads, where the old snapshot-backed handles made one.
+Each call on a handle from `all()` is one hierarchy read, so iterate `all()` when you need per-row
+*actions*. For a batch *read*, use a single query instead: [`allTextContents()`](#elementhandlealltextcontents-promisestring)
+for the texts, `count()` for the size, or an assertion such as `toHaveCount`. On an Android emulator a
+hierarchy read costs roughly 0.7 s, so `for (const row of rows) await row.getText()` over ten rendered
+rows takes about 7 s where `rows.allTextContents()` takes one read.
+
+#### `elementHandle.allTextContents(): Promise<string[]>`
+
+Return the text of every element the locator matches, in match order, from a single hierarchy read
+(Playwright's `allTextContents()`). Every modifier applies, as for `count()` and `all()`, and like them
+it does not wait and is exempt from strict mode: when nothing matches it resolves to `[]`.
+
+```typescript
+const names = await device.getByRole("listitem").allTextContents();
+expect(names).toEqual(["Item 1", "Item 2", "Item 3"]);
+```
 
 ### Waiting
 
@@ -1175,7 +1187,8 @@ const png = await device.getByRole("image", { name: "Profile" }).screenshot();
 
 #### `elementHandle.getText(): Promise<string>`
 
-Get the visible text content of this element.
+Get the visible text content of this element. Waits for the element like `find()`. To read the text of
+every match in one hierarchy read, use [`allTextContents()`](#elementhandlealltextcontents-promisestring).
 
 ```typescript
 const label = await device.locator({ id: "status_label" }).getText();

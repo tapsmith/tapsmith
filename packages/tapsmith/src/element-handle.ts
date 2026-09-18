@@ -1727,6 +1727,29 @@ export class ElementHandle {
     }
   }
 
+  /**
+   * Return the text of every element the locator matches, in match order,
+   * from ONE hierarchy read — Playwright's `allTextContents()`. Every
+   * modifier applies, as for `count()` and `all()`, and like them it does not
+   * wait and is exempt from strict mode: no match is `[]`.
+   *
+   * Prefer it to `for (const row of await rows.all()) await row.getText()`
+   * for a batch read: each handle from `all()` is a live locator, so that
+   * loop is one hierarchy read per row (PILOT-346).
+   */
+  async allTextContents(): Promise<string[]> {
+    this._emitQueryStarted('allTextContents');
+    const start = Date.now();
+    try {
+      const elements = await this._select(await this._resolveAll());
+      await this._traceQuery('allTextContents', `Found ${elements.length} element(s)`, Date.now() - start);
+      return elements.map((el) => el.text);
+    } catch (err) {
+      await this._traceQueryFailed('allTextContents', err, Date.now() - start);
+      throw err;
+    }
+  }
+
   // ── Waiting ──
 
   /**

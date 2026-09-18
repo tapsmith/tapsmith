@@ -2430,6 +2430,51 @@ describe('positional actions on shared-property matches', () => {
   });
 });
 
+// ─── allTextContents() (PILOT-346) ───
+
+describe('allTextContents()', () => {
+  it('returns every match\'s text in order from ONE hierarchy read', async () => {
+    const findElements = vi.fn(async () => makeFindElementsResponse(threeItems));
+    const handle = new ElementHandle(makeMockClient({ findElements }), _role('listitem'), 5000);
+    expect(await handle.allTextContents()).toEqual(['Apple', 'Banana', 'Cherry']);
+    expect(findElements).toHaveBeenCalledTimes(1);
+  });
+
+  it('is [] for no match — no wait, no throw — and is exempt from strict mode', async () => {
+    const findElements = vi.fn(async () => makeFindElementsResponse([]));
+    const handle = new ElementHandle(makeMockClient({ findElements }), _role('listitem'), 5000);
+    expect(await handle.allTextContents()).toEqual([]);
+    expect(findElements).toHaveBeenCalledTimes(1);
+  });
+
+  it('honours every modifier, like count(): filters, the positional index and what is chained after it', async () => {
+    const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse(threeItems)) });
+    const handle = new ElementHandle(client, _role('listitem'), 5000);
+    expect(await handle.filter({ hasNotText: 'Banana' }).allTextContents()).toEqual(['Apple', 'Cherry']);
+    expect(await handle.last().allTextContents()).toEqual(['Cherry']);
+    expect(await handle.nth(1).filter({ hasText: 'Banana' }).allTextContents()).toEqual(['Banana']);
+    expect(await handle.nth(1).filter({ hasText: 'Apple' }).allTextContents()).toEqual([]);
+    expect(await handle.first().nth(1).allTextContents()).toEqual([]);
+  });
+
+  it('collapses accessibility-tree duplicates like count() and all() do', async () => {
+    const dup = (id: string, text: string, top: number) =>
+      makeElementInfo({ elementId: id, text, bounds: { left: 0, top, right: 100, bottom: top + 20 } });
+    const client = makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse([dup('a', 'Apple', 0), dup('a2', 'Apple', 0), dup('b', 'Banana', 20)])),
+    });
+    expect(await new ElementHandle(client, _role('listitem'), 5000).allTextContents()).toEqual(['Apple', 'Banana']);
+  });
+
+  it('surfaces a daemon-level failure instead of reporting an empty list', async () => {
+    const client = makeMockClient({
+      findElements: vi.fn(async () => ({ requestId: '1', elements: [], errorMessage: 'UiAutomation not connected' })),
+    });
+    await expect(new ElementHandle(client, _role('listitem'), 5000).allTextContents())
+      .rejects.toThrow('findElements failed: UiAutomation not connected');
+  });
+});
+
 // ─── Positional composition (PILOT-346) ───
 
 describe('modifiers after a positional index compose in call order (Playwright)', () => {
