@@ -647,33 +647,15 @@ describe('exists()', () => {
       expect(calls).toBe(2);
     });
 
-    it('a handle from all() answers from its snapshot without another device read', async () => {
-      const findElements = vi.fn(async () =>
-        makeFindElementsResponse([makeElementInfo({ elementId: 'a' }), makeElementInfo({ elementId: 'b' })]));
+    it('a handle from all() is a live nth(i) locator: exists() re-queries by index and reports the row gone once the list shrank (PILOT-346)', async () => {
+      let live = [makeElementInfo({ elementId: 'a' }), makeElementInfo({ elementId: 'b' })];
+      const findElements = vi.fn(async () => makeFindElementsResponse(live));
       const client = makeMockClient({ findElements });
       const rows = await new ElementHandle(client, _role('listitem'), 5000).all();
       expect(await rows[1].exists()).toBe(true);
-      expect(findElements).toHaveBeenCalledTimes(1);
-    });
-
-    it('a snapshot index that fell out of range answers false at once — no idle wait, no re-read of a frozen capture (review follow-up)', async () => {
-      // The shape an action ladder leaves behind when it refreshed rows[i]'s
-      // snapshot and the list had shrunk: the capture is local, so confirming
-      // the miss could only cost a device round trip for the same answer.
-      const findElements = vi.fn(async () => makeFindElementsResponse([]));
-      const client = makeMockClient({ findElements });
-      const shrunk = new ElementHandle(client, _role('listitem'), 20_000, {
-        nthIndex: 5,
-        resolvedElementsPromise: Promise.resolve([makeElementInfo({ elementId: 'a' })]),
-      });
-      const start = Date.now();
-      expect(await shrunk.exists()).toBe(false);
-      expect(Date.now() - start).toBeLessThan(500);
-      expect(client.waitForIdle).not.toHaveBeenCalled();
-      expect(findElements).not.toHaveBeenCalled();
-      // Same for the visibility probes, which read the same snapshot.
-      expect(await shrunk.isVisible()).toBe(false);
-      expect(client.waitForIdle).not.toHaveBeenCalled();
+      expect(findElements).toHaveBeenCalledTimes(2); // all() + the live read
+      live = live.slice(0, 1);
+      expect(await withFakeClock(5000, () => rows[1].exists())).toBe(false);
     });
 
     it('answers false, not a throw, for a scoped child whose parent is absent', async () => {
@@ -1602,72 +1584,91 @@ describe('isVisible()', () => {
     expect(calls).toBe(21);
   });
 
-  it('answers from the all() snapshot like every other reader on the handle, so a check and the tap it guards describe the same element (review follow-up)', async () => {
-    // rows = [A, B]; a later query would show B hidden. If the probe re-queried
-    // while find()/tap() kept using the snapshot, `if (await rows[1].isVisible())
-    // await rows[1].tap()` could check one element and tap another. All readers
-    // on an all() handle agree on the captured element; live all() is PILOT-346.
-    let calls = 0;
-    const findElements = vi.fn(async () => {
-      calls++;
-      return makeFindElementsResponse([
-        makeElementInfo({ elementId: 'a', text: 'A', visible: true }),
-        makeElementInfo({ elementId: 'b', text: 'B', visible: calls === 1, bounds: { left: 0, top: 20, right: 10, bottom: 30 } }),
-      ]);
+  it('a handle from all() is a live nth(i) locator, so a check and the tap it guards describe the same element — whatever is at that index NOW (PILOT-346)', async () => {
+    // The PILOT-346 scenario: rows = [A, B, C]; tapping rows[0] removes A and
+    // the list shifts up. `if (await rows[1].isVisible()) await rows[1].tap()`
+    // must check and tap the SAME element — the one now at index 1 (C) —
+    // never check C and tap the captured B.
+    let live = [
+      makeElementInfo({ elementId: 'a', text: 'A', bounds: { left: 0, top: 0, right: 10, bottom: 10 } }),
+      makeElementInfo({ elementId: 'b', text: 'B', bounds: { left: 0, top: 10, right: 10, bottom: 20 } }),
+      makeElementInfo({ elementId: 'c', text: 'C', bounds: { left: 0, top: 20, right: 10, bottom: 30 } }),
+    ];
+    const tap = vi.fn(async (_sel: unknown, _t: unknown, id?: string) => {
+      live = live.filter((e) => e.elementId !== id); // the tapped row is removed
+      return successResponse();
     });
-    const client = makeMockClient({ findElements });
+    const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse(live)), tap });
     const rows = await new ElementHandle(client, _role('listitem'), 5000).all();
-    expect(calls).toBe(1);
+    expect(rows).toHaveLength(3);
+    await rows[0].tap();
+    expect(tap).toHaveBeenLastCalledWith(undefined, expect.any(Number), 'a');
+    // Every reader and the action agree on the element now at index 1.
     expect(await rows[1].isVisible()).toBe(true);
     expect(await rows[1].isHidden()).toBe(false);
-    expect((await rows[1].find()).visible).toBe(true);
-    // No device query for any of them.
-    expect(calls).toBe(1);
+    expect((await rows[1].find()).text).toBe('C');
+    expect(await rows[1].getText()).toBe('C');
+    expect((await rows[1].boundingBox())?.y).toBe(20);
+    await rows[1].tap();
+    expect(tap).toHaveBeenLastCalledWith(undefined, expect.any(Number), 'c');
+    // Nothing is at the captured last index any more.
+    expect(await rows[2].count()).toBe(0);
+    expect(await withFakeClock(5000, () => rows[2].exists())).toBe(false);
+    expect(await withFakeClock(5000, () => rows[2].isVisible())).toBe(false);
   });
 
-  it('filter() on a handle from all() is refused, like first()/last()/nth() — the snapshot would have silently ignored it (review follow-up)', async () => {
-    // _resolveOne reads the all() snapshot BEFORE filters apply, so
-    // `rows[0].filter({ hasText: 'Sold out' })` used to report rows[0]'s state
-    // and act on rows[0] regardless of the filter.
-    const client = makeMockClient({
-      findElements: vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: 'a', text: 'A' })])),
-    });
-    const rows = await new ElementHandle(client, _role('listitem'), 5000).all();
-    expect(() => rows[0].filter({ hasText: 'Sold out' })).toThrow(/filter\(\) cannot be called on a handle returned by all\(\)/);
-  });
-
-  it('and()/or() on a handle from all() are refused too — the left operand would have resolved live over every row (review follow-up)', async () => {
-    // _resolveAll never consults the all() snapshot, so `rows[0].and(x)` would
-    // silently intersect ALL rows with x, not row 0.
+  it('filter() on a handle from all() narrows THAT row, like Playwright: row i if it matches, nothing otherwise (PILOT-346)', async () => {
     const client = makeMockClient({
       findElements: vi.fn(async () => makeFindElementsResponse([
-        makeElementInfo({ elementId: 'a', text: 'A' }),
-        makeElementInfo({ elementId: 'b', text: 'B' }),
+        makeElementInfo({ elementId: 'a', text: 'Apple' }),
+        makeElementInfo({ elementId: 'b', text: 'Banana — sold out' }),
       ])),
     });
     const rows = await new ElementHandle(client, _role('listitem'), 5000).all();
-    const other = new ElementHandle(client, _role('button'), 5000);
-    expect(() => rows[0].and(other)).toThrow(/and\(\) cannot be called on a handle returned by all\(\)/);
-    expect(() => rows[1].or(other)).toThrow(/or\(\) cannot be called on a handle returned by all\(\)/);
+    expect(await rows[1].filter({ hasText: 'sold out' }).count()).toBe(1);
+    expect((await rows[1].filter({ hasText: 'sold out' }).find()).elementId).toBe('b');
+    // Row 0 does not match: the filter yields nothing. It never re-indexes
+    // over the filtered set (that would be `list.filter(…).nth(0)`).
+    expect(await rows[0].filter({ hasText: 'sold out' }).count()).toBe(0);
+    expect(await rows[0].filter({ hasNotText: 'sold out' }).count()).toBe(1);
   });
 
-  it('an all() handle is refused as the OTHER operand too, and as filter({ has }) (review follow-up)', async () => {
-    // The right operand of and()/or() and a `has`/`hasNot` handle are resolved
-    // from their selector alone, so `x.and(rows[0])` would intersect x with
-    // every row and `list.filter({ has: rows[0] })` would match every row.
+  it('and()/or() on a handle from all() take THAT row as the left operand (PILOT-346)', async () => {
+    const rowsInfo = [
+      makeElementInfo({ elementId: 'a', text: 'A', bounds: { left: 0, top: 0, right: 10, bottom: 10 } }),
+      makeElementInfo({ elementId: 'b', text: 'B', bounds: { left: 0, top: 10, right: 10, bottom: 20 } }),
+    ];
     const client = makeMockClient({
-      findElements: vi.fn(async () => makeFindElementsResponse([
-        makeElementInfo({ elementId: 'a', text: 'A' }),
-        makeElementInfo({ elementId: 'b', text: 'B' }),
-      ])),
+      // getByRole("button") matches only B (identity = bounds + text; ids churn per read).
+      findElements: vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(formatSelector(selector).includes('button') ? [{ ...rowsInfo[1], elementId: 'b2' }] : rowsInfo)),
+    });
+    const rows = await new ElementHandle(client, _role('listitem'), 5000).all();
+    const button = new ElementHandle(client, _role('button'), 5000);
+    expect(await rows[0].and(button).count()).toBe(0); // row 0 is not a button
+    expect(await rows[1].and(button).count()).toBe(1); // row 1 is
+    expect(await rows[0].or(button).count()).toBe(2); // A, plus the button
+    expect(await rows[1].or(button).count()).toBe(1); // B, de-duplicated
+  });
+
+  it('an all() handle is accepted as the OTHER operand too, and names that row (PILOT-346)', async () => {
+    const rowsInfo = [
+      makeElementInfo({ elementId: 'a', text: 'A', bounds: { left: 0, top: 0, right: 10, bottom: 10 } }),
+      makeElementInfo({ elementId: 'b', text: 'B', bounds: { left: 0, top: 10, right: 10, bottom: 20 } }),
+    ];
+    const client = makeMockClient({
+      findElements: vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(formatSelector(selector).includes('button') ? [{ ...rowsInfo[1], elementId: 'b2' }] : rowsInfo)),
     });
     const list = new ElementHandle(client, _role('listitem'), 5000);
     const rows = await list.all();
-    const other = new ElementHandle(client, _role('button'), 5000);
-    expect(() => other.and(rows[0])).toThrow(/and cannot combine a handle returned by all\(\)/);
-    expect(() => other.or(rows[0])).toThrow(/or cannot combine a handle returned by all\(\)/);
-    expect(() => list.filter({ has: rows[0] })).toThrow(/filter\(\{ has \}\) cannot combine a handle returned by all\(\)/);
-    expect(() => list.filter({ hasNot: rows[1] })).toThrow(/filter\(\{ hasNot \}\) cannot combine a handle returned by all\(\)/);
+    const button = new ElementHandle(client, _role('button'), 5000);
+    expect(await button.and(rows[1]).count()).toBe(1);
+    expect(await button.and(rows[0]).count()).toBe(0);
+    expect(await button.or(rows[0]).count()).toBe(2);
+    // As a `has` operand it is a plain locator like any other (its modifiers
+    // are PILOT-361's concern) — no longer refused.
+    expect(() => list.filter({ has: rows[0] })).not.toThrow();
   });
 
   it('works with timeout: 0 — one read on the daemon default deadline, no artificial 1ms budget (review follow-up)', async () => {
@@ -1890,47 +1891,53 @@ describe('all()', () => {
     const first = await handle.first().all();
     expect(first).toHaveLength(1);
     expect(await first[0].getText()).toBe('Apple');
-    // A handle from all() already names one element — all() on it is refused
-    // like first()/filter()/and()/or(), not silently re-read live.
-    await expect(first[0].all()).rejects.toThrow(/all\(\) cannot be called on a handle returned by all\(\)/);
+    // The one handle is the live positional locator itself: all() on it
+    // yields one handle for the same element (as WebViewLocator does).
+    const again = await first[0].all();
+    expect(again).toHaveLength(1);
+    expect(await again[0].getText()).toBe('Apple');
     const last = await handle.last().all();
     expect(last).toHaveLength(1);
     expect(await last[0].getText()).toBe('Cherry');
     expect(await handle.nth(5).all()).toEqual([]);
   });
 
-  it('a handle from last()/nth(k).all() keeps naming that element after its snapshot is refreshed', async () => {
-    // The refresh re-resolves the FULL match set; the handle must carry the
-    // parent's own index, not index 0 over a narrowed capture.
+  it('a handle from last()/nth(k).all() is the live positional locator — it names whatever is last/kth NOW (PILOT-346)', async () => {
+    let live = threeItems;
     const client = makeMockClient({
-      findElements: vi.fn(async () => makeFindElementsResponse(threeItems)),
+      findElements: vi.fn(async () => makeFindElementsResponse(live)),
     });
     const handle = new ElementHandle(client, _role('listitem'), 5000);
     const [last] = await handle.last().all();
     const [second] = await handle.nth(1).all();
     expect(await last.getText()).toBe('Cherry');
     expect(await second.getText()).toBe('Banana');
-    await last['_refreshSnapshot']();
-    await second['_refreshSnapshot']();
-    expect(await last.getText()).toBe('Cherry');
+    live = threeItems.slice(0, 2); // Cherry gone
+    expect(await last.getText()).toBe('Banana'); // last() is live
     expect(await second.getText()).toBe('Banana');
-    // A refresh through the live-tick path (scrollIntoView re-captures before
-    // every probe) agrees too: the element is already visible, so this is a
-    // no-op scroll that still refreshes the capture.
-    await last.scrollIntoView();
-    expect(await last.getText()).toBe('Cherry');
+    expect(await last.count()).toBe(1);
+    expect(await last.exists()).toBe(true);
+    live = threeItems.slice(0, 1); // Banana gone too
+    expect(await second.count()).toBe(0);
+    expect(await withFakeClock(5000, () => second.exists())).toBe(false);
   });
 
-  it('a handle from last().all() names the captured LAST row, not whatever is last later — count() reports it gone', async () => {
-    let live = threeItems;
+  it('indexes the collapsed match set, so rows[i] and nth(i) agree on platforms that report an element twice (iOS)', async () => {
+    // iOS renders a React Native <Text testID> as a parent StaticText plus an
+    // inner child with identical text and bounds; the collapser keeps the first.
+    const dup = (id: string, text: string, top: number) =>
+      makeElementInfo({ elementId: id, text, bounds: { left: 0, top, right: 100, bottom: top + 20 } });
     const client = makeMockClient({
-      findElements: vi.fn(async () => makeFindElementsResponse(live)),
+      findElements: vi.fn(async () => makeFindElementsResponse([
+        dup('a', 'Apple', 0), dup('a-inner', 'Apple', 0), dup('b', 'Banana', 20), dup('b-inner', 'Banana', 20),
+      ])),
     });
-    const [last] = await new ElementHandle(client, _role('listitem'), 5000).last().all();
-    expect(await last.count()).toBe(1);
-    live = threeItems.slice(0, 2); // Cherry gone
-    expect(await last.count()).toBe(0);
-    expect(await last.exists()).toBe(true); // capture-backed reader, documented
+    const handle = new ElementHandle(client, _role('listitem'), 5000);
+    const rows = await handle.all();
+    expect(rows).toHaveLength(2);
+    expect(await handle.count()).toBe(2);
+    expect((await rows[1].find()).elementId).toBe('b');
+    expect((await handle.nth(1).find()).elementId).toBe('b');
   });
 
   it('returned handles resolve to the correct element via nth index', async () => {
@@ -1944,16 +1951,23 @@ describe('all()', () => {
     expect(second.text).toBe('Banana');
   });
 
-  it('handles from all() throw when re-indexed with first/last/nth', async () => {
+  it('positional narrowing on a handle from all() composes instead of re-indexing the original set, like WebViewLocator (PILOT-346)', async () => {
     const client = makeMockClient({
       findElements: vi.fn(async () => makeFindElementsResponse(threeItems)),
     });
     const handle = new ElementHandle(client, _role('listitem'), 5000);
     const items = await handle.all();
 
-    expect(() => items[2].first()).toThrow('first() cannot be called on a handle returned by all()');
-    expect(() => items[0].last()).toThrow('last() cannot be called on a handle returned by all()');
-    expect(() => items[1].nth(0)).toThrow('nth() cannot be called on a handle returned by all()');
+    // rows[i] is one element: first()/last()/nth(0)/nth(-1) of it are itself …
+    expect(await items[2].first().getText()).toBe('Cherry');
+    expect(await items[2].last().getText()).toBe('Cherry');
+    expect(await items[0].nth(0).getText()).toBe('Apple');
+    expect(await items[0].nth(-1).getText()).toBe('Apple');
+    // … and there is no second element in it.
+    expect(await items[1].nth(1).count()).toBe(0);
+    expect(await items[1].nth(-2).count()).toBe(0);
+    expect(await items[1].nth(1).first().count()).toBe(0);
+    expect(await items[1].nth(1).all()).toEqual([]);
   });
 });
 
@@ -2324,47 +2338,31 @@ describe('positional actions on shared-property matches', () => {
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
-  it('drops the cached all() snapshot so the stale retry re-queries for a fresh id', async () => {
+  it('a stale retry on a handle from all() re-resolves live by index for a fresh id', async () => {
     let tapCalls = 0;
     const tap = vi.fn(async () =>
       (tapCalls += 1) === 1 ? failureResponse('Element is stale (UI changed)') : successResponse(),
     );
-    // The cached all() snapshot must NOT be reused on retry: the second
-    // findElements (re-query) returns fresh ids.
+    // Every read mints fresh ids, as the agents do. Read 1 is all()'s, read 2
+    // the tap's own enabled-wait (a live locator never reuses all()'s read),
+    // read 3 the re-resolve after the stale dispatch.
     let findCalls = 0;
     const findElements = vi.fn(async () => {
       findCalls += 1;
-      const tag = findCalls === 1 ? 'stale' : 'fresh';
       return makeFindElementsResponse([
-        makeElementInfo({ elementId: `${tag}-0`, contentDescription: 'bin' }),
-        makeElementInfo({ elementId: `${tag}-1`, contentDescription: 'bin' }),
+        makeElementInfo({ elementId: `r${findCalls}-0`, contentDescription: 'bin' }),
+        makeElementInfo({ elementId: `r${findCalls}-1`, contentDescription: 'bin' }),
       ]);
     });
     const client = makeMockClient({ findElements, tap });
     const items = await new ElementHandle(client, _contentDesc('bin'), 5000).all();
     await items[1].tap();
-    // First dispatch used the cached id 'stale-1'; after clearing the cache the
-    // retry re-queried and dispatched the fresh id 'fresh-1'.
-    expect(tap).toHaveBeenNthCalledWith(1, undefined, expect.any(Number), 'stale-1');
-    expect(tap).toHaveBeenNthCalledWith(2, undefined, expect.any(Number), 'fresh-1');
+    expect(findCalls).toBe(3);
+    expect(tap).toHaveBeenNthCalledWith(1, undefined, expect.any(Number), 'r2-1');
+    expect(tap).toHaveBeenNthCalledWith(2, undefined, expect.any(Number), 'r3-1');
   });
 
-  it('a snapshot refresh reads with the poll-tick budget, not the handle timeout (review follow-up)', async () => {
-    const tap = vi.fn(async () => failureResponse('Element is stale (UI changed)'));
-    const budgets: number[] = [];
-    const findElements = vi.fn(async (_sel: unknown, budget?: number) => {
-      budgets.push(budget!);
-      return makeFindElementsResponse([makeElementInfo({ elementId: 'e0' }), makeElementInfo({ elementId: 'e1' })]);
-    });
-    const client = makeMockClient({ findElements, tap });
-    const items = await new ElementHandle(client, _role('listitem'), 30_000).all();
-    await items[1].tap().catch(() => undefined);
-    expect(budgets[0]).toBe(30_000); // all() itself
-    expect(budgets.length).toBeGreaterThan(1);
-    for (const b of budgets.slice(1)) expect(b).toBe(250); // every refresh
-  });
-
-  it('a refresh that fails inside the enabled-wait surfaces the agent error, not "is disabled" (review follow-up)', async () => {
+  it('a device read that fails inside the enabled-wait of an all() handle surfaces the agent error, not "is disabled" (review follow-up)', async () => {
     let findCalls = 0;
     const findElements = vi.fn(async () => {
       findCalls += 1;
@@ -2376,23 +2374,7 @@ describe('positional actions on shared-property matches', () => {
     await expect(withFakeClock(5000, () => items[1].tap())).rejects.toThrow(/UiAutomation not connected/);
   });
 
-  it('a failed snapshot refresh does not poison the handle: the error surfaces once, later reads use the previous capture (review follow-up)', async () => {
-    const tap = vi.fn(async () => failureResponse('Element is stale (UI changed)'));
-    let findCalls = 0;
-    const findElements = vi.fn(async () => {
-      findCalls += 1;
-      if (findCalls === 2) throw new Error('findElements failed: UiAutomation not connected');
-      return makeFindElementsResponse([makeElementInfo({ elementId: 'e0' }), makeElementInfo({ elementId: 'e1' })]);
-    });
-    const client = makeMockClient({ findElements, tap });
-    const items = await new ElementHandle(client, _role('listitem'), 5000).all();
-    await expect(items[1].tap()).rejects.toThrow(/UiAutomation not connected/);
-    // The refresh rejected → the previous capture is back; no cached rejection.
-    expect((await items[1].find()).elementId).toBe('e1');
-    expect(findCalls).toBe(2);
-  });
-
-  it('after a refresh that shrank the list, a reader on an all() handle WAITS with device reads and fails descriptively, not by spinning on the frozen capture (review follow-up)', async () => {
+  it('after the list shrank, an action on an all() handle reports the row gone in the element\'s terms, and a reader WAITS with device reads and fails descriptively (review follow-up)', async () => {
     let tapCalls = 0;
     const tap = vi.fn(async () =>
       (tapCalls += 1) === 1 ? failureResponse('Element is stale (UI changed)') : successResponse(),
@@ -2400,23 +2382,25 @@ describe('positional actions on shared-property matches', () => {
     let findCalls = 0;
     const findElements = vi.fn(async () => {
       findCalls += 1;
-      const n = findCalls === 1 ? 3 : 1;
+      // Reads 1-2 (all(), the tap's enabled-wait) see 3 rows; the list then
+      // shrinks to 1 before the stale retry's re-resolve.
+      const n = findCalls <= 2 ? 3 : 1;
       return makeFindElementsResponse(Array.from({ length: n }, (_, i) => makeElementInfo({ elementId: `r${findCalls}-${i}`, text: `row ${i}` })));
     });
     const client = makeMockClient({ findElements, tap });
     const items = await new ElementHandle(client, _role('listitem'), 1000).all();
-    // The stale retry re-captures a 1-row list; rows[2] can no longer be
-    // satisfied. The tap reports that in the element's terms, not as a raw
+    // The stale retry re-resolves against a 1-row list; rows[2] can no longer
+    // be satisfied. The tap reports that in the element's terms, not as a raw
     // internal nth() error.
     await expect(items[2].tap()).rejects.toThrow(/Element getByRole\("listitem"\) changed while being acted on and could not be found again: nth\(2\)/);
     const before = findCalls;
     const err = await withFakeClock(5000, () => items[2].find()).catch((e) => e);
     expect(err.message).toMatch(/was not found after waiting 1000ms \(nth\(2\): expected at least 3 element\(s\), but found 1\)$/);
-    // Each tick re-captured from the device rather than re-awaiting the frozen list.
+    // Each tick read the device.
     expect(findCalls).toBeGreaterThan(before + 1);
   });
 
-  it('a stale retry REFRESHES the all() snapshot rather than turning the handle live (review follow-up)', async () => {
+  it('a stale retry re-resolves live, and so does every later reader on the handle (PILOT-346)', async () => {
     let tapCalls = 0;
     const tap = vi.fn(async () =>
       (tapCalls += 1) === 1 ? failureResponse('Element is stale (UI changed)') : successResponse(),
@@ -2424,7 +2408,9 @@ describe('positional actions on shared-property matches', () => {
     let findCalls = 0;
     const findElements = vi.fn(async () => {
       findCalls += 1;
-      const tag = findCalls === 1 ? 'stale' : 'fresh';
+      // Reads 1-2: all() and the tap's enabled-wait (the first dispatch uses
+      // read 2's id, which goes stale); read 3 onwards: fresh ids.
+      const tag = findCalls <= 2 ? 'stale' : 'fresh';
       return makeFindElementsResponse([
         makeElementInfo({ elementId: `${tag}-0`, text: `${tag} zero` }),
         makeElementInfo({ elementId: `${tag}-1`, text: `${tag} one` }),
@@ -2433,12 +2419,93 @@ describe('positional actions on shared-property matches', () => {
     const client = makeMockClient({ findElements, tap });
     const items = await new ElementHandle(client, _role('listitem'), 5000).all();
     await items[1].tap();
-    expect(findCalls).toBe(2);
-    // Readers answer from the refreshed capture — no third device read — and
-    // the all()-handle guards still hold.
+    expect(findCalls).toBe(3);
+    expect(tap).toHaveBeenNthCalledWith(1, undefined, expect.any(Number), 'stale-1');
+    expect(tap).toHaveBeenNthCalledWith(2, undefined, expect.any(Number), 'fresh-1');
+    // A reader is one more live read — nothing is cached on the handle.
     expect((await items[1].find()).elementId).toBe('fresh-1');
-    expect(findCalls).toBe(2);
-    expect(() => items[1].first()).toThrow(/first\(\) cannot be called on a handle returned by all\(\)/);
+    expect(findCalls).toBe(4);
+    // A plain nth(1) locator: narrowing it further composes (see all()).
+    expect((await items[1].first().find()).elementId).toBe('fresh-1');
+  });
+});
+
+// ─── Positional composition (PILOT-346) ───
+
+describe('modifiers after a positional index compose in call order (Playwright)', () => {
+  const list = () => new ElementHandle(makeMockClient({
+    findElements: vi.fn(async () => makeFindElementsResponse(threeItems)),
+  }), _role('listitem'), 5000);
+
+  it('nth(i).filter(…) keeps row i if it matches — not the i-th matching row', async () => {
+    expect(await list().nth(1).filter({ hasText: 'Banana' }).count()).toBe(1);
+    expect((await list().nth(1).filter({ hasText: 'Banana' }).find()).text).toBe('Banana');
+    expect(await list().nth(1).filter({ hasText: 'Apple' }).count()).toBe(0);
+    expect(await list().nth(1).filter({ hasNotText: 'Apple' }).count()).toBe(1);
+    // The other order is unchanged: filter first, then index the filtered set.
+    expect((await list().filter({ hasText: /^[BC]/ }).nth(0).find()).text).toBe('Banana');
+  });
+
+  it('first().nth(1) matches nothing; first().first() is first(); last().nth(-1) is last()', async () => {
+    expect(await list().first().nth(1).count()).toBe(0);
+    expect((await list().first().first().find()).text).toBe('Apple');
+    expect((await list().last().nth(-1).find()).text).toBe('Cherry');
+    expect((await list().nth(1).last().find()).text).toBe('Banana');
+    expect(await list().last().nth(-2).count()).toBe(0);
+  });
+
+  it('several steps compose left to right, and all() on the result yields it or nothing', async () => {
+    const h = list().nth(1).filter({ hasText: 'Banana' }).first().filter({ hasNotText: 'Zzz' });
+    expect(await h.count()).toBe(1);
+    expect((await h.find()).text).toBe('Banana');
+    const one = await h.all();
+    expect(one).toHaveLength(1);
+    expect(await one[0].getText()).toBe('Banana');
+    expect(await list().nth(1).filter({ hasText: 'Zzz' }).all()).toEqual([]);
+  });
+
+  it('filter({ has }) after a positional index applies to that row', async () => {
+    const button = makeElementInfo({ elementId: 'btn', role: 'button', bounds: { left: 10, top: 60, right: 50, bottom: 90 } }); // inside Banana
+    const client = makeMockClient({
+      findElements: vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(formatSelector(selector).includes('button') ? [button] : threeItems)),
+    });
+    const handle = new ElementHandle(client, _role('listitem'), 5000);
+    const has = new ElementHandle(client, _role('button'), 5000);
+    expect(await handle.nth(1).filter({ has }).count()).toBe(1);
+    expect(await handle.nth(0).filter({ has }).count()).toBe(0);
+    expect(await handle.nth(0).filter({ hasNot: has }).count()).toBe(1);
+  });
+
+  it('a composed handle acts on its element by id, and a miss is reported in its terms', async () => {
+    const tap = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse(threeItems)), tap });
+    const handle = new ElementHandle(client, _role('listitem'), 5000);
+    await handle.nth(1).filter({ hasText: 'Banana' }).tap();
+    expect(tap).toHaveBeenCalledWith(undefined, expect.any(Number), 'el-2');
+    // Single-shot miss names the composed chain, not the bare selector.
+    await expect(new ElementHandle(client, _role('listitem'), 0).nth(1).filter({ hasText: 'Zzz' }).find())
+      .rejects.toThrow('Element not found: getByRole("listitem").nth(1).filter(…×1)');
+    await expect(new ElementHandle(client, _role('listitem'), 0).first().nth(1).find())
+      .rejects.toThrow('Element not found: getByRole("listitem").first().nth(1)');
+  });
+
+  it('the composed positional step applies to an and()/or() operand and a scope parent too', async () => {
+    const button = makeElementInfo({ elementId: 'btn', role: 'button', bounds: { left: 10, top: 60, right: 50, bottom: 90 } }); // inside Banana
+    const client = makeMockClient({
+      findElements: vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(formatSelector(selector).includes('button') ? [button] : threeItems)),
+    });
+    const handle = new ElementHandle(client, _role('listitem'), 5000);
+    const other = new ElementHandle(client, _role('listitem'), 5000);
+    // nth(1).filter(Zzz) is empty → the intersection is empty; the union is the other operand alone.
+    expect(await handle.nth(1).filter({ hasText: 'Zzz' }).and(other).count()).toBe(0);
+    expect(await other.and(handle.nth(1).filter({ hasText: 'Zzz' })).count()).toBe(0);
+    expect(await handle.nth(1).filter({ hasText: 'Zzz' }).or(other.first()).count()).toBe(1);
+    // Scope parent: `nth(1).filter(Banana).getByRole('button')` finds the button inside Banana …
+    expect(await handle.nth(1).filter({ hasText: 'Banana' }).getByRole('button').count()).toBe(1);
+    // … and an empty composed parent has no children in scope.
+    expect(await handle.nth(1).filter({ hasText: 'Zzz' }).getByRole('button').count()).toBe(0);
   });
 });
 
@@ -3341,8 +3408,8 @@ describe('setChecked()', () => {
   });
 
   it('setChecked() on a handle from all() confirms the change from a fresh read — one tap, no blind re-tap (review follow-up)', async () => {
-    // The captured snapshot would show the ORIGINAL state forever; the
-    // confirmation must re-capture by index or it double-toggles.
+    // The confirmation must read the device (a handle from all() is a live
+    // nth(i) locator, never a capture) or it would double-toggle.
     const device = { checked: [false, false] };
     const tap = vi.fn(async (_sel: unknown, _t: unknown, id?: string) => {
       const i = Number(id!.slice(1));
@@ -5110,16 +5177,15 @@ describe("scrollIntoView honours the handle's modifiers (PILOT-345)", () => {
     expect(swipe).not.toHaveBeenCalled();
   });
 
-  it('a handle from all() re-captures by index before every probe, so a row captured off-screen still scrolls into view (review follow-up)', async () => {
-    // rows[i] answers readers from its capture, but a scroll exists to watch
-    // the screen change: reading the frozen capture would miss on every tick
-    // (5 swipes, then "not visible") even once the row is on screen.
+  it('a handle from all() reads live before every probe, so a row that was off-screen at all() still scrolls into view (review follow-up)', async () => {
+    // rows[i] is a live nth(i) locator: a scroll exists to watch the screen
+    // change, and every probe reads the device rather than what all() saw.
     let calls = 0;
     const findElements = vi.fn(async () => {
       calls++;
-      // Call 1: the all() capture, Zebra rendered off-screen. Calls 2-3: the
-      // probe's and the confirmation's re-captures, unchanged → swipe. From
-      // call 4 (post-swipe re-capture, then stabilization) Zebra is on screen.
+      // Call 1: all()'s read, Zebra rendered off-screen. Calls 2-3: the
+      // probe's and the confirmation's reads, unchanged → swipe. From call 4
+      // (post-swipe probe, then stabilization) Zebra is on screen.
       const onScreen = calls >= 4;
       return makeFindElementsResponse([
         row('r0', 'Apple', true, 100),
@@ -5135,16 +5201,15 @@ describe("scrollIntoView honours the handle's modifiers (PILOT-345)", () => {
 
     expect(swipe).toHaveBeenCalledTimes(1);
     expect(findElements.mock.calls.length).toBeGreaterThanOrEqual(4);
-    // The handle now holds the post-scroll capture, so the action that
-    // follows the scroll addresses the row where it is NOW.
+    // A reader after the scroll addresses the row where it is NOW.
     expect((await rows[2].boundingBox())?.y).toBe(300);
   });
 
-  it('a handle from all() whose row has scrolled away since the capture swipes instead of reporting it visible (review follow-up)', async () => {
+  it('a handle from all() whose row has scrolled away since all() swipes instead of reporting it visible (review follow-up)', async () => {
     let calls = 0;
     const findElements = vi.fn(async () => {
       calls++;
-      // Captured visible (call 1); gone off-screen by the time of the scroll
+      // Visible at all() (call 1); gone off-screen by the time of the scroll
       // (calls 2-3); back after one swipe (call 4 onwards).
       const onScreen = calls === 1 || calls >= 4;
       return makeFindElementsResponse([
@@ -5298,13 +5363,12 @@ describe("scrollIntoView honours the handle's modifiers (PILOT-345)", () => {
     expect(findElements).toHaveBeenCalledTimes(7);
   });
 
-  it('DOCUMENTED CONTRACT: rows[i].scrollIntoView() on a list whose window shifts stops on whatever is at index i, like .nth(i) (PILOT-346 rewrites this)', async () => {
-    // A virtualised list renders a moving window. all() captured [A, B, C];
-    // after one swipe the rendered window is [B, C, D]. The captured handle is
-    // re-captured BY INDEX before every check (the refresh-not-clear
-    // semantics), so rows[2] now denotes D — the api-reference all() section
-    // says so and tells users to name the row instead. Pinned here so the
-    // behaviour is explicit for PILOT-346, not so it is desirable.
+  it('DOCUMENTED CONTRACT: rows[i].scrollIntoView() on a list whose window shifts stops on whatever is at index i, because rows[i] IS .nth(i) (PILOT-346)', async () => {
+    // A virtualised list renders a moving window. all() saw [A, B, C]; after
+    // one swipe the rendered window is [B, C, D]. rows[2] is the live nth(2)
+    // locator, so it now denotes D — the api-reference all() section says so
+    // and tells users to name the row instead. Pinned so the behaviour is
+    // explicit, not because it is desirable.
     let calls = 0;
     const findElements = vi.fn(async () => {
       calls++;
@@ -5320,7 +5384,7 @@ describe("scrollIntoView honours the handle's modifiers (PILOT-345)", () => {
 
     expect(swipe).toHaveBeenCalledTimes(1);
     // Index 2 of the scrolled window is D: the scroll stopped on it and the
-    // handle now describes it.
+    // handle describes it.
     expect((await rows[2].find()).elementId).toBe('d');
     expect((await rows[2].boundingBox())?.y).toBe(300);
   });
