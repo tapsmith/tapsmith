@@ -27,11 +27,11 @@
   ],
   "homepage": "https://tapsmith.dev",
   "bugs": {
-    "url": "https://github.com/samsmithyeah/tapsmith/issues"
+    "url": "https://github.com/tapsmith/tapsmith/issues"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/samsmithyeah/tapsmith.git"
+    "url": "https://github.com/tapsmith/tapsmith.git"
   },
   "author": "Sam Smith <sam@sammysmith.co.uk>",
   "keywords": [
