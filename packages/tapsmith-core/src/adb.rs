@@ -925,6 +925,46 @@ pub fn parse_keyguard_showing(dump: &str) -> Option<bool> {
     seen.then_some(false)
 }
 
+/// Parse an app's Linux uid out of `pm list packages -U <filter>` output.
+///
+/// Lines look like `package:dev.tapsmith.testapp uid:10151`. The filter is a
+/// substring match, so a query for `com.example.app` also returns
+/// `com.example.app.debug` — hence the exact-name comparison rather than
+/// taking the first line. `None` when the package is absent or the platform
+/// prints no uid field.
+pub fn parse_package_uid(output: &str, package: &str) -> Option<u32> {
+    for line in output.lines() {
+        // adb shell line endings are CRLF; `trim` drops the stray \r that
+        // would otherwise end up inside the parsed number.
+        let Some(rest) = line.trim().strip_prefix("package:") else {
+            continue;
+        };
+        let Some((name, uid)) = rest.split_once(" uid:") else {
+            continue;
+        };
+        if name.trim() != package {
+            continue;
+        }
+        if let Ok(uid) = uid.trim().parse::<u32>() {
+            return Some(uid);
+        }
+    }
+    None
+}
+
+/// The app's Linux uid, as the package manager reports it.
+///
+/// Deliberately asks the package manager rather than inspecting the app's
+/// data directory: a directory's ownership is only as trustworthy as whatever
+/// last wrote to it, and `RestoreAppState` extracts archives that carry the
+/// ownership of the device they were captured on.
+pub async fn package_uid(serial: &str, package: &str) -> Option<u32> {
+    let output = shell_lenient(serial, &format!("pm list packages -U {package}"))
+        .await
+        .ok()?;
+    parse_package_uid(&output, package)
+}
+
 /// Ask the device whether its lock screen is showing. See
 /// [`parse_keyguard_showing`] for the `None` case.
 pub async fn keyguard_showing(serial: &str) -> Option<bool> {
@@ -1232,6 +1272,54 @@ pub async fn cleanup_iptables_redirect(serial: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn package_uid_takes_the_exact_package_not_a_prefix_match() {
+        // `pm list packages -U` filters by substring, so a query for the base
+        // package also returns its variants. Taking the first line would hand
+        // back the wrong app's uid.
+        let out = "package:com.example.app.debug uid:10201\r\n\
+                   package:com.example.app uid:10150\r\n\
+                   package:com.example.app.test uid:10202\r\n";
+        assert_eq!(
+            super::parse_package_uid(out, "com.example.app"),
+            Some(10150)
+        );
+        assert_eq!(
+            super::parse_package_uid(out, "com.example.app.debug"),
+            Some(10201)
+        );
+    }
+
+    #[test]
+    fn package_uid_is_none_when_absent_or_unparseable() {
+        assert_eq!(super::parse_package_uid("", "com.example.app"), None);
+        // A package that is simply not installed.
+        assert_eq!(
+            super::parse_package_uid("package:com.other.app uid:10150\n", "com.example.app"),
+            None
+        );
+        // Platform that prints no uid field (e.g. `pm list packages` without -U).
+        assert_eq!(
+            super::parse_package_uid("package:com.example.app\n", "com.example.app"),
+            None
+        );
+        // Garbage where the number should be.
+        assert_eq!(
+            super::parse_package_uid("package:com.example.app uid:nope\n", "com.example.app"),
+            None
+        );
+    }
+
+    #[test]
+    fn package_uid_tolerates_crlf_and_surrounding_noise() {
+        // Real adb output: CRLF endings, and shells that echo a warning first.
+        let out = "WARNING: linker: something\r\npackage:com.example.app uid:10150\r\n";
+        assert_eq!(
+            super::parse_package_uid(out, "com.example.app"),
+            Some(10150)
+        );
+    }
+
     #[test]
     fn capture_ports_keep_defaults_and_loopback_exclusion() {
         let commands = super::iptables_redirect_commands(45678, &[8080, 9099, 8080, 80]);

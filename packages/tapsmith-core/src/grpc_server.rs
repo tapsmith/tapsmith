@@ -7223,38 +7223,42 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
                 // 6. Fix ownership and SELinux context (root only)
                 if is_root {
-                    let uid_output = match adb::shell_lenient(
-                        &serial,
-                        &format!("stat -c '%u' {data_dir}"),
-                    )
-                    .await
-                    {
-                        Ok(output) => output,
-                        Err(e) => {
+                    // Ask the package manager, NOT the data directory.
+                    //
+                    // Archives are built with `tar czf ... -C {data_dir} .`, so
+                    // they carry an entry for the data dir itself owned by the
+                    // uid it had on the device it was captured on. Extracting
+                    // as root re-applies that ownership, so `stat`-ing the
+                    // directory here reads the ARCHIVE's uid back — and the
+                    // `chown -R` below then pins every restored file to a uid
+                    // this app does not have. The app dies on its next launch
+                    // with EACCES (`Failed to create lock file .../
+                    // app_webview/webview_data.lock`), leaving the launcher in
+                    // the foreground, and the failure surfaces far away as a
+                    // session-preflight timeout that names nothing useful.
+                    //
+                    // Invisible whenever an archive is restored onto the device
+                    // that produced it, because then the two uids agree. It
+                    // bites exactly where archives are most useful: reused as
+                    // fixtures across devices, emulator images or CI machines.
+                    let uid = match adb::package_uid(&serial, pkg).await {
+                        Some(uid) => uid.to_string(),
+                        None => {
                             let _ =
                                 adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
                             return Ok(self
                                 .action_error(
                                     request_id,
                                     "APP_STATE_RESTORE_FAILED",
-                                    format!("Failed to determine app UID via stat: {e}"),
+                                    format!(
+                                        "Failed to determine the UID of {pkg} from \
+                                         `pm list packages -U`; cannot safely re-own \
+                                         the restored app state"
+                                    ),
                                 )
                                 .await);
                         }
                     };
-                    let uid = uid_output.trim().to_string();
-
-                    if uid.is_empty() {
-                        let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                "Failed to determine app UID: stat returned empty output"
-                                    .to_string(),
-                            )
-                            .await);
-                    }
 
                     if let Err(e) = adb::shell_with_timeout(
                         &serial,
