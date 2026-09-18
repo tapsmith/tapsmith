@@ -312,6 +312,105 @@ export default defineConfig({
 });
 ```
 
+### Testing Expo / React Native Dev Builds
+
+Tapsmith launches the app under test by its package name / bundle identifier, and
+the install step (`apk` / `app`) is optional. That means you can drive an **Expo
+development build** — a debug build with the `expo-dev-client` runtime that
+connects to a Metro dev server — exactly like a release build. The launch path
+(`monkey` / `am start` on Android, `simctl launch` on iOS) does not care whether
+the binary is debug, release, or a dev client.
+
+The cleanest setup is to **omit `apk`/`app`** and point Tapsmith at `package`
+only. Tapsmith detects that the app is already installed and skips installation,
+launching the existing dev build, which reconnects to Metro on its own:
+
+```typescript
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  // No `apk` / `app` — the dev build is already installed.
+  platform: "android", // required when there's no apk/app to infer it from
+  package: "com.example.myapp",
+});
+```
+
+Workflow:
+
+1. Build and install the dev client once. With EAS:
+   `eas build --profile development --platform android` then `adb install <build>.apk`.
+   Or let Expo install it for you: `npx expo run:android` / `npx expo run:ios`.
+2. Start Metro: `npx expo start --dev-client`. On an Android emulator, make Metro
+   reachable from the device with `adb reverse tcp:8081 tcp:8081` (`expo start`
+   usually sets this up for you).
+3. Run Tapsmith pointing at `package` only. It launches the installed dev build,
+   which connects back to Metro.
+
+#### Skipping the Expo dev launcher and dev menu
+
+A bare dev client opens cold to the **dev launcher** (the "Development servers"
+list) rather than your app, and can surface the **dev menu** overlay at launch.
+Neither is something you want a test run to land on. These are two separate
+screens, controlled independently.
+
+The cleanest fix is build-time, via the `expo-dev-client` config plugin in your
+`app.json` / `app.config.js`. It bakes the behaviour into the build, so there is
+no per-test setup to maintain:
+
+```json
+{
+  "expo": {
+    "plugins": [
+      ["expo-dev-client", {
+        "launchMode": "most-recent",
+        "defaultLaunchURL": "http://localhost:8081",
+        "showMenuAtLaunch": false
+      }]
+    ]
+  }
+}
+```
+
+- `launchMode: "most-recent"` (with `defaultLaunchURL`) launches straight into the
+  dev server and skips the server-selection launcher screen.
+- `showMenuAtLaunch: false` stops the dev menu overlay from appearing at launch.
+  `false` is the default, but setting it explicitly keeps the intent clear.
+
+Rebuild the dev client after changing the plugin config. This is preferred over a
+runtime hook because it is set once per build rather than repeated in test setup.
+
+If you can't rebuild (or want a one-off), open the dev-client deep link at runtime
+instead — the same link the `npx expo start --dev-client` QR code encodes — in a
+`beforeAll` hook:
+
+```typescript
+test.beforeAll(async ({ device }) => {
+  // <scheme> is your app's URL scheme; the url is the Metro bundler address.
+  // On an Android emulator, use http://localhost:8081 (with `adb reverse`);
+  // on a physical device, use your machine's LAN IP, e.g. http://192.168.1.20:8081.
+  await device.openDeepLink(
+    "myapp://expo-development-client/?url=http://localhost:8081",
+  );
+});
+```
+
+The in-app dev menu is otherwise only triggered manually (shake / Cmd-D), so it
+won't interfere with a run.
+
+Notes and caveats:
+
+- **`platform` is required** when you omit `apk`/`app`, since Tapsmith normally
+  infers the platform from those fields.
+- **Don't use the `apk`/`app` install field for a raw dev client on a fresh or
+  CI device.** A dev-client binary is inert until it can reach Metro, so
+  installing it on a clean emulator without a reachable Metro server won't give
+  you a runnable app. For a self-contained artifact that installs and runs like a
+  release build, use an Expo **preview** build
+  (`eas build --profile preview`), which bundles the JS — then the normal
+  `apk`/`app` config works directly.
+- This path works by virtue of the launch-by-id design; it isn't a separately
+  tested Expo integration.
+
 ### CI Configuration (Android)
 
 ```typescript
