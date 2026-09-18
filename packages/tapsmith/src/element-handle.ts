@@ -100,9 +100,22 @@ export interface FilterOptions {
 
 // ─── Internal options for modified handles ───
 
+/**
+ * A modifier chained AFTER a positional index. Modifiers compose in call
+ * order, as in Playwright: `list.nth(1).filter(f)` is row 1 if it matches f
+ * (not the second matching row), `list.first().nth(1)` is nothing, and
+ * `list.first().first()` is `list.first()`. Filters chained BEFORE the index
+ * live in `filters` and apply to the full match set; the index then picks one
+ * element and these steps narrow that one element further (see `_select`).
+ */
+type PostIndexStep = { readonly nth: number } | { readonly filter: FilterOptions };
+
 interface ElementHandleOptions {
   nthIndex?: number;
+  /** Filters applied to the full match set, BEFORE `nthIndex`. */
   filters?: FilterOptions[];
+  /** Modifiers chained after `nthIndex`, applied in call order — see {@link PostIndexStep}. */
+  post?: PostIndexStep[];
   /** Left operand for and() — the full handle `this` was called on. */
   andSelf?: ElementHandle;
   andHandle?: ElementHandle;
@@ -116,7 +129,6 @@ interface ElementHandleOptions {
    * and the child is scoped to them by geometric containment (see _resolveAll).
    */
   scopeParent?: ElementHandle;
-  resolvedElementsPromise?: Promise<ElementInfo[]>;
   /** Trace capture context, propagated from the Device. */
   traceCapture?: TraceCapture;
   /** Default inter-keystroke delay in ms, from config.typingDelay. */
@@ -191,8 +203,6 @@ const STALE_SNAPSHOT_SIGNATURE = 'is stale (UI changed)';
  * snapshots are NOT bounded by this — see `_probeOnce`.)
  */
 const PROBE_FAULT_RETRY_WINDOW_MS = 2000;
-/** Budget of the device read that refreshes an all() snapshot (see _refreshSnapshot). */
-const SNAPSHOT_REFRESH_BUDGET_MS = POLL_INTERVAL_MS;
 /**
  * Idle-wait budget used by the presence probes to confirm a first empty
  * read. Right after navigation or app launch the accessibility tree can lag
@@ -692,30 +702,36 @@ export class ElementHandle {
 
   /** Return a new handle targeting the first match. */
   first(): ElementHandle {
-    this._assertNoResolvedCache('first');
-    return new ElementHandle(this._client, this._selector, this._timeoutMs, {
-      ...this._options,
-      nthIndex: 0,
-    });
+    return this.nth(0);
   }
 
   /** Return a new handle targeting the last match. */
   last(): ElementHandle {
-    this._assertNoResolvedCache('last');
-    return new ElementHandle(this._client, this._selector, this._timeoutMs, {
-      ...this._options,
-      nthIndex: -1,
-    });
+    return this.nth(-1);
   }
 
-  /** Return a new handle targeting the match at `index` (0-based). Negative indices count from the end. */
+  /**
+   * Return a new handle targeting the match at `index` (0-based). Negative
+   * indices count from the end.
+   *
+   * On a handle that already carries a positional index — `list.first()`, or
+   * a handle from `all()` — the new index narrows THAT one element rather
+   * than re-indexing the original match set (Playwright semantics, and the
+   * same rule as `WebViewLocator`): `first()`/`last()`/`nth(0)`/`nth(-1)` of
+   * one element are itself, any other index is nothing.
+   */
   nth(index: number): ElementHandle {
-    this._assertNoResolvedCache('nth');
     if (!Number.isInteger(index)) {
       // selectNth would bounds-check a fractional index as in range and index
       // the array at it, yielding [undefined] — a phantom count() match and a
       // TypeError far from the mistake. Refuse it here, at the public entry.
       throw new Error(`nth() requires an integer index, got ${index}`);
+    }
+    if (this._options.nthIndex !== undefined) {
+      return new ElementHandle(this._client, this._selector, this._timeoutMs, {
+        ...this._options,
+        post: [...(this._options.post ?? []), { nth: index }],
+      });
     }
     return new ElementHandle(this._client, this._selector, this._timeoutMs, {
       ...this._options,
@@ -723,38 +739,23 @@ export class ElementHandle {
     });
   }
 
-  /** @internal — Refuse an all() handle as an operand (and/or/has/hasNot): it
-   * would be resolved live from its selector, ignoring the element it names. */
-  private static _assertOperandNotResolved(method: string, operand: ElementHandle): void {
-    if (operand._options.resolvedElementsPromise) {
-      throw new Error(
-        `${method} cannot combine a handle returned by all(). ` +
-          'Handles from all() already reference a specific element; pass the locator you called all() on instead.',
-      );
-    }
-  }
-
-  /** @internal — Prevent re-indexing on handles returned by all(). */
-  private _assertNoResolvedCache(method: string): void {
-    if (this._options.resolvedElementsPromise) {
-      throw new Error(
-        `${method}() cannot be called on a handle returned by all(). ` +
-          'Handles from all() already reference a specific element.',
-      );
-    }
-  }
-
   // ── Filtering (PILOT-16) ──
 
-  /** Narrow matches by additional criteria without changing the selector. */
+  /**
+   * Narrow matches by additional criteria without changing the selector.
+   *
+   * Modifiers compose in call order: a filter chained AFTER a positional
+   * index (`list.nth(1).filter(f)`, `rows[i].filter(f)` on a handle from
+   * `all()`) keeps that one element if it matches and nothing otherwise, as
+   * in Playwright — it does not become "the second matching row".
+   */
   filter(criteria: FilterOptions): ElementHandle {
-    // A handle from all() resolves from its snapshot BEFORE filters apply, so
-    // a filter on it would be silently ignored (`rows[0].filter(…)` would still
-    // act on rows[0]). Refuse it, as first()/last()/nth() do. The same goes for
-    // an all() handle used as `has`/`hasNot`: only its selector is consulted.
-    this._assertNoResolvedCache('filter');
-    if (criteria.has) ElementHandle._assertOperandNotResolved('filter({ has })', criteria.has);
-    if (criteria.hasNot) ElementHandle._assertOperandNotResolved('filter({ hasNot })', criteria.hasNot);
+    if (this._options.nthIndex !== undefined) {
+      return new ElementHandle(this._client, this._selector, this._timeoutMs, {
+        ...this._options,
+        post: [...(this._options.post ?? []), { filter: criteria }],
+      });
+    }
     return new ElementHandle(this._client, this._selector, this._timeoutMs, {
       ...this._options,
       filters: [...(this._options.filters ?? []), criteria],
@@ -768,11 +769,6 @@ export class ElementHandle {
    * `this` (with all its modifiers) becomes the left operand, preserving call order.
    */
   and(other: ElementHandle): ElementHandle {
-    // Both operands resolve through _resolveAll(), which never consults an
-    // all() snapshot, so `rows[0].and(x)` / `x.and(rows[0])` would silently
-    // intersect ALL rows.
-    this._assertNoResolvedCache('and');
-    ElementHandle._assertOperandNotResolved('and', other);
     ElementHandle._assertOperandNotXpath('and', this);
     ElementHandle._assertOperandNotXpath('and', other);
     return new ElementHandle(this._client, this._selector, this._timeoutMs, {
@@ -792,8 +788,6 @@ export class ElementHandle {
    * `this` (with all its modifiers) becomes the left operand, preserving call order.
    */
   or(other: ElementHandle): ElementHandle {
-    this._assertNoResolvedCache('or');
-    ElementHandle._assertOperandNotResolved('or', other);
     ElementHandle._assertOperandNotXpath('or', this);
     ElementHandle._assertOperandNotXpath('or', other);
     return new ElementHandle(this._client, this._selector, this._timeoutMs, {
@@ -812,7 +806,7 @@ export class ElementHandle {
    * text, the XML dump's bounds) than every other selector, so an xpath
    * operand can never key equal to the other side: the combination would
    * resolve to a plausible-looking empty (and) or doubled (or) result. Refuse
-   * it up front — the same shape as the all()-handle guards.
+   * it up front.
    */
   private static _assertOperandNotXpath(method: string, operand: ElementHandle): void {
     const offending = ElementHandle._findXpath(operand);
@@ -863,11 +857,11 @@ export class ElementHandle {
       const right = this._options.andHandle;
 
       // Each operand keeps its own positional index (`a.first().and(b)`
-      // intersects the FIRST a with b — PILOT-347); _resolveAll alone never
-      // applies one.
+      // intersects the FIRST a with b — PILOT-347) and anything chained after
+      // it; _resolveAll alone never applies them.
       const [leftEls, rightEls] = await Promise.all([
-        left._resolveAll().then((els) => selectNth(els, left._options.nthIndex)),
-        right._resolveAll().then((els) => selectNth(els, right._options.nthIndex)),
+        left._resolveAll().then((els) => left._select(els)),
+        right._resolveAll().then((els) => right._select(els)),
       ]);
 
       // Each operand is its own hierarchy read, and the agents mint a fresh
@@ -892,8 +886,8 @@ export class ElementHandle {
 
       // Each operand keeps its own positional index (PILOT-347), as in and().
       const [leftEls, rightEls] = await Promise.all([
-        left._resolveAll().then((els) => selectNth(els, left._options.nthIndex)),
-        right._resolveAll().then((els) => selectNth(els, right._options.nthIndex)),
+        left._resolveAll().then((els) => left._select(els)),
+        right._resolveAll().then((els) => right._select(els)),
       ]);
 
       // De-duplicate ACROSS the operands by stable identity, not by the
@@ -971,13 +965,12 @@ export class ElementHandle {
    * Playwright, instead of surfacing the parent's "not found" error.
    */
   private async _scopeToParent(children: ElementInfo[], parent: ElementHandle): Promise<ElementInfo[]> {
-    // A parent from all() is resolved live by index here, exactly like
-    // `.nth(i)` (and like `expect(items[i])`): re-identifying a captured row
+    // A positional parent (`.nth(i)`, a handle from all()) is resolved live
+    // by index, like every reader on it: re-identifying a previously seen row
     // in a fresh read has no reliable key — element ids go stale, bounds move
     // with any layout shift, text mutates and testIDs repeat — so every
-    // "smarter" match has a silent wrong-row failure. Live-by-index is the
-    // documented behaviour; live all() handles are PILOT-346.
-    const scopedParents = selectNth(await parent._resolveAll(), parent._options.nthIndex);
+    // "smarter" match has a silent wrong-row failure (PILOT-346).
+    const scopedParents = await parent._select(await parent._resolveAll());
 
     return children.filter((child) =>
       scopedParents.some((p) => boundsContain(p.bounds, child.bounds) === 'contained'),
@@ -1060,9 +1053,7 @@ export class ElementHandle {
    * more than one element is an error — never a silent first-match.
    */
   private async _resolveOne(): Promise<ElementInfo> {
-    const elements = this._options.resolvedElementsPromise
-      ? await this._options.resolvedElementsPromise
-      : await this._resolveAll();
+    const elements = await this._resolveAll();
     const nthIndex = this._options.nthIndex;
 
     if (nthIndex !== undefined) {
@@ -1073,7 +1064,13 @@ export class ElementHandle {
           `nth(${nthIndex}): expected at least ${expectedCount} element(s), but found ${elements.length}`,
         );
       }
-      return elements[idx];
+      // The index is satisfied; a modifier chained after it may still narrow
+      // the one element to nothing (`nth(1).filter(f)` where row 1 lacks f).
+      const selected = await this._select(elements);
+      if (selected.length === 0) {
+        throw new Error(`Element not found: ${this._describe()}`);
+      }
+      return selected[0];
     }
 
     if (elements.length === 0) {
@@ -1085,6 +1082,51 @@ export class ElementHandle {
     return elements[0];
   }
 
+  /**
+   * @internal — Apply this handle's positional index and every modifier
+   * chained after it, in call order, to its resolved matches (see
+   * {@link PostIndexStep}). Filters chained before the index are applied by
+   * `_resolveAll`; this is the one place the index and what follows it are
+   * applied, so `count()`, `all()`, actions, assertions, waits, and/or
+   * operands and scope parents cannot disagree about which element a
+   * positional handle names. At most one element once an index has applied.
+   */
+  private async _select(elements: ElementInfo[]): Promise<ElementInfo[]> {
+    let result = selectNth(elements, this._options.nthIndex);
+    for (const step of this._options.post ?? []) {
+      result = 'nth' in step ? selectNth(result, step.nth) : await this._applyFilter(result, step.filter);
+    }
+    return result;
+  }
+
+  /**
+   * @internal — The modifiers chained after the positional index, for
+   * `_describe()`. Rendered only when there are any (`.nth(1).filter(…×1)`,
+   * `.first().nth(1)`); a bare index is not rendered, as before, so existing
+   * error messages keep their shape.
+   */
+  private _describePostIndex(): string {
+    const post = this._options.post;
+    if (!post?.length) return '';
+    const renderNth = (n: number): string => (n === 0 ? '.first()' : n === -1 ? '.last()' : `.nth(${n})`);
+    let desc = renderNth(this._options.nthIndex!);
+    let filters = 0;
+    const flushFilters = (): void => {
+      if (filters) desc += `.filter(…×${filters})`;
+      filters = 0;
+    };
+    for (const step of post) {
+      if ('nth' in step) {
+        flushFilters();
+        desc += renderNth(step.nth);
+      } else {
+        filters++;
+      }
+    }
+    flushFilters();
+    return desc;
+  }
+
   /** @internal — Build a human-readable description of this handle for error messages. */
   private _describe(): string {
     const sel = formatSelector(this._selector);
@@ -1093,18 +1135,18 @@ export class ElementHandle {
       const right = this._options.andHandle._describe();
       let desc = `${left} AND ${right}`;
       if (this._options.filters?.length) desc += `.filter(…×${this._options.filters.length})`;
-      return desc;
+      return desc + this._describePostIndex();
     }
     if (this._options.orHandle) {
       const left = this._options.orSelf?._describe() ?? sel;
       const right = this._options.orHandle._describe();
       let desc = `${left} OR ${right}`;
       if (this._options.filters?.length) desc += `.filter(…×${this._options.filters.length})`;
-      return desc;
+      return desc + this._describePostIndex();
     }
     let desc = this._options.scopeParent ? `${this._options.scopeParent._describe()} >> ${sel}` : sel;
     if (this._options.filters?.length) desc += `.filter(…×${this._options.filters.length})`;
-    return desc;
+    return desc + this._describePostIndex();
   }
 
   /**
@@ -1178,9 +1220,6 @@ export class ElementHandle {
     // the deadline error still says WHICH index was short and by how much.
     let lastPositionalMiss: Error | undefined;
     while (true) {
-      // An all() handle answers from its capture without a device read, so
-      // that answer says nothing about whether the agent is responsive.
-      const fromSnapshot = !!this._options.resolvedElementsPromise;
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind === 'fault') {
         // A transient agent-command timeout (slow-but-alive agent) or a
@@ -1194,7 +1233,7 @@ export class ElementHandle {
         // so it is currently responsive — clear any earlier transient timeout
         // so a genuine "not found" isn't misreported as an infra error at the
         // end. Strict violations and infra errors have already propagated.
-        if (!fromSnapshot) lastTransientErr = undefined;
+        lastTransientErr = undefined;
         // Keep the diagnostic honest: the most recent tick that CARRIED a
         // count. A stale tick says nothing about how many matched, so it
         // neither refreshes nor discards the last confirmed count.
@@ -1214,11 +1253,6 @@ export class ElementHandle {
           `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}`,
         );
       }
-      // An all() snapshot cannot change on its own: a tick that could not be
-      // satisfied from it re-captures by index before the next one, so this
-      // is a real wait (like .nth(i)) rather than a busy-wait on a frozen list.
-      // A refresh that fails is classified like any tick's read error.
-      lastTransientErr = await this._refreshBetweenTicks(lastTransientErr);
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
       if (sleepMs > 0) await sleep(sleepMs, this._client._getAbortSignal?.());
     }
@@ -1235,15 +1269,8 @@ export class ElementHandle {
    * scope parent or `filter({ has })` child query inherits it too. The budget
    * does not bound a healthy dump — the daemon's headroom does (see the note
    * by {@link POLL_INTERVAL_MS}) — so the usual 250ms tick costs nothing.
-   *
-   * A handle from `all()` answers from its snapshot — no device read to bound
-   * — and the clone would drop that cache, so it resolves as-is. Every reader
-   * and action on such a handle must describe the same captured element (a
-   * check that re-queried while the tap it guards used the snapshot could
-   * check one row and tap another); making `all()` live is PILOT-346.
    */
   private _resolveOneWithin(budgetMs: number): Promise<ElementInfo> {
-    if (this._options.resolvedElementsPromise) return this._resolveOne();
     return ElementHandle._cloneWithTimeout(this, budgetMs)._resolveOne();
   }
 
@@ -1317,57 +1344,16 @@ export class ElementHandle {
    * Filters, and/or, scope and the positional index all apply, through the
    * same re-timed resolution the assertion poller uses
    * ({@link _resolveForAssertion} with `strict: false`), so every read of a
-   * chain is bounded by `budgetMs`. A handle from `all()` answers from its
-   * snapshot, like every other reader on that handle. A failed read
-   * classifies exactly as {@link _classifyTickError} does for the strict tick.
+   * chain is bounded by `budgetMs`. A failed read classifies exactly as
+   * {@link _classifyTickError} does for the strict tick.
    */
   private async _existsTick(budgetMs: number): Promise<ResolveTick> {
     try {
-      const elements = this._options.resolvedElementsPromise
-        ? selectNth(await this._options.resolvedElementsPromise, this._options.nthIndex)
-        : await this._resolveForAssertion(budgetMs, false);
+      const elements = await this._resolveForAssertion(budgetMs, false);
       return elements.length > 0 ? { kind: 'found', element: elements[0] } : { kind: 'miss' };
     } catch (err) {
       return ElementHandle._classifyTickError(err);
     }
-  }
-
-  /**
-   * @internal — {@link _resolveTick} against the LIVE tree. A handle from
-   * `all()` answers `_resolveTick` from its capture, which is right for the
-   * action ladders (a check and the action it guards must describe the same
-   * captured element; those loops re-capture *between* ticks). A loop that
-   * exists to watch the screen change — `scrollIntoView`'s probe and
-   * stabilisation — must instead re-capture by index before every read, or it
-   * reads the same frozen answer on every iteration and never converges (a row
-   * captured off-screen would "miss" through all its swipes and then fail).
-   * The refresh is bounded by `budgetMs` like any tick. A failed refresh is
-   * returned as the classified tick (stale / fault / miss) without a read —
-   * the handle keeps holding its previous capture for later readers, as
-   * `_refreshSnapshot` guarantees. A handle without a capture reads exactly
-   * as `_resolveTick`.
-   */
-  private async _resolveLiveTick(budgetMs: number): Promise<ResolveTick> {
-    const refreshErr = await this._refreshSnapshot(budgetMs);
-    if (refreshErr) {
-      switch (classifyResolutionError(refreshErr)) {
-        case 'stale':
-          return { kind: 'stale' };
-        case 'fault':
-          return { kind: 'fault', error: refreshErr };
-        case 'miss':
-          // Not reachable today — a refresh runs `_resolveAll`, which answers
-          // an empty match with `[]` rather than throwing. Spelled out so every
-          // class the classifier can return has a home here, and mapped to an
-          // unreliable tick rather than a miss: a refresh that failed is not
-          // evidence the element is off-screen, and a miss would let the
-          // scroll probe swipe on a read that never happened (PILOT-283).
-          return { kind: 'stale' };
-        default:
-          throw refreshErr;
-      }
-    }
-    return this._resolveTick(budgetMs);
   }
 
   /**
@@ -1380,10 +1366,6 @@ export class ElementHandle {
   private static _cloneWithTimeout(h: ElementHandle, timeoutMs: number): ElementHandle {
     return new ElementHandle(h._client, h._selector, timeoutMs, {
       ...h._options,
-      // A re-timed clone is a fresh probe: drop any cached resolution from
-      // all() so it re-queries with the new timeout instead of serving the
-      // stale snapshot (_resolveOne short-circuits on this promise).
-      resolvedElementsPromise: undefined,
       andSelf: h._options.andSelf ? ElementHandle._cloneWithTimeout(h._options.andSelf, timeoutMs) : undefined,
       andHandle: h._options.andHandle ? ElementHandle._cloneWithTimeout(h._options.andHandle, timeoutMs) : undefined,
       orSelf: h._options.orSelf ? ElementHandle._cloneWithTimeout(h._options.orSelf, timeoutMs) : undefined,
@@ -1420,6 +1402,7 @@ export class ElementHandle {
       const probe = new ElementHandle(this._client, this._selector, timeoutMs, {
         ...ElementHandle._cloneWithTimeout(this, timeoutMs)._options,
         nthIndex: undefined,
+        post: undefined,
       });
       elements = await probe._resolveAll();
     } else {
@@ -1430,8 +1413,7 @@ export class ElementHandle {
       elements = collapseSameTargetDuplicates(res.elements ?? []);
     }
 
-    const nthIndex = this._options.nthIndex;
-    if (nthIndex !== undefined) return selectNth(elements, nthIndex);
+    if (this._options.nthIndex !== undefined) return this._select(elements);
     if (strict && elements.length > 1) {
       throw buildStrictModeViolationError(this._describe(), elements);
     }
@@ -1472,9 +1454,6 @@ export class ElementHandle {
     // does not fail with a worse message than `nth(5).type()`.
     let lastPositionalMiss: Error | undefined;
     while (true) {
-      // A capture (all() handle) answers without a device read; only a
-      // device read proves the agent responsive (see _strictResolve).
-      const fromSnapshot = !!this._options.resolvedElementsPromise;
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind === 'fault') {
         // A transient agent-command timeout (slow-but-alive agent, e.g. a
@@ -1489,7 +1468,7 @@ export class ElementHandle {
         // earlier transient timeout so a genuine "not found"/"disabled" isn't
         // reported as an infra error at the deadline. Anything fatal (a
         // crashed daemon, a strict violation) has already propagated.
-        if (!fromSnapshot) lastTransientErr = undefined;
+        lastTransientErr = undefined;
         // Remember what the LAST counted read saw, so an element that was
         // present (disabled) for a tick and then vanished is reported as not
         // found, not as still disabled. A stale tick carries no count, so it
@@ -1519,9 +1498,6 @@ export class ElementHandle {
             : `Element ${desc} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}`,
         );
       }
-      // A captured (all()) element that is disabled or gone cannot change in
-      // the snapshot: re-capture by index before the next tick (see _strictResolve).
-      lastTransientErr = await this._refreshBetweenTicks(lastTransientErr);
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
       if (sleepMs > 0) await sleep(sleepMs, this._client._getAbortSignal?.());
     }
@@ -1542,65 +1518,6 @@ export class ElementHandle {
    * @param preResolved - Resolved ElementInfo from the auto-wait step (avoids a
    *   redundant resolution round-trip).
    */
-  /**
-   * @internal — Re-capture an `all()` handle's snapshot from a fresh device
-   * read (by the same index) instead of dropping it: after a cached element
-   * id went stale mid-action, or when a wait cannot be satisfied from the
-   * capture. Dropping it would silently turn `rows[i]` into a live `.nth(i)`
-   * and the first()/nth()/filter()/and()/or() guards would stop firing. A
-   * handle that never had a snapshot is left alone.
-   *
-   * The read is bounded like any poll tick (a re-timed live clone), so a
-   * wedged agent cannot hold one tick for the handle timeout plus headroom.
-   * The returned promise never rejects: it resolves to the read's error, if
-   * any, so a poll loop can classify it (transient vs fatal) within its tick
-   * while callers that re-resolve immediately can ignore it. A failed refresh
-   * falls back to the previous capture so the handle is never left holding a
-   * cached rejection.
-   */
-  private _refreshSnapshot(budgetMs: number = SNAPSHOT_REFRESH_BUDGET_MS): Promise<Error | undefined> {
-    const previous = this._options.resolvedElementsPromise;
-    if (!previous) return Promise.resolve(undefined);
-    const fresh = ElementHandle._cloneWithTimeout(this, budgetMs)._resolveAll();
-    this._options.resolvedElementsPromise = fresh;
-    return fresh.then(
-      () => undefined,
-      (err: unknown) => {
-        if (this._options.resolvedElementsPromise === fresh) this._options.resolvedElementsPromise = previous;
-        return err instanceof Error ? err : new Error(String(err));
-      },
-    );
-  }
-
-  /**
-   * @internal — The between-ticks step the action ladders (`_strictResolve`,
-   * `_waitForEnabled`) share for a handle from `all()`: an all() capture
-   * cannot change on its own, so a tick that could not be satisfied from it
-   * re-captures by index before the next one (a real wait, like `.nth(i)`,
-   * rather than a busy-wait on a frozen list). Folds the refresh's outcome
-   * into the ladder's remembered transient fault and returns the new value:
-   * a failed refresh is classified like a tick's read error (a fault is
-   * remembered, a stale or not-found answer changes nothing, anything fatal
-   * is thrown); a successful refresh IS this handle's device read — the agent
-   * answered, so an earlier fault has cleared, and it must not be reported at
-   * the deadline as the cause of a plain "not found". A handle without a
-   * capture is left alone.
-   */
-  private async _refreshBetweenTicks(lastTransientErr: Error | undefined): Promise<Error | undefined> {
-    if (!this._options.resolvedElementsPromise) return lastTransientErr;
-    const refreshErr = await this._refreshSnapshot();
-    if (!refreshErr) return undefined;
-    switch (classifyResolutionError(refreshErr)) {
-      case 'fault':
-        return refreshErr;
-      case 'stale':
-      case 'miss':
-        return lastTransientErr;
-      default:
-        throw refreshErr;
-    }
-  }
-
   private async _actionTarget(preResolved?: ElementInfo): Promise<ActionTarget> {
     if (!this._hasModifiers()) return { selector: this._selector };
     const el = preResolved ?? await this._resolveOne();
@@ -1643,9 +1560,6 @@ export class ElementHandle {
       } catch (err) {
         if (isLast || !isStaleElementError(err instanceof Error ? err.message : String(err))) throw err;
       }
-      // Refresh any cached all() snapshot so the re-resolve gets a FRESH id
-      // rather than the same stale one, without turning the handle live.
-      void this._refreshSnapshot(); // the re-resolve below awaits the refreshed capture
       try {
         currentTarget = await this._actionTarget();
       } catch (err) {
@@ -1664,8 +1578,7 @@ export class ElementHandle {
    * Resolve this handle to an ElementInfo. Waits for the element to be
    * present (up to the handle's timeout) and throws if it never appears —
    * on every handle shape, modified (`.first()`, `.nth()`, `.filter()`,
-   * `.and()`/`.or()`, scoped chains) or not. A handle from `all()` resolves
-   * from the snapshot it was created with.
+   * `.and()`/`.or()`, scoped chains) or not.
    */
   async find(): Promise<ElementInfo> {
     this._emitQueryStarted('find');
@@ -1737,10 +1650,7 @@ export class ElementHandle {
    * Same reliability contract as {@link isVisible}: a first empty read is
    * confirmed once after a short idle wait, a stale mid-re-render snapshot is
    * re-read, a momentary agent fault is retried briefly and then thrown, and a
-   * user stop propagates — never swallowed as "doesn't exist". A handle from
-   * `all()` answers from its snapshot — as last refreshed by that handle's own
-   * actions, never a fresh read — so it says whether the captured row was
-   * there, not whether it still is; re-query the list to check that.
+   * user stop propagates — never swallowed as "doesn't exist".
    */
   async exists(): Promise<boolean> {
     this._emitQueryStarted('exists');
@@ -1765,16 +1675,15 @@ export class ElementHandle {
   /**
    * Return the number of elements the locator matches (PILOT-14). Every
    * modifier applies — filter/and/or/scope and the positional index — so
-   * `first().count()` is 1 or 0, like Playwright. Always a LIVE read: on a
-   * handle from `all()` it re-queries by index like `expect()`/`toHaveCount()`
-   * do (1 while a row is at that index, 0 once the list has shrunk), where
-   * `exists()`, `getText()` and `isVisible()` answer from the capture.
+   * `first().count()` is 1 or 0, like Playwright. Always a live read: on a
+   * handle from `all()` (a plain `nth(i)` locator) it is 1 while a row is at
+   * that index and 0 once the list has shrunk.
    */
   async count(): Promise<number> {
     this._emitQueryStarted('count');
     const start = Date.now();
     try {
-      const elements = selectNth(await this._resolveAll(), this._options.nthIndex);
+      const elements = await this._select(await this._resolveAll());
       await this._traceQuery('count', `Count: ${elements.length}`, Date.now() - start);
       return elements.length;
     } catch (err) {
@@ -1786,41 +1695,57 @@ export class ElementHandle {
   /**
    * Return an array of ElementHandles, one for each matching element (PILOT-13).
    *
-   * The resolved elements are cached in the returned handles, so iterating
-   * and performing actions will not re-query `findElements` for each handle.
+   * Each handle is a plain `nth(i)` locator with nothing cached, as in
+   * Playwright: every reader and action on it resolves live, so a check and
+   * the action it guards always describe the same element — whatever is at
+   * index `i` when each runs (PILOT-346). Every modifier applies, as for
+   * `count()`: `list.first().all()` (or `.nth(i)`/`.last()`) is that one
+   * positional locator, or an empty array.
    */
   async all(): Promise<ElementHandle[]> {
-    // A handle from all() already names one element; all() on it would be a
-    // silent capture→live switch (one handle over a fresh read), the same
-    // hazard filter()/first()/and()/or() refuse.
-    this._assertNoResolvedCache('all');
     this._emitQueryStarted('all');
     const start = Date.now();
     try {
-      // The positional index applies here as it does in count(): a handle
-      // from `loc.first().all()` is the one element first() names. The
-      // capture stays the FULL match set and that one handle carries the
-      // parent's index resolved against it at capture time (`last()` on three
-      // rows becomes index 2), because a snapshot refresh re-resolves the full
-      // set too — a child indexed 0 over a narrowed capture would re-point at
-      // match 0 after its first refresh, and a child keeping `-1` would name
-      // whatever is last after the list shrank instead of reporting the
-      // captured row gone, like every other all() handle does.
-      const parentIndex = this._options.nthIndex;
-      const resolvedElementsPromise = this._resolveAll();
-      const all = await resolvedElementsPromise;
-      const elements = selectNth(all, parentIndex);
-      const captureIndex = parentIndex === undefined ? undefined : parentIndex < 0 ? all.length + parentIndex : parentIndex;
+      const elements = await this._select(await this._resolveAll());
       await this._traceQuery('all', `Found ${elements.length} element(s)`, Date.now() - start);
+      if (this._options.nthIndex !== undefined) {
+        // Already narrowed to one element: the locator is its own single
+        // entry (as WebViewLocator.all() does), or there is nothing.
+        return elements.length > 0
+          ? [new ElementHandle(this._client, this._selector, this._timeoutMs, { ...this._options })]
+          : [];
+      }
       return elements.map((_, i) =>
         new ElementHandle(this._client, this._selector, this._timeoutMs, {
           ...this._options,
-          nthIndex: captureIndex ?? i,
-          resolvedElementsPromise,
+          nthIndex: i,
         }),
       );
     } catch (err) {
       await this._traceQueryFailed('all', err, Date.now() - start);
+      throw err;
+    }
+  }
+
+  /**
+   * Return the text of every element the locator matches, in match order,
+   * from ONE hierarchy read — Playwright's `allTextContents()`. Every
+   * modifier applies, as for `count()` and `all()`, and like them it does not
+   * wait and is exempt from strict mode: no match is `[]`.
+   *
+   * Prefer it to `for (const row of await rows.all()) await row.getText()`
+   * for a batch read: each handle from `all()` is a live locator, so that
+   * loop is one hierarchy read per row (PILOT-346).
+   */
+  async allTextContents(): Promise<string[]> {
+    this._emitQueryStarted('allTextContents');
+    const start = Date.now();
+    try {
+      const elements = await this._select(await this._resolveAll());
+      await this._traceQuery('allTextContents', `Found ${elements.length} element(s)`, Date.now() - start);
+      return elements.map((el) => el.text);
+    } catch (err) {
+      await this._traceQueryFailed('allTextContents', err, Date.now() - start);
       throw err;
     }
   }
@@ -1900,10 +1825,10 @@ export class ElementHandle {
       if (resolved === null) return false;
       let elements = resolved;
 
-      // Respect nthIndex — target the specific element, not the full set
-      const nthIndex = this._options.nthIndex;
-      if (nthIndex !== undefined) {
-        elements = selectNth(elements, nthIndex);
+      // Respect the positional index (and what is chained after it) — target
+      // the specific element, not the full set
+      if (this._options.nthIndex !== undefined) {
+        elements = await this._select(elements);
       } else if ((state === 'visible' || state === 'attached') && elements.length > 1) {
         // Strict mode (PILOT-226): waiting for presence on an ambiguous
         // selector is an error. Absence states ('hidden'/'detached') are
@@ -2277,9 +2202,6 @@ export class ElementHandle {
       } catch (err) {
         if (!isStaleElementError(err instanceof Error ? err.message : String(err))) throw err;
       }
-      // Refresh any cached all() snapshot on BOTH ends so each re-resolves fresh.
-      void this._refreshSnapshot(); // both re-resolves below await the refreshed captures
-      void target._refreshSnapshot();
       return dispatch(await this._actionTarget(), await target._actionTarget());
     }, 'Drag and drop failed');
   }
@@ -2322,7 +2244,6 @@ export class ElementHandle {
         tapRes = synthetic(false, msg);
       }
       if (!tapRes.success && isStaleElementError(tapRes.errorMessage)) {
-        void this._refreshSnapshot(); // _resolveOne below awaits the refreshed capture
         const fresh = await this._resolveOne();
         if (fresh.checked === checked) return synthetic(true); // already set after the change
         tapRes = await tapByTarget(await this._actionTarget(fresh));
@@ -2347,9 +2268,6 @@ export class ElementHandle {
       while (Date.now() < deadline) {
         await sleep(POLL_INTERVAL_MS, this._client._getAbortSignal?.());
         try {
-          // An all() snapshot would never show the change: re-capture by
-          // index so the confirmation (and the re-tap gate) reads live state.
-          void this._refreshSnapshot(); // _resolveOne below awaits the refreshed capture
           const after = await this._resolveOne();
           // The agent answered → responsive; drop any earlier transient timeout
           // so a state that simply never changes fails as such, not as infra.
@@ -2680,10 +2598,6 @@ export class ElementHandle {
    * everywhere else in the probe. As with any definitive tick, an empty read
    * clears a remembered fault.
    *
-   * A handle from `all()` reads its snapshot rather than the device, so a miss
-   * is answered without the confirmation (nothing could change) — and no read
-   * of it can be stale or faulty.
-   *
    * `timeout: 0` is the explicit single-shot opt-out: one read, no retries and
    * no confirmation. That read is issued with a 0 deadline, which the daemon
    * maps to its default command deadline — the same as `count()` at timeout 0.
@@ -2738,10 +2652,7 @@ export class ElementHandle {
           break;
       }
       if (miss) {
-        // A handle from all() answered from its snapshot, which no idle wait
-        // or re-read can change — confirming would only cost a device round
-        // trip for the same answer.
-        if (missConfirmed || this._timeoutMs === 0 || this._options.resolvedElementsPromise) return undefined;
+        if (missConfirmed || this._timeoutMs === 0) return undefined;
         // A definitive answer: any earlier fault has recovered.
         lastFault = undefined;
         faultDeadline = undefined;
@@ -2855,10 +2766,8 @@ export class ElementHandle {
       // Strict mode (PILOT-226) applies too: scrolling toward an ambiguous
       // selector is an error — which match should end up on screen? — and
       // propagates, as does any other fatal error (gRPC transport failure,
-      // user stop). A handle from all() is re-captured by index first: the
-      // probe watches the screen change, so it must never answer from the
-      // capture it was created with.
-      const tick = await this._resolveLiveTick(POLL_INTERVAL_MS);
+      // user stop).
+      const tick = await this._resolveTick(POLL_INTERVAL_MS);
       switch (tick.kind) {
         case 'fault':
           // A momentary agent fault or agent command timeout is retried by
@@ -2963,7 +2872,7 @@ export class ElementHandle {
               //   next tap. Bounded by the tick cap above.
               let stabilityTick: ResolveTick;
               try {
-                stabilityTick = await this._resolveLiveTick(POLL_INTERVAL_MS);
+                stabilityTick = await this._resolveTick(POLL_INTERVAL_MS);
               } catch (err) {
                 if (!isStrictModeViolation(err)) throw err;
                 // An ambiguous read is an unreadable tick like any other.
