@@ -22,3 +22,5 @@ pnpm-debug.log*
 # macOS-specific files
 .DS_Store
 public/promo.mp4
+# written by scripts/sync-promo.mjs at build time
+src/promo-version.json

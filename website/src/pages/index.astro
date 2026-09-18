@@ -1,5 +1,7 @@
 ---
 import '../styles/global.css'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { Code } from 'astro:components'
 import type { ComponentProps } from 'astro/types'
 
@@ -79,6 +81,16 @@ test("user can complete checkout", async ({ device }) => {
 
   await expect(device.getByText("Order Confirmed")).toBeVisible()
 })`
+
+// Cache-busting version for the demo video, written by scripts/sync-promo.mjs
+// at build time from the fetched file's hash. Read with fs (not an import) so
+// `astro check` works on a checkout that has not run the sync.
+// astro build runs with the website directory as cwd (npm run build)
+const promoVersionFile = resolve(process.cwd(), 'src', 'promo-version.json')
+const promoVersion: string | null = existsSync(promoVersionFile)
+  ? (JSON.parse(readFileSync(promoVersionFile, 'utf8')).v ?? null)
+  : null
+const promoSrc = promoVersion ? `/promo.mp4?v=${promoVersion}` : '/promo.mp4'
 
 // GitHub mark (octicon), used inline next to the GitHub links
 const githubMark =
@@ -326,7 +338,7 @@ const threeThings = [
         <div class="tp-container">
           <video
             class="tp-demo-video"
-            src="/promo.mp4"
+            src={promoSrc}
             poster="/promo-poster.jpg"
             controls
             preload="metadata"
