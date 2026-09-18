@@ -262,7 +262,8 @@ function isPollableNotFoundError(err: unknown): boolean {
  * absence states (`'detached'`/`'hidden'`) — must retry rather than conclude
  * absence, or a single re-render blip would falsely satisfy the wait.
  */
-function isStaleSnapshotError(err: unknown): boolean {
+/** @internal — exported for the assertion poll in expect.ts, which retries a stale tick like every ladder here. */
+export function isStaleSnapshotError(err: unknown): boolean {
   return err instanceof Error && err.message.includes(STALE_SNAPSHOT_SIGNATURE);
 }
 
@@ -496,6 +497,8 @@ export function collapseSameTargetDuplicates(elements: ElementInfo[]): ElementIn
   const seen = new Set<string>();
   const result: ElementInfo[] = [];
   for (const el of elements) {
+    // Zero-size / bounds-less entries have no positional identity and are
+    // never collapsed (sameTargetKey keys them by id for the same reason).
     const b = el.bounds;
     if (!b || b.right - b.left <= 0 || b.bottom - b.top <= 0) {
       result.push(el);
@@ -509,6 +512,12 @@ export function collapseSameTargetDuplicates(elements: ElementInfo[]): ElementIn
   return result;
 }
 
+/** @internal — bounds present and non-degenerate: the element can be placed on screen. */
+function hasUsableGeometry(el: ElementInfo): boolean {
+  const b = el.bounds;
+  return !!b && b.right - b.left > 0 && b.bottom - b.top > 0;
+}
+
 /**
  * Identity of an element across two reads of the same hierarchy.
  *
@@ -520,17 +529,41 @@ export function collapseSameTargetDuplicates(elements: ElementInfo[]): ElementIn
  * stable within one hierarchy: the element's bounds and text, the same "same
  * visual target" notion `collapseSameTargetDuplicates` uses (PILOT-349).
  *
- * An element without bounds cannot be placed, so it only matches itself (its
- * id). Zero-size bounds are keyed like any other: two reads of an off-screen
- * element still intersect, where the collapser deliberately keeps zero-size
- * same-text entries apart for strict-mode counting.
+ * An element without usable geometry — no bounds, or a zero-size rect — has
+ * no cross-read identity and keys by its per-read id, so it only ever matches
+ * itself within one read. This matters more than it looks: Android reports
+ * every element scrolled fully out of the viewport at `0,0,0,0`
+ * (`UiObject2.visibleBounds` of a clipped view), so keying zero-size rects
+ * by position would make all clipped same-text elements — icon buttons with
+ * empty text, say — one element: false `and()` intersections and `or()`
+ * unions that lose members. A clipped element has nothing to lose by being
+ * unmatchable across reads: `toBeVisible` is false either way,
+ * `scrollIntoView` treats a miss as "keep scrolling", and a tap cannot land
+ * on it. Same rule as the collapser (PILOT-226), for the same reason.
  *
  * @internal
  */
 export function sameTargetKey(el: ElementInfo): string {
   const b = el.bounds;
-  if (!b) return `id:${el.elementId}`;
+  if (!b || b.right - b.left <= 0 || b.bottom - b.top <= 0) return `id:${el.elementId || anonymousIdentity(el)}`;
   return `${b.left},${b.top},${b.right},${b.bottom}|${el.text}`;
+}
+
+/**
+ * A per-object identity for an element the agent reported WITHOUT an id (a
+ * proto3 default the agents never actually emit, but `_actionTarget` hedges
+ * against it too). Two such elements must not share the key `id:` — that
+ * would make and() intersect them and or() drop one.
+ */
+const anonymousIdentities = new WeakMap<ElementInfo, number>();
+let nextAnonymousIdentity = 0;
+function anonymousIdentity(el: ElementInfo): string {
+  let n = anonymousIdentities.get(el);
+  if (n === undefined) {
+    n = ++nextAnonymousIdentity;
+    anonymousIdentities.set(el, n);
+  }
+  return `anon-${n}`;
 }
 
 /**
@@ -678,6 +711,12 @@ export class ElementHandle {
   /** Return a new handle targeting the match at `index` (0-based). Negative indices count from the end. */
   nth(index: number): ElementHandle {
     this._assertNoResolvedCache('nth');
+    if (!Number.isInteger(index)) {
+      // selectNth would bounds-check a fractional index as in range and index
+      // the array at it, yielding [undefined] — a phantom count() match and a
+      // TypeError far from the mistake. Refuse it here, at the public entry.
+      throw new Error(`nth() requires an integer index, got ${index}`);
+    }
     return new ElementHandle(this._client, this._selector, this._timeoutMs, {
       ...this._options,
       nthIndex: index,
@@ -734,10 +773,17 @@ export class ElementHandle {
     // intersect ALL rows.
     this._assertNoResolvedCache('and');
     ElementHandle._assertOperandNotResolved('and', other);
+    ElementHandle._assertOperandNotXpath('and', this);
+    ElementHandle._assertOperandNotXpath('and', other);
     return new ElementHandle(this._client, this._selector, this._timeoutMs, {
       andSelf: this,
       andHandle: other,
       traceCapture: this._options.traceCapture,
+      // Deliberately NOT ...this._options: the receiver's modifiers live in
+      // andSelf and must not double-apply on the combined handle. Only the
+      // config-derived action knobs carry over.
+      typingDelay: this._options.typingDelay,
+      doubleTapInterval: this._options.doubleTapInterval,
     });
   }
 
@@ -748,11 +794,53 @@ export class ElementHandle {
   or(other: ElementHandle): ElementHandle {
     this._assertNoResolvedCache('or');
     ElementHandle._assertOperandNotResolved('or', other);
+    ElementHandle._assertOperandNotXpath('or', this);
+    ElementHandle._assertOperandNotXpath('or', other);
     return new ElementHandle(this._client, this._selector, this._timeoutMs, {
       orSelf: this,
       orHandle: other,
       traceCapture: this._options.traceCapture,
+      // As in and(): only the config-derived action knobs carry over.
+      typingDelay: this._options.typingDelay,
+      doubleTapInterval: this._options.doubleTapInterval,
     });
+  }
+
+  /**
+   * @internal — and()/or() combine two reads by bounds + text, and the Android
+   * agent's xpath path reports both from a different read (the node's OWN
+   * text, the XML dump's bounds) than every other selector, so an xpath
+   * operand can never key equal to the other side: the combination would
+   * resolve to a plausible-looking empty (and) or doubled (or) result. Refuse
+   * it up front — the same shape as the all()-handle guards.
+   */
+  private static _assertOperandNotXpath(method: string, operand: ElementHandle): void {
+    const offending = ElementHandle._findXpath(operand);
+    if (offending) {
+      throw new Error(
+        `${method}() cannot combine an xpath locator (${formatSelector(offending)}). ` +
+          'xpath locators are Android-only and for use on their own — see docs/selectors.md.',
+      );
+    }
+  }
+
+  /**
+   * @internal — The xpath selector anywhere in this handle's shape: its own
+   * selector or a scoped ancestor (`locator({ xpath }).getByText(…)` nests the
+   * xpath as the selector's `parent`; a modified parent lives in
+   * `scopeParent`), or an operand of a nested and()/or().
+   */
+  private static _findXpath(handle: ElementHandle): Selector | undefined {
+    for (let sel: Selector | undefined = handle._selector; sel; sel = sel.parent) {
+      if (sel.kind.type === 'xpath') return sel;
+    }
+    const o = handle._options;
+    for (const nested of [o.scopeParent, o.andSelf, o.andHandle, o.orSelf, o.orHandle]) {
+      if (!nested) continue;
+      const found = ElementHandle._findXpath(nested);
+      if (found) return found;
+    }
+    return undefined;
   }
 
   // ── Internal resolution helpers ──
@@ -772,10 +860,14 @@ export class ElementHandle {
   async _resolveAll(): Promise<ElementInfo[]> {
     if (this._options.andHandle) {
       const left = this._options.andSelf!;
+      const right = this._options.andHandle;
 
+      // Each operand keeps its own positional index (`a.first().and(b)`
+      // intersects the FIRST a with b — PILOT-347); _resolveAll alone never
+      // applies one.
       const [leftEls, rightEls] = await Promise.all([
-        left._resolveAll(),
-        this._options.andHandle._resolveAll(),
+        left._resolveAll().then((els) => selectNth(els, left._options.nthIndex)),
+        right._resolveAll().then((els) => selectNth(els, right._options.nthIndex)),
       ]);
 
       // Each operand is its own hierarchy read, and the agents mint a fresh
@@ -796,24 +888,37 @@ export class ElementHandle {
 
     if (this._options.orHandle) {
       const left = this._options.orSelf!;
+      const right = this._options.orHandle;
 
+      // Each operand keeps its own positional index (PILOT-347), as in and().
       const [leftEls, rightEls] = await Promise.all([
-        left._resolveAll(),
-        this._options.orHandle._resolveAll(),
+        left._resolveAll().then((els) => selectNth(els, left._options.nthIndex)),
+        right._resolveAll().then((els) => selectNth(els, right._options.nthIndex)),
       ]);
 
-      // De-duplicate by stable identity, not by the per-read elementId
-      // (PILOT-349): an element both operands match would otherwise appear
-      // twice and turn every single-element use into a strict-mode
-      // violation. First occurrence wins — left operand first, in order.
-      const seen = new Set<string>();
-      let elements: ElementInfo[] = [];
-      for (const el of [...leftEls, ...rightEls]) {
-        const key = sameTargetKey(el);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        elements.push(el);
-      }
+      // De-duplicate ACROSS the operands by stable identity, not by the
+      // per-read elementId (PILOT-349): an element both operands match would
+      // otherwise appear twice and turn every single-element use into a
+      // strict-mode violation. Only right entries the left read already has
+      // are dropped — every operand's own entries all SURVIVE (the collapser's
+      // exemptions are respected; the sort below only reorders), so a union is
+      // never smaller than one operand alone. An element with no usable
+      // geometry (clipped: 0,0,0,0) has no cross-read identity and is kept
+      // once per operand — see sameTargetKey.
+      // The union is then put in SCREEN order (top, then left) so that
+      // `first()`/`nth()` on it pick by position, as Playwright's DOM-ordered
+      // or() does — the operands are two independent reads, so position is
+      // the only shared order they have. Geometry-less entries keep their
+      // operand order after the positioned ones (the sort is stable).
+      const leftKeys = new Set(leftEls.map(sameTargetKey));
+      let elements = [...leftEls, ...rightEls.filter((e) => !leftKeys.has(sameTargetKey(e)))]
+        .sort((a, b) => {
+          const ga = hasUsableGeometry(a);
+          const gb = hasUsableGeometry(b);
+          if (ga && gb) return a.bounds!.top - b.bounds!.top || a.bounds!.left - b.bounds!.left;
+          if (ga !== gb) return ga ? -1 : 1;
+          return 0;
+        });
 
       // Apply post-combination filters (from .or(b).filter(F))
       if (this._options.filters) {
@@ -1657,12 +1762,19 @@ export class ElementHandle {
     }
   }
 
-  /** Return the number of elements matching the selector (PILOT-14). */
+  /**
+   * Return the number of elements the locator matches (PILOT-14). Every
+   * modifier applies — filter/and/or/scope and the positional index — so
+   * `first().count()` is 1 or 0, like Playwright. Always a LIVE read: on a
+   * handle from `all()` it re-queries by index like `expect()`/`toHaveCount()`
+   * do (1 while a row is at that index, 0 once the list has shrunk), where
+   * `exists()`, `getText()` and `isVisible()` answer from the capture.
+   */
   async count(): Promise<number> {
     this._emitQueryStarted('count');
     const start = Date.now();
     try {
-      const elements = await this._resolveAll();
+      const elements = selectNth(await this._resolveAll(), this._options.nthIndex);
       await this._traceQuery('count', `Count: ${elements.length}`, Date.now() - start);
       return elements.length;
     } catch (err) {
@@ -1678,16 +1790,32 @@ export class ElementHandle {
    * and performing actions will not re-query `findElements` for each handle.
    */
   async all(): Promise<ElementHandle[]> {
+    // A handle from all() already names one element; all() on it would be a
+    // silent capture→live switch (one handle over a fresh read), the same
+    // hazard filter()/first()/and()/or() refuse.
+    this._assertNoResolvedCache('all');
     this._emitQueryStarted('all');
     const start = Date.now();
     try {
+      // The positional index applies here as it does in count(): a handle
+      // from `loc.first().all()` is the one element first() names. The
+      // capture stays the FULL match set and that one handle carries the
+      // parent's index resolved against it at capture time (`last()` on three
+      // rows becomes index 2), because a snapshot refresh re-resolves the full
+      // set too — a child indexed 0 over a narrowed capture would re-point at
+      // match 0 after its first refresh, and a child keeping `-1` would name
+      // whatever is last after the list shrank instead of reporting the
+      // captured row gone, like every other all() handle does.
+      const parentIndex = this._options.nthIndex;
       const resolvedElementsPromise = this._resolveAll();
-      const elements = await resolvedElementsPromise;
+      const all = await resolvedElementsPromise;
+      const elements = selectNth(all, parentIndex);
+      const captureIndex = parentIndex === undefined ? undefined : parentIndex < 0 ? all.length + parentIndex : parentIndex;
       await this._traceQuery('all', `Found ${elements.length} element(s)`, Date.now() - start);
       return elements.map((_, i) =>
         new ElementHandle(this._client, this._selector, this._timeoutMs, {
           ...this._options,
-          nthIndex: i,
+          nthIndex: captureIndex ?? i,
           resolvedElementsPromise,
         }),
       );

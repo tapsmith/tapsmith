@@ -101,12 +101,13 @@ export function parseDevicectlDeviceList(json: string): PhysicalDeviceInfo[] {
     // Only iOS devices — devicectl also lists watchOS/macOS/tvOS.
     if (hwProps['platform'] !== 'iOS') continue;
     // Only real hardware — from Xcode 27 devicectl lists simulators too
-    // (`reality: "simulated"`, also under the newer `properties.hardware`).
-    // Without this a booted simulator is taken for a physical device, and a
-    // simulator run aborts looking for a device-slice xctestrun.
-    const props = (d['properties'] as Record<string, unknown> | undefined) ?? {};
-    const hardware = (props['hardware'] as Record<string, unknown> | undefined) ?? {};
-    if (hwProps['reality'] === 'simulated' || hardware['reality'] === 'simulated') continue;
+    // (`reality: "simulated"`). Without this a booted simulator is taken for
+    // a physical device, and a simulator run aborts looking for a
+    // device-slice xctestrun. Read from the same dictionary as every other
+    // field: Xcode 27 deprecates these in favour of a differently shaped
+    // `properties` tree, which is a whole-parser migration, not a per-field
+    // fallback.
+    if (hwProps['reality'] === 'simulated') continue;
 
     const udid = typeof hwProps['udid'] === 'string' ? (hwProps['udid'] as string) : '';
     if (!udid) continue;

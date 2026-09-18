@@ -112,17 +112,15 @@ describe('parseDevicectlDeviceList', () => {
             connectionProperties: { pairingState: 'paired' },
           },
           {
-            // The deprecated top-level dictionaries gone, the flag only under
-            // the replacement `properties.hardware`.
-            hardwareProperties: { platform: 'iOS', udid: 'SIM-2-UDID' },
-            properties: { hardware: { reality: 'simulated' } },
-            deviceProperties: { name: 'iPhone 17 Pro', bootState: 'booted' },
+            // No reality field at all (pre-Xcode-27 output): real hardware.
+            hardwareProperties: { platform: 'iOS', udid: 'OLD-XCODE-UDID' },
+            deviceProperties: { name: 'iPhone 15', bootState: 'booted' },
             connectionProperties: {},
           },
         ],
       },
     });
-    expect(parseDevicectlDeviceList(json).map((d) => d.udid)).toEqual(['REAL-UDID']);
+    expect(parseDevicectlDeviceList(json).map((d) => d.udid)).toEqual(['REAL-UDID', 'OLD-XCODE-UDID']);
   });
 
   it('returns empty array for missing / malformed result', () => {
