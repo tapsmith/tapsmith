@@ -98,7 +98,7 @@ device.locator({ xpath: "//android.widget.Button[@text='OK']" })
 | Option | Type | Description |
 |---|---|---|
 | `id` | `string` | Native resource id (Android `R.id.foo` or iOS `accessibilityIdentifier`). |
-| `xpath` | `string` | XPath expression. Android-only. |
+| `xpath` | `string` | XPath expression. Android-only, and for use on its own. `and()`/`or()` refuse an xpath operand with an error (its text and bounds come from a different agent read and could never match the other side). Narrowing (`filter()`, `first()`/`nth()`) still queries, but actions through a narrowed xpath locator fail at the agent — it cannot act on an xpath match by id. |
 | `className` | `string` | Native widget class name. |
 
 > The `getBy*` methods and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to its descendants. See [ElementHandle Scoping](#scoping).
@@ -764,7 +764,7 @@ await device.getByRole("listitem").last().tap();
 
 #### `elementHandle.nth(index: number): ElementHandle`
 
-Return a new handle targeting the match at the given 0-based index. Negative indices count from the end.
+Return a new handle targeting the match at the given 0-based index. Negative indices count from the end. The index must be an integer — `nth(1.5)` throws.
 
 ```typescript
 await device.getByRole("listitem").nth(2).tap();
@@ -798,7 +798,7 @@ const count = await premiumItems.count();
 Return a handle matching elements that satisfy both this and the other handle's selector (intersection). AND binds tighter than OR.
 
 ```typescript
-const submitButton = device.getByRole("button").and(device.getByText("Submit", { exact: true }));
+const submitButton = device.getByRole("button").and(device.getByDescription("Submit"));
 await submitButton.tap();
 ```
 
@@ -810,6 +810,8 @@ Return a handle matching elements that satisfy either this or the other handle's
 const acceptButton = device.getByText("OK", { exact: true }).or(device.getByText("Accept", { exact: true }));
 await acceptButton.tap();
 ```
+
+**How operands are matched.** Each operand is resolved with its own hierarchy read, and the on-device agents give an element a fresh internal id on every read, so the two reads are combined by the element's *visual identity* — its bounds and its text — rather than by id. `and()` keeps the left operand's matches whose bounds and text also appear in the right operand's; `or()` keeps every left match and adds the right operand's matches that the left did not already have; the union is then ordered by position on screen (top, then left — matches without usable geometry come last, in operand order), so `first()` on a union is the topmost match, as with Playwright's DOM-ordered `or()`. A positional modifier on an operand applies to that operand first: `a.first().and(b)` intersects the first `a` with `b`. An xpath locator is refused as an operand (`and()`/`or()` throw), since on Android its text and bounds come from a different agent read and could never match the other side. Two distinct elements that share both bounds and text (a pressable and the single text it wraps, with no padding) count as the same target, which is also how strict mode already treats them; acting on either taps the same point. An element with no usable geometry — scrolled fully out of view, which Android reports as a zero-size rectangle — has no cross-read identity: `and()` does not match it until it is on screen (`scrollIntoView()` keeps scrolling; `toBeVisible()` is false either way), and `or()` keeps each operand's copy of it, so a single-element use of an overlapping union (including `scrollIntoView()`) fails with a strict-mode violation while the shared element is fully off-screen — bring it on screen through one operand first, or use a single-selector locator for scrolling. If the screen moves — or a label's text changes — between the two reads, that `and()` tick simply misses; auto-waiting readers (`find()`, actions, `expect(...)`) retry it, while the one-shot readers `count()` and `exists()` report that tick as it was, and an absence assertion (`toHaveCount(0)`, `toBeHidden()`, `not.toBeVisible()`) accepts it as its answer; an `or()` whose operands *both* match the moving element can see it twice for that tick and raise a strict-mode violation on a single-element action, so wait for the transition to settle before acting through an overlapping union. Both operands must also resolve the *same* node (or same-frame nodes): a role query resolving a row container and a text query resolving a differently-framed inner label do not intersect, so prefer operand pairs that target the same element, as the built-in role/text queries do.
 
 ### Queries
 
@@ -844,7 +846,9 @@ The `ElementInfo` object contains:
 Returns `true` if the element exists in the UI hierarchy **right now**, whether or not it is visible.
 
 Like a Playwright presence check (Playwright has no `exists()`; `locator.count() > 0` is the idiom
-there), this does **not** wait for the element to appear: it reads the current hierarchy and returns
+there), this does **not** wait for the element to appear. Note the two idioms are not interchangeable
+on a handle from `all()`: there `exists()` answers from the capture while `count()` re-queries the
+device by index (see `all()`). It reads the current hierarchy and returns
 `false` without waiting for it when nothing matches (two reads and a short idle wait, see below), so it
 is safe to branch on presence. To wait for an element, use `expect(locator).toExist()` or `waitFor({ state: "attached" })`.
 Both of those are strict (see below), so if the locator may match several elements, narrow it with
@@ -895,7 +899,7 @@ check that.
 
 #### `elementHandle.count(): Promise<number>`
 
-Return the number of elements matching the selector.
+Return the number of elements the locator matches. Every modifier applies — `filter()`, `and()`/`or()`, scoping and `first()`/`nth()`/`last()` — so `locator.first().count()` is 1 or 0, as in Playwright.
 
 ```typescript
 const itemCount = await device.getByRole("listitem").count();
@@ -903,7 +907,7 @@ const itemCount = await device.getByRole("listitem").count();
 
 #### `elementHandle.all(): Promise<ElementHandle[]>`
 
-Return an array of `ElementHandle` instances, one for each matching element. Useful for iterating over a list of elements.
+Return an array of `ElementHandle` instances, one for each element the locator matches. Useful for iterating over a list of elements. Every modifier applies, as for `count()`: `locator.first().all()` (or `.nth(i)`/`.last()`) yields the one handle that position names, or an empty array.
 
 ```typescript
 const items = await device.getByRole("listitem").all();
@@ -928,8 +932,8 @@ exists to watch the screen change; the handle keeps answering from the refreshed
 means: after `items[i].scrollIntoView()` the handle describes whatever row is at index `i` in the *scrolled*
 list — on a virtualised list that can be a different row from the one captured, exactly as `.nth(i)` would
 resolve — so prefer a locator that names the row (`getByText`, `filter({ hasText })`) when scrolling to it. `expect(items[i])` assertions and
-`waitFor()` also re-query the device by index, so they reflect what is on screen now. Because a handle
-from `all()` already names one element, `first()`, `last()`, `nth()`, `filter()`, `and()` and `or()`
+`waitFor()` and `count()` also re-query the device by index, so they reflect what is on screen now. Because a handle
+from `all()` already names one element, `first()`, `last()`, `nth()`, `filter()`, `and()`, `or()` and `all()`
 throw on it, and so does passing it as the other operand or as `has`/`hasNot` — narrow the locator
 before calling `all()` instead (`list.filter({ hasText: "Sold out" }).all()`). Note that filters always
 apply before a positional index, so `list.nth(1).filter(…)` means "the second matching row", not "row 1
@@ -1475,7 +1479,7 @@ await expect(device.getByTestId("status")).toContainText(/\d+ items/);
 
 #### `.toHaveCount(count: number, options?): Promise<void>`
 
-Assert that the selector resolves to exactly N elements.
+Assert that the locator resolves to exactly N elements. Every modifier on the locator applies — `filter()`, `and()`/`or()`, scoping and `first()`/`nth()`/`last()` — so it counts the same set `count()` returns, and a positional locator has a count of 1 or 0.
 
 ```typescript
 await expect(device.getByRole("listitem")).toHaveCount(5);

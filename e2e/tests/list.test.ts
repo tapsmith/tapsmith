@@ -74,37 +74,37 @@ describe("List screen — and()/or() on a device", () => {
   // header instead (PILOT-223, PILOT-348). Here the list is as the deep link
   // mounted it.
   test.beforeAll(async ({ device }) => {
-    await device.openDeepLink("tapsmithtest:///list")
-  })
+    await device.openDeepLink("tapsmithtest:///list");
+  });
 
   test("and() intersects its operands", async ({ device, listScreen }) => {
     // getByRole("button") alone is ambiguous (every rendered row, plus the
     // header's back button); intersected with one row's label it is that row.
-    const row = device.getByRole("button").and(listScreen.item(2))
-    await expect(row).toHaveCount(1)
-    await expect(row).toBeVisible()
+    const row = device.getByRole("button").and(listScreen.item(2));
+    await expect(row).toHaveCount(1);
+    await expect(row).toBeVisible();
     // Disjoint operands: the item-count text is not a button.
-    await expect(device.getByRole("button").and(listScreen.itemCount)).toHaveCount(0)
-  })
+    await expect(device.getByRole("button").and(listScreen.itemCount)).toHaveCount(0);
+  });
 
   test("an action through and() lands on the intersected element", async ({ device, listScreen }) => {
-    const row = device.getByRole("button").and(listScreen.item(2))
-    await row.tap()
-    await expect(listScreen.selectedCount).toContainText("1 selected")
-    await row.tap() // deselect, leave the screen as we found it
-    await expect(listScreen.selectedCount).toContainText("0 selected")
-  })
+    const row = device.getByRole("button").and(listScreen.item(2));
+    await row.tap();
+    await expect(listScreen.selectedCount).toContainText("1 selected");
+    await row.tap(); // deselect, leave the screen as we found it
+    await expect(listScreen.selectedCount).toContainText("0 selected");
+  });
 
   test("or() unites its operands without duplicating a shared match", async ({ device, listScreen }) => {
     // The same row reached through two different selectors is ONE match, so
     // a single-element use of the union is not a strict-mode violation.
-    const sameRow = listScreen.item(2).or(device.getByTestId("item-2"))
-    await expect(sameRow).toHaveCount(1)
-    await expect(sameRow).toBeVisible()
+    const sameRow = listScreen.item(2).or(device.getByTestId("item-2"));
+    await expect(sameRow).toHaveCount(1);
+    await expect(sameRow).toBeVisible();
     // Distinct rows add up.
-    await expect(listScreen.item(2).or(listScreen.item(3))).toHaveCount(2)
-  })
-})
+    await expect(listScreen.item(2).or(listScreen.item(3))).toHaveCount(2);
+  });
+});
 
 // PILOT-287 follow-up: the all() snapshot contract, on a device. Handles from
 // all() answer from the capture they were created from, children scoped off
