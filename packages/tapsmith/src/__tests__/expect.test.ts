@@ -1,7 +1,7 @@
 import { describe, it, expect as vitestExpect, vi } from "vitest";
 import { expect as tapsmithExpect } from "../expect.js";
 import { ElementHandle } from "../element-handle.js";
-import { _text } from "../selectors.js";
+import { _role, _text, selectorToProto, type Selector } from "../selectors.js";
 import type {
   TapsmithGrpcClient,
   FindElementResponse,
@@ -817,6 +817,41 @@ describe("toHaveCount()", () => {
     ).rejects.toThrow("found 2");
   });
 
+  it("counts the handle's modified match set, not its raw selector (PILOT-349 follow-up)", async () => {
+    // Real agents mint a fresh elementId per read: churn ids so the and()
+    // below can only intersect by stable identity.
+    let nextId = 0;
+    const row = (text: string, top: number) =>
+      makeElementInfo({ elementId: `id-${++nextId}`, text, role: "button", bounds: { left: 0, top, right: 400, bottom: top + 60 } });
+    const findElements = vi.fn(async (selector: Selector) => ({
+      requestId: "1",
+      elements: selectorToProto(selector).text === "Item 5"
+        ? [row("Item 5", 100)]
+        : [row("Back", 0), row("Item 5", 100), row("Item 6", 160)],
+      errorMessage: "",
+    }));
+    const client = {
+      findElement: vi.fn(async () => ({ requestId: "1", found: true, element: makeElementInfo(), errorMessage: "" })),
+      findElements,
+    } as unknown as TapsmithGrpcClient;
+    const buttons = new ElementHandle(client, _role("button"), 5000);
+    const item5 = new ElementHandle(client, _text("Item 5"), 5000);
+    await tapsmithExpect(buttons.and(item5)).toHaveCount(1, { timeout: 200 });
+    await tapsmithExpect(buttons.or(item5)).toHaveCount(3, { timeout: 200 });
+    await tapsmithExpect(buttons.filter({ hasText: "Item" })).toHaveCount(2, { timeout: 200 });
+    // An operand's own positional index survives the assertion path's
+    // re-timed clone of the handle tree (PILOT-347): the FIRST button is
+    // "Back", which item5 does not match; the second is Item 5.
+    await tapsmithExpect(buttons.first().and(item5)).toHaveCount(0, { timeout: 200 });
+    await tapsmithExpect(buttons.nth(1).and(item5)).toHaveCount(1, { timeout: 200 });
+    await tapsmithExpect(buttons.nth(1).and(item5)).toBeVisible({ timeout: 200 });
+    await tapsmithExpect(buttons.first().or(item5)).toHaveCount(2, { timeout: 200 });
+    await tapsmithExpect(buttons.first()).toHaveCount(1, { timeout: 200 });
+    await vitestExpect(
+      tapsmithExpect(buttons.and(item5)).toHaveCount(3, { timeout: 100 }),
+    ).rejects.toThrow("to have count 3, but found 1");
+  });
+
   it("not.toHaveCount() passes when count differs", async () => {
     const client = makeMockClient(
       async () => ({
@@ -853,6 +888,150 @@ describe("toHaveCount()", () => {
     await vitestExpect(
       tapsmithExpect(handle).not.toHaveCount(2, { timeout: 50 }),
     ).rejects.toThrow("NOT to have count");
+  });
+
+  it("surfaces a daemon-level failure as the real cause instead of counting it as 0", async () => {
+    // A dead agent must not make `toHaveCount(0)` pass. Resolution errors
+    // flow through the poll like every other assertion: retried to the
+    // deadline, then rethrown as themselves.
+    const client = makeMockClient(
+      async () => ({ requestId: "1", found: false, errorMessage: "" }),
+      async () => ({ requestId: "1", elements: [], errorMessage: "agent dead" }),
+    );
+    const handle = makeHandle(client);
+    await vitestExpect(
+      tapsmithExpect(handle).toHaveCount(0, { timeout: 100 }),
+    ).rejects.toThrow(/findElements failed: agent dead/);
+  });
+
+  it("retries a stale-snapshot tick instead of failing on it (the UI changed mid-read)", async () => {
+    // Android's StaleObjectException surfaces as a findElements error carrying
+    // the stale signature. It says nothing about presence — the next tick does.
+    let calls = 0;
+    const client = makeMockClient(
+      async () => ({ requestId: "1", found: false, errorMessage: "" }),
+      async () => ++calls === 1
+        ? { requestId: "1", elements: [], errorMessage: "Element is stale (UI changed): null" }
+        : { requestId: "1", elements: [makeElementInfo(), makeElementInfo({ elementId: "el-2" })], errorMessage: "" },
+    );
+    const handle = makeHandle(client);
+    await tapsmithExpect(handle).toHaveCount(2, { timeout: 2_000 });
+    vitestExpect(calls).toBeGreaterThanOrEqual(2);
+  });
+
+  it("a stale tick landing LAST does not mask the real assertion failure once other ticks completed", async () => {
+    // Ticks 1..n complete and observe count 0 (the element never appears);
+    // the final ticks before the deadline are stale. The failure must be the
+    // ordinary assertion message, not the could-not-evaluate stall error —
+    // and the same for a stale landing on the post-deadline final attempt.
+    let calls = 0;
+    const client = makeMockClient(
+      async () => ({ requestId: "1", found: false, errorMessage: "" }),
+      async () => ++calls <= 1
+        ? { requestId: "1", elements: [], errorMessage: "" }
+        : { requestId: "1", elements: [], errorMessage: "Element is stale (UI changed): null" },
+    );
+    const handle = makeHandle(client);
+    await vitestExpect(
+      tapsmithExpect(handle).toHaveCount(2, { timeout: 400 }),
+    ).rejects.toThrow(/to have count 2, but found 0/);
+  });
+
+  it("toBeVisible() fails fast on an or() duplicate of a clipped element (documented limitation, PILOT-360 tracks the design)", async () => {
+    // Both operands read one clipped element; ids differ per read, so the
+    // union holds 2 entries and strict mode refuses the ambiguity on the
+    // first tick rather than burning the assertion budget.
+    let id = 0;
+    const clipped = () => makeElementInfo({ elementId: `u-${++id}`, text: "Item 25", visible: false, bounds: { left: 0, top: 0, right: 0, bottom: 0 } });
+    const client = makeMockClient(
+      async () => ({ requestId: "1", found: false, errorMessage: "" }),
+      async () => ({ requestId: "1", elements: [clipped()], errorMessage: "" }),
+    );
+    const a = new ElementHandle(client, _text("Item 25"), 5000);
+    const b = new ElementHandle(client, _role("button"), 5000);
+    const start = Date.now();
+    await vitestExpect(
+      tapsmithExpect(a.or(b)).toBeVisible({ timeout: 5000 }),
+    ).rejects.toThrow(/resolved to 2 elements/);
+    vitestExpect(Date.now() - start).toBeLessThan(2000);
+  });
+
+  it("timeout 0's single read hitting a stale snapshot is 'could not be evaluated', not a fabricated count", async () => {
+    // With timeout 0 the poll loop never runs; the final attempt is the only
+    // read. A stale there is not an observation either.
+    const client = makeMockClient(
+      async () => ({ requestId: "1", found: false, errorMessage: "" }),
+      async () => ({ requestId: "1", elements: [], errorMessage: "Element is stale (UI changed): null" }),
+    );
+    const handle = makeHandle(client);
+    await vitestExpect(
+      tapsmithExpect(handle).toHaveCount(2, { timeout: 0 }),
+    ).rejects.toThrow(/single non-waiting read \(timeout: 0\) landed mid-update/);
+  });
+
+  it("a stale read that lasts the whole budget fails as 'could not be evaluated', for either polarity", async () => {
+    // No tick ever completed, so neither "found 2" nor "found 0" is a fact:
+    // the failure must not claim an observation, and must not surface as a
+    // raw infrastructure error either.
+    const client = makeMockClient(
+      async () => ({ requestId: "1", found: false, errorMessage: "" }),
+      async () => ({ requestId: "1", elements: [], errorMessage: "Element is stale (UI changed): null" }),
+    );
+    const handle = makeHandle(client);
+    await vitestExpect(
+      tapsmithExpect(handle).toHaveCount(2, { timeout: 300 }),
+    ).rejects.toThrow(/UI kept changing for the whole 300ms assertion timeout.*is stale \(UI changed\)/);
+    await vitestExpect(
+      tapsmithExpect(handle).not.toHaveCount(2, { timeout: 300 }),
+    ).rejects.toThrow(/UI kept changing/);
+    await vitestExpect(
+      tapsmithExpect(handle).not.toBeVisible({ timeout: 300 }),
+    ).rejects.toThrow(/UI kept changing/);
+  });
+
+  it("counts a scoped handle (dialog.first().getByRole) within its parent only", async () => {
+    // Two stacked dialogs, one button inside each; the old raw-selector count
+    // reported every button on screen.
+    const dialogs = [
+      makeElementInfo({ elementId: "d1", text: "Dialog A", bounds: { left: 0, top: 0, right: 200, bottom: 100 } }),
+      makeElementInfo({ elementId: "d2", text: "Dialog B", bounds: { left: 0, top: 100, right: 200, bottom: 200 } }),
+    ];
+    const buttons = [
+      makeElementInfo({ elementId: "b1", text: "Submit", role: "button", bounds: { left: 10, top: 10, right: 90, bottom: 40 } }),
+      makeElementInfo({ elementId: "b2", text: "Submit", role: "button", bounds: { left: 10, top: 110, right: 90, bottom: 140 } }),
+    ];
+    const client = {
+      findElement: vi.fn(async () => ({ requestId: "1", found: true, element: makeElementInfo(), errorMessage: "" })),
+      findElements: vi.fn(async (selector: Selector) => ({
+        requestId: "1",
+        elements: selectorToProto(selector).role ? buttons : dialogs,
+        errorMessage: "",
+      })),
+    } as unknown as TapsmithGrpcClient;
+    const dialog = new ElementHandle(client, _text("Dialog"), 5000);
+    await tapsmithExpect(dialog.first().getByRole("button")).toHaveCount(1, { timeout: 200 });
+    await tapsmithExpect(dialog.getByRole("button")).toHaveCount(2, { timeout: 200 });
+    await vitestExpect(
+      tapsmithExpect(dialog.first().getByRole("button")).toHaveCount(2, { timeout: 100 }),
+    ).rejects.toThrow("to have count 2, but found 1");
+  });
+
+  it("on a handle from all() answers live by index, like count()", async () => {
+    const rows3 = [
+      makeElementInfo({ elementId: "r1", text: "A" }),
+      makeElementInfo({ elementId: "r2", text: "B" }),
+      makeElementInfo({ elementId: "r3", text: "C" }),
+    ];
+    let live = rows3;
+    const client = makeMockClient(
+      async () => ({ requestId: "1", found: true, element: makeElementInfo(), errorMessage: "" }),
+      async () => ({ requestId: "1", elements: live, errorMessage: "" }),
+    );
+    const rows = await new ElementHandle(client, _role("listitem"), 5000).all();
+    await tapsmithExpect(rows[2]).toHaveCount(1, { timeout: 200 });
+    live = rows3.slice(0, 2);
+    await tapsmithExpect(rows[2]).toHaveCount(0, { timeout: 200 });
+    await tapsmithExpect(rows[0]).toHaveCount(1, { timeout: 200 });
   });
 });
 

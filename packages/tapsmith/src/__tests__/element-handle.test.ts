@@ -6,7 +6,7 @@ import { ElementHandle, StrictModeViolationError, isStrictModeViolation } from '
 import { TraceCollector, type TraceCapture } from '../trace/trace-collector.js';
 import type { AnyTraceEvent, ActionTraceEvent } from '../trace/types.js';
 import { isAbortError, TestAbortedError } from '../abort.js';
-import { type Selector, _text, _textContains, _role, _className, _id, _testId, _contentDesc, formatSelector, selectorToProto } from '../selectors.js';
+import { type Selector, _text, _textContains, _role, _className, _id, _testId, _contentDesc, _xpath, formatSelector, selectorToProto } from '../selectors.js';
 import type {
   TapsmithGrpcClient,
   FindElementsResponse,
@@ -1822,6 +1822,38 @@ describe('count()', () => {
     await handle.count();
     expect(findElements).toHaveBeenCalledWith(handle._selector, 7000);
   });
+
+  it('refuses a non-integer nth() index up front', () => {
+    const handle = new ElementHandle(makeMockClient(), _role('listitem'), 5000);
+    expect(() => handle.nth(1.5)).toThrow(/nth\(\) requires an integer index, got 1.5/);
+    expect(() => handle.nth(NaN)).toThrow(/requires an integer index/);
+    expect(() => handle.nth(1)).not.toThrow();
+    expect(() => handle.nth(-1)).not.toThrow();
+  });
+
+  it('honours the positional index, like exists() and toHaveCount() (Playwright: first().count() is 1)', async () => {
+    const client = makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse(threeItems)),
+    });
+    const handle = new ElementHandle(client, _role('listitem'), 5000);
+    expect(await handle.first().count()).toBe(1);
+    expect(await handle.nth(2).count()).toBe(1);
+    expect(await handle.last().count()).toBe(1);
+    expect(await handle.nth(3).count()).toBe(0);
+  });
+
+  it('on a handle from all() answers live by index — 1 while the row exists, 0 once the list has shrunk', async () => {
+    let live = threeItems;
+    const client = makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse(live)),
+    });
+    const rows = await new ElementHandle(client, _role('listitem'), 5000).all();
+    expect(rows).toHaveLength(3);
+    expect(await rows[2].count()).toBe(1);
+    live = threeItems.slice(0, 2);
+    expect(await rows[2].count()).toBe(0);
+    expect(await rows[0].count()).toBe(1);
+  });
 });
 
 // ─── all() (PILOT-13) ───
@@ -1848,6 +1880,57 @@ describe('all()', () => {
     const handle = new ElementHandle(client, _role('listitem'), 5000);
     const items = await handle.all();
     expect(items).toEqual([]);
+  });
+
+  it('honours the positional index, like count() (Playwright: first().all() has one handle)', async () => {
+    const client = makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse(threeItems)),
+    });
+    const handle = new ElementHandle(client, _role('listitem'), 5000);
+    const first = await handle.first().all();
+    expect(first).toHaveLength(1);
+    expect(await first[0].getText()).toBe('Apple');
+    // A handle from all() already names one element — all() on it is refused
+    // like first()/filter()/and()/or(), not silently re-read live.
+    await expect(first[0].all()).rejects.toThrow(/all\(\) cannot be called on a handle returned by all\(\)/);
+    const last = await handle.last().all();
+    expect(last).toHaveLength(1);
+    expect(await last[0].getText()).toBe('Cherry');
+    expect(await handle.nth(5).all()).toEqual([]);
+  });
+
+  it('a handle from last()/nth(k).all() keeps naming that element after its snapshot is refreshed', async () => {
+    // The refresh re-resolves the FULL match set; the handle must carry the
+    // parent's own index, not index 0 over a narrowed capture.
+    const client = makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse(threeItems)),
+    });
+    const handle = new ElementHandle(client, _role('listitem'), 5000);
+    const [last] = await handle.last().all();
+    const [second] = await handle.nth(1).all();
+    expect(await last.getText()).toBe('Cherry');
+    expect(await second.getText()).toBe('Banana');
+    await last['_refreshSnapshot']();
+    await second['_refreshSnapshot']();
+    expect(await last.getText()).toBe('Cherry');
+    expect(await second.getText()).toBe('Banana');
+    // A refresh through the live-tick path (scrollIntoView re-captures before
+    // every probe) agrees too: the element is already visible, so this is a
+    // no-op scroll that still refreshes the capture.
+    await last.scrollIntoView();
+    expect(await last.getText()).toBe('Cherry');
+  });
+
+  it('a handle from last().all() names the captured LAST row, not whatever is last later — count() reports it gone', async () => {
+    let live = threeItems;
+    const client = makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse(live)),
+    });
+    const [last] = await new ElementHandle(client, _role('listitem'), 5000).last().all();
+    expect(await last.count()).toBe(1);
+    live = threeItems.slice(0, 2); // Cherry gone
+    expect(await last.count()).toBe(0);
+    expect(await last.exists()).toBe(true); // capture-backed reader, documented
   });
 
   it('returned handles resolve to the correct element via nth index', async () => {
@@ -2503,7 +2586,7 @@ describe('filter()', () => {
 // ─── and() (PILOT-17) ───
 
 describe('and()', () => {
-  it('returns elements matching both selectors (intersection by elementId)', async () => {
+  it('returns elements matching both selectors (intersection)', async () => {
     const buttonsEls: ElementInfo[] = [
       makeElementInfo({ elementId: 'e1', text: 'Submit', resourceId: 'btn1' }),
       makeElementInfo({ elementId: 'e2', text: 'Cancel', resourceId: 'btn2' }),
@@ -2556,6 +2639,200 @@ describe('and()', () => {
 
     // and() is a modified handle → dispatches by the resolved element's id.
     expect(tap).toHaveBeenCalledWith(undefined, expect.any(Number), 'e1');
+  });
+
+  // PILOT-349: both agents mint a fresh elementId on every findElements, so
+  // the two operand reads never share an id. The mock below behaves like a
+  // real agent — same elements, new ids each read — which is what the
+  // id-reusing mocks above never exercised.
+  describe('on a device that mints a fresh elementId per read (PILOT-349)', () => {
+    const ROW = { left: 0, top: 100, right: 400, bottom: 160 };
+    const OTHER_ROW = { left: 0, top: 160, right: 400, bottom: 220 };
+    let nextId = 0;
+    const churn = (els: ElementInfo[]) => els.map((e) => ({ ...e, elementId: `id-${++nextId}` }));
+
+    it('intersects operands by stable identity (bounds + text), not by id', async () => {
+      const buttons = [
+        makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 6', role: 'button', bounds: OTHER_ROW }),
+      ];
+      const item5 = [makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW })];
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(selectorToProto(selector).text === 'Item 5' ? item5 : buttons)));
+      const client = makeMockClient({ findElements });
+
+      const handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('Item 5'), 5000));
+      const els = await handle._resolveAll();
+      expect(els.map((e) => e.text)).toEqual(['Item 5']);
+      // The left operand's entry (and therefore its id) is the one kept, so
+      // the action that follows addresses the element the left read saw.
+      expect(els[0].elementId).toMatch(/^id-/);
+      expect(els[0].role).toBe('button');
+    });
+
+    it('does not conflate same-text elements at different bounds', async () => {
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(
+          selectorToProto(selector).text === 'Save'
+            ? [makeElementInfo({ text: 'Save', bounds: OTHER_ROW })]
+            : [makeElementInfo({ text: 'Save', role: 'button', bounds: ROW })])));
+      const client = makeMockClient({ findElements });
+      const handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('Save'), 5000));
+      expect(await handle._resolveAll()).toEqual([]);
+    });
+
+    it('never matches zero-size (clipped) elements across reads — Android reports every clipped element at 0,0,0,0', async () => {
+      // Two rows' icon-only buttons scrolled out of view: same empty text,
+      // same degenerate rect. Keyed by position they would be one element
+      // and the intersection would name both; keyed by id they match nothing.
+      const ZERO = { left: 0, top: 0, right: 0, bottom: 0 };
+      const findElements = vi.fn(async () =>
+        makeFindElementsResponse(churn([
+          makeElementInfo({ text: '', role: 'button', contentDescription: 'Delete', bounds: ZERO, visible: false }),
+          makeElementInfo({ text: '', role: 'button', contentDescription: 'Share', bounds: ZERO, visible: false }),
+        ])));
+      const client = makeMockClient({ findElements });
+      const handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _contentDesc('Delete'), 5000));
+      expect(await handle._resolveAll()).toEqual([]);
+    });
+
+    it('honours a positional index on either operand (PILOT-347)', async () => {
+      const rows = [
+        makeElementInfo({ text: 'Item 1', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 2', role: 'button', bounds: OTHER_ROW }),
+        makeElementInfo({ text: 'Item 3', role: 'button', bounds: { left: 0, top: 220, right: 400, bottom: 280 } }),
+      ];
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(formatSelector(selector).includes('getByRole') ? rows : rows.slice(1))));
+      const client = makeMockClient({ findElements });
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      const items = new ElementHandle(client, _text('Item'), 5000); // matches Items 2 and 3
+      // Left index: the FIRST button is Item 1, which the right does not have.
+      expect(await buttons.first().and(items)._resolveAll()).toEqual([]);
+      // Left index naming a shared row intersects to exactly that row.
+      expect((await buttons.nth(1).and(items)._resolveAll()).map((e) => e.text)).toEqual(['Item 2']);
+      // Right index: only the LAST item (Item 3) is on the right side.
+      expect((await buttons.and(items.last())._resolveAll()).map((e) => e.text)).toEqual(['Item 3']);
+      // Without an index the whole sets intersect.
+      expect((await buttons.and(items)._resolveAll()).map((e) => e.text)).toEqual(['Item 2', 'Item 3']);
+    });
+
+    it('applies an operand index and the combined handle\'s own index each exactly once', async () => {
+      const rows = [
+        makeElementInfo({ text: 'Item 1', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 2', role: 'button', bounds: OTHER_ROW }),
+        makeElementInfo({ text: 'Item 3', role: 'button', bounds: { left: 0, top: 220, right: 400, bottom: 280 } }),
+      ];
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(formatSelector(selector).includes('getByRole') ? rows : rows.slice(1))));
+      const client = makeMockClient({ findElements });
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      const items = new ElementHandle(client, _text('Item'), 5000);
+      // Outer index over the intersection [Item 2, Item 3].
+      expect((await buttons.and(items).first().find()).text).toBe('Item 2');
+      expect((await buttons.and(items).last().find()).text).toBe('Item 3');
+      expect((await buttons.and(items).nth(1).find()).text).toBe('Item 3');
+      // Inner index narrows the operand first; the outer index then applies
+      // to the one-element result, not to the raw operand again.
+      expect((await buttons.nth(1).and(items).first().find()).text).toBe('Item 2');
+      expect(await buttons.nth(1).and(items).nth(1).count()).toBe(0);
+    });
+
+    it('refuses an xpath operand on either side (its text and bounds come from a different agent read)', () => {
+      const client = makeMockClient();
+      const byXpath = new ElementHandle(client, _xpath('//android.widget.Button'), 5000);
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      expect(() => byXpath.and(buttons)).toThrow(/and\(\) cannot combine an xpath locator/);
+      expect(() => buttons.and(byXpath)).toThrow(/and\(\) cannot combine an xpath locator/);
+      expect(() => byXpath.or(buttons)).toThrow(/or\(\) cannot combine an xpath locator/);
+      expect(() => buttons.or(byXpath)).toThrow(/or\(\) cannot combine an xpath locator/);
+      // The xpath may be hiding up the chain: a getBy* scoped off it (nested
+      // selector parent), a modified xpath parent (scopeParent), or an inner
+      // and()/or() built on one.
+      expect(() => byXpath.getByText('Y').and(buttons)).toThrow(/and\(\) cannot combine an xpath locator/);
+      expect(() => byXpath.first().getByText('Y').or(buttons)).toThrow(/or\(\) cannot combine an xpath locator/);
+      const labels = new ElementHandle(client, _text('Y'), 5000);
+      // (the inner or() is built first, so it is the one that refuses)
+      expect(() => buttons.and(labels.or(byXpath.getByText('Z')))).toThrow(/or\(\) cannot combine an xpath locator/);
+    });
+
+    it('never lets two id-less, bounds-less elements share a key (a proto default no agent emits)', async () => {
+      const nameless = () => makeElementInfo({ elementId: '', text: 'A' });
+      const findElements = vi.fn(async () => makeFindElementsResponse([nameless(), nameless()]));
+      const client = makeMockClient({ findElements });
+      const a = new ElementHandle(client, _role('button'), 5000);
+      const b = new ElementHandle(client, _text('A'), 5000);
+      expect(await a.and(b)._resolveAll()).toEqual([]);
+      expect(await a.or(b)._resolveAll()).toHaveLength(4);
+    });
+
+    it('an element without bounds only matches itself (by id)', async () => {
+      // No bounds → no stable identity. Mocks that reuse ids still intersect
+      // (the behaviour every other test here relies on); churned ids do not.
+      const stable = [makeElementInfo({ elementId: 'fixed', text: 'A' })];
+      let client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse(stable)) });
+      let handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('A'), 5000));
+      expect(await handle._resolveAll()).toHaveLength(1);
+
+      client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse(churn(stable))) });
+      handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('A'), 5000));
+      expect(await handle._resolveAll()).toEqual([]);
+    });
+
+    it('a clipped or() duplicate fails fast with a strict violation (documented limitation, PILOT-360 tracks the design)', async () => {
+      // Both operands read one off-screen element; ids differ per read and a
+      // zero-size rect has no cross-read identity, so the union holds two
+      // entries and strict mode refuses the ambiguity immediately.
+      const ZERO = { left: 0, top: 0, right: 0, bottom: 0 };
+      const findElements = vi.fn(async () =>
+        makeFindElementsResponse(churn([makeElementInfo({ text: 'Item 25', visible: false, bounds: ZERO })])));
+      const client = makeMockClient({ findElements });
+      const union = new ElementHandle(client, _text('Item 25'), 5000).or(new ElementHandle(client, _contentDesc('Item 25'), 5000));
+      await expect(union.find()).rejects.toThrow(/resolved to 2 elements/);
+      await expect(union.tap()).rejects.toThrow(/resolved to 2 elements/);
+    });
+
+    it('carries the config-derived typing delay onto the combined handle', async () => {
+      const typeText = vi.fn(async () => successResponse());
+      const findElements = vi.fn(async () =>
+        makeFindElementsResponse(churn([makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW })])));
+      const client = makeMockClient({ findElements, typeText });
+      const field = new ElementHandle(client, _role('button'), 5000, { typingDelay: 50 });
+      const visible = new ElementHandle(client, _text('Item 5'), 5000);
+      await field.and(visible).type('hello');
+      // typeText(selector, text, timeoutMs, typingDelayMs, elementId)
+      expect(typeText).toHaveBeenCalledWith(undefined, 'hello', expect.any(Number), 50, expect.any(String));
+      typeText.mockClear();
+      await field.or(visible).type('hi');
+      expect(typeText).toHaveBeenCalledWith(undefined, 'hi', expect.any(Number), 50, expect.any(String));
+    });
+
+    it('carries the config-derived double-tap interval onto the combined handle', async () => {
+      const doubleTap = vi.fn(async () => successResponse());
+      const findElements = vi.fn(async () =>
+        makeFindElementsResponse(churn([makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW })])));
+      const client = makeMockClient({ findElements, doubleTap });
+      const a = new ElementHandle(client, _role('button'), 5000, { doubleTapInterval: 75 });
+      const b = new ElementHandle(client, _text('Item 5'), 5000);
+      await a.and(b).doubleTap();
+      // doubleTap(selector, timeoutMs, intervalMs, elementId)
+      expect(doubleTap).toHaveBeenCalledWith(undefined, expect.any(Number), 75, expect.any(String));
+      doubleTap.mockClear();
+      await a.or(b).doubleTap();
+      expect(doubleTap).toHaveBeenCalledWith(undefined, expect.any(Number), 75, expect.any(String));
+    });
+
+    it('count(), find() and tap() all see the intersection', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const findElements = vi.fn(async () =>
+        makeFindElementsResponse(churn([makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW })])));
+      const client = makeMockClient({ findElements, tap });
+      const handle = new ElementHandle(client, _role('button'), 5000).and(new ElementHandle(client, _text('Item 5'), 5000));
+      expect(await handle.count()).toBe(1);
+      expect((await handle.find()).text).toBe('Item 5');
+      await handle.tap();
+      expect(tap).toHaveBeenCalledWith(undefined, expect.any(Number), expect.stringMatching(/^id-/));
+    });
   });
 });
 
@@ -2619,6 +2896,88 @@ describe('or()', () => {
     const a = new ElementHandle(client, _text('OK'), 300);
     const b = new ElementHandle(client, _text('Confirm'), 300);
     await expect(withFakeClock(5000, () => a.or(b).find())).rejects.toThrow(/was not found after waiting 300ms/);
+  });
+
+  // PILOT-349: see the matching and() block — real agents mint a fresh id per
+  // read, so an element both operands match used to appear twice.
+  describe('on a device that mints a fresh elementId per read (PILOT-349)', () => {
+    const ROW = { left: 0, top: 100, right: 400, bottom: 160 };
+    const OTHER_ROW = { left: 0, top: 160, right: 400, bottom: 220 };
+    let nextId = 0;
+    const churn = (els: ElementInfo[]) => els.map((e) => ({ ...e, elementId: `id-${++nextId}` }));
+
+    it('de-duplicates an element both operands match, keeping the left read first', async () => {
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(
+          selectorToProto(selector).text === 'Item 5'
+            ? [makeElementInfo({ text: 'Item 5', bounds: ROW })]
+            : [makeElementInfo({ text: 'Item 5', role: 'button', bounds: ROW }), makeElementInfo({ text: 'Item 6', role: 'button', bounds: OTHER_ROW })])));
+      const client = makeMockClient({ findElements });
+
+      // Same element via two selectors → one match, not a strict-mode violation.
+      const same = new ElementHandle(client, _text('Item 5'), 5000).or(new ElementHandle(client, _text('Item 5'), 5000));
+      expect(await same.count()).toBe(1);
+      expect((await same.find()).text).toBe('Item 5');
+
+      // Overlapping unions keep the left operand's entry, then the right's extras.
+      const union = new ElementHandle(client, _role('button'), 5000).or(new ElementHandle(client, _text('Item 5'), 5000));
+      const els = await union._resolveAll();
+      expect(els.map((e) => e.text)).toEqual(['Item 5', 'Item 6']);
+      expect(els[0].role).toBe('button');
+    });
+
+    it('keeps distinct same-text elements at different bounds apart', async () => {
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(
+          selectorToProto(selector).text === 'Save'
+            ? [makeElementInfo({ text: 'Save', bounds: OTHER_ROW })]
+            : [makeElementInfo({ text: 'Save', role: 'button', bounds: ROW })])));
+      const client = makeMockClient({ findElements });
+      const handle = new ElementHandle(client, _role('button'), 5000).or(new ElementHandle(client, _text('Save'), 5000));
+      expect(await handle.count()).toBe(2);
+    });
+
+    it('never merges zero-size (clipped) elements — a union is never smaller than one operand alone', async () => {
+      // Two clipped icon buttons and a clipped link: zero-size bounds,
+      // identical (empty) text. None of them has a cross-read identity, so
+      // all three survive; only the shared 'Help' row (real bounds, matched by
+      // both operands) is merged.
+      const ZERO = { left: 0, top: 0, right: 0, bottom: 0 };
+      const help = makeElementInfo({ text: 'Help', role: 'button', bounds: ROW });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(
+          formatSelector(selector).includes('link')
+            ? [makeElementInfo({ text: '', role: 'link', bounds: ZERO }), help]
+            : [makeElementInfo({ text: '', role: 'button', bounds: ZERO }), makeElementInfo({ text: '', role: 'button', bounds: ZERO }), help])));
+      const client = makeMockClient({ findElements });
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      const links = new ElementHandle(client, _role('link'), 5000);
+      expect(await buttons.count()).toBe(3);
+      const els = await buttons.or(links)._resolveAll();
+      // Screen order: the positioned 'Help' row first, then the geometry-less
+      // clipped entries in operand order (left's two buttons, right's link).
+      expect(els.map((e) => [e.role, e.text])).toEqual([['button', 'Help'], ['button', ''], ['button', ''], ['link', '']]);
+    });
+
+    it('honours a positional index on either operand (PILOT-347)', async () => {
+      const rows = [
+        makeElementInfo({ text: 'Item 1', role: 'button', bounds: ROW }),
+        makeElementInfo({ text: 'Item 2', role: 'button', bounds: OTHER_ROW }),
+      ];
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(churn(formatSelector(selector).includes('getByRole') ? rows : [makeElementInfo({ text: 'Help', bounds: { left: 0, top: 300, right: 400, bottom: 340 } })])));
+      const client = makeMockClient({ findElements });
+      const buttons = new ElementHandle(client, _role('button'), 5000);
+      const help = new ElementHandle(client, _text('Help'), 5000);
+      expect((await buttons.first().or(help)._resolveAll()).map((e) => e.text)).toEqual(['Item 1', 'Help']);
+      // Screen order, not operand order: Item 2 (top 160) is above Help (300).
+      expect((await help.or(buttons.last())._resolveAll()).map((e) => e.text)).toEqual(['Item 2', 'Help']);
+      // The union's own index composes with an operand index, each applied
+      // exactly once, over the union's SCREEN order — first() on a union is
+      // the topmost match regardless of which operand contributed it.
+      expect((await buttons.first().or(help).last().find()).text).toBe('Help');
+      expect((await help.or(buttons.first()).first().find()).text).toBe('Item 1');
+    });
   });
 });
 
@@ -4620,6 +4979,50 @@ describe("scrollIntoView honours the handle's modifiers (PILOT-345)", () => {
     await left.or(right).scrollIntoView();
 
     expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('an or() union that reads one clipped element twice fails fast with a strict violation (documented limitation)', async () => {
+    // Both operands match the same off-screen row. Clipped, it is reported at
+    // 0,0,0,0 by both reads with no geometry to merge by, so the union holds
+    // two entries. Strict mode refuses the ambiguity immediately — the
+    // documented remedy is to scroll through one operand or a single selector.
+    const ZERO = { left: 0, top: 0, right: 0, bottom: 0 };
+    const findElements = vi.fn(async () =>
+      makeFindElementsResponse([
+        makeElementInfo({ elementId: `id-${Math.random()}`, text: 'Item 25', visible: false, bounds: ZERO }),
+      ]));
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+    const byText = new ElementHandle(client, _text('Item 25'), 5000);
+    const byDesc = new ElementHandle(client, _contentDesc('Item 25'), 5000);
+
+    await expect(byText.or(byDesc).scrollIntoView()).rejects.toThrow(/resolved to 2 elements/);
+    expect(swipe).not.toHaveBeenCalled();
+  });
+
+  it('a strict violation with a VISIBLE candidate still fails scrollIntoView immediately (real ambiguity)', async () => {
+    const findElements = vi.fn(async () => makeFindElementsResponse([
+      row('a', 'Delete', true, 100),
+      row('b', 'Delete', true, 200),
+    ]));
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+    await expect(new ElementHandle(client, _text('Delete'), 5000).scrollIntoView()).rejects.toThrow(/resolved to 2 elements/);
+    expect(swipe).not.toHaveBeenCalled();
+  });
+
+  it('an ambiguous locator fails fast even when every match is off-screen — no scroll budget is spent', async () => {
+    const ZERO = { left: 0, top: 0, right: 0, bottom: 0 };
+    const findElements = vi.fn(async () => makeFindElementsResponse([
+      makeElementInfo({ elementId: `a-${Math.random()}`, text: 'Delete row 1', visible: false, bounds: ZERO }),
+      makeElementInfo({ elementId: `b-${Math.random()}`, text: 'Delete row 2', visible: false, bounds: ZERO }),
+    ]));
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+    await expect(
+      new ElementHandle(client, _textContains('Delete'), 5000).scrollIntoView({ maxScrolls: 1 }),
+    ).rejects.toThrow(/resolved to 2 elements/);
+    expect(swipe).not.toHaveBeenCalled();
   });
 
   it('a scoped child (parent.first().getByText) is judged within its parent, not against a same-text element elsewhere', async () => {
