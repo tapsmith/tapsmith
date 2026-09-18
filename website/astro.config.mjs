@@ -34,7 +34,7 @@ export default defineConfig({
         {
           label: 'Guides',
           items: [
-            { label: 'Selectors', slug: 'guides/selectors' },
+            { label: 'Locators', slug: 'guides/locators' },
             { label: 'Network Interception', slug: 'guides/network' },
             { label: 'WebView Testing', slug: 'guides/webview' },
             { label: 'Trace Viewer', slug: 'guides/trace-viewer' },

@@ -12,7 +12,7 @@ Use WebView testing when your app renders web content inside a native container:
 - **Cordova / Ionic / Capacitor apps** where the entire UI is web-based but wrapped in a native shell.
 - **React Native WebView components** used to embed specific web pages or forms within an otherwise native app.
 
-If your app is fully native, you do not need this. Stick with the standard [Selectors Guide](selectors.md) and native locators.
+If your app is fully native, you do not need this. Stick with the standard [Locators Guide](locators.md) and native locators.
 
 ## Prerequisites
 
@@ -385,10 +385,10 @@ const webview = await device.webview({ timeout: 60_000 })
 
 **`device.native()` closes the connection.** After calling `device.native()`, the WebView connection is torn down. If you need to interact with the WebView again, call `device.webview()` again to establish a new connection.
 
-**Cross-platform selector consistency.** Because WebView content is rendered by a web engine (Chromium on Android, WebKit on iOS), the same CSS selectors work on both platforms. This makes WebView tests inherently cross-platform, unlike native selectors which can differ between Android and iOS.
+**Cross-platform selector consistency.** Because WebView content is rendered by a web engine (Chromium on Android, WebKit on iOS), the same CSS selectors work on both platforms. This makes WebView tests inherently cross-platform, unlike native locators which can differ between Android and iOS.
 
 ## Further Reading
 
 - [API Reference](api-reference.md) -- full method signatures and options.
-- [Selectors Guide](selectors.md) -- choosing the right locators for native UI.
+- [Locators Guide](locators.md) -- choosing the right locators for native UI.
 - [Configuration](configuration.md) -- global timeout and project settings.

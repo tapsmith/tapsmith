@@ -256,6 +256,15 @@ fn parse_devicectl_devices(json_str: &str) -> Result<Vec<IosDevice>> {
         if reality == "simulated" {
             continue;
         }
+        // Older devicectl versions lack `reality`; the CoreSimulator provider
+        // is the fallback signal (mirrors the TS parser in ios-devicectl.ts).
+        let provider = device
+            .pointer("/deviceProperties/provider")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if provider.contains("CoreSimulator") {
+            continue;
+        }
 
         let udid = device
             .pointer("/hardwareProperties/udid")
@@ -1711,6 +1720,11 @@ mod tests {
                 "hardwareProperties": { "platform": "iOS", "udid": "SIM-UDID", "reality": "simulated" },
                 "deviceProperties": { "name": "iPhone 17", "bootState": "shutdown" },
                 "connectionProperties": { "pairingState": "paired" }
+              },
+              {
+                "hardwareProperties": { "platform": "iOS", "udid": "SIM-2" },
+                "deviceProperties": { "name": "iPhone 16", "bootState": "shutdown", "provider": "com.apple.CoreSimulator.SimulatorCoreDevicePlugin" },
+                "connectionProperties": {}
               },
               {
                 "hardwareProperties": { "platform": "iOS", "udid": "OLD-XCODE-UDID" },

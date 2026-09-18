@@ -6,7 +6,7 @@ Complete reference for all public APIs in the `tapsmith` package.
 
 Locators identify UI elements on the device. They are exposed as Playwright-style `getBy*` methods on `Device` and `ElementHandle`. Each method returns an `ElementHandle` — a lazy reference that resolves when an action or assertion runs against it.
 
-See the [Selectors Guide](selectors.md) for a deeper discussion of when to use each one.
+See the [Locators Guide](locators.md) for a deeper discussion of when to use each one.
 
 ### `device.getByText(text: string, options?: { exact?: boolean }): ElementHandle`
 
@@ -103,11 +103,11 @@ device.locator({ xpath: "//android.widget.Button[@text='OK']" })
 
 > The `getBy*` methods and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to its descendants. See [ElementHandle Scoping](#scoping).
 
-> **iOS wrapper suppression.** When traversing the iOS accessibility tree, Tapsmith drops a matching `XCUIElementTypeOther` container if a descendant *also* matches the same selector and shares the wrapper's `accessibilityIdentifier` (or, when the wrapper's identifier is empty, its `accessibilityLabel`). This collapses the redundant wrappers React Native (and SwiftUI in some configurations) emit around interactive elements, so a `getByText("Submit")` resolves to the actual control rather than the surrounding container. The visible text of the wrapper and descendant is *not* compared — identifier/label match alone is enough. If your native iOS app deliberately exposes an `.other` container with the same identifier as a child you also want addressable, the outer wrapper will be silently suppressed in favour of the child — give the wrapper a unique `accessibilityIdentifier` (or use `device.locator({ id: ... })`) to address it directly.
+> **iOS wrapper suppression.** When traversing the iOS accessibility tree, Tapsmith drops a matching `XCUIElementTypeOther` container if a descendant *also* matches the same locator and shares the wrapper's `accessibilityIdentifier` (or, when the wrapper's identifier is empty, its `accessibilityLabel`). This collapses the redundant wrappers React Native (and SwiftUI in some configurations) emit around interactive elements, so a `getByText("Submit")` resolves to the actual control rather than the surrounding container. The visible text of the wrapper and descendant is *not* compared — identifier/label match alone is enough. If your native iOS app deliberately exposes an `.other` container with the same identifier as a child you also want addressable, the outer wrapper will be silently suppressed in favour of the child — give the wrapper a unique `accessibilityIdentifier` (or use `device.locator({ id: ... })`) to address it directly.
 
 ### Strict mode
 
-Like Playwright, Tapsmith locators are **strict**: a locator used for an action, single-element query, or assertion must resolve to exactly one element. When it resolves to more than one, the operation throws a `StrictModeViolationError` immediately (it does not keep auto-waiting) listing every match with a suggested unambiguous selector:
+Like Playwright, Tapsmith locators are **strict**: a locator used for an action, single-element query, or assertion must resolve to exactly one element. When it resolves to more than one, the operation throws a `StrictModeViolationError` immediately (it does not keep auto-waiting) listing every match with a suggested unambiguous locator:
 
 ```
 strict mode violation: getByText("Sign in") resolved to 2 elements:
@@ -146,7 +146,7 @@ try {
 
 > **Accessibility-tree duplicates don't count.** Some platforms expose the same visual element twice — iOS in particular renders a React Native `<Text testID="...">` as a parent `StaticText` carrying the attributes plus an inner child with identical text and pixel-identical bounds. Matches with identical text **and** identical bounds are collapsed to one element (the attribute-carrying first occurrence) before the strict check, since acting on either taps the same point. This collapsing also applies to `count()`, `all()`, and `.nth()` indexing, so positional chains stay consistent with what you see on screen. Distinct elements that merely share text at different positions still violate.
 
-> **Transient duplicates:** if a screen briefly shows two elements matching the locator mid-transition, the violation throws at that moment (Playwright behaves the same way). Prefer selectors that are unique at all times, or `.first()` when duplication is expected.
+> **Transient duplicates:** if a screen briefly shows two elements matching the locator mid-transition, the violation throws at that moment (Playwright behaves the same way). Prefer locators that are unique at all times, or `.first()` when duplication is expected.
 
 > **WebView locators too.** `webview.getBy*` and `webview.locator(css)` locators enforce the same rules: actions, single-element queries (`isVisible()`, `textContent()`, …), and positive assertions throw on an ambiguous match, while `count()`, `all()`, absence checks, and `.first()/.nth()/.last()` chains are exempt. Element descriptions in the violation message come from the DOM (tag, text, `id`, `data-testid`, `aria-label`), and suggestions use `webview.*` selectors. For WebView violations `err.elements` holds at most the first 10 matches as sampled descriptions — check `err.totalCount` for the full match count. The string-selector convenience methods (`webview.click(css)`, `webview.fill(css, …)`, …) predate locators and still act on the first match — prefer `webview.locator(css)` for strict behavior.
 
@@ -205,7 +205,7 @@ await device.pressBack();
 
 ### `device.tapXY(x: number, y: number): Promise<void>`
 
-Tap at raw screen coordinates in logical points (Android pixels; iOS points). Prefer selector-based `tap()` in tests; use this for coordinate-driven interaction (e.g., device mirror gestures).
+Tap at raw screen coordinates in logical points (Android pixels; iOS points). Prefer locator-based `tap()` in tests; use this for coordinate-driven interaction (e.g., device mirror gestures).
 
 ```typescript
 await device.tapXY(120, 340);
@@ -231,7 +231,7 @@ await device.dragXY({ x: 50, y: 200 }, { x: 50, y: 600 }, { duration: 400 });
 
 ### `device.inputText(text: string): Promise<void>`
 
-Type `text` into whatever element currently has focus (no selector). Useful for inserting text without first tapping a field.
+Type `text` into whatever element currently has focus (no locator). Useful for inserting text without first tapping a field.
 
 ```typescript
 await device.inputText("hello world");
@@ -775,7 +775,7 @@ await device.getByRole("listitem").nth(-1).tap(); // last item
 
 #### `elementHandle.filter(criteria: FilterOptions): ElementHandle`
 
-Narrow matches by additional criteria without changing the selector. Returns a new lazy handle.
+Narrow matches by additional criteria without changing the locator. Returns a new lazy handle.
 
 ```typescript
 const premiumItems = device.getByRole("listitem").filter({ hasText: "Premium" });
@@ -791,11 +791,11 @@ const count = await premiumItems.count();
 | `has` | `ElementHandle` | Keep elements that have a descendant matching this locator |
 | `hasNot` | `ElementHandle` | Exclude elements that have a descendant matching this locator |
 
-### Combining Selectors
+### Combining Locators
 
 #### `elementHandle.and(other: ElementHandle): ElementHandle`
 
-Return a handle matching elements that satisfy both this and the other handle's selector (intersection). AND binds tighter than OR.
+Return a handle matching elements that satisfy both this and the other handle's locator (intersection). AND binds tighter than OR.
 
 ```typescript
 const submitButton = device.getByRole("button").and(device.getByDescription("Submit"));
@@ -804,7 +804,7 @@ await submitButton.tap();
 
 #### `elementHandle.or(other: ElementHandle): ElementHandle`
 
-Return a handle matching elements that satisfy either this or the other handle's selector (union).
+Return a handle matching elements that satisfy either this or the other handle's locator (union).
 
 ```typescript
 const acceptButton = device.getByText("OK", { exact: true }).or(device.getByText("Accept", { exact: true }));
@@ -864,7 +864,7 @@ if (await logOut.exists()) {
 }
 ```
 
-`exists()` is **exempt from strict mode**, like `count()` and `all()`: a selector that matches several
+`exists()` is **exempt from strict mode**, like `count()` and `all()`: a locator that matches several
 elements answers `true` rather than throwing. That is the difference from `isVisible()`, which is a
 strict single-element query and also requires the match to be visible. An attached but off-screen or
 invisible element exists.
@@ -892,7 +892,7 @@ check that.
 > Two further changes affect handles with `.filter()`, `.and()`, `.or()`, or a `getBy*` scoped to a
 > modified parent. Those used to report `false` for *any* error, so `x.filter({ hasText: "X" }).exists()`
 > answered `false` when the filter kept several candidates; it now answers `true`, as an ambiguous
-> selector should for a multi-element query. And a user stop, a transport failure or a persistent
+> locator should for a multi-element query. And a user stop, a transport failure or a persistent
 > device fault now propagates as an error instead of being reported as "doesn't exist" — including the
 > descriptive error thrown when the hierarchy never settles for the whole timeout, which the
 > unmodified form already threw.
@@ -1192,7 +1192,7 @@ if (!(await device.getByRole("button", { name: "Enable notifications" }).isVisib
 }
 ```
 
-Strict mode still applies: a selector that matches more than one element throws a
+Strict mode still applies: a locator that matches more than one element throws a
 `StrictModeViolationError`. On a settled screen a present element costs one hierarchy read on the
 device (it never polls for the element). An absent answer costs two: the accessibility tree can briefly
 lag a just-rendered screen, so the first empty read is confirmed by waiting for the UI to settle (at
@@ -1226,9 +1226,9 @@ The opposite of `isVisible()`: `true` when the element is not visible **or** doe
 wait for the element to appear or disappear. To wait for an element to go away, use
 `expect(locator).not.toBeVisible()` or `waitFor({ state: "hidden" })`.
 
-Like Playwright's `isHidden()`, this is a strict single-element query: a selector that matches more
+Like Playwright's `isHidden()`, this is a strict single-element query: a locator that matches more
 than one element throws a `StrictModeViolationError`, whereas `not.toBeVisible()` and
-`waitFor({ state: "hidden" })` evaluate absence over all matches. If the selector may match several
+`waitFor({ state: "hidden" })` evaluate absence over all matches. If the locator may match several
 elements (say, two "Loading…" spinners), use those, or narrow with `.first()`/`.filter()`.
 
 ```typescript
@@ -2509,7 +2509,7 @@ npx tapsmith show-trace test-results/traces/trace-my_test.zip
 ```
 
 The trace viewer shows:
-- **Actions panel** — chronological list of actions with icons, selectors, and durations
+- **Actions panel** — chronological list of actions with icons, locators, and durations
 - **Timeline filmstrip** — screenshot thumbnails for quick navigation
 - **Screenshot panel** — before/after screenshots with tap coordinate overlays
 - **Detail tabs** — Call info, Console output, Source code, View hierarchy, Network requests, Errors

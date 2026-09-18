@@ -448,7 +448,7 @@ describe('Telemetry.printNoticeIfFirstRun()', () => {
     expect(text).toContain('telemetry: false');
     expect(text).toContain('TAPSMITH_TELEMETRY=0');
     expect(text).toContain(TELEMETRY_DOCS_URL);
-    expect(text).toMatch(/never sends test names, selectors, app identifiers, or file paths/);
+    expect(text).toMatch(/never sends test names, locators, app identifiers, or file paths/);
   });
 });
 

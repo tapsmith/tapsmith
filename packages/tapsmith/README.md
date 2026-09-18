@@ -37,11 +37,11 @@ The `init` wizard detects your environment, walks through platform configuration
 
 ## Documentation
 
-- [Getting Started](https://tapsmith.dev/getting-started)
-- [Selectors Guide](https://tapsmith.dev/selectors)
-- [API Reference](https://tapsmith.dev/api-reference)
-- [Configuration](https://tapsmith.dev/configuration)
-- [CI Setup](https://tapsmith.dev/ci-setup)
+- [Getting Started](https://tapsmith.dev/getting-started/)
+- [Locators Guide](https://tapsmith.dev/guides/locators/)
+- [API Reference](https://tapsmith.dev/reference/api/locators/)
+- [Configuration](https://tapsmith.dev/reference/configuration/)
+- [CI Setup](https://tapsmith.dev/platform/ci-setup/)
 
 ## License
 

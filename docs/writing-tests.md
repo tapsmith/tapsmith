@@ -41,7 +41,7 @@ Every import you need comes from the `tapsmith` package: `test`, `describe`, `ex
 
 ## Screen object pattern
 
-The screen object pattern is the recommended way to abstract your locators. It is the mobile equivalent of Playwright's page object model. A screen class wraps the locators for a single screen of your app, keeping selectors out of test logic and making changes to your UI a one-line fix.
+The screen object pattern is the recommended way to abstract your locators. It is the mobile equivalent of Playwright's page object model. A screen class wraps the locators for a single screen of your app, keeping locators out of test logic and making changes to your UI a one-line fix.
 
 ### Defining a screen object
 
@@ -295,13 +295,13 @@ export default defineConfig({
 
 ---
 
-## Selector best practices
+## Locator best practices
 
-Selectors determine how your tests find UI elements. The right selector makes tests resilient to refactors. The wrong one makes them break whenever a developer moves a button.
+Locators determine how your tests find UI elements. The right locator makes tests resilient to refactors. The wrong one makes them break whenever a developer moves a button.
 
 ### Priority hierarchy
 
-Use the most accessible selector that uniquely identifies the element:
+Use the most accessible locator that uniquely identifies the element:
 
 | Priority | Method | When to use |
 |---|---|---|
@@ -310,7 +310,7 @@ Use the most accessible selector that uniquely identifies the element:
 | 3 (preferred) | `getByDescription()` | Elements with explicit accessibility descriptions |
 | 4 (acceptable) | `getByPlaceholder()` | Text inputs without a visible label |
 | 5 (escape hatch) | `getByTestId()` | When no user-visible attribute works |
-| 6 (discouraged) | `locator({ id })`, `locator({ className })` | Platform-specific selectors |
+| 6 (discouraged) | `locator({ id })`, `locator({ className })` | Platform-specific locators |
 | 7 (last resort) | `locator({ xpath })` | Android-only, extremely fragile |
 
 ```typescript
@@ -332,7 +332,7 @@ device.locator({ xpath: "//android.widget.Button[2]" })
 
 ### Role filtering options
 
-`getByRole()` supports state filters that make selectors both precise and readable:
+`getByRole()` supports state filters that make locators both precise and readable:
 
 ```typescript
 device.getByRole("switch", { name: "Dark Mode", checked: true })
@@ -368,7 +368,7 @@ For elements that must be individually addressable on both platforms, use `getBy
 
 ### ESLint plugin
 
-Tapsmith ships an ESLint plugin that warns when tests use low-priority selectors. Add it to your ESLint config to enforce accessible selector usage across your team. See [Selectors Guide](selectors.md) for full details.
+Tapsmith ships an ESLint plugin that warns when tests use low-priority locators. Add it to your ESLint config to enforce accessible locator usage across your team. See [Locators Guide](locators.md) for full details.
 
 ### Scoping with `.locator()`
 
@@ -943,6 +943,6 @@ export default defineConfig({
 
 ## Further reading
 
-- [Selectors Guide](selectors.md) -- deep dive into selector types and cross-platform behavior
+- [Locators Guide](locators.md) -- deep dive into locator types and cross-platform behavior
 - [API Reference](api-reference.md) -- complete reference for all public APIs
 - [Configuration](configuration.md) -- all config options, reporters, trace modes, and video recording

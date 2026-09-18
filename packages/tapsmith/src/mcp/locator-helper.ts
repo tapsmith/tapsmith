@@ -14,7 +14,7 @@ export interface ParsedRuntimeSelector {
 export function parseSelectorToInternal(input: string): ParsedRuntimeSelector {
   const parsed = parseSelectorString(input);
   if (!parsed) {
-    throw new Error(`Invalid selector: "${input}". Use a Tapsmith selector like device.getByRole("button", { name: "Login" })`);
+    throw new Error(`Invalid locator: "${input}". Use a Tapsmith locator like device.getByRole("button", { name: "Login" })`);
   }
   return { selector: makeSelector(parsedSelectorToKind(parsed)), index: parsed.index };
 }
@@ -41,7 +41,7 @@ function parsedSelectorToKind(parsed: ParsedSelector): SelectorKind {
     case 'label':
       return { type: 'label', value: parsed.value };
     default:
-      throw new Error(`Unsupported selector type "${parsed.type}" for device actions. Use device.getByRole(), getByText(), getByDescription(), getByPlaceholder(), getByLabel(), or getByTestId().`);
+      throw new Error(`Unsupported locator type "${parsed.type}" for device actions. Use device.getByRole(), getByText(), getByDescription(), getByPlaceholder(), getByLabel(), or getByTestId().`);
   }
 }
 
@@ -54,7 +54,7 @@ export function formatBounds(bounds: ElementInfo['bounds']): string {
 /**
  * Build a selector targeting one already-resolved element, mirroring the
  * SDK's `_selectorForElement` (element-handle.ts). Used to honor a
- * positional chain when dispatching an action: the raw selector would make
+ * positional chain when dispatching an action: the raw locator would make
  * the agent act on its first match, so re-target via an identifying
  * property instead.
  */
@@ -83,7 +83,7 @@ export interface ResolvedActionTarget {
 
 /**
  * Resolve an action target through the runtime find path with the SDK's
- * strict-mode semantics (PILOT-226): polls findElements until the selector
+ * strict-mode semantics (PILOT-226): polls findElements until the locator
  * matches, errors when it matches more than one element and no positional
  * chain was given, and honors .first()/.last()/.nth(n) by re-targeting the
  * resolved element.
@@ -109,7 +109,7 @@ export async function resolveActionTarget(
   }
 
   if (elements.length === 0) {
-    return { selector, error: `No elements match ${input} after waiting ${RESOLVE_TIMEOUT_MS}ms. Use tapsmith_snapshot or tapsmith_test_selector to inspect the current screen.` };
+    return { selector, error: `No elements match ${input} after waiting ${RESOLVE_TIMEOUT_MS}ms. Use tapsmith_snapshot or tapsmith_test_locator to inspect the current screen.` };
   }
 
   if (index === undefined) {
@@ -127,7 +127,7 @@ export async function resolveActionTarget(
   }
   // Address the EXACT resolved element by its agent-cached id, so the action
   // lands on it even when its identifying property is shared with an earlier
-  // match (the agent acts on a bare selector's first document-order match).
+  // match (the agent acts on a bare locator's first document-order match).
   const targeted = selectorForElement(el);
   if (el.elementId) {
     return { selector: targeted ?? selector, elementId: el.elementId };

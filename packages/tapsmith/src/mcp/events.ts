@@ -64,17 +64,17 @@ export function truncateResultText(result: string): Pick<McpToolCallEvent, 'resu
 export function summarizeResult(tool: string, result: string): string {
   switch (tool) {
     case 'tapsmith_snapshot': {
-      const selectorMatch = result.match(/## Suggested Selectors\n([\s\S]*)/);
-      const selectorCount = selectorMatch
-        ? selectorMatch[1].trim().split('\n').length
+      const locatorMatch = result.match(/## Suggested Locators\n([\s\S]*)/);
+      const locatorCount = locatorMatch
+        ? locatorMatch[1].trim().split('\n').length
         : 0;
       const elementMatch = result.match(/^- /gm);
       const elementCount = elementMatch ? elementMatch.length : 0;
-      return `${elementCount} elements, ${selectorCount} selectors`;
+      return `${elementCount} elements, ${locatorCount} locators`;
     }
     case 'tapsmith_screenshot':
       return 'PNG image captured';
-    case 'tapsmith_test_selector': {
+    case 'tapsmith_test_locator': {
       try {
         const parsed = JSON.parse(result);
         return parsed.matched

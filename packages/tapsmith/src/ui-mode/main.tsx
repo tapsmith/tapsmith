@@ -42,7 +42,7 @@ import { ScreenshotPanel } from '../trace-viewer/components/ScreenshotPanel.js';
 import { DetailTabs } from '../trace-viewer/components/DetailTabs.js';
 import { findTestDeclarationLine, findSuiteDeclarationLine } from '../trace-viewer/components/source-view-utils.js';
 import { TimelineFilmstrip } from '../trace-viewer/components/TimelineFilmstrip.js';
-import { SelectorTab, computeSelectorHighlights, handlePickFromScreenshot, handleHoverFromScreenshot, isWebViewOverlayPending } from '../trace-viewer/components/SelectorPlayground.js';
+import { LocatorTab, computeSelectorHighlights, handlePickFromScreenshot, handleHoverFromScreenshot, isWebViewOverlayPending } from '../trace-viewer/components/LocatorPlayground.js';
 import { parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import type { HierarchyNode, Bounds } from '../trace-viewer/components/hierarchy-utils.js';
 import { uiModeStyles } from './styles/ui-mode.css.js';
@@ -184,7 +184,7 @@ function App() {
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   const selectedIndex = hoveredIndex ?? pinnedIndex;
 
-  // Selector playground state. Picks can come from two surfaces — the trace
+  // Locator playground state. Picks can come from two surfaces — the trace
   // screenshot viewer and the live device mirror. `pickTarget` is the surface
   // currently armed for picking (mutually exclusive by construction);
   // `selectorSource` is the hierarchy the Locator tab is bound to, which
@@ -600,7 +600,7 @@ function App() {
     };
   }, [viewedGroupDevices, actionEvents, liveActionCount, hierarchies, selectedEvent, activeDeviceOverride]);
 
-  // Hierarchy for the current action (used by selector playground) — resolved
+  // Hierarchy for the current action (used by locator playground) — resolved
   // to depict the same moment as the displayed screenshot, borrowing for
   // actions that capture none (network family). PILOT-302.
   const currentHierarchy = useMemo(() => {
@@ -632,7 +632,7 @@ function App() {
   );
 
   // Match overlay bounds, derived from whichever hierarchy the Locator tab is
-  // bound to. Derived rather than pushed up from SelectorTab so it stays
+  // bound to. Derived rather than pushed up from LocatorTab so it stays
   // consistent with the tree even when the Locator tab isn't mounted.
   const selectorHighlights = useMemo(
     () => computeSelectorHighlights(selectorSource === 'live' ? liveRoots : currentRoots, selectorText),
@@ -1886,7 +1886,7 @@ function App() {
           screenshotVariant={screenshotVariant}
           locatorTab={
 
-            <SelectorTab
+            <LocatorTab
               hierarchyXml={selectorSource === 'live' ? (liveHierarchyXml ?? undefined) : currentHierarchyXml}
               pickedNode={pickedNode}
               selector={selectorText}

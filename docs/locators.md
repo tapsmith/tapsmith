@@ -1,8 +1,8 @@
-# Selectors Guide
+# Locators Guide
 
-Selectors are how you tell Tapsmith which UI element to interact with. Tapsmith exposes them as Playwright-style `getBy*` methods on `Device` and `ElementHandle`. The guiding principle: **tests should interact with the app the way users do.**
+Locators are how you tell Tapsmith which UI element to interact with. Tapsmith exposes them as Playwright-style `getBy*` methods on `Device` and `ElementHandle`. The guiding principle: **tests should interact with the app the way users do.**
 
-Selectors that reflect what users see and what assistive technologies read are preferred over selectors that depend on implementation details. This makes your tests more resilient to refactors and ensures your app remains accessible.
+Locators that reflect what users see and what assistive technologies read are preferred over locators that depend on implementation details. This makes your tests more resilient to refactors and ensures your app remains accessible.
 
 ## Priority Hierarchy
 
@@ -15,7 +15,7 @@ Selectors that reflect what users see and what assistive technologies read are p
 
 ## Cross-Platform Considerations
 
-Tapsmith supports both Android and iOS. Most selectors work identically on both platforms, but there is one important difference to be aware of when writing cross-platform tests.
+Tapsmith supports both Android and iOS. Most locators work identically on both platforms, but there is one important difference to be aware of when writing cross-platform tests.
 
 ### Child text inside labeled containers
 
@@ -121,7 +121,7 @@ Adding accessibility props to your RN components makes them both testable with `
 
 Common components and their recommended props:
 
-| Component | Props to add | Tapsmith selector |
+| Component | Props to add | Tapsmith locator |
 |---|---|---|
 | `TouchableOpacity` / `Pressable` | `accessibilityRole="button"` | `getByRole("button", { name: "..." })` |
 | `TextInput` | `accessibilityLabel="Email"` | `getByRole("textfield", { name: "Email" })` or `getByPlaceholder(...)` |
@@ -283,5 +283,5 @@ export default [
 |---|---|---|
 | `tapsmith/prefer-role` | warn | Suggests `getByRole()` instead of `locator({ className })` for standard Android widgets. |
 | `tapsmith/no-bare-locator-xpath` | error | Requires an explanatory comment when using `locator({ xpath })`. |
-| `tapsmith/prefer-accessible-selectors` | warn | Suggests accessible getters instead of `getByTestId()` or `locator({ id })`. |
+| `tapsmith/prefer-accessible-locators` | warn | Suggests accessible getters instead of `getByTestId()` or `locator({ id })`. |
 | `tapsmith/prefer-app-reset-option` | warn | Suggests `test.use({ appReset, appResetScope })` when a `beforeEach` only restarts or clears the app. |

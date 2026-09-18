@@ -1,9 +1,9 @@
 /**
  * Selector uniqueness validation (PILOT-226).
  *
- * Suggested selectors must resolve to exactly one element under RUNTIME
+ * Suggested locators must resolve to exactly one element under RUNTIME
  * matching semantics — an ambiguous suggestion now throws a strict mode
- * violation the moment a test acts on it. Shared by the selector playground
+ * violation the moment a test acts on it. Shared by the locator playground
  * (trace viewer / UI mode) and the MCP snapshot tool.
  */
 

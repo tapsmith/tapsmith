@@ -319,7 +319,7 @@ class ActionExecutor(
      * survive verbatim and any quote characters we add ourselves become
      * literal input (the original PILOT-133 bug). Spaces inside a printable
      * run are converted to `%s`, which `input text` interprets as a literal
-     * space. The selector-regressions.test.ts metachar test locks this in.
+     * space. The locator-regressions.test.ts metachar test locks this in.
      *
      * KNOWN LIMITATION: a literal `%s` substring in `text` is indistinguishable
      * from an encoded space and will type a space instead. Real-world test

@@ -8,7 +8,7 @@
  * one-off `install` event when a machine's anonymous id is first created,
  * each stamped with the SDK, Node and OS versions.
  *
- * What is deliberately NOT collected: test names, selectors, app or package
+ * What is deliberately NOT collected: test names, locators, app or package
  * identifiers, file paths, device serials, hostnames, usernames, IP-derived
  * location — anything that could identify a project or a person. The
  * payload is a closed set of fields (see {@link TelemetryPayload}), and the
@@ -620,7 +620,7 @@ export function telemetryNoticeText(): string {
     '',
     'Tapsmith collects anonymous usage data to guide development: SDK, Node and OS',
     'versions, platform (Android/iOS), run mode, and pass/fail counts per run.',
-    'It never sends test names, selectors, app identifiers, or file paths.',
+    'It never sends test names, locators, app identifiers, or file paths.',
     'Opt out with `tapsmith telemetry disable`, TAPSMITH_TELEMETRY=0, or',
     '`telemetry: false` in tapsmith.config.ts. `tapsmith telemetry status` shows the',
     `current setting. Details: ${TELEMETRY_DOCS_URL}`,

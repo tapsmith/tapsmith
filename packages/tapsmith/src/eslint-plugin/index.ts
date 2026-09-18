@@ -1,7 +1,7 @@
 /**
  * eslint-plugin-tapsmith
  *
- * ESLint rules that encourage accessible, maintainable selectors in Tapsmith
+ * ESLint rules that encourage accessible, maintainable locators in Tapsmith
  * tests.
  *
  * Rules:
@@ -9,7 +9,7 @@
  *     Android widgets that have well-known accessibility roles.
  *   - no-bare-locator-xpath: Errors when `.locator({ xpath })` is used without
  *     an explanatory comment on the same or preceding line.
- *   - prefer-accessible-selectors: Warns when `.getByTestId()` or
+ *   - prefer-accessible-locators: Warns when `.getByTestId()` or
  *     `.locator({ id })` is used instead of `getByRole`, `getByText`,
  *     `getByDescription`, etc.
  *   - prefer-app-reset-option: Warns when a `beforeEach` hook only restarts
@@ -128,7 +128,7 @@ const preferRole: RuleModule = {
     },
     messages: {
       preferRole:
-        'Use getByRole("{{role}}") instead of locator({ className: "{{className}}" }). Role-based selectors are more resilient to implementation changes.',
+        'Use getByRole("{{role}}") instead of locator({ className: "{{className}}" }). Role-based locators are more resilient to implementation changes.',
     },
     schema: [],
   },
@@ -158,12 +158,12 @@ const noBareLocatorXpath: RuleModule = {
     type: 'problem',
     docs: {
       description:
-        'Require an explanatory comment when using locator({ xpath }) selectors',
+        'Require an explanatory comment when using locator({ xpath })',
       recommended: true,
     },
     messages: {
       noBareLocatorXpath:
-        'locator({ xpath }) must have an explanatory comment on the same or preceding line. XPath selectors are fragile and Android-only — document why this is necessary.',
+        'locator({ xpath }) must have an explanatory comment on the same or preceding line. XPath locators are fragile and Android-only — document why this is necessary.',
     },
     schema: [],
   },
@@ -191,9 +191,9 @@ const noBareLocatorXpath: RuleModule = {
   },
 };
 
-// ─── prefer-accessible-selectors ───
+// ─── prefer-accessible-locators ───
 
-const preferAccessibleSelectors: RuleModule = {
+const preferAccessibleLocators: RuleModule = {
   meta: {
     type: 'suggestion',
     docs: {
@@ -331,7 +331,7 @@ const preferAppResetOption: RuleModule = {
 const rules: Record<string, RuleModule> = {
   'prefer-role': preferRole,
   'no-bare-locator-xpath': noBareLocatorXpath,
-  'prefer-accessible-selectors': preferAccessibleSelectors,
+  'prefer-accessible-locators': preferAccessibleLocators,
   'prefer-app-reset-option': preferAppResetOption,
 };
 
@@ -340,7 +340,7 @@ const recommendedConfig = {
   rules: {
     'tapsmith/prefer-role': 'warn' as const,
     'tapsmith/no-bare-locator-xpath': 'error' as const,
-    'tapsmith/prefer-accessible-selectors': 'warn' as const,
+    'tapsmith/prefer-accessible-locators': 'warn' as const,
     'tapsmith/prefer-app-reset-option': 'warn' as const,
   },
 };

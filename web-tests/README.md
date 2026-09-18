@@ -11,7 +11,7 @@ and in CI.
 
 The two apps share their whole inspection layer — `ActionsPanel`,
 `ScreenshotPanel`, `DetailTabs`, `NetworkTab`, `HierarchyTree`,
-`SelectorPlayground` and `TimelineFilmstrip` are imported by UI mode from the
+`LocatorPlayground` and `TimelineFilmstrip` are imported by UI mode from the
 trace viewer. Those are covered through the **trace-viewer** project, where a
 static archive is far less setup than choreographing a live session, and the
 coverage lands on both apps. The **ui-mode** project covers what only it has: the
@@ -148,7 +148,7 @@ own: `node-duration`, `filter-count`, `count-passed`/`-failed`/`-skipped`,
 `tests-empty`, `run-notification`, `preflight-message`, `mirror-status`/`-hint`,
 `call-grid`, `no-content`, `log-entry`, `log-message`, `error-entry`, `source-line`,
 `source-filename`, `net-detail-body`, `hierarchy-row`, `hierarchy-properties`,
-`locator-code`, `selector-match-count`, `selector-strict-warning`, `film-frame`,
+`locator-code`, `locator-match-count`, `locator-strict-warning`, `film-frame`,
 `timeline-meta`, `viewer-title`, `screenshot-empty`, `viewer-empty`, `pick-note`, `mcp-entry`,
 `mcp-agent`, `mcp-empty`, `actions-list`, `action-item`, `locator-suggestions`,
 `locator-option`, `explorer-pane`, `explorer-resize`, `source-line` (which also

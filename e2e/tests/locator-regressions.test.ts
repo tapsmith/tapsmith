@@ -1,11 +1,11 @@
 /**
- * Regression tests for selector and assertion bugs that have been fixed.
+ * Regression tests for locator and assertion bugs that have been fixed.
  * Each section preserves the original PILOT issue ID so future regressions
  * are easy to triage.
  */
 import { describe, expect, test } from "tapsmith"
 
-describe("Selector & assertion regressions", () => {
+describe("Locator & assertion regressions", () => {
   // Every test starts from the home screen and types into shared fields —
   // genuine per-test isolation, worth ~1 s of warm reset before each test.
   test.use({ appResetScope: "test" })

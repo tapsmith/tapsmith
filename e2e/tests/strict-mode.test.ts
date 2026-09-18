@@ -8,7 +8,7 @@ describe("strict mode", () => {
     await device.openDeepLink("tapsmithtest:///list")
   })
 
-  test("tapping an ambiguous selector throws a strict mode violation listing the matches", async ({ device }) => {
+  test("tapping an ambiguous locator throws a strict mode violation listing the matches", async ({ device }) => {
     let error: unknown
     try {
       // The list screen renders many "Item N" rows — substring getByText
@@ -25,7 +25,7 @@ describe("strict mode", () => {
     expect(message).toContain("Hint: use { exact: true }")
   })
 
-  test("assertions on an ambiguous selector throw instead of checking the first match", async ({ device }) => {
+  test("assertions on an ambiguous locator throw instead of checking the first match", async ({ device }) => {
     let error: unknown
     try {
       await expect(device.getByText("Item ")).toBeVisible({ timeout: 3_000 })

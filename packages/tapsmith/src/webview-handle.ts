@@ -769,7 +769,7 @@ export class WebViewHandle {
   }
 
   /**
-   * @internal — Dump the WebView DOM as hierarchy XML nodes for the Selector Playground.
+   * @internal — Dump the WebView DOM as hierarchy XML nodes for the Locator Playground.
    * Each visible DOM element becomes a node with bounds in screen coordinates.
    */
   async _dumpDomHierarchy(): Promise<string | undefined> {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { parseSelectorToInternal, resolveActionTarget, formatBounds } from '../mcp/selector-helper.js';
+import { parseSelectorToInternal, resolveActionTarget, formatBounds } from '../mcp/locator-helper.js';
 import { selectorToProto } from '../selectors.js';
 import type { TapsmithGrpcClient, ElementInfo } from '../grpc-client.js';
 
@@ -54,13 +54,13 @@ describe('parseSelectorToInternal', () => {
     expect(selectorToProto(selector)).toEqual({ role: { role: 'button', name: 'Sign in' } });
   });
 
-  it('throws on invalid selector strings', () => {
-    expect(() => parseSelectorToInternal('not a selector')).toThrow(/Invalid selector/);
+  it('throws on invalid locator strings', () => {
+    expect(() => parseSelectorToInternal('not a locator')).toThrow(/Invalid locator/);
   });
 });
 
 describe('resolveActionTarget (strict mode, PILOT-226)', () => {
-  it('returns the raw selector for a unique match', async () => {
+  it('returns the raw locator for a unique match', async () => {
     const client = makeClient([makeElementInfo({ text: 'Sign in' })]);
     const target = await resolveActionTarget(client, 'device.getByText("Sign in")');
     expect(target.error).toBeUndefined();

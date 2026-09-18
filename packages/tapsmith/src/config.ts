@@ -208,7 +208,7 @@ export interface TapsmithConfig {
    * Anonymous usage telemetry (default true). Tapsmith reports one event per
    * test-file run — run mode, platform, pass/fail counts, SDK/Node/OS
    * versions — under a random per-machine id. It never sends test names,
-   * selectors, app identifiers, or file paths. Set `false` to opt out; the
+   * locators, app identifiers, or file paths. Set `false` to opt out; the
    * `TAPSMITH_TELEMETRY=0` environment variable does the same without a
    * config change. See `docs/telemetry.md`.
    */

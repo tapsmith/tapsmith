@@ -259,7 +259,7 @@ function CallTab({ event, metadata }: { event: ActionTraceEvent | AssertionTrace
         <span class="call-label">Action</span>
         <span class="call-value">{event.action}</span>
         {event.selector && <>
-          <span class="call-label">Selector</span>
+          <span class="call-label">Locator</span>
           {formatSelectorForCall(event.selector)}
         </>}
         {event.inputValue !== undefined && <>
@@ -304,7 +304,7 @@ function CallTab({ event, metadata }: { event: ActionTraceEvent | AssertionTrace
       <span class="call-label">Action</span>
       <span class="call-value">{event.assertion}</span>
       {event.selector && <>
-        <span class="call-label">Selector</span>
+        <span class="call-label">Locator</span>
         {formatSelectorForCall(event.selector)}
       </>}
       <span class="call-label">Wait strategy</span>

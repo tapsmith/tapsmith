@@ -123,13 +123,13 @@ project name is refused too, never ignored.
 
 #### `tapsmith_snapshot`
 
-Get the current screen's accessibility tree with copy-paste-ready Tapsmith selectors for each interactive element. Use this first when writing tests to see what's on screen.
+Get the current screen's accessibility tree with copy-paste-ready Tapsmith locators for each interactive element. Use this first when writing tests to see what's on screen.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `device` | string | No | Device serial from `tapsmith_list_devices`. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
-Returns a text representation of the accessibility tree with suggested selectors like `device.getByRole("button", { name: "Login" })` for each interactive element.
+Returns a text representation of the accessibility tree with suggested locators like `device.getByRole("button", { name: "Login" })` for each interactive element.
 
 #### `tapsmith_screenshot`
 
@@ -141,33 +141,33 @@ Capture a PNG screenshot of the device screen. Use when you need to visually ver
 
 Returns a base64-encoded PNG image.
 
-#### `tapsmith_test_selector`
+#### `tapsmith_test_locator`
 
-Test a Tapsmith selector against the current screen. Returns whether it matches, how many elements match, and details about each match. Use to validate selectors before putting them in test code.
+Test a Tapsmith locator against the current screen. Returns whether it matches, how many elements match, and details about each match. Use to validate locators before putting them in test code.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `selector` | string | Yes | Tapsmith selector string, e.g. `device.getByRole("button", { name: "Login" })` |
+| `locator` | string | Yes | Tapsmith locator string, e.g. `device.getByRole("button", { name: "Login" })` |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
 Returns a JSON object with `matched` (boolean), `count` (number), and `elements` (array of matched elements with role, text, and bounds).
 
 #### `tapsmith_tap`
 
-Tap a UI element matching the given Tapsmith selector.
+Tap a UI element matching the given Tapsmith locator.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `selector` | string | Yes | Tapsmith selector, e.g. `device.getByRole("button", { name: "Login" })` |
+| `locator` | string | Yes | Tapsmith locator, e.g. `device.getByRole("button", { name: "Login" })` |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
 #### `tapsmith_type`
 
-Type text into an element matching the selector.
+Type text into an element matching the locator.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `selector` | string | Yes | Tapsmith selector for the text field |
+| `locator` | string | Yes | Tapsmith locator for the text field |
 | `text` | string | Yes | Text to type |
 | `clear` | boolean | No | Clear existing text before typing (default: false) |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
@@ -247,7 +247,7 @@ Read a Tapsmith trace archive (.zip) and return step-by-step test execution data
 | `include_screenshots` | boolean | No | Include base64 screenshots for each step (default: false) |
 | `device_logs` | string | No | Include device logs: `errors` (default, error/warn only), `all`, or `none` |
 
-Returns trace metadata (device, platform, test file, duration) followed by a step-by-step action list with status, selectors, durations, and error details.
+Returns trace metadata (device, platform, test file, duration) followed by a step-by-step action list with status, locators, durations, and error details.
 
 ### Test session tools (both modes)
 
@@ -341,7 +341,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 2. **Connect your agent** to the MCP endpoint shown in the MCP panel
 3. **Understand the environment:** call `tapsmith_session_info` to see platform, device, package, and project configuration
 4. **Discover tests:** call `tapsmith_list_tests` to see the full test tree with file paths and test names
-5. **Explore the screen:** use `tapsmith_snapshot` to see the accessibility tree with suggested selectors, then `tapsmith_test_selector` to validate a selector before using it
+5. **Explore the screen:** use `tapsmith_snapshot` to see the accessibility tree with suggested locators, then `tapsmith_test_locator` to validate a locator before using it
 6. **Run tests:** call `tapsmith_run_tests` with file paths and optional test name / project filters. On failure, the response includes error details, trace steps, and a screenshot
 7. **Review results:** use `tapsmith_list_results` to browse the latest run (pass `details: true` to see trace steps for failures), and `tapsmith_suite_status` to see the whole suite's accumulated status including tests that have not run yet
 8. **Debug failures:** use `tapsmith_read_trace` with the trace file path from the failure report for step-by-step debugging
@@ -352,13 +352,13 @@ Returns a message indicating whether watch mode was enabled or disabled.
 1. **Add the MCP server config:** `codex mcp add tapsmith -- npx tapsmith mcp-server`
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
-4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_selector` against the headless session's selected device
+4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device
 5. **Run tests:** call `tapsmith_run_tests`; results are stored in the headless session for `tapsmith_list_results`
 6. **Iterate:** use `tapsmith_watch` to re-run watched files on save, or `tapsmith_stop_tests` to terminate a running headless test run
 
-## Selector format
+## Locator format
 
-Device action tools (`tapsmith_tap`, `tapsmith_type`, `tapsmith_test_selector`) expect Tapsmith selector strings. These are the same expressions you'd write in test code:
+Device action tools (`tapsmith_tap`, `tapsmith_type`, `tapsmith_test_locator`) expect Tapsmith locator strings. These are the same expressions you'd write in test code:
 
 ```
 device.getByRole("button", { name: "Login" })
@@ -370,7 +370,7 @@ device.getByPlaceholder("Email")
 device.locator({ id: "com.myapp:id/input" })
 ```
 
-Use `tapsmith_snapshot` to see suggested selectors for every interactive element on screen.
+Use `tapsmith_snapshot` to see suggested locators for every interactive element on screen.
 
 ## Multi-project support
 

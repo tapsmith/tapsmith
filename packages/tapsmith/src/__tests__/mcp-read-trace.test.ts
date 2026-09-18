@@ -124,7 +124,7 @@ describe('tapsmith_read_trace step rendering', () => {
     });
     const out = text(await readTrace({ path: trace }));
     expect(out).toContain('1. [OK] tap (120ms)');
-    expect(out).toContain('Selector: device.getByText("Login")');
+    expect(out).toContain('Locator: device.getByText("Login")');
     expect(out).toContain('2. [FAIL] expect toHaveText (5000ms)');
     expect(out).toContain('Expected: Welcome');
     expect(out).toContain('Actual: Error');

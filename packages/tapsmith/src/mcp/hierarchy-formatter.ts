@@ -5,7 +5,7 @@ import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqu
 
 interface FormattedResult {
   tree: string
-  selectors: string[]
+  locators: string[]
 }
 
 interface RefEntry {
@@ -67,7 +67,7 @@ function formatNode(
 
   if (isSemantic) {
     // Disambiguate against the full hierarchy (PILOT-226): a suggested
-    // selector that matches multiple elements would throw a strict mode
+    // locator that matches multiple elements would throw a strict mode
     // violation the moment a test acts on it.
     const selectors = disambiguateSelectors(roots, node, generateSelectors(node));
     let refTag = '';
@@ -113,6 +113,6 @@ export function formatHierarchy(roots: HierarchyNode[]): FormattedResult {
 
   return {
     tree: lines.join('\n'),
-    selectors: refs.map(r => `[${r.ref}] ${r.selector}`),
+    locators: refs.map(r => `[${r.ref}] ${r.selector}`),
   };
 }

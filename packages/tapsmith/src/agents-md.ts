@@ -42,7 +42,7 @@ The UI MCP session shares the browser test runner, device, test tree, results, t
 
 Do not start a long-lived UI session yourself unless the user asks you to. Prefer asking the user to start \`npx tapsmith test --ui\` in their terminal so they can see and control the shared session.
 
-When using MCP, inspect before editing: \`tapsmith_snapshot\` for the accessibility tree and suggested selectors, \`tapsmith_test_selector\` to prove a selector is unique, \`tapsmith_screenshot\` when the tree is not enough, \`tapsmith_list_tests\` before \`tapsmith_run_tests\`, and \`tapsmith_read_trace\` for failures.
+When using MCP, inspect before editing: \`tapsmith_snapshot\` for the accessibility tree and suggested locators, \`tapsmith_test_locator\` to prove a locator is unique, \`tapsmith_screenshot\` when the tree is not enough, \`tapsmith_list_tests\` before \`tapsmith_run_tests\`, and \`tapsmith_read_trace\` for failures.
 
 ### Writing tests
 
@@ -60,12 +60,12 @@ When using MCP, inspect before editing: \`tapsmith_snapshot\` for the accessibil
 - Keep unauthenticated and authenticated specs in separate projects or use \`testIgnore\` so the setup test does not run as a normal test and logged-out tests do not accidentally inherit app state.
 - For multi-platform suites, create one auth setup project per platform and one logged-in project per platform. Save each platform's state to a distinct file and make each logged-in project depend on its matching setup project.
 
-### Selectors and assertions
+### Locators and assertions
 
-- Prefer accessibility-first selectors: \`device.getByRole('button', { name: 'Login' })\`, \`device.getByText('Welcome', { exact: true })\`, \`device.getByDescription('Close')\`, \`device.getByLabel('Email')\`, and \`device.getByPlaceholder('Search')\`.
-- Use \`getByTestId()\` or \`locator({ id })\` only when no user-visible or accessibility selector can uniquely identify the element. Treat \`locator({ xpath })\` as a last resort; it is Android-only and should have an explanatory comment.
+- Prefer accessibility-first locators: \`device.getByRole('button', { name: 'Login' })\`, \`device.getByText('Welcome', { exact: true })\`, \`device.getByDescription('Close')\`, \`device.getByLabel('Email')\`, and \`device.getByPlaceholder('Search')\`.
+- Use \`getByTestId()\` or \`locator({ id })\` only when no user-visible or accessibility locator can uniquely identify the element. Treat \`locator({ xpath })\` as a last resort; it is Android-only and should have an explanatory comment.
 - Assertions auto-wait: prefer \`await expect(locator).toBeVisible()\`, \`toHaveText()\`, \`toBeEnabled()\`, etc. Avoid fixed sleeps and broad timeouts; wait on the UI state, route, response, or traceable app signal that matters.
-- Remember strict mode: if a selector can match multiple elements, disambiguate with role/name, \`{ exact: true }\`, a test id, or \`.first()/.nth()\` only when that ordering is intentional.
+- Remember strict mode: if a locator can match multiple elements, disambiguate with role/name, \`{ exact: true }\`, a test id, or \`.first()/.nth()\` only when that ordering is intentional.
 
 ### Anti-patterns
 

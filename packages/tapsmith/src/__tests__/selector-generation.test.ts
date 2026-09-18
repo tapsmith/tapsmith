@@ -243,7 +243,7 @@ describe('generateBestSelector', () => {
 
   it('returns fallback comment when no attributes at all', () => {
     const node = makeNode('node', {});
-    expect(generateBestSelector(node)).toBe('// No selector available');
+    expect(generateBestSelector(node)).toBe('// No locator available');
   });
 });
 

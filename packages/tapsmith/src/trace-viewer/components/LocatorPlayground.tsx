@@ -6,9 +6,9 @@ import { generateSelectors, type GeneratedSelector } from './selector-generation
 import { parseSelectorString, findMatchingNodes, getNodeBounds } from './selector-matching.js';
 import { disambiguateSelectors } from './selector-uniqueness.js';
 
-// ─── Selector Tab (lives in detail tabs) ───
+// ─── Locator Tab (lives in detail tabs) ───
 
-const SELECTOR_TAB_STYLES = `
+const LOCATOR_TAB_STYLES = `
   .st-container { display: flex; flex-direction: column; height: 100%; font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace; font-size: 12px; }
   .st-input-row { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
   .st-input-wrap { position: relative; flex: 1; min-width: 0; display: flex; }
@@ -50,7 +50,7 @@ function injectStStyles() {
   if (stStylesInjected) return;
   stStylesInjected = true;
   const el = document.createElement('style');
-  el.textContent = SELECTOR_TAB_STYLES;
+  el.textContent = LOCATOR_TAB_STYLES;
   document.head.appendChild(el);
 }
 
@@ -70,7 +70,7 @@ export function computeSelectorHighlights(roots: HierarchyNode[], selector: stri
     .filter((b): b is Bounds => b !== null);
 }
 
-interface SelectorTabProps {
+interface LocatorTabProps {
   hierarchyXml: string | undefined
   pickedNode: HierarchyNode | null
   selector: string
@@ -85,7 +85,7 @@ interface SelectorTabProps {
   liveSourceAvailable?: boolean
 }
 
-export function SelectorTab({ hierarchyXml, pickedNode, selector, onSelectorChange, source, onSourceChange, liveSourceAvailable }: SelectorTabProps) {
+export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChange, source, onSourceChange, liveSourceAvailable }: LocatorTabProps) {
   injectStStyles();
 
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
@@ -155,7 +155,7 @@ export function SelectorTab({ hierarchyXml, pickedNode, selector, onSelectorChan
       ? 'st-count has-matches'
       : 'st-count no-matches';
 
-  // Strict mode (PILOT-226): an ambiguous selector without a positional
+  // Strict mode (PILOT-226): an ambiguous locator without a positional
   // chain will throw at runtime — warn here, where the user is composing it.
   const hasPositionalChain = /\.(first|last)\(\)|\.nth\(\s*-?\d+\s*\)/.test(selector);
   const strictWarning = matchCount !== null && matchCount > 1 && !hasPositionalChain;
@@ -191,7 +191,7 @@ export function SelectorTab({ hierarchyXml, pickedNode, selector, onSelectorChan
             ref={inputRef}
             class="st-input"
             type="text"
-            aria-label="Selector"
+            aria-label="Locator"
             placeholder='device.getByText("Login") · device.getByRole("button", { name: "Submit" })'
             value={selector}
             onInput={handleInput}
@@ -208,12 +208,12 @@ export function SelectorTab({ hierarchyXml, pickedNode, selector, onSelectorChan
             </button>
           )}
         </div>
-        <span class={countClass} data-testid="selector-match-count">{countLabel}</span>
+        <span class={countClass} data-testid="locator-match-count">{countLabel}</span>
       </div>
       {strictWarning && (
-        <div class="st-strict-warning" data-testid="selector-strict-warning">
+        <div class="st-strict-warning" data-testid="locator-strict-warning">
           ⚠ {matchCount} matches — runtime actions/assertions will throw a strict
-          mode violation. Refine the selector (<code>{'{ exact: true }'}</code>,{' '}
+          mode violation. Refine the locator (<code>{'{ exact: true }'}</code>,{' '}
           <code>getByRole</code>) or add <code>.first()</code>.
         </div>
       )}

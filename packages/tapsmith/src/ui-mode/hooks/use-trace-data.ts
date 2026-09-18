@@ -128,7 +128,7 @@ export interface ResolvedHierarchy {
 }
 
 /**
- * The hierarchy the selector playground must hit-test for an action, which
+ * The hierarchy the locator playground must hit-test for an action, which
  * has to depict the same moment as the screenshot the panel displays — or a
  * pick would resolve one screen over a picture of another (PILOT-302):
  *
