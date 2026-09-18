@@ -6460,16 +6460,29 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             // Keep `handle` alive as a whole — dropping `_cancel_tx` kills
             // the log subprocess, so it must outlive the recv loop.
             let mut handle = handle;
-            while let Some(entry) = handle.rx.recv().await {
-                let proto_entry = proto::DeviceLogEntry {
-                    level: entry.level.to_string(),
-                    message: entry.message,
-                    tag: entry.tag,
-                    timestamp_ms: entry.timestamp_ms,
-                    pid: entry.pid,
-                };
-                if out_tx.send(Ok(proto_entry)).await.is_err() {
-                    break;
+            loop {
+                tokio::select! {
+                    entry = handle.rx.recv() => {
+                        let Some(entry) = entry else { break };
+                        let proto_entry = proto::DeviceLogEntry {
+                            level: entry.level.to_string(),
+                            message: entry.message,
+                            tag: entry.tag,
+                            timestamp_ms: entry.timestamp_ms,
+                            pid: entry.pid,
+                        };
+                        if out_tx.send(Ok(proto_entry)).await.is_err() {
+                            break;
+                        }
+                    }
+                    // Client disconnected: terminate immediately instead of
+                    // blocking on `handle.rx.recv()` until the next (maybe
+                    // never) log line. The reader filters to the app's PIDs,
+                    // so a cancelled stream against an app that has since been
+                    // reset or terminated produced no wakeup at all and this
+                    // task parked forever, holding its log subprocess open.
+                    // Mirrors `stream_daemon_logs` below.
+                    _ = out_tx.closed() => break,
                 }
             }
             drop(handle);
