@@ -106,24 +106,23 @@ describe("List screen — and()/or() on a device", () => {
   });
 });
 
-// PILOT-287 follow-up: the all() snapshot contract, on a device. Handles from
-// all() answer from the capture they were created from, children scoped off
-// them resolve the row LIVE by index (like .nth(i)), and expect() re-queries.
-// Pinned here because the follow-up tickets (PILOT-344/345/346/347) edit
-// exactly this code; PILOT-346 (live all()) is expected to rewrite this test
-// deliberately, not to make it pass by accident.
-describe("List screen — all() snapshot semantics", () => {
+// PILOT-346: handles from all() are live nth(i) locators, on a device. Every
+// reader and action on rows[i] resolves live, so a check and the action it
+// guards describe the same element — whatever is at index i NOW — and a
+// row's children (rows[i].getByRole(…)) resolve the row live by index too.
+// Pinned here because PILOT-287's follow-ups edit exactly this code.
+describe("List screen — all() returns live locators", () => {
   test.beforeAll(async ({ device }) => {
     await device.openDeepLink("tapsmithtest:///list")
   })
 
-  test("a check on rows[i] and an action on rows[i] address the same captured row", async ({ device, listScreen }) => {
+  test("a check on rows[i] and an action on rows[i] address the same live row", async ({ device, listScreen }) => {
     // FlatList virtualises: only the rendered window (~10 rows) is in the tree.
     const rows = device.getByRole("button")
     const captured = await rows.all()
     expect(captured.length).toBeGreaterThanOrEqual(5)
 
-    // Snapshot readers: no re-query, so a check and the action it guards agree.
+    // Live readers agree with the live action.
     expect(await captured[2].isVisible()).toBe(true)
     expect(await captured[2].isEnabled()).toBe(true)
     await captured[2].tap()
@@ -132,7 +131,7 @@ describe("List screen — all() snapshot semantics", () => {
     await expect(listScreen.selectedCount).toContainText("0 selected")
   })
 
-  test("a captured handle keeps answering from its capture; expect() and nth() see the live list", async ({ device, listScreen }) => {
+  test("rows[i] follows the list: after the list changes it names whatever is at index i now", async ({ device, listScreen }) => {
     // Android merges a button's children into one accessibility node, so the
     // rows here have no separately addressable children; the live-by-index
     // rule for scoped children (rows[i].getByRole(…)) is unit-tested.
@@ -149,17 +148,25 @@ describe("List screen — all() snapshot semantics", () => {
     await search.type("Item 3")
     await expect(listScreen.itemCount).toHaveText("2 items")
     try {
-      // The captured handle still answers from its capture (documented; live
-      // all() is PILOT-346) …
+      // rows[idx] IS rows.nth(idx): every reader sees the row now at that
+      // index (Item 3 or Item 30), never the Item 2 that all() saw there …
+      expect(await captured[idx].getText()).toContain("Item 3")
+      expect(await captured[idx].getText()).not.toContain("Item 2")
       expect(await captured[idx].isVisible()).toBe(true)
-      expect(await captured[idx].getText()).toContain("Item 2")
-      // … while expect() and .nth() re-query by index: that index now holds
-      // Item 3 or Item 30, and the captured last index is gone from the screen.
+      await expect(captured[idx]).toContainText("Item 3")
       await expect(rows.nth(idx)).toContainText("Item 3")
-      await expect(rows.nth(idx)).not.toContainText("Item 2")
-      await expect(captured[idx]).toBeVisible()
-      await expect(captured[captured.length - 1]).not.toBeVisible()
-      expect(await rows.nth(captured.length - 1).isHidden()).toBe(true)
+      // … and the last index all() saw is gone from the screen for every reader.
+      const last = captured[captured.length - 1]
+      expect(await last.exists()).toBe(false)
+      expect(await last.isHidden()).toBe(true)
+      expect(await last.count()).toBe(0)
+      await expect(last).not.toBeVisible()
+      // A handle from all() is a plain locator: narrowing it further composes
+      // (Playwright): row idx if it matches, nothing otherwise.
+      expect(await captured[idx].filter({ hasText: "Item 3" }).count()).toBe(1)
+      expect(await captured[idx].filter({ hasText: "Item 2" }).count()).toBe(0)
+      expect(await captured[idx].first().count()).toBe(1)
+      expect(await captured[idx].nth(1).count()).toBe(0)
     } finally {
       await search.clear()
       await expect(listScreen.itemCount).toHaveText("30 items")

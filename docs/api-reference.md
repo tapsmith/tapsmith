@@ -126,7 +126,7 @@ This is the safety net for the substring default of `getByText` — without it, 
 | Positive assertions (`toBeVisible`, `toHaveText`, `toBeChecked`, …) | Yes |
 | `waitFor({ state: "hidden" \| "detached" })` | No — absence is evaluated over all matches |
 | `toBeHidden`, `not.toBeVisible`, `not.toExist` | No — absence is evaluated over all matches |
-| `count()`, `all()`, `exists()`, `toHaveCount` | No — inherently multi-element |
+| `count()`, `all()`, `allTextContents()`, `exists()`, `toHaveCount` | No — inherently multi-element |
 | Locators narrowed with `.first()` / `.last()` / `.nth(n)` | Exempt — they target one match by definition |
 
 To handle a violation programmatically, import the error class or the cross-realm-safe guard:
@@ -766,6 +766,8 @@ await device.getByRole("listitem").last().tap();
 
 Return a new handle targeting the match at the given 0-based index. Negative indices count from the end. The index must be an integer — `nth(1.5)` throws.
 
+Chaining a positional modifier onto an already-positional handle narrows that one element rather than re-indexing the original match set, as in Playwright (and as `WebViewLocator` does): `list.nth(2).first()` is `list.nth(2)`, while `list.first().nth(1)` matches nothing. A `filter()` chained after the index applies to that one element too — see [`all()`](#elementhandleall-promiseelementhandle).
+
 ```typescript
 await device.getByRole("listitem").nth(2).tap();
 await device.getByRole("listitem").nth(-1).tap(); // last item
@@ -846,9 +848,7 @@ The `ElementInfo` object contains:
 Returns `true` if the element exists in the UI hierarchy **right now**, whether or not it is visible.
 
 Like a Playwright presence check (Playwright has no `exists()`; `locator.count() > 0` is the idiom
-there), this does **not** wait for the element to appear. Note the two idioms are not interchangeable
-on a handle from `all()`: there `exists()` answers from the capture while `count()` re-queries the
-device by index (see `all()`). It reads the current hierarchy and returns
+there), this does **not** wait for the element to appear. It reads the current hierarchy and returns
 `false` without waiting for it when nothing matches (two reads and a short idle wait, see below), so it
 is safe to branch on presence. To wait for an element, use `expect(locator).toExist()` or `waitFor({ state: "attached" })`.
 Both of those are strict (see below), so if the locator may match several elements, narrow it with
@@ -877,10 +877,7 @@ until the handle's timeout instead, like an action); and a user stop propagates 
 Infrastructure problems are never reported as an answer. If every read is a stale snapshot (a screen
 that never stops re-rendering, with no empty read to fall back on) the call re-reads for the handle's
 timeout and then throws, pointing at `expect(locator).toExist()` / `.not.toExist()` and
-`waitFor({ state: "attached" })`. A handle obtained from `all()` answers from its snapshot (as last
-refreshed by that handle's own actions), never from a fresh read, so `exists()` on it says whether the
-captured row was there, not whether it still is; re-query the list (`count()` or a fresh `all()`) to
-check that.
+`waitFor({ state: "attached" })`.
 
 > **Behaviour change.** Before this release `exists()` handed the handle's timeout to the on-device
 > agent, which waited for the element, so an absent element cost the whole action timeout (30 s by
@@ -917,29 +914,50 @@ for (const item of items) {
 }
 ```
 
-The returned handles carry the snapshot they were resolved from, so reading and acting on the batch
-does not re-query the device for every element: `find()`, `getText()`, `isEnabled()`, `isChecked()`,
-`isEditable()`, `inputValue()`, `boundingBox()`, `isVisible()`, `isHidden()` and actions all address
-the element captured by `all()`, so a check and the action it guards describe the same element
-(after an action other than `scrollIntoView()` that moves the list, `items[i].boundingBox()` still
-reports the captured coordinates). Scoped children (`items[i].getByRole("button")`) resolve their parent live by index, like
-`.nth(i)`: once the list has changed they address whatever row is now at index `i`, so call `all()` again
-after the list changes before acting on a row's children. Three things refresh the snapshot from a fresh
-read by the same index: an action whose captured element went stale mid-action, a wait the
-capture cannot satisfy (a disabled control, a `setChecked()` state change being confirmed, an index the
-capture no longer has), and `items[i].scrollIntoView()`, which re-captures before every check because it
-exists to watch the screen change; the handle keeps answering from the refreshed capture. Note what that
-means: after `items[i].scrollIntoView()` the handle describes whatever row is at index `i` in the *scrolled*
-list — on a virtualised list that can be a different row from the one captured, exactly as `.nth(i)` would
-resolve — so prefer a locator that names the row (`getByText`, `filter({ hasText })`) when scrolling to it. `expect(items[i])` assertions and
-`waitFor()` and `count()` also re-query the device by index, so they reflect what is on screen now. Because a handle
-from `all()` already names one element, `first()`, `last()`, `nth()`, `filter()`, `and()`, `or()` and `all()`
-throw on it, and so does passing it as the other operand or as `has`/`hasNot` — narrow the locator
-before calling `all()` instead (`list.filter({ hasText: "Sold out" }).all()`). Note that filters always
-apply before a positional index, so `list.nth(1).filter(…)` means "the second matching row", not "row 1
-if it matches". If the list changes after `all()` (an item is removed, say), call `all()` again, or use
-`.nth(i)` for a handle that always resolves live. Making `all()` return live locators, as Playwright
-does, is tracked as PILOT-346.
+Each returned handle is a plain `.nth(i)` locator, exactly as in Playwright: nothing is cached, so
+every reader (`find()`, `getText()`, `isVisible()`, `isEnabled()`, `boundingBox()`, `exists()`,
+`count()`, …), every action and every `expect()` on `items[i]` resolves live against the device.
+A check and the action it guards therefore always describe the same element — whatever is at index
+`i` when each of them runs:
+
+```typescript
+const rows = await device.getByRole("listitem").all();
+await rows[0].tap(); // removes row 0; the list shifts up
+if (await rows[1].isVisible()) {
+  await rows[1].tap(); // taps the element now at index 1 — the same one isVisible() saw
+}
+```
+
+The flip side is that once the list changes, `items[i]` names whatever is at index `i` *now*, not the
+row it named when `all()` ran — including after `items[i].scrollIntoView()` on a virtualised list,
+where the rendered window shifts under the index. To act on a particular row, prefer a locator that
+names it (`getByText`, `filter({ hasText })`), or call `all()` again after the list changes.
+Scoped children (`items[i].getByRole("button")`) resolve their parent the same live way.
+
+Because a handle from `all()` is an ordinary positional locator, further modifiers compose in call
+order, as in Playwright: `items[i].filter({ hasText: "Sold out" })` is row `i` if it matches and
+nothing otherwise, `items[i].first()` is `items[i]` itself, `items[i].nth(1)` matches nothing, and
+`items[i].and(x)` / `items[i].or(x)` use that row as an operand. The same rule applies to any
+positional locator: `list.nth(1).filter(…)` means "row 1 if it matches", not "the second matching
+row" — put the filter first (`list.filter(…).nth(1)`) for the latter. `list.first().all()` (or
+`.nth(i)`/`.last()`) yields that one locator, or an empty array.
+
+Each call on a handle from `all()` is one hierarchy read, so iterate `all()` when you need per-row
+*actions*. For a batch *read*, use a single query instead: [`allTextContents()`](#elementhandlealltextcontents-promisestring)
+for the texts, `count()` for the size, or an assertion such as `toHaveCount`. On an Android emulator a
+hierarchy read costs roughly 0.7 s, so `for (const row of rows) await row.getText()` over ten rendered
+rows takes about 7 s where `rows.allTextContents()` takes one read.
+
+#### `elementHandle.allTextContents(): Promise<string[]>`
+
+Return the text of every element the locator matches, in match order, from a single hierarchy read
+(Playwright's `allTextContents()`). Every modifier applies, as for `count()` and `all()`, and like them
+it does not wait and is exempt from strict mode: when nothing matches it resolves to `[]`.
+
+```typescript
+const names = await device.getByRole("listitem").allTextContents();
+expect(names).toEqual(["Item 1", "Item 2", "Item 3"]);
+```
 
 ### Waiting
 
@@ -1068,7 +1086,7 @@ Scroll the viewport until this element is visible on screen. Useful for reaching
 
 Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts.
 
-If the element is already visible, this is a no-op — it returns without scrolling, so calling `scrollIntoView()` before every `tap()` is safe even when the target is on screen (an unnecessary swipe could otherwise shift it under a pinned app bar). When the element isn't found on the first check, Tapsmith waits for the UI to settle and re-checks before the first swipe, so a briefly stale accessibility tree (e.g. right after navigation) doesn't trigger a spurious scroll. For a handle from `all()` the check first re-captures the row by index — see the note in the [`all()`](#elementhandleall-promiseelementhandle) section for what that means on a virtualised list.
+If the element is already visible, this is a no-op — it returns without scrolling, so calling `scrollIntoView()` before every `tap()` is safe even when the target is on screen (an unnecessary swipe could otherwise shift it under a pinned app bar). When the element isn't found on the first check, Tapsmith waits for the UI to settle and re-checks before the first swipe, so a briefly stale accessibility tree (e.g. right after navigation) doesn't trigger a spurious scroll. A handle from `all()` is a live `.nth(i)` locator, so on a virtualised list the scroll stops on whatever row is at index `i` in the scrolled window — see the [`all()`](#elementhandleall-promiseelementhandle) section.
 
 The visibility check honours every modifier on the locator — `filter()`, `and()`/`or()`, scoping and `first()`/`nth()`/`last()` — so `device.getByRole("listitem").filter({ hasText: "Zebra" }).scrollIntoView()` swipes until *that* row is on screen rather than stopping at the first list item. Strict mode applies as for any single-element query: an ambiguous locator throws (before the first swipe, if it is ambiguous from the start) rather than scrolling toward an arbitrary match.
 
@@ -1169,7 +1187,8 @@ const png = await device.getByRole("image", { name: "Profile" }).screenshot();
 
 #### `elementHandle.getText(): Promise<string>`
 
-Get the visible text content of this element.
+Get the visible text content of this element. Waits for the element like `find()`. To read the text of
+every match in one hierarchy read, use [`allTextContents()`](#elementhandlealltextcontents-promisestring).
 
 ```typescript
 const label = await device.locator({ id: "status_label" }).getText();
@@ -1207,8 +1226,7 @@ A stale mid-re-render snapshot
 just means the screen is busy, so — like `find()` and `waitFor()` — it is re-read until the handle's
 timeout; if the hierarchy never settles (a screen that never stops animating) the call keeps re-reading
 for the handle's timeout and then throws a descriptive error, pointing at `expect(locator).toBeVisible()` /
-`.not.toBeVisible()` and `waitFor()`, rather than guessing an answer. A handle obtained from `all()`
-answers from the snapshot it was created from, like every other reader on that handle (see `all()`).
+`.not.toBeVisible()` and `waitFor()`, rather than guessing an answer.
 
 > **Behaviour change.** Before this release `isVisible()` waited for the element like `find()` and threw
 > when it never appeared, so `expect(await x.isVisible()).toBe(true)` straight after a navigation used
