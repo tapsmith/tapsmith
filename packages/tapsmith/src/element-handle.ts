@@ -982,6 +982,11 @@ export class ElementHandle {
     elements: ElementInfo[],
     filter: FilterOptions,
   ): Promise<ElementInfo[]> {
+    // Nothing to filter: answer without the `has`/`hasNot` child read. An
+    // empty match set (or an out-of-range index ahead of a post-index filter)
+    // would otherwise cost a hierarchy dump per poll tick and expose a
+    // definite "no match" to a momentary fault on a read that decides nothing.
+    if (elements.length === 0) return elements;
     let result = elements;
 
     if (filter.hasText !== undefined) {
@@ -1057,18 +1062,21 @@ export class ElementHandle {
     const nthIndex = this._options.nthIndex;
 
     if (nthIndex !== undefined) {
-      const idx = nthIndex < 0 ? elements.length + nthIndex : nthIndex;
-      if (idx < 0 || idx >= elements.length) {
-        const expectedCount = nthIndex >= 0 ? nthIndex + 1 : -nthIndex;
-        throw new Error(
-          `nth(${nthIndex}): expected at least ${expectedCount} element(s), but found ${elements.length}`,
-        );
-      }
-      // The index is satisfied; a modifier chained after it may still narrow
-      // the one element to nothing (`nth(1).filter(f)` where row 1 lacks f).
-      const selected = await this._select(elements);
-      if (selected.length === 0) {
-        throw new Error(`Element not found: ${this._describe()}`);
+      // The same walk as `_select`, with a diagnostic per step: a positional
+      // miss names the index and how many elements there were to pick from
+      // (so `first().nth(5)` reports "found 1", as `nth(5)` reports the list
+      // size), and a filter that empties the one element is a plain not-found.
+      let selected = elements;
+      for (const step of [{ nth: nthIndex }, ...(this._options.post ?? [])]) {
+        const found = selected.length;
+        selected = await this._applyStep(selected, step);
+        if (selected.length === 0) {
+          if ('nth' in step) {
+            const expectedCount = step.nth >= 0 ? step.nth + 1 : -step.nth;
+            throw new Error(`nth(${step.nth}): expected at least ${expectedCount} element(s), but found ${found}`);
+          }
+          throw new Error(`Element not found: ${this._describe()}`);
+        }
       }
       return selected[0];
     }
@@ -1092,11 +1100,20 @@ export class ElementHandle {
    * positional handle names. At most one element once an index has applied.
    */
   private async _select(elements: ElementInfo[]): Promise<ElementInfo[]> {
+    // `post` only has meaning after an index (nth()/filter() gate on it);
+    // without one every read path ignores it, this one included, so a
+    // malformed shape can never make two readers disagree.
+    if (this._options.nthIndex === undefined) return elements;
     let result = selectNth(elements, this._options.nthIndex);
     for (const step of this._options.post ?? []) {
-      result = 'nth' in step ? selectNth(result, step.nth) : await this._applyFilter(result, step.filter);
+      result = await this._applyStep(result, step);
     }
     return result;
+  }
+
+  /** @internal — Apply one positional-chain step (see {@link PostIndexStep}). */
+  private _applyStep(elements: ElementInfo[], step: PostIndexStep): Promise<ElementInfo[]> {
+    return 'nth' in step ? Promise.resolve(selectNth(elements, step.nth)) : this._applyFilter(elements, step.filter);
   }
 
   /**
@@ -1109,7 +1126,9 @@ export class ElementHandle {
     const post = this._options.post;
     if (!post?.length) return '';
     const renderNth = (n: number): string => (n === 0 ? '.first()' : n === -1 ? '.last()' : `.nth(${n})`);
-    let desc = renderNth(this._options.nthIndex!);
+    // `post` only exists alongside an index (nth()/filter() gate on it); if
+    // that ever changes, render the steps alone rather than "undefined".
+    let desc = this._options.nthIndex === undefined ? '' : renderNth(this._options.nthIndex);
     let filters = 0;
     const flushFilters = (): void => {
       if (filters) desc += `.filter(…×${filters})`;
@@ -1388,6 +1407,10 @@ export class ElementHandle {
    * `strict: false` and evaluate their condition over the full match set.
    */
   async _resolveForAssertion(timeoutMs: number, strict: boolean): Promise<ElementInfo[]> {
+    // The re-timed tree is used for BOTH reads of a tick: the match set below
+    // and, in `_select`, any `has`/`hasNot` filter chained after the
+    // positional index (its child read uses the handle's timeout otherwise).
+    const timed = ElementHandle._cloneWithTimeout(this, timeoutMs);
     let elements: ElementInfo[];
     if (
       this._options.filters?.length ||
@@ -1400,7 +1423,7 @@ export class ElementHandle {
       // stays fast — and/or operands carry their own (long) timeouts and
       // would otherwise cap each sub-query at e.g. 30s.
       const probe = new ElementHandle(this._client, this._selector, timeoutMs, {
-        ...ElementHandle._cloneWithTimeout(this, timeoutMs)._options,
+        ...timed._options,
         nthIndex: undefined,
         post: undefined,
       });
@@ -1413,7 +1436,7 @@ export class ElementHandle {
       elements = collapseSameTargetDuplicates(res.elements ?? []);
     }
 
-    if (this._options.nthIndex !== undefined) return this._select(elements);
+    if (this._options.nthIndex !== undefined) return timed._select(elements);
     if (strict && elements.length > 1) {
       throw buildStrictModeViolationError(this._describe(), elements);
     }
@@ -1673,6 +1696,55 @@ export class ElementHandle {
   }
 
   /**
+   * @internal — The read behind the one-shot multi-element readers
+   * (`count()`, `all()`, `allTextContents()`): this handle's current matches
+   * with every modifier applied. "One-shot" means no waiting for the
+   * ELEMENT: an empty screen is `[]` at once. A read that lands mid-re-render
+   * (stale snapshot) is not an answer at all — the screen was busy, not empty
+   * — so it is re-read until one lands between frames, for up to the
+   * handle's timeout, exactly as the presence probes do; only then does the
+   * stale error surface. `timeout: 0` is the single-shot opt-out (one read on
+   * the daemon's default deadline). Any other error propagates as it is.
+   *
+   * Every read is re-timed to the tick budget (see {@link tickBudget}) like
+   * every other poll loop here, so a wedged agent cannot spend the whole
+   * window on one read; the loop owns the deadline. Faults are classified
+   * as the probes classify them: a slow-but-alive agent (agent command
+   * timeout on a loaded emulator) is re-read to the deadline; a momentary
+   * agent command failure (`findElements failed: …` during hierarchy churn)
+   * is re-read for a short grace window ({@link PROBE_FAULT_RETRY_WINDOW_MS})
+   * and then surfaced, so a real infrastructure error is not hidden for the
+   * whole timeout; anything else propagates at once.
+   */
+  private async _readMatches(): Promise<ElementInfo[]> {
+    if (this._timeoutMs === 0) return this._select(await this._resolveAll());
+    const deadline = Date.now() + this._timeoutMs;
+    let faultDeadline: number | undefined;
+    while (true) {
+      try {
+        const tick = ElementHandle._cloneWithTimeout(this, tickBudget(deadline));
+        return await tick._select(await tick._resolveAll());
+      } catch (err) {
+        if (Date.now() >= deadline) throw err;
+        if (isStaleSnapshotError(err) || isTransientAgentError(err)) {
+          // Both classes get the whole window, for different reasons: a stale
+          // snapshot is a definitive answer from the agent (it is alive; the
+          // screen was mid-frame), so any earlier fault has cleared; an agent
+          // command timeout means the agent is alive but slow, which the
+          // probes also re-read to the deadline rather than a short window.
+          faultDeadline = undefined;
+        } else if (isRetryableResolutionError(err)) {
+          faultDeadline ??= Date.now() + Math.min(PROBE_FAULT_RETRY_WINDOW_MS, this._timeoutMs);
+          if (Date.now() >= faultDeadline) throw err;
+        } else {
+          throw err;
+        }
+      }
+      await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())), this._client._getAbortSignal?.());
+    }
+  }
+
+  /**
    * Return the number of elements the locator matches (PILOT-14). Every
    * modifier applies — filter/and/or/scope and the positional index — so
    * `first().count()` is 1 or 0, like Playwright. Always a live read: on a
@@ -1683,7 +1755,7 @@ export class ElementHandle {
     this._emitQueryStarted('count');
     const start = Date.now();
     try {
-      const elements = await this._select(await this._resolveAll());
+      const elements = await this._readMatches();
       await this._traceQuery('count', `Count: ${elements.length}`, Date.now() - start);
       return elements.length;
     } catch (err) {
@@ -1706,7 +1778,7 @@ export class ElementHandle {
     this._emitQueryStarted('all');
     const start = Date.now();
     try {
-      const elements = await this._select(await this._resolveAll());
+      const elements = await this._readMatches();
       await this._traceQuery('all', `Found ${elements.length} element(s)`, Date.now() - start);
       if (this._options.nthIndex !== undefined) {
         // Already narrowed to one element: the locator is its own single
@@ -1741,7 +1813,7 @@ export class ElementHandle {
     this._emitQueryStarted('allTextContents');
     const start = Date.now();
     try {
-      const elements = await this._select(await this._resolveAll());
+      const elements = await this._readMatches();
       await this._traceQuery('allTextContents', `Found ${elements.length} element(s)`, Date.now() - start);
       return elements.map((el) => el.text);
     } catch (err) {
@@ -1760,6 +1832,12 @@ export class ElementHandle {
    * interpret it as a reached state (this is what keeps `'detached'`/`'hidden'`
    * from falsely resolving on a re-render blip). A genuine not-found resolves
    * to `[]`; daemon-level failures propagate so the wait fails fast.
+   *
+   * The positional index and anything chained after it are applied HERE, on
+   * the re-timed clone, so a `has`/`hasNot` filter after the index reads its
+   * children within the tick budget and a stale or faulty child read is
+   * classified like the match read — not thrown past the caller's
+   * stale-vs-fault handling.
    */
   private async _resolveForWaitTick(findBudget: number): Promise<ElementInfo[] | null> {
     try {
@@ -1768,7 +1846,9 @@ export class ElementHandle {
         // (long) timeout doesn't stall this poll tick — the waitFor deadline
         // loop owns the overall wait.
         const pollHandle = ElementHandle._cloneWithTimeout(this, findBudget);
-        return await pollHandle._resolveAll();
+        const elements = await pollHandle._resolveAll();
+        // Awaited here so a failing child read is classified by this catch.
+        return this._options.nthIndex !== undefined ? await pollHandle._select(elements) : elements;
       }
       const res = await this._client.findElements(this._selector, findBudget);
       if (res.errorMessage) {
@@ -1823,13 +1903,12 @@ export class ElementHandle {
       // null = transient stale snapshot: skip this tick and retry rather than
       // treating an unreliable result as a real state.
       if (resolved === null) return false;
-      let elements = resolved;
+      const elements = resolved;
 
-      // Respect the positional index (and what is chained after it) — target
-      // the specific element, not the full set
-      if (this._options.nthIndex !== undefined) {
-        elements = await this._select(elements);
-      } else if ((state === 'visible' || state === 'attached') && elements.length > 1) {
+      // A positional handle was narrowed to its element (and whatever is
+      // chained after the index) inside the tick read above; only an
+      // unindexed handle can be ambiguous here.
+      if (this._options.nthIndex === undefined && (state === 'visible' || state === 'attached') && elements.length > 1) {
         // Strict mode (PILOT-226): waiting for presence on an ambiguous
         // selector is an error. Absence states ('hidden'/'detached') are
         // exempt — they evaluate over the full match set.

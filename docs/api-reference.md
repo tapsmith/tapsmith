@@ -902,15 +902,24 @@ Return the number of elements the locator matches. Every modifier applies — `f
 const itemCount = await device.getByRole("listitem").count();
 ```
 
+`count()` does not wait for an element: nothing matching is `0` at once. Like `isVisible()`, a read that
+lands mid-re-render (a stale snapshot) is not treated as an answer but re-read until one lands between
+frames, for up to the handle's timeout — so on a screen that never stops changing the call can take the
+full timeout and then throws the stale error. A `timeout` of `0` in the config makes it a
+single read. The same contract
+applies to `all()` and `allTextContents()`.
+
 #### `elementHandle.all(): Promise<ElementHandle[]>`
 
 Return an array of `ElementHandle` instances, one for each element the locator matches. Useful for iterating over a list of elements. Every modifier applies, as for `count()`: `locator.first().all()` (or `.nth(i)`/`.last()`) yields the one handle that position names, or an empty array.
 
 ```typescript
-const items = await device.getByRole("listitem").all();
-for (const item of items) {
-  const info = await item.find();
-  console.log(info.text);
+// Read every row's text in one hierarchy read
+const names = await device.getByRole("listitem").allTextContents();
+
+// Iterate all() when each row needs its own action
+for (const item of await device.getByRole("listitem").all()) {
+  await item.tap(); // each handle is a live nth(i) locator — one read per call
 }
 ```
 
@@ -946,7 +955,21 @@ Each call on a handle from `all()` is one hierarchy read, so iterate `all()` whe
 *actions*. For a batch *read*, use a single query instead: [`allTextContents()`](#elementhandlealltextcontents-promisestring)
 for the texts, `count()` for the size, or an assertion such as `toHaveCount`. On an Android emulator a
 hierarchy read costs roughly 0.7 s, so `for (const row of rows) await row.getText()` over ten rendered
-rows takes about 7 s where `rows.allTextContents()` takes one read.
+rows takes about 7 s where `rows.allTextContents()` takes one read. Issuing the reads concurrently
+(`Promise.all(rows.map((row) => row.getText()))`) does not help: the same dumps queue on one on-device
+agent, and on a loaded emulator they surface as agent command timeouts and stale-snapshot retries
+rather than as speed.
+
+> **Behaviour change.** Before this release the handles returned by `all()` carried the snapshot they
+> were resolved from: `find()`, `getText()`, `isEnabled()`, `boundingBox()` and actions answered from
+> that capture (no device read), while `expect()`, `waitFor()`, `isVisible()` and `count()` re-queried
+> live — so a check and the action it guarded could describe different elements, and `first()`,
+> `nth()`, `filter()`, `and()`, `or()` and `all()` threw on such a handle. Every reader now resolves
+> live and those methods compose instead of throwing. Two consequences on upgrade: a per-row loop such
+> as `for (const row of rows) await row.getText()` now costs one hierarchy read per row (use
+> `allTextContents()` for a batch read), and `list.nth(1).filter(…)` — on any positional locator, not
+> only one from `all()` — now means "row 1 if it matches" rather than "the second matching row"; write
+> `list.filter(…).nth(1)` for the old meaning.
 
 #### `elementHandle.allTextContents(): Promise<string[]>`
 

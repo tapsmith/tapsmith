@@ -247,6 +247,31 @@ describe('generateBestSelector', () => {
   });
 });
 
+// ─── parseSelectorString — chained positional steps compose like the runtime (PILOT-346) ───
+
+describe('parseSelectorString chained positionals', () => {
+  it('an identity step after an index is a no-op: first().first(), nth(2).last(), last().nth(-1), nth(1).nth(0)', () => {
+    expect(parseSelectorString('device.getByRole("listitem").first().first()')).toEqual({ type: 'role', value: 'listitem', index: 'first' });
+    expect(parseSelectorString('device.getByRole("listitem").nth(2).last()')).toEqual({ type: 'role', value: 'listitem', index: 2 });
+    expect(parseSelectorString('device.getByRole("listitem").last().nth(-1)')).toEqual({ type: 'role', value: 'listitem', index: 'last' });
+    expect(parseSelectorString('device.getByRole("listitem").nth(1).nth(0).first()')).toEqual({ type: 'role', value: 'listitem', index: 1 });
+  });
+
+  it('a non-identity index after an index can never match at runtime — rejected instead of silently re-indexing the full set', () => {
+    // Previously parsed as { index: 1 } (the .first() was dropped by the
+    // un-anchored selector regex), highlighting the SECOND listitem while the
+    // runtime resolves this chain to nothing.
+    expect(parseSelectorString('device.getByRole("listitem").first().nth(1)')).toBeNull();
+    expect(parseSelectorString('device.getByRole("listitem").last().nth(-2)')).toBeNull();
+    expect(parseSelectorString('device.getByText("x").nth(1).nth(1)')).toBeNull();
+  });
+
+  it('a single positional step is unchanged', () => {
+    expect(parseSelectorString('device.getByRole("listitem").nth(-1)')).toEqual({ type: 'role', value: 'listitem', index: -1 });
+    expect(parseSelectorString('device.getByRole("listitem")')).toEqual({ type: 'role', value: 'listitem' });
+  });
+});
+
 // ─── parseSelectorString — Label support ───
 
 describe('parseSelectorString Label support', () => {

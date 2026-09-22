@@ -56,20 +56,39 @@ const SHORT_RE = /^(\w+)\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*\)/;
 // (the runtime's .nth() counts from the end for negative indices)
 const CHAIN_RE = /\.(first|last)\(\)$|\.nth\(\s*(-?\d+)\s*\)$/;
 
-function parseChain(input: string): { base: string; index?: number | 'first' | 'last' } {
-  const match = input.match(CHAIN_RE);
-  if (!match) return { base: input };
-  const base = input.slice(0, match.index);
-  if (match[1] === 'first') return { base, index: 'first' };
-  if (match[1] === 'last') return { base, index: 'last' };
-  return { base, index: parseInt(match[2], 10) };
+/**
+ * Split off the positional chain. Every trailing positional step is consumed
+ * and composed the way the runtime composes them (ElementHandle.nth): the
+ * innermost step picks the element and each later step narrows that ONE
+ * element — `.first()`/`.last()`/`.nth(0)`/`.nth(-1)` of it are itself, any
+ * other index is nothing. Returns `null` for a chain that can never match
+ * (e.g. `.first().nth(1)`), so callers report an invalid locator instead of
+ * silently evaluating a different one (the un-anchored selector regexes would
+ * otherwise drop the leftover step and re-index the full set).
+ */
+function parseChain(input: string): { base: string; index?: number | 'first' | 'last' } | null {
+  const steps: Array<number | 'first' | 'last'> = [];
+  let base = input;
+  for (let match = base.match(CHAIN_RE); match; match = base.match(CHAIN_RE)) {
+    steps.unshift(match[1] === 'first' ? 'first' : match[1] === 'last' ? 'last' : parseInt(match[2], 10));
+    base = base.slice(0, match.index);
+  }
+  if (steps.length === 0) return { base };
+  const [index, ...rest] = steps;
+  for (const step of rest) {
+    const identity = step === 'first' || step === 'last' || step === 0 || step === -1;
+    if (!identity) return null;
+  }
+  return { base, index };
 }
 
 export function parseSelectorString(input: string): ParsedSelector | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
 
-  const { base, index } = parseChain(trimmed);
+  const chain = parseChain(trimmed);
+  if (!chain) return null;
+  const { base, index } = chain;
 
   // Parsed values are UNESCAPED (raw) — they compare directly against raw
   // node attribute values; emitters re-escape when generating code strings.
