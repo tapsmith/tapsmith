@@ -366,7 +366,12 @@ console.log("Submit exists:", exists)
 const count = await device.getByRole("button").count()
 console.log("Button count:", count)
 
-// List all matching elements
+// List every match's text — one hierarchy read
+console.log("Buttons:", await device.getByRole("button").allTextContents())
+
+// Per-element details: each handle from all() is a live locator, so every
+// find() here is one hierarchy read (~0.7 s on an emulator) — fine for a
+// handful of elements, slow for a long list
 const buttons = await device.getByRole("button").all()
 for (const btn of buttons) {
   const info = await btn.find()

@@ -138,10 +138,15 @@ describe("List screen — all() returns live locators", () => {
     const rows = device.getByRole("button")
     const captured = await rows.all()
     expect(captured.length).toBeGreaterThanOrEqual(5)
-    // Buttons include the header's back button, so locate Item 2 by text.
-    const texts = await Promise.all(captured.map((h) => h.getText()))
+    // Buttons include the header's back button, so locate Item 2 by text —
+    // from ONE hierarchy read (each captured[i] is live, so a per-handle
+    // getText() would be a burst of concurrent dumps on a starved emulator).
+    const texts = await rows.allTextContents()
     const idx = texts.findIndex((t) => t.includes("Item 2"))
     expect(idx).toBeGreaterThan(0)
+    // Two reads of a virtualised window can differ in size; a handle from
+    // all() IS rows.nth(i), so the fallback is the identical locator.
+    const item2 = captured[idx] ?? rows.nth(idx)
 
     // Filter the list down to Item 3 and Item 30.
     const search = device.getByTestId("search-input")
@@ -150,10 +155,10 @@ describe("List screen — all() returns live locators", () => {
     try {
       // rows[idx] IS rows.nth(idx): every reader sees the row now at that
       // index (Item 3 or Item 30), never the Item 2 that all() saw there …
-      expect(await captured[idx].getText()).toContain("Item 3")
-      expect(await captured[idx].getText()).not.toContain("Item 2")
-      expect(await captured[idx].isVisible()).toBe(true)
-      await expect(captured[idx]).toContainText("Item 3")
+      expect(await item2.getText()).toContain("Item 3")
+      expect(await item2.getText()).not.toContain("Item 2")
+      expect(await item2.isVisible()).toBe(true)
+      await expect(item2).toContainText("Item 3")
       await expect(rows.nth(idx)).toContainText("Item 3")
       // … and the last index all() saw is gone from the screen for every reader.
       const last = captured[captured.length - 1]
@@ -163,10 +168,10 @@ describe("List screen — all() returns live locators", () => {
       await expect(last).not.toBeVisible()
       // A handle from all() is a plain locator: narrowing it further composes
       // (Playwright): row idx if it matches, nothing otherwise.
-      expect(await captured[idx].filter({ hasText: "Item 3" }).count()).toBe(1)
-      expect(await captured[idx].filter({ hasText: "Item 2" }).count()).toBe(0)
-      expect(await captured[idx].first().count()).toBe(1)
-      expect(await captured[idx].nth(1).count()).toBe(0)
+      expect(await item2.filter({ hasText: "Item 3" }).count()).toBe(1)
+      expect(await item2.filter({ hasText: "Item 2" }).count()).toBe(0)
+      expect(await item2.first().count()).toBe(1)
+      expect(await item2.nth(1).count()).toBe(0)
     } finally {
       await search.clear()
       await expect(listScreen.itemCount).toHaveText("30 items")
