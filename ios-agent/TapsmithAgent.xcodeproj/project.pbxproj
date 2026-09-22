@@ -25,6 +25,7 @@
 		B9C16B182851EAD07DF20338 /* RoleMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4047824F41AA54563A432DC /* RoleMapping.swift */; };
 		C3EA7BC091BB4FFF7DDD0C3D /* AgentError.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDF3E8F423ADAE29CD2EFB48 /* AgentError.swift */; };
 		C3FB8341E6CADE143C84D0C0 /* QuiescenceDisabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45FCCCE646EA2B85354B30F7 /* QuiescenceDisabler.swift */; };
+		E0DE662FCB6D79C8C8970C91 /* TouchPlanClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB260507663C49D261F50588 /* TouchPlanClock.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -41,6 +42,7 @@
 		7CD67663681CC3C8C65959F0 /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptionCatcher.h; sourceTree = "<group>"; };
 		95F1D55A943C25C2F98CC102 /* SnapshotElementFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotElementFinder.swift; sourceTree = "<group>"; };
 		9FBB72A2A362837309906E13 /* SystemDialogPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemDialogPolicy.swift; sourceTree = "<group>"; };
+		AB260507663C49D261F50588 /* TouchPlanClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchPlanClock.swift; sourceTree = "<group>"; };
 		B20F42F1DA77FBEEC0F04F60 /* SocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketServer.swift; sourceTree = "<group>"; };
 		B4047824F41AA54563A432DC /* RoleMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleMapping.swift; sourceTree = "<group>"; };
 		BDD4545E80BE3B249F9D6B2F /* TapsmithAgent-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TapsmithAgent-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -71,6 +73,7 @@
 				9FBB72A2A362837309906E13 /* SystemDialogPolicy.swift */,
 				BDD4545E80BE3B249F9D6B2F /* TapsmithAgent-Bridging-Header.h */,
 				46F2F23AB376461F1E086465 /* TapsmithAgentRunner.swift */,
+				AB260507663C49D261F50588 /* TouchPlanClock.swift */,
 				C511FD447184FAEDC3739DB9 /* TouchSynthesizer.h */,
 				03BBAA69CD44B39C3AD6DA0F /* TouchSynthesizer.m */,
 				45B43D837B50F6CE9F2973A3 /* WaitEngine.swift */,
@@ -176,6 +179,7 @@
 				B8E4DB3D143C129530BED0E8 /* SocketServer.swift in Sources */,
 				0E010C836E22158D44530C5D /* SystemDialogPolicy.swift in Sources */,
 				A4DD313B0DC87ACC0AC5EC36 /* TapsmithAgentRunner.swift in Sources */,
+				E0DE662FCB6D79C8C8970C91 /* TouchPlanClock.swift in Sources */,
 				17687791BBF6102D034AB942 /* TouchSynthesizer.m in Sources */,
 				6C50B1ECB9A19432E1A89D91 /* WaitEngine.swift in Sources */,
 			);

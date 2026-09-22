@@ -19,6 +19,10 @@ class CommandHandler {
 
     /// Cache of last clipboard text set via setClipboard.
     private var lastClipboardText = ""
+    /// When the daemon gives up on the command being handled: its
+    /// `readTimeoutMs`, counted from the command's arrival (PILOT-223 — the
+    /// occlusion wait never touches past it). nil from an older daemon.
+    private var commandReadDeadline: Date?
 
     // Interactive-mirror live-drag: iOS can't stream touches, so buffer the
     // path during the drag and dispatch it as one gesture on touchUp.
@@ -506,6 +510,8 @@ class CommandHandler {
         }
 
         let params = json["params"] as? [String: Any] ?? [:]
+        commandReadDeadline = (params["readTimeoutMs"] as? NSNumber)
+            .map { Date(timeIntervalSinceNow: $0.doubleValue / 1000) }
 
         do {
             var result: [String: Any]?
@@ -543,35 +549,50 @@ class CommandHandler {
         }
     }
 
-    // MARK: - Coordinate-based actions (fast path)
-
-    /// Get the center point of an element, refreshing bounds from a live
-    /// XCUIElement read to minimize the TOCTOU window between coordinate
-    /// resolution and the subsequent tap/gesture action.
-    ///
-    /// Falls back to cached snapshot bounds if the live refresh fails.
-    /// Returns nil if bounds are off-screen (e.g., scroll view children with
-    /// stale snapshot coordinates), falling through to the XCUIElement path.
-    private func snapshotCenter(for elementId: String) -> CGPoint? {
-        // refreshBounds takes a live frame read from the cached XCUIElement,
-        // falling back to the snapshot-time bounds if unavailable.
-        guard let bounds = snapshotFinder.refreshBounds(for: elementId) else { return nil }
-        guard bounds.width > 0 && bounds.height > 0 else { return nil }
-        let center = CGPoint(x: bounds.midX, y: bounds.midY)
-        // Reject off-screen coordinates — snapshot frames for scroll view
-        // children can be stale/parent-relative, causing taps to miss.
-        let screen = snapshotFinder.screenSize
-        guard center.x >= 0 && center.y >= 0
-                && center.x <= screen.width && center.y <= screen.height else {
-            return nil
-        }
-        return center
-    }
-
     /// An action's time budget from its params, in ms. JSON numbers arrive as
     /// NSNumber; absent (the SDK's explicit zero timeout) means no waiting.
     private func actionTimeoutMs(_ params: [String: Any]) -> Int64 {
         (params["timeout"] as? NSNumber)?.int64Value ?? 0
+    }
+
+    /// Resolve a top-level selector the way `findElement` does: one snapshot
+    /// first; on a miss, clear a blocking system dialog and retry, then poll
+    /// the wait engine for up to `timeoutMs` (only when it is at least 1 s).
+    private func findTopLevelElement(_ selector: ElementSelector, timeoutMs timeout: Int64) throws -> ElementInfo {
+        do {
+            return try snapshotFinder.findElement(selector)
+        } catch {
+            // Before falling through to the wait engine, check for a
+            // blocking iOS system dialog covering the target — iCloud
+            // Keychain can pop up after a sign-in tap and obscure
+            // post-login UI. If we tap one away, try the snapshot
+            // once more before polling.
+            //
+            // Physical devices sweep every known dialog (Save
+            // Password, Allow Notifications, …). Simulators only
+            // handle the Keychain "Save Password?" sheet, the one
+            // system prompt they do show (iOS 26): the full sweep
+            // would probe two extra hierarchies on a hot path where
+            // first-snapshot misses are routine, and it historically
+            // denied permission prompts here, permanently poisoning
+            // simulator notification state (PILOT-290).
+            #if targetEnvironment(simulator)
+            let dismissed = dismissSavePasswordSheetIfPresent()
+            #else
+            let dismissed = dismissBlockingSystemDialogs()
+            #endif
+            if dismissed, let retried = try? snapshotFinder.findElement(selector) {
+                return retried
+            }
+            guard timeout >= 1000 else { throw error }
+            // Element not in current snapshot — poll with wait engine
+            return try waitEngine.waitForElement(
+                selector,
+                timeoutMs: timeout,
+                elementFinder: elementFinder,
+                snapshotFinder: snapshotFinder
+            )
+        }
     }
 
     // MARK: - Element Resolution
@@ -598,7 +619,7 @@ class CommandHandler {
             // and some selector shapes never get a query at all). The
             // find-time snapshot BOUNDS are cached unconditionally — recover
             // with a minimal ElementInfo so the coordinate-driven action
-            // paths (snapshotCenter) proceed instead of surfacing a spurious
+            // paths (planTouch) proceed instead of surfacing a spurious
             // "gone stale" for an element that is still on screen.
             // Guard degenerate frames: a cached CGRect.null has an infinite
             // origin, and Int(x) is a Swift runtime FATAL ERROR for both
@@ -693,7 +714,8 @@ class CommandHandler {
         /// XCUITest's hit test passed — tap through the element itself.
         case hittableElement(XCUIElement)
         /// Touch at this screen point; nothing in the snapshot covers it.
-        case point(CGPoint)
+        /// `visible` is the uncovered part of the element around it.
+        case point(CGPoint, visible: CGRect)
         /// No part of the element is on screen.
         case offScreen
     }
@@ -716,54 +738,102 @@ class CommandHandler {
     private func planTouch(
         _ element: ElementInfo,
         timeoutMs: Int64,
-        preferElementTap: Bool
+        preferElementTap: Bool,
+        reserveMs: Int64 = 0
     ) throws -> TouchPlan {
-        let deadline = Date(timeIntervalSinceNow: Double(max(0, timeoutMs)) / 1000)
+        var clock = TouchPlanClock(
+            start: Date(),
+            timeoutMs: timeoutMs,
+            readDeadline: commandReadDeadline,
+            reserveSeconds: Double(max(0, reserveMs)) / 1000
+        )
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
             let hittable = xcElem?.isHittable ?? false
             if preferElementTap, hittable, let xcElem {
+                try refuseIfLate(clock)
                 return .hittableElement(xcElem)
             }
-            switch occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable) {
-            case .clear(let point):
-                return .point(point)
-            case .offScreen:
+            let verdict = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable)
+            // Checked after the pass: a slow pass that ends past the deadline
+            // fails now instead of paying for another one.
+            try refuseIfLate(clock)
+            var sleep = clock.sleepBeforeNextPass(at: Date())
+            switch verdict {
+            case .clear(let point, let visible)?:
+                return .point(point, visible: visible)
+            case .unlocated(let point, let visible)?:
+                // Moved between the two reads (animating): read again for a
+                // moment — whatever the budget — and fall back to the old
+                // coordinate tap only if it does not settle.
+                if clock.shouldFallBackWhenUnlocated(at: Date()) {
+                    return .point(point, visible: visible)
+                }
+                sleep = TouchPlanClock.pollSeconds
+            case .offScreen?:
                 return .offScreen
-            case .covered(let cover):
-                let remaining = deadline.timeIntervalSinceNow
-                if remaining <= 0 {
+            case .gone?:
+                // "stale" makes the SDK re-resolve an id-addressed handle.
+                throw AgentError.elementNotFound(
+                    "Element not found any more — it went away before it could be touched (it may have gone stale)"
+                )
+            case .covered(let cover)?:
+                guard sleep != nil else {
                     throw AgentError.elementCovered(coveredMessage(cover, timeoutMs: timeoutMs))
                 }
                 NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); waiting")
-                Thread.sleep(forTimeInterval: min(0.25, remaining))
+            case nil:
+                // No tree to check against. A hittable element lets XCUITest
+                // pick its own hit point (a coordinate from its bounds could
+                // be under the keyboard); an unhittable one is never touched
+                // blind — it could be anything on top.
+                if hittable, let xcElem { return .hittableElement(xcElem) }
+                guard sleep != nil else {
+                    throw AgentError.actionFailed(
+                        "Element is not hittable, and the UI hierarchy could not be read to check what covers it"
+                    )
+                }
             }
+            if let sleep { Thread.sleep(forTimeInterval: sleep) }
         }
     }
 
+    private func refuseIfLate(_ clock: TouchPlanClock) throws {
+        guard clock.isTooLateToAct(at: Date()) else { return }
+        throw AgentError.actionFailed(
+            "Ran out of time checking whether the element is covered: the daemon would give up before the touch finished, so not touching it"
+        )
+    }
+
+    /// nil when no tree could be read.
     private func occlusionVerdict(
         for element: ElementInfo,
         xcElem: XCUIElement?,
         isHittable: Bool
-    ) -> OcclusionAnalyzer.Verdict {
+    ) -> OcclusionAnalyzer.Verdict? {
         let target: OcclusionAnalyzer.Target
         if let snap = try? xcElem?.snapshot() {
             target = .init(frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier)
         } else {
-            // Only bounds survive (a stale live query, or an id recovered from
-            // the bounds cache): match by frame alone.
+            // The live element can't be read (it unmounted, or an iOS 26 live
+            // query that fails for an element still on screen): identify it
+            // by what was cached when it was found. If that no longer matches
+            // anything, the analyzer reports it gone.
             let b = element.bounds
             let frame = snapshotFinder.getBounds(element.elementId)
                 ?? CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
-            target = .init(frame: frame, elementType: nil, label: nil, identifier: nil)
+            let identity = snapshotFinder.getIdentity(element.elementId)
+            target = .init(
+                frame: frame,
+                elementType: identity?.elementType,
+                label: identity?.label,
+                identifier: identity?.identifier,
+                isLive: false
+            )
         }
         let screenSize = snapshotFinder.screenSize
-        guard let appSnapshot = try? app.snapshot() else {
-            // No tree, no evidence of a cover: analyze against nothing, which
-            // still rejects an off-screen target.
-            return OcclusionAnalyzer(nodes: [], screen: CGRect(origin: .zero, size: screenSize))
-                .analyze(target, isHittable: isHittable)
-        }
+        // takeSnapshot retries a transiently failing or empty snapshot.
+        guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
         return OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
             .analyze(target, isHittable: isHittable)
     }
@@ -793,7 +863,7 @@ class CommandHandler {
         switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
         case .hittableElement(let xcElem):
             actionExecutor.tapHittable(xcElem)
-        case .point(let point):
+        case .point(let point, _):
             NSLog("[TapsmithCommand] \(element.elementId) is not hittable; tapping the uncovered point \(point)")
             actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
         case .offScreen:
@@ -807,42 +877,115 @@ class CommandHandler {
     /// XCUIElement.doubleTap() (whose two taps are subject to scheduling
     /// jitter) is the fallback when no part of the element is on screen.
     private func doubleTapResolvedElement(_ element: ElementInfo, intervalMs: Int, timeoutMs: Int64) throws {
-        // Resolve the cached element FIRST even on the coordinate path: the
-        // coordinate gesture never throws, so an evicted id would otherwise
-        // silently double-tap stale bounds — this lookup raises the "gone
-        // stale" error the SDK's re-resolve retry keys on.
-        let xcElem = try getXCUIElement(element.elementId)
-
+        // An evicted id needs no up-front lookup to raise "stale": with no
+        // live query and nothing cached to recognise it by, planTouch reports
+        // it gone. Ids that never had a query (placeholder, className, …)
+        // still take the coordinate path.
         switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
-        case .point(let point):
+        case .point(let point, _):
             actionExecutor.doubleTapCoordinates(
                 x: Int(point.x.rounded()),
                 y: Int(point.y.rounded()),
                 intervalMs: intervalMs
             )
         case .hittableElement, .offScreen:
-            try actionExecutor.doubleTap(xcElem)
+            try actionExecutor.doubleTap(try getXCUIElement(element.elementId))
+        }
+    }
+
+    /// Where a focusing tap (type, clear, focus) may land. Those taps land at
+    /// a coordinate, so like the gestures they wait out a cover and then
+    /// throw ELEMENT_COVERED rather than focus-tapping the keyboard (a stray
+    /// key into the field that has focus) or an overlay.
+    private enum FocusTarget: Equatable {
+        /// Tap inside this uncovered part of the element.
+        case area(CGRect)
+        /// Tap through the XCUIElement: hittable with no tree to pick a point
+        /// from, or off screen — its hittability guard refuses the latter
+        /// (the find-time bounds could be anything by now).
+        case element
+    }
+
+    /// `focusTarget` for a field that may already have focus. One immediate
+    /// check first: when a focusing tap can land, the field gets it (it puts
+    /// the caret at the end). When it cannot — typically the field is behind
+    /// the keyboard it raised — and a live query confirms the field is the
+    /// focused input, nil: input already goes to it. Otherwise wait out the
+    /// cover as usual. Only the live query decides: `isFocused` can come from
+    /// a stale hint after the app moved focus itself (skipping the tap then
+    /// would type into another field), or be absent altogether (an id served
+    /// from the bounds cache).
+    private func focusTargetUnlessFocused(_ element: ElementInfo, timeoutMs: Int64) throws -> FocusTarget? {
+        do {
+            return try focusTarget(element, timeoutMs: 0)
+        } catch {
+            if isLiveFocused(element) { return nil }
+            guard timeoutMs > 0 else { throw error }
+            return try focusTarget(element, timeoutMs: timeoutMs)
+        }
+    }
+
+    private func isLiveFocused(_ element: ElementInfo) -> Bool {
+        guard let live = snapshotFinder.liveFocusedTextInputFrame() else { return false }
+        let b = element.bounds
+        let frame = CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
+        // Bounds are integer-truncated.
+        return OcclusionAnalyzer.framesMatch(live, frame, tolerance: 1.5)
+    }
+
+    private func focusTarget(_ element: ElementInfo, timeoutMs: Int64) throws -> FocusTarget {
+        switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
+        case .point(_, let visible):
+            return .area(visible)
+        case .hittableElement, .offScreen:
+            return .element
+        }
+    }
+
+    /// Refocus a field mid-command (a typeText retry, clearText's refocuses),
+    /// planned against the element as it is now: the first focusing tap can
+    /// have moved it (a KeyboardAvoidingView lifting it above the keyboard),
+    /// so an area captured before that tap would now be under the keyboard.
+    /// One check, no waiting — a covered field throws ELEMENT_COVERED and an
+    /// off-screen one refuses, never a blind tap.
+    private func refocusForTyping(_ element: ElementInfo, settleTime: TimeInterval) throws {
+        let plan: TouchPlan
+        do {
+            plan = try planTouch(element, timeoutMs: 0, preferElementTap: false)
+        } catch {
+            // Still the focused input (typically behind the keyboard it
+            // raised): input reaches it without a tap.
+            if isLiveFocused(element) { return }
+            throw error
+        }
+        switch plan {
+        case .point(_, let visible):
+            try focusElementForTyping(element, settleTime: settleTime, within: visible)
+        case .hittableElement:
+            try focusElementForTyping(element, settleTime: settleTime, within: nil)
+        case .offScreen:
+            throw AgentError.actionFailed("Element is not hittable — cannot refocus it")
         }
     }
 
     /// Tap inside a text input, biased toward the trailing edge so refocusing
     /// during retries keeps the insertion point at the end of the current
-    /// value instead of moving it into the middle of existing text.
-    private func focusElementForTyping(_ element: ElementInfo, settleTime: TimeInterval) throws {
-        let bounds = element.bounds
-        if bounds.width > 0 && bounds.height > 0 {
-            let inset = min(12, max(1, bounds.width / 4))
-            let x = CGFloat(max(bounds.left + 1, bounds.right - inset))
-            let y = CGFloat(bounds.centerY)
-            let screen = snapshotFinder.screenSize
-            if x >= 0 && y >= 0 && x <= screen.width && y <= screen.height {
-                actionExecutor.tapCoordinates(x: Int(x), y: Int(y))
-                snapshotFinder.recordFocusedTextInputHint(element)
-                waitForKeyboardAppearance(maxWait: settleTime)
-                return
-            }
+    /// value instead of moving it into the middle of existing text, inside
+    /// `area` (the element's uncovered part, from `focusTarget`). Without an
+    /// area, XCUITest taps the element itself (refused when unhittable).
+    private func focusElementForTyping(
+        _ element: ElementInfo,
+        settleTime: TimeInterval,
+        within area: CGRect?
+    ) throws {
+        if let area {
+            let inset = min(12, max(1, area.width / 4))
+            let x = max(area.minX + 1, area.maxX - inset)
+            actionExecutor.tapCoordinates(x: Int(x.rounded()), y: Int(area.midY.rounded()))
+            snapshotFinder.recordFocusedTextInputHint(element)
+            waitForKeyboardAppearance(maxWait: settleTime)
+            return
         }
-
         let xcElem = try getXCUIElement(element.elementId)
         guard xcElem.isHittable else {
             throw AgentError.actionFailed("Element is not hittable — cannot type text")
@@ -949,7 +1092,20 @@ class CommandHandler {
                 )
                 if lastObserved == beforeValue {
                     let refreshed = try resolveElement(selectorParams)
-                    try focusElementForTyping(refreshed, settleTime: 0.25)
+                    do {
+                        try refocusForTyping(refreshed, settleTime: 0.25)
+                    } catch let error as AgentError {
+                        // Part of the text is already in the field: never let
+                        // this read as a stale element, which the SDK would
+                        // answer by typing the whole text again. The type
+                        // alone names the cause without echoing a cover's
+                        // label (which could contain anything).
+                        // No typed text in the message either: the SDK
+                        // spots a stale element by matching "stale" in it.
+                        throw AgentError.actionFailed(
+                            "typeText could not refocus the field after \(expectedValue.count) character(s) (\(error.type))"
+                        )
+                    }
                 }
             }
 
@@ -989,48 +1145,7 @@ class CommandHandler {
             // Use snapshot-based finding (fast) for top-level queries.
             // Fall back to wait engine for queries that need polling.
             if parentId == nil {
-                do {
-                    element = try snapshotFinder.findElement(selector)
-                } catch {
-                    // Before falling through to the wait engine, check for a
-                    // blocking iOS system dialog covering the target — iCloud
-                    // Keychain can pop up after a sign-in tap and obscure
-                    // post-login UI. If we tap one away, try the snapshot
-                    // once more before polling.
-                    //
-                    // Physical devices sweep every known dialog (Save
-                    // Password, Allow Notifications, …). Simulators only
-                    // handle the Keychain "Save Password?" sheet, the one
-                    // system prompt they do show (iOS 26): the full sweep
-                    // would probe two extra hierarchies on a hot path where
-                    // first-snapshot misses are routine, and it historically
-                    // denied permission prompts here, permanently poisoning
-                    // simulator notification state (PILOT-290).
-                    #if targetEnvironment(simulator)
-                    let dismissed = dismissSavePasswordSheetIfPresent()
-                    #else
-                    let dismissed = dismissBlockingSystemDialogs()
-                    #endif
-                    if dismissed {
-                        do {
-                            let retried = try snapshotFinder.findElement(selector)
-                            return retried.toDict()
-                        } catch {
-                            // Fall through to wait engine
-                        }
-                    }
-                    if timeout >= 1000 {
-                        // Element not in current snapshot — poll with wait engine
-                        element = try waitEngine.waitForElement(
-                            selector,
-                            timeoutMs: timeout,
-                            elementFinder: elementFinder,
-                            snapshotFinder: snapshotFinder
-                        )
-                    } else {
-                        throw error
-                    }
-                }
+                element = try findTopLevelElement(selector, timeoutMs: timeout)
             } else {
                 element = try elementFinder.findElement(selector, parentId: parentId)
             }
@@ -1088,8 +1203,10 @@ class CommandHandler {
                 actionExecutor.longPressCoordinates(x: x, y: y, durationMs: duration)
             } else {
                 let element = try resolveElement(params)
-                switch try planTouch(element, timeoutMs: actionTimeoutMs(params), preferElementTap: false) {
-                case .point(let point):
+                // The press itself must still fit the daemon's read timeout.
+                let coverBudget = max(0, actionTimeoutMs(params) - duration)
+                switch try planTouch(element, timeoutMs: coverBudget, preferElementTap: false, reserveMs: duration) {
+                case .point(let point, _):
                     actionExecutor.longPressCoordinates(
                         x: Int(point.x.rounded()),
                         y: Int(point.y.rounded()),
@@ -1109,12 +1226,26 @@ class CommandHandler {
             // bypass the agent's own gesture code. Waits out covers like the
             // agent's gestures do; ELEMENT_COVERED when one outlasts the
             // timeout.
-            let element = try resolveElement(params)
-            switch try planTouch(element, timeoutMs: actionTimeoutMs(params), preferElementTap: false) {
-            case .point(let point):
+            // Resolve like findElement (which this replaces on the HID path):
+            // dismiss a blocking system dialog, wait for a missing element.
+            // Whatever the wait used comes off the cover-wait budget.
+            let started = Date()
+            let budget = actionTimeoutMs(params)
+            let element: ElementInfo
+            if let elementId = params["elementId"] as? String, !elementId.isEmpty {
+                element = try resolveElement(params)
+            } else {
+                element = try findTopLevelElement(SelectorParser.parse(params), timeoutMs: budget)
+            }
+            let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
+            switch try planTouch(element, timeoutMs: remaining, preferElementTap: false) {
+            case .point(let point, _):
                 return ["x": Double(point.x), "y": Double(point.y)]
             case .hittableElement, .offScreen:
-                throw AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
+                // No point to hand out (off screen, or hittable with no tree
+                // to choose one from): the daemon should use the agent's own
+                // gesture, which lets XCUITest pick — or refuses.
+                return ["useElement": true]
             }
 
         // ─── Text Input ───
@@ -1145,7 +1276,16 @@ class CommandHandler {
                 }
                 let element = try resolveElement(selectorParams)
                 if !isFocusedOnlySelector {
-                    try focusElementForTyping(element, settleTime: 0.5)
+                    // Half the budget at most for a cover, so the typing
+                    // after it still fits the daemon's read timeout.
+                    switch try focusTargetUnlessFocused(element, timeoutMs: actionTimeoutMs(params) / 2) {
+                    case .area(let area)?:
+                        try focusElementForTyping(element, settleTime: 0.5, within: area)
+                    case .element?:
+                        try focusElementForTyping(element, settleTime: 0.5, within: nil)
+                    case nil:
+                        break
+                    }
                 }
                 if delayMs > 0 {
                     let focused = isFocusedOnlySelector ? element : try resolveElement(selectorParams)
@@ -1223,8 +1363,14 @@ class CommandHandler {
             // bar / RN bridge updates can grow or shrink the value between
             // batches, so a single batch sized off the initial snapshot is
             // brittle.
-            if let center = snapshotCenter(for: element.elementId) {
-                actionExecutor.tapCoordinates(x: Int(center.x), y: Int(center.y))
+            // Half the budget at most for a cover (see typeText). Every refocus
+            // below is planned afresh (refocusForTyping): this first tap can
+            // move the field and bring up a keyboard over its old spot.
+            let target = try focusTargetUnlessFocused(element, timeoutMs: actionTimeoutMs(params) / 2)
+            if target == nil {
+                // Already first responder behind a cover: clear it as is.
+            } else if case .area(let area)? = target {
+                actionExecutor.tapCoordinates(x: Int(area.midX.rounded()), y: Int(area.midY.rounded()))
                 Thread.sleep(forTimeInterval: 0.1)
             } else if let xcElem = try? getXCUIElement(element.elementId), xcElem.isHittable {
                 xcElem.tap()
@@ -1265,7 +1411,7 @@ class CommandHandler {
                 Thread.sleep(forTimeInterval: 0.15)
                 let afterSelectAll = (try? resolveElement(params)) ?? element
                 if (afterSelectAll.text ?? "").isEmpty {
-                    try? focusElementForTyping(afterSelectAll, settleTime: 0.1)
+                    try? refocusForTyping(afterSelectAll, settleTime: 0.1)
                     return ["success": true]
                 }
                 // Cmd+A didn't take (or deleted only one char). Fall
@@ -1307,7 +1453,7 @@ class CommandHandler {
                 // but length still drops between batches; comparing length
                 // tolerates that as progress.
                 if displayed.count >= lastLength {
-                    try? focusElementForTyping(refreshed, settleTime: 0.2)
+                    try? refocusForTyping(refreshed, settleTime: 0.2)
                     let settled = (try? resolveElement(params)) ?? refreshed
                     let settledText = settled.text ?? ""
                     finalLength = settledText.count
@@ -1350,7 +1496,7 @@ class CommandHandler {
                         "\(iterationsRun) iteration\(iterationsRun == 1 ? "" : "s") — \(reason)"
                 )
             }
-            try? focusElementForTyping(element, settleTime: 0.1)
+            try? refocusForTyping(element, settleTime: 0.1)
             return ["success": true]
 
         // ─── Interactive Mirror Live-Drag (buffered touch path) ───
@@ -1533,8 +1679,11 @@ class CommandHandler {
 
         case "focus":
             let element = try resolveElement(params)
-            if let center = snapshotCenter(for: element.elementId) {
-                actionExecutor.tapCoordinates(x: Int(center.x), y: Int(center.y))
+            let target = try focusTargetUnlessFocused(element, timeoutMs: actionTimeoutMs(params))
+            if target == nil {
+                // Verified focused behind a cover: nothing to do.
+            } else if case .area(let area)? = target {
+                actionExecutor.tapCoordinates(x: Int(area.midX.rounded()), y: Int(area.midY.rounded()))
             } else {
                 let xcElem = try getXCUIElement(element.elementId)
                 try actionExecutor.focus(xcElem)

@@ -83,6 +83,19 @@ fn read_timeout_for(timeout: Duration) -> Duration {
     saturating_read_timeout(timeout, read_timeout_headroom())
 }
 
+/// Tell the agent how long this daemon will wait for its answer
+/// (`params.readTimeoutMs`), counted from the send. The iOS agent can spend an
+/// action's budget waiting out a covered target (PILOT-223); it uses this to
+/// never touch after the daemon has given up on the command — a touch then
+/// would land in the middle of whatever the test does next. Only the daemon
+/// knows the deadline (the timeout plus a configurable headroom).
+fn stamp_read_timeout(json: &mut Value, read_timeout: Duration) {
+    if let Some(params) = json.get_mut("params").and_then(Value::as_object_mut) {
+        let ms = u64::try_from(read_timeout.as_millis()).unwrap_or(u64::MAX);
+        params.insert("readTimeoutMs".to_string(), json!(ms));
+    }
+}
+
 /// Timeout for each half (connect, then read) of a liveness probe after an
 /// empty-response EOF. The probe is a real ping round-trip, so it has to
 /// leave a busy agent time to answer, but it sits on the command hot path
@@ -227,7 +240,9 @@ async fn try_send_persistent(
     timeout: Duration,
 ) -> std::result::Result<AgentResponse, SendError> {
     let request_id = uuid::Uuid::new_v4().to_string();
-    let json_msg = command.to_json(&request_id);
+    let read_timeout = read_timeout_for(timeout);
+    let mut json_msg = command.to_json(&request_id);
+    stamp_read_timeout(&mut json_msg, read_timeout);
     let mut payload = serde_json::to_string(&json_msg)
         .map_err(|e| SendError::PostSend(anyhow!(e).context("Failed to serialize command")))?;
     debug!(payload = %payload, "Sending command to agent (persistent)");
@@ -249,7 +264,6 @@ async fn try_send_persistent(
     }
 
     // Read — once flushed, the agent may have the command
-    let read_timeout = read_timeout_for(timeout);
     let mut line = String::new();
     let read_result = tokio::time::timeout(read_timeout, stream.reader.read_line(&mut line)).await;
 
@@ -1300,7 +1314,9 @@ impl AgentConnection {
         // The exception is EOF ("empty response"): see below.
         let io_result: Result<AgentResponse> = async {
             let request_id = uuid::Uuid::new_v4().to_string();
-            let json_msg = command.to_json(&request_id);
+            let read_timeout = read_timeout_for(timeout);
+            let mut json_msg = command.to_json(&request_id);
+            stamp_read_timeout(&mut json_msg, read_timeout);
             let payload =
                 serde_json::to_string(&json_msg).context("Failed to serialize command")?;
             debug!(payload = %payload, "Sending command to agent");
@@ -1320,7 +1336,6 @@ impl AgentConnection {
             // supplied timeout plus headroom so the agent's own work clock
             // always finishes first — see DEFAULT_READ_TIMEOUT_HEADROOM for the
             // rationale.
-            let read_timeout = read_timeout_for(timeout);
             let reader = BufReader::new(&mut stream);
             let mut line = String::new();
 
@@ -1611,6 +1626,29 @@ mod tests {
         assert_eq!(j["method"], "findElements");
         assert_eq!(j["params"]["className"], "Button");
         assert_eq!(j["params"]["timeout"], 1000);
+    }
+
+    #[test]
+    fn stamp_read_timeout_tells_the_agent_how_long_the_daemon_will_wait() {
+        // PILOT-223: the iOS agent can wait out a covered target; it must
+        // not touch after the daemon has given up on the command, and only
+        // the daemon knows its read deadline (timeout + configurable headroom).
+        let mut j = AgentCommand::Tap {
+            selector: json!({"text": "OK"}),
+            timeout_ms: Some(4000),
+            element_id: None,
+        }
+        .to_json("t");
+        stamp_read_timeout(&mut j, Duration::from_millis(9000));
+        assert_eq!(j["params"]["readTimeoutMs"], 9000);
+        assert_eq!(j["params"]["text"], "OK");
+    }
+
+    #[test]
+    fn stamp_read_timeout_leaves_non_object_params_alone() {
+        let mut j = json!({"id": "x", "method": "ping", "params": null});
+        stamp_read_timeout(&mut j, Duration::from_millis(1000));
+        assert!(j["params"].is_null());
     }
 
     #[test]

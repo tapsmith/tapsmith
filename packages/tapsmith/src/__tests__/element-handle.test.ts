@@ -2308,6 +2308,50 @@ describe('positional actions on shared-property matches', () => {
     expect(tap).toHaveBeenNthCalledWith(2, undefined, expect.any(Number), 'bin-1');
   });
 
+  it('a stale retry gets what is left of the budget, not the full budget again (PILOT-223)', async () => {
+    // The iOS agent can spend a dispatch's whole budget waiting out a cover
+    // and then report the target gone ("stale"). The retry must be bounded by
+    // the action's original deadline, or one tap could run ~4x its timeout.
+    let now = 1_000_000;
+    const dateSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const budgets: number[] = [];
+      const tap = vi.fn(async (_sel: unknown, timeoutMs?: number) => {
+        budgets.push(timeoutMs ?? -1);
+        if (budgets.length === 1) {
+          now += 3000; // the agent waited 3 s on a cover, then the target went
+          return failureResponse("Element 'bin-1' not found. It may have gone stale.");
+        }
+        return successResponse();
+      });
+      const client = makeMockClient({
+        findElements: vi.fn(async () => makeFindElementsResponse(twoBins)),
+        tap,
+      });
+      const handle = new ElementHandle(client, _contentDesc('bin'), 5000);
+      await handle.last().tap();
+      expect(budgets).toHaveLength(2);
+      expect(budgets[0]).toBe(5000);
+      expect(budgets[1]).toBe(2000);
+    } finally {
+      dateSpy.mockRestore();
+    }
+  });
+
+  it('does not treat a covered-element failure as stale, even when the cover says "stale" (PILOT-223)', async () => {
+    const tap = vi.fn(async () => ({
+      ...failureResponse('Element is covered by button "Stale data", so a touch would land on it instead'),
+      errorType: 'ELEMENT_COVERED',
+    }));
+    const client = makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse(twoBins)),
+      tap,
+    });
+    const handle = new ElementHandle(client, _contentDesc('bin'), 5000);
+    await expect(handle.last().tap()).rejects.toThrow(/covered by button "Stale data"/);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
   it('retries on the Android StaleObjectException wording too', async () => {
     let tapCalls = 0;
     const tap = vi.fn(async () => {
@@ -3553,6 +3597,19 @@ describe('setChecked()', () => {
     await withFakeClock(10_000, () => rows[1].setChecked(true));
     expect(tap).toHaveBeenCalledTimes(1);
     expect(device.checked).toEqual([false, true]);
+  });
+
+  it('does not treat a covered-element failure as stale, even when the cover says "stale" (PILOT-223)', async () => {
+    const findElements = vi.fn(async () =>
+      makeFindElementsResponse([makeElementInfo({ elementId: 'sw', checked: false, text: 'Switch', resourceId: 'sw1' })]));
+    const tap = vi.fn(async () => ({
+      ...failureResponse('Element is covered by button "Stale data", so a touch would land on it instead'),
+      errorType: 'ELEMENT_COVERED',
+    }));
+    const client = makeMockClient({ findElements, tap });
+    const handle = new ElementHandle(client, _text('Switch'), 5000);
+    await expect(handle.setChecked(true)).rejects.toThrow(/covered by button "Stale data"/);
+    expect(tap).toHaveBeenCalledTimes(1);
   });
 
   it('on a stale retry, skips the tap if the re-resolved element is already in the desired state', async () => {

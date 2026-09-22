@@ -307,6 +307,17 @@ function requestId(): string {
   return crypto.randomUUID();
 }
 
+/**
+ * gRPC deadline for an element action that can block on the agent for its
+ * whole action timeout — the iOS agent waits out a covered target before it
+ * fails (PILOT-223). The default 60 s would cut a longer timeout short with
+ * DEADLINE_EXCEEDED while the agent is still waiting, and it would then tap
+ * in the middle of whatever the test does next.
+ */
+function actionCallDeadlineMs(timeoutMs: number | undefined): number {
+  return Math.max(60_000, (timeoutMs ?? 0) + 30_000);
+}
+
 export class TapsmithGrpcClient {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
   private client: grpc.Client & Record<string, Function>;
@@ -459,7 +470,7 @@ export class TapsmithGrpcClient {
       requestId: requestId(),
       ...this.actionTarget(selector, elementId),
       timeoutMs: timeoutMs ?? 0,
-    });
+    }, actionCallDeadlineMs(timeoutMs));
   }
 
   async longPress(selector: Selector | undefined, durationMs?: number, timeoutMs?: number, elementId?: string): Promise<ActionResponse> {
@@ -468,7 +479,7 @@ export class TapsmithGrpcClient {
       ...this.actionTarget(selector, elementId),
       durationMs: durationMs ?? 0,
       timeoutMs: timeoutMs ?? 0,
-    });
+    }, actionCallDeadlineMs(timeoutMs));
   }
 
   async typeText(selector: Selector | undefined, text: string, timeoutMs?: number, typingDelayMs?: number, elementId?: string): Promise<ActionResponse> {
@@ -478,7 +489,7 @@ export class TapsmithGrpcClient {
       text,
       timeoutMs: timeoutMs ?? 0,
       typingDelayMs: typingDelayMs ?? 0,
-    });
+    }, actionCallDeadlineMs(timeoutMs));
   }
 
   async clearText(selector: Selector | undefined, timeoutMs?: number, elementId?: string): Promise<ActionResponse> {
@@ -486,7 +497,7 @@ export class TapsmithGrpcClient {
       requestId: requestId(),
       ...this.actionTarget(selector, elementId),
       timeoutMs: timeoutMs ?? 0,
-    });
+    }, actionCallDeadlineMs(timeoutMs));
   }
 
   async clearAndType(selector: Selector | undefined, text: string, timeoutMs?: number, typingDelayMs?: number, elementId?: string): Promise<ActionResponse> {
@@ -496,7 +507,7 @@ export class TapsmithGrpcClient {
       text,
       timeoutMs: timeoutMs ?? 0,
       typingDelayMs: typingDelayMs ?? 0,
-    });
+    }, actionCallDeadlineMs(timeoutMs));
   }
 
   async swipe(direction: string, options?: SwipeOptions): Promise<ActionResponse> {
@@ -689,7 +700,7 @@ export class TapsmithGrpcClient {
       ...this.actionTarget(selector, elementId),
       timeoutMs: timeoutMs ?? 0,
       intervalMs: intervalMs ?? 0,
-    });
+    }, actionCallDeadlineMs(timeoutMs));
   }
 
   async dragAndDrop(
@@ -742,7 +753,7 @@ export class TapsmithGrpcClient {
       requestId: requestId(),
       ...this.actionTarget(selector, elementId),
       timeoutMs: timeoutMs ?? 0,
-    });
+    }, actionCallDeadlineMs(timeoutMs));
   }
 
   async blur(selector: Selector | undefined, timeoutMs?: number, elementId?: string): Promise<ActionResponse> {

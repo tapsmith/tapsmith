@@ -23,9 +23,20 @@ class SnapshotElementFinder {
     private var elementCache: [String: XCUIElement] = [:]
     /// Bounds from snapshot — used for coordinate-based actions (fast, no quiescence).
     private var boundsCache: [String: CGRect] = [:]
+    /// Element type, label, and identifier from the same snapshot, so the
+    /// occlusion check can still pick the element out of a fresh tree when
+    /// its live query no longer reads (PILOT-223) — bounds alone cannot tell
+    /// it from a same-frame cover.
+    private var identityCache: [String: CachedIdentity] = [:]
     private var cacheOrder: [String] = []
     private var focusedTextInputHint: FocusedTextInputHint?
     private let lock = NSLock()
+
+    struct CachedIdentity {
+        let elementType: XCUIElement.ElementType
+        let label: String
+        let identifier: String
+    }
 
     /// Maximum number of cached elements before eviction. Prevents unbounded
     /// growth from thousands of stale XCUIElement references accumulating
@@ -201,6 +212,12 @@ class SnapshotElementFinder {
             // Cache the snapshot bounds for fast coordinate-based actions.
             lock.lock()
             boundsCache[elementId] = frame
+            identityCache[elementId] = CachedIdentity(elementType: elType, label: label, identifier: identifier)
+            // Every minted id takes part in eviction, with or without a live
+            // query — ids that get none (placeholder, className, …) would
+            // otherwise stay in the bounds and identity caches for the whole
+            // session.
+            cacheOrder.append(elementId)
             lock.unlock()
 
             // Lazily build an XCUIElement query for actions that need it (typeText, etc.).
@@ -326,6 +343,7 @@ class SnapshotElementFinder {
         lock.lock()
         elementCache.removeAll()
         boundsCache.removeAll()
+        identityCache.removeAll()
         cacheOrder.removeAll()
         focusedTextInputHint = nil
         lock.unlock()
@@ -370,7 +388,7 @@ class SnapshotElementFinder {
     /// any ids in `protected` (a batch just returned to the caller).
     /// Must be called while `lock` is held.
     private func pruneCacheLocked(protecting protected: Set<String> = []) {
-        var overflow = elementCache.count - maxCacheSize
+        var overflow = cacheOrder.count - maxCacheSize
         guard overflow > 0 else { return }
         var index = 0
         while overflow > 0 && index < cacheOrder.count {
@@ -382,6 +400,7 @@ class SnapshotElementFinder {
             cacheOrder.remove(at: index)
             elementCache.removeValue(forKey: candidate)
             boundsCache.removeValue(forKey: candidate)
+            identityCache.removeValue(forKey: candidate)
             overflow -= 1
         }
     }
@@ -427,40 +446,11 @@ class SnapshotElementFinder {
         return bounds
     }
 
-    /// Take a fresh snapshot and return updated bounds for a cached element.
-    ///
-    /// Used to minimize the TOCTOU window between coordinate reads and
-    /// tap/gesture actions. If the element can be re-identified in the
-    /// fresh snapshot (by its cached XCUIElement query), returns its
-    /// current frame. Otherwise returns nil.
-    ///
-    /// **Cost:** one `element.frame` IPC read on the cached XCUIElement.
-    /// This is cheaper than a full `app.snapshot()` but still crosses
-    /// the XPC boundary, so only call immediately before a coordinate
-    /// action where stale bounds could cause a mis-tap.
-    func refreshBounds(for elementId: String) -> CGRect? {
+    /// The find-time type/label/identifier of a cached element (no IPC).
+    func getIdentity(_ elementId: String) -> CachedIdentity? {
         lock.lock()
-        let cachedElement = elementCache[elementId]
-        let cachedBounds = boundsCache[elementId]
-        lock.unlock()
-
-        guard let element = cachedElement else { return cachedBounds }
-
-        // Read the live frame — this is a single IPC call.
-        let liveFrame = element.frame
-        guard liveFrame.width > 0 && liveFrame.height > 0 else {
-            return cachedBounds
-        }
-
-        // Update the bounds cache atomically — re-check the element is
-        // still cached (clearCaches may have run between the two locks).
-        lock.lock()
-        if elementCache[elementId] != nil {
-            boundsCache[elementId] = liveFrame
-        }
-        lock.unlock()
-
-        return liveFrame
+        defer { lock.unlock() }
+        return identityCache[elementId]
     }
 
     /// Get the ElementInfo for a cached element.
@@ -532,6 +522,23 @@ class SnapshotElementFinder {
     private func isTextFieldType(_ elType: XCUIElement.ElementType) -> Bool {
         elType == .textField || elType == .secureTextField
             || elType == .textView || elType == .searchField
+    }
+
+    /// Frame of the text input that has keyboard focus right now, from a
+    /// live query, or nil when none does. Unlike an element's `isFocused`,
+    /// this cannot come from a stale focus hint. It queries
+    /// `hasKeyboardFocus`: on iOS 26 a `hasFocus == true` query (what
+    /// `findLiveFocusedTextInput` uses) matches nothing even while a field is
+    /// first responder, measured 23 Sep 2026.
+    func liveFocusedTextInputFrame() -> CGRect? {
+        let textInputTypes: Set<XCUIElement.ElementType> = [
+            .textField, .secureTextField, .textView, .searchField,
+        ]
+        let element = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true"))
+            .firstMatch
+        guard element.exists, textInputTypes.contains(element.elementType) else { return nil }
+        return element.frame
     }
 
     private func findLiveFocusedTextInput() -> LiveFocusedTextInput? {
@@ -1298,7 +1305,6 @@ class SnapshotElementFinder {
         if let element = element {
             lock.lock()
             elementCache[elementId] = element
-            cacheOrder.append(elementId)
             lock.unlock()
         }
     }

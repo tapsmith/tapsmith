@@ -20,9 +20,11 @@ import XCTest
 ///   visible part of that area is still tappable: the touch point moves to
 ///   the center of what the keyboard leaves visible, the same way Playwright
 ///   clicks the in-viewport part of a partly scrolled-out element.
-/// - **Navigation, tab, and tool bars** the target is not part of. They are
-///   drawn over content regardless of where they sit in the tree, so they
-///   clip the visible area like the keyboard does.
+/// - **Navigation, tab, and tool bars** the target is not part of, when they
+///   are drawn over it: over the content of their own container (scroll
+///   content passes under a nav bar even though the bar comes first in the
+///   tree) or painted after it — not over a sheet presented on top of their
+///   screen. They clip the visible area like the keyboard does.
 /// - **Anything painted after the target** (later in a pre-order walk, which
 ///   is the drawing order) that is not the target's own descendant, contains
 ///   the touch point, and is *substantive* — not a plain unlabeled container.
@@ -34,23 +36,38 @@ import XCTest
 struct OcclusionAnalyzer {
     /// What the snapshot says about the target.
     enum Verdict: Equatable {
-        /// Nothing covers `point` — touch there.
-        case clear(point: CGPoint)
+        /// Nothing covers `point` — touch there. `visible` is the part of the
+        /// element left uncovered by the keyboard and bars (`point` is its
+        /// center), for callers that want a different spot inside it.
+        case clear(point: CGPoint, visible: CGRect)
         /// The element is covered, by the thing `by` names ("the keyboard",
         /// `button "Overlay"`).
         case covered(by: String)
         /// No part of the element is on screen.
         case offScreen
+        /// The target is not hittable and could not be matched in the tree
+        /// (it moved between the element read and the tree read — an
+        /// animation). There is no evidence either way yet: read again, and
+        /// only if it never settles fall back to `point`, as with no tree.
+        case unlocated(point: CGPoint, visible: CGRect)
+        /// The target was identified only from cached find-time data and
+        /// nothing in the tree matches it any more — it unmounted (a screen
+        /// transition while its cover was being waited out). Touching its old
+        /// bounds would hit whatever replaced it.
+        case gone
     }
 
-    /// The target as last read from the device. `elementType`, `label`, and
-    /// `identifier` are nil when the live element could not be read (only
-    /// cached bounds survive); matching then falls back to the frame.
+    /// The target as last read from the device. `isLive` is false when the
+    /// live element could not be read and the fields come from what was
+    /// cached when the element was found; `elementType`, `label`, and
+    /// `identifier` are nil when even that is unknown, and matching then
+    /// falls back to the frame.
     struct Target {
         let frame: CGRect
         let elementType: XCUIElement.ElementType?
         let label: String?
         let identifier: String?
+        var isLive = true
     }
 
     struct Node {
@@ -60,6 +77,8 @@ struct OcclusionAnalyzer {
         let frame: CGRect
         /// One past the index of the last node in this node's subtree.
         var subtreeEnd: Int
+        /// Index of the parent node (nil for the root).
+        let parent: Int?
         /// Index of the top-level window node this node is in (nil for the
         /// application node itself).
         let window: Int?
@@ -83,7 +102,7 @@ struct OcclusionAnalyzer {
 
     init(snapshot: XCUIElementSnapshot, screenSize: CGSize) {
         var nodes: [Node] = []
-        func walk(_ s: XCUIElementSnapshot, window: Int?) {
+        func walk(_ s: XCUIElementSnapshot, window: Int?, parent: Int?) {
             let index = nodes.count
             let ownWindow = s.elementType == .window && window == nil ? index : window
             nodes.append(Node(
@@ -92,12 +111,13 @@ struct OcclusionAnalyzer {
                 identifier: s.identifier,
                 frame: s.frame,
                 subtreeEnd: index + 1,
+                parent: parent,
                 window: s.elementType == .application ? nil : ownWindow
             ))
-            for child in s.children { walk(child, window: ownWindow) }
+            for child in s.children { walk(child, window: ownWindow, parent: index) }
             nodes[index].subtreeEnd = nodes.count
         }
-        walk(snapshot, window: nil)
+        walk(snapshot, window: nil, parent: nil)
         self.init(nodes: nodes, screen: CGRect(origin: .zero, size: screenSize))
     }
 
@@ -111,9 +131,29 @@ struct OcclusionAnalyzer {
             return .offScreen
         }
 
+        // Not readable live and nothing cached to recognise it by: a frame
+        // alone would match a same-frame cover or replacement.
+        if !target.isLive, !nodes.isEmpty,
+           target.elementType == nil, target.label == nil, target.identifier == nil {
+            return .gone
+        }
         let targetIndex = locate(target)
+        if targetIndex == nil, !target.isLive, !nodes.isEmpty { return .gone }
+        // Content scrolled past its scroll view's edge is clipped, whatever
+        // is drawn there (a JS header is painted before the list, so the
+        // painted-after check would not see it).
+        if let t = targetIndex {
+            for a in ancestors(of: t) where Self.scrollerTypes.contains(nodes[a].elementType) {
+                visible = visible.intersection(nodes[a].frame)
+                if visible.isNull
+                    || visible.width < Self.minVisibleExtent
+                    || visible.height < Self.minVisibleExtent {
+                    return .offScreen
+                }
+            }
+        }
         let keyboardWindows = self.keyboardWindows()
-        let targetInKeyboard = targetIndex.flatMap { nodes[$0].window }.map(keyboardWindows.contains) ?? false
+        let targetInKeyboard = targetIndex.map { isInKeyboard($0, keyboardWindows: keyboardWindows) } ?? false
 
         var clips: [(rect: CGRect, name: String)] = []
         if !targetInKeyboard, let region = keyboardRegion(keyboardWindows: keyboardWindows) {
@@ -121,7 +161,8 @@ struct OcclusionAnalyzer {
         }
         for (i, node) in nodes.enumerated() where Self.barTypes.contains(node.elementType) {
             if let w = node.window, keyboardWindows.contains(w) { continue }
-            if isAncestor(i, of: targetIndex, targetFrame: target.frame) { continue }
+            if isSelfOrAncestor(i, of: targetIndex, targetFrame: target.frame) { continue }
+            if !barCovers(i, target: targetIndex) { continue }
             clips.append((node.frame, describe(node)))
         }
         for clip in clips {
@@ -136,20 +177,33 @@ struct OcclusionAnalyzer {
         let point = CGPoint(x: visible.midX, y: visible.midY)
         // XCUITest's hit test passed: trust it over the snapshot (see the
         // type comment on pass-through overlays).
-        if isHittable { return .clear(point: point) }
+        if isHittable { return .clear(point: point, visible: visible) }
         // Without the target's place in the tree there is no telling what is
-        // drawn over it — no evidence of a cover.
-        guard let t = targetIndex else { return .clear(point: point) }
+        // drawn over it: a live target that just moved can be read again; a
+        // tree that has nothing to match (no snapshot) is no evidence.
+        guard let t = targetIndex else {
+            return nodes.isEmpty
+                ? .clear(point: point, visible: visible)
+                : .unlocated(point: point, visible: visible)
+        }
+        // Runs of the same text as the target (a link inside a paragraph).
+        let paragraph = nodes[t].parent.flatMap { nodes[$0].elementType == .staticText ? $0 : nil }
 
         var cover: Node?
         for i in nodes[t].subtreeEnd..<nodes.count {
             let node = nodes[i]
             if let w = node.window, keyboardWindows.contains(w), !targetInKeyboard { continue }
+            // Other runs of the same paragraph are laid out beside the target,
+            // not over it — a line-wrapped sibling link's frame is the union
+            // of its lines and can span the target's center. (A Text drawn
+            // over a sibling Pressable is not a run of the target's text.)
+            if let paragraph, node.parent == paragraph, Self.textRunTypes.contains(node.elementType) { continue }
+            if isScrollIndicator(node) { continue }
             guard isSubstantive(node), node.frame.contains(point) else { continue }
             cover = node
         }
         if let cover { return .covered(by: describe(cover)) }
-        return .clear(point: point)
+        return .clear(point: point, visible: visible)
     }
 
     // MARK: - Target lookup
@@ -170,27 +224,59 @@ struct OcclusionAnalyzer {
         return match
     }
 
-    private func isAncestor(_ i: Int, of target: Int?, targetFrame: CGRect) -> Bool {
-        if let t = target { return i < t && nodes[i].subtreeEnd > t }
+    private func isSelfOrAncestor(_ i: Int, of target: Int?, targetFrame: CGRect) -> Bool {
+        if let t = target { return i <= t && nodes[i].subtreeEnd > t }
         // Unknown place in the tree: a bar that fully contains the target
         // (a back button, a tab) is taken to be its ancestor.
         return nodes[i].frame.contains(targetFrame)
     }
 
+    /// Whether bar `i` is drawn over the target. A bar is drawn over the
+    /// content of its own container (scroll content passes under a nav bar
+    /// even though the bar comes first in the tree), and over anything
+    /// painted after it — but not over a sheet or modal presented on top of
+    /// the screen it belongs to, which is painted after the bar's container.
+    private func barCovers(_ i: Int, target: Int?) -> Bool {
+        // Unknown place in the tree: assume it does.
+        guard let t = target else { return true }
+        if i >= nodes[t].subtreeEnd { return true }
+        // A window or the application "contains" everything in it, including
+        // a sheet presented over the bar's screen — that is not the bar's own
+        // content.
+        guard let container = nodes[i].parent,
+              nodes[container].elementType != .window,
+              nodes[container].elementType != .application else { return false }
+        return container < t && nodes[container].subtreeEnd > t
+    }
+
     // MARK: - Keyboard
 
-    /// Top-level windows that host the software keyboard: any window holding
-    /// a `.keyboard` node or the remote input view (`inputView`, observed on
-    /// iOS 26 in a separate window from the keys).
+    /// Top-level windows that host the software keyboard: windows other than
+    /// the app's first (main) window holding a `.keyboard` node or the remote
+    /// input view (`inputView`, observed on iOS 26 in a separate window from
+    /// the keys). The main window never counts, even if a runtime puts the
+    /// keyboard in it: that would make every app element "part of the
+    /// keyboard" (and an app view could carry the same testID).
     func keyboardWindows() -> Set<Int> {
+        let mainWindow = nodes.first(where: { $0.window != nil })?.window
         var windows = Set<Int>()
         for node in nodes {
-            guard let w = node.window else { continue }
-            if node.elementType == .keyboard || node.identifier == "inputView" {
-                windows.insert(w)
-            }
+            guard let w = node.window, w != mainWindow else { continue }
+            if isKeyboardRoot(node) { windows.insert(w) }
         }
         return windows
+    }
+
+    private func isKeyboardRoot(_ node: Node) -> Bool {
+        node.elementType == .keyboard || node.identifier == "inputView"
+    }
+
+    /// Whether node `t` is part of the keyboard itself (a key, the predictive
+    /// bar): in a keyboard window, or inside the `.keyboard` subtree wherever
+    /// it lives.
+    private func isInKeyboard(_ t: Int, keyboardWindows: Set<Int>) -> Bool {
+        if let w = nodes[t].window, keyboardWindows.contains(w) { return true }
+        return ancestors(of: t).contains { nodes[$0].elementType == .keyboard }
     }
 
     /// The screen area the keyboard covers, or nil when no keyboard is up.
@@ -213,7 +299,11 @@ struct OcclusionAnalyzer {
             top = min(top, f.minY)
         }
 
-        if keyboard.maxY >= screen.maxY - Self.dockedKeyboardSlack {
+        // Docked: near the bottom and (nearly) full width. A hardware
+        // keyboard's small assistant bar near the bottom is neither, and
+        // covers only its own frame.
+        if keyboard.maxY >= screen.maxY - Self.dockedKeyboardSlack,
+           keyboard.width >= screen.width * 0.9 {
             return CGRect(x: screen.minX, y: top, width: screen.width, height: screen.maxY - top)
         }
         return CGRect(x: keyboard.minX, y: top, width: keyboard.width, height: keyboard.maxY - top)
@@ -222,6 +312,26 @@ struct OcclusionAnalyzer {
     // MARK: - Helpers
 
     static let barTypes: Set<XCUIElement.ElementType> = [.navigationBar, .tabBar, .toolbar]
+    static let scrollerTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView, .webView]
+    static let textRunTypes: Set<XCUIElement.ElementType> = [.staticText, .link]
+
+    private func ancestors(of i: Int) -> [Int] {
+        var result: [Int] = []
+        var p = nodes[i].parent
+        while let a = p {
+            result.append(a)
+            p = nodes[a].parent
+        }
+        return result
+    }
+
+    /// A scroll view's indicator ("Vertical scroll bar, 2 pages"): drawn over
+    /// the content's edge, but it never takes touches.
+    private func isScrollIndicator(_ node: Node) -> Bool {
+        guard node.elementType == .other,
+              let p = node.parent, Self.scrollerTypes.contains(nodes[p].elementType) else { return false }
+        return node.label.lowercased().contains("scroll bar")
+    }
 
     /// Worth naming as a cover: a typed element, or a generic one that carries
     /// a label or identifier (a Pressable backdrop with a testID). Unlabeled
@@ -244,6 +354,9 @@ struct OcclusionAnalyzer {
         case .tabBar: kind = "tab bar"
         case .toolbar: kind = "toolbar"
         case .other: kind = "element"
+        // Named here, not via RoleMapping: its reverse map is built from a
+        // Dictionary, so .staticText comes out "text" or "heading" per process.
+        case .staticText: kind = "text"
         default: kind = RoleMapping.elementTypeToRole[node.elementType] ?? "element"
         }
         let name = node.label.isEmpty ? node.identifier : node.label

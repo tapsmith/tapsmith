@@ -48,6 +48,7 @@ Requires `protobuf-compiler` installed for tonic-build.
 
 ### iOS agent (`ios-agent/`)
 ```bash
+ios-agent/Tests/run-unit-tests.sh            # host-side unit tests (no simulator); CI: rust-macos job
 cd ios-agent && ./create-xcode-project.sh    # first time only
 # Simulator build (unsigned, builds once per iOS version):
 xcodebuild build-for-testing \
