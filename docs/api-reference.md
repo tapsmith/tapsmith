@@ -1005,6 +1005,8 @@ Tap this element.
 await device.getByRole("button", { name: "Submit" }).tap();
 ```
 
+**Covered elements (iOS).** Like a Playwright click, a tap auto-waits for the element to be enabled and then for nothing to be drawn over it. If another element or the software keyboard covers the point it would tap, the tap waits for the cover to go away and then fails instead of tapping the cover: `Element is covered by the keyboard …` or `Element is covered by button "Overlay" …`. The error type is `ELEMENT_COVERED`. When the keyboard covers only part of the element, the tap lands on the visible part. `doubleTap()` and `longPress()` follow the same rules. If the keyboard is in the way, dismiss it first (`device.hideKeyboard()`, or submit the field). Android does not have this check yet (PILOT-362).
+
 #### `elementHandle.doubleTap(options?: { intervalMs?: number }): Promise<void>`
 
 Double-tap this element.

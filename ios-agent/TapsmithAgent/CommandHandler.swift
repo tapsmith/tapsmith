@@ -568,6 +568,12 @@ class CommandHandler {
         return center
     }
 
+    /// An action's time budget from its params, in ms. JSON numbers arrive as
+    /// NSNumber; absent (the SDK's explicit zero timeout) means no waiting.
+    private func actionTimeoutMs(_ params: [String: Any]) -> Int64 {
+        (params["timeout"] as? NSNumber)?.int64Value ?? 0
+    }
+
     // MARK: - Element Resolution
 
     /// Resolve an element from params, supporting both elementId (cached) and selector-based lookup.
@@ -680,54 +686,143 @@ class CommandHandler {
     }
 
 
-    /// Tap a resolved element. Always attempt XCUIElement.tap() first —
-    /// synthesized coordinate events are unreliable with UIKit/RN gesture
-    /// recognizers regardless of element type. Coordinate synthesis is
-    /// only used as a fallback when XCUIElement.tap() fails (e.g. element
-    /// is not hittable).
-    private func tapResolvedElement(_ element: ElementInfo) throws {
-        var firstError: Error?
-        do {
-            let xcElem = try getXCUIElement(element.elementId)
-            try actionExecutor.tap(xcElem)
-            return
-        } catch {
-            firstError = error
-            NSLog(
-                "[TapsmithCommand] XCUIElement.tap failed for \(element.elementId): \(error.localizedDescription), falling back to coordinate tap"
-            )
-        }
+    // MARK: - Occlusion-aware touch planning (PILOT-223)
 
-        if let center = snapshotCenter(for: element.elementId) {
-            actionExecutor.tapCoordinates(x: Int(center.x), y: Int(center.y))
-            return
-        }
+    /// How an element-addressed touch should be delivered.
+    private enum TouchPlan {
+        /// XCUITest's hit test passed — tap through the element itself.
+        case hittableElement(XCUIElement)
+        /// Touch at this screen point; nothing in the snapshot covers it.
+        case point(CGPoint)
+        /// No part of the element is on screen.
+        case offScreen
+    }
 
-        throw firstError!
+    /// Decide where a touch on `element` can land, waiting up to `timeoutMs`
+    /// for anything covering it to go away (Playwright waits out a click's
+    /// intercepting element the same way). Throws ELEMENT_COVERED, naming the
+    /// cover, when it is still there at the deadline — never plans a touch
+    /// that would land on the cover.
+    ///
+    /// `preferElementTap` short-circuits to `.hittableElement` when XCUITest
+    /// calls the element hittable, skipping the snapshot: `XCUIElement.tap()`
+    /// picks its own hit point, which already avoids the keyboard (it taps
+    /// the visible part of a half-covered element). Coordinate gestures
+    /// (double tap, long press, HID input) need an explicit point and always
+    /// take the snapshot.
+    ///
+    /// **Cost** per pass: `isHittable` (one hit-test IPC); when not
+    /// short-circuited, one `snapshot()` of the element plus one of the app.
+    private func planTouch(
+        _ element: ElementInfo,
+        timeoutMs: Int64,
+        preferElementTap: Bool
+    ) throws -> TouchPlan {
+        let deadline = Date(timeIntervalSinceNow: Double(max(0, timeoutMs)) / 1000)
+        while true {
+            let xcElem = try? getXCUIElement(element.elementId)
+            let hittable = xcElem?.isHittable ?? false
+            if preferElementTap, hittable, let xcElem {
+                return .hittableElement(xcElem)
+            }
+            switch occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable) {
+            case .clear(let point):
+                return .point(point)
+            case .offScreen:
+                return .offScreen
+            case .covered(let cover):
+                let remaining = deadline.timeIntervalSinceNow
+                if remaining <= 0 {
+                    throw AgentError.elementCovered(coveredMessage(cover, timeoutMs: timeoutMs))
+                }
+                NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); waiting")
+                Thread.sleep(forTimeInterval: min(0.25, remaining))
+            }
+        }
+    }
+
+    private func occlusionVerdict(
+        for element: ElementInfo,
+        xcElem: XCUIElement?,
+        isHittable: Bool
+    ) -> OcclusionAnalyzer.Verdict {
+        let target: OcclusionAnalyzer.Target
+        if let snap = try? xcElem?.snapshot() {
+            target = .init(frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier)
+        } else {
+            // Only bounds survive (a stale live query, or an id recovered from
+            // the bounds cache): match by frame alone.
+            let b = element.bounds
+            let frame = snapshotFinder.getBounds(element.elementId)
+                ?? CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
+            target = .init(frame: frame, elementType: nil, label: nil, identifier: nil)
+        }
+        let screenSize = snapshotFinder.screenSize
+        guard let appSnapshot = try? app.snapshot() else {
+            // No tree, no evidence of a cover: analyze against nothing, which
+            // still rejects an off-screen target.
+            return OcclusionAnalyzer(nodes: [], screen: CGRect(origin: .zero, size: screenSize))
+                .analyze(target, isHittable: isHittable)
+        }
+        return OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+            .analyze(target, isHittable: isHittable)
+    }
+
+    private func coveredMessage(_ cover: String, timeoutMs: Int64) -> String {
+        var message = "Element is covered by \(cover), so a touch would land on it instead"
+        if timeoutMs > 0 { message += " (still covered after waiting \(timeoutMs)ms)" }
+        if cover == "the keyboard" {
+            message += ". Dismiss the keyboard first (device.hideKeyboard()) or scroll the element into view."
+        }
+        return message
+    }
+
+    /// Tap a resolved element. Prefer XCUIElement.tap() — synthesized
+    /// coordinate events are unreliable with UIKit/RN gesture recognizers
+    /// regardless of element type. A coordinate tap is only the fallback for
+    /// elements XCUITest calls unhittable, and only at a point the snapshot
+    /// shows uncovered (PILOT-223: the unguarded fallback tapped covers).
+    private func tapResolvedElement(_ element: ElementInfo, timeoutMs: Int64) throws {
+        // Surface a stale id up front (the SDK's re-resolve retry keys on the
+        // "gone stale" message) — but only once nothing else can tap: the
+        // bounds-cache recovery path in resolveElement hands us ids with no
+        // live query that the coordinate fallback can still tap.
+        var staleError: Error?
+        do { _ = try getXCUIElement(element.elementId) } catch { staleError = error }
+
+        switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
+        case .hittableElement(let xcElem):
+            actionExecutor.tapHittable(xcElem)
+        case .point(let point):
+            NSLog("[TapsmithCommand] \(element.elementId) is not hittable; tapping the uncovered point \(point)")
+            actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
+        case .offScreen:
+            throw staleError ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
+        }
     }
 
     /// Double-tap a resolved element. Prefer coordinate synthesis: it encodes
     /// both taps in one event record with precise offsets, so the inter-tap
     /// gap cannot be stretched past the app's double-tap window by CI load.
     /// XCUIElement.doubleTap() (whose two taps are subject to scheduling
-    /// jitter) is the fallback when no snapshot center is available.
-    private func doubleTapResolvedElement(_ element: ElementInfo, intervalMs: Int) throws {
+    /// jitter) is the fallback when no part of the element is on screen.
+    private func doubleTapResolvedElement(_ element: ElementInfo, intervalMs: Int, timeoutMs: Int64) throws {
         // Resolve the cached element FIRST even on the coordinate path: the
         // coordinate gesture never throws, so an evicted id would otherwise
         // silently double-tap stale bounds — this lookup raises the "gone
         // stale" error the SDK's re-resolve retry keys on.
         let xcElem = try getXCUIElement(element.elementId)
 
-        if let center = snapshotCenter(for: element.elementId) {
+        switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
+        case .point(let point):
             actionExecutor.doubleTapCoordinates(
-                x: Int(center.x),
-                y: Int(center.y),
+                x: Int(point.x.rounded()),
+                y: Int(point.y.rounded()),
                 intervalMs: intervalMs
             )
-            return
+        case .hittableElement, .offScreen:
+            try actionExecutor.doubleTap(xcElem)
         }
-
-        try actionExecutor.doubleTap(xcElem)
     }
 
     /// Tap inside a text input, biased toward the trailing edge so refocusing
@@ -965,7 +1060,7 @@ class CommandHandler {
                 snapshotFinder.recordFocusedTextInputHint(at: CGPoint(x: CGFloat(x), y: CGFloat(y)))
             } else {
                 let element = try resolveElement(params)
-                try tapResolvedElement(element)
+                try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params))
                 snapshotFinder.recordFocusedTextInputHint(element)
             }
             // Force-flush pending touch events: take a snapshot() which does
@@ -979,7 +1074,7 @@ class CommandHandler {
         case "doubleTap":
             let element = try resolveElement(params)
             let intervalMs = params["intervalMs"] as? Int ?? 0
-            try doubleTapResolvedElement(element, intervalMs: intervalMs)
+            try doubleTapResolvedElement(element, intervalMs: intervalMs, timeoutMs: actionTimeoutMs(params))
             touchBarrier()
             return ["success": true]
 
@@ -993,15 +1088,34 @@ class CommandHandler {
                 actionExecutor.longPressCoordinates(x: x, y: y, durationMs: duration)
             } else {
                 let element = try resolveElement(params)
-                if let center = snapshotCenter(for: element.elementId) {
-                    actionExecutor.longPressCoordinates(x: Int(center.x), y: Int(center.y), durationMs: duration)
-                } else {
+                switch try planTouch(element, timeoutMs: actionTimeoutMs(params), preferElementTap: false) {
+                case .point(let point):
+                    actionExecutor.longPressCoordinates(
+                        x: Int(point.x.rounded()),
+                        y: Int(point.y.rounded()),
+                        durationMs: duration
+                    )
+                case .hittableElement, .offScreen:
                     let xcElem = try getXCUIElement(element.elementId)
                     try actionExecutor.longPress(xcElem, durationMs: duration)
                 }
             }
             touchBarrier()
             return ["success": true]
+
+        case "resolveActionPoint":
+            // Where an element-addressed touch can land without hitting a
+            // cover (PILOT-223), for the daemon's HID-injected gestures, which
+            // bypass the agent's own gesture code. Waits out covers like the
+            // agent's gestures do; ELEMENT_COVERED when one outlasts the
+            // timeout.
+            let element = try resolveElement(params)
+            switch try planTouch(element, timeoutMs: actionTimeoutMs(params), preferElementTap: false) {
+            case .point(let point):
+                return ["x": Double(point.x), "y": Double(point.y)]
+            case .hittableElement, .offScreen:
+                throw AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
+            }
 
         // ─── Text Input ───
 

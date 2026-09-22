@@ -32,6 +32,12 @@ class ActionExecutor {
         guard element.isHittable else {
             throw AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
+        tapHittable(element)
+    }
+
+    /// `tap(_:)` for an element the caller has just read as hittable — skips
+    /// the repeat `isHittable` round-trip.
+    func tapHittable(_ element: XCUIElement) {
         waitForStableFrame(element)
         element.tap()
     }

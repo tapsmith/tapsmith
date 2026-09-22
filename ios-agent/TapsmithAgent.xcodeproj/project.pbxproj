@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		00939514784AEE11CC64485E /* CommandHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4606C81DC5E17A14939D8D /* CommandHandler.swift */; };
 		09E2E27C7BCBF01AE2648172 /* SnapshotElementFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95F1D55A943C25C2F98CC102 /* SnapshotElementFinder.swift */; };
+		0E010C836E22158D44530C5D /* SystemDialogPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBB72A2A362837309906E13 /* SystemDialogPolicy.swift */; };
 		17687791BBF6102D034AB942 /* TouchSynthesizer.m in Sources */ = {isa = PBXBuildFile; fileRef = 03BBAA69CD44B39C3AD6DA0F /* TouchSynthesizer.m */; };
 		1C2ED89480D51025F3F287F0 /* ActionExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D53CA4D47911BC911C8430EF /* ActionExecutor.swift */; };
 		6C50B1ECB9A19432E1A89D91 /* WaitEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45B43D837B50F6CE9F2973A3 /* WaitEngine.swift */; };
@@ -16,11 +17,11 @@
 		8EAA355DA951C199AF253DB7 /* ElementInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19310EAA5EA86B6E6776B6F8 /* ElementInfo.swift */; };
 		9A7AA0FD964CB0917BA73A34 /* ElementFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120AEFF331CC195D7A1592FC /* ElementFinder.swift */; };
 		A36314E56A12B9911A8E07F5 /* SelectorParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17FE6EF9A57433664F043E7 /* SelectorParser.swift */; };
+		A4B1C63E6075AF48ADFC2123 /* OcclusionAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB85E18A5531D03A65BDA55 /* OcclusionAnalyzer.swift */; };
 		A4DD313B0DC87ACC0AC5EC36 /* TapsmithAgentRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F2F23AB376461F1E086465 /* TapsmithAgentRunner.swift */; };
 		AF850BF1649CFB7D3D5FEDAB /* OneShotLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D8F09D7C424D6639D7D0AD /* OneShotLogger.swift */; };
 		B5ED1D32F5D4721948E90845 /* HierarchyDumper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 09C5E3AFD1299FFFF4B31AB6 /* HierarchyDumper.swift */; };
 		B8E4DB3D143C129530BED0E8 /* SocketServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B20F42F1DA77FBEEC0F04F60 /* SocketServer.swift */; };
-		B8F21A6C4D9E3057A1C2D4E8 /* SystemDialogPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A3C5E914F2B60D8C3A1B5F2 /* SystemDialogPolicy.swift */; };
 		B9C16B182851EAD07DF20338 /* RoleMapping.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4047824F41AA54563A432DC /* RoleMapping.swift */; };
 		C3EA7BC091BB4FFF7DDD0C3D /* AgentError.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDF3E8F423ADAE29CD2EFB48 /* AgentError.swift */; };
 		C3FB8341E6CADE143C84D0C0 /* QuiescenceDisabler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 45FCCCE646EA2B85354B30F7 /* QuiescenceDisabler.swift */; };
@@ -38,8 +39,8 @@
 		46F2F23AB376461F1E086465 /* TapsmithAgentRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapsmithAgentRunner.swift; sourceTree = "<group>"; };
 		4F73B6388FA79243297885B0 /* ObjCExceptionCatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = ObjCExceptionCatcher.m; sourceTree = "<group>"; };
 		7CD67663681CC3C8C65959F0 /* ObjCExceptionCatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = ObjCExceptionCatcher.h; sourceTree = "<group>"; };
-		7A3C5E914F2B60D8C3A1B5F2 /* SystemDialogPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemDialogPolicy.swift; sourceTree = "<group>"; };
 		95F1D55A943C25C2F98CC102 /* SnapshotElementFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotElementFinder.swift; sourceTree = "<group>"; };
+		9FBB72A2A362837309906E13 /* SystemDialogPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemDialogPolicy.swift; sourceTree = "<group>"; };
 		B20F42F1DA77FBEEC0F04F60 /* SocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketServer.swift; sourceTree = "<group>"; };
 		B4047824F41AA54563A432DC /* RoleMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleMapping.swift; sourceTree = "<group>"; };
 		BDD4545E80BE3B249F9D6B2F /* TapsmithAgent-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TapsmithAgent-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -48,6 +49,7 @@
 		D53CA4D47911BC911C8430EF /* ActionExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionExecutor.swift; sourceTree = "<group>"; };
 		E2D8F09D7C424D6639D7D0AD /* OneShotLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OneShotLogger.swift; sourceTree = "<group>"; };
 		EDF3E8F423ADAE29CD2EFB48 /* AgentError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentError.swift; sourceTree = "<group>"; };
+		EEB85E18A5531D03A65BDA55 /* OcclusionAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OcclusionAnalyzer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -60,12 +62,13 @@
 				09C5E3AFD1299FFFF4B31AB6 /* HierarchyDumper.swift */,
 				7CD67663681CC3C8C65959F0 /* ObjCExceptionCatcher.h */,
 				4F73B6388FA79243297885B0 /* ObjCExceptionCatcher.m */,
+				EEB85E18A5531D03A65BDA55 /* OcclusionAnalyzer.swift */,
 				45FCCCE646EA2B85354B30F7 /* QuiescenceDisabler.swift */,
 				B4047824F41AA54563A432DC /* RoleMapping.swift */,
 				D17FE6EF9A57433664F043E7 /* SelectorParser.swift */,
 				95F1D55A943C25C2F98CC102 /* SnapshotElementFinder.swift */,
 				B20F42F1DA77FBEEC0F04F60 /* SocketServer.swift */,
-				7A3C5E914F2B60D8C3A1B5F2 /* SystemDialogPolicy.swift */,
+				9FBB72A2A362837309906E13 /* SystemDialogPolicy.swift */,
 				BDD4545E80BE3B249F9D6B2F /* TapsmithAgent-Bridging-Header.h */,
 				46F2F23AB376461F1E086465 /* TapsmithAgentRunner.swift */,
 				C511FD447184FAEDC3739DB9 /* TouchSynthesizer.h */,
@@ -164,13 +167,14 @@
 				8EAA355DA951C199AF253DB7 /* ElementInfo.swift in Sources */,
 				B5ED1D32F5D4721948E90845 /* HierarchyDumper.swift in Sources */,
 				8343FFC928BF3DED3CE9B54D /* ObjCExceptionCatcher.m in Sources */,
+				A4B1C63E6075AF48ADFC2123 /* OcclusionAnalyzer.swift in Sources */,
 				AF850BF1649CFB7D3D5FEDAB /* OneShotLogger.swift in Sources */,
 				C3FB8341E6CADE143C84D0C0 /* QuiescenceDisabler.swift in Sources */,
 				B9C16B182851EAD07DF20338 /* RoleMapping.swift in Sources */,
 				A36314E56A12B9911A8E07F5 /* SelectorParser.swift in Sources */,
 				09E2E27C7BCBF01AE2648172 /* SnapshotElementFinder.swift in Sources */,
 				B8E4DB3D143C129530BED0E8 /* SocketServer.swift in Sources */,
-				B8F21A6C4D9E3057A1C2D4E8 /* SystemDialogPolicy.swift in Sources */,
+				0E010C836E22158D44530C5D /* SystemDialogPolicy.swift in Sources */,
 				A4DD313B0DC87ACC0AC5EC36 /* TapsmithAgentRunner.swift in Sources */,
 				17687791BBF6102D034AB942 /* TouchSynthesizer.m in Sources */,
 				6C50B1ECB9A19432E1A89D91 /* WaitEngine.swift in Sources */,

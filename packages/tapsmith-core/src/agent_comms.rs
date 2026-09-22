@@ -401,6 +401,16 @@ pub enum AgentCommand {
         timeout_ms: Option<u64>,
         element_id: Option<String>,
     },
+    /// iOS: resolve the screen point an element-addressed touch can land on
+    /// without hitting something drawn over the element (PILOT-223), waiting
+    /// up to `timeout_ms` for a cover to go away. The HID-injected gestures
+    /// use it instead of `FindElement` so they never press a cover.
+    // Only the macOS-only HID gesture paths construct it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    ResolveActionPoint {
+        selector: Value,
+        timeout_ms: Option<u64>,
+    },
     LongPress {
         selector: Value,
         duration_ms: Option<u64>,
@@ -598,6 +608,7 @@ impl AgentCommand {
             AgentCommand::FindElement { .. } => "findElement",
             AgentCommand::FindElements { .. } => "findElements",
             AgentCommand::Tap { .. } => "tap",
+            AgentCommand::ResolveActionPoint { .. } => "resolveActionPoint",
             AgentCommand::LongPress { .. } => "longPress",
             AgentCommand::TypeText { .. } => "typeText",
             AgentCommand::ClearText { .. } => "clearText",
@@ -674,6 +685,16 @@ impl AgentCommand {
                 }
                 add_element_id(&mut p, element_id);
                 ("tap", p)
+            }
+            AgentCommand::ResolveActionPoint {
+                selector,
+                timeout_ms,
+            } => {
+                let mut p = selector.clone();
+                if let Some(t) = timeout_ms {
+                    p["timeout"] = json!(t);
+                }
+                ("resolveActionPoint", p)
             }
             AgentCommand::LongPress {
                 selector,
@@ -1590,6 +1611,22 @@ mod tests {
         assert_eq!(j["method"], "findElements");
         assert_eq!(j["params"]["className"], "Button");
         assert_eq!(j["params"]["timeout"], 1000);
+    }
+
+    #[test]
+    fn to_json_resolve_action_point() {
+        // The HID gestures ask the agent where a touch can land without
+        // hitting a cover (PILOT-223); the budget rides along so the agent
+        // can wait a transient cover out.
+        let cmd = AgentCommand::ResolveActionPoint {
+            selector: json!({"text": "Item"}),
+            timeout_ms: Some(4000),
+        };
+        let j = cmd.to_json("rap");
+        assert_eq!(j["method"], "resolveActionPoint");
+        assert_eq!(cmd.method_name(), "resolveActionPoint");
+        assert_eq!(j["params"]["text"], "Item");
+        assert_eq!(j["params"]["timeout"], 4000);
     }
 
     #[test]
