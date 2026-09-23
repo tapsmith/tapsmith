@@ -198,7 +198,7 @@ struct OcclusionAnalyzer {
             // of its lines and can span the target's center. (A Text drawn
             // over a sibling Pressable is not a run of the target's text.)
             if let paragraph, node.parent == paragraph, Self.textRunTypes.contains(node.elementType) { continue }
-            if isScrollIndicator(node) { continue }
+            if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
             guard isSubstantive(node), node.frame.contains(point) else { continue }
             cover = node
         }
@@ -323,6 +323,16 @@ struct OcclusionAnalyzer {
             p = nodes[a].parent
         }
         return result
+    }
+
+    /// `@tapsmith/react-native`'s test hooks marker: a screen-sized
+    /// transparent text in a `pointerEvents="none"` wrapper, painted after all
+    /// content (plus a small visible copy in a corner). It exists to be seen
+    /// in the hierarchy and takes no touches — but on Xcode 26.6 it makes
+    /// XCUITest call every element under it unhittable, and as a labeled text
+    /// over every point it would otherwise be named the cover of all of them.
+    private func isTapsmithHooksMarker(_ node: Node) -> Bool {
+        node.identifier == "tapsmith-hooks" || node.label.hasPrefix("tapsmith-hooks:")
     }
 
     /// A scroll view's indicator ("Vertical scroll bar, 2 pages"): drawn over

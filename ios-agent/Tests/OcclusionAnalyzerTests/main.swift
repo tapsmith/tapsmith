@@ -190,6 +190,24 @@ check("identifier-only overlay over an unhittable target: covered",
       pt.analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: false),
       .covered(by: "element \"pass-through-overlay\""))
 
+// @tapsmith/react-native's hooks marker: a screen-sized transparent text in a
+// pointerEvents="none" wrapper, painted after all content. On Xcode 26.6 (CI)
+// it makes XCUITest call every element under it unhittable; it must never be
+// named as their cover (it takes no touches). The visible corner copy carries
+// the same label without the testID.
+let hooksMarker: [Row] = [
+    (2, .other, "", "", screen),
+    (3, .staticText, "tapsmith-hooks:1;epoch=0;nav=1;boot=0bb7f557;url=tapsmithtest:///", "tapsmith-hooks", screen),
+    (2, .other, "", "", R(300, 850, 100, 12)),
+    (3, .staticText, "tapsmith-hooks:1;epoch=0;nav=1;boot=0bb7f557;url=tapsmithtest:///", "", R(300, 850, 100, 12)),
+]
+checkPoint("the test hooks marker is never a cover",
+           analyzer(screenRows() + hooksMarker).analyze(button("Covered action", covered), isHittable: false),
+           CGPoint(x: 201, y: 291.33))
+check("…while a real cover under the marker still is",
+      analyzer(screenRows(overlay: true) + hooksMarker).analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "button \"Overlay\""))
+
 // ─── Cached (non-live) identity ───
 
 check("cached identity picks the target, not the same-frame overlay",
