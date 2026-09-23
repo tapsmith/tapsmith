@@ -16,6 +16,8 @@ data class Box(val left: Int, val top: Int, val right: Int, val bottom: Int) {
 
     fun intersects(other: Box): Boolean = !intersect(other).isEmpty
 
+    fun contains(other: Box): Boolean = other.left >= left && other.top >= top && other.right <= right && other.bottom <= bottom
+
     fun intersect(other: Box): Box =
         Box(
             maxOf(left, other.left),
@@ -150,10 +152,14 @@ object OcclusionAnalyzer {
 
         // The framework calls a view invisible when nothing of it is left to
         // see — for a view on screen, because a window above (the keyboard, a
-        // dialog) hides it. Name that window, topmost first, so the cover is
-        // waited out; with none, the view really is not on screen.
+        // dialog) hides it. Name that window so the cover is waited out: the
+        // topmost one that hides all of it, else the topmost that overlaps it
+        // (one that only grazes its edge is not what hides it). With none, the
+        // view really is not on screen.
         if (target != null && !target.isVisible) {
-            val window = covers.firstOrNull { it.bounds.intersects(onScreen) }
+            val window =
+                covers.firstOrNull { it.bounds.contains(onScreen) }
+                    ?: covers.firstOrNull { it.bounds.intersects(onScreen) }
             return if (window != null) covered(window) else Verdict.OffScreen
         }
 

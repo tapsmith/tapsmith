@@ -430,6 +430,7 @@ class ActionExecutor(
             clickToFocus(element, null, budget.noWait(), expected, FALLBACK_FOLLOW_UP_MS)
         } catch (e: ElementCoveredException) {
             if (e.kind != OcclusionAnalyzer.CoverKind.KEYBOARD) throw e
+            // The caller waits for focus again, which then returns at once.
             waitForFocus(element)
             val focused =
                 try {
@@ -438,6 +439,9 @@ class ActionExecutor(
                     false
                 }
             if (!focused) throw e
+            // No tap was planned, so plan()'s deadline check did not run: the
+            // keys that follow must still finish before the daemon gives up.
+            occlusionGuard.requireTimeFor(budget, FALLBACK_FOLLOW_UP_MS)
             Log.d(TAG, "fallback refocus skipped: the field got focus under its keyboard")
         }
     }

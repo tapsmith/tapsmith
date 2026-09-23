@@ -213,6 +213,18 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
+    fun `an invisible target is attributed to the window that hides all of it`() {
+        // Fully behind the keyboard, with its bottom edge reaching into a
+        // navigation bar drawn above the keyboard: the keyboard hides it.
+        val navBar = WindowSpec(id = 3, kind = WindowKind.SYSTEM, layer = 9, bounds = Box(0, 2300, 1080, 2400), title = "Navigation bar")
+        val field = FakeNode(Box(40, 2200, 1040, 2340), isVisible = false, takesTouches = true)
+        root(field)
+        val verdict = analyze(field, windows = listOf(appWindow, keyboard, navBar))
+        assertCoveredBy(verdict, "the keyboard")
+        assertEquals(OcclusionAnalyzer.CoverKind.KEYBOARD, coverKind(verdict))
+    }
+
+    @Test
     fun `covers say what kind of thing they are`() {
         // The focusing tap of a focused field is skipped under the keyboard or
         // a control on its own screen (input still reaches it), never under

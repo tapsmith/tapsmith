@@ -89,7 +89,9 @@ class OcclusionGuard(
         reserveMs: Long = 0,
     ): Plan {
         val clock = TouchPlanClock(budget.startMs, budget.timeoutMs, budget.readDeadlineMs, reserveMs)
-        val planStartMs = SystemClock.uptimeMillis()
+        // When a cover was first seen — how long it has been waited out, for
+        // the error (a single check waits for nothing).
+        var coveredSinceMs: Long? = null
         val bounds = Rect(initialBounds)
         var firstPass = true
         // For a target nothing of its own identifies (an unlabelled
@@ -132,7 +134,11 @@ class OcclusionGuard(
                 is OcclusionAnalyzer.Verdict.Covered -> {
                     val sleep =
                         clock.sleepBeforeNextPass(now)
-                            ?: throw ElementCoveredException(coveredMessage(verdict.by, now - planStartMs), verdict.kind)
+                            ?: throw ElementCoveredException(
+                                coveredMessage(verdict.by, coveredSinceMs?.let { now - it } ?: 0),
+                                verdict.kind,
+                            )
+                    if (coveredSinceMs == null) coveredSinceMs = now
                     if (contentWhenCovered == null && node != null && expected?.identifiedOnlyByContent == true) {
                         contentWhenCovered = contentOf(node)
                     }
@@ -168,6 +174,20 @@ class OcclusionGuard(
             if (!budget.hasTimeLeft) throw e
             plan(element, initialBounds, budget, expected, reserveMs)
         }
+    }
+
+    /**
+     * Refuse (TouchTooLateException) when [reserveMs] of work started now
+     * could not finish before the daemon gives up — for work that goes ahead
+     * without a touch being planned (a focusing tap skipped), which [plan]'s
+     * own check does not cover.
+     */
+    fun requireTimeFor(
+        budget: ActionBudget,
+        reserveMs: Long,
+    ) {
+        val clock = TouchPlanClock(budget.startMs, budget.timeoutMs, budget.readDeadlineMs, reserveMs)
+        if (clock.isTooLateToAct(SystemClock.uptimeMillis())) throw TouchTooLateException()
     }
 
     private fun matches(
