@@ -36,25 +36,45 @@ enum RoleMapping {
         "combobox": [.other],
     ]
 
+    /// The role reported for an element type that more than one role lists in
+    /// `roleToElementTypes`. "heading" also queries `.staticText`, but a
+    /// heading is only reported off the header trait, which `resolveRole`
+    /// checks before this map.
+    static let reverseRolePins: [XCUIElement.ElementType: String] = [
+        .staticText: "text",
+    ]
+
     /// Reverse mapping: XCUIElement.ElementType → role name.
     /// `.other` is excluded: multiple roles include it in their forward mapping
     /// (checkbox, radiobutton, alert, combobox) so getByRole can match generic
-    /// Views by name, but the reverse can't pick one — and Swift dictionary
-    /// iteration order is non-deterministic, which caused .other elements to get
-    /// a random role each session.
-    static let elementTypeToRole: [XCUIElement.ElementType: String] = {
+    /// Views by name, but the reverse can't pick one.
+    static let elementTypeToRole = buildReverseMap(Array(roleToElementTypes), pins: reverseRolePins)
+
+    /// Build the reverse map so the result never depends on the order of
+    /// `entries`: Swift seeds Dictionary iteration per process, and "first
+    /// mapping wins" made plain text report "heading" in some sessions
+    /// (PILOT-365). A type listed under several roles gets its pinned role,
+    /// or none at all if it has no pin.
+    static func buildReverseMap(
+        _ entries: [(key: String, value: [XCUIElement.ElementType])],
+        pins: [XCUIElement.ElementType: String]
+    ) -> [XCUIElement.ElementType: String] {
+        var claims: [XCUIElement.ElementType: Set<String>] = [:]
+        for (role, types) in entries {
+            for type in types where type != .other {
+                claims[type, default: []].insert(role)
+            }
+        }
         var map: [XCUIElement.ElementType: String] = [:]
-        for (role, types) in roleToElementTypes {
-            for type in types {
-                if type == .other { continue }
-                // First mapping wins (e.g., .staticText → "text", not "heading")
-                if map[type] == nil {
-                    map[type] = role
-                }
+        for (type, roles) in claims {
+            if roles.count == 1 {
+                map[type] = roles.first
+            } else if let pinned = pins[type], roles.contains(pinned) {
+                map[type] = pinned
             }
         }
         return map
-    }()
+    }
 
     /// Resolve a role name from an XCUIElement.ElementType.
     static func resolveRole(for elementType: XCUIElement.ElementType) -> String {
