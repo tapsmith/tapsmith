@@ -186,9 +186,12 @@ let pt = analyzer(screenRows(passThrough: true))
 checkPoint("pointerEvents=none overlay, hittable: clear",
            pt.analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: true),
            CGPoint(x: 201, y: 359.33))
-check("identifier-only overlay over an unhittable target: covered",
-      pt.analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: false),
-      .covered(by: "element \"pass-through-overlay\""))
+// On Xcode 26.6 (CI) a pointerEvents="none" overlay fools XCUITest's hit test
+// too, so "unhittable" is no evidence here: only an interactive control over
+// the point counts as a cover.
+checkPoint("pointerEvents=none overlay, unhittable (Xcode 26.6): still clear",
+           pt.analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: false),
+           CGPoint(x: 201, y: 359.33))
 
 // @tapsmith/react-native's hooks marker: a screen-sized transparent text in a
 // pointerEvents="none" wrapper, painted after all content. On Xcode 26.6 (CI)
@@ -323,8 +326,9 @@ checkPoint("a window-parented nav bar does not clip a sheet presented in that wi
            analyzer(windowParentedBar).analyze(button("Cancel", R(16, 72, 80, 40)), isHittable: true),
            CGPoint(x: 56, y: 92))
 
-// A title Text drawn over a sibling Pressable (a card) is a cover, not a run
-// of the target's text.
+// A title Text drawn over a sibling Pressable (a card) is not an interactive
+// control, so it is not named a cover (a pass-through label looks the same;
+// telling them apart needs an accessibility hit test, PILOT-364).
 let card: [Row] = [
     (0, .application, "App", "", screen),
     (1, .window, "", "", screen),
@@ -332,9 +336,19 @@ let card: [Row] = [
     (3, .button, "Open card", "", R(16, 400, 370, 120)),
     (3, .staticText, "Card title", "", R(16, 440, 370, 40)),
 ]
-check("a sibling Text overlaid on an unhittable Pressable covers it",
-      analyzer(card).analyze(button("Open card", R(16, 400, 370, 120)), isHittable: false),
-      .covered(by: "text \"Card title\""))
+checkPoint("a Text overlaid on an unhittable Pressable is not named a cover",
+           analyzer(card).analyze(button("Open card", R(16, 400, 370, 120)), isHittable: false),
+           CGPoint(x: 201, y: 460))
+// …but an interactive control painted over it is.
+let cardWithButton: [Row] = card + [(3, .button, "Close", "", R(16, 440, 370, 40))]
+check("an interactive control over an unhittable target covers it",
+      analyzer(cardWithButton).analyze(button("Open card", R(16, 400, 370, 120)), isHittable: false),
+      .covered(by: "button \"Close\""))
+// Presented containers cover what is under them too.
+let alertOver: [Row] = screenRows(extra: [(4, .alert, "Delete?", "", R(40, 250, 322, 200))])
+check("an alert over an unhittable target covers it",
+      alertOver.isEmpty ? .offScreen : analyzer(alertOver).analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "element \"Delete?\""))
 
 // ─── Geometry ───
 

@@ -25,14 +25,13 @@ import XCTest
 ///   content passes under a nav bar even though the bar comes first in the
 ///   tree) or painted after it — not over a sheet presented on top of their
 ///   screen. They clip the visible area like the keyboard does.
-/// - **Anything painted after the target** (later in a pre-order walk, which
-///   is the drawing order) that is not the target's own descendant, contains
-///   the touch point, and is *substantive* — not a plain unlabeled container.
-///   This check only runs when XCUITest says the element is not hittable: a
-///   `pointerEvents="none"` overlay shows up in the snapshot on top of its
-///   target exactly like a real cover, and only the hit test can tell them
-///   apart. Plain full-screen `Other` wrappers are painted after most content
-///   in React Native trees, hence the substantive filter.
+/// - **An interactive control painted after the target** (later in a
+///   pre-order walk, which is the drawing order) that is not the target's own
+///   descendant and contains the touch point: a button, link, input, cell,
+///   alert, sheet… This check only runs when XCUITest says the element is not
+///   hittable. Plain views, texts, and images are never named: a
+///   `pointerEvents="none"` overlay looks exactly like them, and on Xcode 26.6
+///   it fools XCUITest's hit test as well (see `interactiveTypes`).
 struct OcclusionAnalyzer {
     /// What the snapshot says about the target.
     enum Verdict: Equatable {
@@ -199,7 +198,7 @@ struct OcclusionAnalyzer {
             // over a sibling Pressable is not a run of the target's text.)
             if let paragraph, node.parent == paragraph, Self.textRunTypes.contains(node.elementType) { continue }
             if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-            guard isSubstantive(node), node.frame.contains(point) else { continue }
+            guard isInteractive(node), node.frame.contains(point) else { continue }
             cover = node
         }
         if let cover { return .covered(by: describe(cover)) }
@@ -343,18 +342,24 @@ struct OcclusionAnalyzer {
         return node.label.lowercased().contains("scroll bar")
     }
 
-    /// Worth naming as a cover: a typed element, or a generic one that carries
-    /// a label or identifier (a Pressable backdrop with a testID). Unlabeled
-    /// `Other` wrappers, windows, and the application are layout, not covers.
-    private func isSubstantive(_ node: Node) -> Bool {
-        switch node.elementType {
-        case .application, .window:
-            return false
-        case .other:
-            return !node.label.isEmpty || !node.identifier.isEmpty
-        default:
-            return true
-        }
+    /// Controls and presented containers: what, drawn over the target, would
+    /// take the touch. Measured on Xcode 26.6 (CI), XCUITest's hit test is
+    /// fooled by `pointerEvents="none"` views (a testID'd overlay, the test
+    /// hooks marker) just like the snapshot is, so "unhittable" is no
+    /// evidence that a plain view, a text, or an image over the point is a
+    /// real cover — only an interactive control is. A non-interactive view
+    /// that does intercept touches (an unlabeled backdrop) still gets the old
+    /// coordinate fallback; telling those apart needs an accessibility hit
+    /// test (PILOT-364).
+    static let interactiveTypes: Set<XCUIElement.ElementType> = [
+        .button, .link, .textField, .secureTextField, .textView, .searchField,
+        .switch, .toggle, .slider, .stepper, .segmentedControl, .picker, .pickerWheel,
+        .cell, .checkBox, .radioButton, .menuItem, .menuButton, .popUpButton,
+        .tab, .alert, .sheet, .dialog, .popover,
+    ]
+
+    private func isInteractive(_ node: Node) -> Bool {
+        Self.interactiveTypes.contains(node.elementType)
     }
 
     func describe(_ node: Node) -> String {
