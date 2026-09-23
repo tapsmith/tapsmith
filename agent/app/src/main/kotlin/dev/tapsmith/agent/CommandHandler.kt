@@ -186,7 +186,16 @@ class CommandHandler(
                 val idAddressed = !params.optString("elementId", null).isNullOrEmpty()
                 if (idAddressed || budget.remainingMs <= 0) throw e
                 Log.d(TAG, "resolved element changed into another before it was touched; resolving again")
-                element = resolveElement(params, timeout = budget.remainingMs)
+                element =
+                    try {
+                        resolveElement(params, timeout = budget.remainingMs)
+                    } catch (_: TimeoutException) {
+                        // Say what happened, not "timed out after <the few ms left>".
+                        throw ElementNotFoundException(
+                            "Element not found any more — it changed into another element before it could be " +
+                                "touched, and nothing matches the locator now",
+                        )
+                    }
             }
         }
     }

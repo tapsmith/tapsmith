@@ -343,7 +343,7 @@ class ActionExecutor(
             // The refocus is one check, no waiting — the first tap may have
             // moved the field (a keyboard-avoiding view lifting it).
             try {
-                clickToFocus(element, null, budget.noWait(), expected, FALLBACK_FOLLOW_UP_MS)
+                refocusForFallback(element, budget, expected)
                 device.waitForIdle(1000)
                 // Key events route through the IME; injecting while the input
                 // session is still restarting after the focus click silently
@@ -353,6 +353,10 @@ class ActionExecutor(
             } catch (e2: StaleObjectException) {
                 throw e2
             } catch (e2: Exception) {
+                // No time left to retry is not the failure: the first attempt's is.
+                if (e2 is TouchTooLateException) {
+                    throw ActionFailedException("Failed to type text: ${e.message} (no time left to retry before the daemon gives up)")
+                }
                 rethrowTouchRefusal(e2)
                 throw ActionFailedException(
                     "Failed to type text: ${e.message} (fallback also failed: ${e2.message})",
@@ -407,6 +411,34 @@ class ActionExecutor(
             // Gone invisible or down to a sliver since it was resolved: see
             // planTouchPoint.
             OcclusionGuard.Plan.OffScreen -> throw notOnScreen()
+        }
+    }
+
+    /**
+     * The fallback's refocus: one check, no waiting — the first tap may have
+     * moved the field (a keyboard-avoiding view lifting it). When the keyboard
+     * refuses it, the first tap usually did land and raised that keyboard
+     * while the field's focus is still arriving: wait for focus (as the
+     * fallback always did) and carry on without a tap if it arrives.
+     */
+    private fun refocusForFallback(
+        element: UiObject2,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
+    ) {
+        try {
+            clickToFocus(element, null, budget.noWait(), expected, FALLBACK_FOLLOW_UP_MS)
+        } catch (e: ElementCoveredException) {
+            if (e.kind != OcclusionAnalyzer.CoverKind.KEYBOARD) throw e
+            waitForFocus(element)
+            val focused =
+                try {
+                    element.isFocused
+                } catch (_: Exception) {
+                    false
+                }
+            if (!focused) throw e
+            Log.d(TAG, "fallback refocus skipped: the field got focus under its keyboard")
         }
     }
 
@@ -524,7 +556,7 @@ class ActionExecutor(
             rethrowTouchRefusal(e)
             // Fallback: triple-click to select all, then press delete
             try {
-                clickToFocus(element, null, budget.noWait(), expected, FALLBACK_FOLLOW_UP_MS)
+                refocusForFallback(element, budget, expected)
                 device.waitForIdle(200)
                 // Use shell to select all and delete
                 device.executeShellCommand("input keyevent KEYCODE_MOVE_HOME")
@@ -533,6 +565,10 @@ class ActionExecutor(
             } catch (e2: StaleObjectException) {
                 throw e2
             } catch (e2: Exception) {
+                // No time left to retry is not the failure: the first attempt's is.
+                if (e2 is TouchTooLateException) {
+                    throw ActionFailedException("Failed to clear text: ${e.message} (no time left to retry before the daemon gives up)")
+                }
                 rethrowTouchRefusal(e2)
                 throw ActionFailedException(
                     "Failed to clear text: ${e.message} (fallback also failed: ${e2.message})",

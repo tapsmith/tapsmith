@@ -8123,10 +8123,12 @@ fn long_press_resolve_budget(timeout_ms: u64, duration_ms: u64) -> u64 {
 const DEFAULT_AGENT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How long the daemon waits for an agent gesture that takes time of its own
-/// after the action timeout (which the agent may spend waiting out a cover —
-/// PILOT-223, PILOT-362): the timeout, or the default wait for a zero one,
-/// plus the gesture. Without it the gesture would be cut off, and the agent
-/// refuses to start one it cannot finish before the daemon gives up.
+/// (a long press's hold, a double tap's interval): the timeout, or the default
+/// wait for a zero one, plus the gesture. The agents keep a covered target's
+/// wait and the gesture inside the timeout where they can (PILOT-223,
+/// PILOT-362), so this extra is for a gesture longer than what is left of the
+/// timeout — without it that gesture would be cut off, and the agent refuses
+/// to start one it cannot finish before the daemon gives up.
 fn agent_wait_with_gesture_ms(timeout_ms: u64, gesture_ms: u64) -> u64 {
     let base = if timeout_ms > 0 {
         timeout_ms

@@ -66,6 +66,11 @@ object OcclusionAnalyzer {
      *  up and names no cover. */
     const val MAX_NODES_VISITED = 2000
 
+    /** Separate allowance for finding the target's place at each ancestor
+     *  level: the cover search must always reach the root (where full-screen
+     *  overlays paint), however wide a level the target sits in. */
+    const val MAX_PATH_NODES_VISITED = 10_000
+
     private const val MAX_LABEL_LENGTH = 40
 
     sealed class Verdict {
@@ -260,24 +265,24 @@ object OcclusionAnalyzer {
         x: Int,
         y: Int,
     ): HitNode? {
+        val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
         val reader = BudgetedReader(MAX_NODES_VISITED)
-        // (parent, index of the target's branch among its children), from the
-        // target's parent up to the root.
-        val levels = mutableListOf<Pair<HitNode, Int>>()
+        // (parent, the target's branch, its index among the parent's
+        // children), from the target's parent up to the root.
+        val levels = mutableListOf<Triple<HitNode, HitNode, Int>>()
         var child = target
         var parent = child.parent()
         while (parent != null) {
             val level = parent
             val index =
-                (0 until level.childCount()).firstOrNull { i -> reader.child(level, i)?.sameAs(child) == true }
+                (0 until level.childCount()).firstOrNull { i -> pathReader.child(level, i)?.sameAs(child) == true }
                     ?: break
-            levels.add(level to index)
+            levels.add(Triple(level, child, index))
             child = level
             parent = child.parent()
         }
 
-        for ((node, branchIndex) in levels.asReversed()) {
-            val branch = reader.child(node, branchIndex) ?: continue
+        for ((node, branch, branchIndex) in levels.asReversed()) {
             val branchKey = drawKey(branch, branchIndex)
             val later =
                 (0 until node.childCount())

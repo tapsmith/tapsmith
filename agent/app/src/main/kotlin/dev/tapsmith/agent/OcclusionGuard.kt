@@ -89,6 +89,7 @@ class OcclusionGuard(
         reserveMs: Long = 0,
     ): Plan {
         val clock = TouchPlanClock(budget.startMs, budget.timeoutMs, budget.readDeadlineMs, reserveMs)
+        val planStartMs = SystemClock.uptimeMillis()
         val bounds = Rect(initialBounds)
         var firstPass = true
         // For a target nothing of its own identifies (an unlabelled
@@ -121,11 +122,17 @@ class OcclusionGuard(
                         Rect(verdict.visible.left, verdict.visible.top, verdict.visible.right, verdict.visible.bottom),
                     )
                 }
-                OcclusionAnalyzer.Verdict.OffScreen -> return Plan.OffScreen
+                // Not on screen, or not visible to the user (mid-fade, a
+                // transition): re-check within the budget like a cover — it may
+                // be visible in a moment — and only then report it.
+                OcclusionAnalyzer.Verdict.OffScreen -> {
+                    val sleep = clock.sleepBeforeNextPass(now) ?: return Plan.OffScreen
+                    SystemClock.sleep(sleep)
+                }
                 is OcclusionAnalyzer.Verdict.Covered -> {
                     val sleep =
                         clock.sleepBeforeNextPass(now)
-                            ?: throw ElementCoveredException(coveredMessage(verdict.by, budget.timeoutMs), verdict.kind)
+                            ?: throw ElementCoveredException(coveredMessage(verdict.by, now - planStartMs), verdict.kind)
                     if (contentWhenCovered == null && node != null && expected?.identifiedOnlyByContent == true) {
                         contentWhenCovered = contentOf(node)
                     }
@@ -189,6 +196,7 @@ class OcclusionGuard(
             (n.text ?: n.contentDescription)?.toString()?.takeIf { it.isNotEmpty() }?.let(parts::add)
             if (depth >= CONTENT_DEPTH) return
             for (i in 0 until n.childCount) {
+                if (budget <= 0) return
                 val child = n.getChild(i) ?: continue
                 walk(child, depth + 1)
             }
@@ -248,12 +256,14 @@ class OcclusionGuard(
         }
     }
 
+    /** [waitedMs] is how long the cover was actually waited out, not the
+     *  action timeout (resolving the element may have used part of it). */
     private fun coveredMessage(
         cover: String,
-        timeoutMs: Long,
+        waitedMs: Long,
     ): String {
         var message = "Element is covered by $cover, so a touch would land on it instead"
-        if (timeoutMs > 0) message += " (still covered after waiting ${timeoutMs}ms)"
+        if (waitedMs > 0) message += " (still covered after waiting ${waitedMs}ms)"
         if (cover == "the keyboard") {
             message += ". Dismiss the keyboard first (device.hideKeyboard()) or scroll the element into view."
         }

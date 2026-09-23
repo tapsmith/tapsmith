@@ -477,6 +477,19 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
+    fun `a target deep in a very wide level still sees an overlay at the root`() {
+        // Finding the target's place among thousands of siblings must not use
+        // up the budget the cover search needs for the root, where full-screen
+        // overlays paint.
+        val misses = Array(OcclusionAnalyzer.MAX_NODES_VISITED + 500) { FakeNode(Box(0, 0, 10, 10)) }
+        val target = FakeNode(Box(40, 780, 1040, 930), takesTouches = true)
+        val content = FakeNode(screen, drawingOrder = 1).add(*misses, target)
+        val scrim = FakeNode(screen, drawingOrder = 2, takesTouches = true, name = "scrim")
+        root(content, scrim)
+        assertCoveredBy(analyze(target), "scrim")
+    }
+
+    @Test
     fun `a walk that runs past its node budget stops without naming a cover`() {
         // A pathological tree (thousands of nodes over the point) must not
         // stall the action: past the budget the check gives up on the tree.
