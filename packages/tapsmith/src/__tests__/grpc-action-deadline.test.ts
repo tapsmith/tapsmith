@@ -49,6 +49,27 @@ describe('element action gRPC deadlines', () => {
   }
 });
 
+describe('gesture gRPC deadlines', () => {
+  it('long press also outlasts the hold, which the daemon waits on top of the timeout', async () => {
+    const capture: Capture = {};
+    await clientCapturing('longPress', capture).longPress(sel, 60_000, 90_000);
+    expect(capture.deadlineMs).toBeGreaterThanOrEqual(179_000);
+  });
+
+  it("a zero timeout counts as the daemon's 30 s default wait, plus the hold", async () => {
+    const capture: Capture = {};
+    await clientCapturing('longPress', capture).longPress(sel, 40_000, 0);
+    // Daemon: 30 s + 40 s hold + 5 s headroom.
+    expect(capture.deadlineMs).toBeGreaterThan(75_000);
+  });
+
+  it('double tap also outlasts its interval', async () => {
+    const capture: Capture = {};
+    await clientCapturing('doubleTap', capture).doubleTap(sel, 90_000, 30_000);
+    expect(capture.deadlineMs).toBeGreaterThanOrEqual(149_000);
+  });
+});
+
 describe('element action gRPC deadlines with a raised daemon read headroom', () => {
   afterEach(() => vi.unstubAllEnvs());
 

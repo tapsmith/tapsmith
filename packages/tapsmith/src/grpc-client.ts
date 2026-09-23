@@ -318,6 +318,19 @@ function actionCallDeadlineMs(timeoutMs: number | undefined): number {
   return Math.max(60_000, (timeoutMs ?? 0) + daemonReadHeadroomMs() + 25_000);
 }
 
+/** The daemon's wait for an agent command sent with no timeout. */
+const DAEMON_DEFAULT_AGENT_WAIT_MS = 30_000;
+
+/**
+ * gRPC deadline for a gesture that takes time of its own after the action
+ * timeout (a long press's hold, a double tap's interval): the daemon waits for
+ * it on top of the timeout — or on top of its default wait, for a zero one.
+ */
+function gestureCallDeadlineMs(timeoutMs: number | undefined, gestureMs: number): number {
+  const base = timeoutMs && timeoutMs > 0 ? timeoutMs : DAEMON_DEFAULT_AGENT_WAIT_MS;
+  return actionCallDeadlineMs(base + gestureMs);
+}
+
 /**
  * The headroom the daemon adds to an action's timeout while it waits for the
  * agent (`TAPSMITH_AGENT_READ_HEADROOM_MS`, default 5 s), parsed the way the
@@ -491,7 +504,7 @@ export class TapsmithGrpcClient {
       ...this.actionTarget(selector, elementId),
       durationMs: durationMs ?? 0,
       timeoutMs: timeoutMs ?? 0,
-    }, actionCallDeadlineMs(timeoutMs));
+    }, gestureCallDeadlineMs(timeoutMs, durationMs || 1_000));
   }
 
   async typeText(selector: Selector | undefined, text: string, timeoutMs?: number, typingDelayMs?: number, elementId?: string): Promise<ActionResponse> {
@@ -712,7 +725,7 @@ export class TapsmithGrpcClient {
       ...this.actionTarget(selector, elementId),
       timeoutMs: timeoutMs ?? 0,
       intervalMs: intervalMs ?? 0,
-    }, actionCallDeadlineMs(timeoutMs));
+    }, gestureCallDeadlineMs(timeoutMs, (intervalMs || 100) + 100));
   }
 
   async dragAndDrop(

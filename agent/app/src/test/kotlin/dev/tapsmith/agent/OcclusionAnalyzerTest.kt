@@ -33,7 +33,14 @@ class OcclusionAnalyzerTest {
 
         override fun childCount(): Int = children.size
 
-        override fun child(index: Int): OcclusionAnalyzer.HitNode? = children.getOrNull(index)
+        override fun child(index: Int): OcclusionAnalyzer.HitNode? {
+            childReads++
+            return children.getOrNull(index)
+        }
+
+        companion object {
+            var childReads = 0
+        }
 
         override fun sameAs(other: OcclusionAnalyzer.HitNode): Boolean = this === other
 
@@ -79,7 +86,13 @@ class OcclusionAnalyzerTest {
         verdict: Verdict,
         cover: String,
     ) {
-        assertEquals(Verdict.Covered(cover), verdict)
+        assertTrue("expected Covered, got $verdict", verdict is Verdict.Covered)
+        assertEquals(cover, (verdict as Verdict.Covered).by)
+    }
+
+    private fun coverKind(verdict: Verdict): OcclusionAnalyzer.CoverKind {
+        assertTrue("expected Covered, got $verdict", verdict is Verdict.Covered)
+        return (verdict as Verdict.Covered).kind
     }
 
     // ─── Nothing in the way ───
@@ -165,6 +178,15 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
+    fun `a window stacked above the keyboard is not covered by it`() {
+        // A suggestions popup that needs the IME is placed above it.
+        val popup = WindowSpec(id = 8, kind = WindowKind.APPLICATION, layer = 7, bounds = Box(0, 1400, 1080, 1700), title = null)
+        val suggestion = FakeNode(Box(0, 1550, 1080, 1650), takesTouches = true)
+        root(suggestion)
+        assertClearAt(analyze(suggestion, windows = listOf(appWindow, keyboard, popup), targetWindowId = 8), 540, 1600)
+    }
+
+    @Test
     fun `the keyboard counts even when the target's window is unknown`() {
         val button = FakeNode(Box(40, 2200, 1040, 2340), takesTouches = true)
         root(button)
@@ -176,6 +198,38 @@ class OcclusionAnalyzerTest {
         val button = FakeNode(Box(40, 1300, 1040, 2340), isVisible = false, takesTouches = true)
         root(button)
         assertCoveredBy(analyze(button, windows = listOf(appWindow, keyboard)), "the keyboard")
+    }
+
+    @Test
+    fun `a target the framework reports invisible under a dialog window is covered by the dialog`() {
+        // Android marks a node invisible when a window above hides it, not
+        // only the keyboard; that is a cover to wait out, not "off screen".
+        val dialog = WindowSpec(id = 4, kind = WindowKind.APPLICATION, layer = 2, bounds = Box(0, 0, 1080, 2400), title = "Loading")
+        val button = FakeNode(Box(40, 100, 1040, 300), isVisible = false, takesTouches = true)
+        root(button)
+        val verdict = analyze(button, windows = listOf(appWindow, dialog))
+        assertCoveredBy(verdict, "the window \"Loading\"")
+        assertEquals(OcclusionAnalyzer.CoverKind.WINDOW, coverKind(verdict))
+    }
+
+    @Test
+    fun `covers say what kind of thing they are`() {
+        // The focusing tap of a focused field is skipped under the keyboard or
+        // a control on its own screen (input still reaches it), never under
+        // another window (which takes the input).
+        val kb = FakeNode(Box(40, 2200, 1040, 2340), takesTouches = true)
+        root(kb)
+        assertEquals(OcclusionAnalyzer.CoverKind.KEYBOARD, coverKind(analyze(kb, windows = listOf(appWindow, keyboard))))
+
+        val dialog = WindowSpec(id = 4, kind = WindowKind.APPLICATION, layer = 2, bounds = Box(0, 0, 1080, 2400), title = null)
+        val underDialog = FakeNode(Box(40, 100, 1040, 300), takesTouches = true)
+        root(underDialog)
+        assertEquals(OcclusionAnalyzer.CoverKind.WINDOW, coverKind(analyze(underDialog, windows = listOf(appWindow, dialog))))
+
+        val covered = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val overlay = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 2, takesTouches = true)
+        root(FakeNode(screen).add(covered, overlay))
+        assertEquals(OcclusionAnalyzer.CoverKind.CONTROL, coverKind(analyze(covered)))
     }
 
     @Test
@@ -254,6 +308,16 @@ class OcclusionAnalyzerTest {
         root(button)
         val verdict = analyze(button, windows = listOf(appWindow, keyboard, banner))
         assertTrue("expected Covered, got $verdict", verdict is Verdict.Covered)
+    }
+
+    @Test
+    fun `a piece set aside by one window is still used when a later one covers the rest`() {
+        // A popup over the middle leaves a small top piece (1300..1450) and a
+        // large bottom one (1650..2340); the keyboard then covers the bottom.
+        val popup = WindowSpec(id = 4, kind = WindowKind.APPLICATION, layer = 9, bounds = Box(0, 1450, 1080, 1650), title = null)
+        val tall = FakeNode(Box(40, 1300, 1040, 2340), takesTouches = true)
+        root(tall)
+        assertClearAt(analyze(tall, windows = listOf(appWindow, keyboard, popup)), 540, 1375)
     }
 
     @Test
@@ -401,6 +465,18 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
+    fun `wide ancestor levels count against the node budget`() {
+        // Thousands of siblings at the target's own level must not be read
+        // without limit: each read can be a blocking accessibility round-trip.
+        val target = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val misses = Array(OcclusionAnalyzer.MAX_NODES_VISITED * 3) { FakeNode(Box(0, 0, 10, 10), drawingOrder = 2) }
+        root(FakeNode(screen).add(target, *misses))
+        FakeNode.childReads = 0
+        assertClearAt(analyze(target), 540, 855)
+        assertTrue("read ${FakeNode.childReads} children", FakeNode.childReads <= OcclusionAnalyzer.MAX_NODES_VISITED * 2)
+    }
+
+    @Test
     fun `a walk that runs past its node budget stops without naming a cover`() {
         // A pathological tree (thousands of nodes over the point) must not
         // stall the action: past the budget the check gives up on the tree.
@@ -466,6 +542,26 @@ class TargetIdentityTest {
     fun `an editable field's text is its value, not its identity`() {
         val field = TargetIdentity("android.widget.EditText", "app:id/name", null, "Ada")
         assertTrue(field.matches("android.widget.EditText", "app:id/name", null, "Ada Lovelace", isEditable = true))
+    }
+
+    @Test
+    fun `an element identified by label or id may change its own text`() {
+        // A stopwatch or countdown button: its text is content, not identity.
+        val byId = TargetIdentity("android.widget.Button", "app:id/record", null, "00:03.41")
+        assertTrue(byId.matches("android.widget.Button", "app:id/record", null, "00:03.46", isEditable = false))
+        val byLabel = TargetIdentity("android.widget.Button", null, "Record", "00:03.41")
+        assertTrue(byLabel.matches("android.widget.Button", null, "Record", "00:03.46", isEditable = false))
+    }
+
+    @Test
+    fun `only an element with no label, id or text of its own needs its content re-checked`() {
+        // An unlabelled RN Pressable: its visible text lives in a child view,
+        // so the fields above cannot tell it from a replacement in its place.
+        assertTrue(TargetIdentity("android.view.ViewGroup", null, null, null).identifiedOnlyByContent)
+        assertTrue(TargetIdentity("android.view.ViewGroup", "", "", "").identifiedOnlyByContent)
+        assertFalse(TargetIdentity("android.view.ViewGroup", "app:id/save", null, null).identifiedOnlyByContent)
+        assertFalse(TargetIdentity("android.widget.Button", null, "Save", null).identifiedOnlyByContent)
+        assertFalse(TargetIdentity("android.widget.TextView", null, null, "Save").identifiedOnlyByContent)
     }
 
     @Test

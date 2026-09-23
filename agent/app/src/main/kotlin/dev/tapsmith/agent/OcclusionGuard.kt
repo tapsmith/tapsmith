@@ -27,6 +27,10 @@ class ActionBudget(
 
     val remainingMs: Long get() = startMs + timeoutMs - SystemClock.uptimeMillis()
 
+    /** The same deadlines with [ms] less to wait: a gesture that takes [ms]
+     *  itself after the wait still fits the timeout. */
+    fun shortenedBy(ms: Long): ActionBudget = ActionBudget(startMs, (timeoutMs - ms).coerceAtLeast(0), readDeadlineMs)
+
     val hasTimeLeft: Boolean get() = remainingMs > 0
 }
 
@@ -49,6 +53,10 @@ class OcclusionGuard(
 ) {
     companion object {
         private const val TAG = "TapsmithOcclusion"
+
+        /** Bounds on reading an unlabelled target's content (see [contentOf]). */
+        private const val CONTENT_NODES_READ = 64
+        private const val CONTENT_DEPTH = 4
     }
 
     sealed class Plan {
@@ -83,32 +91,44 @@ class OcclusionGuard(
         val clock = TouchPlanClock(budget.startMs, budget.timeoutMs, budget.readDeadlineMs, reserveMs)
         val bounds = Rect(initialBounds)
         var firstPass = true
+        // For a target nothing of its own identifies (an unlabelled
+        // container), the text inside it when a cover was first seen: a
+        // replacement rendered into the same view while the cover is waited
+        // out shows different content.
+        var contentWhenCovered: String? = null
         while (true) {
             // Refreshes the node; throws StaleObjectException when it is gone,
             // which the SDK answers by re-resolving.
             val node = nodeInfoOf(element)
             if (node != null) {
                 if (expected != null && !matches(expected, node)) throw TargetChangedException()
+                if (contentWhenCovered != null && contentOf(node) != contentWhenCovered) throw TargetChangedException()
                 if (!firstPass) node.getBoundsInScreen(bounds)
             }
             firstPass = false
             val verdict = analyze(node, bounds)
-            // Checked after the pass: a slow pass that ends past the deadline
-            // fails now instead of paying for another one.
             val now = SystemClock.uptimeMillis()
-            if (clock.isTooLateToAct(now)) throw TouchTooLateException()
             when (verdict) {
-                is OcclusionAnalyzer.Verdict.Clear ->
+                is OcclusionAnalyzer.Verdict.Clear -> {
+                    // Only a touch can be too late: a pass that ends past the
+                    // point where the touch could still answer the daemon
+                    // refuses it. A cover that outlasts the budget is still
+                    // reported as the cover, below.
+                    if (clock.isTooLateToAct(now)) throw TouchTooLateException()
                     return Plan.Point(
                         verdict.x,
                         verdict.y,
                         Rect(verdict.visible.left, verdict.visible.top, verdict.visible.right, verdict.visible.bottom),
                     )
+                }
                 OcclusionAnalyzer.Verdict.OffScreen -> return Plan.OffScreen
                 is OcclusionAnalyzer.Verdict.Covered -> {
                     val sleep =
                         clock.sleepBeforeNextPass(now)
-                            ?: throw ElementCoveredException(coveredMessage(verdict.by, budget.timeoutMs))
+                            ?: throw ElementCoveredException(coveredMessage(verdict.by, budget.timeoutMs), verdict.kind)
+                    if (contentWhenCovered == null && node != null && expected?.identifiedOnlyByContent == true) {
+                        contentWhenCovered = contentOf(node)
+                    }
                     Log.d(TAG, "element is covered by ${verdict.by}; waiting")
                     SystemClock.sleep(sleep)
                 }
@@ -118,23 +138,28 @@ class OcclusionGuard(
 
     /**
      * [plan] for a focusing tap (type, clear, focus), or null when no tap is
-     * needed. One immediate check first; when a tap cannot land — typically a
+     * needed. One immediate check first; when a tap cannot land because the
+     * keyboard or a control on the field's own screen covers it — typically a
      * field behind the keyboard it raised — and the field already has input
-     * focus, skip the tap: input goes to it anyway. Otherwise wait out the
-     * cover as usual.
+     * focus, skip the tap: input goes to it anyway. Under another window (a
+     * dialog) the field does not get the input, so that cover is waited out
+     * as usual. [reserveMs] is the work the caller does after the tap
+     * (setting text, waiting for focus), which must also finish before the
+     * daemon gives up.
      */
     fun planFocusTap(
         element: UiObject2,
         initialBounds: Rect,
         budget: ActionBudget,
         expected: TargetIdentity?,
+        reserveMs: Long,
     ): Plan? {
         return try {
-            plan(element, initialBounds, budget.noWait(), expected)
+            plan(element, initialBounds, budget.noWait(), expected, reserveMs)
         } catch (e: ElementCoveredException) {
-            if (isFocused(element)) return null
+            if (e.kind != OcclusionAnalyzer.CoverKind.WINDOW && isFocused(element)) return null
             if (!budget.hasTimeLeft) throw e
-            plan(element, initialBounds, budget, expected)
+            plan(element, initialBounds, budget, expected, reserveMs)
         }
     }
 
@@ -149,6 +174,28 @@ class OcclusionGuard(
             text = node.text?.toString(),
             isEditable = node.isEditable,
         )
+
+    /** The text and content descriptions inside [node], in tree order —
+     *  bounded, since each read can be an accessibility round-trip. */
+    private fun contentOf(node: AccessibilityNodeInfo): String {
+        val parts = mutableListOf<String>()
+        var budget = CONTENT_NODES_READ
+
+        fun walk(
+            n: AccessibilityNodeInfo,
+            depth: Int,
+        ) {
+            if (budget-- <= 0) return
+            (n.text ?: n.contentDescription)?.toString()?.takeIf { it.isNotEmpty() }?.let(parts::add)
+            if (depth >= CONTENT_DEPTH) return
+            for (i in 0 until n.childCount) {
+                val child = n.getChild(i) ?: continue
+                walk(child, depth + 1)
+            }
+        }
+        walk(node, 0)
+        return parts.joinToString("\u0000")
+    }
 
     private fun isFocused(element: UiObject2): Boolean =
         try {
@@ -248,8 +295,11 @@ private fun Rect.toBox() = Box(left, top, right, bottom)
  *  or bury the error type in a generic ACTION_FAILED. */
 sealed class TouchRefusedException(message: String) : RuntimeException(message)
 
-/** A touch on the element would land on something drawn over it. */
-class ElementCoveredException(message: String) : TouchRefusedException(message)
+/** A touch on the element would land on something drawn over it, of [kind]. */
+class ElementCoveredException(
+    message: String,
+    val kind: OcclusionAnalyzer.CoverKind,
+) : TouchRefusedException(message)
 
 /** The resolved node now shows a different element (React reused its view):
  *  a selector-addressed action re-resolves, an id-addressed one is stale. */

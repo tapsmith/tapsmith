@@ -100,10 +100,12 @@ class CommandHandler(
 
     /**
      * The time an element action may spend, counted from the command's
-     * arrival: its `timeout` (the same default the selector wait uses) and the
-     * daemon's `readTimeoutMs`, stamped on every command — past it the daemon
-     * has given up, and a touch then would land in the middle of whatever the
-     * test does next (PILOT-362).
+     * arrival: its `timeout` and the daemon's `readTimeoutMs`, stamped on every
+     * command — past it the daemon has given up, and a touch then would land
+     * in the middle of whatever the test does next (PILOT-362). The daemon
+     * sends no `timeout` for an explicit zero (no-wait) one, so a missing
+     * `timeout` means no waiting for a cover — a single check, as on iOS. (The
+     * selector wait keeps its own 10 s default for a missing `timeout`.)
      */
     private fun actionBudget(
         params: JSONObject,
@@ -112,7 +114,7 @@ class CommandHandler(
         val readTimeoutMs = params.optLong("readTimeoutMs", 0L)
         return ActionBudget(
             startMs = startMs,
-            timeoutMs = params.optLong("timeout", 10000L),
+            timeoutMs = params.optLong("timeout", 0L),
             readDeadlineMs = if (readTimeoutMs > 0) startMs + readTimeoutMs else null,
         )
     }

@@ -21,7 +21,9 @@ class TouchPlanClock(
         const val POLL_MS = 250L
 
         /** Room left before the daemon's read deadline for the touch itself
-         *  and the answer to reach the daemon. */
+         *  and the answer to reach the daemon — capped at the headroom the
+         *  daemon gave past the timeout, so a lowered
+         *  TAPSMITH_AGENT_READ_HEADROOM_MS does not refuse every late touch. */
         const val READ_DEADLINE_MARGIN_MS = 1000L
 
         /** Fallback when the daemon did not say how long it waits: past the
@@ -45,7 +47,8 @@ class TouchPlanClock(
      *  up, and would land in the middle of whatever the test does next. */
     fun isTooLateToAct(nowMs: Long): Boolean {
         if (readDeadlineMs != null) {
-            return nowMs + reserveMs.coerceAtLeast(0) + READ_DEADLINE_MARGIN_MS > readDeadlineMs
+            val margin = READ_DEADLINE_MARGIN_MS.coerceAtMost((readDeadlineMs - deadlineMs).coerceAtLeast(0))
+            return nowMs + reserveMs.coerceAtLeast(0) + margin > readDeadlineMs
         }
         // Older daemon: a zero budget is a single check on its default deadline.
         return timeoutMs > 0 && nowMs - deadlineMs > LATE_WITHOUT_READ_DEADLINE_MS

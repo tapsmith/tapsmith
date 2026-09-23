@@ -48,6 +48,19 @@ class TouchPlanClockTest {
     }
 
     @Test
+    fun `the margin never exceeds the headroom the daemon gave`() {
+        // TAPSMITH_AGENT_READ_HEADROOM_MS=0: the daemon waits exactly the
+        // timeout, so demanding a 1 s margin would refuse every late touch.
+        val clock = TouchPlanClock(startMs = 0, timeoutMs = 1_000, readDeadlineMs = 1_000)
+        assertFalse(clock.isTooLateToAct(nowMs = 50))
+        assertTrue(clock.isTooLateToAct(nowMs = 1_001))
+        // Half the usual margin with a 500 ms headroom.
+        val half = TouchPlanClock(startMs = 0, timeoutMs = 1_000, readDeadlineMs = 1_500)
+        assertFalse(half.isTooLateToAct(nowMs = 1_000))
+        assertTrue(half.isTooLateToAct(nowMs = 1_001))
+    }
+
+    @Test
     fun `a reserved hold moves the too-late point earlier`() {
         val clock = TouchPlanClock(startMs = 0, timeoutMs = 2_000, readDeadlineMs = 7_000, reserveMs = 3_000)
         assertFalse(clock.isTooLateToAct(nowMs = 4_000 - TouchPlanClock.READ_DEADLINE_MARGIN_MS))

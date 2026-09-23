@@ -634,7 +634,7 @@ impl TapsmithServiceImpl {
         let timeout = if timeout_ms > 0 {
             Duration::from_millis(timeout_ms)
         } else {
-            Duration::from_secs(30)
+            DEFAULT_AGENT_COMMAND_TIMEOUT
         };
         let params = Self::agent_params(&*self.agent.read().await)?;
         agent_comms::send_with_persistent_cache(&self.agent_stream, &params, command, timeout)
@@ -650,7 +650,7 @@ impl TapsmithServiceImpl {
         let timeout = if timeout_ms > 0 {
             Duration::from_millis(timeout_ms)
         } else {
-            Duration::from_secs(30)
+            DEFAULT_AGENT_COMMAND_TIMEOUT
         };
         let params = Self::agent_params(&*self.agent.read().await)?;
         let started = std::time::Instant::now();
@@ -2959,7 +2959,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         };
 
         let result = self
-            .send_agent_command_with_timeout(&command, req.timeout_ms)
+            .send_agent_command_with_timeout(
+                &command,
+                agent_wait_with_gesture_ms(req.timeout_ms, hold_ms(req.duration_ms)),
+            )
             .await;
         self.make_action_response(request_id, result).await
     }
@@ -3897,7 +3900,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         };
 
         let result = self
-            .send_agent_command_with_timeout(&command, req.timeout_ms)
+            .send_agent_command_with_timeout(
+                &command,
+                agent_wait_with_gesture_ms(req.timeout_ms, double_tap_ms(req.interval_ms)),
+            )
             .await;
         self.make_action_response(request_id, result).await
     }
@@ -8113,6 +8119,39 @@ fn long_press_resolve_budget(timeout_ms: u64, duration_ms: u64) -> u64 {
     timeout_ms.saturating_sub(hold)
 }
 
+/// The daemon's wait for an agent command sent with no timeout.
+const DEFAULT_AGENT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long the daemon waits for an agent gesture that takes time of its own
+/// after the action timeout (which the agent may spend waiting out a cover —
+/// PILOT-223, PILOT-362): the timeout, or the default wait for a zero one,
+/// plus the gesture. Without it the gesture would be cut off, and the agent
+/// refuses to start one it cannot finish before the daemon gives up.
+fn agent_wait_with_gesture_ms(timeout_ms: u64, gesture_ms: u64) -> u64 {
+    let base = if timeout_ms > 0 {
+        timeout_ms
+    } else {
+        u64::try_from(DEFAULT_AGENT_COMMAND_TIMEOUT.as_millis()).unwrap_or(u64::MAX)
+    };
+    base.saturating_add(gesture_ms)
+}
+
+/// A long press's hold; 0 means the agents' default 1 s.
+fn hold_ms(duration_ms: u64) -> u64 {
+    if duration_ms == 0 {
+        1000
+    } else {
+        duration_ms
+    }
+}
+
+/// A double tap's own duration: the gap between the taps (0 means the
+/// agents' default 100 ms) plus the two presses.
+fn double_tap_ms(interval_ms: u64) -> u64 {
+    let gap = if interval_ms == 0 { 100 } else { interval_ms };
+    gap.saturating_add(100)
+}
+
 /// Outcome of trying a gesture through the iOS-simulator HID helper.
 #[cfg(target_os = "macos")]
 enum HidOutcome {
@@ -9006,6 +9045,24 @@ mod tests {
             error_type: Some(error_type.into()),
             data: Value::Null,
         })
+    }
+
+    #[test]
+    fn agent_gesture_wait_covers_the_gesture() {
+        // The agent holds the press after its cover wait, so the daemon must
+        // wait the timeout plus the hold.
+        assert_eq!(agent_wait_with_gesture_ms(2_000, hold_ms(5_000)), 7_000);
+        // 0 means the agent's default 1 s hold.
+        assert_eq!(agent_wait_with_gesture_ms(2_000, hold_ms(0)), 3_000);
+        // A zero timeout is the default wait, plus the gesture.
+        assert_eq!(agent_wait_with_gesture_ms(0, hold_ms(32_000)), 62_000);
+        assert_eq!(agent_wait_with_gesture_ms(u64::MAX, 5_000), u64::MAX);
+        // A double tap's gap (0 = default 100 ms) plus its two presses.
+        assert_eq!(
+            agent_wait_with_gesture_ms(2_000, double_tap_ms(3_000)),
+            5_100
+        );
+        assert_eq!(agent_wait_with_gesture_ms(2_000, double_tap_ms(0)), 2_200);
     }
 
     #[test]

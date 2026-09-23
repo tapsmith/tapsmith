@@ -60,9 +60,10 @@ object OcclusionAnalyzer {
      *  thinner risks the integer touch point landing just outside. */
     const val MIN_VISIBLE_EXTENT = 2
 
-    /** Upper bound on nodes visited when searching the target's window for a
-     *  cover, so a pathological tree cannot stall an action. Past it the tree
-     *  check gives up and names no cover. */
+    /** Upper bound on child nodes read when searching the target's window for
+     *  a cover — each read can be a blocking accessibility round-trip — so a
+     *  pathological tree cannot stall an action. Past it the tree check gives
+     *  up and names no cover. */
     const val MAX_NODES_VISITED = 2000
 
     private const val MAX_LABEL_LENGTH = 40
@@ -74,8 +75,8 @@ object OcclusionAnalyzer {
         data class Clear(val x: Int, val y: Int, val visible: Box) : Verdict()
 
         /** The element is covered, by the thing [by] names ("the keyboard",
-         *  `button "Overlay"`). */
-        data class Covered(val by: String) : Verdict()
+         *  `button "Overlay"`), of [kind]. */
+        data class Covered(val by: String, val kind: CoverKind) : Verdict()
 
         /** No part of the element is on screen. */
         object OffScreen : Verdict() {
@@ -84,6 +85,11 @@ object OcclusionAnalyzer {
     }
 
     enum class WindowKind { INPUT_METHOD, SYSTEM, APPLICATION, OTHER }
+
+    /** What a cover is. A focused field under the keyboard or a control on
+     *  its own screen still gets the input; under another window it does
+     *  not — that window has the input focus. */
+    enum class CoverKind { KEYBOARD, WINDOW, CONTROL }
 
     data class WindowSpec(
         val id: Int,
@@ -138,23 +144,29 @@ object OcclusionAnalyzer {
         val covers = coveringWindows(windows, targetWindowId)
 
         // The framework calls a view invisible when nothing of it is left to
-        // see — for a view on screen, typically because the keyboard is over
-        // it. Name the keyboard when it could be the reason.
+        // see — for a view on screen, because a window above (the keyboard, a
+        // dialog) hides it. Name that window, topmost first, so the cover is
+        // waited out; with none, the view really is not on screen.
         if (target != null && !target.isVisible) {
-            val keyboard = covers.firstOrNull { it.kind == WindowKind.INPUT_METHOD && it.bounds.intersects(onScreen) }
-            return if (keyboard != null) Verdict.Covered(windowName(keyboard)) else Verdict.OffScreen
+            val window = covers.firstOrNull { it.bounds.intersects(onScreen) }
+            return if (window != null) covered(window) else Verdict.OffScreen
         }
 
-        var visible = onScreen
+        // Every piece the windows leave uncovered, not just the largest so
+        // far: a later window can cover that one and leave a smaller piece
+        // untouched.
+        var pieces = listOf(onScreen)
         for (window in covers) {
-            if (!window.bounds.intersects(visible)) continue
-            visible = largestRemainder(visible, window.bounds) ?: return Verdict.Covered(windowName(window))
+            if (pieces.none { it.intersects(window.bounds) }) continue
+            pieces = pieces.flatMap { if (it.intersects(window.bounds)) remainders(it, window.bounds) else listOf(it) }
+            if (pieces.isEmpty()) return covered(window)
         }
+        val visible = pieces.maxBy { it.area }
 
         val x = (visible.left + visible.right) / 2
         val y = (visible.top + visible.bottom) / 2
         if (target != null) {
-            findCoverInWindow(target, x, y)?.let { return Verdict.Covered(it.describe()) }
+            findCoverInWindow(target, x, y)?.let { return Verdict.Covered(it.describe(), CoverKind.CONTROL) }
         }
         return Verdict.Clear(x, y, visible)
     }
@@ -192,13 +204,22 @@ object OcclusionAnalyzer {
                 w.id != targetWindowId &&
                     !w.bounds.isEmpty &&
                     when (w.kind) {
-                        WindowKind.INPUT_METHOD -> true
+                        // Drawn over every app window, so it counts even when
+                        // the target's window is unknown — but not over a
+                        // window stacked above it (a popup that needs the IME).
+                        WindowKind.INPUT_METHOD -> targetLayer == null || w.layer > targetLayer
                         WindowKind.SYSTEM, WindowKind.APPLICATION -> targetLayer != null && w.layer > targetLayer
                         WindowKind.OTHER -> false
                     }
             }
             .sortedByDescending { it.layer }
     }
+
+    private fun covered(window: WindowSpec) =
+        Verdict.Covered(
+            windowName(window),
+            if (window.kind == WindowKind.INPUT_METHOD) CoverKind.KEYBOARD else CoverKind.WINDOW,
+        )
 
     private fun windowName(window: WindowSpec): String {
         val title = window.title?.takeIf { it.isNotBlank() }
@@ -209,18 +230,18 @@ object OcclusionAnalyzer {
         }
     }
 
-    /** The largest touchable part of [area] outside [cover], or null when
-     *  nothing touchable is left. */
-    private fun largestRemainder(
+    /** The touchable parts of [area] outside [cover]: the strips above,
+     *  below, left and right of it (they may overlap each other). */
+    private fun remainders(
         area: Box,
         cover: Box,
-    ): Box? =
+    ): List<Box> =
         listOf(
             Box(area.left, area.top, area.right, minOf(area.bottom, cover.top)),
             Box(area.left, maxOf(area.top, cover.bottom), area.right, area.bottom),
             Box(area.left, area.top, minOf(area.right, cover.left), area.bottom),
             Box(maxOf(area.left, cover.right), area.top, area.right, area.bottom),
-        ).filter(::isTouchable).maxByOrNull { it.area }
+        ).filter(::isTouchable)
 
     private fun isTouchable(box: Box) = box.width >= MIN_VISIBLE_EXTENT && box.height >= MIN_VISIBLE_EXTENT
 
@@ -239,36 +260,52 @@ object OcclusionAnalyzer {
         x: Int,
         y: Int,
     ): HitNode? {
+        val reader = BudgetedReader(MAX_NODES_VISITED)
         // (parent, index of the target's branch among its children), from the
         // target's parent up to the root.
         val levels = mutableListOf<Pair<HitNode, Int>>()
         var child = target
         var parent = child.parent()
         while (parent != null) {
-            val index = (0 until parent.childCount()).firstOrNull { i -> parent!!.child(i)?.sameAs(child) == true } ?: break
-            levels.add(parent to index)
-            child = parent
+            val level = parent
+            val index =
+                (0 until level.childCount()).firstOrNull { i -> reader.child(level, i)?.sameAs(child) == true }
+                    ?: break
+            levels.add(level to index)
+            child = level
             parent = child.parent()
         }
 
-        var budget = MAX_NODES_VISITED
         for ((node, branchIndex) in levels.asReversed()) {
-            val branch = node.child(branchIndex) ?: continue
+            val branch = reader.child(node, branchIndex) ?: continue
             val branchKey = drawKey(branch, branchIndex)
             val later =
                 (0 until node.childCount())
                     .filter { it != branchIndex }
-                    .mapNotNull { i -> node.child(i)?.let { it to drawKey(it, i) } }
+                    .mapNotNull { i -> reader.child(node, i)?.let { it to drawKey(it, i) } }
                     .filter { (_, key) -> compareKeys(key, branchKey) > 0 }
                     .sortedWith { a, b -> compareKeys(b.second, a.second) }
             for ((sibling, _) in later) {
-                val (cover, left) = searchSubtree(sibling, x, y, budget)
-                budget = left
-                if (cover != null) return cover
-                if (budget <= 0) return null
+                searchSubtree(sibling, x, y, reader)?.let { return it }
             }
+            if (reader.exhausted) return null
         }
         return null
+    }
+
+    /** Reads children while counting them against a shared budget; once it is
+     *  spent every read returns null. */
+    private class BudgetedReader(private var left: Int) {
+        val exhausted: Boolean get() = left <= 0
+
+        fun child(
+            node: HitNode,
+            index: Int,
+        ): HitNode? {
+            if (left <= 0) return null
+            left--
+            return node.child(index)
+        }
     }
 
     /** Depth-first search of [root]'s subtree for a visible touchable node
@@ -278,24 +315,23 @@ object OcclusionAnalyzer {
         root: HitNode,
         x: Int,
         y: Int,
-        budget: Int,
-    ): Pair<HitNode?, Int> {
-        var left = budget
+        reader: BudgetedReader,
+    ): HitNode? {
         val stack = ArrayDeque<HitNode>()
         stack.addLast(root)
         while (stack.isNotEmpty()) {
-            if (left-- <= 0) return null to 0
             val node = stack.removeLast()
             if (!node.isVisible || !node.bounds.contains(x, y)) continue
-            if (node.takesTouches) return node to left
+            if (node.takesTouches) return node
+            if (reader.exhausted) return null
             val children =
                 (0 until node.childCount())
-                    .mapNotNull { i -> node.child(i)?.let { it to drawKey(it, i) } }
+                    .mapNotNull { i -> reader.child(node, i)?.let { it to drawKey(it, i) } }
                     .sortedWith { a, b -> compareKeys(a.second, b.second) }
             // Last pushed is popped first: the topmost-painted child.
             for ((c, _) in children) stack.addLast(c)
         }
-        return null to left
+        return null
     }
 
     private fun drawKey(
@@ -326,8 +362,10 @@ object OcclusionAnalyzer {
  * touched (PILOT-362). React reuses a native view for whatever it renders
  * next in the same place, so the resolved node can be showing a different
  * element by the time the touch is planned — touching it would hit what
- * replaced the target. An editable field's text is its value, not what the
- * field is, so it is ignored for editable nodes.
+ * replaced the target. Text only identifies a node that has neither a
+ * content description nor a resource id: on one that does (a stopwatch or
+ * countdown button), text is content that may change at any moment. An
+ * editable field's text is its value, so it never counts.
  */
 data class TargetIdentity(
     val className: String?,
@@ -346,7 +384,14 @@ data class TargetIdentity(
         same(this.className, className) &&
             same(this.resourceId, resourceId) &&
             same(this.contentDescription, contentDescription) &&
-            (isEditable || same(this.text, text))
+            (isEditable || isLabelled || same(this.text, text))
+
+    private val isLabelled: Boolean get() = !contentDescription.isNullOrEmpty() || !resourceId.isNullOrEmpty()
+
+    /** Nothing of the node's own identifies it — an unlabelled container
+     *  whose visible text lives in its children — so a replacement in its
+     *  place matches every field. Callers compare its content instead. */
+    val identifiedOnlyByContent: Boolean get() = !isLabelled && text.isNullOrEmpty()
 
     private fun same(
         a: String?,
