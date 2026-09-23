@@ -24,6 +24,19 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/occlusion-analyzer-tests"
 "$OUT/occlusion-analyzer-tests"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/RoleMappingTests/main.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/role-mapping-tests"
+# Several runs, each with a freshly seeded Dictionary hash: an order-dependent
+# reverse map passes some runs and fails others (PILOT-365).
+for _ in 1 2 3 4 5; do
+  "$OUT/role-mapping-tests" > "$OUT/role-mapping.log" || { cat "$OUT/role-mapping.log"; exit 1; }
+done
+cat "$OUT/role-mapping.log"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/TouchPlanClockTests/main.swift \
   TapsmithAgent/TouchPlanClock.swift \

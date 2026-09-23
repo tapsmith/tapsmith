@@ -381,9 +381,6 @@ struct OcclusionAnalyzer {
         case .tabBar: kind = "tab bar"
         case .toolbar: kind = "toolbar"
         case .other: kind = "element"
-        // Named here, not via RoleMapping: its reverse map is built from a
-        // Dictionary, so .staticText comes out "text" or "heading" per process.
-        case .staticText: kind = "text"
         default: kind = RoleMapping.elementTypeToRole[node.elementType] ?? "element"
         }
         let name = node.label.isEmpty ? node.identifier : node.label
