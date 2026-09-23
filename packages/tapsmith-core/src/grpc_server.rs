@@ -2480,51 +2480,39 @@ impl TapsmithServiceImpl {
         }
     }
 
-    /// Double-tap via the iOS-simulator HID helper: resolve the element's
-    /// center through the agent (which owns waiting and matching), then
-    /// inject two real down/up pairs. Real HID input enters below XCTest,
-    /// so the iOS 26.x synthesized-tap coalescing (which swallows the
-    /// second tap of every XCTest-level double-tap route) does not apply.
-    /// Returns false — caller falls back to the agent route — when the
-    /// active device isn't an iOS simulator, the helper is unavailable,
-    /// element resolution fails, or an injection fails.
+    /// Double-tap via the iOS-simulator HID helper: resolve an uncovered
+    /// point on the element through the agent (which owns waiting, matching,
+    /// and occlusion — PILOT-223), then inject two real down/up pairs. Real
+    /// HID input enters below XCTest, so the iOS 26.x synthesized-tap
+    /// coalescing (which swallows the second tap of every XCTest-level
+    /// double-tap route) does not apply. `Refused` when the agent reports the
+    /// element covered or gone, or its check failed or timed out; `NotHandled`
+    /// — caller falls back to the agent route — when the active device isn't
+    /// an iOS simulator, the helper is unavailable, the agent asks for its own
+    /// gesture (or predates resolveActionPoint), or an injection fails.
     #[cfg(target_os = "macos")]
     async fn try_hid_double_tap(
         &self,
         selector: &Value,
         timeout_ms: u64,
         interval_ms: u64,
-    ) -> bool {
+    ) -> HidOutcome {
         let udid = {
             let dm = self.device_manager.read().await;
             match dm.active_device() {
                 Some(d) if d.platform == Platform::Ios && d.is_emulator => d.serial.clone(),
-                _ => return false,
+                _ => return HidOutcome::NotHandled,
             }
         };
         if let Err(e) = self.hid_injector.ensure(&udid).await {
             debug!(%udid, error = %e, "iOS HID helper unavailable for double-tap; using agent route");
-            return false;
+            return HidOutcome::NotHandled;
         }
-        let find = AgentCommand::FindElement {
-            selector: selector.clone(),
-            timeout_ms: opt_timeout(timeout_ms),
+        let (x, y) = match self.resolve_hid_point(selector, timeout_ms).await {
+            HidTarget::Point { x, y } => (x, y),
+            HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
+            HidTarget::AgentRoute => return HidOutcome::NotHandled,
         };
-        let resp = match self
-            .send_agent_command_with_timeout(&find, timeout_ms)
-            .await
-        {
-            Ok(r) if r.success => r,
-            _ => return false,
-        };
-        let Some(info) = parse_element_info(&resp.data) else {
-            return false;
-        };
-        let Some(bounds) = info.bounds else {
-            return false;
-        };
-        let x = (bounds.left + bounds.right) / 2;
-        let y = (bounds.top + bounds.bottom) / 2;
         // One wire command: the helper owns the press/gap timing in-process
         // (~40ms press, ~120ms gap), so the inter-tap gap stays inside the
         // app's double-tap recognizer window regardless of daemon-side load.
@@ -2539,60 +2527,72 @@ impl TapsmithServiceImpl {
             .await
             .is_err()
         {
-            return false;
+            return HidOutcome::NotHandled;
         }
         info!(%udid, x, y, "double-tap injected via HID");
-        true
+        HidOutcome::Injected
     }
 
-    /// Long-press via the iOS-simulator HID helper: resolve the element's
-    /// center through the agent, then inject a real touch-down, hold, and
-    /// lift. XCTest-synthesized presses share the injection pipeline that
-    /// simulator input outages break — the runner acks the press but the app
-    /// never receives it (and the synthesis IPC has been observed wedging for
-    /// minutes) — while HID events enter below XCTest. Returns false — caller
-    /// falls back to the agent route — when the active device isn't an iOS
-    /// simulator, the helper is unavailable, element resolution fails, or an
-    /// injection fails.
+    /// Ask the agent where a HID touch on `selector` can land without hitting
+    /// something drawn over the element (PILOT-223). A raw HID press lands on
+    /// whatever is on top, so the element's bounds center is not enough.
+    #[cfg(target_os = "macos")]
+    async fn resolve_hid_point(&self, selector: &Value, timeout_ms: u64) -> HidTarget {
+        let resolve = AgentCommand::ResolveActionPoint {
+            selector: selector.clone(),
+            timeout_ms: opt_timeout(timeout_ms),
+        };
+        hid_target(
+            self.send_agent_command_with_timeout(&resolve, timeout_ms)
+                .await,
+        )
+    }
+
+    /// Long-press via the iOS-simulator HID helper: resolve an uncovered
+    /// point on the element through the agent (PILOT-223), then inject a real
+    /// touch-down, hold, and lift. XCTest-synthesized presses share the
+    /// injection pipeline that simulator input outages break — the runner
+    /// acks the press but the app never receives it (and the synthesis IPC
+    /// has been observed wedging for minutes) — while HID events enter below
+    /// XCTest. `Refused` when the agent reports the element covered or gone,
+    /// or its check failed or timed out; `NotHandled` — caller falls back to
+    /// the agent route — when the active device isn't an iOS simulator, the
+    /// helper is unavailable, the agent asks for its own gesture (or predates
+    /// resolveActionPoint), or an injection fails.
     #[cfg(target_os = "macos")]
     async fn try_hid_long_press(
         &self,
         selector: &Value,
         timeout_ms: u64,
         duration_ms: u64,
-    ) -> bool {
+    ) -> HidOutcome {
         let udid = {
             let dm = self.device_manager.read().await;
             match dm.active_device() {
                 Some(d) if d.platform == Platform::Ios && d.is_emulator => d.serial.clone(),
-                _ => return false,
+                _ => return HidOutcome::NotHandled,
             }
         };
         if let Err(e) = self.hid_injector.ensure(&udid).await {
             debug!(%udid, error = %e, "iOS HID helper unavailable for long-press; using agent route");
-            return false;
+            return HidOutcome::NotHandled;
         }
-        let find = AgentCommand::FindElement {
-            selector: selector.clone(),
-            timeout_ms: opt_timeout(timeout_ms),
-        };
-        let resp = match self
-            .send_agent_command_with_timeout(&find, timeout_ms)
+        let (x, y) = match self
+            .resolve_hid_point(selector, long_press_resolve_budget(timeout_ms, duration_ms))
             .await
         {
-            Ok(r) if r.success => r,
-            _ => return false,
+            HidTarget::Point { x, y } => (x, y),
+            HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
+            HidTarget::AgentRoute => return HidOutcome::NotHandled,
         };
-        let Some(info) = parse_element_info(&resp.data) else {
-            return false;
-        };
-        let Some(bounds) = info.bounds else {
-            return false;
-        };
-        let x = (bounds.left + bounds.right) / 2;
-        let y = (bounds.top + bounds.bottom) / 2;
-        self.hid_long_press_at(&udid, x as f32, y as f32, duration_ms)
+        if self
+            .hid_long_press_at(&udid, x as f32, y as f32, duration_ms)
             .await
+        {
+            HidOutcome::Injected
+        } else {
+            HidOutcome::NotHandled
+        }
     }
 
     /// Coordinate-addressed variant of [`try_hid_long_press`]: same device
@@ -2938,12 +2938,17 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         // only — cached-element-id bounds are agent-internal; those (and any
         // HID failure) fall through to the agent route.
         #[cfg(target_os = "macos")]
-        if element_id.is_none()
-            && self
+        if element_id.is_none() {
+            match self
                 .try_hid_long_press(&selector, req.timeout_ms, req.duration_ms)
                 .await
-        {
-            return Ok(Self::success_action_response(request_id));
+            {
+                HidOutcome::Injected => return Ok(Self::success_action_response(request_id)),
+                HidOutcome::Refused(resp) => {
+                    return self.make_action_response(request_id, Ok(resp)).await
+                }
+                HidOutcome::NotHandled => {}
+            }
         }
 
         let command = AgentCommand::LongPress {
@@ -3871,12 +3876,17 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         // targets only — cached-element-id bounds are agent-internal; those
         // (and any HID failure) fall through to the agent route.
         #[cfg(target_os = "macos")]
-        if element_id.is_none()
-            && self
+        if element_id.is_none() {
+            match self
                 .try_hid_double_tap(&selector, req.timeout_ms, req.interval_ms)
                 .await
-        {
-            return Ok(Self::success_action_response(request_id));
+            {
+                HidOutcome::Injected => return Ok(Self::success_action_response(request_id)),
+                HidOutcome::Refused(resp) => {
+                    return self.make_action_response(request_id, Ok(resp)).await
+                }
+                HidOutcome::NotHandled => {}
+            }
         }
 
         let command = AgentCommand::DoubleTap {
@@ -8027,6 +8037,94 @@ async fn query_cdp_json(port: u16) -> anyhow::Result<Vec<serde_json::Value>> {
     Ok(targets)
 }
 
+// ─── Helper: HID touch point from the agent (PILOT-223) ───
+
+/// What an iOS-simulator HID gesture should do with the agent's
+/// `resolveActionPoint` answer.
+#[cfg(any(target_os = "macos", test))]
+#[derive(Debug)]
+enum HidTarget {
+    /// Press here: the agent found no cover over this point.
+    Point { x: f64, y: f64 },
+    /// Report this failure instead of pressing: the element is covered, gone,
+    /// or the check failed or timed out — by then the agent may have waited
+    /// out the whole budget, and the agent route would wait it all over again.
+    Refuse(AgentResponse),
+    /// The agent asked for its own gesture (no point to press: off screen,
+    /// or hittable with no tree to choose one from), or is too old to know
+    /// the method.
+    AgentRoute,
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
+    let resp = match result {
+        Ok(resp) => resp,
+        Err(status) => {
+            return HidTarget::Refuse(AgentResponse {
+                success: false,
+                error: Some(status.message().to_string()),
+                error_type: Some("INTERNAL".to_string()),
+                data: Value::Null,
+            })
+        }
+    };
+    if !resp.success {
+        // An agent from before resolveActionPoint rejects it by name.
+        let unknown_method = resp.error_type.as_deref() == Some("ACTION_FAILED")
+            && resp
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("Unknown method"));
+        return if unknown_method {
+            HidTarget::AgentRoute
+        } else {
+            HidTarget::Refuse(resp)
+        };
+    }
+    if resp.data.get("useElement").and_then(Value::as_bool) == Some(true) {
+        return HidTarget::AgentRoute;
+    }
+    // The helper parses coordinates with strtod, so only hand it sane
+    // numbers — the same bound the agent puts on cached frames.
+    let coord = |key: &str| {
+        resp.data
+            .get(key)
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite() && v.abs() < 100_000.0)
+    };
+    match (coord("x"), coord("y")) {
+        (Some(x), Some(y)) => HidTarget::Point { x, y },
+        _ => HidTarget::Refuse(AgentResponse {
+            success: false,
+            error: Some("Agent returned no usable touch point".to_string()),
+            error_type: Some("INTERNAL".to_string()),
+            data: Value::Null,
+        }),
+    }
+}
+
+/// How long a HID long-press may wait for its target's cover to go away: the
+/// action timeout minus the press itself, so the whole gesture still fits the
+/// timeout — the agent route budgets its cover wait the same way.
+#[cfg(any(target_os = "macos", test))]
+fn long_press_resolve_budget(timeout_ms: u64, duration_ms: u64) -> u64 {
+    let hold = if duration_ms == 0 { 1000 } else { duration_ms };
+    timeout_ms.saturating_sub(hold)
+}
+
+/// Outcome of trying a gesture through the iOS-simulator HID helper.
+#[cfg(target_os = "macos")]
+enum HidOutcome {
+    /// Injected — the gesture is done.
+    Injected,
+    /// Refused: the target is covered, gone, or could not be checked in
+    /// time. Surface this response.
+    Refused(AgentResponse),
+    /// Not handled here; fall back to the agent route.
+    NotHandled,
+}
+
 // ─── Helper: Parse ElementInfo from agent JSON ───
 
 pub(crate) fn parse_element_info(data: &Value) -> Option<proto::ElementInfo> {
@@ -8888,6 +8986,112 @@ mod tests {
         };
         let j = selector_to_json(&sel);
         assert_eq!(j, json!({}));
+    }
+
+    // ─── hid_target (PILOT-223) ───
+
+    fn agent_ok(data: Value) -> Result<AgentResponse, Status> {
+        Ok(AgentResponse {
+            success: true,
+            error: None,
+            error_type: None,
+            data,
+        })
+    }
+
+    fn agent_err(error_type: &str, message: &str) -> Result<AgentResponse, Status> {
+        Ok(AgentResponse {
+            success: false,
+            error: Some(message.into()),
+            error_type: Some(error_type.into()),
+            data: Value::Null,
+        })
+    }
+
+    #[test]
+    fn long_press_resolve_budget_leaves_room_for_the_press() {
+        assert_eq!(long_press_resolve_budget(10_000, 3_000), 7_000);
+        // 0 means the default 1 s hold (hid_long_press_at).
+        assert_eq!(long_press_resolve_budget(10_000, 0), 9_000);
+        // A press longer than the timeout leaves no cover wait, not an
+        // underflow.
+        assert_eq!(long_press_resolve_budget(2_000, 5_000), 0);
+    }
+
+    #[test]
+    fn hid_target_presses_the_resolved_point() {
+        match hid_target(agent_ok(json!({"x": 201.0, "y": 489.5}))) {
+            HidTarget::Point { x, y } => {
+                assert_eq!(x, 201.0);
+                assert_eq!(y, 489.5);
+            }
+            other => panic!("expected a point, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hid_target_reports_a_covered_element_instead_of_pressing() {
+        // The agent already waited the whole budget for the cover to go; the
+        // agent route would wait it all over again and fail the same way.
+        match hid_target(agent_err(
+            "ELEMENT_COVERED",
+            "Element is covered by the keyboard",
+        )) {
+            HidTarget::Refuse(resp) => {
+                assert_eq!(
+                    resp.error.as_deref(),
+                    Some("Element is covered by the keyboard")
+                );
+            }
+            other => panic!("expected refuse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn hid_target_refuses_every_failure_after_the_agent_may_have_waited() {
+        // Gone, a check that ran out of time, an unreadable tree, a read
+        // timeout, a malformed answer: falling back to the agent route here
+        // would wait the budget out a second time (and could press long after
+        // the client gave up).
+        for result in [
+            agent_err(
+                "ELEMENT_NOT_FOUND",
+                "Element not found any more — it may have gone stale",
+            ),
+            agent_err(
+                "ACTION_FAILED",
+                "Ran out of time checking whether the element is covered",
+            ),
+            agent_err(
+                "ACTION_FAILED",
+                "Element is not hittable, and the UI hierarchy could not be read",
+            ),
+            agent_ok(json!({"x": 1.0})),
+            agent_ok(json!({"x": "NaN", "y": 2.0})),
+            agent_ok(json!({"x": f64::MAX, "y": 2.0})),
+            Err(Status::internal("Agent command timed out")),
+        ] {
+            assert!(
+                matches!(hid_target(result), HidTarget::Refuse(_)),
+                "expected refuse"
+            );
+        }
+    }
+
+    #[test]
+    fn hid_target_uses_the_agent_route_only_when_asked_or_unknown() {
+        assert!(matches!(
+            hid_target(agent_ok(json!({"useElement": true}))),
+            HidTarget::AgentRoute
+        ));
+        // An agent from before resolveActionPoint.
+        assert!(matches!(
+            hid_target(agent_err(
+                "ACTION_FAILED",
+                "Unknown method: resolveActionPoint"
+            )),
+            HidTarget::AgentRoute
+        ));
     }
 
     // ─── parse_element_info ───

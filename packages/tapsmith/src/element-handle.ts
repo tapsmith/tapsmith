@@ -593,6 +593,33 @@ type ActionTarget = { selector: Selector } | { elementId: string };
  * StaleObjectException where the cached object's view re-rendered ("Element is
  * stale (UI changed): …", Android).
  */
+/**
+ * The least an action dispatch is given: an element that became enabled right
+ * at the deadline, or a stale retry late in the budget, still gets time to act.
+ */
+const MIN_ACTION_BUDGET_MS = 1000;
+
+/**
+ * @internal — The time budget for each dispatch of one action, pinned to a
+ * deadline that starts at the first dispatch (not when the action is set up:
+ * a traced action captures the screen in between). The iOS agent can spend a
+ * dispatch's whole budget waiting out a covered target (PILOT-223), so a
+ * stale-element retry — or setChecked's re-tap — must get what is left, not
+ * the full budget again. A zero budget (the explicit no-wait timeout) stays
+ * zero; a late retry is floored at `MIN_ACTION_BUDGET_MS`.
+ */
+export function actionBudget(remainingMs: number): () => number {
+  if (remainingMs <= 0) return () => 0;
+  // A late retry still gets a usable budget — the daemon waits it + 5 s for
+  // the agent — but never more than the action started with.
+  const floor = Math.min(remainingMs, MIN_ACTION_BUDGET_MS);
+  let deadline: number | undefined;
+  return () => {
+    deadline ??= Date.now() + remainingMs;
+    return Math.max(floor, deadline - Date.now());
+  };
+}
+
 function isStaleElementError(message: string | undefined): boolean {
   return !!message && /stale/i.test(message);
 }
@@ -1232,7 +1259,6 @@ export class ElementHandle {
   private async _strictResolve(): Promise<{ remainingMs: number; element?: ElementInfo }> {
     const timeoutMs = this._timeoutMs;
     if (timeoutMs === 0) return { remainingMs: 0 };
-    const MIN_ACTION_BUDGET_MS = 1000;
     const deadline = Date.now() + timeoutMs;
     let lastTransientErr: Error | undefined;
     // The most recent positional miss (`nth(i): expected at least …`), kept so
@@ -1467,7 +1493,6 @@ export class ElementHandle {
     // timeoutMs === 0 means "no polling": behave like the pre-auto-wait code
     // and hand the full zero budget straight to the action.
     if (timeoutMs === 0) return { remainingMs: 0 };
-    const MIN_ACTION_BUDGET_MS = 1000;
     const deadline = Date.now() + timeoutMs;
     let lastSeenDisabled = false;
     let lastTransientErr: Error | undefined;
@@ -1568,7 +1593,7 @@ export class ElementHandle {
    * runs, but a repeated partial execution would duplicate input rather than
    * merely re-tap, so those keep the conservative single retry.
    */
-  private async _dispatchTargeted<R extends { success: boolean; errorMessage: string }>(
+  private async _dispatchTargeted<R extends { success: boolean; errorMessage: string; errorType?: string }>(
     target: ActionTarget,
     call: (t: ActionTarget) => Promise<R>,
     maxStaleRetries = 3,
@@ -1579,7 +1604,11 @@ export class ElementHandle {
       const isLast = attempt === maxStaleRetries;
       try {
         const res = await call(currentTarget);
-        if (isLast || res.success || !isStaleElementError(res.errorMessage)) return res;
+        // A covered target (PILOT-223) is never stale, whatever the cover's
+        // label says — its name is embedded in the message.
+        if (isLast || res.success || res.errorType === 'ELEMENT_COVERED' || !isStaleElementError(res.errorMessage)) {
+          return res;
+        }
       } catch (err) {
         if (isLast || !isStaleElementError(err instanceof Error ? err.message : String(err))) throw err;
       }
@@ -2164,10 +2193,11 @@ export class ElementHandle {
       const { remainingMs, element } = await this._waitForEnabled();
       return { target: await this._actionTarget(element), remainingMs };
     });
+    const budget = actionBudget(remainingMs);
     return this._tracedAction('tap', 'tap',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
-        ? this._client.tap(undefined, remainingMs, t.elementId)
-        : this._client.tap(t.selector, remainingMs)),
+        ? this._client.tap(undefined, budget(), t.elementId)
+        : this._client.tap(t.selector, budget())),
       'Tap failed');
   }
 
@@ -2176,10 +2206,11 @@ export class ElementHandle {
       const { remainingMs, element } = await this._waitForEnabled();
       return { target: await this._actionTarget(element), remainingMs };
     });
+    const budget = actionBudget(remainingMs);
     return this._tracedAction('longPress', 'tap',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
-        ? this._client.longPress(undefined, durationMs, remainingMs, t.elementId)
-        : this._client.longPress(t.selector, durationMs, remainingMs)),
+        ? this._client.longPress(undefined, durationMs, budget(), t.elementId)
+        : this._client.longPress(t.selector, durationMs, budget())),
       'Long press failed');
   }
 
@@ -2189,10 +2220,11 @@ export class ElementHandle {
       return { target: await this._actionTarget(element), remainingMs };
     });
     const delay = options?.delay ?? this._options.typingDelay ?? 0;
+    const budget = actionBudget(remainingMs);
     return this._tracedAction('type', 'type',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
-        ? this._client.typeText(undefined, text, remainingMs, delay, t.elementId)
-        : this._client.typeText(t.selector, text, remainingMs, delay), 1),
+        ? this._client.typeText(undefined, text, budget(), delay, t.elementId)
+        : this._client.typeText(t.selector, text, budget(), delay), 1),
       'Type text failed', { inputValue: text });
   }
 
@@ -2202,10 +2234,11 @@ export class ElementHandle {
       return { target: await this._actionTarget(element), remainingMs };
     });
     const delay = options?.delay ?? this._options.typingDelay ?? 0;
+    const budget = actionBudget(remainingMs);
     return this._tracedAction('clearAndType', 'type',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
-        ? this._client.clearAndType(undefined, text, remainingMs, delay, t.elementId)
-        : this._client.clearAndType(t.selector, text, remainingMs, delay)),
+        ? this._client.clearAndType(undefined, text, budget(), delay, t.elementId)
+        : this._client.clearAndType(t.selector, text, budget(), delay)),
       'Clear and type failed', { inputValue: text });
   }
 
@@ -2214,10 +2247,11 @@ export class ElementHandle {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
     });
+    const budget = actionBudget(remainingMs);
     return this._tracedAction('clear', 'type',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
-        ? this._client.clearText(undefined, remainingMs, t.elementId)
-        : this._client.clearText(t.selector, remainingMs)),
+        ? this._client.clearText(undefined, budget(), t.elementId)
+        : this._client.clearText(t.selector, budget())),
       'Clear text failed');
   }
 
@@ -2243,10 +2277,11 @@ export class ElementHandle {
     // 0 on the wire = "use agent default (100ms)". User-supplied values
     // must be positive; ≤0 is treated as "use default".
     const intervalMs = Math.max(0, options?.intervalMs ?? this._options.doubleTapInterval ?? 0);
+    const budget = actionBudget(remainingMs);
     return this._tracedAction('doubleTap', 'tap',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
-        ? this._client.doubleTap(undefined, remainingMs, intervalMs, t.elementId)
-        : this._client.doubleTap(t.selector, remainingMs, intervalMs)),
+        ? this._client.doubleTap(undefined, budget(), intervalMs, t.elementId)
+        : this._client.doubleTap(t.selector, budget(), intervalMs)),
       'Double tap failed');
   }
 
@@ -2296,6 +2331,7 @@ export class ElementHandle {
       return { target: await this._actionTarget(el), remainingMs, alreadySet: el.checked === checked };
     });
 
+    const budget = actionBudget(remainingMs);
     return this._tracedAction('setChecked', 'tap', async () => {
       // No real RPC for the already-in-state / poll-timeout paths — synthesize
       // a minimal ActionResponse so they still flow through trace recording.
@@ -2306,8 +2342,8 @@ export class ElementHandle {
 
       const tapByTarget = (t: ActionTarget): Promise<ActionResponse> =>
         'elementId' in t
-          ? this._client.tap(undefined, remainingMs, t.elementId)
-          : this._client.tap(t.selector, remainingMs);
+          ? this._client.tap(undefined, budget(), t.elementId)
+          : this._client.tap(t.selector, budget());
 
       // Tap once — for toggleable elements (checkboxes, switches) a second tap
       // would revert the state, so we must not blindly re-tap. On a stale
@@ -2322,7 +2358,9 @@ export class ElementHandle {
         if (!isStaleElementError(msg)) throw err;
         tapRes = synthetic(false, msg);
       }
-      if (!tapRes.success && isStaleElementError(tapRes.errorMessage)) {
+      // A covered target (PILOT-223) is never stale, whatever its cover's
+      // label says (see _dispatchTargeted).
+      if (!tapRes.success && tapRes.errorType !== 'ELEMENT_COVERED' && isStaleElementError(tapRes.errorMessage)) {
         const fresh = await this._resolveOne();
         if (fresh.checked === checked) return synthetic(true); // already set after the change
         tapRes = await tapByTarget(await this._actionTarget(fresh));
@@ -2463,10 +2501,11 @@ export class ElementHandle {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
     });
+    const budget = actionBudget(remainingMs);
     return this._tracedAction('focus', 'other',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
-        ? this._client.focus(undefined, remainingMs, t.elementId)
-        : this._client.focus(t.selector, remainingMs)),
+        ? this._client.focus(undefined, budget(), t.elementId)
+        : this._client.focus(t.selector, budget())),
       'Focus failed');
   }
 

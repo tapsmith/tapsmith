@@ -118,7 +118,8 @@ jobs:
     # Compiles tapsmith-core on macOS so the macOS-gated iOS network capture
     # path (src/ios_redirect.rs, transparent-TCP MITM, vendored mitmproxy
     # IPC proto) is exercised by CI. The Linux rust job above can't catch
-    # cfg(target_os = "macos") regressions on its own.
+    # cfg(target_os = "macos") regressions on its own. Also the one macOS job
+    # without a simulator, so it runs the iOS agent's host-side unit tests.
     name: Rust (macOS)
     runs-on: macos-latest
     defaults:
@@ -126,6 +127,10 @@ jobs:
         working-directory: packages/tapsmith-core
     steps:
       - uses: actions/checkout@v4
+
+      - name: iOS agent unit tests
+        working-directory: ios-agent
+        run: Tests/run-unit-tests.sh
 
       - uses: dtolnay/rust-toolchain@stable
         with:
