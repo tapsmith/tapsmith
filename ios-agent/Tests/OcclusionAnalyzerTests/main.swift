@@ -211,6 +211,13 @@ check("…while a real cover under the marker still is",
       analyzer(screenRows(overlay: true) + hooksMarker).analyze(button("Covered action", covered), isHittable: false),
       .covered(by: "button \"Overlay\""))
 
+// Only the marker's own text is exempt: a control that happens to carry the
+// marker's label prefix is still a cover.
+check("a control labeled with the marker prefix still covers",
+      analyzer(screenRows(extra: [(4, .button, "tapsmith-hooks:fake", "", covered)]))
+          .analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "button \"tapsmith-hooks:fake\""))
+
 // ─── Cached (non-live) identity ───
 
 check("cached identity picks the target, not the same-frame overlay",
@@ -284,6 +291,15 @@ check("a row wholly out of its scroll view: off screen",
       analyzer(jsHeader + [(4, .button, "Row 0", "", R(0, 40, 402, 60))])
           .analyze(button("Row 0", R(0, 40, 402, 60)), isHittable: false),
       .offScreen)
+
+// A cover candidate is clipped to its scroll views too: a row scrolled up out
+// of the list keeps its full frame in the snapshot but is not drawn over the
+// header. (On Xcode 26.6 every element can read unhittable, so this check
+// runs for header taps on any scrolled list.)
+let scrolledUnderHeader: [Row] = jsHeader + [(4, .button, "Row 0", "", R(0, 40, 402, 60))]
+checkPoint("a row scrolled out of its list is not a cover for the header's Back button",
+           analyzer(scrolledUnderHeader).analyze(button("Back", R(8, 60, 60, 44)), isHittable: false),
+           CGPoint(x: 38, y: 82))
 
 // A scroll indicator is painted over the content's edge but takes no touches.
 let indicator: [Row] = jsHeader + [

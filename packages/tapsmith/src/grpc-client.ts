@@ -315,7 +315,19 @@ function requestId(): string {
  * in the middle of whatever the test does next.
  */
 function actionCallDeadlineMs(timeoutMs: number | undefined): number {
-  return Math.max(60_000, (timeoutMs ?? 0) + 30_000);
+  return Math.max(60_000, (timeoutMs ?? 0) + daemonReadHeadroomMs() + 25_000);
+}
+
+/**
+ * The headroom the daemon adds to an action's timeout while it waits for the
+ * agent (`TAPSMITH_AGENT_READ_HEADROOM_MS`, default 5 s), parsed the way the
+ * daemon parses it. The daemon is spawned with this process's environment, so
+ * this is the value it uses.
+ */
+function daemonReadHeadroomMs(): number {
+  const raw = process.env.TAPSMITH_AGENT_READ_HEADROOM_MS?.trim();
+  if (raw && /^\d+$/.test(raw)) return Number(raw);
+  return 5_000;
 }
 
 export class TapsmithGrpcClient {

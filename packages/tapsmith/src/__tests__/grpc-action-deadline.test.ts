@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { TapsmithGrpcClient } from '../grpc-client.js';
 import { _text } from '../selectors.js';
 
@@ -47,4 +47,26 @@ describe('element action gRPC deadlines', () => {
       expect(capture.deadlineMs).toBeLessThanOrEqual(60_000);
     });
   }
+});
+
+describe('element action gRPC deadlines with a raised daemon read headroom', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('outlasts timeout + TAPSMITH_AGENT_READ_HEADROOM_MS, which the daemon adds', async () => {
+    // The daemon (spawned with this process's environment) waits the action
+    // timeout plus this headroom for the agent; a client deadline inside that
+    // window would turn a late answer into DEADLINE_EXCEEDED.
+    vi.stubEnv('TAPSMITH_AGENT_READ_HEADROOM_MS', '40000');
+    const capture: Capture = {};
+    await clientCapturing('tap', capture).tap(sel, 90_000);
+    expect(capture.deadlineMs).toBeGreaterThan(130_000);
+  });
+
+  it('ignores an unparseable value, like the daemon does', async () => {
+    vi.stubEnv('TAPSMITH_AGENT_READ_HEADROOM_MS', 'lots');
+    const capture: Capture = {};
+    await clientCapturing('tap', capture).tap(sel, 90_000);
+    expect(capture.deadlineMs).toBeGreaterThanOrEqual(119_000);
+    expect(capture.deadlineMs).toBeLessThanOrEqual(120_000);
+  });
 });

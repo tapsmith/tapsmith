@@ -198,7 +198,7 @@ struct OcclusionAnalyzer {
             // over a sibling Pressable is not a run of the target's text.)
             if let paragraph, node.parent == paragraph, Self.textRunTypes.contains(node.elementType) { continue }
             if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-            guard isInteractive(node), node.frame.contains(point) else { continue }
+            guard isInteractive(node), clippedFrame(of: i).contains(point) else { continue }
             cover = node
         }
         if let cover { return .covered(by: describe(cover)) }
@@ -314,6 +314,17 @@ struct OcclusionAnalyzer {
     static let scrollerTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView, .webView]
     static let textRunTypes: Set<XCUIElement.ElementType> = [.staticText, .link]
 
+    /// A node's frame clipped to its scroll viewports: content scrolled past a
+    /// scroll view's edge keeps its full frame in the snapshot but is not
+    /// drawn there.
+    private func clippedFrame(of i: Int) -> CGRect {
+        var frame = nodes[i].frame
+        for a in ancestors(of: i) where Self.scrollerTypes.contains(nodes[a].elementType) {
+            frame = frame.intersection(nodes[a].frame)
+        }
+        return frame
+    }
+
     private func ancestors(of i: Int) -> [Int] {
         var result: [Int] = []
         var p = nodes[i].parent
@@ -331,7 +342,8 @@ struct OcclusionAnalyzer {
     /// XCUITest call every element under it unhittable, and as a labeled text
     /// over every point it would otherwise be named the cover of all of them.
     private func isTapsmithHooksMarker(_ node: Node) -> Bool {
-        node.identifier == "tapsmith-hooks" || node.label.hasPrefix("tapsmith-hooks:")
+        node.elementType == .staticText
+            && (node.identifier == "tapsmith-hooks" || node.label.hasPrefix("tapsmith-hooks:"))
     }
 
     /// A scroll view's indicator ("Vertical scroll bar, 2 pages"): drawn over
