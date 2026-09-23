@@ -51,6 +51,7 @@ class TouchPlanClock(
             return nowMs + reserveMs.coerceAtLeast(0) + margin > readDeadlineMs
         }
         // Older daemon: a zero budget is a single check on its default deadline.
-        return timeoutMs > 0 && nowMs - deadlineMs > LATE_WITHOUT_READ_DEADLINE_MS
+        // The reserved work counts here too — it must also finish in time.
+        return timeoutMs > 0 && nowMs + reserveMs.coerceAtLeast(0) - deadlineMs > LATE_WITHOUT_READ_DEADLINE_MS
     }
 }

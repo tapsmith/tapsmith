@@ -77,6 +77,15 @@ class TouchPlanClockTest {
     }
 
     @Test
+    fun `without a read deadline a reserve still counts`() {
+        // 3.5 s of follow-up work started 2 s past the budget would run past
+        // an older daemon's usual timeout + 5 s.
+        val clock = TouchPlanClock(startMs = 0, timeoutMs = 2_000, reserveMs = 3_500)
+        assertFalse(clock.isTooLateToAct(nowMs = 2_000 + TouchPlanClock.LATE_WITHOUT_READ_DEADLINE_MS - 3_500))
+        assertTrue(clock.isTooLateToAct(nowMs = 2_000 + 2_000))
+    }
+
+    @Test
     fun `without a read deadline a zero budget is never too late`() {
         val clock = TouchPlanClock(startMs = 0, timeoutMs = 0)
         assertFalse(clock.isTooLateToAct(nowMs = 60_000))
