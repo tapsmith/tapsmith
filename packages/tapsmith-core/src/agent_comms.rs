@@ -84,11 +84,11 @@ fn read_timeout_for(timeout: Duration) -> Duration {
 }
 
 /// Tell the agent how long this daemon will wait for its answer
-/// (`params.readTimeoutMs`), counted from the send. The iOS agent can spend an
-/// action's budget waiting out a covered target (PILOT-223); it uses this to
-/// never touch after the daemon has given up on the command — a touch then
-/// would land in the middle of whatever the test does next. Only the daemon
-/// knows the deadline (the timeout plus a configurable headroom).
+/// (`params.readTimeoutMs`), counted from the send. The agents can spend an
+/// action's budget waiting out a covered target (PILOT-223, PILOT-362); they
+/// use this to never touch after the daemon has given up on the command — a
+/// touch then would land in the middle of whatever the test does next. Only
+/// the daemon knows the deadline (the timeout plus a configurable headroom).
 fn stamp_read_timeout(json: &mut Value, read_timeout: Duration) {
     if let Some(params) = json.get_mut("params").and_then(Value::as_object_mut) {
         let ms = u64::try_from(read_timeout.as_millis()).unwrap_or(u64::MAX);

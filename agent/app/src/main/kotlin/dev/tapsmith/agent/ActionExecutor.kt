@@ -20,6 +20,7 @@ import androidx.test.uiautomator.Until
 class ActionExecutor(
     private val device: UiDevice,
     private val instrumentation: Instrumentation,
+    private val occlusionGuard: OcclusionGuard,
 ) {
     /** Tracks ASCII control-char code points we've already warned about,
      *  so the log fires once per code point per agent lifetime. */
@@ -61,15 +62,20 @@ class ActionExecutor(
     }
 
     /**
-     * Tap on an element's center point.
+     * Tap on an element, at the center of the part of it nothing covers.
      *
      * Waits for the element's bounds to stop moving first (Playwright-style
      * actionability): a click computed from mid-animation/mid-layout bounds
      * can land on a non-interactive pixel and silently miss. When the caller
      * passes [resolvedBounds] from a resolve that just completed (WaitEngine
-     * has already settle-checked them), the stability wait is skipped and the
-     * tap is injected at those coordinates directly — repeating the check
-     * would only stack more blocking accessibility round-trips (PILOT-278).
+     * has already settle-checked them), the stability wait is skipped —
+     * repeating the check would only stack more blocking accessibility
+     * round-trips (PILOT-278).
+     *
+     * A tap lands on whatever is on top, so [OcclusionGuard] picks the point:
+     * the visible part of an element the keyboard half covers, and never an
+     * element under an overlay — that waits out the cover within [budget],
+     * then fails with ELEMENT_COVERED (PILOT-362).
      *
      * The tap itself is injected at coordinates rather than via
      * UiObject2.click(), which would re-fetch the accessibility node — one
@@ -77,32 +83,43 @@ class ActionExecutor(
      */
     fun tap(
         element: UiObject2,
-        resolvedBounds: Rect? = null,
+        resolvedBounds: Rect?,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
     ) {
         try {
             val trusted = resolvedBounds?.takeIf { !it.isEmpty }
             val stableStart = SystemClock.uptimeMillis()
             val bounds = trusted ?: waitForStableBounds(element)
             val stableMs = SystemClock.uptimeMillis() - stableStart
+            val planStart = SystemClock.uptimeMillis()
+            val plan =
+                if (bounds.isEmpty) OcclusionGuard.Plan.OffScreen else occlusionGuard.plan(element, bounds, budget, expected)
+            val planMs = SystemClock.uptimeMillis() - planStart
             val injectStart = SystemClock.uptimeMillis()
-            if (bounds.isEmpty || !device.click(bounds.centerX(), bounds.centerY())) {
-                // Empty bounds (zero-size or fully clipped element) or refused
-                // injection (e.g. coordinates outside the display) — fall back
+            when (plan) {
+                is OcclusionGuard.Plan.Point ->
+                    if (!device.click(plan.x, plan.y)) {
+                        throw ActionFailedException("Failed to tap element at (${plan.x}, ${plan.y})")
+                    }
+                // Empty bounds (zero-size or fully clipped element) — fall back
                 // to the node click, which targets the element's live center
-                // and throws if the element is gone. Matches clickToFocus and
-                // the pre-PILOT-278 behavior.
-                element.click()
+                // and throws if the element is gone (the pre-PILOT-278
+                // behavior).
+                OcclusionGuard.Plan.OffScreen -> element.click()
             }
             Log.d(
                 TAG,
                 "tap phases: stableBounds=${stableMs}ms (resolvedBoundsReused=${trusted != null}) " +
-                    "inject=${SystemClock.uptimeMillis() - injectStart}ms",
+                    "occlusion=${planMs}ms inject=${SystemClock.uptimeMillis() - injectStart}ms",
             )
         } catch (e: StaleObjectException) {
             // Bubble up: CommandHandler maps this to ELEMENT_NOT_FOUND so the
             // SDK re-resolves, rather than failing hard on ACTION_FAILED.
             throw e
         } catch (e: ActionFailedException) {
+            throw e
+        } catch (e: TouchRefusedException) {
             throw e
         } catch (e: Exception) {
             throw ActionFailedException("Failed to tap element: ${e.message}")
@@ -161,35 +178,57 @@ class ActionExecutor(
     }
 
     /**
-     * Long press on an element with configurable duration.
+     * Long press on an element with configurable duration, at a point nothing
+     * covers (see [tap]; PILOT-362).
      *
      * [resolvedBounds] from a just-completed resolve skips the node re-read
      * (a blocking accessibility round-trip; PILOT-278).
      */
     fun longPress(
         element: UiObject2,
-        durationMs: Long = 1000L,
-        resolvedBounds: Rect? = null,
+        durationMs: Long,
+        resolvedBounds: Rect?,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
     ) {
         try {
             val bounds = resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
-            if (bounds.isEmpty) {
-                // No node-level long-press to fall back to (the gesture is
-                // coordinate-computed) — fail loudly rather than pressing (0, 0).
-                throw ActionFailedException(
-                    "Cannot long press: element has empty visible bounds (zero-size or fully clipped)",
-                )
-            }
-            val cx = bounds.centerX()
-            val cy = bounds.centerY()
-            device.swipe(cx, cy, cx, cy, (durationMs / 5).toInt().coerceAtLeast(1))
+            val point = planGesturePoint(element, bounds, budget, expected, "long press", reserveMs = durationMs)
+            device.swipe(point.x, point.y, point.x, point.y, (durationMs / 5).toInt().coerceAtLeast(1))
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ActionFailedException) {
             throw e
+        } catch (e: TouchRefusedException) {
+            throw e
         } catch (e: Exception) {
             throw ActionFailedException("Failed to long press element: ${e.message}")
         }
+    }
+
+    /**
+     * The uncovered point a coordinate-computed gesture (long press, double
+     * tap) must use. Those have no node-level fallback, so an element with no
+     * on-screen part fails loudly rather than being pressed at (0, 0).
+     */
+    private fun planGesturePoint(
+        element: UiObject2,
+        bounds: Rect,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
+        gesture: String,
+        reserveMs: Long = 0,
+    ): OcclusionGuard.Plan.Point {
+        val plan =
+            if (bounds.isEmpty) {
+                OcclusionGuard.Plan.OffScreen
+            } else {
+                occlusionGuard.plan(element, bounds, budget, expected, reserveMs)
+            }
+        return plan as? OcclusionGuard.Plan.Point
+            ?: throw ActionFailedException(
+                "Cannot $gesture: element has empty visible bounds (zero-size, fully clipped, or off screen)",
+            )
     }
 
     /**
@@ -215,10 +254,12 @@ class ActionExecutor(
     fun typeText(
         element: UiObject2,
         text: String,
-        resolvedBounds: Rect? = null,
+        resolvedBounds: Rect?,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
     ) {
         try {
-            clickToFocus(element, resolvedBounds)
+            clickToFocus(element, resolvedBounds, budget, expected)
             element.text = text
             // UiObject2.setText silently logs-and-returns when the framework
             // rejects ACTION_SET_TEXT (e.g. the field is still gaining focus
@@ -240,9 +281,14 @@ class ActionExecutor(
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: Exception) {
-            // Fallback: try clicking and using device-level text injection
+            // A focusing tap that cannot land (PILOT-362) is final: retrying it
+            // through the fallback would only hit the cover.
+            rethrowTouchRefusal(e)
+            // Fallback: try clicking and using device-level text injection.
+            // The refocus is one check, no waiting — the first tap may have
+            // moved the field (a keyboard-avoiding view lifting it).
             try {
-                clickToFocus(element, resolvedBounds)
+                clickToFocus(element, null, budget.noWait(), expected)
                 device.waitForIdle(1000)
                 // Key events route through the IME; injecting while the input
                 // session is still restarting after the focus click silently
@@ -252,6 +298,7 @@ class ActionExecutor(
             } catch (e2: StaleObjectException) {
                 throw e2
             } catch (e2: Exception) {
+                rethrowTouchRefusal(e2)
                 throw ActionFailedException(
                     "Failed to type text: ${e.message} (fallback also failed: ${e2.message})",
                 )
@@ -283,20 +330,46 @@ class ActionExecutor(
         }
     }
 
-    /** Click an element's center to focus it, reusing resolve-time bounds when available. */
+    /**
+     * Tap an element to focus it, at a point nothing covers (PILOT-362),
+     * reusing resolve-time bounds when available. A covered field that
+     * already has input focus — typically one behind the keyboard it raised —
+     * is not tapped at all: input reaches it anyway, and the tap would land
+     * on a key.
+     */
     private fun clickToFocus(
         element: UiObject2,
         resolvedBounds: Rect?,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
     ) {
-        val bounds = resolvedBounds?.takeIf { !it.isEmpty }
-        // Coordinate click when fresh bounds are available (skips a node
-        // re-fetch); fall back to the node click if injection is refused
-        // (e.g. coordinates outside the display) so a focus failure is
-        // never silent — the node click targets the element's live center
-        // and throws if the element is gone.
-        if (bounds == null || !device.click(bounds.centerX(), bounds.centerY())) {
-            element.click()
+        val bounds = resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
+        val plan =
+            if (bounds.isEmpty) {
+                OcclusionGuard.Plan.OffScreen
+            } else {
+                occlusionGuard.planFocusTap(element, bounds, budget, expected)
+            }
+        when (plan) {
+            null -> Log.d(TAG, "focusing tap skipped: the field is covered but already focused")
+            is OcclusionGuard.Plan.Point ->
+                if (!device.click(plan.x, plan.y)) {
+                    throw ActionFailedException("Failed to tap element at (${plan.x}, ${plan.y}) to focus it")
+                }
+            // Nothing of it on screen: the node click targets its live center
+            // and throws if the element is gone, so a focus failure is never
+            // silent.
+            OcclusionGuard.Plan.OffScreen -> element.click()
         }
+    }
+
+    /**
+     * Rethrow a touch that was refused rather than attempted (covered, changed
+     * into another element, too late) so a fallback path does not retry it —
+     * or bury its error type in a generic ACTION_FAILED.
+     */
+    private fun rethrowTouchRefusal(e: Exception) {
+        if (e is TouchRefusedException) throw e
     }
 
     /**
@@ -388,18 +461,23 @@ class ActionExecutor(
     /**
      * Clear text in an element by selecting all and deleting.
      */
-    fun clearText(element: UiObject2) {
+    fun clearText(
+        element: UiObject2,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
+    ) {
         try {
-            element.click()
+            clickToFocus(element, null, budget, expected)
             device.waitForIdle(500)
             // Select all (Ctrl+A) then delete
             element.clear()
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: Exception) {
+            rethrowTouchRefusal(e)
             // Fallback: triple-click to select all, then press delete
             try {
-                element.click()
+                clickToFocus(element, null, budget.noWait(), expected)
                 device.waitForIdle(200)
                 // Use shell to select all and delete
                 device.executeShellCommand("input keyevent KEYCODE_MOVE_HOME")
@@ -408,6 +486,7 @@ class ActionExecutor(
             } catch (e2: StaleObjectException) {
                 throw e2
             } catch (e2: Exception) {
+                rethrowTouchRefusal(e2)
                 throw ActionFailedException(
                     "Failed to clear text: ${e.message} (fallback also failed: ${e2.message})",
                 )
@@ -653,7 +732,8 @@ class ActionExecutor(
     }
 
     /**
-     * Double-tap on an element's center point.
+     * Double-tap on an element, at a point nothing covers (see [tap];
+     * PILOT-362).
      *
      * Injects the four motion events directly (down/up, pause, down/up) instead
      * of calling device.click() twice: click() blocks waiting for the device to
@@ -662,22 +742,20 @@ class ActionExecutor(
      */
     fun doubleTap(
         element: UiObject2,
-        intervalMs: Long = DOUBLE_TAP_INTERVAL_MS,
-        resolvedBounds: Rect? = null,
+        intervalMs: Long,
+        resolvedBounds: Rect?,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
     ) {
         try {
             val bounds = resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
-            if (bounds.isEmpty) {
-                // No node-level double-tap to fall back to (the gesture is
-                // coordinate-computed) — fail loudly rather than tapping (0, 0).
-                throw ActionFailedException(
-                    "Cannot double tap: element has empty visible bounds (zero-size or fully clipped)",
-                )
-            }
-            doubleTapCoordinates(bounds.centerX(), bounds.centerY(), intervalMs)
+            val point = planGesturePoint(element, bounds, budget, expected, "double tap")
+            doubleTapCoordinates(point.x, point.y, intervalMs)
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ActionFailedException) {
+            throw e
+        } catch (e: TouchRefusedException) {
             throw e
         } catch (e: Exception) {
             throw ActionFailedException("Failed to double tap element: ${e.message}")
@@ -772,10 +850,12 @@ class ActionExecutor(
     fun selectOption(
         element: UiObject2,
         optionText: String,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
     ) {
         try {
             // Tap the spinner to open it
-            element.click()
+            tap(element, null, budget, expected)
             // Wait for the option to appear then tap it
             val option =
                 device.wait(Until.findObject(By.text(optionText)), DROPDOWN_WAIT_TIMEOUT_MS)
@@ -784,6 +864,8 @@ class ActionExecutor(
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ElementNotFoundException) {
+            throw e
+        } catch (e: TouchRefusedException) {
             throw e
         } catch (e: Exception) {
             throw ActionFailedException("Failed to select option '$optionText': ${e.message}")
@@ -796,10 +878,12 @@ class ActionExecutor(
     fun selectOptionByIndex(
         element: UiObject2,
         index: Int,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
     ) {
         try {
             // Tap the spinner to open it
-            element.click()
+            tap(element, null, budget, expected)
             // Wait for a common dropdown container to appear
             val popupSelector = By.clazz(java.util.regex.Pattern.compile(".*(ListView|RecyclerView|PopupWindow)$"))
             val popup =
@@ -817,6 +901,8 @@ class ActionExecutor(
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ActionFailedException) {
+            throw e
+        } catch (e: TouchRefusedException) {
             throw e
         } catch (e: Exception) {
             throw ActionFailedException("Failed to select option at index $index: ${e.message}")
@@ -851,13 +937,18 @@ class ActionExecutor(
     /**
      * Focus an element (click to focus, typically shows keyboard for text fields).
      */
-    fun focus(element: UiObject2) {
+    fun focus(
+        element: UiObject2,
+        budget: ActionBudget,
+        expected: TargetIdentity?,
+    ) {
         try {
-            element.click()
+            clickToFocus(element, null, budget, expected)
             device.waitForIdle(FOCUS_IDLE_TIMEOUT_MS)
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: Exception) {
+            rethrowTouchRefusal(e)
             throw ActionFailedException("Failed to focus element: ${e.message}")
         }
     }

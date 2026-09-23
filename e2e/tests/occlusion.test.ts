@@ -1,15 +1,20 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
 
-// PILOT-223: a tap on an element that is on screen but covered by something
-// else — the software keyboard, an overlay — used to report success while the
-// touch landed on the cover. Playwright fails a click whose target point is
-// intercepted (after waiting for the cover to go away); so must we. Every
-// target and cover on the screen counts its own taps, so each test can assert
-// where a touch really went, not just whether tap() resolved.
+// PILOT-223 (iOS) / PILOT-362 (Android): a tap on an element that is on
+// screen but covered by something else — the software keyboard, an overlay —
+// used to report success while the touch landed on the cover. Playwright fails
+// a click whose target point is intercepted (after waiting for the cover to go
+// away); so must we. Every target and cover on the screen counts its own taps,
+// so each test can assert where a touch really went, not just whether tap()
+// resolved.
 //
-// iOS-only until the Android agent gets the same check (PILOT-362); drop the
-// `.ios` from the file name then.
+// One platform difference shapes the keyboard cases: Android hides a view
+// that is entirely behind the keyboard from the accessibility tree (a view
+// the keyboard only half covers stays, bounds unclipped). So on Android an
+// action on a fully covered element fails as not found rather than as
+// covered, and a field behind the keyboard cannot be read until the keyboard
+// is gone.
 
 describe("Occlusion", () => {
   test.use({ appResetScope: "test" })
@@ -26,6 +31,12 @@ describe("Occlusion", () => {
       (e: unknown) => (e instanceof Error ? e.message : String(e)),
     )
 
+  // How an action on an element entirely behind the keyboard fails. Android
+  // can also see it as covered: the element resolves before the keyboard has
+  // finished rising over it.
+  const behindKeyboardFailure = (platform: string) =>
+    platform === "android" ? /covered by the keyboard|not found/i : /covered by the keyboard/i
+
   type Counter = "bottom" | "covered" | "overlay" | "passThrough" | "link" | "replacement"
   const counts = (c: Partial<Record<Counter, number>>) => {
     const all = { bottom: 0, covered: 0, overlay: 0, passThrough: 0, link: 0, replacement: 0, ...c }
@@ -40,11 +51,11 @@ describe("Occlusion", () => {
     // short so the file stays quick.
     test.use({ timeout: 4_000 })
 
-    test("tap() on a button behind the keyboard fails and names the keyboard", async ({ device, occlusionScreen }) => {
+    test("tap() on a button behind the keyboard fails and names the keyboard", async ({ device, platform, occlusionScreen }) => {
       await occlusionScreen.openKeyboard()
       expect(await device.isKeyboardShown()).toBe(true)
 
-      expect(await failureOf(occlusionScreen.bottomAction.tap())).toMatch(/covered by the keyboard/i)
+      expect(await failureOf(occlusionScreen.bottomAction.tap())).toMatch(behindKeyboardFailure(platform))
 
       // The keyboard never saw the touch (no stray key typed) and it is still up.
       await expect(occlusionScreen.input).toHaveValue("x")
@@ -71,28 +82,32 @@ describe("Occlusion", () => {
       await expect(occlusionScreen.counts).toHaveText(counts({}))
     })
 
-    test("type() into a field behind the keyboard fails instead of typing into the focused one", async ({ occlusionScreen }) => {
+    test("type() into a field behind the keyboard fails instead of typing into the focused one", async ({ device, platform, occlusionScreen }) => {
       await occlusionScreen.openKeyboard()
 
-      expect(await failureOf(occlusionScreen.bottomInput.type("abc"))).toMatch(/covered by the keyboard/i)
+      expect(await failureOf(occlusionScreen.bottomInput.type("abc"))).toMatch(behindKeyboardFailure(platform))
 
       // The focusing tap never reached the keyboard: no stray key in the
       // focused field, and nothing typed anywhere.
       await expect(occlusionScreen.input).toHaveValue("x")
+      await occlusionScreen.submitInput()
+      await expect.poll(() => device.isKeyboardShown()).toBe(false)
       await expect(occlusionScreen.bottomInput).toHaveValue("")
     })
 
-    test("clear() and focus() on a field behind the keyboard fail too", async ({ occlusionScreen }) => {
+    test("clear() and focus() on a field behind the keyboard fail too", async ({ device, platform, occlusionScreen }) => {
       // clear() of an empty field returns before it taps, so give the bottom
       // field text while nothing covers it yet.
       await occlusionScreen.bottomInput.type("abc")
       await occlusionScreen.openKeyboard()
 
-      expect(await failureOf(occlusionScreen.bottomInput.clear())).toMatch(/covered by the keyboard/i)
-      expect(await failureOf(occlusionScreen.bottomInput.focus())).toMatch(/covered by the keyboard/i)
+      expect(await failureOf(occlusionScreen.bottomInput.clear())).toMatch(behindKeyboardFailure(platform))
+      expect(await failureOf(occlusionScreen.bottomInput.focus())).toMatch(behindKeyboardFailure(platform))
 
-      await expect(occlusionScreen.bottomInput).toHaveValue("abc")
       await expect(occlusionScreen.input).toHaveValue("x")
+      await occlusionScreen.submitInput()
+      await expect.poll(() => device.isKeyboardShown()).toBe(false)
+      await expect(occlusionScreen.bottomInput).toHaveValue("abc")
     })
 
     test("a target replaced while its cover is waited out is not tapped in its place", async ({ occlusionScreen }) => {
@@ -167,7 +182,10 @@ describe("Occlusion", () => {
     await expect(occlusionScreen.bottomInput).toHaveValue("")
   })
 
-  test("type() into a focused field its own keyboard covers types into it", async ({ device, occlusionScreen }) => {
+  test("type() into a focused field its own keyboard covers types into it", async ({ device, platform, occlusionScreen }) => {
+    // Android hides the field from the accessibility tree once its keyboard
+    // covers it, so there is nothing left to type into by locator.
+    if (platform === "android") return
     // Tapping the bottom input raises a keyboard over it (no avoidance). The
     // field already has focus, so type() must not need a focusing tap.
     await occlusionScreen.bottomInput.tap()
@@ -201,9 +219,7 @@ describe("Occlusion", () => {
 
   test("tap() on a button behind the keyboard works once the keyboard is gone", async ({ device, occlusionScreen }) => {
     await occlusionScreen.openKeyboard()
-    // Submitting blurs the single-line input. (Not hideKeyboard(): on iOS it
-    // relies on a scroll view to dismiss into, and this screen has none.)
-    await device.pressKey("enter")
+    await occlusionScreen.submitInput()
     await expect.poll(() => device.isKeyboardShown()).toBe(false)
 
     await occlusionScreen.bottomAction.tap()

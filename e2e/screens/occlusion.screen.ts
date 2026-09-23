@@ -29,4 +29,13 @@ export class OcclusionScreen {
     await this.input.tap()
     await this.input.type("x")
   }
+
+  /**
+   * Put the keyboard away by submitting the focused single-line input, which
+   * blurs it. (Not hideKeyboard(): on iOS it relies on a scroll view to
+   * dismiss into, and this screen has none.)
+   */
+  async submitInput() {
+    await this.device.pressKey("enter")
+  }
 }

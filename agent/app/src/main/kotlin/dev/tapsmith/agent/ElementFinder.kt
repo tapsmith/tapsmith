@@ -111,6 +111,9 @@ class ElementFinder(private val device: UiDevice) {
     /** Insertion order tracking for cache eviction (ArrayDeque for O(1) removeFirst). */
     private val elementCacheOrder = ArrayDeque<String>()
 
+    /** [TargetIdentity] of each cached element, evicted with it. */
+    private val elementIdentities = ConcurrentHashMap<String, TargetIdentity>()
+
     /** Maximum number of cached elements before evicting oldest entries.
      *  Kept high so a broad query's own matches cannot evict ids the SDK is
      *  about to act on (`.first()` acts on the oldest-appended id of a batch). */
@@ -960,7 +963,12 @@ class ElementFinder(private val device: UiDevice) {
         }
     }
 
-    private fun nodeInfoFor(obj: UiObject2): android.view.accessibility.AccessibilityNodeInfo? {
+    /**
+     * The live accessibility node behind [obj], refreshed; null when the
+     * reflective accessor is unavailable. Throws StaleObjectException when
+     * the node is gone.
+     */
+    fun nodeInfoFor(obj: UiObject2): android.view.accessibility.AccessibilityNodeInfo? {
         val method = nodeInfoMethod ?: return null
         return try {
             method.invoke(obj) as? android.view.accessibility.AccessibilityNodeInfo
@@ -1025,10 +1033,15 @@ class ElementFinder(private val device: UiDevice) {
         depth: Int = 0,
     ): String = collectDescendantTextParts(obj, depth).joinToString(" ")
 
+    /**
+     * Read [obj] into an [ElementInfo], plus the [TargetIdentity] actions
+     * re-check before touching it — built from the same reads, since each
+     * UiObject2 property read is an accessibility round-trip.
+     */
     private fun toElementInfo(
         obj: UiObject2,
         elementId: String,
-    ): ElementInfo {
+    ): Pair<ElementInfo, TargetIdentity> {
         val bounds =
             try {
                 obj.visibleBounds
@@ -1037,6 +1050,8 @@ class ElementFinder(private val device: UiDevice) {
             }
         val className = obj.className ?: ""
         val rawText = obj.text
+        val contentDescription = obj.contentDescription
+        val resourceId = obj.resourceName
         val hint = extractHint(obj)
 
         // PILOT-133/toBeEmpty: UIAutomator surfaces the placeholder/hint as
@@ -1068,41 +1083,52 @@ class ElementFinder(private val device: UiDevice) {
         val role = extractRoleDescription(obj) ?: resolveRole(className)
         val viewportRatio = computeViewportRatio(bounds)
 
-        return ElementInfo(
-            elementId = elementId,
-            className = className,
-            text = effectiveText,
-            contentDescription = obj.contentDescription,
-            resourceId = obj.resourceName,
-            hint = hint,
-            bounds = bounds,
-            isEnabled = obj.isEnabled,
-            isChecked = obj.isChecked,
-            isFocused = obj.isFocused,
-            isClickable = obj.isClickable,
-            isFocusable = obj.isFocusable,
-            isScrollable = obj.isScrollable,
-            isVisible = viewportRatio > 0f,
-            isSelected = obj.isSelected,
-            childCount = obj.childCount,
-            role = role,
-            viewportRatio = viewportRatio,
-        )
+        val info =
+            ElementInfo(
+                elementId = elementId,
+                className = className,
+                text = effectiveText,
+                contentDescription = contentDescription,
+                resourceId = resourceId,
+                hint = hint,
+                bounds = bounds,
+                isEnabled = obj.isEnabled,
+                isChecked = obj.isChecked,
+                isFocused = obj.isFocused,
+                isClickable = obj.isClickable,
+                isFocusable = obj.isFocusable,
+                isScrollable = obj.isScrollable,
+                isVisible = viewportRatio > 0f,
+                isSelected = obj.isSelected,
+                childCount = obj.childCount,
+                role = role,
+                viewportRatio = viewportRatio,
+            )
+        return info to TargetIdentity(className, resourceId, contentDescription, rawText)
     }
 
     private fun cacheElement(
         id: String,
         element: UiObject2,
+        identity: TargetIdentity,
     ) {
         synchronized(elementCacheOrder) {
             elementCache[id] = element
+            elementIdentities[id] = identity
             elementCacheOrder.add(id)
             if (elementCacheOrder.size > maxCacheSize) {
                 val oldest = elementCacheOrder.removeFirst()
                 elementCache.remove(oldest)
+                elementIdentities.remove(oldest)
             }
         }
     }
+
+    /**
+     * What identified a cached element when it was found (PILOT-362), for
+     * actions to re-check before touching it; null for an unknown id.
+     */
+    fun identityOf(elementId: String): TargetIdentity? = elementIdentities[elementId]
 
     /**
      * Clear the element cache. Called by the daemon between tests or on
@@ -1111,14 +1137,16 @@ class ElementFinder(private val device: UiDevice) {
     fun clearElementCache() {
         synchronized(elementCacheOrder) {
             elementCache.clear()
+            elementIdentities.clear()
             elementCacheOrder.clear()
         }
     }
 
     private fun cacheAndConvert(obj: UiObject2): ElementInfo {
         val elementId = UUID.randomUUID().toString()
-        cacheElement(elementId, obj)
-        return toElementInfo(obj, elementId)
+        val (info, identity) = toElementInfo(obj, elementId)
+        cacheElement(elementId, obj, identity)
+        return info
     }
 
     private fun describeSelector(selector: ElementSelector): String {

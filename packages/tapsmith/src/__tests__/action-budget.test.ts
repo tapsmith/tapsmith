@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { actionBudget } from '../element-handle.js';
 
-// PILOT-223: the iOS agent can spend a dispatch's whole budget waiting out a
-// covered target, so each dispatch of one action gets what is left of a single
-// deadline — and that deadline starts at the first dispatch, not when the
-// action was set up (a traced action captures the screen in between).
+// PILOT-223 / PILOT-362: the agent can spend a dispatch's whole budget waiting
+// out a covered target, so each dispatch of one action gets what is left of a
+// single deadline — and that deadline starts at the first dispatch, not when
+// the action was set up (a traced action captures the screen in between).
 
 describe('actionBudget', () => {
   afterEach(() => vi.restoreAllMocks());

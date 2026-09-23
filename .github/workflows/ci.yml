@@ -190,6 +190,9 @@ jobs:
       - name: Compile (assembleDebug)
         run: ./gradlew assembleDebug
 
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest
+
       - name: Lint with ktlint
         run: ./gradlew ktlintCheck
 

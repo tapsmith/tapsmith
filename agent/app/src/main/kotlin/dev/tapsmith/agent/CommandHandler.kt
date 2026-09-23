@@ -59,8 +59,15 @@ class CommandHandler(
 
         val start = SystemClock.uptimeMillis()
         return try {
-            val result = dispatch(method, params)
+            val result = dispatch(method, params, actionBudget(params, start))
             successResponse(id, result)
+        } catch (e: ElementCoveredException) {
+            errorResponse(id, "ELEMENT_COVERED", e.message ?: "Element is covered")
+        } catch (e: TargetChangedException) {
+            // "stale": the SDK re-resolves an id-addressed handle.
+            errorResponse(id, "ELEMENT_NOT_FOUND", e.message ?: "Element changed")
+        } catch (e: TouchTooLateException) {
+            errorResponse(id, "ACTION_FAILED", e.message ?: "Ran out of time")
         } catch (e: ElementNotFoundException) {
             errorResponse(id, "ELEMENT_NOT_FOUND", e.message ?: "Element not found")
         } catch (e: TimeoutException) {
@@ -92,6 +99,25 @@ class CommandHandler(
     }
 
     /**
+     * The time an element action may spend, counted from the command's
+     * arrival: its `timeout` (the same default the selector wait uses) and the
+     * daemon's `readTimeoutMs`, stamped on every command — past it the daemon
+     * has given up, and a touch then would land in the middle of whatever the
+     * test does next (PILOT-362).
+     */
+    private fun actionBudget(
+        params: JSONObject,
+        startMs: Long,
+    ): ActionBudget {
+        val readTimeoutMs = params.optLong("readTimeoutMs", 0L)
+        return ActionBudget(
+            startMs = startMs,
+            timeoutMs = params.optLong("timeout", 10000L),
+            readDeadlineMs = if (readTimeoutMs > 0) startMs + readTimeoutMs else null,
+        )
+    }
+
+    /**
      * An element resolved for action execution.
      *
      * [freshBounds] is non-null only when resolution ran a selector wait just
@@ -104,13 +130,19 @@ class CommandHandler(
     private class ResolvedElement(
         val obj: UiObject2,
         val freshBounds: Rect?,
+        /** What identified the element when it was found, re-checked before
+         *  it is touched (PILOT-362). */
+        val identity: TargetIdentity?,
     )
 
     /**
      * Resolve an element from params, supporting both elementId (cached) and
      * selector-based lookup with auto-waiting.
      */
-    private fun resolveElement(params: JSONObject): ResolvedElement {
+    private fun resolveElement(
+        params: JSONObject,
+        timeout: Long = params.optLong("timeout", 10000L),
+    ): ResolvedElement {
         val elementId = params.optString("elementId", null)
         if (!elementId.isNullOrEmpty()) {
             // Use the cached element directly — a pure cache lookup, zero
@@ -118,13 +150,43 @@ class CommandHandler(
             // getElementInfo(), re-reading every attribute — ~a dozen blocking
             // a11y calls, each able to stall for seconds on a busy app — only
             // for every caller to discard all of it but the id; PILOT-278.)
-            return ResolvedElement(elementFinder.getElement(elementId), freshBounds = null)
+            return ResolvedElement(
+                elementFinder.getElement(elementId),
+                freshBounds = null,
+                identity = elementFinder.identityOf(elementId),
+            )
         }
         // Selector-based: auto-wait then find
         val selector = parseSelectorParams(params)
-        val timeout = params.optLong("timeout", 10000L)
         val info = waitEngine.waitForElement(selector, timeout, elementFinder)
-        return ResolvedElement(elementFinder.getElement(info.elementId), info.bounds)
+        return ResolvedElement(elementFinder.getElement(info.elementId), info.bounds, elementFinder.identityOf(info.elementId))
+    }
+
+    /**
+     * Resolve the element and run [action] on it. When the resolved node turns
+     * out to show another element by the time it is touched (React reuses a
+     * native view for what it renders next in the same place — PILOT-362), a
+     * selector-addressed action resolves its selector again within what is
+     * left of the budget, like a Playwright locator, which re-resolves on
+     * every attempt. An id-addressed one fails as stale, and the SDK
+     * re-resolves it.
+     */
+    private fun <T> actOnElement(
+        params: JSONObject,
+        budget: ActionBudget,
+        action: (ResolvedElement) -> T,
+    ): T {
+        var element = resolveElement(params)
+        while (true) {
+            try {
+                return action(element)
+            } catch (e: TargetChangedException) {
+                val idAddressed = !params.optString("elementId", null).isNullOrEmpty()
+                if (idAddressed || budget.remainingMs <= 0) throw e
+                Log.d(TAG, "resolved element changed into another before it was touched; resolving again")
+                element = resolveElement(params, timeout = budget.remainingMs)
+            }
+        }
     }
 
     /**
@@ -139,15 +201,16 @@ class CommandHandler(
     ): ResolvedElement {
         val elementId = params.optString("elementId", null)
         if (!elementId.isNullOrEmpty()) {
-            return ResolvedElement(elementFinder.getElement(elementId), freshBounds = null)
+            return ResolvedElement(elementFinder.getElement(elementId), freshBounds = null, elementFinder.identityOf(elementId))
         }
         val info = waitEngine.waitForElement(parseSelectorParams(params), timeout, elementFinder)
-        return ResolvedElement(elementFinder.getElement(info.elementId), info.bounds)
+        return ResolvedElement(elementFinder.getElement(info.elementId), info.bounds, elementFinder.identityOf(info.elementId))
     }
 
     private fun dispatch(
         method: String,
         params: JSONObject,
+        budget: ActionBudget,
     ): JSONObject {
         return when (method) {
             "findElement" -> {
@@ -182,8 +245,9 @@ class CommandHandler(
                 if (x >= 0 && y >= 0) {
                     actionExecutor.tapCoordinates(x, y)
                 } else {
-                    val element = resolveElement(params)
-                    actionExecutor.tap(element.obj, element.freshBounds)
+                    actOnElement(params, budget) { element ->
+                        actionExecutor.tap(element.obj, element.freshBounds, budget, element.identity)
+                    }
                 }
                 JSONObject().put("success", true)
             }
@@ -195,7 +259,12 @@ class CommandHandler(
                 val element = waitEngine.waitForElement(selector, timeout, elementFinder)
                 // After waiting, tap the element — reusing the settle-checked
                 // bounds from the wait, so the tap adds no further a11y reads.
-                actionExecutor.tap(elementFinder.getElement(element.elementId), element.bounds)
+                actionExecutor.tap(
+                    elementFinder.getElement(element.elementId),
+                    element.bounds,
+                    budget,
+                    elementFinder.identityOf(element.elementId),
+                )
                 JSONObject().put("success", true).put("element", element.toJson())
             }
 
@@ -206,8 +275,9 @@ class CommandHandler(
                 if (x >= 0 && y >= 0) {
                     actionExecutor.longPressCoordinates(x, y, duration)
                 } else {
-                    val element = resolveElement(params)
-                    actionExecutor.longPress(element.obj, duration, element.freshBounds)
+                    actOnElement(params, budget) { element ->
+                        actionExecutor.longPress(element.obj, duration, element.freshBounds, budget, element.identity)
+                    }
                 }
                 JSONObject().put("success", true)
             }
@@ -241,8 +311,9 @@ class CommandHandler(
                     // would treat the typed value as a text match criterion.
                     val selectorParams = JSONObject(params.toString())
                     selectorParams.remove("text")
-                    val element = resolveElement(selectorParams)
-                    actionExecutor.typeText(element.obj, text, element.freshBounds)
+                    actOnElement(selectorParams, budget) { element ->
+                        actionExecutor.typeText(element.obj, text, element.freshBounds, budget, element.identity)
+                    }
                 } else {
                     actionExecutor.typeTextWithoutFocus(text)
                 }
@@ -250,8 +321,9 @@ class CommandHandler(
             }
 
             "clearText" -> {
-                val element = resolveElement(params)
-                actionExecutor.clearText(element.obj)
+                actOnElement(params, budget) { element ->
+                    actionExecutor.clearText(element.obj, budget, element.identity)
+                }
                 JSONObject().put("success", true)
             }
 
@@ -353,9 +425,10 @@ class CommandHandler(
             }
 
             "doubleTap" -> {
-                val element = resolveElement(params)
                 val intervalMs = params.optLong("intervalMs", 0)
-                actionExecutor.doubleTap(element.obj, intervalMs, element.freshBounds)
+                actOnElement(params, budget) { element ->
+                    actionExecutor.doubleTap(element.obj, intervalMs, element.freshBounds, budget, element.identity)
+                }
                 JSONObject().put("success", true)
             }
 
@@ -372,15 +445,17 @@ class CommandHandler(
             }
 
             "selectOption" -> {
-                val element = resolveElement(params)
                 val optionText = params.optString("option", null)
                 val index = if (params.has("index")) params.getInt("index") else -1
-                if (optionText != null) {
-                    actionExecutor.selectOption(element.obj, optionText)
-                } else if (index >= 0) {
-                    actionExecutor.selectOptionByIndex(element.obj, index)
-                } else {
+                if (optionText == null && index < 0) {
                     throw InvalidSelectorException("selectOption requires either 'option' (string) or 'index' (int)")
+                }
+                actOnElement(params, budget) { element ->
+                    if (optionText != null) {
+                        actionExecutor.selectOption(element.obj, optionText, budget, element.identity)
+                    } else {
+                        actionExecutor.selectOptionByIndex(element.obj, index, budget, element.identity)
+                    }
                 }
                 JSONObject().put("success", true)
             }
@@ -393,8 +468,9 @@ class CommandHandler(
             }
 
             "focus" -> {
-                val element = resolveElement(params)
-                actionExecutor.focus(element.obj)
+                actOnElement(params, budget) { element ->
+                    actionExecutor.focus(element.obj, budget, element.identity)
+                }
                 JSONObject().put("success", true)
             }
 
