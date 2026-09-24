@@ -1398,3 +1398,32 @@ describe('noDeviceMessage', () => {
     expect(noDeviceMessage()).toContain('Connect a device');
   });
 });
+
+// A config file that exists but fails to load leaves the session without a
+// config (PILOT-262). The dispatcher must say so in its session info — device
+// tools read `configError` to answer with the load error — and forget it once
+// a config loads.
+describe('HeadlessTestDispatcher config load errors', () => {
+  it('records the load error, and clears it after a config loads', async () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-dispatch-cfg-')));
+    try {
+      const broken = path.join(dir, 'broken.config.mjs');
+      fs.writeFileSync(broken, 'throw new Error("boom")\n');
+      const good = path.join(dir, 'good.config.mjs');
+      fs.writeFileSync(good, 'export default { platform: "ios" }\n');
+      const dispatcher = new HeadlessTestDispatcher({ configFile: broken });
+      const internals = dispatcher as unknown as { _configFile?: string; _loadConfigWithFallback(): Promise<unknown> };
+
+      expect(await internals._loadConfigWithFallback()).toBeNull();
+      const info = dispatcher.getSessionInfo();
+      expect(info.configError).toContain(`Failed to load config file ${broken}: boom`);
+      expect(info.configWarning).toContain('boom');
+
+      internals._configFile = good;
+      expect(await internals._loadConfigWithFallback()).not.toBeNull();
+      expect(dispatcher.getSessionInfo().configError).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

@@ -873,8 +873,11 @@ let configImportQueue: Promise<unknown> = Promise.resolve();
  * specifier it cannot resolve (`./helpers.js` for `helpers.ts`, a directory
  * import), TypeScript it cannot strip (an `enum`, a `.ts` file inside
  * node_modules), an extension it does not know, a JSON import without its
- * `type` attribute. Node raises all of these before any of the config's code
- * runs.
+ * `type` attribute. Raised by a static import, they come before any of the
+ * config's code runs; raised by a dynamic import or `require` while it runs,
+ * the retry evaluates the config a second time — as `tapsmith test` always
+ * has, parent and tsx child each evaluating it — and the stack cannot tell
+ * the two apart, so they are treated alike.
  */
 const LOADER_ERROR_CODES = new Set([
   'ERR_MODULE_NOT_FOUND',
@@ -901,8 +904,17 @@ function isLoaderError(err: unknown): boolean {
 }
 
 function firstStackFrameIsNodeInternal(err: Error): boolean {
-  const frames = (err.stack ?? '').split('\n').filter((line) => /^\s+at /.test(line) && !line.includes('<anonymous>'));
-  return frames.length > 0 && /\(?node:/.test(frames[0]);
+  for (const line of (err.stack ?? '').split('\n')) {
+    const frame = /^\s+at (?:async )?(?:.*? \((.*)\)|(.*))$/.exec(line);
+    if (!frame) continue;
+    const location = frame[1] ?? frame[2] ?? '';
+    // Builtins such as `JSON.parse` report no location; the next frame is
+    // whoever called them. `Object.<anonymous> (/p/config.js:3:1)` — a
+    // CommonJS module's top level — does have one, and it is the config's.
+    if (location === '<anonymous>' || location === 'native') continue;
+    return location.startsWith('node:');
+  }
+  return false;
 }
 
 /**
@@ -938,23 +950,44 @@ function firstStackFrameIsNodeInternal(err: Error): boolean {
  * tsx itself, which is not the config's fault.
  */
 async function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
+  let nativeError: unknown;
   try {
     return (await import(pathToFileURL(configPath).href)) as Record<string, unknown>;
   } catch (err) {
     if (!isLoaderError(err)) throw configLoadError(configPath, err);
+    nativeError = err;
   }
-  const result = configImportQueue.then(() => importConfigModuleWithTsx(configPath));
+  const result = configImportQueue.then(() => importConfigModuleWithTsx(configPath, nativeError));
   configImportQueue = result.catch(() => undefined);
   return result;
 }
 
-function configLoadError(configPath: string, err: unknown): Error {
-  const detail = err instanceof Error ? err.message : String(err);
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The rejection for a config that could not be imported. When the tsx retry
+ * failed too, Node's own error rides along: either one can be the actionable
+ * one (tsx's for a config that runs and throws; Node's for a mistyped import
+ * that tsx then trips over something else on).
+ */
+function configLoadError(configPath: string, err: unknown, nativeError?: unknown): Error {
+  let detail = errorMessage(err);
+  if (nativeError !== undefined && errorMessage(nativeError) !== detail) {
+    detail += `\n(Without tsx, Node reported: ${errorMessage(nativeError)})`;
+  }
   return new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
 }
 
-async function importConfigModuleWithTsx(configPath: string): Promise<Record<string, unknown>> {
-  configEsmImport ??= import('tsx/esm/api').then((esm) => esm.register({ namespace: 'tapsmith-config' }).import);
+async function importConfigModuleWithTsx(configPath: string, nativeError: unknown): Promise<Record<string, unknown>> {
+  configEsmImport ??= import('tsx/esm/api')
+    .then((esm) => esm.register({ namespace: 'tapsmith-config' }).import)
+    .catch((err: unknown) => {
+      // Not cached: a later load in this process should try again.
+      configEsmImport = undefined;
+      throw err;
+    });
   const [esmImport, cjs] = await Promise.all([configEsmImport, import('tsx/cjs/api')]);
   // tsx's CJS unregister deletes the `.ts`/`.tsx`/`.jsx`/`.mjs` handlers it
   // replaced instead of restoring them, so in a process already running under
@@ -977,7 +1010,7 @@ async function importConfigModuleWithTsx(configPath: string): Promise<Record<str
     }
     return mod;
   } catch (err) {
-    throw configLoadError(configPath, err);
+    throw configLoadError(configPath, err, nativeError);
   } finally {
     unregisterCjs();
     for (const key of Object.keys(installed)) {

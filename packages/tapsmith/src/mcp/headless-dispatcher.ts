@@ -1452,7 +1452,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       .catch((err) => {
         const message = err instanceof Error ? err.message : String(err);
         this._configPath = null;
-        this._configWarning = `Failed to load the Tapsmith config: ${message}`;
+        this._configWarning = `Failed to load the Tapsmith config: ${message} Restart the MCP server once it is fixed; the load is not retried within a session.`;
         this._configError = message;
         log(`Warning: failed to load config: ${message}`);
         return null;

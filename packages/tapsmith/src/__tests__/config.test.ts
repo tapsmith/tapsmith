@@ -284,6 +284,20 @@ describe('loadConfig rootDir anchoring', () => {
       expect(out.runs).toBe(1);
     });
 
+    // A CommonJS config's top-level frame is `Object.<anonymous> (<path>)`,
+    // which must read as the config's own code, not as a builtin.
+    it('rejects a CommonJS config that throws a SyntaxError while running, without running it twice', () => {
+      writePackage(root, 'commonjs');
+      const file = path.join(root, 'tapsmith.config.js');
+      fs.writeFileSync(file, 'globalThis.__runs = (globalThis.__runs ?? 0) + 1;\nJSON.parse("{bad");\nmodule.exports = {};\n', 'utf-8');
+      const out = inBareNode<{ error?: string; runs?: number }>(
+        `try { await loadConfig(${JSON.stringify(root)}); emit({}); }\n`
+        + 'catch (e) { emit({ error: e.message, runs: globalThis.__runs }); }\n',
+      );
+      expect(out.error).toContain(`Failed to load config file ${file}:`);
+      expect(out.runs).toBe(1);
+    });
+
     // Loader failures bare Node raises and tsx does not, beyond the common
     // ones above: each must fall back rather than stop the CLI's parent.
     it('loads a TypeScript config with a directory import and an attribute-less JSON import', () => {
@@ -310,6 +324,23 @@ describe('loadConfig rootDir anchoring', () => {
       );
       expect(out.error).toContain(`Failed to load config file ${file}:`);
       expect(out.error).toMatch(/missing/);
+    });
+
+    // When tsx fails on something else, Node's own error — here the actual
+    // typo — must still reach the user.
+    it('keeps Node\'s error when the tsx retry fails differently', () => {
+      writePackage(root, 'commonjs');
+      const pkg = path.join(root, 'node_modules', 'esm-sdk');
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.writeFileSync(path.join(pkg, 'package.json'), '{ "name": "esm-sdk", "type": "module", "exports": "./index.js" }\n', 'utf-8');
+      fs.writeFileSync(path.join(pkg, 'index.js'), 'import * as path from "node:path";\nconst here = path.resolve(import.meta.dirname);\nexport const x = here;\n', 'utf-8');
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(file, 'import { x } from "esm-sdk";\nimport { y } from "./helpr.js";\nexport default { x, y };\n', 'utf-8');
+      const out = inBareNode<{ error?: string }>(
+        `try { await loadConfig(${JSON.stringify(root)}); emit({}); } catch (e) { emit({ error: e.message }); }\n`,
+      );
+      expect(out.error).toContain(`Failed to load config file ${file}:`);
+      expect(out.error).toMatch(/helpr\.js/);
     });
 
     // tsx's CJS unregister deletes the extension handlers it replaced rather
