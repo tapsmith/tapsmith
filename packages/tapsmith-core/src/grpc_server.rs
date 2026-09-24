@@ -5483,9 +5483,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         // publishes its lease inside that guard, so a check made before taking
         // it could see no lease and then reuse the one published meanwhile.
         // Cleanup takes the guard itself, so drop it, clean up, and look again.
+        #[cfg(target_os = "macos")]
         let mut proxy_guard = loop {
             let guard = self.network_proxy.write().await;
-            #[cfg(target_os = "macos")]
             if req.require_isolation && self.ios_system_proxy.read().await.is_some() {
                 drop(guard);
                 info!("Isolated capture requested; releasing the host-wide system-proxy capture");
@@ -5494,6 +5494,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             }
             break guard;
         };
+        // No host-wide system proxy exists off macOS.
+        #[cfg(not(target_os = "macos"))]
+        let mut proxy_guard = self.network_proxy.write().await;
         // If a proxy is already running (pre-started for physical iOS OCSP
         // passthrough during start_agent), reuse it instead of erroring.
         // Capture state is reset so this session starts clean.
