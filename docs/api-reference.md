@@ -2078,9 +2078,9 @@ correct device.
 | `grep` | `RegExp \| RegExp[]` | Per-project grep filter, intersected with the root `grep`. A test must match at least one pattern in this set AND at least one pattern in the root set (when either is configured). |
 | `grepInvert` | `RegExp \| RegExp[]` | Per-project grep-invert filter, unioned with the root `grepInvert`. A test that matches any pattern in either set is skipped. |
 
-### `loadConfig(dir?: string): Promise<TapsmithConfig>`
+### `loadConfig(dir?: string, configFile?: string): Promise<TapsmithConfig>`
 
-Load configuration from the first of `tapsmith.config.ts`, `tapsmith.config.js` and `tapsmith.config.mjs` that exists in `dir` (default: the working directory). Falls back to defaults only if none exists: when the file exists but cannot be imported, the promise rejects with `Failed to load config file <path>: <reason>`, the import error as its `cause`, rather than trying the next candidate. TypeScript configs load without a TypeScript loader in the calling process. This is used internally by the CLI.
+With `configFile`, load that file (resolved against `dir`); a missing one rejects with `Config file not found: <path>`. Otherwise, load configuration from the first of `tapsmith.config.ts`, `tapsmith.config.js` and `tapsmith.config.mjs` that exists in `dir` (default: the working directory). Falls back to defaults only if none exists: when the file exists but cannot be imported, the promise rejects with `Failed to load config file <path>: <reason>`, the import error as its `cause`, rather than trying the next candidate. TypeScript configs load without a TypeScript loader in the calling process. This is used internally by the CLI.
 
 ---
 
