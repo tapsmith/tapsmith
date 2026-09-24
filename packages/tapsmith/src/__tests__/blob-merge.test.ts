@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { BlobReporter, BlobMergeError, mergeBlobs, describeMergedBlobs, incompleteMergeMessage } from '../reporters/blob.js';
+import { BlobReporter, BlobMergeError, BlobOutputDirError, mergeBlobs, describeMergedBlobs, incompleteMergeMessage } from '../reporters/blob.js';
 import type { FullResult } from '../reporter.js';
 import type { TapsmithConfig } from '../config.js';
 import type { TestResult } from '../runner.js';
@@ -143,6 +143,7 @@ describe('mergeBlobs input checks', () => {
 
   it.each([
     ['a screenshot key', { screenshots: { '../escape.png': 'eA==' } }],
+    ['a screenshot key that would read as a blob', { screenshots: { 'zzz.jsonl': 'eA==' } }],
     ['a trace key', { tests: [{ name: 'a', fullName: 'a', status: 'passed', durationMs: 1, traceKey: '/etc/passwd' }] }],
     ['a nested video key', { suites: [{ name: 's', durationMs: 1, suites: [], tests: [
       { name: 'a', fullName: 'a', status: 'passed', durationMs: 1, videoKey: 'sub/dir.webm' },
@@ -354,6 +355,24 @@ describe('BlobReporter output directory', () => {
     expect(() => reporter.onRunStart(makeConfig({ rootDir }), 1)).toThrow(/contains the project root/);
     expect(fs.existsSync(rootDir)).toBe(true);
   });
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'turns a directory it cannot empty into a refusal, and then writes no blob', async () => {
+      const outputDir = path.join(tmpDir, 'blob-report');
+      const locked = path.join(outputDir, 'locked');
+      fs.mkdirSync(locked, { recursive: true });
+      fs.writeFileSync(path.join(locked, 'report-old.jsonl'), '{}');
+      fs.chmodSync(locked, 0o500);
+      try {
+        const reporter = new BlobReporter({ outputDir });
+        expect(() => reporter.prepareOutputDir(makeConfig())).toThrow(BlobOutputDirError);
+        expect(() => reporter.prepareOutputDir(makeConfig())).toThrow(/^Cannot empty blob reporter outputDir /);
+        await expect(reporter.onRunEnd(makeResult())).rejects.toThrow(/Cannot empty/);
+        expect(fs.readdirSync(outputDir)).toEqual(['locked']);
+      } finally {
+        fs.chmodSync(locked, 0o700);
+      }
+    });
 
   it('prepareOutputDir clears before the run starts', () => {
     const outputDir = path.join(tmpDir, 'blob-report');

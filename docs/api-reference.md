@@ -2225,7 +2225,9 @@ run leaves exactly one blob (plus its trace and video attachments) and an earlie
 can't be merged as though they were this run's. Point `outputDir` at a dedicated directory. If
 `outputDir` is, or contains, the project root or the working directory, `tapsmith test` stops
 with an error before launching any device. Clearing it would delete the project. A shard that gets no test files still writes an empty blob, so `merge-reports` can tell an
-empty shard from a missing one.
+empty shard from a missing one. UI mode writes no blobs and leaves `outputDir` alone. Shards run
+at the same time on one machine each need their own `outputDir`, or one run's clearing deletes
+another's blob. Playwright behaves the same way.
 
 ### Custom reporters
 

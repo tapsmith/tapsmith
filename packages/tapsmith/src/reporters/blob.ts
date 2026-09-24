@@ -97,7 +97,16 @@ export class BlobReporter implements TapsmithReporter {
         throw this._refusal;
       }
     }
-    fs.rmSync(outputDir, { recursive: true, force: true });
+    try {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    } catch (err) {
+      // A blob that can't be removed would be merged beside this run's, so
+      // this run writes none either (onRunEnd rethrows the refusal).
+      this._refusal = new BlobOutputDirError(
+        `Cannot empty blob reporter outputDir ${outputDir}: ${(err as Error).message}`,
+      );
+      throw this._refusal;
+    }
   }
 
   onRunStart(config: TapsmithConfig, _fileCount: number): void {
@@ -452,7 +461,9 @@ function checkAttachmentKeys(file: string, blob: BlobData): void {
   for (const key of keys) {
     if (key === undefined || key === null) continue;
     if (typeof key !== 'string' || key === '' || key === '.' || key === '..'
-      || path.basename(key) !== key || key.includes('/') || key.includes('\\')) {
+      || path.basename(key) !== key || key.includes('/') || key.includes('\\')
+      // Restored into the merge directory, a *.jsonl would be read as a blob next time.
+      || key.endsWith('.jsonl')) {
       throw new BlobMergeError(`Invalid blob file ${file}: attachment name ${JSON.stringify(key)} is not a plain file name`);
     }
   }
