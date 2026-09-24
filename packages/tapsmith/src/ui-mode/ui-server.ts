@@ -35,7 +35,7 @@ import type { ResolvedProject } from '../project.js';
 import { collectTransitiveDeps, projectLabel } from '../project.js';
 import { LaunchSetupError } from '../dispatcher.js';
 import { STOPPED_BY_USER } from '../abort.js';
-import { classifyEntryStatus, isInterruptedEntry } from '../mcp/test-dispatcher.js';
+import { classifyEntryStatus, isInterruptedEntry, uiDeviceChoiceError } from '../mcp/test-dispatcher.js';
 import type { LaunchedEmulator } from '../emulator.js';
 import { preserveEmulatorsForReuse, getRunningAvdName } from '../emulator.js';
 import { listSimulators, getSimulatorScreenScale } from '../ios-simulator.js';
@@ -156,6 +156,11 @@ export interface UIServerContext {
   testFiles: string[]
   screenshotDir?: string
   launchedEmulators: LaunchedEmulator[]
+  /**
+   * `--force-install`: workers reinstall the app on the devices they set up
+   * at startup (the CLI already did the primary). Never on a respawn.
+   */
+  forceInstall: boolean
   projects?: ResolvedProject[]
   /** Dependency-ordered project waves from topologicalSort(). */
   projectWaves?: ResolvedProject[][]
@@ -1167,6 +1172,22 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         configPath: ctx.configPath,
       };
     },
+    async deviceChoiceError(_files, device, project) {
+      let serial: string;
+      try {
+        serial = testDispatcher.resolveDeviceName(device, project) ?? device;
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      const live = uiWorkers.filter((w) => !w.retired);
+      return uiDeviceChoiceError({
+        device,
+        serial,
+        sessionDevices: (testDispatcher.getSessionInfo().deviceTargets ?? []).flatMap((t) => (t.device ? [t.device] : [])),
+        // Workers spawn on the first run; until then, the ones planned.
+        workerCount: live.length > 0 ? live.length : workerGroups.length,
+      });
+    },
     resolveDeviceName(name, project) {
       // Live workers first (each lists its group, primary first); before the
       // workers spawn, the primary the CLI set up and the members it opened.
@@ -1675,6 +1696,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           },
           adopt,
           true,
+          ctx.forceInstall,
         ),
       );
     }
@@ -1796,6 +1818,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     adopt?: AdoptTarget,
     /** The adopted primary's startup launch is still unconsumed (initial spawn only). */
     adoptPrepared = false,
+    /** `--force-install` applies (initial spawn only: a respawn must not wipe the app mid-session). */
+    forceInstall = false,
   ): Promise<UIWorkerHandle> {
     // The rest of this worker's device group (`use.devices`), each on a
     // daemon of its own — adopted from the CLI when it opened them beside
@@ -2009,6 +2033,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         screenshotDir: ctx.screenshotDir,
         adoptPrimary: !!adopt,
         adoptPrepared: !!adopt && adoptPrepared,
+        forceInstall,
         ...(members.length > 0 ? {
           groupMembers: members.map((m) => ({
             name: m.name,

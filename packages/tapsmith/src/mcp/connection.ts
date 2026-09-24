@@ -118,7 +118,16 @@ export function getAllDaemonAddresses(): string | null {
   return _connections.map(c => c.address).join(',');
 }
 
-export async function ensureConnected(device?: string): Promise<TapsmithGrpcClient> {
+export async function ensureConnected(
+  device?: string,
+  /**
+   * The device the caller is about to pin, for a first-time discovery that
+   * starts its own daemon: it would otherwise point that daemon — agent and
+   * all — at whichever device looked best, which may be another session's
+   * (PILOT-342). Ignored once the pool exists.
+   */
+  preferDevice?: string,
+): Promise<TapsmithGrpcClient> {
   if (_ready && _connections.length > 0) {
     if (device) {
       const conn = _deviceIndex.get(device);
@@ -143,9 +152,9 @@ export async function ensureConnected(device?: string): Promise<TapsmithGrpcClie
   // First-time init (with mutex to prevent concurrent discovery)
   if (_connectingPromise) {
     await _connectingPromise;
-    return ensureConnected(device);
+    return ensureConnected(device, preferDevice);
   }
-  _connectingPromise = discover();
+  _connectingPromise = discover(preferDevice);
   try {
     await _connectingPromise;
   } finally {
@@ -525,7 +534,7 @@ export async function listAllDevices(): Promise<DeviceInfoProto[]> {
 
 // ─── Discovery ───
 
-async function discover(): Promise<void> {
+async function discover(preferDevice?: string): Promise<void> {
   const config = await loadMcpConfig(_configFile).then((result) => result.config).catch(() => null);
   _discoveredConfig = config;
 
@@ -701,7 +710,13 @@ async function discover(): Promise<void> {
     // claiming this daemon for a *different* device must know it is repointing
     // one — otherwise the daemon reports an agent connected and the second
     // platform silently runs against the first one's.
-    conn.preparedDevice = await setDeviceAndAgent(conn.client, config);
+    // A config pin wins over the caller's preference, as it does for targets,
+    // and a device a UI session holds is never preferred: the target's own
+    // guard refuses that pin by name.
+    const preferred = preferDevice && config && !primaryDevicePin(config) && !uiHeldDevices().has(preferDevice)
+      ? { ...config, device: preferDevice }
+      : config;
+    conn.preparedDevice = await setDeviceAndAgent(conn.client, preferred);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Daemon started but setup failed: ${msg}`);
@@ -957,14 +972,16 @@ async function ensureMemberTarget(
 }
 
 async function ensurePrimaryTarget(config: TapsmithConfig): Promise<PlatformTarget> {
-  await ensureConnected();
   const platform = config.platform;
   const key = platform ?? 'default';
   // The first group member's pin, root `device` included. Reading `config.device`
   // here honoured `bob`'s pin and auto-picked `alice`'s.
   const wanted = primaryDevicePin(config);
-  // Before any daemon is started: a pinned device another session drives is
-  // refused outright, not silently taken over.
+  // Discovery's own daemon starts on the pin too, not on an auto-pick.
+  await ensureConnected(undefined, wanted);
+  // After discovery, which learns what UI sessions hold; before this target
+  // starts any daemon: a pinned device another session drives is refused
+  // outright, not silently taken over.
   assertNotHeldByUi(wanted, uiHeldDevices());
 
   const existing = await findConnectionForPlatform(platform, key, wanted);

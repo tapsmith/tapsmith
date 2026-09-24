@@ -2351,15 +2351,20 @@ npx tapsmith test tests/login.test.ts tests/signup.test.ts
 
 ### `tapsmith test --device <serial>` / `tapsmith test -d <serial>`
 
-Target a specific device by its ADB serial number. This is mainly useful for
-single-device debugging or reproducing an issue on one known device.
+Target a specific device by its ADB serial number (or simulator UDID). This is
+mainly useful for single-device debugging or reproducing an issue on one known
+device.
 
 ```bash
 npx tapsmith test --device emulator-5554
 ```
 
-For multi-worker emulator runs, prefer config-based provisioning with
-`workers`, `launchEmulators`, and `avd`.
+A pinned device hosts exactly one worker, in every mode — sequential, parallel,
+watch and UI. A `workers` value from the config is capped to one (with a note
+saying so), and `--device` combined with `--workers N` (N > 1) is refused: the two
+ask for different runs. The same holds for `device` in the config and for pinned
+`use.devices` members. For multi-worker emulator runs, use config-based
+provisioning with `workers`, `launchEmulators`, and `avd` instead.
 
 ### `tapsmith test --workers <n>` / `tapsmith test -j <n>`
 
@@ -2487,7 +2492,7 @@ npx tapsmith test --config=./configs/ios.config.mjs
 
 ### `tapsmith test --force-install`
 
-Force reinstall the APK/app and agent on every run, even if they're already installed. Useful when the app has been updated outside of Tapsmith, or when troubleshooting agent issues.
+Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK is already detected and reinstalled without it.
 
 ```bash
 npx tapsmith test --force-install

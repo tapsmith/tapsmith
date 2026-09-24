@@ -194,6 +194,7 @@ async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
     {
       label: `UI Worker ${workerId}`,
       launchPhase: 'UI worker startup launch',
+      forceInstall: msg.forceInstall,
       // SetDevice resolves the serial against the daemon's last device listing.
       // A worker that (re)connects later — a recycle, a respawn — cannot assume
       // that listing still holds the device (an Android daemon reported

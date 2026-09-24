@@ -28,6 +28,12 @@ export interface InitMessage {
   /** True when the emulator was freshly launched for this run (needs warmup). */
   freshEmulator?: boolean
   /**
+   * `--force-install`: reinstall the app even when the device holds this
+   * build. Required so no embedder can forget it — the parallel path dropped
+   * the flag entirely (PILOT-261).
+   */
+  forceInstall: boolean
+  /**
    * The rest of the device group (`devices[1..]`), each on its own daemon.
    * Present only for group projects (`use.devices`); a single-device worker
    * omits it.

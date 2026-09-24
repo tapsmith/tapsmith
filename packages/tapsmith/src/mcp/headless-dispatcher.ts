@@ -19,7 +19,7 @@ import type { WatchRunMessage, WatchRunChildMessage } from '../watch-run.js';
 import { RunQueue } from '../watch-queue.js';
 import { telemetry } from '../telemetry.js';
 import { ensurePlatformTarget, platformTargetIsLive, type PlatformTarget } from './connection.js';
-import { deviceGroupNames, deviceGroupSize, resolveDeviceGroup, type TapsmithConfig } from '../config.js';
+import { deviceGroupNames, deviceGroupSize, primaryDevicePin, resolveDeviceGroup, type TapsmithConfig } from '../config.js';
 import { deviceGroupSignature, deviceSignature } from '../project.js';
 import { matchesTestFilter } from '../test-filter.js';
 import type {
@@ -141,6 +141,14 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   private _retriedTargets = new Set<string>();
   /** Per-project serialized configs handed to workers, built on first use. */
   private _projectConfigs = new Map<string, SerializedConfig>();
+  /**
+   * The device a `run_tests` call pinned each target to (PILOT-342). Kept for
+   * the session's life, so a target resolved again (its daemon died, it had
+   * no device) comes back on the same device.
+   */
+  private readonly _devicePins = new Map<string, string>();
+  /** A `run_tests` `device` to pin while the targets are first resolved. */
+  private _pendingPin: { device: string; files: string[]; project?: string } | null = null;
 
   constructor(options?: { configFile?: string }) {
     this._configFile = options?.configFile;
@@ -534,6 +542,66 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     };
   }
 
+  /**
+   * Whether `device` can be honoured for a run of `files`, and why not.
+   *
+   * A session keeps one device per target for its whole life: moving a target
+   * would leave the agent it started attached to the previous device, and the
+   * device tools pointed at it. So `device` can *choose* a target's device only
+   * while that target is still unresolved — the session's first call, or a
+   * target that found no device — and otherwise only confirm the one it has.
+   * Anything else is refused: running the tests somewhere the caller did not
+   * name is how one session took a device from under another.
+   */
+  async deviceChoiceError(files: string[], device: string, project?: string): Promise<string | null> {
+    if (!this._devicesReady && !this._initialized) this._pendingPin = { device, files, project };
+    try {
+      await this.ensureDevicesReady();
+    } finally {
+      this._pendingPin = null;
+    }
+    if (!this._config) return null;
+    // An unknown project is `validateProjectChoice`'s to refuse, by name.
+    if (project !== undefined && !this._projects.some((p) => p.name === project)) return null;
+
+    const keys = this._targetKeysFor(files, project);
+    if (keys.length === 0) return null;
+    if (keys.length > 1) {
+      return `\`device\` names one device, but these files run on ${keys.length} device targets `
+        + `(${keys.map((k) => this._describeTargetKey(k)).join(', ')}). Pass \`project\` to pick one, or run them separately.`;
+    }
+    const key = keys[0];
+    let serial: string;
+    try {
+      serial = this.resolveDeviceName(device, project) ?? device;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+
+    const effective = this._wantedConfigs(this._config).find((c) => targetKeyFor(c) === key);
+    const configPin = effective ? primaryDevicePin(effective) : undefined;
+    if (!this._targets.has(key) && this._targetErrors.has(key) && effective && !configPin) {
+      // No device yet, so nothing to move: resolve it on the requested one.
+      this._devicePins.set(key, serial);
+      this._retriedTargets.add(key);
+      await this._resolveOnePlatformTarget(effective);
+    }
+    const target = this._targets.get(key);
+    // Still none: the run reports the target's own failure.
+    if (!target) return null;
+    const serials = [target.deviceSerial, ...(target.members ?? []).map((m) => m.deviceSerial)];
+    if (serials.includes(serial)) return null;
+
+    const where = this._describeTargetKey(key);
+    return `This session runs ${where} tests on ${serials.join(' + ')}, not ${device}. `
+      + 'A headless MCP session keeps the device it started on for its whole life (moving it would strand the agent '
+      + 'it started there), so `device` can confirm that device but not choose another. '
+      + (configPin
+        ? `The config pins ${configPin}; change \`device\` there and restart the MCP server to run on ${device}.`
+        : `To run on ${device}, restart the MCP server and pass \`device\` on its first run_tests call, `
+          + `or set \`device: '${device}'\` in the config.`);
+  }
+
   toggleWatch(filePath: string, options?: { testFilter?: string; project?: string }): { enabled: boolean } {
     const { testFilter, project: projectName } = options ?? {};
     const existing = this._findWatchEntry(filePath, projectName, testFilter);
@@ -673,6 +741,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       }
     }
 
+    if (config) this._applyPendingPin(config);
     await this._resolvePlatformTargets(config);
 
     if (config) {
@@ -737,11 +806,52 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     return [...byKey.values()];
   }
 
+  /**
+   * Pin the target a pending `run_tests` `device` is for, before anything
+   * auto-picks one. Only an unambiguous request pins: files spanning two
+   * targets would pin one of them to a device it cannot use, and a group
+   * member's *name* means nothing until its group's devices are known.
+   * `deviceChoiceError` refuses both afterwards.
+   */
+  private _applyPendingPin(config: TapsmithConfig): void {
+    const pin = this._pendingPin;
+    if (!pin) return;
+    if (this._projects.some((p) => resolveDeviceGroup(p.effectiveConfig).some((e) => e.name === pin.device))) return;
+    const keys = this._targetKeysFor(pin.files, pin.project);
+    if (keys.length !== 1) return;
+    const effective = this._wantedConfigs(config).find((c) => targetKeyFor(c) === keys[0]);
+    // A device pinned in the config wins; `deviceChoiceError` says so.
+    if (effective && !primaryDevicePin(effective)) this._devicePins.set(keys[0], pin.device);
+  }
+
+  /** The distinct targets a run of `files` would use, the way `runFiles` routes them. */
+  private _targetKeysFor(files: string[], project?: string): string[] {
+    const keys = new Set(this.resolveRequestedFiles(files).map((f) => platformKeyForProject(
+      this._projects,
+      this._realProjectName(this._projectForFile(f, project)),
+      this._config?.platform,
+    )));
+    return [...keys];
+  }
+
+  /**
+   * A target key as a caller would name it: a group target by its project
+   * (it has one), any other by its platform — several projects share it.
+   */
+  private _describeTargetKey(key: string): string {
+    const group = key.includes('|') ? this._projectForTargetKey(key) : undefined;
+    if (group) return `project "${group}"`;
+    const platform = key.split('|')[0];
+    return platform === DEFAULT_PLATFORM_KEY ? 'its' : platform;
+  }
+
   /** Resolve (or re-resolve) a single platform, leaving the others alone. */
   private async _resolveOnePlatformTarget(effective: TapsmithConfig): Promise<void> {
     const key = targetKeyFor(effective);
+    // A `run_tests` pin applies only where the config leaves the primary free.
+    const pin = primaryDevicePin(effective) ? undefined : this._devicePins.get(key);
     try {
-      const target = await ensurePlatformTarget(effective);
+      const target = await ensurePlatformTarget(pin ? { ...effective, device: pin } : effective);
       this._targets.set(key, target);
       this._targetErrors.delete(key);
       this._deviceSerial ??= target.deviceSerial;

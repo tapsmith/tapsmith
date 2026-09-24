@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { deviceClientFor } from '../mcp/tools/device-target.js';
 import { selectProjectDevice, retiredUiConnections, sessionDevicesFrom } from '../mcp/connection.js';
-import type { TestDispatcher } from '../mcp/test-dispatcher.js';
+import { uiDeviceChoiceError, type TestDispatcher } from '../mcp/test-dispatcher.js';
 
 // A device tool used to fall back to the first pooled daemon whenever no
 // `device` was given. A session holds one daemon per platform, so that answered
@@ -31,6 +31,7 @@ function dispatcherWith(projects: Array<{ name: string; platform?: string }>): T
       })),
     }),
     resolveDeviceName: () => undefined,
+    deviceChoiceError: async () => null,
     toggleWatch: () => ({ enabled: false }),
   };
 }
@@ -189,5 +190,27 @@ describe('sessionDevicesFrom', () => {
       { serial: 'emulator-5554', platform: 'android' },
       { serial: 'SIM-1', platform: 'ios' },
     ]);
+  });
+});
+
+describe('uiDeviceChoiceError', () => {
+  it('accepts the device of a one-worker session, by serial', () => {
+    expect(uiDeviceChoiceError({ device: 'emulator-5554', serial: 'emulator-5554', sessionDevices: ['emulator-5554'], workerCount: 1 }))
+      .toBeNull();
+  });
+
+  it('accepts a group member of a one-worker session by its name', () => {
+    expect(uiDeviceChoiceError({ device: 'bob', serial: 'emulator-5556', sessionDevices: ['emulator-5554', 'emulator-5556'], workerCount: 1 }))
+      .toBeNull();
+  });
+
+  it('refuses a device the session does not drive, listing the ones it does', () => {
+    expect(uiDeviceChoiceError({ device: 'emulator-5560', serial: 'emulator-5560', sessionDevices: ['emulator-5554'], workerCount: 1 }))
+      .toMatch(/emulator-5560 is not a device this UI session drives \(emulator-5554\)/);
+  });
+
+  it('refuses to pin a run when several workers could take it', () => {
+    expect(uiDeviceChoiceError({ device: 'emulator-5554', serial: 'emulator-5554', sessionDevices: ['emulator-5554', 'emulator-5556'], workerCount: 2 }))
+      .toMatch(/whichever of its 2 workers is free/);
   });
 });

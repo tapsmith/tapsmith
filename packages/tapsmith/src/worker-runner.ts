@@ -80,6 +80,7 @@ async function handleInit(msg: InitMessage): Promise<void> {
 
   sessions = await openDeviceGroup(specs, config, {
     label: `Worker ${workerId}`,
+    forceInstall: msg.forceInstall,
     launchPhase: 'worker startup launch',
     onProgress: (message) => sendProgress(message),
   });

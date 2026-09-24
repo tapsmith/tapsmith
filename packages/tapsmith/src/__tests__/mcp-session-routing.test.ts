@@ -282,6 +282,7 @@ function makeDispatcher(): TestDispatcher {
       projects: [],
     }),
     resolveDeviceName: () => undefined,
+    deviceChoiceError: async () => null,
     toggleWatch: () => ({ enabled: true }),
   };
 }

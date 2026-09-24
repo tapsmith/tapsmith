@@ -44,6 +44,7 @@ function makeDispatcher(projects: ProjectInfo[]): {
     resolveRequestedFiles: (files) => files.filter((f) => known.includes(f)),
     getSessionInfo: () => ({ timeout: 0, retries: 0, projects }),
     resolveDeviceName: () => undefined,
+    deviceChoiceError: async () => null,
     toggleWatch: () => ({ enabled: false }),
   };
   return { dispatcher, runs };
@@ -171,5 +172,51 @@ describe('tapsmith_run_tests project routing', () => {
 
     expect(result.isError).toBeFalsy();
     expect(runs).toEqual([{ files: [HOME], project: undefined }]);
+  });
+});
+
+// PILOT-342: `device` was forwarded only on the CLI fallback branch, so a
+// dispatcher-backed run went to whichever device the session held. The tool
+// now asks the dispatcher first, and a refusal stops the run.
+describe('run_tests `device`', () => {
+  it('refuses the run with the dispatcher\'s reason, running nothing', async () => {
+    const { dispatcher, runs } = makeDispatcher(SINGLE_PLATFORM);
+    const asked: Array<{ files: string[]; device: string; project?: string }> = [];
+    dispatcher.deviceChoiceError = async (files, device, project) => {
+      asked.push({ files, device, project });
+      return 'This session runs android tests on emulator-5556, not emulator-5560.';
+    };
+    const result = await runTool(dispatcher)({ files: [HOME], device: 'emulator-5560', project: 'default' }, extra);
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toContain('not emulator-5560');
+    expect(asked).toEqual([{ files: [HOME], device: 'emulator-5560', project: 'default' }]);
+    expect(runs).toEqual([]);
+  });
+
+  it('runs when the dispatcher can honour it', async () => {
+    const { dispatcher, runs } = makeDispatcher(SINGLE_PLATFORM);
+    const result = await runTool(dispatcher)({ files: [HOME], device: 'emulator-5560' }, extra);
+    expect(result.isError).toBeUndefined();
+    expect(runs).toHaveLength(1);
+  });
+
+  // The headless dispatcher pins an unresolved target while answering, so the
+  // question must come before anything that initializes the session (which
+  // auto-picks a device first).
+  it('asks before anything initializes the session', async () => {
+    const { dispatcher } = makeDispatcher(SINGLE_PLATFORM);
+    const order: string[] = [];
+    dispatcher.ensureInitialized = async () => { order.push('init'); };
+    dispatcher.deviceChoiceError = async () => { order.push('device'); return null; };
+    await runTool(dispatcher)({ files: [HOME], device: 'emulator-5560' }, extra);
+    expect(order[0]).toBe('device');
+  });
+
+  it('does not ask when no device is given', async () => {
+    const { dispatcher } = makeDispatcher(SINGLE_PLATFORM);
+    let asked = false;
+    dispatcher.deviceChoiceError = async () => { asked = true; return null; };
+    await runTool(dispatcher)({ files: [HOME] }, extra);
+    expect(asked).toBe(false);
   });
 });

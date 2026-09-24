@@ -28,7 +28,7 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
       files: z.array(z.string()).describe('Absolute file paths or glob patterns (e.g. ["/Users/me/project/e2e/tests/login.test.ts"]). Use tapsmith_list_tests to find available files.'),
       test: z.string().optional().describe('Run only tests whose full name contains this text (case-insensitive substring of "Describe > test name", e.g. "submits form"). May match more than one test, and applies across all the given files. If it matches nothing, the run returns an error listing the available tests — it never silently passes. Use tapsmith_list_tests to see exact names.'),
       project: z.string().optional().describe('Project name to target a specific platform/device (e.g. "android", "ios"). Use tapsmith_list_tests to see available projects. Required when a requested file runs under more than one project — such a run is refused rather than sent to whichever project comes first. An unknown name is refused too, never ignored.'),
-      device: z.string().optional().describe('Device serial (optional, ignored in UI mode — use project instead to target a platform)'),
+      device: z.string().optional().describe('Device serial, or a `use.devices` member name (e.g. "alice"), the run must use. Optional — prefer `project` to pick a platform. Never ignored: a session keeps its devices for its whole life, so this can confirm the device a run would use, or choose one on a headless session\'s first run; any other device is refused, naming the one the session holds. UI mode accepts it only when the session has a single worker.'),
     },
     async ({ files, test: testFilter, project, device }, extra) => {
       const sendProgress = makeProgressSender(extra);
@@ -40,6 +40,18 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             content: [{ type: 'text' as const, text: 'A test run is already in progress. Wait for it to finish or use tapsmith_stop_tests to abort.' }],
             isError: true,
           };
+        }
+        // First of all: the headless dispatcher can still pin an unresolved
+        // target to `device` here, and anything that initializes the session
+        // (the project check below does) auto-picks a device instead. A
+        // `device` it cannot honour is refused — ignoring it ran the tests on
+        // whatever device the session held, another session's included
+        // (PILOT-342).
+        if (device !== undefined) {
+          const deviceError = await dispatcher.deviceChoiceError(files, device, project);
+          if (deviceError) {
+            return { content: [{ type: 'text' as const, text: deviceError }], isError: true };
+          }
         }
         // Before the run, not inside it: a `project` that names nothing, or a
         // file that runs under several projects, decides *which device the

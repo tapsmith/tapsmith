@@ -15,7 +15,7 @@ import * as fs from 'node:fs';
 import { normalizeGrep, resolveDeviceStrategy, type TapsmithConfig } from './config.js';
 import { sharedDeviceGroup } from './project.js';
 import { findDaemonBin } from './daemon-bin.js';
-import { assignGroupMemberDevices, deviceGroupSize, resolveDeviceGroup } from './config.js';
+import { assignGroupMemberDevices, deviceGroupSize, resolveDeviceGroup, type DeviceGroupEntry } from './config.js';
 import { TapsmithGrpcClient } from './grpc-client.js';
 import type { TestResult, SuiteResult } from './runner.js';
 import type { TapsmithReporter, FullResult } from './reporter.js';
@@ -192,6 +192,8 @@ export interface DispatcherOptions {
   reporter: TapsmithReporter
   testFiles: string[]
   workers: number
+  /** `--force-install`, handed to every worker (see `InitMessage.forceInstall`). */
+  forceInstall: boolean
   /** Resolved projects for wave-based execution. When set, files are dispatched per-wave. */
   projects?: import('./project.js').ResolvedProject[]
   /** Pre-sorted project waves from topologicalSort(). Required when `projects` is set. */
@@ -247,6 +249,37 @@ export class LaunchSetupError extends Error {
 
 export function isLaunchSetupError(err: unknown): err is LaunchSetupError {
   return err instanceof Error && err.name === 'LaunchSetupError';
+}
+
+/**
+ * The devices a fully pinned group runs on — every entry's pin, primary
+ * first — or `undefined` while any member is left to auto-pick.
+ *
+ * Pins name their devices outright, so discovery's filters (strategy,
+ * health, "prefers the installed app") and emulator provisioning must not
+ * apply: a filter dropping the pinned device ran the bucket on another one,
+ * and a shortfall booted an emulator nobody would use. An Android pin that
+ * is not connected is refused here with what is; iOS pins pass as given, as
+ * in the sequential path (the daemon only lists booted simulators).
+ *
+ * @internal — exported for unit testing.
+ */
+export function pinnedWorkerDevices(
+  group: DeviceGroupEntry[],
+  onlineSerials: string[],
+  isIos: boolean,
+): string[] | undefined {
+  if (!group.every((e) => e.device)) return undefined;
+  const pins = group.map((e) => e.device!);
+  if (isIos) return pins;
+  const missing = pins.filter((p) => !onlineSerials.includes(p));
+  if (missing.length > 0) {
+    throw new LaunchSetupError(
+      `Pinned device${missing.length === 1 ? '' : 's'} ${missing.join(', ')} ${missing.length === 1 ? 'is' : 'are'} not connected. `
+      + (onlineSerials.length > 0 ? `Connected: ${onlineSerials.join(', ')}.` : 'No Android devices are connected.'),
+    );
+  }
+  return pins;
 }
 
 function messageFromUnknown(err: unknown): string {
@@ -544,12 +577,13 @@ async function runMultiBucket(opts: DispatcherOptions): Promise<FullResult> {
   }
   const buckets = [...bucketsBySig.values()];
 
-  const { allocateBucketWorkers } = await import('./project.js');
+  const { allocateBucketWorkers, pinnedBucketSignatures } = await import('./project.js');
   const bucketEntries = buckets.map((bucketProjects, i) => ({
     signature: `${i}-${bucketProjects[0].deviceSignature}`,
     projects: bucketProjects,
   }));
-  const allocation = allocateBucketWorkers(opts.workers, bucketEntries, opts.workerCap);
+  // Live pins are the user's here: the parallel path runs no sequential setup.
+  const allocation = allocateBucketWorkers(opts.workers, bucketEntries, opts.workerCap, pinnedBucketSignatures(bucketEntries));
   const bucketWorkers = bucketEntries.map((b) => allocation.get(b.signature) ?? 0);
 
   const totalWorkersAcrossBuckets = bucketWorkers.reduce((s, n) => s + n, 0);
@@ -709,7 +743,12 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
   const groupSize = deviceGroupSize(groupConfig);
   const deviceGroup = resolveDeviceGroup({ devices: groupConfig.devices, device: config.device ?? groupConfig.device });
   const pinnedMemberSerials = deviceGroup.slice(1).flatMap((e) => (e.device ? [e.device] : []));
-  const maxUsefulWorkers = pinnedMemberSerials.length > 0 ? 1 : Math.min(opts.workers, maxFilesInWave);
+  // Any pin — the primary's from `--device` / root `device` included — fixes
+  // the bucket to one worker on exactly the pinned devices. Checking only the
+  // members' pins let a `--device` run go to whichever devices were found
+  // (PILOT-261).
+  const pinnedGroup = deviceGroup.some((e) => e.device);
+  const maxUsefulWorkers = pinnedGroup ? 1 : Math.min(opts.workers, maxFilesInWave);
   const progressWorkerTotal = opts.launchProgressWorkerTotal ?? maxUsefulWorkers;
   const progressReadyCounter = opts.launchProgressReadyCounter ?? { count: 0 };
   const phaseCounters = opts.launchProgressPhaseCounters ?? createLaunchPhaseCounters();
@@ -1026,6 +1065,11 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
   // failure still runs the finally below (deregistering the signal/crash
   // handlers) instead of leaking them on the process (PILOT-230).
   try {
+    const fullyPinned = pinnedWorkerDevices(
+      deviceGroup,
+      onlineDevices.filter((d) => (d.platform === 'ios') === isIos).map((d) => d.serial),
+      isIos,
+    );
     if (isIos && !config.simulator) {
       // ─── Physical iOS device bucket ───
       // No `simulator` configured → treat as a physical device run. Use the
@@ -1050,6 +1094,10 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       }
       launchProgress?.update('worker-devices', { state: 'running', detail: `physical iOS device ${deviceSerials[0]}` });
       if (!launchProgress) process.stderr.write(`${DIM}Physical iOS device: ${deviceSerials[0]}${RESET}\n`);
+    } else if (fullyPinned) {
+      // ─── Every device named outright ───
+      deviceSerials = fullyPinned;
+      launchProgress?.update('worker-devices', { state: 'running', detail: `pinned ${fullyPinned.join(', ')}` });
     } else if (isIos) {
       // ─── iOS simulator discovery & provisioning ───
       // The daemon reports ALL booted iOS simulators. Filter to only those
@@ -1183,7 +1231,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
       );
     }
 
-    if (pinnedMemberSerials.length > 0) {
+    if (pinnedGroup) {
       // A pinned group: its one worker holds the primary (from `config.device`
       // or the first unpinned device found), then the members in order — each
       // keeping its pin, the unpinned ones taking the next free device.
@@ -1334,6 +1382,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
             ? LAUNCHED_EMULATOR_INIT_TIMEOUT_MS
             : EXISTING_DEVICE_INIT_TIMEOUT_MS,
           freshEmulator: isFresh,
+          forceInstall: opts.forceInstall,
           tsxBin,
           daemonPortOverride: slot.daemonPort,
           agentPortOverride: slot.agentPort,
@@ -1896,6 +1945,7 @@ interface InitializeWorkerOptions {
   resolvedScript: string
   initializationTimeoutMs: number
   freshEmulator: boolean
+  forceInstall: boolean
   tsxBin?: string
   /** Override the daemon port instead of computing baseDaemonPort + 1 + workerId. */
   daemonPortOverride?: number
@@ -2083,6 +2133,7 @@ async function initializeWorker(opts: InitializeWorkerOptions): Promise<WorkerHa
         daemonPort: worker.daemonPort,
         config: serializedConfig,
         freshEmulator: opts.freshEmulator === true ? true : undefined,
+        forceInstall: opts.forceInstall,
         ...(members.length > 0 ? {
           groupMembers: members.map((m, i) => ({
             name: m.name,

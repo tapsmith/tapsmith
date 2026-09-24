@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers, bucketizeProjects, type ResolvedProject } from '../project.js';
+import { resolveProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers as allocateWithPins, bucketizeProjects, pinnedBucketSignatures, type ResolvedProject } from '../project.js';
 import { effectiveConfigForProject, type TapsmithConfig } from '../config.js';
 
 function makeConfig(overrides: Partial<TapsmithConfig> = {}): TapsmithConfig {
@@ -450,6 +450,11 @@ describe('resolveProjects() — device validation', () => {
 // ─── allocateBucketWorkers ───
 
 describe('allocateBucketWorkers()', () => {
+  // Pins read live from the projects — what every caller passes when it
+  // allocates before device setup.
+  const allocateBucketWorkers = (budget: number, buckets: ReturnType<typeof bucketizeProjects>, cap?: number) =>
+    allocateWithPins(budget, buckets, cap, pinnedBucketSignatures(buckets));
+
   function makeProject(
     name: string,
     fileCount: number,
@@ -620,6 +625,63 @@ describe('allocateBucketWorkers()', () => {
     expect(alloc.get('c')).toBe(1);
     const total = (alloc.get('a') ?? 0) + (alloc.get('b') ?? 0) + (alloc.get('c') ?? 0);
     expect(total).toBe(3);
+  });
+
+  // A pinned device (root `device`, `--device`, or a `use.devices` pin) can
+  // host exactly one worker. Every path used to hand such a bucket its full
+  // share and then either ignore the pin (Android parallel, watch) or pile
+  // extra workers onto other devices beside it (PILOT-261, PILOT-313).
+  describe('pinned device targets', () => {
+    function pinnedProject(name: string, fileCount: number, pin: Partial<TapsmithConfig>, workers?: number): ResolvedProject {
+      return { ...makeProject(name, fileCount, workers), effectiveConfig: makeConfig(pin) };
+    }
+
+    it('gives a bucket pinned by root `device` one worker whatever the budget', () => {
+      const buckets = bucketizeProjects([pinnedProject('a', 8, { device: 'emulator-5554' })]);
+      expect(allocateBucketWorkers(4, buckets).get('a')).toBe(1);
+    });
+
+    it('gives a bucket pinned by a group member one worker', () => {
+      const buckets = bucketizeProjects([pinnedProject('a', 8, { devices: [{ name: 'alice' }, { name: 'bob', device: 'X' }] })]);
+      expect(allocateBucketWorkers(4, buckets).get('a')).toBe(1);
+    });
+
+    it('caps an explicit per-project `workers` on a pinned bucket at one', () => {
+      const buckets = bucketizeProjects([pinnedProject('a', 8, { device: 'emulator-5554' }, 3)]);
+      expect(allocateBucketWorkers(1, buckets).get('a')).toBe(1);
+    });
+
+    it('hands the budget a pinned bucket cannot use to the unpinned ones', () => {
+      const buckets = bucketizeProjects([
+        pinnedProject('pinned', 8, { device: 'emulator-5554' }),
+        makeProject('free', 2),
+      ]);
+      const alloc = allocateBucketWorkers(4, buckets);
+      expect(alloc.get('pinned')).toBe(1);
+      expect(alloc.get('free')).toBe(3);
+    });
+
+    it('never scales a pinned bucket above one to meet budgetCap', () => {
+      const buckets = bucketizeProjects([
+        pinnedProject('pinned', 8, { device: 'emulator-5554' }),
+        makeProject('free', 2, 1),
+      ]);
+      const alloc = allocateBucketWorkers(1, buckets, 4);
+      expect(alloc.get('pinned')).toBe(1);
+      expect(alloc.get('free')).toBe(3);
+    });
+
+    it('takes the pins it is handed, not whatever the configs say by now', () => {
+      // The sequential setup writes its auto-picked serial onto the effective
+      // config; an allocation made after that must not read it as a pin.
+      const buckets = bucketizeProjects([pinnedProject('a', 8, { device: 'emulator-5554' })]);
+      expect(allocateWithPins(4, buckets, undefined, new Set()).get('a')).toBe(4);
+    });
+
+    it('still gives a pinned bucket with no files zero workers', () => {
+      const buckets = bucketizeProjects([pinnedProject('a', 0, { device: 'emulator-5554' })]);
+      expect(allocateBucketWorkers(4, buckets).get('a')).toBe(0);
+    });
   });
 
   it('budgetCap scales down mixed explicit and implicit allocation', () => {

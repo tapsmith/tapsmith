@@ -5,7 +5,7 @@
  * dependency constraints and shared `use` options.
  */
 
-import { deviceGroupSize, effectiveConfigForProject, resolveDeviceGroup, type DeviceGroupEntry, type TapsmithConfig, type ProjectConfig, type UseOptions } from './config.js';
+import { deviceGroupSize, effectiveConfigForProject, pinnedDeviceSerials, resolveDeviceGroup, type DeviceGroupEntry, type TapsmithConfig, type ProjectConfig, type UseOptions } from './config.js';
 import { matchesTestFile } from './test-file-discovery.js';
 
 // ─── Types ───
@@ -163,11 +163,22 @@ export function sharedDeviceGroup(
  * 5. When `budgetCap` is set, the total allocation is scaled down to fit
  *    within the cap. Each active bucket keeps at least 1 worker, so the
  *    effective minimum is `active.length`.
+ * 6. A bucket that pins a device (root `device`, `--device`, or a
+ *    `use.devices` pin) gets exactly 1 worker — a pinned device hosts one —
+ *    whatever its projects' `workers` say. It consumes 1 from the budget,
+ *    and the rest goes to the unpinned buckets.
  */
 export function allocateBucketWorkers(
   totalBudget: number,
   bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
-  budgetCap?: number,
+  budgetCap: number | undefined,
+  /**
+   * Signatures of the buckets that pin a device — {@link pinnedBucketSignatures},
+   * taken *before* any device setup. Required, not derived here: the
+   * sequential setup writes the device it auto-picked onto the effective
+   * config, so reading pins afterwards mistakes that pick for a user's pin.
+   */
+  pinnedSignatures: ReadonlySet<string>,
 ): Map<string, number> {
   const result = new Map<string, number>();
 
@@ -179,9 +190,16 @@ export function allocateBucketWorkers(
   }
   if (active.length === 0) return result;
 
+  const pinned = active.filter((b) => pinnedSignatures.has(b.signature));
+  for (const b of pinned) result.set(b.signature, 1);
+  const scalable = active.filter((b) => !pinned.includes(b));
+  const scaleBudget = (cap: number) => scaleToBudget(result, cap - pinned.length, scalable);
+  if (scalable.length === 0) return result;
+  const budget = Math.max(0, totalBudget - pinned.length);
+
   const explicit: typeof active = [];
   const implicit: typeof active = [];
-  for (const b of active) {
+  for (const b of scalable) {
     const explicitValues = b.projects
       .map((p) => p.workers)
       .filter((w): w is number => typeof w === 'number' && w > 0);
@@ -194,7 +212,7 @@ export function allocateBucketWorkers(
   }
 
   if (implicit.length === 0) {
-    if (budgetCap !== undefined) scaleToBudget(result, budgetCap, active);
+    if (budgetCap !== undefined) scaleBudget(budgetCap);
     return result;
   }
 
@@ -206,7 +224,7 @@ export function allocateBucketWorkers(
   for (const b of implicit) {
     result.set(b.signature, 1);
   }
-  let remaining = Math.max(0, totalBudget - implicit.length);
+  let remaining = Math.max(0, budget - implicit.length);
 
   if (remaining > 0 && implicitFiles > 0) {
     const ranked = implicit
@@ -220,7 +238,7 @@ export function allocateBucketWorkers(
       let madeProgress = false;
       for (const r of ranked) {
         if (remaining === 0) break;
-        const fairShare = Math.floor((totalBudget * r.files) / implicitFiles);
+        const fairShare = Math.floor((budget * r.files) / implicitFiles);
         const current = result.get(r.signature) ?? 1;
         if (current < fairShare) {
           result.set(r.signature, current + 1);
@@ -241,8 +259,21 @@ export function allocateBucketWorkers(
     }
   }
 
-  if (budgetCap !== undefined) scaleToBudget(result, budgetCap, active);
+  if (budgetCap !== undefined) scaleBudget(budgetCap);
   return result;
+}
+
+/**
+ * The buckets whose device target pins a device (root `device`, `--device`, a
+ * `use.devices` pin), each fixed to one worker. Call it before any device
+ * setup — see `allocateBucketWorkers`.
+ */
+export function pinnedBucketSignatures(
+  bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
+): Set<string> {
+  return new Set(bucketEntries
+    .filter((b) => b.projects.some((p) => pinnedDeviceSerials(p.effectiveConfig).length > 0))
+    .map((b) => b.signature));
 }
 
 /**
@@ -256,7 +287,8 @@ function scaleToBudget(
   cap: number,
   active: Array<{ signature: string; projects: ResolvedProject[] }>,
 ): void {
-  const total = [...result.values()].reduce((s, n) => s + n, 0);
+  if (active.length === 0) return;
+  const total = active.reduce((s, b) => s + (result.get(b.signature) ?? 0), 0);
   if (total === cap) return;
 
   const effectiveCap = Math.max(cap, active.length);

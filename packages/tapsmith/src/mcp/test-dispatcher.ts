@@ -126,6 +126,15 @@ export interface TestDispatcher {
    */
   ensureDevicesReady?(): Promise<void>
   runFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult>
+  /**
+   * Why `run_tests` cannot run `files` on `device` (a serial or a group
+   * member's name), or `null` when it can. Asked before the run so a `device`
+   * the dispatcher cannot honour is refused rather than ignored — ignoring it
+   * ran the tests on another session's device (PILOT-342). The headless
+   * dispatcher may pin an unresolved target to `device` while answering.
+   * Required, like `resolveDeviceName`.
+   */
+  deviceChoiceError(files: string[], device: string, project?: string): Promise<string | null>
   runAll(): Promise<TestRunResult>
   stop(): void
   /**
@@ -167,4 +176,36 @@ export interface TestDispatcher {
   resolveDeviceName(name: string, project?: string): string | undefined
 
   toggleWatch(filePath: string, options?: { testFilter?: string; project?: string }): { enabled: boolean }
+}
+
+/**
+ * UI mode's answer to {@link TestDispatcher.deviceChoiceError}. A UI session
+ * hands each run to whichever of its workers is free, so `device` can only be
+ * honoured when the session has one worker and `device` is on it. The tool used
+ * to document `device` as "ignored in UI mode" and ignore it — a caller naming
+ * a device got its tests run on another one without a word.
+ *
+ * @internal — exported for unit testing.
+ */
+export function uiDeviceChoiceError(opts: {
+  /** What the caller passed. */
+  device: string
+  /** `device` resolved from a group member name to its serial (else `device`). */
+  serial: string
+  /** Every device the session's workers drive. */
+  sessionDevices: string[]
+  /** Workers a run can land on. */
+  workerCount: number
+}): string | null {
+  const { device, serial, sessionDevices, workerCount } = opts;
+  if (!sessionDevices.includes(serial)) {
+    return `${device} is not a device this UI session drives `
+      + `(${sessionDevices.length > 0 ? sessionDevices.join(', ') : 'none yet'}). UI mode runs tests only on its own workers: `
+      + 'omit `device` (use `project` to pick a platform), or start the UI session with `--device` on the device you want.';
+  }
+  if (workerCount > 1) {
+    return `UI mode hands each run to whichever of its ${workerCount} workers is free, so \`device\` cannot pin this run to ${device}. `
+      + 'Omit `device` (use `project` to pick a platform), or start the UI session with `--device` to use only that device.';
+  }
+  return null;
 }

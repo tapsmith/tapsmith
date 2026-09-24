@@ -603,6 +603,19 @@ export function primaryDevicePin(config: Pick<TapsmithConfig, 'devices' | 'devic
 }
 
 /**
+ * Every serial the config's device group pins, primary first — root `device`
+ * (and so `--device`) included, via {@link resolveDeviceGroup}.
+ *
+ * A pinned device can host exactly one worker, so any pin fixes its target to
+ * a single worker. Every embedder that sizes a worker pool asks this rather
+ * than checking one kind of pin: checking only the members' let the parallel
+ * dispatcher and watch mode spread a `--device` run across other devices.
+ */
+export function pinnedDeviceSerials(config: Pick<TapsmithConfig, 'devices' | 'device'>): string[] {
+  return resolveDeviceGroup(config).flatMap((e) => (e.device ? [e.device] : []));
+}
+
+/**
  * The member names of a `use.devices` project (`['alice', 'bob']`), or
  * `undefined` for a single-device project. What MCP consumers see beside a
  * project so they know its tests need a group and which names the device

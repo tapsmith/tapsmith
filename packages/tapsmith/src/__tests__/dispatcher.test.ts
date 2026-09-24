@@ -9,6 +9,8 @@ import {
   handleParallelTestEndMessage,
   handleParallelFileRetryMessage,
   handleParallelFileDoneMessage,
+  pinnedWorkerDevices,
+  isLaunchSetupError,
   type DispatcherOptions,
 } from '../dispatcher.js';
 import { serializeTestResult, serializeSuiteResult } from '../worker-protocol.js';
@@ -69,6 +71,7 @@ function makeOpts(projects: ResolvedProject[], workers: number): DispatcherOptio
     reporter: stubReporter(),
     testFiles: projects.flatMap((p) => p.testFiles),
     workers,
+    forceInstall: false,
     projects,
   };
 }
@@ -103,6 +106,20 @@ describe('planMultiBucket()', () => {
         plans[i - 1].portOffset + PORTS_PER_BUCKET,
       );
     }
+  });
+
+  // Each bucket is its own runParallel call; a flag the plan dropped would
+  // reach no worker of a multi-target run (PILOT-261).
+  it('hands --force-install to every bucket', () => {
+    const projects = [
+      makeProject('a', 'android|emu1||', ['t1.test.ts']),
+      makeProject('b', 'ios|iPhone 16|', ['t2.test.ts']),
+    ];
+    const plans = planMultiBucket({ ...makeOpts(projects, 2), forceInstall: true }, new Map([
+      ['0-android|emu1||', 1],
+      ['1-ios|iPhone 16|', 1],
+    ]));
+    expect(plans.map((p) => p.bucketOpts.forceInstall)).toEqual([true, true]);
   });
 
   it('routes each file only to the bucket that owns it', () => {
@@ -479,5 +496,42 @@ describe('sendToWorkerProcess()', () => {
     await flushMicrotasks();
     expect(send).toHaveBeenCalledOnce();
     expect(onSendFailure).not.toHaveBeenCalled();
+  });
+});
+
+// A fully pinned device group (`--device`, root `device`, every `use.devices`
+// member pinned) runs on exactly its pins. The Android branch used to pick
+// from whatever was connected and ignore a `--device` pin (PILOT-261).
+describe('pinnedWorkerDevices', () => {
+  it('returns every pin, primary first, when all are connected', () => {
+    const group = [{ name: 'alice', device: 'emulator-5556' }, { name: 'bob', device: 'emulator-5554' }];
+    expect(pinnedWorkerDevices(group, ['emulator-5554', 'emulator-5556', 'emulator-5558'], false))
+      .toEqual(['emulator-5556', 'emulator-5554']);
+  });
+
+  it('is undefined while any member is left to auto-pick', () => {
+    expect(pinnedWorkerDevices([{ name: 'alice', device: 'X' }, { name: 'bob' }], ['X', 'Y'], false)).toBeUndefined();
+    expect(pinnedWorkerDevices([{ name: 'device-1' }], ['X'], false)).toBeUndefined();
+  });
+
+  it('refuses an Android pin that is not connected, naming what is', () => {
+    let error: unknown;
+    try {
+      pinnedWorkerDevices([{ name: 'device-1', device: 'emulator-5560' }], ['emulator-5554'], false);
+    } catch (err) {
+      error = err;
+    }
+    expect(isLaunchSetupError(error)).toBe(true);
+    expect((error as Error).message).toContain('emulator-5560');
+    expect((error as Error).message).toContain('Connected: emulator-5554');
+  });
+
+  it('says nothing is connected rather than listing an empty set', () => {
+    expect(() => pinnedWorkerDevices([{ name: 'device-1', device: 'emulator-5560' }], [], false))
+      .toThrow(/No Android devices are connected/);
+  });
+
+  it('takes iOS pins as given: the daemon lists only booted simulators, and the sequential path does not require one', () => {
+    expect(pinnedWorkerDevices([{ name: 'device-1', device: 'SIM-UDID' }], [], true)).toEqual(['SIM-UDID']);
   });
 });
