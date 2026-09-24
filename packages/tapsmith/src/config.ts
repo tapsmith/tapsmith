@@ -869,28 +869,51 @@ let configImportQueue: Promise<unknown> = Promise.resolve();
 
 /**
  * Failures of the process's own loader, as opposed to the config running and
- * throwing: a specifier it cannot resolve (`./helpers.js` for `helpers.ts`),
- * TypeScript it cannot strip (an `enum`), an extension it does not know.
+ * throwing — each one something tsx handles and bare Node does not: a
+ * specifier it cannot resolve (`./helpers.js` for `helpers.ts`, a directory
+ * import), TypeScript it cannot strip (an `enum`, a `.ts` file inside
+ * node_modules), an extension it does not know, a JSON import without its
+ * `type` attribute. Node raises all of these before any of the config's code
+ * runs.
  */
 const LOADER_ERROR_CODES = new Set([
   'ERR_MODULE_NOT_FOUND',
   'MODULE_NOT_FOUND',
+  'ERR_UNSUPPORTED_DIR_IMPORT',
   'ERR_UNKNOWN_FILE_EXTENSION',
+  'ERR_UNKNOWN_MODULE_FORMAT',
   'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX',
   'ERR_INVALID_TYPESCRIPT_SYNTAX',
+  'ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING',
+  'ERR_IMPORT_ATTRIBUTE_MISSING',
+  'ERR_IMPORT_ASSERTION_TYPE_MISSING',
+  'ERR_REQUIRE_ESM',
 ]);
 
 function isLoaderError(err: unknown): boolean {
-  if (err instanceof SyntaxError) return true;
   const code = (err as { code?: unknown } | null)?.code;
-  return typeof code === 'string' && LOADER_ERROR_CODES.has(code);
+  if (typeof code === 'string' && LOADER_ERROR_CODES.has(code)) return true;
+  // A SyntaxError is a parse failure only when Node's compiler threw it. One
+  // the config raised while running (`JSON.parse` of a bad file, a bad
+  // `RegExp`) has a frame in the config's own code first, and retrying it
+  // through tsx would run the config's side effects a second time.
+  return err instanceof SyntaxError && firstStackFrameIsNodeInternal(err);
+}
+
+function firstStackFrameIsNodeInternal(err: Error): boolean {
+  const frames = (err.stack ?? '').split('\n').filter((line) => /^\s+at /.test(line) && !line.includes('<anonymous>'));
+  return frames.length > 0 && /\(?node:/.test(frames[0]);
 }
 
 /**
  * Import a config file, rejecting with an error that names it.
  *
  * Natively first, exactly as before, so a config the process can import
- * shares its module instances (the SDK included) with the process. Only when
+ * shares its module instances (the SDK included) with the process. A config
+ * that needs the fallback gets its own instances of everything it imports —
+ * the namespace is carried to every import in its graph — so nothing may
+ * rely on identity between config values and the process's modules beyond
+ * the `Symbol.for` markers used here. Only when
  * the process's loader cannot handle it does the import go through tsx. The
  * CLI loads the config before it re-execs under tsx, and bare Node cannot
  * import every valid config: a TypeScript one with a `./helpers.js`

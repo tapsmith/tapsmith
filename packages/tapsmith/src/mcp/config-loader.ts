@@ -44,7 +44,7 @@ export async function loadMcpConfig(configFile?: string): Promise<McpConfigLoadR
       if (nested.length === 0) throw err;
       const others = nested.map((e) => path.relative(cwd, e.configPath)).join(', ');
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`${message} Fix it, or pass one of the configs below it (${others}) with \`--config <file>\`.`, { cause: err });
+      throw new Error(`${message}\nFix it, or pass one of the configs below it (${others}) with \`--config <file>\`.`, { cause: err });
     }
   }
 

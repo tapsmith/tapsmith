@@ -119,7 +119,7 @@ export function withGroupNames(err: unknown, requested: string | undefined, disp
   return new Error(`${err.message}. Group names: ${names.join(', ')}`);
 }
 
-/** The session's device targets as its dispatcher reports them (none without one). */
+/** The session's config load error, when a config file exists but failed to load. */
 function sessionConfigErrorOf(dispatcher?: TestDispatcher): string | undefined {
   if (!dispatcher) return undefined;
   try {
@@ -129,6 +129,7 @@ function sessionConfigErrorOf(dispatcher?: TestDispatcher): string | undefined {
   }
 }
 
+/** The session's device targets as its dispatcher reports them (none without one). */
 function sessionTargetsOf(dispatcher?: TestDispatcher): Array<{ platform?: string; device?: string; error?: string }> {
   if (!dispatcher) return [];
   try {

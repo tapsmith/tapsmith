@@ -269,6 +269,38 @@ describe('loadConfig rootDir anchoring', () => {
       expect(out).toEqual({ error: `Failed to load config file ${file}: boom 1`, cause: 'boom 1', runs: 1 });
     });
 
+    // A SyntaxError the config raised while running is its own error, not a
+    // parse failure for tsx to retry: retrying would run it twice.
+    it('rejects a config that throws a SyntaxError while running, without running it twice', () => {
+      writePackage(root, 'module');
+      const file = path.join(root, 'tapsmith.config.mjs');
+      fs.writeFileSync(file, 'globalThis.__runs = (globalThis.__runs ?? 0) + 1;\nJSON.parse("{bad");\nexport default {};\n', 'utf-8');
+      const out = inBareNode<{ error?: string; runs?: number }>(
+        `try { await loadConfig(${JSON.stringify(root)}); emit({}); }\n`
+        + 'catch (e) { emit({ error: e.message, runs: globalThis.__runs }); }\n',
+      );
+      expect(out.error).toContain(`Failed to load config file ${file}:`);
+      expect(out.error).toMatch(/JSON/);
+      expect(out.runs).toBe(1);
+    });
+
+    // Loader failures bare Node raises and tsx does not, beyond the common
+    // ones above: each must fall back rather than stop the CLI's parent.
+    it('loads a TypeScript config with a directory import and an attribute-less JSON import', () => {
+      writePackage(root, 'module');
+      fs.mkdirSync(path.join(root, 'shared'));
+      fs.writeFileSync(path.join(root, 'shared', 'index.ts'), 'export const platform: string = "ios";\n', 'utf-8');
+      fs.writeFileSync(path.join(root, 'settings.json'), '{ "retries": 2 }\n', 'utf-8');
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(
+        file,
+        'import { platform } from "./shared";\nimport settings from "./settings.json";\n'
+        + 'export default { platform, retries: settings.retries };\n',
+        'utf-8',
+      );
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+
     it('rejects a config bare Node and tsx both fail on with the import error', () => {
       writePackage(root, 'module');
       const file = path.join(root, 'tapsmith.config.ts');
