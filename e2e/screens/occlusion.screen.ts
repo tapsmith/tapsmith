@@ -12,6 +12,7 @@ export class OcclusionScreen {
   get makeInputTallButton() { return this.device.getByRole("button", { name: "Make bottom input tall" }) }
   get avoidKeyboardButton() { return this.device.getByRole("button", { name: "Avoid keyboard" }) }
   get coverAndReplaceButton() { return this.device.getByRole("button", { name: "Cover and replace" }) }
+  get coverInputButton() { return this.device.getByRole("button", { name: "Cover input" }) }
 
   get bottomAction() { return this.device.getByRole("button", { name: "Bottom action" }) }
   get tallBottomAction() { return this.device.getByRole("button", { name: "Tall bottom action" }) }
@@ -21,6 +22,7 @@ export class OcclusionScreen {
   /** The top input by placeholder — a selector shape the iOS agent builds no live query for. */
   get inputByPlaceholder() { return this.device.getByPlaceholder("Type to open the keyboard") }
   get overlay() { return this.device.getByRole("button", { name: "Overlay" }) }
+  get inputCover() { return this.device.getByRole("button", { name: "Input cover" }) }
   get passThroughAction() { return this.device.getByRole("button", { name: "Pass-through action" }) }
   get termsLink() { return this.device.getByRole("link", { name: "terms" }) }
 

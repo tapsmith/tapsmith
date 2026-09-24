@@ -34,6 +34,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   which covers it visually but lets touches through.
 // - "terms" is a link nested inside a Text run: it is not a view of its own
 //   (iOS 26 still reports it hittable; older runtimes may not).
+// - "Cover input" puts a tappable overlay ("Input cover") over the top
+//   input. A field that already has focus keeps getting the input under a
+//   control on its own screen, so typing into it must not tap the cover.
 
 export default function OcclusionScreen() {
   const [text, setText] = useState("")
@@ -46,6 +49,8 @@ export default function OcclusionScreen() {
   const [linkTaps, setLinkTaps] = useState(0)
   const [replaced, setReplaced] = useState(false)
   const [replacementTaps, setReplacementTaps] = useState(0)
+  const [inputCovered, setInputCovered] = useState(false)
+  const [inputCoverTaps, setInputCoverTaps] = useState(0)
   const [bottomText, setBottomText] = useState("")
   const [tallInput, setTallInput] = useState(false)
   const [avoidKeyboard, setAvoidKeyboard] = useState(false)
@@ -67,6 +72,8 @@ export default function OcclusionScreen() {
     setLinkTaps(0)
     setReplaced(false)
     setReplacementTaps(0)
+    setInputCovered(false)
+    setInputCoverTaps(0)
     setBottomText("")
     setTallInput(false)
     setAvoidKeyboard(false)
@@ -96,19 +103,31 @@ export default function OcclusionScreen() {
       behavior="position"
       enabled={avoidKeyboard}
     >
-      <TextInput
-        style={styles.input}
-        value={text}
-        onChangeText={setText}
-        placeholder="Type to open the keyboard"
-        autoCapitalize="none"
-        autoCorrect={false}
-        accessibilityLabel="Occlusion input"
-        testID="occlusion-input"
-      />
+      <View>
+        <TextInput
+          style={styles.input}
+          value={text}
+          onChangeText={setText}
+          placeholder="Type to open the keyboard"
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="Occlusion input"
+          testID="occlusion-input"
+        />
+        {inputCovered && (
+          <TouchableOpacity
+            style={styles.overlay}
+            onPress={() => setInputCoverTaps((n) => n + 1)}
+            accessibilityRole="button"
+            accessibilityLabel="Input cover"
+          >
+            <Text style={styles.overlayText}>Input cover</Text>
+          </TouchableOpacity>
+        )}
+      </View>
 
       <Text testID="occlusion-counts">
-        {`bottom=${bottomTaps} covered=${coveredTaps} overlay=${overlayTaps} passThrough=${passThroughTaps} link=${linkTaps} replacement=${replacementTaps}`}
+        {`bottom=${bottomTaps} covered=${coveredTaps} overlay=${overlayTaps} passThrough=${passThroughTaps} link=${linkTaps} replacement=${replacementTaps} inputCover=${inputCoverTaps}`}
       </Text>
 
       <View style={styles.row}>
@@ -161,6 +180,14 @@ export default function OcclusionScreen() {
           accessibilityLabel="Cover and replace"
         >
           <Text style={styles.smallButtonText}>Replace</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.smallButton}
+          onPress={() => setInputCovered((c) => !c)}
+          accessibilityRole="button"
+          accessibilityLabel={inputCovered ? "Uncover input" : "Cover input"}
+        >
+          <Text style={styles.smallButtonText}>{inputCovered ? "Uncover input" : "Cover input"}</Text>
         </TouchableOpacity>
       </View>
 

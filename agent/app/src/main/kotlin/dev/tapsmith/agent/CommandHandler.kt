@@ -116,6 +116,7 @@ class CommandHandler(
             startMs = startMs,
             timeoutMs = params.optLong("timeout", 0L),
             readDeadlineMs = if (readTimeoutMs > 0) startMs + readTimeoutMs else null,
+            clock = SystemGuardClock,
         )
     }
 
@@ -177,28 +178,15 @@ class CommandHandler(
         params: JSONObject,
         budget: ActionBudget,
         action: (ResolvedElement) -> T,
-    ): T {
-        var element = resolveElement(params)
-        while (true) {
-            try {
-                return action(element)
-            } catch (e: TargetChangedException) {
-                val idAddressed = !params.optString("elementId", null).isNullOrEmpty()
-                if (idAddressed || budget.remainingMs <= 0) throw e
-                Log.d(TAG, "resolved element changed into another before it was touched; resolving again")
-                element =
-                    try {
-                        resolveElement(params, timeout = budget.remainingMs)
-                    } catch (_: TimeoutException) {
-                        // Say what happened, not "timed out after <the few ms left>".
-                        throw ElementNotFoundException(
-                            "Element not found any more — it changed into another element before it could be " +
-                                "touched, and nothing matches the locator now",
-                        )
-                    }
-            }
-        }
-    }
+    ): T =
+        actWithReresolve(
+            element = resolveElement(params),
+            idAddressed = !params.optString("elementId", null).isNullOrEmpty(),
+            budget = budget,
+            reResolve = { timeout -> resolveElement(params, timeout = timeout) },
+            log = { Log.d(TAG, it) },
+            act = action,
+        )
 
     /**
      * Resolve one end of a drag (source/target) from its params: a cached

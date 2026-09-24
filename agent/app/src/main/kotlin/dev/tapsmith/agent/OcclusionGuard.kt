@@ -10,37 +10,17 @@ import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.UiObject2
 
-/**
- * The time an element action may spend, fixed when its command arrived: the
- * action's `timeout` (shared with resolving the element) and the daemon's
- * `readTimeoutMs`, after which nothing may be touched any more.
- */
-class ActionBudget(
-    val startMs: Long,
-    val timeoutMs: Long,
-    /** Uptime at which the daemon stops waiting for the answer; null from an
-     *  older daemon that does not send `readTimeoutMs`. */
-    val readDeadlineMs: Long?,
-) {
-    /** The same deadlines with no waiting: a single check, now. */
-    fun noWait(): ActionBudget = ActionBudget(SystemClock.uptimeMillis(), 0, readDeadlineMs)
+/** The real clock: uptime, and a thread sleep. */
+object SystemGuardClock : GuardClock {
+    override fun now(): Long = SystemClock.uptimeMillis()
 
-    val remainingMs: Long get() = startMs + timeoutMs - SystemClock.uptimeMillis()
-
-    /** The same deadlines with [ms] less to wait: a gesture that takes [ms]
-     *  itself after the wait still fits the timeout. */
-    fun shortenedBy(ms: Long): ActionBudget = ActionBudget(startMs, (timeoutMs - ms).coerceAtLeast(0), readDeadlineMs)
-
-    val hasTimeLeft: Boolean get() = remainingMs > 0
+    override fun sleep(ms: Long) = SystemClock.sleep(ms)
 }
 
 /**
- * Plans element-addressed touches so they never land on something drawn over
- * the element (PILOT-362): the keyboard, another window, or a touchable view
- * painted on top. A covered element is waited on — up to the action's budget,
- * the way Playwright waits out a click's intercepting element — and then the
- * action fails with ELEMENT_COVERED naming the cover. The geometry lives in
- * [OcclusionAnalyzer]; this class reads the live windows and nodes.
+ * The Android side of [TouchPlanner] (PILOT-362): reads the target's live
+ * accessibility node and the window list, and hands them to the planner,
+ * which decides where — and whether — a touch may land.
  *
  * **Cost** per check: one node refresh for the target, one window-list read,
  * and a walk of the target's ancestors and their later-painted siblings over
@@ -59,162 +39,61 @@ class OcclusionGuard(
         private const val CONTENT_DEPTH = 4
     }
 
-    sealed class Plan {
-        /** Touch at ([x], [y]), the center of [visible]: the part of the
-         *  element nothing covers. */
-        data class Point(val x: Int, val y: Int, val visible: Rect) : Plan()
+    private val screen =
+        object : GuardScreen {
+            override val bounds: Box get() = Box(0, 0, device.displayWidth, device.displayHeight)
 
-        /** No part of the element is on screen. */
-        object OffScreen : Plan()
-    }
+            override fun windows() = readWindows()
+        }
 
-    /**
-     * Where a touch on [element] can land. [initialBounds] are the element's
-     * settled bounds for the first check; later checks (after waiting out a
-     * cover) read them afresh. [expected] is what identified the element when
-     * it was resolved, re-checked on every pass. [reserveMs] is time the
-     * gesture needs after it starts (a long press's hold), so it is not
-     * started too late to finish.
-     *
-     * @throws ElementCoveredException when a cover outlasts the budget.
-     * @throws TargetChangedException when the node now shows another element
-     *   (a StaleObjectException when it went away).
-     * @throws TouchTooLateException when the check ran too late to act on.
-     */
+    private val planner = TouchPlanner(screen, SystemGuardClock) { Log.d(TAG, it) }
+
+    /** See [TouchPlanner.plan]. */
     fun plan(
         element: UiObject2,
         initialBounds: Rect,
         budget: ActionBudget,
         expected: TargetIdentity?,
         reserveMs: Long = 0,
-    ): Plan {
-        val clock = TouchPlanClock(budget.startMs, budget.timeoutMs, budget.readDeadlineMs, reserveMs)
-        // When a cover was first seen — how long it has been waited out, for
-        // the error (a single check waits for nothing).
-        var coveredSinceMs: Long? = null
-        val bounds = Rect(initialBounds)
-        var firstPass = true
-        // For a target nothing of its own identifies (an unlabelled
-        // container), the text inside it when a cover was first seen: a
-        // replacement rendered into the same view while the cover is waited
-        // out shows different content.
-        var contentWhenCovered: String? = null
+    ): TouchPlan = planner.plan(targetOf(element), initialBounds.toBox(), budget, expected, reserveMs)
 
-        fun armContentCheck(node: AccessibilityNodeInfo?) {
-            if (contentWhenCovered == null && node != null && expected?.identifiedOnlyByContent == true) {
-                contentWhenCovered = contentOf(node)
-            }
-        }
-        while (true) {
-            // Refreshes the node; throws StaleObjectException when it is gone,
-            // which the SDK answers by re-resolving.
-            val node = nodeInfoOf(element)
-            if (node != null) {
-                if (expected != null && !matches(expected, node)) throw TargetChangedException()
-                if (contentWhenCovered != null && contentOf(node) != contentWhenCovered) throw TargetChangedException()
-                if (!firstPass) node.getBoundsInScreen(bounds)
-            }
-            firstPass = false
-            val verdict = analyze(node, bounds)
-            val now = SystemClock.uptimeMillis()
-            when (verdict) {
-                is OcclusionAnalyzer.Verdict.Clear -> {
-                    // Only a touch can be too late: a pass that ends past the
-                    // point where the touch could still answer the daemon
-                    // refuses it. A cover that outlasts the budget is still
-                    // reported as the cover, below.
-                    if (clock.isTooLateToAct(now)) throw TouchTooLateException()
-                    return Plan.Point(
-                        verdict.x,
-                        verdict.y,
-                        Rect(verdict.visible.left, verdict.visible.top, verdict.visible.right, verdict.visible.bottom),
-                    )
-                }
-                // Not on screen, or not visible to the user (mid-fade, a
-                // transition): re-check within the budget like a cover — it may
-                // be visible in a moment — and only then report it.
-                OcclusionAnalyzer.Verdict.OffScreen -> {
-                    val sleep = clock.sleepBeforeNextPass(now) ?: return Plan.OffScreen
-                    // A view reused for another element during the wait must
-                    // be caught here too (see contentWhenCovered).
-                    armContentCheck(node)
-                    SystemClock.sleep(sleep)
-                }
-                is OcclusionAnalyzer.Verdict.Covered -> {
-                    val sleep =
-                        clock.sleepBeforeNextPass(now)
-                            ?: throw ElementCoveredException(
-                                coveredMessage(verdict.by, coveredSinceMs?.let { now - it } ?: 0),
-                                verdict.kind,
-                            )
-                    if (coveredSinceMs == null) coveredSinceMs = now
-                    armContentCheck(node)
-                    Log.d(TAG, "element is covered by ${verdict.by}; waiting")
-                    SystemClock.sleep(sleep)
-                }
-            }
-        }
-    }
-
-    /**
-     * [plan] for a focusing tap (type, clear, focus), or null when no tap is
-     * needed. One immediate check first; when a tap cannot land because the
-     * keyboard or a control on the field's own screen covers it — typically a
-     * field behind the keyboard it raised — and the field already has input
-     * focus, skip the tap: input goes to it anyway. Under another window (a
-     * dialog) the field does not get the input, so that cover is waited out
-     * as usual. [reserveMs] is the work the caller does after the tap
-     * (setting text, waiting for focus), which must also finish before the
-     * daemon gives up.
-     */
+    /** See [TouchPlanner.planFocusTap]. */
     fun planFocusTap(
         element: UiObject2,
         initialBounds: Rect,
         budget: ActionBudget,
         expected: TargetIdentity?,
         reserveMs: Long,
-    ): Plan? {
-        val quick =
-            try {
-                plan(element, initialBounds, budget.noWait(), expected, reserveMs)
-            } catch (e: ElementCoveredException) {
-                if (e.kind != OcclusionAnalyzer.CoverKind.WINDOW && isFocused(element)) return null
-                if (!budget.hasTimeLeft) throw e
-                return plan(element, initialBounds, budget, expected, reserveMs)
-            }
-        // Not visible for a moment: wait it out within the budget, as a tap
-        // does, before giving up on it.
-        if (quick == Plan.OffScreen && budget.hasTimeLeft) {
-            return plan(element, initialBounds, budget, expected, reserveMs)
-        }
-        return quick
-    }
+    ): TouchPlan? = planner.planFocusTap(targetOf(element), initialBounds.toBox(), budget, expected, reserveMs)
 
-    /**
-     * Refuse (TouchTooLateException) when [reserveMs] of work started now
-     * could not finish before the daemon gives up — for work that goes ahead
-     * without a touch being planned (a focusing tap skipped), which [plan]'s
-     * own check does not cover.
-     */
+    /** See [TouchPlanner.requireTimeFor]. */
     fun requireTimeFor(
         budget: ActionBudget,
         reserveMs: Long,
-    ) {
-        val clock = TouchPlanClock(budget.startMs, budget.timeoutMs, budget.readDeadlineMs, reserveMs)
-        if (clock.isTooLateToAct(SystemClock.uptimeMillis())) throw TouchTooLateException()
-    }
+    ) = planner.requireTimeFor(budget, reserveMs)
 
-    private fun matches(
-        expected: TargetIdentity,
-        node: AccessibilityNodeInfo,
-    ): Boolean =
-        expected.matches(
-            className = node.className?.toString(),
-            resourceId = node.viewIdResourceName,
-            contentDescription = node.contentDescription?.toString(),
-            text = node.text?.toString(),
-            isEditable = node.isEditable,
-        )
+    /** [element] as the planner reads it. [nodeInfoOf] refreshes the node on
+     *  every read and throws StaleObjectException when it is gone, which the
+     *  SDK answers by re-resolving. */
+    private fun targetOf(element: UiObject2): GuardTarget =
+        object : GuardTarget {
+            override fun read(): TargetSnapshot? {
+                val node = nodeInfoOf(element) ?: return null
+                return TargetSnapshot(
+                    node = A11yHitNode(node),
+                    windowId = node.windowId,
+                    bounds = Rect().also(node::getBoundsInScreen).toBox(),
+                    className = node.className?.toString(),
+                    resourceId = node.viewIdResourceName,
+                    contentDescription = node.contentDescription?.toString(),
+                    text = node.text?.toString(),
+                    isEditable = node.isEditable,
+                    readContent = { contentOf(node) },
+                )
+            }
+
+            override fun isFocused(): Boolean = nodeInfoOf(element)?.isFocused == true
+        }
 
     /** The text and content descriptions inside [node], in tree order —
      *  bounded, since each read can be an accessibility round-trip. */
@@ -238,25 +117,6 @@ class OcclusionGuard(
         walk(node, 0)
         return parts.joinToString("\u0000")
     }
-
-    private fun isFocused(element: UiObject2): Boolean =
-        try {
-            nodeInfoOf(element)?.isFocused == true
-        } catch (e: Exception) {
-            false
-        }
-
-    private fun analyze(
-        node: AccessibilityNodeInfo?,
-        bounds: Rect,
-    ): OcclusionAnalyzer.Verdict =
-        OcclusionAnalyzer.analyze(
-            target = node?.let(::A11yHitNode),
-            targetBounds = bounds.toBox(),
-            targetWindowId = node?.windowId,
-            windows = readWindows(),
-            screen = Box(0, 0, device.displayWidth, device.displayHeight),
-        )
 
     @Suppress("DEPRECATION")
     private fun readWindows(): List<OcclusionAnalyzer.WindowSpec> {
@@ -290,20 +150,6 @@ class OcclusionGuard(
         }
     }
 
-    /** [waitedMs] is how long the cover was actually waited out, not the
-     *  action timeout (resolving the element may have used part of it). */
-    private fun coveredMessage(
-        cover: String,
-        waitedMs: Long,
-    ): String {
-        var message = "Element is covered by $cover, so a touch would land on it instead"
-        if (waitedMs > 0) message += " (still covered after waiting ${waitedMs}ms)"
-        if (cover == "the keyboard") {
-            message += ". Dismiss the keyboard first (device.hideKeyboard()) or scroll the element into view."
-        }
-        return message
-    }
-
     /** [OcclusionAnalyzer.HitNode] over a live accessibility node, with its
      *  children read at most once per check. */
     private class A11yHitNode(val node: AccessibilityNodeInfo) : OcclusionAnalyzer.HitNode {
@@ -333,29 +179,3 @@ class OcclusionGuard(
 }
 
 private fun Rect.toBox() = Box(left, top, right, bottom)
-
-/** A touch [OcclusionGuard] refused to make. Action code rethrows these
- *  untouched: a fallback path retrying the touch would only hit the cover,
- *  or bury the error type in a generic ACTION_FAILED. */
-sealed class TouchRefusedException(message: String) : RuntimeException(message)
-
-/** A touch on the element would land on something drawn over it, of [kind]. */
-class ElementCoveredException(
-    message: String,
-    val kind: OcclusionAnalyzer.CoverKind,
-) : TouchRefusedException(message)
-
-/** The resolved node now shows a different element (React reused its view):
- *  a selector-addressed action re-resolves, an id-addressed one is stale. */
-class TargetChangedException :
-    TouchRefusedException(
-        "Element not found any more — it changed into another element before it could be touched " +
-            "(it may have gone stale)",
-    )
-
-/** The check ran so late that the daemon would give up before the touch finished. */
-class TouchTooLateException :
-    TouchRefusedException(
-        "Ran out of time checking whether the element is covered: the daemon would give up before " +
-            "the touch finished, so not touching it",
-    )

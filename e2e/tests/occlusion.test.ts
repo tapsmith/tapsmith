@@ -37,12 +37,12 @@ describe("Occlusion", () => {
   const behindKeyboardFailure = (platform: string) =>
     platform === "android" ? /covered by the keyboard|not found/i : /covered by the keyboard/i
 
-  type Counter = "bottom" | "covered" | "overlay" | "passThrough" | "link" | "replacement"
+  type Counter = "bottom" | "covered" | "overlay" | "passThrough" | "link" | "replacement" | "inputCover"
   const counts = (c: Partial<Record<Counter, number>>) => {
-    const all = { bottom: 0, covered: 0, overlay: 0, passThrough: 0, link: 0, replacement: 0, ...c }
+    const all = { bottom: 0, covered: 0, overlay: 0, passThrough: 0, link: 0, replacement: 0, inputCover: 0, ...c }
     return (
       `bottom=${all.bottom} covered=${all.covered} overlay=${all.overlay} ` +
-      `passThrough=${all.passThrough} link=${all.link} replacement=${all.replacement}`
+      `passThrough=${all.passThrough} link=${all.link} replacement=${all.replacement} inputCover=${all.inputCover}`
     )
   }
 
@@ -194,6 +194,22 @@ describe("Occlusion", () => {
     await occlusionScreen.bottomInput.type("abc")
 
     await expect(occlusionScreen.bottomInput).toHaveValue("abc")
+  })
+
+  test("type() into a focused field an overlay covers types into it without tapping the overlay", async ({ device, occlusionScreen }) => {
+    // The field keeps input focus under a control on its own screen, so
+    // type() skips the focusing tap rather than tapping the cover. (The
+    // keyboard-covered variant above cannot run on Android, which hides a
+    // field its keyboard fully covers; this one runs on both platforms.)
+    await occlusionScreen.input.tap()
+    await expect.poll(() => device.isKeyboardShown()).toBe(true)
+    await occlusionScreen.coverInputButton.tap()
+    await expect(occlusionScreen.inputCover).toBeVisible()
+
+    await occlusionScreen.input.type("yz")
+
+    await expect(occlusionScreen.input).toHaveValue("yz")
+    await expect(occlusionScreen.counts).toHaveText(counts({}))
   })
 
   test("actions through a locator with no live query (placeholder) still work", async ({ occlusionScreen }) => {

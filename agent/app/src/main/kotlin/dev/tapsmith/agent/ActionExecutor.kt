@@ -226,8 +226,8 @@ class ActionExecutor(
         budget: ActionBudget,
         expected: TargetIdentity?,
         followUpMs: Long,
-    ): OcclusionGuard.Plan.Point =
-        occlusionGuard.plan(element, bounds, budget, expected, followUpMs) as? OcclusionGuard.Plan.Point
+    ): TouchPlan.Point =
+        occlusionGuard.plan(element, bounds, budget, expected, followUpMs) as? TouchPlan.Point
             ?: throw notOnScreen()
 
     private fun notOnScreen() =
@@ -242,7 +242,7 @@ class ActionExecutor(
      * never by the node click, which would ignore what covers the element.
      */
     private fun clickAt(
-        point: OcclusionGuard.Plan.Point,
+        point: TouchPlan.Point,
         what: String,
     ) {
         if (device.click(point.x, point.y)) return
@@ -264,11 +264,11 @@ class ActionExecutor(
         expected: TargetIdentity?,
         gesture: String,
         reserveMs: Long = 0,
-    ): OcclusionGuard.Plan.Point {
+    ): TouchPlan.Point {
         // Empty bounds (zero size, or clipped away for a moment) go through the
         // guard too: it re-reads them within the budget, then refuses.
         val plan = occlusionGuard.plan(element, bounds, budget, expected, reserveMs)
-        return plan as? OcclusionGuard.Plan.Point
+        return plan as? TouchPlan.Point
             ?: throw ActionFailedException(
                 "Cannot $gesture: element has empty visible bounds (zero-size, fully clipped, or off screen)",
             )
@@ -341,22 +341,7 @@ class ActionExecutor(
             } catch (e2: StaleObjectException) {
                 throw e2
             } catch (e2: Exception) {
-                // No time left to retry is not the failure: the first attempt's is.
-                if (e2 is TouchTooLateException) {
-                    throw ActionFailedException("Failed to type text: ${e.message} (no time left to retry before the daemon gives up)")
-                }
-                // The first attempt already typed (or tried to) into this
-                // field: re-resolving would type the text again elsewhere.
-                if (e2 is TargetChangedException) {
-                    throw ActionFailedException(
-                        "Failed to type text: ${e.message} (the field changed into another element before the retry, " +
-                            "so it was not typed into again)",
-                    )
-                }
-                rethrowTouchRefusal(e2)
-                throw ActionFailedException(
-                    "Failed to type text: ${e.message} (fallback also failed: ${e2.message})",
-                )
+                throw fallbackFailure("type text", e, e2, changedNote = "so it was not typed into again")
             }
         }
     }
@@ -401,16 +386,13 @@ class ActionExecutor(
     ) {
         val bounds = resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
         when (val plan = occlusionGuard.planFocusTap(element, bounds, budget, expected, followUpMs)) {
-            null -> {
-                // No tap was planned, so plan()'s deadline check did not run:
-                // the work after it must still finish before the daemon gives up.
-                occlusionGuard.requireTimeFor(budget, followUpMs)
-                Log.d(TAG, "focusing tap skipped: the field is covered but already focused")
-            }
-            is OcclusionGuard.Plan.Point -> clickAt(plan, "tap element to focus it")
+            // Skipped (covered, but already focused); the planner has checked
+            // the work after it still fits the deadline.
+            null -> Log.d(TAG, "focusing tap skipped: the field is covered but already focused")
+            is TouchPlan.Point -> clickAt(plan, "tap element to focus it")
             // Gone invisible or down to a sliver since it was resolved: see
             // planTouchPoint.
-            OcclusionGuard.Plan.OffScreen -> throw notOnScreen()
+            TouchPlan.OffScreen -> throw notOnScreen()
         }
     }
 
@@ -426,24 +408,23 @@ class ActionExecutor(
         budget: ActionBudget,
         expected: TargetIdentity?,
     ) {
-        try {
-            clickToFocus(element, null, budget.noWait(), expected, FALLBACK_FOLLOW_UP_MS)
-        } catch (e: ElementCoveredException) {
-            if (e.kind != OcclusionAnalyzer.CoverKind.KEYBOARD) throw e
-            // The caller waits for focus again, which then returns at once.
-            waitForFocus(element)
-            val focused =
-                try {
-                    element.isFocused
-                } catch (_: Exception) {
-                    false
-                }
-            if (!focused) throw e
-            // No tap was planned, so plan()'s deadline check did not run: the
-            // keys that follow must still finish before the daemon gives up.
-            occlusionGuard.requireTimeFor(budget, FALLBACK_FOLLOW_UP_MS)
-            Log.d(TAG, "fallback refocus skipped: the field got focus under its keyboard")
-        }
+        val skipped =
+            refocusOrAcceptFocus(
+                refocus = { clickToFocus(element, null, budget.noWait(), expected, FALLBACK_FOLLOW_UP_MS) },
+                // The caller waits for focus again, which then returns at once.
+                waitForFocus = {
+                    waitForFocus(element)
+                    try {
+                        element.isFocused
+                    } catch (_: Exception) {
+                        false
+                    }
+                },
+                // No tap was planned, so plan()'s deadline check did not run:
+                // the keys that follow must still finish in time.
+                requireTime = { occlusionGuard.requireTimeFor(budget, FALLBACK_FOLLOW_UP_MS) },
+            )
+        if (skipped) Log.d(TAG, "fallback refocus skipped: the field got focus under its keyboard")
     }
 
     /**
@@ -569,21 +550,7 @@ class ActionExecutor(
             } catch (e2: StaleObjectException) {
                 throw e2
             } catch (e2: Exception) {
-                // No time left to retry is not the failure: the first attempt's is.
-                if (e2 is TouchTooLateException) {
-                    throw ActionFailedException("Failed to clear text: ${e.message} (no time left to retry before the daemon gives up)")
-                }
-                // Clearing a re-resolved element would clear some other field.
-                if (e2 is TargetChangedException) {
-                    throw ActionFailedException(
-                        "Failed to clear text: ${e.message} (the field changed into another element before the retry, " +
-                            "so nothing else was cleared)",
-                    )
-                }
-                rethrowTouchRefusal(e2)
-                throw ActionFailedException(
-                    "Failed to clear text: ${e.message} (fallback also failed: ${e2.message})",
-                )
+                throw fallbackFailure("clear text", e, e2, changedNote = "so nothing else was cleared")
             }
         }
     }
