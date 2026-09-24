@@ -523,6 +523,8 @@ describe('loadMcpConfig config-file reporting', () => {
     fs.writeFileSync(path.join(root, 'e2e', 'tapsmith.config.mjs'), 'export default { platform: "ios" }\n');
     process.chdir(root);
     await expect(loadMcpConfig()).rejects.toThrow(`Failed to load config file ${broken}: boom`);
+    // And it points at the alternative rather than only failing.
+    await expect(loadMcpConfig()).rejects.toThrow(/pass one of the configs below it \(e2e\/tapsmith\.config\.mjs\)/);
   });
 
   it('rejects a broken nested config rather than passing defaults off as it', async () => {

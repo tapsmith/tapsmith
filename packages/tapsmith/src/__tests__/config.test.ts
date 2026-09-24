@@ -2,7 +2,6 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import * as fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -167,30 +166,40 @@ describe('loadConfig rootDir anchoring', () => {
     });
   });
 
-  // The CLI loads the config before it re-execs under tsx, so configs must
-  // load through tsx itself rather than rely on the process's loader —
-  // otherwise a valid config that bare Node cannot import (a `.js` specifier
-  // for a `.ts` helper, an enum) would now be a hard error instead of the
-  // silent fallback that used to mask it. Vitest transforms dynamic imports
-  // itself, so these load the source in a bare `node` child to see what the
-  // CLI's parent process sees.
+  // The CLI loads the config before it re-execs under tsx, so a config bare
+  // Node cannot import (a `.js` specifier for a `.ts` helper, an enum) must
+  // still load — it used to be masked by the silent fallback, and would now
+  // be a hard error. Vitest transforms dynamic imports itself, so these run
+  // the source in a bare `node` child to see what the CLI's parent sees.
   describe('in a process not running under tsx', () => {
     const configModule = path.resolve(__dirname, '..', 'config.ts');
 
-    function loadInBareNode(dir: string): { path?: string; platform?: string; retries?: number } {
+    /** Runs `body` in a bare node child with `loadConfig`, `configPathOf` and `ext` (require.extensions) in scope. */
+    function inBareNode<T>(body: string): T {
       const script = `const { loadConfig, configPathOf } = await import(${JSON.stringify(configModule)});\n`
-        + `const c = await loadConfig(${JSON.stringify(dir)});\n`
-        + 'process.stdout.write(JSON.stringify({ path: configPathOf(c), platform: c.platform, retries: c.retries }));\n';
+        + 'const { createRequire } = await import("node:module");\n'
+        + 'const ext = createRequire(import.meta.url).extensions;\n'
+        + 'const emit = (v) => process.stdout.write(JSON.stringify(v));\n'
+        + body;
       const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
-        cwd: dir,
+        cwd: root,
         encoding: 'utf-8',
         stdio: ['ignore', 'pipe', 'pipe'],
       });
-      return JSON.parse(out) as { path?: string; platform?: string; retries?: number };
+      return JSON.parse(out) as T;
+    }
+
+    function loadInBareNode(dir: string): { path?: string; platform?: string; retries?: number } {
+      return inBareNode(`const c = await loadConfig(${JSON.stringify(dir)});\n`
+        + 'emit({ path: configPathOf(c), platform: c.platform, retries: c.retries });\n');
     }
 
     function writeHelper(dir: string): void {
       fs.writeFileSync(path.join(dir, 'helpers.ts'), 'export const platform: string = "ios";\n', 'utf-8');
+    }
+
+    function writePackage(dir: string, type: 'module' | 'commonjs'): void {
+      fs.writeFileSync(path.join(dir, 'package.json'), type === 'module' ? '{ "type": "module" }\n' : '{}\n', 'utf-8');
     }
 
     const TS_CONFIG = 'import { platform } from "./helpers.js";\n'
@@ -200,7 +209,7 @@ describe('loadConfig rootDir anchoring', () => {
     it('loads a TypeScript config in a package without "type": "module"', () => {
       // tsx compiles it to CommonJS here, so this also covers unwrapping the
       // `__esModule` default.
-      fs.writeFileSync(path.join(root, 'package.json'), '{}\n', 'utf-8');
+      writePackage(root, 'commonjs');
       writeHelper(root);
       const file = path.join(root, 'tapsmith.config.ts');
       fs.writeFileSync(file, TS_CONFIG, 'utf-8');
@@ -208,7 +217,7 @@ describe('loadConfig rootDir anchoring', () => {
     });
 
     it('loads a TypeScript config in a "type": "module" package', () => {
-      fs.writeFileSync(path.join(root, 'package.json'), '{ "type": "module" }\n', 'utf-8');
+      writePackage(root, 'module');
       writeHelper(root);
       const file = path.join(root, 'tapsmith.config.ts');
       fs.writeFileSync(file, TS_CONFIG, 'utf-8');
@@ -216,70 +225,102 @@ describe('loadConfig rootDir anchoring', () => {
     });
 
     it('loads a JavaScript config that imports a TypeScript helper', () => {
-      fs.writeFileSync(path.join(root, 'package.json'), '{ "type": "module" }\n', 'utf-8');
+      writePackage(root, 'module');
       writeHelper(root);
       const file = path.join(root, 'tapsmith.config.js');
       fs.writeFileSync(file, 'import { platform } from "./helpers.js";\nexport default { platform, retries: 2 };\n', 'utf-8');
       expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
     });
-  });
 
-  // The rejection path through the real hooks: Vitest's own import transform
-  // would hide a wrapping or cleanup bug that only shows under Node.
-  it('rejects a broken TypeScript config in bare Node, naming it and restoring the require hooks', () => {
-    const file = path.join(root, 'tapsmith.config.ts');
-    fs.writeFileSync(file, 'const x: number = 1;\nthrow new Error("boom " + x);\n', 'utf-8');
-    const configModule = path.resolve(__dirname, '..', 'config.ts');
-    const script = `const { loadConfig } = await import(${JSON.stringify(configModule)});\n`
-      + 'const { createRequire } = await import("node:module");\n'
-      + 'const ext = createRequire(import.meta.url).extensions;\n'
-      + 'const before = Object.keys(ext).join();\n'
-      + `try { await loadConfig(${JSON.stringify(root)}); process.stdout.write("{}"); }\n`
-      + 'catch (e) { process.stdout.write(JSON.stringify({ error: e.message, cause: e.cause?.message, restored: Object.keys(ext).join() === before })); }\n';
-    const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
-      cwd: root,
-      encoding: 'utf-8',
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })) as { error?: string; cause?: string; restored?: boolean };
-    expect(out).toEqual({ error: `Failed to load config file ${file}: boom 1`, cause: 'boom 1', restored: true });
-  });
-
-  // The require hooks and the extensions snapshot are process-global, so
-  // overlapping loads (an MCP server's discovery and session setup) must not
-  // interleave: each would restore the other's half-registered state and
-  // leave tsx's handlers installed for good.
-  it('leaves require.extensions untouched after overlapping loads', async () => {
-    const extensions = createRequire(import.meta.url).extensions;
-    const before = Object.keys(extensions);
-    const dirs = ['a', 'b', 'c'].map((name) => {
-      const dir = path.join(root, name);
-      fs.mkdirSync(dir);
-      fs.writeFileSync(path.join(dir, 'tapsmith.config.ts'), `export default { platform: "ios", testMatch: ["${name}"] }\n`, 'utf-8');
-      return dir;
+    // The documented config shape, in a package without "type": "module" (an
+    // Expo/RN app root). Node imports it natively; tsx would compile it, and
+    // the ESM package it imports, to CommonJS, where `import.meta.dirname` —
+    // which the SDK reads at module level — is undefined. A stand-in package
+    // does the same, so this needs no build of the SDK.
+    it('loads a config that imports an ESM package reading import.meta.dirname, in a package without "type": "module"', () => {
+      writePackage(root, 'commonjs');
+      const pkg = path.join(root, 'node_modules', 'esm-sdk');
+      fs.mkdirSync(pkg, { recursive: true });
+      fs.writeFileSync(path.join(pkg, 'package.json'), '{ "name": "esm-sdk", "type": "module", "exports": "./index.js" }\n', 'utf-8');
+      fs.writeFileSync(
+        path.join(pkg, 'index.js'),
+        'import * as path from "node:path";\nconst here = path.resolve(import.meta.dirname);\n'
+        + 'export const defineConfig = (c) => ({ ...c, here });\n',
+        'utf-8',
+      );
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(file, 'import { defineConfig } from "esm-sdk";\nexport default defineConfig({ platform: "ios", retries: 2 });\n', 'utf-8');
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
     });
-    const configs = await Promise.all(dirs.map((dir) => loadConfig(dir)));
-    expect(configs.map((c) => c.testMatch)).toEqual([['a'], ['b'], ['c']]);
-    expect(Object.keys(extensions)).toEqual(before);
-  });
 
-  // tsx's CJS unregister deletes the extension handlers it replaced rather
-  // than restoring them; in the CLI's tsx child that stripped tsx's own `.ts`
-  // handler and broke later extensionless requires of TypeScript files.
-  it('leaves require.extensions as it found them', async () => {
-    const extensions = createRequire(import.meta.url).extensions;
-    const hadTs = Object.prototype.hasOwnProperty.call(extensions, '.ts');
-    const previous = extensions['.ts'];
-    const sentinel = (() => undefined) as unknown as NodeJS.RequireExtensions[string];
-    extensions['.ts'] = sentinel;
-    try {
-      fs.writeFileSync(path.join(root, 'tapsmith.config.ts'), 'export default { platform: "ios" }\n', 'utf-8');
-      await loadConfig(root);
-      expect(extensions['.ts']).toBe(sentinel);
-      expect(Object.keys(extensions)).not.toContain('.tsx');
-    } finally {
-      if (hadTs) extensions['.ts'] = previous;
-      else delete extensions['.ts'];
-    }
+    // The rejection path under the real loader.
+    it('rejects a TypeScript config that throws, naming it, without running it twice', () => {
+      writePackage(root, 'module');
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(
+        file,
+        'globalThis.__runs = (globalThis.__runs ?? 0) + 1;\nconst x: number = 1;\nthrow new Error("boom " + x);\n',
+        'utf-8',
+      );
+      const out = inBareNode<{ error?: string; cause?: string; runs?: number }>(
+        `try { await loadConfig(${JSON.stringify(root)}); emit({}); }\n`
+        + 'catch (e) { emit({ error: e.message, cause: e.cause?.message, runs: globalThis.__runs }); }\n',
+      );
+      expect(out).toEqual({ error: `Failed to load config file ${file}: boom 1`, cause: 'boom 1', runs: 1 });
+    });
+
+    it('rejects a config bare Node and tsx both fail on with the import error', () => {
+      writePackage(root, 'module');
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(file, 'import { x } from "./missing.js";\nexport default { x };\n', 'utf-8');
+      const out = inBareNode<{ error?: string }>(
+        `try { await loadConfig(${JSON.stringify(root)}); emit({}); } catch (e) { emit({ error: e.message }); }\n`,
+      );
+      expect(out.error).toContain(`Failed to load config file ${file}:`);
+      expect(out.error).toMatch(/missing/);
+    });
+
+    // tsx's CJS unregister deletes the extension handlers it replaced rather
+    // than restoring them, which in a tsx process strips tsx's own `.ts`
+    // handler. The loader must undo only what the registration did.
+    it('restores require.extensions after a tsx load, and keeps handlers the config installed', () => {
+      writePackage(root, 'commonjs');
+      writeHelper(root);
+      fs.writeFileSync(
+        path.join(root, 'tapsmith.config.ts'),
+        'require.extensions[".yaml"] = () => undefined;\n' + TS_CONFIG,
+        'utf-8',
+      );
+      const out = inBareNode<{ tsKept: boolean; keys: string[] }>(
+        'const sentinel = () => undefined;\next[".ts"] = sentinel;\n'
+        + `await loadConfig(${JSON.stringify(root)});\n`
+        + 'emit({ tsKept: ext[".ts"] === sentinel, keys: Object.keys(ext) });\n',
+      );
+      expect(out.tsKept).toBe(true);
+      expect(out.keys).toContain('.yaml');
+      expect(out.keys).not.toContain('.tsx');
+    });
+
+    // The require hooks are process-global, so overlapping loads (an MCP
+    // server's discovery and session setup) must not interleave: each would
+    // restore the other's half-registered state and leave tsx's handlers
+    // installed for good.
+    it('leaves require.extensions untouched after overlapping tsx loads', () => {
+      const dirs = ['a', 'b', 'c'].map((name) => {
+        const dir = path.join(root, name);
+        fs.mkdirSync(dir);
+        writePackage(dir, 'commonjs');
+        writeHelper(dir);
+        fs.writeFileSync(path.join(dir, 'tapsmith.config.ts'), TS_CONFIG.replace('retries: Retries.Some', `retries: Retries.Some, testMatch: ["${name}"]`), 'utf-8');
+        return dir;
+      });
+      const out = inBareNode<{ matches: string[][]; same: boolean }>(
+        'const before = Object.keys(ext).join();\n'
+        + `const cs = await Promise.all(${JSON.stringify(dirs)}.map((d) => loadConfig(d)));\n`
+        + 'emit({ matches: cs.map((c) => c.testMatch), same: Object.keys(ext).join() === before });\n',
+      );
+      expect(out).toEqual({ matches: [['a'], ['b'], ['c']], same: true });
+    });
   });
 });
 import {

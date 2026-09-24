@@ -528,43 +528,27 @@ export async function listAllDevices(): Promise<DeviceInfoProto[]> {
 /**
  * Whether discovery's own daemon should select a device (and start its agent).
  *
- * Only where nothing else will. A headless session with a config resolves a
- * target per platform before any run or device tool, and `prepareTarget`
- * selects the device and starts the agent then — on the device the run named,
- * if it named one. Selecting here first put an agent on whichever device
- * looked best, another session's as likely as not, on nothing more than a
- * `list_devices` (PILOT-342). Without a config there are no targets, and a UI
- * session's endpoint normally adopts the UI's own daemons, so those keep the
- * old behaviour.
+ * Only in a UI session, whose endpoint normally adopts the UI's own daemons.
+ * A headless session resolves a target per platform before any run or device
+ * tool, and `prepareTarget` selects the device and starts the agent then — on
+ * the device the run named, if it named one. Selecting here first put an
+ * agent on whichever device looked best, another session's as likely as not,
+ * on nothing more than a `list_devices` (PILOT-342).
+ *
+ * That holds with no config file too (the session runs on the defaults, which
+ * still resolve targets), and with one that fails to load: the load error is
+ * the session's answer, not a reason to claim a device (PILOT-262).
  *
  * @internal — exported for unit testing.
  */
-export function discoverySelectsDevice(opts: { uiMode: boolean; hasConfig: boolean }): boolean {
-  return opts.uiMode || !opts.hasConfig;
-}
-
-/**
- * The config discovery works from, and whether the session has one.
- *
- * A config that fails to load still counts as one (`config` is then null):
- * the session's tools report the load error, and treating it as "no config"
- * would let discovery pick a device and start an agent on it — the PILOT-342
- * behaviour a config exists to prevent — because the file has a syntax error.
- * Before PILOT-262 a broken discovered config loaded as the defaults, which
- * counted too; only a broken `--config` file used to let discovery choose.
- *
- * @internal — exported for unit testing.
- */
-export async function loadDiscoveryConfig(
-  configFile: string | undefined,
-): Promise<{ config: TapsmithConfig | null; hasConfig: boolean }> {
-  return loadMcpConfig(configFile)
-    .then((result) => ({ config: result.config, hasConfig: true }))
-    .catch(() => ({ config: null, hasConfig: true }));
+export function discoverySelectsDevice(opts: { uiMode: boolean }): boolean {
+  return opts.uiMode;
 }
 
 async function discover(): Promise<void> {
-  const { config, hasConfig } = await loadDiscoveryConfig(_configFile);
+  // A config that fails to load leaves discovery without one; the session's
+  // tools report the load error.
+  const config = await loadMcpConfig(_configFile).then((result) => result.config).catch(() => null);
   _discoveredConfig = config;
 
   // Collect candidate addresses from all sources, remembering where each came
@@ -741,7 +725,7 @@ async function discover(): Promise<void> {
     // platform silently runs against the first one's.
     // A device a UI session holds is never preferred: the target's own guard
     // refuses that pin by name.
-    conn.preparedDevice = discoverySelectsDevice({ uiMode: _uiMode, hasConfig })
+    conn.preparedDevice = discoverySelectsDevice({ uiMode: _uiMode })
       ? await setDeviceAndAgent(conn.client, config)
       : undefined;
   } catch (err) {

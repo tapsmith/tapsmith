@@ -864,50 +864,84 @@ export function configPathOf(config: TapsmithConfig): string | undefined {
 /** tsx's ESM hooks for config imports: one namespaced registration per process. */
 let configEsmImport: Promise<(specifier: string, parentURL: string) => Promise<unknown>> | undefined;
 
-/** Config imports run one at a time; see `importConfigModule`. */
+/** tsx fallback imports run one at a time; see `importConfigModule`. */
 let configImportQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Failures of the process's own loader, as opposed to the config running and
+ * throwing: a specifier it cannot resolve (`./helpers.js` for `helpers.ts`),
+ * TypeScript it cannot strip (an `enum`), an extension it does not know.
+ */
+const LOADER_ERROR_CODES = new Set([
+  'ERR_MODULE_NOT_FOUND',
+  'MODULE_NOT_FOUND',
+  'ERR_UNKNOWN_FILE_EXTENSION',
+  'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX',
+  'ERR_INVALID_TYPESCRIPT_SYNTAX',
+]);
+
+function isLoaderError(err: unknown): boolean {
+  if (err instanceof SyntaxError) return true;
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && LOADER_ERROR_CODES.has(code);
+}
 
 /**
  * Import a config file, rejecting with an error that names it.
  *
- * Every config is imported through tsx. The CLI loads the config before it
- * re-execs under tsx, and bare Node cannot import every valid config: a
- * TypeScript one with a `./helpers.js` specifier for `helpers.ts` or an
- * `enum`, or a JavaScript one that imports a TypeScript helper. The old
- * warn-and-use-defaults fallback hid that, and with a load failure now fatal
- * it would break those configs outright.
+ * Natively first, exactly as before, so a config the process can import
+ * shares its module instances (the SDK included) with the process. Only when
+ * the process's loader cannot handle it does the import go through tsx. The
+ * CLI loads the config before it re-execs under tsx, and bare Node cannot
+ * import every valid config: a TypeScript one with a `./helpers.js`
+ * specifier for `helpers.ts` or an `enum`, or a JavaScript one that imports a
+ * TypeScript helper. The old warn-and-use-defaults fallback hid that, and
+ * with a load failure now fatal it would break those configs outright. A
+ * config that ran and threw is reported as it is, not run a second time.
  *
- * ESM goes through one namespaced tsx registration, created on first use and
- * kept: Node cannot remove a `module.register` hook, so registering per load
- * would grow the hook chain for the life of the process, and the namespace
- * keeps it from touching any import but the config's own graph. CommonJS —
- * which tsx compiles a TypeScript config to in a package without
- * `"type": "module"` — needs tsx's global `require` hooks, registered only for
- * the duration of the import. Loads are serialised because those hooks and
- * the `require.extensions` snapshot below are process-global: two overlapping
- * loads would each restore the other's half-registered state.
+ * The fallback's ESM goes through one namespaced tsx registration, created on
+ * first use and kept: Node cannot remove a `module.register` hook, so one per
+ * load would grow the hook chain for the life of the process, and the
+ * namespace keeps it off every import but the config's own graph (and gives
+ * the config a fresh URL, clear of the failed native attempt's cache entry).
+ * CommonJS — which tsx compiles a TypeScript config to in a package without
+ * `"type": "module"` — needs tsx's global `require` hooks, registered only
+ * for the duration of the import. Fallback loads are serialised because those
+ * hooks are process-global: two overlapping loads would each restore the
+ * other's half-registered state.
  *
- * Only the import is wrapped. Validation errors raised after it (by
- * `applyConfigDefaults`) already say what is wrong and propagate as they are,
- * and so does a failure to load tsx itself, which is not the config's fault.
+ * Validation errors raised after the import (by `applyConfigDefaults`) already
+ * say what is wrong and propagate as they are, and so does a failure to load
+ * tsx itself, which is not the config's fault.
  */
-function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
-  const result = configImportQueue.then(() => importConfigModuleNow(configPath));
+async function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
+  try {
+    return (await import(pathToFileURL(configPath).href)) as Record<string, unknown>;
+  } catch (err) {
+    if (!isLoaderError(err)) throw configLoadError(configPath, err);
+  }
+  const result = configImportQueue.then(() => importConfigModuleWithTsx(configPath));
   configImportQueue = result.catch(() => undefined);
   return result;
 }
 
-async function importConfigModuleNow(configPath: string): Promise<Record<string, unknown>> {
+function configLoadError(configPath: string, err: unknown): Error {
+  const detail = err instanceof Error ? err.message : String(err);
+  return new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
+}
+
+async function importConfigModuleWithTsx(configPath: string): Promise<Record<string, unknown>> {
   configEsmImport ??= import('tsx/esm/api').then((esm) => esm.register({ namespace: 'tapsmith-config' }).import);
   const [esmImport, cjs] = await Promise.all([configEsmImport, import('tsx/cjs/api')]);
   // tsx's CJS unregister deletes the `.ts`/`.tsx`/`.jsx`/`.mjs` handlers it
   // replaced instead of restoring them, so in a process already running under
-  // tsx (the CLI's re-exec'd child) it would strip tsx's own handlers and
-  // break later extensionless requires of TypeScript files. Put the table
-  // back exactly as it was.
+  // tsx it would strip tsx's own handlers and break later extensionless
+  // requires of TypeScript files. Undo exactly what the registration did,
+  // leaving any handler the config itself installed while loading.
   const extensions = createRequire(import.meta.url).extensions;
-  const savedExtensions = { ...extensions };
+  const before = { ...extensions };
   const unregisterCjs = cjs.register();
+  const installed = { ...extensions };
   try {
     const mod = (await esmImport(pathToFileURL(configPath).href, import.meta.url)) as Record<string, unknown>;
     // A config compiled to CommonJS comes back with the whole `module.exports`
@@ -920,14 +954,17 @@ async function importConfigModuleNow(configPath: string): Promise<Record<string,
     }
     return mod;
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
+    throw configLoadError(configPath, err);
   } finally {
     unregisterCjs();
-    for (const key of Object.keys(extensions)) {
-      if (!(key in savedExtensions)) delete extensions[key];
+    for (const key of Object.keys(installed)) {
+      if (installed[key] === before[key]) continue;
+      const current = Object.prototype.hasOwnProperty.call(extensions, key) ? extensions[key] : undefined;
+      // Changed since registration by someone other than tsx: leave it.
+      if (current !== undefined && current !== installed[key] && current !== before[key]) continue;
+      if (key in before) extensions[key] = before[key];
+      else delete extensions[key];
     }
-    Object.assign(extensions, savedExtensions);
   }
 }
 

@@ -134,6 +134,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   private _sessionPromise: Promise<void> | null = null;
   private _configPath: string | null = null;
   private _configWarning: string | null = null;
+  private _configError: string | null = null;
   /** Daemon + device per platform, keyed by platform (or DEFAULT_PLATFORM_KEY). */
   private _targets = new Map<string, PlatformTarget>();
   /** Why a platform has no target, kept so a run for it can say so. */
@@ -549,6 +550,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       deviceTargets: this._deviceTargets(),
       configPath: this._configPath ?? undefined,
       configWarning: this._configWarning ?? undefined,
+      configError: this._configError ?? undefined,
     };
   }
 
@@ -1442,6 +1444,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         // carry the reason it has none rather than logging it once to stderr
         // that no MCP client ever reads.
         this._configWarning = result.warning ?? null;
+        this._configError = null;
         if (result.configPath) log(`Using config: ${path.relative(process.cwd(), result.configPath) || result.configPath}`);
         if (result.warning) log(`Warning: ${result.warning}`);
         return result.config;
@@ -1450,6 +1453,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         const message = err instanceof Error ? err.message : String(err);
         this._configPath = null;
         this._configWarning = `Failed to load the Tapsmith config: ${message}`;
+        this._configError = message;
         log(`Warning: failed to load config: ${message}`);
         return null;
       });

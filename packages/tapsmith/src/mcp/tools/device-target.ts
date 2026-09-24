@@ -44,6 +44,16 @@ export async function deviceClientFor(
   // tool of a session pay for a discovery child per test file.
   if (dispatcher?.ensureDevicesReady) await dispatcher.ensureDevicesReady({ retryFailedTargets: true, project: request.project });
   else await dispatcher?.ensureInitialized?.();
+  // A config that failed to load gives the session no projects and no
+  // targets. Unless the caller named a device outright, say that, rather than
+  // an "unknown project" or a daemon nothing prepared (no device, no agent).
+  const configError = sessionConfigErrorOf(dispatcher);
+  if (configError && !request.device) {
+    throw new Error(
+      `The Tapsmith config could not be loaded, so this session has no device to use: ${configError} `
+      + 'Fix the config, or pass `device` to use one directly.',
+    );
+  }
   // Nothing named and no target resolved: say why, rather than hand the call
   // to a pool daemon no target prepared (no device selected, no agent).
   if (!request.device && !request.project) {
@@ -110,6 +120,15 @@ export function withGroupNames(err: unknown, requested: string | undefined, disp
 }
 
 /** The session's device targets as its dispatcher reports them (none without one). */
+function sessionConfigErrorOf(dispatcher?: TestDispatcher): string | undefined {
+  if (!dispatcher) return undefined;
+  try {
+    return dispatcher.getSessionInfo().configError;
+  } catch {
+    return undefined;
+  }
+}
+
 function sessionTargetsOf(dispatcher?: TestDispatcher): Array<{ platform?: string; device?: string; error?: string }> {
   if (!dispatcher) return [];
   try {

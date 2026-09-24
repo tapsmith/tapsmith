@@ -35,8 +35,17 @@ export async function loadMcpConfig(configFile?: string): Promise<McpConfigLoadR
   const nested = findImmediateNestedConfigs(cwd);
 
   if (cwdConfig) {
-    const config = await loadConfig(cwd);
-    return { config, configPath: configPathOf(config) };
+    try {
+      const config = await loadConfig(cwd);
+      return { config, configPath: configPathOf(config) };
+    } catch (err) {
+      // Point at the configs one level down: `--config` is only actionable
+      // when the reader knows there are others to point it at.
+      if (nested.length === 0) throw err;
+      const others = nested.map((e) => path.relative(cwd, e.configPath)).join(', ');
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`${message} Fix it, or pass one of the configs below it (${others}) with \`--config <file>\`.`, { cause: err });
+    }
   }
 
   if (nested.length === 1) {
