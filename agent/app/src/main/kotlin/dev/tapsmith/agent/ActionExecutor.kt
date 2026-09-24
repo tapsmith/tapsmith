@@ -109,7 +109,6 @@ class ActionExecutor(
             val bounds = trusted ?: waitForStableBounds(element)
             val stableMs = SystemClock.uptimeMillis() - stableStart
             val planStart = SystemClock.uptimeMillis()
-            if (bounds.isEmpty) throw noVisibleArea()
             val point = planTouchPoint(element, bounds, budget, expected, followUpMs)
             val planMs = SystemClock.uptimeMillis() - planStart
             val injectStart = SystemClock.uptimeMillis()
@@ -236,14 +235,6 @@ class ActionExecutor(
             "Element is not visible on screen (scrolled off, hidden, or fully clipped), so it was not touched",
         )
 
-    /** An element with empty visible bounds (zero size, or clipped away by its
-     *  parent) has no point a touch could land on: the node click would tap
-     *  the empty rect's corner, whatever covers it (PILOT-362). */
-    private fun noVisibleArea() =
-        ActionFailedException(
-            "Element has no visible area on screen (zero size or fully clipped), so it was not touched",
-        )
-
     /**
      * Tap at a planned point. A refused injection (the input dispatcher
      * dropping the event during a window transition on a loaded device) is
@@ -274,12 +265,9 @@ class ActionExecutor(
         gesture: String,
         reserveMs: Long = 0,
     ): OcclusionGuard.Plan.Point {
-        val plan =
-            if (bounds.isEmpty) {
-                OcclusionGuard.Plan.OffScreen
-            } else {
-                occlusionGuard.plan(element, bounds, budget, expected, reserveMs)
-            }
+        // Empty bounds (zero size, or clipped away for a moment) go through the
+        // guard too: it re-reads them within the budget, then refuses.
+        val plan = occlusionGuard.plan(element, bounds, budget, expected, reserveMs)
         return plan as? OcclusionGuard.Plan.Point
             ?: throw ActionFailedException(
                 "Cannot $gesture: element has empty visible bounds (zero-size, fully clipped, or off screen)",
@@ -357,6 +345,14 @@ class ActionExecutor(
                 if (e2 is TouchTooLateException) {
                     throw ActionFailedException("Failed to type text: ${e.message} (no time left to retry before the daemon gives up)")
                 }
+                // The first attempt already typed (or tried to) into this
+                // field: re-resolving would type the text again elsewhere.
+                if (e2 is TargetChangedException) {
+                    throw ActionFailedException(
+                        "Failed to type text: ${e.message} (the field changed into another element before the retry, " +
+                            "so it was not typed into again)",
+                    )
+                }
                 rethrowTouchRefusal(e2)
                 throw ActionFailedException(
                     "Failed to type text: ${e.message} (fallback also failed: ${e2.message})",
@@ -404,9 +400,13 @@ class ActionExecutor(
         followUpMs: Long,
     ) {
         val bounds = resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
-        if (bounds.isEmpty) throw noVisibleArea()
         when (val plan = occlusionGuard.planFocusTap(element, bounds, budget, expected, followUpMs)) {
-            null -> Log.d(TAG, "focusing tap skipped: the field is covered but already focused")
+            null -> {
+                // No tap was planned, so plan()'s deadline check did not run:
+                // the work after it must still finish before the daemon gives up.
+                occlusionGuard.requireTimeFor(budget, followUpMs)
+                Log.d(TAG, "focusing tap skipped: the field is covered but already focused")
+            }
             is OcclusionGuard.Plan.Point -> clickAt(plan, "tap element to focus it")
             // Gone invisible or down to a sliver since it was resolved: see
             // planTouchPoint.
@@ -572,6 +572,13 @@ class ActionExecutor(
                 // No time left to retry is not the failure: the first attempt's is.
                 if (e2 is TouchTooLateException) {
                     throw ActionFailedException("Failed to clear text: ${e.message} (no time left to retry before the daemon gives up)")
+                }
+                // Clearing a re-resolved element would clear some other field.
+                if (e2 is TargetChangedException) {
+                    throw ActionFailedException(
+                        "Failed to clear text: ${e.message} (the field changed into another element before the retry, " +
+                            "so nothing else was cleared)",
+                    )
                 }
                 rethrowTouchRefusal(e2)
                 throw ActionFailedException(

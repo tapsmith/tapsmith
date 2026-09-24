@@ -99,6 +99,12 @@ class OcclusionGuard(
         // replacement rendered into the same view while the cover is waited
         // out shows different content.
         var contentWhenCovered: String? = null
+
+        fun armContentCheck(node: AccessibilityNodeInfo?) {
+            if (contentWhenCovered == null && node != null && expected?.identifiedOnlyByContent == true) {
+                contentWhenCovered = contentOf(node)
+            }
+        }
         while (true) {
             // Refreshes the node; throws StaleObjectException when it is gone,
             // which the SDK answers by re-resolving.
@@ -129,6 +135,9 @@ class OcclusionGuard(
                 // be visible in a moment — and only then report it.
                 OcclusionAnalyzer.Verdict.OffScreen -> {
                     val sleep = clock.sleepBeforeNextPass(now) ?: return Plan.OffScreen
+                    // A view reused for another element during the wait must
+                    // be caught here too (see contentWhenCovered).
+                    armContentCheck(node)
                     SystemClock.sleep(sleep)
                 }
                 is OcclusionAnalyzer.Verdict.Covered -> {
@@ -139,9 +148,7 @@ class OcclusionGuard(
                                 verdict.kind,
                             )
                     if (coveredSinceMs == null) coveredSinceMs = now
-                    if (contentWhenCovered == null && node != null && expected?.identifiedOnlyByContent == true) {
-                        contentWhenCovered = contentOf(node)
-                    }
+                    armContentCheck(node)
                     Log.d(TAG, "element is covered by ${verdict.by}; waiting")
                     SystemClock.sleep(sleep)
                 }
@@ -167,13 +174,20 @@ class OcclusionGuard(
         expected: TargetIdentity?,
         reserveMs: Long,
     ): Plan? {
-        return try {
-            plan(element, initialBounds, budget.noWait(), expected, reserveMs)
-        } catch (e: ElementCoveredException) {
-            if (e.kind != OcclusionAnalyzer.CoverKind.WINDOW && isFocused(element)) return null
-            if (!budget.hasTimeLeft) throw e
-            plan(element, initialBounds, budget, expected, reserveMs)
+        val quick =
+            try {
+                plan(element, initialBounds, budget.noWait(), expected, reserveMs)
+            } catch (e: ElementCoveredException) {
+                if (e.kind != OcclusionAnalyzer.CoverKind.WINDOW && isFocused(element)) return null
+                if (!budget.hasTimeLeft) throw e
+                return plan(element, initialBounds, budget, expected, reserveMs)
+            }
+        // Not visible for a moment: wait it out within the budget, as a tap
+        // does, before giving up on it.
+        if (quick == Plan.OffScreen && budget.hasTimeLeft) {
+            return plan(element, initialBounds, budget, expected, reserveMs)
         }
+        return quick
     }
 
     /**
