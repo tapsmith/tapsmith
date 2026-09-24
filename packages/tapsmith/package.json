@@ -9,7 +9,7 @@
     "tapsmith": "dist/cli.js"
   },
   "scripts": {
-    "build": "npm run clean && tsc && chmod +x dist/cli.js && mkdir -p dist/proto && cp ../../proto/tapsmith.proto dist/proto/ && npm run build:ios-agent-src && npm run build:trace-viewer && npm run build:ui-mode",
+    "build": "npm run clean && tsc && chmod +x dist/cli.js && mkdir -p dist/proto && cp ../../proto/tapsmith.proto dist/proto/ && mkdir -p dist/schema && cp schema/trace-format.schema.json dist/schema/ && npm run build:ios-agent-src && npm run build:trace-viewer && npm run build:ui-mode",
     "build:ios-agent-src": "(mkdir -p dist/ios-agent; [ -d ../../ios-agent/TapsmithAgent ] && cp -r ../../ios-agent/TapsmithAgent dist/ios-agent/; [ -d ../../ios-agent/TapsmithAgent.xcodeproj ] && cp -r ../../ios-agent/TapsmithAgent.xcodeproj dist/ios-agent/; [ -f ../../ios-agent/create-xcode-project.sh ] && cp ../../ios-agent/create-xcode-project.sh dist/ios-agent/; [ -f ../../ios-agent/Package.swift ] && cp ../../ios-agent/Package.swift dist/ios-agent/) || true",
     "clean": "rm -rf dist",
     "build:trace-viewer": "vite build",
@@ -47,7 +47,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./trace-format.schema.json": "./dist/schema/trace-format.schema.json"
   },
   "dependencies": {
     "@grpc/grpc-js": "^1.12.0",
@@ -72,6 +73,7 @@
     "@types/node": "^22.0.0",
     "@types/proper-lockfile": "^4.1.4",
     "@types/ws": "^8.18.1",
+    "ajv": "^8.20.0",
     "eslint": "^9.0.0",
     "knip": "^5.86.0",
     "lucide-preact": "^1.6.0",

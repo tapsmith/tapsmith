@@ -148,6 +148,12 @@ const FILES = [
     title: 'Telemetry',
     desc: 'Exactly what anonymous usage data Tapsmith collects, what it never does, and how to opt out.',
   },
+  {
+    src: 'trace-format.md',
+    dest: 'reference/trace-format.md',
+    title: 'Trace Archive Format',
+    desc: 'The versioned contract for what a Tapsmith trace .zip contains, with its JSON Schema.',
+  },
 ]
 
 // ─── API reference split definitions ───
@@ -261,6 +267,7 @@ const LINK_MAP = {
   'configuration.md': '/reference/configuration/',
   'environment-variables.md': '/reference/environment-variables/',
   'telemetry.md': '/reference/telemetry/',
+  'trace-format.md': '/reference/trace-format/',
 }
 
 // Build regex-based rewrites from the map

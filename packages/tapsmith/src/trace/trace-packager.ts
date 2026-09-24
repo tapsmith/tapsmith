@@ -11,9 +11,11 @@ import { unzipSync, zipSync, type Zippable } from 'fflate';
 import type { TraceCollector, HierarchyCapture } from './trace-collector.js';
 import { collectReferencedFiles } from './trace-collector.js';
 import type { TraceMetadata, TraceDeviceInfo, NetworkEntry } from './types.js';
+import { TRACE_FORMAT_VERSION } from './trace-format.js';
+import { archivePathMapper, withPortablePaths, type ArchivePathMapper } from './archive-paths.js';
 
 export interface PackageOptions {
-  /** Test file path. */
+  /** Test file path. Recorded relative to `rootDir`. */
   testFile: string
   /** Fully qualified test name. */
   testName: string
@@ -35,6 +37,12 @@ export interface PackageOptions {
   error?: string
   /** Output directory for the trace zip. */
   outputDir: string
+  /**
+   * Project root (`config.rootDir`). Every local path the archive records —
+   * `testFile`, `appState`, stack frames, `sources.json` keys — is written
+   * relative to it, so the archive does not depend on where it was recorded.
+   */
+  rootDir: string
   /** Test source files to include. */
   sourceFiles?: string[]
   /** Captured network entries to include. */
@@ -48,6 +56,44 @@ export interface PackageOptions {
   appResetScope?: string
   /** Zero-based attempt number; retries get a `-retryN` filename suffix. */
   retry?: number
+}
+
+/** Screenshot members in a zip — what `metadata.screenshotCount` reports. */
+function countScreenshotMembers(zipData: Zippable): number {
+  return Object.keys(zipData).filter((name) => name.startsWith('screenshots/')).length;
+}
+
+/** Per-file cap on snapshotted sources, to keep the archive small. */
+const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
+
+/**
+ * Snapshot `files` into `sources`, keyed by archive path, skipping any key
+ * already present and any file that is missing, unreadable, or over the cap.
+ * Returns whether anything was added.
+ */
+function snapshotSources(
+  sources: Record<string, string>,
+  files: Iterable<string>,
+  toPath: ArchivePathMapper,
+): boolean {
+  let added = false;
+  for (const file of files) {
+    const key = toPath(file);
+    if (key in sources) continue;
+    try {
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || stat.size > MAX_SOURCE_BYTES) continue;
+      sources[key] = fs.readFileSync(file, 'utf-8');
+      added = true;
+    } catch {
+      // Skip unreadable / missing source files
+    }
+  }
+  return added;
+}
+
+function toNDJSON(events: readonly unknown[]): string {
+  return events.map((e) => JSON.stringify(e)).join('\n') + '\n';
 }
 
 /**
@@ -75,15 +121,22 @@ export function packageTrace(
   // action list's wall-clock durations reconcile with metadata.testDuration.
   collector.finalizeTimeline(options.endTime);
 
+  // Every local path goes in rootDir-relative. The test file and explicit
+  // sources are the lexical spellings the frames are mapped back to.
+  const knownFiles = [options.testFile, ...(options.sourceFiles ?? [])]
+    .filter(Boolean)
+    .map((f) => path.resolve(options.rootDir, f));
+  const toPath = archivePathMapper(options.rootDir, knownFiles);
+
   // 1. trace.json — NDJSON event log
-  const ndjson = collector.toNDJSON();
-  zipData['trace.json'] = new TextEncoder().encode(ndjson);
+  const events = withPortablePaths(collector.events, toPath);
+  zipData['trace.json'] = new TextEncoder().encode(toNDJSON(events));
 
   // 2. metadata.json
   const metadata: TraceMetadata = {
-    version: 1,
+    version: TRACE_FORMAT_VERSION,
     tapsmithVersion: options.tapsmithVersion,
-    testFile: options.testFile,
+    testFile: toPath(options.testFile),
     testName: options.testName,
     testStatus: options.testStatus,
     testDuration: options.testDuration,
@@ -100,18 +153,17 @@ export function packageTrace(
       daemonLogs: collector.config.daemonLogs,
     },
     actionCount: collector.currentActionIndex,
-    screenshotCount: collector.screenshots.length,
+    screenshotCount: 0, // set below, once the screenshots are written
     error: options.error,
     project: options.project,
-    appState: options.appState,
+    appState: options.appState ? toPath(options.appState) : undefined,
     appReset: options.appReset,
     appResetScope: options.appResetScope,
   };
-  zipData['metadata.json'] = new TextEncoder().encode(
-    JSON.stringify(metadata, null, 2),
-  );
 
-  // 3. Screenshots
+  // 3. Screenshots — before metadata.json is encoded, so screenshotCount is
+  //    the members actually written: a vanished temp file is skipped, and two
+  //    captures sharing a path are one member.
   for (const screenshot of collector.screenshots) {
     try {
       const data = fs.readFileSync(screenshot.diskPath);
@@ -120,6 +172,10 @@ export function packageTrace(
       // Skip missing screenshots
     }
   }
+  metadata.screenshotCount = countScreenshotMembers(zipData);
+  zipData['metadata.json'] = new TextEncoder().encode(
+    JSON.stringify(metadata, null, 2),
+  );
 
   // 4. Hierarchy XML snapshots
   for (const hierarchy of collector.hierarchies as HierarchyCapture[]) {
@@ -127,26 +183,15 @@ export function packageTrace(
   }
 
   // 5. Source files (optional) — snapshot every file referenced by an action's
-  //    stack, keyed by absolute path, so the Source tab shows the exact code
-  //    that ran. Capped per file to keep the archive small.
+  //    stack, so the Source tab shows the exact code that ran. Keyed by the
+  //    same rootDir-relative path the frames carry. Capped per file to keep
+  //    the archive small.
   if (collector.config.sources) {
-    const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
-    const referenced = new Set<string>();
-    if (options.sourceFiles) {
-      for (const f of options.sourceFiles) referenced.add(path.resolve(f).replace(/\\/g, '/'));
-    }
-    for (const f of collectReferencedFiles(collector.events)) referenced.add(path.resolve(f).replace(/\\/g, '/'));
+    // Relative paths are rootDir-relative, as toArchivePath reads them.
+    const referenced = [...(options.sourceFiles ?? []), ...collectReferencedFiles(collector.events)]
+      .map((f) => path.resolve(options.rootDir, f));
     const sources: Record<string, string> = {};
-    for (const sourcePath of referenced) {
-      try {
-        const stat = fs.statSync(sourcePath);
-        if (!stat.isFile() || stat.size > MAX_SOURCE_BYTES) continue;
-        sources[sourcePath] = fs.readFileSync(sourcePath, 'utf-8');
-      } catch {
-        // Skip unreadable / missing source files
-      }
-    }
-    if (Object.keys(sources).length > 0) {
+    if (snapshotSources(sources, referenced, toPath)) {
       zipData['sources.json'] = new TextEncoder().encode(JSON.stringify(sources));
     }
   }
@@ -246,6 +291,8 @@ export function appendEventsToTrace(
   zipPath: string,
   collector: TraceCollector,
   endTime: number,
+  /** Project root the appended events' paths are made relative to (see PackageOptions.rootDir). */
+  rootDir: string,
   actionIndexOffset = 0,
 ): void {
   if (collector.events.length === 0) return;
@@ -256,15 +303,38 @@ export function appendEventsToTrace(
   const decoder = new TextDecoder();
   const zipData: Zippable = { ...files };
 
-  const shifted = collector.events.map((e) => ({
+  // The archive records the test file rootDir-relative; resolving it again
+  // gives the lexical spelling that realpath'd hook frames map back to.
+  let recordedTestFile: string | undefined;
+  try {
+    const recorded = files['metadata.json']
+      ? (JSON.parse(decoder.decode(files['metadata.json'])) as { testFile?: unknown }).testFile
+      : undefined;
+    if (typeof recorded === 'string' && recorded) recordedTestFile = path.resolve(rootDir, recorded);
+  } catch {
+    // Unparseable metadata — the metadata block below keeps the original too.
+  }
+  const toPath = archivePathMapper(rootDir, recordedTestFile ? [recordedTestFile] : []);
+
+  const shifted = withPortablePaths(collector.events, toPath).map((e) => ({
     ...e,
     actionIndex: e.actionIndex + actionIndexOffset,
   }));
-  const appendedNdjson = shifted.map((e) => JSON.stringify(e)).join('\n') + '\n';
+  const appendedNdjson = toNDJSON(shifted);
   const existing = files['trace.json'] ? decoder.decode(files['trace.json']).trimEnd() : '';
   zipData['trace.json'] = encoder.encode(
     (existing ? existing + '\n' : '') + appendedNdjson,
   );
+
+  for (const screenshot of collector.screenshots) {
+    try {
+      // Buffer is a Uint8Array — no copy needed for fflate.
+      zipData[shiftArchivePath(screenshot.archivePath, actionIndexOffset)] =
+        fs.readFileSync(screenshot.diskPath);
+    } catch {
+      // Skip missing screenshots
+    }
+  }
 
   if (files['metadata.json']) {
     try {
@@ -283,22 +353,30 @@ export function appendEventsToTrace(
         )
         : asNumber(metadata.actionCount);
       metadata.endTime = Math.max(asNumber(metadata.endTime), endTime);
-      metadata.screenshotCount = asNumber(metadata.screenshotCount) + collector.screenshots.length;
+      // The members now in the zip, existing and appended alike.
+      metadata.screenshotCount = countScreenshotMembers(zipData);
       zipData['metadata.json'] = encoder.encode(JSON.stringify(metadata, null, 2));
     } catch {
       // Unparseable metadata — keep the original.
     }
   }
 
-  for (const screenshot of collector.screenshots) {
+  // Frames the hook added may name files the test itself never reached (a
+  // cleanup helper); snapshot those too, so every frame still resolves.
+  if (collector.config.sources) {
+    let sources: Record<string, string> = {};
     try {
-      // Buffer is a Uint8Array — no copy needed for fflate.
-      zipData[shiftArchivePath(screenshot.archivePath, actionIndexOffset)] =
-        fs.readFileSync(screenshot.diskPath);
+      if (files['sources.json']) sources = JSON.parse(decoder.decode(files['sources.json'])) as Record<string, string>;
     } catch {
-      // Skip missing screenshots
+      // Unparseable sources.json — rebuild it from what the hook references.
+      sources = {};
+    }
+    const referenced = collectReferencedFiles(collector.events).map((f) => path.resolve(rootDir, f));
+    if (snapshotSources(sources, referenced, toPath)) {
+      zipData['sources.json'] = encoder.encode(JSON.stringify(sources));
     }
   }
+
   for (const hierarchy of collector.hierarchies) {
     zipData[shiftArchivePath(hierarchy.archivePath, actionIndexOffset)] =
       encoder.encode(hierarchy.xml);

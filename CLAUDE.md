@@ -116,6 +116,13 @@ live in `e2e/utils/trace-archive-checks.mjs` and are themselves unit-tested by t
 job's **E2E helper tests** step (`cd e2e && npm test`, no device needed);
 `--verify-only <trace.zip>` re-runs them against a trace downloaded from a CI artifact.
 
+The archive format is a versioned public contract (`docs/trace-format.md`): `trace/types.ts`,
+`packages/tapsmith/schema/trace-format.schema.json` and the docs page move together, and
+`TRACE_FORMAT_VERSION` (`trace/trace-format.ts`) is bumped for any change an existing reader could
+misread (additive fields don't bump it). Local paths go into the archive rootDir-relative via
+`trace/archive-paths.ts`. `trace-format-schema.test.ts` validates a packaged archive against the
+schema, and the device checks validate a real one.
+
 ## npm packaging & releases
 
 **Cutting a release (automated).** Run the **Prepare release** workflow from the Actions tab (`.github/workflows/prepare-release.yml`) with a version input of `patch`, `minor`, `major`, or an explicit version like `0.4.0`. It runs `scripts/bump-version.sh` and opens a labelled `Release vX.Y.Z` PR (CI runs on it). Review and merge the PR — merging triggers:

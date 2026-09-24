@@ -1247,6 +1247,15 @@ async function runSuiteContext(
   const inheritedActionCount = inherited.recordings.reduce((n, r) => n + r.actionCount, 0);
   const devices = allDevices(opts);
   const primary = primaryDevice(opts);
+  // A manual `device.tracing` archive records paths relative to the project
+  // root like the runner's own traces, and names the test file they came
+  // from; Tracing has no config of its own. (Guarded: embedders' test doubles
+  // stand in for Device without one.)
+  for (const d of devices) {
+    if (!d.tracing) continue;
+    d.tracing._rootDir = opts.config.rootDir;
+    d.tracing._testFile = opts.testFilePath;
+  }
 
   // Propagate timeout override to every device so assertion auto-wait uses it
   const prevDeviceTimeouts = scopeTimeout
@@ -1446,6 +1455,7 @@ async function runSuiteContext(
           tapsmithVersion: getPackageVersion(),
           error: beforeAllError.message,
           outputDir,
+          rootDir: opts.config.rootDir,
           project: opts.projectName,
           appState: policy.appState || undefined,
           appReset: policy.mode,
@@ -2223,6 +2233,7 @@ async function runSuiteContext(
                 tapsmithVersion: version,
                 error: error?.message,
                 outputDir,
+                rootDir: opts.config.rootDir,
                 sourceFiles,
                 networkEntries,
                 project: opts.projectName,
@@ -2489,7 +2500,7 @@ async function runSuiteContext(
         await afterAllCollector.flushPendingCaptures();
         if (targetTracePath && actionIndexOffset > 0) {
           try {
-            appendEventsToTrace(targetTracePath, afterAllCollector, Date.now(), actionIndexOffset);
+            appendEventsToTrace(targetTracePath, afterAllCollector, Date.now(), opts.config.rootDir, actionIndexOffset);
           } catch {
             // Trace amendment is best-effort, like packaging.
           }

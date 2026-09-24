@@ -6,6 +6,7 @@ import { zipSync } from 'fflate';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createMcpServer } from '../mcp/index.js';
+import { TRACE_FORMAT_VERSION } from '../trace/trace-format.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 // `tapsmith_read_trace` is how an agent finds out why a test failed, and it is
@@ -103,10 +104,52 @@ describe('tapsmith_read_trace path handling', () => {
   });
 });
 
+describe('tapsmith_read_trace format version', () => {
+  it('reads a v1 archive recorded before paths became relative', async () => {
+    const trace = writeTrace({
+      metadata: { version: 1, testFile: '/home/runner/work/app/e2e/login.test.ts' },
+      events: [{ type: 'action', action: 'tap' }],
+    });
+    const res = await readTrace({ path: trace });
+    expect(res.isError).toBeFalsy();
+    expect(text(res)).toContain('Test: /home/runner/work/app/e2e/login.test.ts');
+    expect(text(res)).not.toContain('relative to');
+  });
+
+  it('says what a v2 test path is relative to, so an agent does not resolve it against its own cwd', async () => {
+    const trace = writeTrace({
+      metadata: { version: 2, testFile: 'tests/login.test.ts' },
+      events: [{ type: 'action', action: 'tap' }],
+    });
+    const out = text(await readTrace({ path: trace }));
+    expect(out).toContain("Test: tests/login.test.ts (relative to the project's rootDir)");
+  });
+
+  it('refuses an archive from a newer format instead of misreading it', async () => {
+    const trace = writeTrace({
+      metadata: { version: TRACE_FORMAT_VERSION + 1, tapsmithVersion: '9.9.9' },
+      events: [{ type: 'action', action: 'tap' }],
+    });
+    const res = await readTrace({ path: trace });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain(`format version ${TRACE_FORMAT_VERSION + 1}`);
+    expect(text(res)).toContain('Tapsmith 9.9.9');
+    expect(text(res)).not.toContain('tap');
+  });
+
+  it('refuses a zip that is not a Tapsmith trace', async () => {
+    for (const metadata of [null, {}]) {
+      const res = await readTrace({ path: writeTrace({ metadata, events: [] }) });
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('Not a Tapsmith trace');
+    }
+  });
+});
+
 describe('tapsmith_read_trace step rendering', () => {
   it('reports the device and test the trace came from', async () => {
     const trace = writeTrace({
-      metadata: { device: { model: 'iPhone 16', platform: 'ios' }, testFile: 'login.test.ts', duration: 4200 },
+      metadata: { version: 2, device: { model: 'iPhone 16', platform: 'ios' }, testFile: 'login.test.ts', duration: 4200 },
       events: [],
     });
     const out = text(await readTrace({ path: trace }));
@@ -148,7 +191,10 @@ describe('tapsmith_read_trace step rendering', () => {
       '{ half a line',
       JSON.stringify({ type: 'action', action: 'swipe' }),
     ].join('\n');
-    fs.writeFileSync(target, zipSync({ 'trace.json': new TextEncoder().encode(ndjson) }));
+    fs.writeFileSync(target, zipSync({
+      'metadata.json': new TextEncoder().encode(JSON.stringify({ version: 1 })),
+      'trace.json': new TextEncoder().encode(ndjson),
+    }));
     const out = text(await readTrace({ path: target }));
     expect(out).toContain('tap');
     expect(out).toContain('swipe');
