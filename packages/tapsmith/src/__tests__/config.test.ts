@@ -224,6 +224,44 @@ describe('loadConfig rootDir anchoring', () => {
     });
   });
 
+  // The rejection path through the real hooks: Vitest's own import transform
+  // would hide a wrapping or cleanup bug that only shows under Node.
+  it('rejects a broken TypeScript config in bare Node, naming it and restoring the require hooks', () => {
+    const file = path.join(root, 'tapsmith.config.ts');
+    fs.writeFileSync(file, 'const x: number = 1;\nthrow new Error("boom " + x);\n', 'utf-8');
+    const configModule = path.resolve(__dirname, '..', 'config.ts');
+    const script = `const { loadConfig } = await import(${JSON.stringify(configModule)});\n`
+      + 'const { createRequire } = await import("node:module");\n'
+      + 'const ext = createRequire(import.meta.url).extensions;\n'
+      + 'const before = Object.keys(ext).join();\n'
+      + `try { await loadConfig(${JSON.stringify(root)}); process.stdout.write("{}"); }\n`
+      + 'catch (e) { process.stdout.write(JSON.stringify({ error: e.message, cause: e.cause?.message, restored: Object.keys(ext).join() === before })); }\n';
+    const out = JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      encoding: 'utf-8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    })) as { error?: string; cause?: string; restored?: boolean };
+    expect(out).toEqual({ error: `Failed to load config file ${file}: boom 1`, cause: 'boom 1', restored: true });
+  });
+
+  // The require hooks and the extensions snapshot are process-global, so
+  // overlapping loads (an MCP server's discovery and session setup) must not
+  // interleave: each would restore the other's half-registered state and
+  // leave tsx's handlers installed for good.
+  it('leaves require.extensions untouched after overlapping loads', async () => {
+    const extensions = createRequire(import.meta.url).extensions;
+    const before = Object.keys(extensions);
+    const dirs = ['a', 'b', 'c'].map((name) => {
+      const dir = path.join(root, name);
+      fs.mkdirSync(dir);
+      fs.writeFileSync(path.join(dir, 'tapsmith.config.ts'), `export default { platform: "ios", testMatch: ["${name}"] }\n`, 'utf-8');
+      return dir;
+    });
+    const configs = await Promise.all(dirs.map((dir) => loadConfig(dir)));
+    expect(configs.map((c) => c.testMatch)).toEqual([['a'], ['b'], ['c']]);
+    expect(Object.keys(extensions)).toEqual(before);
+  });
+
   // tsx's CJS unregister deletes the extension handlers it replaced rather
   // than restoring them; in the CLI's tsx child that stripped tsx's own `.ts`
   // handler and broke later extensionless requires of TypeScript files.

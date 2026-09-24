@@ -861,26 +861,45 @@ export function configPathOf(config: TapsmithConfig): string | undefined {
   return (config as unknown as Record<symbol, string | undefined>)[CONFIG_PATH];
 }
 
+/** tsx's ESM hooks for config imports: one namespaced registration per process. */
+let configEsmImport: Promise<(specifier: string, parentURL: string) => Promise<unknown>> | undefined;
+
+/** Config imports run one at a time; see `importConfigModule`. */
+let configImportQueue: Promise<unknown> = Promise.resolve();
+
 /**
  * Import a config file, rejecting with an error that names it.
  *
- * Every config is imported with tsx's hooks registered for the duration of
- * the import. The CLI loads the config before it re-execs under tsx, and bare
- * Node cannot import every valid config: a TypeScript one with a
- * `./helpers.js` specifier for `helpers.ts` or an `enum`, or a JavaScript one
- * that imports a TypeScript helper. The old warn-and-use-defaults fallback
- * hid that, and with a load failure now fatal it would break those configs
- * outright. Registering both the ESM and CJS hooks — what the `tsx` binary
- * does — keeps the result identical to the re-exec'd process's. tsx's
- * namespaced `tsImport` does not: in a project without `"type": "module"` it
- * still fails on those configs.
+ * Every config is imported through tsx. The CLI loads the config before it
+ * re-execs under tsx, and bare Node cannot import every valid config: a
+ * TypeScript one with a `./helpers.js` specifier for `helpers.ts` or an
+ * `enum`, or a JavaScript one that imports a TypeScript helper. The old
+ * warn-and-use-defaults fallback hid that, and with a load failure now fatal
+ * it would break those configs outright.
+ *
+ * ESM goes through one namespaced tsx registration, created on first use and
+ * kept: Node cannot remove a `module.register` hook, so registering per load
+ * would grow the hook chain for the life of the process, and the namespace
+ * keeps it from touching any import but the config's own graph. CommonJS —
+ * which tsx compiles a TypeScript config to in a package without
+ * `"type": "module"` — needs tsx's global `require` hooks, registered only for
+ * the duration of the import. Loads are serialised because those hooks and
+ * the `require.extensions` snapshot below are process-global: two overlapping
+ * loads would each restore the other's half-registered state.
  *
  * Only the import is wrapped. Validation errors raised after it (by
  * `applyConfigDefaults`) already say what is wrong and propagate as they are,
  * and so does a failure to load tsx itself, which is not the config's fault.
  */
-async function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
-  const [esm, cjs] = await Promise.all([import('tsx/esm/api'), import('tsx/cjs/api')]);
+function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
+  const result = configImportQueue.then(() => importConfigModuleNow(configPath));
+  configImportQueue = result.catch(() => undefined);
+  return result;
+}
+
+async function importConfigModuleNow(configPath: string): Promise<Record<string, unknown>> {
+  configEsmImport ??= import('tsx/esm/api').then((esm) => esm.register({ namespace: 'tapsmith-config' }).import);
+  const [esmImport, cjs] = await Promise.all([configEsmImport, import('tsx/cjs/api')]);
   // tsx's CJS unregister deletes the `.ts`/`.tsx`/`.jsx`/`.mjs` handlers it
   // replaced instead of restoring them, so in a process already running under
   // tsx (the CLI's re-exec'd child) it would strip tsx's own handlers and
@@ -889,13 +908,12 @@ async function importConfigModule(configPath: string): Promise<Record<string, un
   const extensions = createRequire(import.meta.url).extensions;
   const savedExtensions = { ...extensions };
   const unregisterCjs = cjs.register();
-  const unregisterEsm = esm.register();
   try {
-    const mod = (await import(pathToFileURL(configPath).href)) as Record<string, unknown>;
-    // Without `"type": "module"`, tsx compiles a TypeScript config to
-    // CommonJS and the namespace's `default` is the whole `module.exports` —
-    // the `__esModule`-marked object whose own `default` is the config. The
-    // tsx binary unwraps that itself; the in-process hooks do not.
+    const mod = (await esmImport(pathToFileURL(configPath).href, import.meta.url)) as Record<string, unknown>;
+    // A config compiled to CommonJS comes back with the whole `module.exports`
+    // — the `__esModule`-marked object whose own `default` is the config — as
+    // the namespace's `default`. The tsx binary unwraps that itself; the
+    // in-process hooks do not.
     const exportsObject = mod.default as { __esModule?: unknown } | undefined;
     if (exportsObject && typeof exportsObject === 'object' && exportsObject.__esModule === true) {
       return exportsObject as Record<string, unknown>;
@@ -906,7 +924,6 @@ async function importConfigModule(configPath: string): Promise<Record<string, un
     throw new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
   } finally {
     unregisterCjs();
-    await unregisterEsm();
     for (const key of Object.keys(extensions)) {
       if (!(key in savedExtensions)) delete extensions[key];
     }

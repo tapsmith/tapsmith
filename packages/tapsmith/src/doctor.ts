@@ -713,7 +713,7 @@ export function configLoadFailure(message: string): { message: string; hint: str
   }
   return {
     message: `Config file has errors: ${message}`,
-    hint: 'Fix the error in the config file named above; tapsmith test stops on it too',
+    hint: 'Fix the config error above; tapsmith test stops on it too',
   };
 }
 

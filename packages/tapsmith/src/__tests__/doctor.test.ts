@@ -340,6 +340,12 @@ describe('configLoadFailure', () => {
     expect(failure.hint).not.toContain('tapsmith.config.ts');
   });
 
+  it('does not point at a named file for a validation error that names none', () => {
+    const failure = configLoadFailure('config: telemetry must be a boolean (got "no")');
+    expect(failure.message).toContain('telemetry must be a boolean');
+    expect(failure.hint).not.toMatch(/named above/);
+  });
+
   it('points a missing --config file at the flag', () => {
     expect(configLoadFailure('Config file not found: /p/ci.config.ts').hint).toBe('Check the -c/--config path');
   });
