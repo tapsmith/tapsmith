@@ -43,6 +43,7 @@ Requires `protobuf-compiler` installed for tonic-build.
 ### Android agent (`agent/`)
 ```bash
 ./gradlew assembleDebug
+./gradlew testDebugUnitTest   # JVM unit tests (no device); CI: android job
 ./gradlew ktlintCheck
 ```
 

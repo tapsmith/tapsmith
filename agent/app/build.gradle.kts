@@ -47,6 +47,9 @@ android {
         getByName("androidTest") {
             kotlin.srcDirs("src/androidTest/kotlin")
         }
+        getByName("test") {
+            kotlin.srcDirs("src/test/kotlin")
+        }
     }
 }
 

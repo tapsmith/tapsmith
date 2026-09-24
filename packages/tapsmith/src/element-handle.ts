@@ -602,11 +602,12 @@ const MIN_ACTION_BUDGET_MS = 1000;
 /**
  * @internal — The time budget for each dispatch of one action, pinned to a
  * deadline that starts at the first dispatch (not when the action is set up:
- * a traced action captures the screen in between). The iOS agent can spend a
- * dispatch's whole budget waiting out a covered target (PILOT-223), so a
- * stale-element retry — or setChecked's re-tap — must get what is left, not
- * the full budget again. A zero budget (the explicit no-wait timeout) stays
- * zero; a late retry is floored at `MIN_ACTION_BUDGET_MS`.
+ * a traced action captures the screen in between). The agent can spend a
+ * dispatch's whole budget waiting out a covered target (PILOT-223,
+ * PILOT-362), so a stale-element retry — or setChecked's re-tap — must get
+ * what is left, not the full budget again. A zero budget (the explicit
+ * no-wait timeout) stays zero; a late retry is floored at
+ * `MIN_ACTION_BUDGET_MS`.
  */
 export function actionBudget(remainingMs: number): () => number {
   if (remainingMs <= 0) return () => 0;
