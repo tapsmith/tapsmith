@@ -28,61 +28,33 @@ export async function loadMcpConfig(configFile?: string): Promise<McpConfigLoadR
   }
 
   const cwd = process.cwd();
-  // `configPathOf`, not the path we probed for: a candidate that throws on
-  // import leaves the session on defaults, and naming it anyway would hide
-  // that behind a real-looking config.
+  // A config that exists but cannot be imported makes `loadConfig` reject, so
+  // a broken working-directory config never falls through to a nested one:
+  // the rejection reaches the caller, which reports the import error.
   const cwdConfig = findConfigInDir(cwd);
   const nested = findImmediateNestedConfigs(cwd);
 
   if (cwdConfig) {
     const config = await loadConfig(cwd);
-    const loaded = configPathOf(config);
-    if (loaded) return { config, configPath: loaded };
-    // It exists and it is broken. Falling through to a nested config here
-    // would answer a question nobody asked: the session would report itself
-    // as backed by some other directory's config, with no warning, while the
-    // import error the user needs to see went only to stderr.
-    return { config, warning: warningFor(cwd, cwdConfig, nested) };
+    return { config, configPath: configPathOf(config) };
   }
 
   if (nested.length === 1) {
     const config = await loadConfig(nested[0].dir);
-    const loaded = configPathOf(config);
-    if (loaded) return { config, configPath: loaded };
-    return { config, warning: warningFor(cwd, nested[0].configPath, nested) };
+    return { config, configPath: configPathOf(config) };
   }
 
-  return { config: await loadConfig(cwd), warning: warningFor(cwd, undefined, nested) };
+  return { config: await loadConfig(cwd), warning: warningFor(cwd, nested) };
 }
 
-/**
- * Why no config file backs this session.
- *
- * `unloadable` is the config that exists but throws on import, if there is
- * one. Saying "none was found" for it would send the reader looking for a
- * missing file when the real cause — a syntax error, a missing dependency —
- * went only to stderr.
- */
-function warningFor(
-  cwd: string,
-  unloadable: string | undefined,
-  nested: Array<{ dir: string; configPath: string }>,
-): string {
+/** Why no config file backs this session: none was found, or several were. */
+function warningFor(cwd: string, nested: Array<{ dir: string; configPath: string }>): string {
   const nestedList = nested.map((e) => path.relative(cwd, e.configPath)).join(', ');
-  const alternatives = nested.filter((e) => e.configPath !== unloadable);
-  const suggestion = unloadable
-    ? `${path.relative(cwd, unloadable)} was found but could not be loaded — the import error is above. Fix it, `
-      // Naming the alternatives matters most here: when the broken config is
-      // the one in the working directory, `--config` is only actionable if the
-      // reader knows there are other configs to point it at.
-      + (alternatives.length > 0
-        ? `or pass one of the configs below it (${alternatives.map((e) => path.relative(cwd, e.configPath)).join(', ')}) with \`--config <file>\`.`
-        : 'or pass a different config with `--config <file>`.')
-    : nested.length > 1
-      ? `Multiple configs were found below it (${nestedList}) — `
-        + 'pass one with `--config <file>`, or start the server with its directory as the working directory.'
-      : `No ${CONFIG_NAMES.join(' / ')} was found there or one level below. `
-        + 'Pass one with `--config <file>`, or start the server with your test project as the working directory.';
+  const suggestion = nested.length > 1
+    ? `Multiple configs were found below it (${nestedList}) — `
+      + 'pass one with `--config <file>`, or start the server with its directory as the working directory.'
+    : `No ${CONFIG_NAMES.join(' / ')} was found there or one level below. `
+      + 'Pass one with `--config <file>`, or start the server with your test project as the working directory.';
 
   return `No Tapsmith config file is backing this session (working directory: ${cwd}). ${suggestion} `
     + 'Until then the session runs on defaults: it has no app to launch, so tests cannot run, '

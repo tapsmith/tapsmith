@@ -9,6 +9,7 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import type { ReporterConfig } from './reporter.js';
 import type { TraceMode, TraceConfig } from './trace/types.js';
 import type { VideoMode, VideoConfig } from './video/types.js';
@@ -851,13 +852,58 @@ function withConfigPath(config: TapsmithConfig, configPath?: string): TapsmithCo
 /**
  * The file a config was read from, or undefined for built-in defaults.
  *
- * Existence is not enough to report: `loadConfig` warns and moves on when a
- * candidate throws on import, so the file that exists may not be the one in
- * effect — and naming it would misreport the session exactly the way an
- * unnamed synthesized config does.
+ * Undefined means no config file exists: `loadConfig` rejects when one exists
+ * but cannot be imported, so a config this returns undefined for was never
+ * backed by a file (PILOT-262).
  */
 export function configPathOf(config: TapsmithConfig): string | undefined {
   return (config as unknown as Record<symbol, string | undefined>)[CONFIG_PATH];
+}
+
+const TYPESCRIPT_CONFIG = /\.[cm]?tsx?$/;
+
+/**
+ * Import a config file, rejecting with an error that names it.
+ *
+ * TypeScript configs are imported with tsx's hooks registered for the
+ * duration of the import. The CLI loads the config before it re-execs under
+ * tsx, and bare Node cannot import every valid TypeScript config (a
+ * `./helpers.js` specifier for `helpers.ts`, an `enum`): the old
+ * warn-and-use-defaults fallback hid that, and with a load failure now fatal
+ * it would break those configs outright. Registering both the ESM and CJS
+ * hooks — what the `tsx` binary does — keeps the result identical to the
+ * re-exec'd process's. tsx's namespaced `tsImport` does not: in a project
+ * without `"type": "module"` it still fails on both of those configs.
+ *
+ * Only the import is wrapped. Validation errors raised after it (by
+ * `applyConfigDefaults`) already say what is wrong and propagate as they are.
+ */
+async function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
+  try {
+    const url = pathToFileURL(configPath).href;
+    if (!TYPESCRIPT_CONFIG.test(configPath)) return (await import(url)) as Record<string, unknown>;
+    const [esm, cjs] = await Promise.all([import('tsx/esm/api'), import('tsx/cjs/api')]);
+    const unregisterCjs = cjs.register();
+    const unregisterEsm = esm.register();
+    try {
+      const mod = (await import(url)) as Record<string, unknown>;
+      // Without `"type": "module"`, tsx compiles the config to CommonJS and
+      // the namespace's `default` is the whole `module.exports` — the
+      // `__esModule`-marked object whose own `default` is the config. The
+      // tsx binary unwraps that itself; the in-process hooks do not.
+      const exportsObject = mod.default as { __esModule?: unknown } | undefined;
+      if (exportsObject && typeof exportsObject === 'object' && exportsObject.__esModule === true) {
+        return exportsObject as Record<string, unknown>;
+      }
+      return mod;
+    } finally {
+      unregisterCjs();
+      await unregisterEsm();
+    }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
+  }
 }
 
 export async function loadConfig(dir?: string, configFile?: string): Promise<TapsmithConfig> {
@@ -868,7 +914,7 @@ export async function loadConfig(dir?: string, configFile?: string): Promise<Tap
     if (!fs.existsSync(configPath)) {
       throw new Error(`Config file not found: ${configPath}`);
     }
-    const mod = await import(configPath);
+    const mod = await importConfigModule(configPath);
     // Keep the original for rawHasExplicitWorkers — omitUndefined produces a
     // fresh object, dropping the non-enumerable EXPLICIT_WORKERS symbol that
     // defineConfig-produced configs carry.
@@ -886,19 +932,11 @@ export async function loadConfig(dir?: string, configFile?: string): Promise<Tap
   for (const name of CONFIG_CANDIDATES) {
     const configPath = path.resolve(root, name);
     if (fs.existsSync(configPath)) {
-      let mod: Record<string, unknown>;
-      try {
-        // For .ts files we rely on tsx / ts-node being available at runtime.
-        // Only the import is tolerated-and-skipped: a config that cannot be
-        // read falls through to the next candidate. Validation errors from
-        // applyConfigDefaults below must PROPAGATE — silently discarding a
-        // whole config because one key is malformed would, for `telemetry`,
-        // turn an opt-out into a run that reports (PILOT-330 review).
-        mod = await import(configPath);
-      } catch (err) {
-        console.warn(`Warning: failed to load ${configPath}: ${err}`);
-        continue;
-      }
+      // The first candidate that exists is the config, loadable or not. A
+      // broken one is a hard error, never a reason to try the next candidate
+      // or fall back to the defaults: either would run the session under a
+      // config the user is not editing (PILOT-262).
+      const mod = await importConfigModule(configPath);
       const original: Partial<TapsmithConfig> = (mod.default as Partial<TapsmithConfig>) ?? mod;
       const raw = omitUndefined(original);
       const merged = applyConfigDefaults(

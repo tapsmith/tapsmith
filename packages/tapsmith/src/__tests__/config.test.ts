@@ -115,15 +115,75 @@ describe('loadConfig rootDir anchoring', () => {
       expect(configPathOf(await loadConfig(root))).toBeUndefined();
     });
 
-    // Existence is not the same as being in effect: loadConfig warns and moves
-    // on when a candidate throws, and naming the file anyway would tell the
-    // caller the session is backed by a config it never read.
-    it('names no config when the one that exists could not be loaded', async () => {
+  });
+
+  // A config that exists but cannot be imported used to be warned about and
+  // replaced by the defaults, so `tapsmith test` ran with the default
+  // testMatch, no app and no device pin, and failed later in ways that never
+  // mentioned the config (PILOT-262). Defaults are only for "no config file".
+  describe('a config file that exists but cannot be loaded', () => {
+    it('rejects a discovered config that throws on import, naming the file and the error', async () => {
+      const file = writeConfig(root, 'throw new Error("boom")\n');
+      await expect(loadConfig(root)).rejects.toThrow(
+        `Failed to load config file ${file}: boom`,
+      );
+    });
+
+    it('keeps the import error as the cause', async () => {
       writeConfig(root, 'throw new Error("boom")\n');
+      const err = await loadConfig(root).catch((e: unknown) => e);
+      expect((err as Error).cause).toBeInstanceOf(Error);
+      expect(((err as Error).cause as Error).message).toBe('boom');
+    });
+
+    it('rejects a discovered config whose own import cannot be resolved', async () => {
+      const file = writeConfig(root, 'import "./does-not-exist.mjs"\nexport default {}\n');
+      await expect(loadConfig(root)).rejects.toThrow(`Failed to load config file ${file}:`);
+      await expect(loadConfig(root)).rejects.toThrow(/does-not-exist\.mjs/);
+    });
+
+    it('does not fall through to a lower-precedence candidate', async () => {
+      // tapsmith.config.ts outranks .mjs; reading the .mjs instead would run
+      // the session under a config the user is not editing.
+      const broken = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(broken, 'throw new Error("boom")\n', 'utf-8');
+      writeConfig(root, 'export default { platform: "ios" }\n');
+      await expect(loadConfig(root)).rejects.toThrow(`Failed to load config file ${broken}: boom`);
+    });
+
+    it('rejects an explicit --config file that throws on import the same way', async () => {
+      const file = writeConfig(path.join(root, 'configs'), 'throw new Error("boom")\n');
+      await expect(loadConfig(root, path.relative(root, file))).rejects.toThrow(
+        `Failed to load config file ${file}: boom`,
+      );
+    });
+
+    it('still falls back to defaults when no config file exists', async () => {
       const config = await loadConfig(root);
       expect(configPathOf(config)).toBeUndefined();
       expect(config.rootDir).toBe(root);
     });
+  });
+
+  // The CLI loads the config before it re-execs under tsx, so a TypeScript
+  // config must load through tsx itself rather than rely on the process's
+  // loader — otherwise a valid config that bare Node cannot import (a `.js`
+  // specifier for a `.ts` helper, a non-erasable TS construct) would now be a
+  // hard error instead of the silent fallback that used to mask it.
+  it('loads a TypeScript config that imports a TypeScript helper through a .js specifier', async () => {
+    fs.writeFileSync(path.join(root, 'helpers.ts'), 'export const platform: string = "ios";\n', 'utf-8');
+    const file = path.join(root, 'tapsmith.config.ts');
+    fs.writeFileSync(
+      file,
+      'import { platform } from "./helpers.js";\n'
+      + 'enum Retries { None = 0, Some = 2 }\n'
+      + 'export default { platform, retries: Retries.Some };\n',
+      'utf-8',
+    );
+    const config = await loadConfig(root);
+    expect(configPathOf(config)).toBe(file);
+    expect(config.platform).toBe('ios');
+    expect(config.retries).toBe(2);
   });
 });
 import {

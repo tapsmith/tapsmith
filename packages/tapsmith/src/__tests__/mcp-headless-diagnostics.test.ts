@@ -512,28 +512,25 @@ describe('loadMcpConfig config-file reporting', () => {
   });
 
   // The working directory's config is the one the user meant. When it is
-  // broken, quietly adopting a nested one instead reports a config the session
-  // is not running under and buries the import error the user has to fix.
-  it('reports a broken working-directory config instead of falling back to a nested one', async () => {
-    fs.writeFileSync(path.join(root, 'tapsmith.config.mjs'), 'throw new Error("boom")\n');
+  // broken, quietly adopting a nested one instead would report a config the
+  // session is not running under and bury the import error the user has to
+  // fix; so would running on defaults. The load rejects, and the dispatcher
+  // turns that rejection into the session's config warning (PILOT-262).
+  it('rejects a broken working-directory config instead of falling back to a nested one', async () => {
+    const broken = path.join(root, 'tapsmith.config.mjs');
+    fs.writeFileSync(broken, 'throw new Error("boom")\n');
     fs.mkdirSync(path.join(root, 'e2e'));
     fs.writeFileSync(path.join(root, 'e2e', 'tapsmith.config.mjs'), 'export default { platform: "ios" }\n');
     process.chdir(root);
-    const result = await loadMcpConfig();
-    expect(result.configPath).toBeUndefined();
-    expect(result.warning).toContain('could not be loaded');
-    expect(result.warning).toContain('tapsmith.config.mjs');
-    // And it points at the alternative rather than only saying "fix it".
-    expect(result.warning).toContain('e2e');
+    await expect(loadMcpConfig()).rejects.toThrow(`Failed to load config file ${broken}: boom`);
   });
 
-  it('reports a broken nested config rather than passing defaults off as it', async () => {
+  it('rejects a broken nested config rather than passing defaults off as it', async () => {
     fs.mkdirSync(path.join(root, 'e2e'));
-    fs.writeFileSync(path.join(root, 'e2e', 'tapsmith.config.mjs'), 'throw new Error("boom")\n');
+    const broken = path.join(root, 'e2e', 'tapsmith.config.mjs');
+    fs.writeFileSync(broken, 'throw new Error("boom")\n');
     process.chdir(root);
-    const result = await loadMcpConfig();
-    expect(result.configPath).toBeUndefined();
-    expect(result.warning).toContain('could not be loaded');
+    await expect(loadMcpConfig()).rejects.toThrow(`Failed to load config file ${broken}: boom`);
   });
 });
 
