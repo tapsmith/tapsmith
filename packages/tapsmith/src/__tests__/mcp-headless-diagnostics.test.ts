@@ -20,6 +20,7 @@ import {
   ambiguousDeviceMessage,
   daemonSpawnArgs,
   isRepointing,
+  takesClaimedDaemon,
   noDeviceMessage,
   primaryDevice,
   configureMcpConnection,
@@ -1235,6 +1236,25 @@ describe('daemonSpawnArgs', () => {
 // Both were previously answered from `preparedDevice`, which records only what
 // *this* process did — so a daemon inherited from another session looked
 // untouched however it was actually pointed.
+// Targets on one platform claim daemons under the platform key, so a second
+// target could be handed a daemon the first had already prepared — and
+// repoint it to its own device under the first target's feet.
+describe('takesClaimedDaemon', () => {
+  it('refuses a daemon this session prepared for another device', () => {
+    expect(takesClaimedDaemon({ claimedBy: 'android', preparedDevice: 'EMU-1' }, 'EMU-2')).toBe(false);
+  });
+
+  it('shares a prepared daemon for the same device, and takes an unprepared one', () => {
+    expect(takesClaimedDaemon({ claimedBy: 'android', preparedDevice: 'EMU-1' }, 'EMU-1')).toBe(true);
+    expect(takesClaimedDaemon({ claimedBy: 'android' }, 'EMU-2')).toBe(true);
+    expect(takesClaimedDaemon({}, 'EMU-2')).toBe(true);
+  });
+
+  it('may repoint a claimed daemon whose agent failed — it serves nothing', () => {
+    expect(takesClaimedDaemon({ claimedBy: 'android', preparedDevice: 'EMU-1', agentFailed: true }, 'EMU-2')).toBe(true);
+  });
+});
+
 describe('isRepointing', () => {
   it('is true when the daemon is serving a different device', () => {
     expect(isRepointing('EMU-1', 'EMU-2')).toBe(true);

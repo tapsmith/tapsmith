@@ -684,10 +684,22 @@ describe('allocateBucketWorkers()', () => {
       // that pin cost parallelism and named a device no worker used.
       const trio = { ...makeProject('trio', 4), deviceSignature: 'shared', effectiveConfig: makeConfig({ devices: [{ name: 'alice' }, { name: 'bob' }, { name: 'carol' }] }) };
       const pair = { ...makeProject('pair', 4), deviceSignature: 'shared', effectiveConfig: makeConfig({ devices: [{ name: 'alice' }, { name: 'bob', device: 'emulator-5558' }] }) };
-      expect(pinnedBucketSignatures(bucketizeProjects([trio, pair]))).toEqual(new Set());
+      expect([...pinnedBucketSignatures(bucketizeProjects([trio, pair])).keys()]).toEqual([]);
       // A pin on the largest group does count.
       const pinnedTrio = { ...trio, effectiveConfig: makeConfig({ devices: [{ name: 'alice' }, { name: 'bob', device: 'emulator-5558' }, { name: 'carol' }] }) };
-      expect(pinnedBucketSignatures(bucketizeProjects([pinnedTrio, pair]))).toEqual(new Set(['shared']));
+      expect([...pinnedBucketSignatures(bucketizeProjects([pinnedTrio, pair])).keys()]).toEqual(['shared']);
+    });
+
+    // The sequential setup later writes its auto-picked serial onto the root
+    // config that `use`-less projects share; the snapshot must keep the pins
+    // as they were, or a bucket reads another platform's auto-pick as its pin.
+    it('snapshots the pinned serials, not just which buckets are pinned', () => {
+      const project = pinnedProject('a', 8, { device: 'emulator-5554' });
+      const snapshot = pinnedBucketSignatures(bucketizeProjects([project]));
+      project.effectiveConfig.device = 'SIM-UDID';
+      expect(snapshot.get('a')?.pins).toEqual(['emulator-5554']);
+      // The group too: provisioning builds the bucket's devices from it.
+      expect(snapshot.get('a')?.group).toEqual([{ name: 'device-1', device: 'emulator-5554' }]);
     });
 
     it('still gives a pinned bucket with no files zero workers', () => {
@@ -721,6 +733,13 @@ describe('devicePinWorkersConflict()', () => {
   it('allows --workers the run can still use beside the pin', () => {
     expect(devicePinWorkersConflict('emulator-5554', 2, 2)).toBeUndefined();
     expect(devicePinWorkersConflict('emulator-5554', 3, 2)).toMatch(/cannot run --workers 3/);
+  });
+
+  // Fewer files than workers already leaves the extra workers idle; the pin
+  // takes nothing away there, and main ran the pair sequentially on the pin.
+  it('allows --workers the run could not have used anyway', () => {
+    expect(devicePinWorkersConflict('emulator-5554', 2, 1, 1)).toBeUndefined();
+    expect(devicePinWorkersConflict('emulator-5554', 3, 1, 2)).toMatch(/cannot run --workers 3/);
   });
 
   it('allows either alone, or --workers 1', () => {

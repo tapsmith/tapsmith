@@ -42,7 +42,7 @@ export async function deviceClientFor(
   //
   // Devices only: waiting for the test tree as well would make the first device
   // tool of a session pay for a discovery child per test file.
-  if (dispatcher?.ensureDevicesReady) await dispatcher.ensureDevicesReady();
+  if (dispatcher?.ensureDevicesReady) await dispatcher.ensureDevicesReady({ retryFailedTargets: true, project: request.project });
   else await dispatcher?.ensureInitialized?.();
   // Nothing named and no target resolved: say why, rather than hand the call
   // to a pool daemon no target prepared (no device selected, no agent).

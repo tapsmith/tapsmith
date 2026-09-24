@@ -12,6 +12,8 @@ import type { TapsmithConfig } from '../config.js';
 const hoisted = vi.hoisted(() => ({
   /** The config every `ensurePlatformTarget` call was handed. */
   resolved: [] as Array<{ platform?: string; device?: string }>,
+  /** Which kind of target resolved, in order: 'chat' for a group, 'solo' otherwise. */
+  order: [] as string[],
   /** What an unpinned resolve picks — the device another session owns, in the report. */
   autoPick: 'emulator-5556',
   /** Platforms whose resolve fails (no device available). */
@@ -25,6 +27,7 @@ vi.mock('../mcp/connection.js', async (importOriginal) => {
     ...actual,
     ensurePlatformTarget: async (config: TapsmithConfig) => {
       hoisted.resolved.push({ platform: config.platform, device: config.device });
+      hoisted.order.push(config.devices ? 'chat' : 'solo');
       if (hoisted.failing.has(config.platform ?? 'default')) throw new Error('No online Android device found.');
       return {
         address: '127.0.0.1:50100',
@@ -56,6 +59,7 @@ describe('run_tests `device` in a headless MCP session', () => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-pin-')));
     process.chdir(root);
     hoisted.resolved.length = 0;
+    hoisted.order.length = 0;
     hoisted.failing.clear();
   });
 
@@ -410,6 +414,167 @@ describe('run_tests `device` in a headless MCP session', () => {
     const d = dispatcher();
     expect(await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5560', 'default')).toBeNull();
     expect(hoisted.resolved).toEqual([]);
+  });
+
+  // Only runs used to retry a failed target, so after a device tool found no
+  // device, booting one did not help any later device tool.
+  it('retries a failed target for a device tool, not for every caller', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    hoisted.failing.clear();
+    await d.ensureDevicesReady();
+    expect(hoisted.resolved).toHaveLength(1);
+    await d.ensureDevicesReady({ retryFailedTargets: true });
+    expect(hoisted.resolved).toHaveLength(2);
+    expect(d.getSessionInfo().deviceTargets).toEqual([{ platform: 'android', device: 'emulator-5556' }]);
+  });
+
+  // The retry is for a session with no device at all: re-resolving a missing
+  // platform on every tap of a working one churned a daemon per call.
+  it('does not retry a failed target while another one serves, nor twice in quick succession', async () => {
+    writeProject(`export default {
+      testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "android", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["b.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    hoisted.failing.add('ios');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    const before = hoisted.resolved.length;
+    await d.ensureDevicesReady({ retryFailedTargets: true });
+    expect(hoisted.resolved.length).toBe(before);
+  });
+
+  it('retries at most once in quick succession when nothing serves', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    await d.ensureDevicesReady({ retryFailedTargets: true });
+    await d.ensureDevicesReady({ retryFailedTargets: true });
+    expect(hoisted.resolved).toHaveLength(2);
+  });
+
+  // A run in flight retries its own target; resolving it here too started a
+  // second daemon for one target.
+  it('does not re-resolve a failed target while a run is in flight', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    hoisted.failing.clear();
+    (d as unknown as { _isRunning: boolean })._isRunning = true;
+    const before = hoisted.resolved.length;
+    await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5560');
+    expect(hoisted.resolved.length).toBe(before);
+  });
+
+  // A group member's pin counts as a pin for the ordering: the unpinned solo
+  // target used to resolve first and could take the member's device.
+  it('resolves a target with a member pin before the unpinned ones', async () => {
+    writeProject(`export default {
+      platform: "android", package: "com.x", testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "solo", testMatch: ["a.test.ts"] },
+        { name: "chat", testMatch: ["b.test.ts"], use: { devices: [{ name: "alice" }, { name: "bob", device: "emulator-5558" }] } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    // The chat target (the only one with a pin) went first; solo followed.
+    expect(hoisted.resolved.map((r) => r.device)).toEqual([undefined, undefined]);
+    expect(hoisted.order[0]).toBe('chat');
+  });
+
+  it('does not answer a member of the unresolved group with a config-pin refusal', async () => {
+    writeProject(`export default {
+      platform: "android", package: "com.x", testMatch: ["**/*.test.ts"],
+      projects: [{ name: "chat", use: { devices: [{ name: "alice", device: "emulator-5554" }, { name: "bob", device: "emulator-5556" }] } }],
+    }\n`);
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    const file = path.join(root, 'a.test.ts');
+    for (const device of ['alice', 'bob', 'emulator-5556']) {
+      expect(await d.deviceChoiceError([file], device)).toBeNull();
+    }
+    expect(await d.deviceChoiceError([file], 'emulator-5560')).toContain('The config pins emulator-5554');
+  });
+
+  it('shares one retry between a device tool and a run_tests device', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    hoisted.failing.clear();
+    const before = hoisted.resolved.length;
+    await Promise.all([
+      d.ensureDevicesReady({ retryFailedTargets: true }),
+      d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5556'),
+    ]);
+    expect(hoisted.resolved.length).toBe(before + 1);
+  });
+
+  it('lets a run wait for a retry already in flight instead of resolving the target again', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    hoisted.failing.clear();
+    const internals = d as unknown as { _retryPromise: Promise<void> | null; _ensureTargetForProject(p?: string): Promise<unknown> };
+    let release!: () => void;
+    internals._retryPromise = new Promise<void>((r) => { release = r; });
+    const before = hoisted.resolved.length;
+    const target = internals._ensureTargetForProject();
+    await new Promise((r) => setImmediate(r));
+    expect(hoisted.resolved.length).toBe(before);
+    release();
+    internals._retryPromise = null;
+    await target;
+  });
+
+  // A tool naming the failed platform's project retries just that target;
+  // taps on the working platform still never do.
+  it('retries the failed target a device tool names, while another target serves', async () => {
+    writeProject(`export default {
+      testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "android", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["b.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    hoisted.failing.add('ios');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    hoisted.failing.clear();
+    const before = hoisted.resolved.length;
+    await d.ensureDevicesReady({ retryFailedTargets: true, project: 'android' });
+    expect(hoisted.resolved.length).toBe(before);
+    await d.ensureDevicesReady({ retryFailedTargets: true, project: 'ios' });
+    expect(hoisted.resolved.length).toBe(before + 1);
+    expect(hoisted.resolved.at(-1)).toEqual({ platform: 'ios', device: undefined });
+  });
+
+  it('lets only one of two concurrent run_tests retry a failed target', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    hoisted.failing.clear();
+    const internals = d as unknown as { _retryPromise: Promise<void> | null };
+    let release!: () => void;
+    internals._retryPromise = new Promise<void>((r) => { release = r; }).then(() => { internals._retryPromise = null; });
+    const before = hoisted.resolved.length;
+    const file = path.join(root, 'a.test.ts');
+    const both = Promise.all([d.deviceChoiceError([file], 'emulator-5556'), d.deviceChoiceError([file], 'emulator-5556')]);
+    await new Promise((r) => setImmediate(r));
+    release();
+    await both;
+    expect(hoisted.resolved.length).toBe(before + 1);
   });
 
   it('leaves files that match nothing to the run, which reports them', async () => {

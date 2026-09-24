@@ -178,7 +178,7 @@ export function allocateBucketWorkers(
    * sequential setup writes the device it auto-picked onto the effective
    * config, so reading pins afterwards mistakes that pick for a user's pin.
    */
-  pinnedSignatures: ReadonlySet<string>,
+  pinnedSignatures: { has(signature: string): boolean },
 ): Map<string, number> {
   const result = new Map<string, number>();
 
@@ -263,17 +263,45 @@ export function allocateBucketWorkers(
   return result;
 }
 
+/** A pinned bucket as it was before device setup: the serials it pins and its device group. */
+export interface PinnedBucket {
+  /** Every serial the bucket's shared group pins, primary first. */
+  pins: readonly string[]
+  /** The bucket's shared device group, primary first, pins as the user set them. */
+  group: readonly DeviceGroupEntry[]
+}
+
+/** Pinned buckets by signature — see {@link pinnedBucketSignatures}. */
+export type PinnedBuckets = ReadonlyMap<string, PinnedBucket>;
+
 /**
  * The buckets whose device target pins a device (root `device`, `--device`, a
- * `use.devices` pin), each fixed to one worker. Call it before any device
- * setup — see `allocateBucketWorkers`.
+ * `use.devices` pin), each fixed to one worker, with the serials they pin.
+ * Call it before any device setup — see `allocateBucketWorkers` — and read
+ * the pins from here afterwards, never from the configs again: the setup
+ * writes its auto-picked serial onto the root config `use`-less projects
+ * share, and a bucket re-reading its pins then took another platform's
+ * auto-pick for one.
  */
 export function pinnedBucketSignatures(
   bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
-): Set<string> {
-  return new Set(bucketEntries
-    .filter((b) => bucketPins(b.projects).length > 0)
-    .map((b) => b.signature));
+): Map<string, PinnedBucket> {
+  const snapshot = new Map<string, PinnedBucket>();
+  for (const b of bucketEntries) {
+    const pins = bucketPins(b.projects);
+    if (pins.length === 0) continue;
+    snapshot.set(b.signature, { pins, group: bucketGroup(b.projects) });
+  }
+  return snapshot;
+}
+
+/** The device group a bucket is provisioned for (its shared group; any project's on a mismatch). */
+function bucketGroup(projects: ResolvedProject[]): DeviceGroupEntry[] {
+  try {
+    return resolveDeviceGroup(sharedDeviceGroup(projects).config).map((e) => ({ ...e }));
+  } catch {
+    return resolveDeviceGroup(projects[0].effectiveConfig).map((e) => ({ ...e }));
+  }
 }
 
 /**
@@ -306,8 +334,14 @@ export function devicePinWorkersConflict(
   workers: number | undefined,
   /** Workers the allocation can run with the pin applied. */
   usableWorkers: number,
+  /**
+   * Workers the run could use at all (its largest wave's file count). Past
+   * that, extra workers sit idle with or without a pin, so asking for them is
+   * no conflict: `--device X --workers 2` on one file runs on X, as it did.
+   */
+  usefulWorkers: number = Number.POSITIVE_INFINITY,
 ): string | undefined {
-  if (!device || workers === undefined || workers <= 1 || workers <= usableWorkers) return undefined;
+  if (!device || workers === undefined || workers <= 1 || Math.min(workers, usefulWorkers) <= usableWorkers) return undefined;
   return `--device ${device} pins the run to one device, so it cannot run --workers ${workers} in parallel. `
     + 'Drop --device to spread the run across devices, or drop --workers to run on that device.';
 }
@@ -733,12 +767,12 @@ export function scopeDevicePinToPlatform(
  */
 export function devicesPinnedByManyBuckets(
   bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
-  pinnedSignatures: ReadonlySet<string>,
+  pinnedSignatures: PinnedBuckets,
 ): Array<{ serial: string; projects: string[] }> {
   const bucketsBySerial = new Map<string, Array<{ signature: string; projects: ResolvedProject[] }>>();
   for (const b of bucketEntries) {
     if (!pinnedSignatures.has(b.signature) || !b.projects.some((p) => p.testFiles.length > 0)) continue;
-    for (const serial of new Set(bucketPins(b.projects))) {
+    for (const serial of new Set(pinnedSignatures.get(b.signature)?.pins)) {
       bucketsBySerial.set(serial, [...(bucketsBySerial.get(serial) ?? []), b]);
     }
   }

@@ -1188,12 +1188,20 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       } catch (err) {
         return err instanceof Error ? err.message : String(err);
       }
-      const live = uiWorkers.filter((w) => !w.retired);
-      // Workers spawn on the first run; until then, the ones planned — the
-      // session info lists only the CLI's primary then.
-      const workers = live.length > 0
-        ? live.map((w) => ({ bucket: w.bucketSignature, devices: workerDevicesInfo(w).map((d) => d.deviceSerial) }))
-        : workerGroups.map((g) => ({ bucket: ctx.bucketByDevice?.get(g[0]), devices: g }));
+      // Every worker slot, retired ones included: the run respawns them before
+      // it dispatches, so a retired worker can take the file too. Workers spawn
+      // on the first run; until then, the ones planned — the session info
+      // lists only the CLI's primary then.
+      const workers = uiWorkers.length > 0
+        ? uiWorkers.map((w) => ({ bucket: w.bucketSignature, devices: workerDevicesInfo(w).map((d) => d.deviceSerial) }))
+        : workerGroups.map((g) => ({
+          bucket: ctx.bucketByDevice?.get(g[0]),
+          // A single-worker session plans only the primary's serial; its
+          // group members were opened beside it by the CLI.
+          devices: g[0] === ctx.deviceSerial
+            ? [...new Set([...g, ...(ctx.primaryGroupMembers ?? []).map((m) => m.serial)])]
+            : g,
+        }));
       // A multi-target session routes each file to a worker of its own target.
       const fileProjects = requested.flatMap((f) => (project !== undefined
         ? [project]

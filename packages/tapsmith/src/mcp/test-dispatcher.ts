@@ -124,7 +124,16 @@ export interface TestDispatcher {
    * for. Optional: a dispatcher that is ready by the time it is handed over
    * (UI mode's) need not implement it.
    */
-  ensureDevicesReady?(): Promise<void>
+  ensureDevicesReady?(opts?: {
+    /**
+     * Also try a platform whose target found no device again (once, now). For
+     * device tools: without it only a run ever retried, so a device booted
+     * after a failed tool call stayed unusable to every later tool.
+     */
+    retryFailedTargets?: boolean
+    /** The project the tool names, if any: its target is the one worth retrying. */
+    project?: string
+  }): Promise<void>
   runFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult>
   /**
    * Why `run_tests` cannot run `files` on `device` (a serial or a group
