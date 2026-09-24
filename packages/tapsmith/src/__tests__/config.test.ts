@@ -409,6 +409,37 @@ describe('loadConfig rootDir anchoring', () => {
       expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
     });
 
+    // One config extending another through the public loadConfig must not
+    // wait on its own load, natively or through tsx.
+    it('loads a config that loads another config, natively and through tsx', () => {
+      const base = path.join(root, 'base');
+      fs.mkdirSync(base);
+      fs.writeFileSync(path.join(base, 'tapsmith.config.mjs'), 'export default { platform: "ios", retries: 2 };\n', 'utf-8');
+      const configModule = path.resolve(__dirname, '..', 'config.ts');
+      const load = `const { loadConfig } = await import(${JSON.stringify(configModule)});\nconst b = await loadConfig(${JSON.stringify(base)});\n`;
+      const native = path.join(root, 'native');
+      fs.mkdirSync(native);
+      writePackage(native, 'module');
+      fs.writeFileSync(path.join(native, 'tapsmith.config.mjs'), `${load}export default { platform: b.platform, retries: b.retries };\n`, 'utf-8');
+      const viaTsx = path.join(root, 'tsx');
+      fs.mkdirSync(viaTsx);
+      writePackage(viaTsx, 'module');
+      fs.writeFileSync(path.join(viaTsx, 'tapsmith.config.ts'), `${load}enum R { N = 0 }\nexport default { platform: b.platform, retries: b.retries + R.N };\n`, 'utf-8');
+      const out = inBareNode<Array<{ platform?: string; retries?: number }>>(
+        'const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("deadlock")), 10000).unref());\n'
+        + `const cs = await Promise.race([Promise.all([loadConfig(${JSON.stringify(native)}), loadConfig(${JSON.stringify(viaTsx)})]), timeout]);\n`
+        + 'emit(cs.map((c) => ({ platform: c.platform, retries: c.retries })));\n',
+      );
+      expect(out).toEqual([{ platform: 'ios', retries: 2 }, { platform: 'ios', retries: 2 }]);
+    }, 15_000);
+
+    it('unwraps an ahead-of-time compiled CommonJS config loaded natively', () => {
+      writePackage(root, 'commonjs');
+      const file = path.join(root, 'tapsmith.config.js');
+      fs.writeFileSync(file, 'Object.defineProperty(exports, "__esModule", { value: true });\nexports.default = { platform: "ios", retries: 2 };\n', 'utf-8');
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+
     // Loader failures bare Node raises and tsx does not, beyond the common
     // ones above: each must fall back rather than stop the CLI's parent.
     it('loads a TypeScript config with a directory import and an attribute-less JSON import', () => {

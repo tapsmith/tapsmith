@@ -9,6 +9,7 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ReporterConfig } from './reporter.js';
@@ -946,28 +947,28 @@ function firstStackFrameIsCompileStep(err: Error): boolean {
  * the hooks more tightly, but from tsx 4.23 it cannot load a CommonJS-compiled
  * config at all. Node cannot remove a `module.register` hook, so each
  * fallback load leaves one deactivated hook behind; fallback loads are rare
- * and few per process. Loads — native attempts included — are serialised
- * because the hooks are process-global: two overlapping loads would each
- * restore the other's half-registered state, and a native import would be
- * compiled by another load's hooks.
+ * and few per process. Fallback loads are serialised because the hooks are
+ * process-global: two overlapping ones would each restore the other's
+ * half-registered state. A load started from inside one (a config calling
+ * `loadConfig`) runs within it rather than queueing behind it.
  *
  * Validation errors raised after the import (by `applyConfigDefaults`) already
  * say what is wrong and propagate as they are, and so does a failure to load
  * tsx itself, which is not the config's fault.
  */
-function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
-  // The native attempt queues too: while another load's tsx hooks are
-  // registered, a native import would be compiled by them and come back
-  // without the unwrap the fallback applies.
-  const result = configImportQueue.then(() => importConfigModuleNow(configPath));
-  configImportQueue = result.catch(() => undefined);
-  return result;
-}
+/**
+ * Set while a tsx fallback load runs: a config that calls `loadConfig` itself
+ * (one config extending another) must not queue behind its own load.
+ */
+const insideFallbackLoad = new AsyncLocalStorage<true>();
 
-async function importConfigModuleNow(configPath: string): Promise<Record<string, unknown>> {
+async function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
   let nativeError: unknown;
   try {
-    return (await import(pathToFileURL(configPath).href)) as Record<string, unknown>;
+    // Not queued: a native import that runs while another load's tsx hooks
+    // are registered is compiled by them, and `unwrapCommonJsConfig` gives
+    // the same result either way.
+    return unwrapCommonJsConfig((await import(pathToFileURL(configPath).href)) as Record<string, unknown>);
   } catch (err) {
     // Every loader failure is retried: whether tsx can get past one (an
     // extensionless require of a `.ts` file, a tsconfig `paths` alias) cannot
@@ -977,7 +978,27 @@ async function importConfigModuleNow(configPath: string): Promise<Record<string,
     if (!isLoaderError(err)) throw configLoadError(configPath, err);
     nativeError = err;
   }
-  return importConfigModuleWithTsx(configPath, nativeError);
+  if (insideFallbackLoad.getStore()) return importConfigModuleWithTsx(configPath, nativeError);
+  const result = configImportQueue.then(() =>
+    insideFallbackLoad.run(true, () => importConfigModuleWithTsx(configPath, nativeError)));
+  configImportQueue = result.catch(() => undefined);
+  return result;
+}
+
+/**
+ * A config compiled to CommonJS — by tsx in a package without
+ * `"type": "module"`, or ahead of time (`exports.__esModule = true;
+ * exports.default = …`) — comes back with the whole `module.exports` as the
+ * namespace's `default`: the `__esModule`-marked object whose own `default`
+ * is the config. The tsx binary unwraps that itself; Node and tsx's
+ * in-process hooks do not.
+ */
+function unwrapCommonJsConfig(mod: Record<string, unknown>): Record<string, unknown> {
+  const exportsObject = mod.default as { __esModule?: unknown } | undefined;
+  if (exportsObject && typeof exportsObject === 'object' && exportsObject.__esModule === true) {
+    return exportsObject as Record<string, unknown>;
+  }
+  return mod;
 }
 
 function errorMessage(err: unknown): string {
@@ -1053,15 +1074,7 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
     // `require` calls.
     const url = `${pathToFileURL(configPath).href}?tapsmith-config=${Date.now()}`;
     const mod = (await import(url)) as Record<string, unknown>;
-    // A config compiled to CommonJS comes back with the whole `module.exports`
-    // — the `__esModule`-marked object whose own `default` is the config — as
-    // the namespace's `default`. The tsx binary unwraps that itself; the
-    // in-process hooks do not.
-    const exportsObject = mod.default as { __esModule?: unknown } | undefined;
-    if (exportsObject && typeof exportsObject === 'object' && exportsObject.__esModule === true) {
-      return exportsObject as Record<string, unknown>;
-    }
-    return mod;
+    return unwrapCommonJsConfig(mod);
   } catch (err) {
     throw configLoadError(configPath, err, nativeError);
   } finally {
