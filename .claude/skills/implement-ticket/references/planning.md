@@ -20,8 +20,8 @@
   across them — e.g. only `isVisible`/`isHidden` are non-waiting in Playwright;
   extending that to `isEnabled`/`isChecked` was wrong and got reverted.
 - **Reproduce a bug before fixing it.** The lowest tier that shows it: a unit test, a
-  scratch script against `dist/`, or a device run (check device availability with the
-  qa-this-branch skill's `scripts/device-availability.sh`). Record the repro in the state
+  scratch script against `dist/`, or a device run (check and lease a device first — SKILL.md
+  *Devices*). Record the repro in the state
   file. Cannot reproduce → investigate why (stale build, environment, already fixed)
   before writing code, and say so if it stays unreproduced.
 
@@ -78,7 +78,7 @@ happen, write down why and do not code for it.
 
 ## 3. The plan file
 
-`<scratchpad>/implement-ticket/<KEY>/plan.md`:
+`<state dir>/plan.md` (SKILL.md Phase 0):
 
 ```markdown
 # <KEY>: <ticket title>

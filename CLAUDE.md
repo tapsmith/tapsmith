@@ -15,7 +15,7 @@ npm-packages/             # Platform-specific npm packages (@tapsmith/core-{os}-
 docs/                     # User-facing documentation
 test-app/                 # React Native (Expo) test app for E2E testing
 e2e/                      # E2E test suite run against the test app
-.claude/skills/           # Claude Code project skills (implement-ticket, review-loop, qa-this-branch); .claude/ otherwise git-ignored
+.claude/skills/           # Claude Code project skills (implement-ticket(s), review-loop, qa-this-branch); .claude/ otherwise git-ignored
 ```
 
 Each component has independent dependencies and build lifecycle (not a JS monorepo).

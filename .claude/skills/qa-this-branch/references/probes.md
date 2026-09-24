@@ -217,6 +217,9 @@ A worktree is safer than `git stash` when a probe is mid-flight. Compare byte-id
 
 ## 10. Cleanup checklist
 
+First release every device lease you took (`scripts/device-lease.sh list` shows them;
+`release <target> <owner>` for each of yours). Never release another owner's lease.
+
 `"${CLAUDE_SKILL_DIR}/scripts/device-availability.sh"` lists the leftovers it found under "Leftovers" — that
 section is your cleanup list.
 

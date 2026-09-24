@@ -4,6 +4,9 @@
 # Exit 0 = FREE   (no active-use signal; claim a target without asking)
 # Exit 3 = BUSY   (a live session holds a device; ask the user before claiming it)
 #
+# Leases (device-lease.sh) are shown per target. FREE means no live session;
+# a target marked [LEASED] still belongs to its holder — lease one first.
+#
 # The whole point is separating live sessions from leftovers. This machine
 # normally carries dozens of orphaned processes and booted devices that are NOT
 # in use; treating those as "busy" makes the check useless.
@@ -94,17 +97,19 @@ orphan_workers=$(match 'ui-worker' | awk '$2 == 1')
 
 # ── Which targets exist, and which are held ─────────────────────────────────
 held_udids=$(printf '%s\n' "$ios_parented" | grep -oE 'id=[0-9A-Fa-f-]+' | cut -d= -f2)
-echo "── Targets ──"
+LEASE="$(dirname "$0")/device-lease.sh"
+leased() { local h; h=$("$LEASE" holder "$1" 2>/dev/null) && printf '  [LEASED by %s — not yours unless you are %s]' "$h" "$h"; }
+echo "── Targets ── (a [LEASED] target belongs to another worker: never claim it)"
 xcrun simctl list devices booted 2>/dev/null | grep -E '\(Booted\)' | sed 's/^ *//' | while read -r line; do
   udid=$(printf '%s' "$line" | grep -oE '[0-9A-F]{8}-[0-9A-F-]+')
   if [ -n "$udid" ] && printf '%s\n' "$held_udids" | grep -qF "$udid"; then
-    echo "  iOS sim   $line  [agent runner attached]"
+    echo "  iOS sim   $line  [agent runner attached]$(leased "$udid")"
   else
-    echo "  iOS sim   $line  [no agent attached]"
+    echo "  iOS sim   $line  [no agent attached]$(leased "$udid")"
   fi
 done
 [ -x "$ADB" ] && "$ADB" devices 2>/dev/null | tail -n +2 | grep -E 'device$|emulator' |
-  while read -r serial state; do echo "  Android   $serial ($state)"; done
+  while read -r serial state; do echo "  Android   $serial ($state)$(leased "$serial")"; done
 
 echo
 if [ ${#NOISE[@]} -gt 0 ]; then

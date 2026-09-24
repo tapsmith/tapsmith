@@ -38,6 +38,9 @@ plan (constraints, hints, "don't touch X").
 | `jira` | also move the ticket (In Progress at start, In Review at the end) and comment the PR link on it | no Jira writes |
 | `leave-draft` | stop at the gate with the PR still a draft | mark it ready for review |
 | `max-qa=<n>` | cap on QA → fix cycles before escalating | `3` |
+| `worker` | run as one of several parallel workers under `/implement-tickets` — see *Worker mode* | off |
+| `worktree=<path>` | do all work in this existing worktree (the coordinator created it) | Phase 0 decides |
+| `plan-review` | (worker mode) stop after Phase 2 and return the plan for approval | off |
 
 ## What you may and may not do
 
@@ -56,6 +59,44 @@ else:
   proposals.
 - Keep secrets, personal paths and machine-specific details out of commits and the PR —
   the repo is public.
+
+## Devices
+
+Devices are shared — with other workers, other sessions and the user. Before any
+device-holding work (a device-tier test, a local e2e file, anything QA does for you),
+check and **lease** a target with the qa-this-branch skill's scripts:
+
+```bash
+"${CLAUDE_SKILL_DIR}/../qa-this-branch/scripts/device-availability.sh"        # pick a target not marked [LEASED]
+"${CLAUDE_SKILL_DIR}/../qa-this-branch/scripts/device-lease.sh" acquire <udid-or-serial> <KEY>
+```
+
+Hold the lease only while you need the device; release it when that work is done
+(`… release <target> <KEY>`), and always before you finish or block. If none is free,
+run `acquire … --wait 60` with `run_in_background` and do device-free work meanwhile — you
+are re-invoked when it exits (0 = leased, 4 = still busy: carry on device-free, try later).
+
+## Worker mode
+
+With `worker`, you are one of several `implement-ticket` runs coordinated by
+`/implement-tickets`. Everything above still applies, with these changes:
+
+- **Stay in your worktree.** Run every git and build command there, with absolute paths
+  or `git -C <worktree>` — a subagent's shell can reset its working directory between
+  calls, and a command that silently runs in the main checkout lands on the wrong branch. Never touch the main checkout, another worker's worktree, branch or PR.
+- **Never ask the user directly.** Any stop-and-ask case (below) becomes a return: write
+  the state file (`Phase: blocked`), release your device leases, and end with the
+  `blocked` result lines and a `QUESTION:` block (Final report). The coordinator batches
+  questions and sends you the answer as a message; resume from the state file when it
+  arrives.
+- **No plan checkpoint**, unless `plan-review`: then stop after Phase 2 and return
+  `IMPLEMENT_TICKET: planned` with the plan path; the coordinator replies "go" (with any
+  corrections) and you continue from Phase 3.
+- **Shared machine.** Builds, devices and CI runners are shared with the other workers:
+  lease devices, and keep the push-batching rule strictly — every push costs CI time that
+  other workers' PRs are queued behind.
+- **Main moves under you.** If the coordinator tells you another PR merged, fetch, merge
+  `origin/<base>` into your branch, and re-run the gate (Phase 7).
 
 ## When to stop and ask a human
 
@@ -80,7 +121,7 @@ leave the branch pushed and the PR in a coherent state.
 
 ## Phase 0 — Set up or resume
 
-1. **Resume check first.** Look for `<scratchpad>/implement-ticket/<KEY>/state.md`, then a
+1. **Resume check first.** Look for `<state dir>/state.md` (below), then a
    local or remote branch whose name carries the key (`git branch -a | grep -i <key>`),
    then an open PR (`gh pr list --search <KEY> --state open`). If any exists, follow
    `references/state.md` to resume from the recorded phase — never start over on top of
@@ -89,9 +130,13 @@ leave the branch pushed and the PR in a coherent state.
    the main checkout, create a worktree
    (`git worktree add .claude/worktrees/<branch> origin/<base>`) instead of touching it.
    `git fetch origin`, then branch from `origin/<base>` using the naming in
-   `references/pr-and-ci.md`.
-3. **Write the state file** (`references/state.md`) and keep it current at every phase
-   transition and decision.
+   `references/pr-and-ci.md`. With `worktree=`, the coordinator has already made a
+   worktree (detached at `origin/<base>`): create your branch inside it
+   (`git -C <worktree> switch -c <branch>`) and do not make another.
+3. **Write the state file** in the **state dir**, `<worktree root>/.claude/state/implement-ticket/<KEY>/`
+   (git-ignored, and unlike the session scratchpad it survives the session — so a new
+   session, or a restarted coordinator, can resume). Format in `references/state.md`;
+   keep it current at every phase transition and decision.
 4. With `jira`: move the ticket to In Progress.
 
 ## Phase 1 — Understand
@@ -104,7 +149,7 @@ reproduce is not ready to fix; say so.
 
 ## Phase 2 — Plan (edge cases before code)
 
-Write the plan file (`<scratchpad>/implement-ticket/<KEY>/plan.md`, format in
+Write the plan file (`<state dir>/plan.md`, format in
 `references/planning.md` §3):
 
 - **acceptance criteria** — stated, inferred and standing, as `/qa-this-branch` defines
@@ -166,9 +211,10 @@ When the plan's slices are all built and the package checks are green:
 
 ## Phase 5 — QA
 
-Invoke `/qa-this-branch` with `autonomous ticket=<KEY> #<pr>` plus the plan's QA items as
-focus text (focus adds emphasis; it never shrinks QA's matrix). On later cycles, add
-`leads=<previous report path>`. Parse the last two lines of its reply (`QA_VERDICT:` /
+Invoke `/qa-this-branch` with `autonomous ticket=<KEY> #<pr> report=<state dir>/qa-<unix-ts>.md`
+plus the plan's QA items as focus text (focus adds emphasis; it never shrinks QA's
+matrix). If you hold device leases, pass them as `devices=<ids>` so QA uses yours rather
+than competing with you. On later cycles, add `leads=<previous report path>`. Parse the last two lines of its reply (`QA_VERDICT:` /
 `QA_REPORT:`) and act:
 
 | Verdict | Do |
@@ -241,8 +287,18 @@ descoped, pre-existing bugs and proposed follow-up tickets, and anything a human
 decide before merging. End with:
 
 ```
-IMPLEMENT_TICKET: <ready-to-merge|blocked|stopped-by-user>
+IMPLEMENT_TICKET: <ready-to-merge|blocked|planned|stopped-by-user>
 PR: <url or none>
+STATE: <absolute path to state.md>
+```
+
+When `blocked`, follow with the question, written so it can be answered without reading
+anything else:
+
+```
+QUESTION: <the decision needed, one paragraph, with the context that makes it answerable>
+OPTIONS: <a) … (recommended) | b) … | c) …>
+DEFAULT: <what you will do if told "use your default">
 ```
 
 Save durable lessons (a new environment trap, a CI flake signature, a design rule a

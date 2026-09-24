@@ -3,15 +3,18 @@
 This workflow runs for hours and will outlive the context window. The state file is how
 it survives a summary, a new session, or a second `/implement-ticket <KEY>` invocation.
 
-Path: `<scratchpad>/implement-ticket/<KEY>/state.md`, beside `plan.md`, `pr-body.md` and
-the QA reports. Write it at every phase transition, after every decision, and after every
+Path: `<worktree root>/.claude/state/implement-ticket/<KEY>/state.md` — the **state dir**,
+beside `plan.md`, `pr-body.md` and the QA reports. `.claude/*` is git-ignored (only
+`.claude/skills/` is tracked), so nothing here is ever committed, and unlike the session
+scratchpad it survives the session. Removing the worktree removes it; that is fine once
+the PR has merged. Write it at every phase transition, after every decision, and after every
 push — never only at the end.
 
 ```markdown
 # implement-ticket state — <KEY>
 
 - Ticket: <KEY> — <title>
-- Mode: interactive | autonomous · flags: jira? leave-draft? max-qa=<n>
+- Mode: interactive | autonomous | worker · flags: jira? leave-draft? plan-review? max-qa=<n>
 - Base: <base> · Branch: <branch> · Worktree: <path or "main checkout">
 - PR: <url or none> · draft? yes/no
 - Phase: 0-setup | 1-understand | 2-plan | 3-build | 4-review | 5-qa | 6-ci-threads | 7-gate | done | blocked
@@ -26,6 +29,7 @@ push — never only at the end.
 - QA cycles: <n>/<max> · last verdict <…> at <sha> · report <path>
 - CI: last head run <run id> <state> · reruns: <job: count, reason>
 - Review threads: <open count> · last checked <time>
+- Device leases held: <targets, or none>
 
 ## Decisions and assumptions
 - <time> <decision> — why
@@ -44,8 +48,8 @@ push — never only at the end.
 
 On invocation, or after noticing the conversation was summarised:
 
-1. Read `state.md` and `plan.md`. If there is no state file (a new session, a different
-   scratchpad) but a branch or PR for the key exists, **rebuild the state** from the
+1. Read `state.md` and `plan.md`. If there is no state file (the worktree was removed, or
+   the work was started by hand) but a branch or PR for the key exists, **rebuild the state** from the
    evidence: `git log origin/<base>..<branch>`, the PR body and checks, the review
    threads, and any `QA_REPORT` or review-loop ledger paths mentioned in the PR or
    commits. Write the reconstructed state file before doing anything else.

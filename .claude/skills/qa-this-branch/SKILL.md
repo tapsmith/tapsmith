@@ -57,6 +57,7 @@ worktree and a repo-relative path breaks there.
 | `budget=<minutes>` | wall-clock cap for Phases 3–4 | `90` |
 | `leads=<path>` | a previous QA report whose findings become must-test rows | none |
 | `report=<path>` | where to write the report | `<scratchpad>/qa-this-branch/report-<unix-ts>.md` |
+| `devices=<id,…>` | device targets (UDIDs / serials) the caller has **already leased for you** — use only these, and do not lease or release them | lease your own (ground rules) |
 | `autonomous` / `interactive` | see below | `interactive` if a person typed `/qa-this-branch`; `autonomous` if another skill or agent invoked you |
 
 **Interactive** — show the plan (intent + matrix) and wait for the go-ahead before Phase 4;
@@ -87,10 +88,19 @@ coverage**, and a lead marked fixed is still a must-test row: prove the fix.
   "${CLAUDE_SKILL_DIR}/scripts/device-availability.sh"   # exit 0 = FREE, 3 = BUSY
   ```
 
-  FREE → claim a listed target, no permission needed. BUSY → use a target it lists as
-  unheld; only when every target is held, stop and ask (interactive) or mark the device
-  cells UNTESTED `device busy: <what holds it>` (autonomous). Re-run it before each new
-  device-holding launch. Booted simulators, running emulators, idle MCP servers and PPID-1
+  FREE → pick a listed target that is not `[LEASED]`, and **lease it before using it**:
+
+  ```bash
+  "${CLAUDE_SKILL_DIR}/scripts/device-lease.sh" acquire <udid-or-serial> "qa:<branch>"
+  ```
+
+  Exit 1 means another worker just took it — pick another. Release every lease you took
+  in cleanup (`… release <target> "qa:<branch>"`). Parallel workers (implement-tickets)
+  rely on leases; the availability check alone has a race between check and claim. With
+  `devices=`, the caller already holds the leases: use only those targets.
+  BUSY → use a target it lists as unheld and unleased; only when every target is taken,
+  stop and ask (interactive) or mark the device cells UNTESTED `device busy: <what holds
+  it>` (autonomous). Re-run it before each new device-holding launch. Booted simulators, running emulators, idle MCP servers and PPID-1
   orphans are **not** active use — the script already separates them. A collision symptom
   after claiming ("hierarchy contains no elements after relaunch", "Failed to connect to
   agent socket" that never recovers) means you took something: back off and report it.

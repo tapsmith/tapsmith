@@ -53,7 +53,7 @@ Open it as a **draft** once the change is complete and reviewed:
 
 ```bash
 gh pr create --draft --base <base> --label <bug|enhancement|documentation|chore> \
-  --title "<Imperative summary> (PILOT-123)" --body-file <scratchpad>/implement-ticket/<KEY>/pr-body.md
+  --title "<Imperative summary> (PILOT-123)" --body-file <state dir>/pr-body.md
 ```
 
 Labels drive the release notes (`.github/release.yml`): `bug` for fixes, `enhancement`

@@ -37,8 +37,8 @@ Push logic **down** where you can: extract the decision into a pure function the
 tier can reach, and leave only the wiring for e2e. That is also how the agents got their
 host-side unit tests.
 
-**Device-tier red/green.** Check availability with the qa-this-branch skill's
-`scripts/device-availability.sh` first. Build what the test needs fresh (SDK `dist/`,
+**Device-tier red/green.** Check and lease a device first (SKILL.md *Devices*), and
+release it when the slice is green. Build what the test needs fresh (SDK `dist/`,
 daemon, agent, test-app — stale builds are the commonest false red; see qa-this-branch
 `references/probes.md` §0). Then one file:
 `cd e2e && node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.<android|ios>.mjs`.
