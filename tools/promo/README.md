@@ -92,8 +92,10 @@ node record.mjs            # choreographed click-through -> rec-frames/
 
 `demo-trace.zip` is a real failing gestures-test trace with the personal
 filesystem path rewritten to `/Users/dev/acme-mobile`. To use a different
-trace, scrub it the same way before recording (`trace.json`, `metadata.json`,
-`sources.json` all contain absolute paths).
+trace, scrub it the same way before recording. It is a format-v1 trace, whose
+`trace.json`, `metadata.json` and `sources.json` all contain absolute paths.
+Format-v2 traces record those paths relative to the project root, but error
+messages and stacks can still name absolute paths.
 
 **UI mode** (boots/claims a simulator — coordinate with whoever is using it):
 

@@ -9,7 +9,7 @@ test.describe("Loading a trace", () => {
     await viewer.open({
       metadata: {
         testName: "Gestures screen > double tap registers double tap gesture",
-        testFile: "/repo/e2e/tests/gestures.test.ts",
+        testFile: "e2e/tests/gestures.test.ts",
         testDuration: 1200,
       },
       events: [actionEvent({ actionIndex: 0, action: "tap" })],
@@ -91,6 +91,50 @@ test.describe("Loading a trace", () => {
 
     await expect(page.getByTestId("load-error")).toBeVisible()
     await expect(page.getByTestId("load-error-detail")).toContainText("metadata.json")
+  })
+
+  test("refuses an archive from a newer format, naming the version and the fix", async ({ viewer, page, filmstrip }) => {
+    // A newer format may have moved or re-meant any field; rendering it anyway
+    // would show a plausible-looking but wrong trace.
+    await viewer.open({
+      metadata: { version: 999, tapsmithVersion: "42.0.0" },
+      events: [actionEvent({ actionIndex: 0, action: "tap" })],
+    })
+
+    await expect(page.getByTestId("load-error")).toBeVisible()
+    const detail = page.getByTestId("load-error-detail")
+    await expect(detail).toContainText("format version 999")
+    await expect(detail).toContainText("Tapsmith 42.0.0")
+    await expect(detail).toContainText(/upgrade/i)
+    await expect(filmstrip.frames).toHaveCount(0)
+  })
+
+  test("refuses metadata with no format version", async ({ viewer, page }) => {
+    await viewer.open({
+      // The builder always writes a version; strip it the way a foreign zip
+      // that happens to carry a metadata.json would look.
+      metadata: { version: undefined as unknown as number },
+      events: [],
+    })
+
+    await expect(page.getByTestId("load-error")).toBeVisible()
+    await expect(page.getByTestId("load-error-detail")).toContainText("Not a Tapsmith trace")
+  })
+
+  test("still opens a format v1 archive, whose paths are absolute", async ({ viewer, actions, detailTabs, filmstrip }) => {
+    // Traces recorded before format v2 live on in CI artifacts; the hosted
+    // viewer must keep reading them after the v2 path change.
+    const file = "/home/runner/work/app/e2e/tests/gestures.test.ts"
+    await viewer.open({
+      metadata: { version: 1, testFile: file },
+      events: [actionEvent({ actionIndex: 0, action: "tap", sourceLocation: { file, line: 2 } })],
+      sources: { [file]: "line one\nline two\n" },
+    })
+
+    await expect(filmstrip.summary).toContainText("gestures.test.ts")
+    await actions.items.first().click()
+    await detailTabs.select("Source")
+    await expect(detailTabs.highlightedSourceLine).toHaveAttribute("data-line", "2")
   })
 
   test("loads an archive with no events at all", async ({ viewer, actions, filmstrip }) => {

@@ -80,6 +80,7 @@ export default defineConfig({
             { label: 'Configuration', slug: 'reference/configuration' },
             { label: 'Environment Variables', slug: 'reference/environment-variables' },
             { label: 'Telemetry', slug: 'reference/telemetry' },
+            { label: 'Trace Archive Format', slug: 'reference/trace-format' },
           ],
         },
         { label: 'Changelog', slug: 'changelog' },

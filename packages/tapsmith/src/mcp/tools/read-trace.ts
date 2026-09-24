@@ -3,6 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { unzipSync } from 'fflate';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { traceFormatProblem } from '../../trace/trace-format.js';
 
 export function registerReadTraceTool(server: McpServer): void {
   server.tool(
@@ -44,9 +45,21 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
 
   const decode = (data: Uint8Array) => new TextDecoder().decode(data);
 
-  // Read metadata
-  if (files['metadata.json']) {
-    const meta = JSON.parse(decode(files['metadata.json']));
+  // Read metadata. The version gate comes first: a newer format may have
+  // moved or re-meant any field below, and a misread is worse than a refusal.
+  const meta = (files['metadata.json'] ? JSON.parse(decode(files['metadata.json'])) : undefined) as
+    | {
+      devices?: unknown
+      device?: { name?: string; serial?: string; model?: string; platform?: string }
+      version?: number
+      testFile?: string
+      testDuration?: number
+      duration?: number
+    }
+    | undefined;
+  const problem = traceFormatProblem(meta);
+  if (problem) throw new Error(problem);
+  if (meta) {
     lines.push(`## Trace Metadata`);
     // Multi-device traces list every device by its group name — the same
     // name each step below carries — so the steps read as a conversation.
@@ -56,7 +69,13 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
       const who = devices.length > 1 && d.name ? ` ${d.name}` : '';
       lines.push(`Device${who}: ${d.model ?? d.serial ?? 'unknown'} (${d.platform ?? 'unknown'})`);
     }
-    if (meta.testFile) lines.push(`Test: ${meta.testFile}`);
+    if (meta.testFile) {
+      // From format v2 the path is relative to the project's rootDir, which the
+      // archive does not record — say so, or an agent resolves it against its
+      // own working directory and opens the wrong file.
+      const relative = (meta.version ?? 1) >= 2 ? " (relative to the project's rootDir)" : '';
+      lines.push(`Test: ${meta.testFile}${relative}`);
+    }
     // `testDuration` is the archive's field; `duration` was what this read
     // before (never present, so the line never printed).
     const duration = meta.testDuration ?? meta.duration;

@@ -506,6 +506,8 @@ jobs:
           # Check critical files are present
           test -f dist/cli.js || (echo "Missing dist/cli.js" && exit 1)
           test -f dist/proto/tapsmith.proto || (echo "Missing dist/proto/tapsmith.proto" && exit 1)
+          # Public export `tapsmith/trace-format.schema.json` (docs/trace-format.md)
+          test -f dist/schema/trace-format.schema.json || (echo "Missing dist/schema/trace-format.schema.json" && exit 1)
 
       - name: Check if tapsmith version already exists
         id: tapsmith_exists

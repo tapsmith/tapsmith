@@ -42,6 +42,18 @@ export class Tracing {
   private _collector: TraceCollector | null = null;
   private _startTime = 0;
   private _title?: string;
+  /**
+   * @internal — Project root the archive's paths are made relative to. Set by
+   * the runner from `config.rootDir`; outside the runner (a standalone
+   * script) the working directory stands in for it.
+   */
+  _rootDir?: string;
+  /**
+   * @internal — Test file the runner is executing, recorded as the archive's
+   * `testFile`. It also seeds the path mapper, so a symlinked test directory
+   * is spelled the way the runner's own trace spells it.
+   */
+  _testFile?: string;
   private _getScreenshot: () => Promise<Buffer | undefined>;
   private _getHierarchy: () => Promise<string | undefined>;
 
@@ -109,7 +121,10 @@ export class Tracing {
     const version = await getVersion();
 
     const packageOptions: PackageOptions = {
-      testFile: '',
+      testFile: this._testFile ?? '',
+      // Snapshot the named test file even when no frame reached it, as the
+      // runner's own traces do (packageTrace only reads it with sources on).
+      ...(this._testFile ? { sourceFiles: [this._testFile] } : {}),
       testName: this._title ?? 'manual-trace',
       testStatus: 'passed',
       testDuration: Date.now() - this._startTime,
@@ -121,6 +136,7 @@ export class Tracing {
       },
       tapsmithVersion: version,
       outputDir,
+      rootDir: this._rootDir ?? process.cwd(),
     };
 
     const zipPath = packageTrace(collector, packageOptions);

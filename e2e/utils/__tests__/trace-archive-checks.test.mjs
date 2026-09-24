@@ -71,6 +71,9 @@ function crc32(buf) {
 }
 
 const T0 = 1_700_000_000_000
+/** rootDir-relative, as a format v2 archive records every local path. */
+const TEST_FILE = "tests/api-calls.test.ts"
+const SCREEN_FILE = "screens/api-calls.screen.ts"
 
 /** How both agents escape an attribute value before it reaches the dump. */
 function escapeXmlAttr(s) {
@@ -97,9 +100,9 @@ function hierarchy(...labels) {
 function buildArchive(mutate = () => {}) {
   const parts = {
     metadata: {
-      version: 1,
-      tapsmithVersion: "0.4.1",
-      testFile: "tests/api-calls.test.ts",
+      version: 2,
+      tapsmithVersion: "0.5.0",
+      testFile: TEST_FILE,
       testName: "API Calls screen > fetches and displays user",
       testStatus: "passed",
       testDuration: 4200,
@@ -132,7 +135,10 @@ function buildArchive(mutate = () => {}) {
         duration: 900,
         success: true,
         hasScreenshotBefore: true,
+        hasScreenshotAfter: false,
         hasHierarchyBefore: true,
+        hasHierarchyAfter: false,
+        stack: [{ file: TEST_FILE, line: 6, column: 5 }],
       },
       {
         type: "assertion",
@@ -142,8 +148,12 @@ function buildArchive(mutate = () => {}) {
         selector: JSON.stringify({ text: "API Calls" }),
         duration: 120,
         passed: true,
+        soft: false,
+        negated: false,
+        attempts: 1,
         hasScreenshotBefore: true,
         hasHierarchyBefore: true,
+        stack: [{ file: SCREEN_FILE, line: 3 }, { file: TEST_FILE, line: 7 }],
       },
       {
         type: "action",
@@ -156,9 +166,16 @@ function buildArchive(mutate = () => {}) {
         duration: 210,
         success: true,
         hasScreenshotBefore: true,
+        hasScreenshotAfter: false,
         hasHierarchyBefore: true,
+        hasHierarchyAfter: false,
+        stack: [{ file: TEST_FILE, line: 8 }],
       },
     ],
+    sources: {
+      [TEST_FILE]: "// api-calls test source\n",
+      [SCREEN_FILE]: "// screen object source\n",
+    },
     screenshots: {
       // Distinct frames: the screen changes as the test navigates and taps.
       "screenshots/action-000-before.png": screenPng([10, 10, 10]),
@@ -205,6 +222,7 @@ function buildArchive(mutate = () => {}) {
     ...parts.hierarchies,
     ...parts.bodies,
   }
+  if (parts.sources) files["sources.json"] = encode(JSON.stringify(parts.sources))
   if (parts.network.length > 0) {
     files["network.json"] = encode(parts.network.map((e) => JSON.stringify(e)).join("\n") + "\n")
   }
@@ -244,6 +262,7 @@ test("a well-formed real-device archive passes every check", () => {
     assert.ok(notes.some((n) => /1 cross-checked/.test(n)), notes.join("\n"))
     assert.ok(notes.some((n) => /1 element boxes checked/.test(n)), notes.join("\n"))
     assert.ok(notes.some((n) => /4 screenshots at 1080x2400, 4 distinct/.test(n)), notes.join("\n"))
+    assert.ok(notes.some((n) => /format v2: schema-valid, 4 stack frames resolved/.test(n)), notes.join("\n"))
   } finally {
     fs.rmSync(path.dirname(zipPath), { recursive: true, force: true })
   }
@@ -267,6 +286,57 @@ test("catches an unresolved device identity", () => {
 test("catches a failed or empty test being passed off as verified", () => {
   assertFails((p) => { p.metadata.testStatus = "failed" }, /testStatus should be "passed"/)
   assertFails((p) => { p.metadata.actionCount = 0 }, /actionCount should be > 0/)
+})
+
+// ─── format contract (PILOT-331) ───
+
+test("catches an archive in a format version other than the one the schema describes", () => {
+  assertFails((p) => { p.metadata.version = 1 }, /metadata\.version should be 2, got 1/)
+  assertFails((p) => { p.metadata.version = 3 }, /metadata\.version should be 2, got 3/)
+})
+
+test("reports each schema violation with the path that broke it", () => {
+  assertFails(
+    (p) => { p.metadata.testFile = "/home/runner/work/tapsmith/e2e/tests/api-calls.test.ts" },
+    /schema: \/metadata\/testFile /,
+  )
+  assertFails((p) => { delete p.events[0].hasScreenshotAfter }, /schema: \/events\/0 .*hasScreenshotAfter/)
+  assertFails((p) => { delete p.network[0].url }, /schema: \/network\/0 .*'url'/)
+  assertFails((p) => { p.events[1].stack[0].file = "C:/work/screens/api-calls.screen.ts" }, /schema: \/events\/1\/stack\/0\/file /)
+})
+
+test("does not claim the archive is schema-valid when it is not", () => {
+  // The note is what a triager reads next to the failures in a CI log.
+  const zipPath = buildArchive((p) => { delete p.network[0].url })
+  try {
+    const { failures, notes } = checkArchive(readArchive(zipPath), { expectedHost: EXPECTED_HOST })
+    assert.ok(failures.some((f) => /^schema: /.test(f)), failures.join("\n"))
+    assert.ok(!notes.some((n) => /schema-valid/.test(n)), notes.join("\n"))
+    assert.ok(notes.some((n) => /schema violations/.test(n)), notes.join("\n"))
+  } finally {
+    fs.rmSync(path.dirname(zipPath), { recursive: true, force: true })
+  }
+})
+
+test("catches a member that would escape the archive root when extracted", () => {
+  assertFails((p) => { p.bodies["network/../../escape.bin"] = encode("x") }, /schema: \/members\/\d+ /)
+})
+
+test("catches a stack frame whose file sources.json does not hold", () => {
+  assertFails(
+    (p) => { delete p.sources[SCREEN_FILE] },
+    /step 1 has a stack frame in screens\/api-calls\.screen\.ts, which sources\.json does not hold/,
+  )
+})
+
+test("catches a test file sources.json does not hold", () => {
+  assertFails((p) => { delete p.sources[TEST_FILE] }, /metadata\.testFile \(tests\/api-calls\.test\.ts\) is not in sources\.json/)
+})
+
+test("catches a trace whose steps recorded no call stacks at all", () => {
+  // The frame/sources cross-check is claim-driven, so without this it would
+  // pass vacuously if stack capture stopped working.
+  assertFails((p) => { for (const e of p.events) delete e.stack }, /no step recorded a call stack/)
 })
 
 // ─── event stream ───
@@ -298,7 +368,9 @@ function appendHookStep(p) {
     duration: 300,
     success: true,
     hasScreenshotBefore: true,
+    hasScreenshotAfter: false,
     hasHierarchyBefore: true,
+    hasHierarchyAfter: false,
   })
   p.metadata.actionCount = 5
   p.screenshots["screenshots/action-004-before.png"] = screenPng([60, 60, 60])

@@ -8,7 +8,7 @@
 import { test, expect } from "../fixtures.js"
 import { actionEvent, assertionEvent } from "../trace-builder.js"
 
-const FILE = "/repo/e2e/tests/gestures.test.ts"
+const FILE = "e2e/tests/gestures.test.ts"
 
 // Numbered for reference: the line each event points at is the one asserted.
 //  1 import { describe, expect, test } from "../fixtures.js"
@@ -30,7 +30,7 @@ const SOURCE = [
   "})",
 ].join("\n")
 
-const HELPER = "/repo/e2e/screens/gestures.screen.ts"
+const HELPER = "e2e/screens/gestures.screen.ts"
 const HELPER_SOURCE = [
   'import { Device } from "tapsmith"',
   "",

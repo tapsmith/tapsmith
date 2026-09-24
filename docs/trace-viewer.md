@@ -172,16 +172,16 @@ Traces are stored as `.zip` files containing:
 
 ```
 trace.zip/
-  metadata.json      # Device, test, version info
+  metadata.json      # Format version, device and test info
   trace.json         # NDJSON event log
   screenshots/       # PNGs (action-003-before.png, action-003-after.png)
   hierarchy/         # View hierarchy XML snapshots
-  sources.json       # Source files referenced by step call stacks, keyed by absolute path
+  sources.json       # Source files referenced by step call stacks, keyed by project-relative path
   network.json       # NDJSON network request log (when network capture is enabled)
-  network/           # Large request/response body files
+  network/           # Request/response body files
 ```
 
-The format uses `version: 1` for forward compatibility.
+`metadata.json` carries a format `version`. The viewer refuses a trace recorded in a newer format than it knows, and asks you to upgrade Tapsmith. It still opens traces recorded in older formats. See [Trace Archive Format](trace-format.md) for the full contract and its JSON Schema, which you'll need if you're building tooling that reads traces.
 
 ## CI Integration
 

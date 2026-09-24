@@ -7,7 +7,7 @@
 //   trace.json       NDJSON of trace events
 //   screenshots/*.png
 //   hierarchy/*.xml
-//   sources.json     { [absolutePath]: fileContents }
+//   sources.json     { [rootDir-relative path]: fileContents }  (absolute in format v1)
 //   network.json     NDJSON of NetworkEntry
 //   network/*        request/response bodies, referenced by path from an entry
 //
@@ -32,7 +32,7 @@ export interface TraceSpec {
   screenshots?: Record<string, Uint8Array>
   /** Keyed by archive path, e.g. `hierarchy/action-000-before.xml`. */
   hierarchies?: Record<string, string>
-  /** Keyed by absolute source path. */
+  /** Keyed by the same path the events' stack frames carry (rootDir-relative since format v2). */
   sources?: Record<string, string>
   network?: NetworkEntry[]
   /** Keyed by archive path, e.g. `network/res-0.bin`. Accepts bytes so binary
@@ -48,9 +48,9 @@ const BASE_TIME = 1_700_000_000_000
 
 export function defaultMetadata(): TraceMetadata {
   return {
-    version: 1,
-    tapsmithVersion: "0.4.1",
-    testFile: "/repo/e2e/tests/gestures.test.ts",
+    version: 2,
+    tapsmithVersion: "0.5.0",
+    testFile: "e2e/tests/gestures.test.ts",
     testName: "Gestures screen > double tap registers double tap gesture",
     testStatus: "passed",
     testDuration: 1200,
