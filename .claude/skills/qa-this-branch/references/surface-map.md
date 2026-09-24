@@ -21,7 +21,8 @@ change is not QA'd on one platform.
 | **CI only** | `.github/workflows/**` | which jobs now run or no longer run, and when | read the diff; confirm on the PR's own run that the job ran/skipped as intended |
 | **Test only** | `e2e/**`, `web-tests/**`, `src/__tests__/**` | does the test fail without the fix? does it run in CI? | revert the fix → watch it go red; grep the CI shard log for it |
 | **Test app** | `test-app/**` | every e2e test that visits the changed screen | rebuild + reinstall; stale-build check (probes.md §0) |
-| **No QA surface** | `.claude/**` (git-ignored), `CLAUDE.md`, comments only | none | say so; verdict follows from the rest of the branch |
+| **Agent skills** | `.claude/skills/**` (tracked) | skill text: each changed instruction; scripts: each behaviour | read the text for contradictions and stale facts (commands, paths, CI facts) and try any changed command; run each changed script's cases, including concurrent ones for `device-lease.sh` |
+| **No QA surface** | `CLAUDE.md`, comments only, and the rest of `.claude/` (git-ignored: `settings.local.json`, `worktrees/`, `state/`) | none | say so; verdict follows from the rest of the branch |
 
 If a changed path is not in the tables below, find its importers
 (`grep -rn "from '.*<basename>" packages/tapsmith/src`) and map those instead.

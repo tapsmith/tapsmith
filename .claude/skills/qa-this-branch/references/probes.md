@@ -42,9 +42,9 @@ like product bugs. Check each one the triage says you need:
 | iOS agent | `strings` on the *running* runner's xctest binary for a new symbol (`pgrep -f TapsmithAgentUITests-Runner`) | the CLAUDE.md `xcodebuild build-for-testing` recipe. The resolver prefers the `~/.tapsmith/ios-simulator-agent` cache over fresh builds, and a runner is not reinstalled unless you `xcrun simctl uninstall <udid> dev.tapsmith.agent.xctrunner`; pin a fresh build with a scratch config setting `iosXctestrun` |
 | Test app | `stat` the APK / `.app` vs `git log -1 --format=%ad -- test-app/app/` | rebuild (with `EXPO_PUBLIC_TAPSMITH_HOOKS=1` for the hooks build). A test app older than the newest `test-app/` commit makes brand-new e2e tests fail against old screens |
 
-**Worktree specifics.** `.claude/` is git-ignored, so skill scripts live only in the main
-checkout (use `${CLAUDE_SKILL_DIR}`); `e2e/` has no `node_modules/.bin`, so use `node
-../packages/tapsmith/dist/cli.js` from `e2e/`; `npm ci` is needed in `packages/tapsmith`
+**Worktree specifics.** Use the scripts via `${CLAUDE_SKILL_DIR}` (the skill copy this
+session loaded), not the worktree's own `.claude/skills/`, which may be older or absent;
+invoke the CLI by path (`node ../packages/tapsmith/dist/cli.js` from `e2e/`), never npx; `npm ci` is needed in `packages/tapsmith`
 (and `web-tests/` if used) before the first build.
 
 ## 1. Read CI — do not re-run it
@@ -148,11 +148,11 @@ target that gives you that, and never run the whole suite "to check".
 ```bash
 cd e2e
 # an artifact to inspect (§8) — one file, trace forced on
-PATH="$SHIM:$PATH" npx tapsmith test tests/<file>.test.ts -c tapsmith.config.ios.mjs --trace on
+PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.ios.mjs --trace on
 # mode 2: parallel workers. CI passes --workers 1, so no job covers this at all
-PATH="$SHIM:$PATH" npx tapsmith test tests/<file>.test.ts -c tapsmith.config.android.mjs --workers 2
+PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.android.mjs --workers 2
 # mode 3: headless watch. No CI job starts a watch coordinator
-PATH="$SHIM:$PATH" npx tapsmith test tests/<file>.test.ts -c tapsmith.config.ios.mjs --watch
+PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.ios.mjs --watch
 ```
 
 Configs: `tapsmith.config.{mjs,ios.mjs,android.mjs,ios-device.mjs,ios-mixed.mjs}` and the
@@ -177,7 +177,7 @@ Check `"${CLAUDE_SKILL_DIR}/scripts/device-availability.sh"` first (the UI serve
 lifetime — the longest-held claim of any mode), then:
 
 ```bash
-cd e2e && PATH="$SHIM:$PATH" npx tapsmith test --ui -c tapsmith.config.ios.mjs --ui-port 7788
+cd e2e && PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test --ui -c tapsmith.config.ios.mjs --ui-port 7788
 ```
 
 Never pipe this through `head` (SIGPIPE kills it mid-boot). Then drive the page with

@@ -6,9 +6,9 @@ config key) has to be wired seven times. This is the list to walk for every inve
 item.
 
 All commands assume `cd packages/tapsmith && npm run build` has just run and node is
-arm64 (`references/probes.md` §0). They use `cd e2e && npx tapsmith …`, which is safe
-**only in the main checkout** — in a worktree `e2e/` has no `node_modules/.bin`, so use
-`node ../packages/tapsmith/dist/cli.js …` from `e2e/` instead. Before any launch that holds
+arm64 (`references/probes.md` §0). They invoke the branch's CLI by path from `e2e/`
+(`node ../packages/tapsmith/dist/cli.js …`) — never `npx tapsmith`, which silently runs a
+cached published build whenever the local bin is missing (SKILL.md ground rules). Before any launch that holds
 a device, run `"${CLAUDE_SKILL_DIR}/scripts/device-availability.sh"` (SKILL.md ground
 rules) — no mode needs the user's permission when it reports FREE.
 
@@ -17,7 +17,7 @@ rules) — no mode needs the user's permission when it reports FREE.
 ## 1. Headless sequential — `src/cli.ts`
 
 ```bash
-cd e2e && npx tapsmith test tests/home.test.ts -c tapsmith.config.ios.mjs
+cd e2e && node ../packages/tapsmith/dist/cli.js test tests/home.test.ts -c tapsmith.config.ios.mjs
 ```
 
 The only path device CI exercises — on both platforms, 5 shards each, on your PR — so
@@ -32,7 +32,7 @@ rejection path (bad value, mutually-exclusive combination — e.g. `--watch` wit
 ## 2. Headless parallel workers — `src/worker-runner.ts` + `src/dispatcher.ts`
 
 ```bash
-cd e2e && npx tapsmith test -c tapsmith.config.ios.mjs --workers 2
+cd e2e && node ../packages/tapsmith/dist/cli.js test -c tapsmith.config.ios.mjs --workers 2
 ```
 
 Only path with worker-protocol serialisation (`src/worker-protocol.ts`): anything that
@@ -49,7 +49,7 @@ socket-name collision; merged reporter/trace output.
 ## 3. Headless watch — `src/watch.ts`, `src/watch-run.ts`, `src/watch-queue.ts`
 
 ```bash
-cd e2e && npx tapsmith test -c tapsmith.config.ios.mjs --watch
+cd e2e && node ../packages/tapsmith/dist/cli.js test -c tapsmith.config.ios.mjs --watch
 # then change a file's *content* (append a comment line, restore it after) — `touch` does not trigger
 ```
 
@@ -88,7 +88,7 @@ re-register against `node <repo>/packages/tapsmith/dist/cli.js mcp-server`.
 ## 5. UI mode — `src/ui-mode/ui-server.ts` + `src/ui-mode/ui-worker.ts` + the SPA
 
 ```bash
-cd e2e && npx tapsmith test --ui -c tapsmith.config.ios.mjs --ui-port 7788
+cd e2e && node ../packages/tapsmith/dist/cli.js test --ui -c tapsmith.config.ios.mjs --ui-port 7788
 ```
 
 It holds the device for its whole lifetime — the longest claim of any mode — so run the

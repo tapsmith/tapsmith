@@ -45,15 +45,20 @@ against every earlier card by `where` and the substance of the claim:
   show up here — that is the loop working. If it earns a second `fix` verdict, that is the
   **oscillation** exit in SKILL.md: stop and put both cards in front of the user.
 - **Matches a `won't-fix` or `invalid` card, first repeat** — two independent reviewers
-  found it. Re-run the scenario and likelihood steps once, from scratch, without re-reading
-  the old card first; then compare. If the new likelihood is higher than before, the
-  verdict flips to `fix` and the card records the flip. If not, mark the card `final` with
-  the sharpened reason.
+  found it. Triage it again from scratch — verify, scenario, likelihood, impact and
+  verdict — without re-reading the old card first; then compare **verdicts**, not a
+  single field. An `invalid` card had no reproducible scenario, so a fresh card that
+  verifies as real is new evidence in its own right. If the fresh verdict is `fix` —
+  because the scenario now reproduces, or likelihood or impact rose (the diff may have
+  changed either) — the verdict flips and the card records the flip and why. If not,
+  mark the card `final` with the sharpened reason.
 - **Matches a `won't-fix` or `invalid` card already marked `final`** — carry the verdict
-  forward: a one-line card `R<n>-F<m> — repeats R<a>-F<b>, verdict stands`. Spend no more
+  forward, unless the diff has changed the code the card is about since it was marked
+  final (then treat it as a first repeat again): a one-line card `R<n>-F<m> — repeats R<a>-F<b>, verdict stands`. Spend no more
   time on it, and print it as that one line.
 - **Matches an `out-of-scope` card** — carry forward the same way; it is already in the
-  final report.
+  final report. Exception: if the current diff now touches the code involved, or makes
+  the problem more likely or worse, it is no longer pre-existing — triage it normally.
 
 Repeats do not count as `fix` verdicts for the round unless they flipped, so a round of
 nothing but known repeats is a clean round.

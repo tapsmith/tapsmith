@@ -299,7 +299,13 @@ anything else:
 QUESTION: <the decision needed, one paragraph, with the context that makes it answerable>
 OPTIONS: <a) … (recommended) | b) … | c) …>
 DEFAULT: <what you will do if told "use your default">
+DEFAULT_SAFE: <yes|no>
 ```
+
+`DEFAULT_SAFE: yes` only for stop case 1 (scope ambiguity where a conservative reading
+exists and can be disclosed in the PR). Cases 2–6 — an API shape with no precedent, a
+split, a loop that will not converge, QA `incomplete`, a disputed human review — are
+`no`: they need a person, and a coordinator must not answer them with your default.
 
 Save durable lessons (a new environment trap, a CI flake signature, a design rule a
 reviewer taught you) to memory. Not the ticket's status — that lives in the PR.

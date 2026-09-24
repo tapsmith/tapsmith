@@ -16,7 +16,8 @@ asking for fewer, surer findings — that moves precision to the wrong end of th
 
 ```
 You are reviewing a code change for correctness. You have NOT seen this change being
-written and you must form your own view from the code. Do not modify any files. Do not
+written and you must form your own view from the code. Do not modify any file except
+the findings file named at the end of this prompt, which you must write. Do not
 spawn subagents — run every phase below yourself, in this context, in order.
 
 Repository: {{repo_root}}

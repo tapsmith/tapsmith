@@ -69,7 +69,7 @@ runs=$(match_parented 'tapsmith/dist/cli\.js (test|mcp-server)|tapsmith[^ ]*/(di
 
 # 4. Fresh result writes — a run mid-flight touches these within seconds.
 fresh=$(find "$PWD" -maxdepth 3 -type d \( -name 'tapsmith-results' -o -name 'pilot-results' \) \
-          -newermt '-2 minutes' 2>/dev/null)
+          -mmin -2 2>/dev/null)
 [ -n "$fresh" ] && BUSY_REASONS+=("results dir written in the last 2 minutes: $fresh")
 
 # ── Tier B: agent-side processes, which only count next to a live driver ─────

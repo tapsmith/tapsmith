@@ -98,8 +98,10 @@ before opening the next finding.
 **When the round's triage is complete, print every card to the user** in the exact card
 format, in ledger order, before making any fix. This is the user's chance to read why
 each finding is or is not being fixed and to object before the tree changes. Do not wait
-for a reply — the loop continues — but if the user does object, their verdict replaces
-yours and the card records `Verdict overridden by user: …`.
+for a reply — the loop continues. In Claude Code a typed message is queued until the
+current turn ends; only **Esc** interrupts, so say in one line after the cards that Esc is
+how to stop a fix before it lands. An objection that arrives after the fix has landed is
+still honoured: revert that fix, and the card records `Verdict overridden by user: …`.
 
 ### 3. Fix
 

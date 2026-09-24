@@ -157,7 +157,7 @@ On every worker stop, read its result lines, update the table, then act:
 | Result | Do |
 |---|---|
 | `planned` | Collect plans until every started worker has one (or a few minutes pass), then show them together: per ticket, the ACs, design choice, edge cases and open questions. Relay "go" with any corrections to each. |
-| `blocked` | Add its question to the pending list. When no running worker is likely to add another soon, ask the user all pending questions at once (interactive; AskUserQuestion takes up to four per call, with each worker's `OPTIONS` and recommended `DEFAULT`). Autonomous: answer from the ticket and precedent where you can; otherwise reply "use your default" and record it. Relay each answer to its worker. |
+| `blocked` | Add its question to the pending list. When no running worker is likely to add another soon, ask the user all pending questions at once (interactive; AskUserQuestion takes up to four per call, with each worker's `OPTIONS` and recommended `DEFAULT`). Autonomous: answer from the ticket, its comments and Playwright precedent where they settle it; otherwise reply "use your default" **only if the worker said `DEFAULT_SAFE: yes`**. A `DEFAULT_SAFE: no` question stays unanswered: the ticket is `held`, its slot is freed, and the question goes in the final report for the user. Relay each answer to its worker and record it. |
 | `ready-to-merge` | Record the PR; tell the user it can be merged. Start the next queued ticket. |
 | `stopped-by-user` / error / no result lines | Read its state file; re-launch it once (it resumes); if it fails again, mark it held and tell the user. |
 

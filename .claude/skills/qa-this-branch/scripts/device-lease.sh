@@ -11,12 +11,16 @@
 # <target> is an iOS simulator UDID or an Android serial (emulator-5554).
 # <owner> names who holds it, e.g. "PILOT-123" or "qa:feat/pilot-123-x".
 #
-# A lease is a directory, created with mkdir, which is atomic: two workers
-# racing for one device cannot both win. A lease expires after
+# Every transition on a target (acquire, renew, expire, release) runs under
+# that target's kernel file lock (lockf on macOS, flock on Linux), so no two
+# can interleave; the lock is released automatically if the process dies.
+# The lease itself is one file, written to a temp file and renamed into
+# place, so a reader never sees half of one. A lease expires after
 # TAPSMITH_LEASE_TTL_HOURS (default 6) so a crashed worker cannot hold a
 # device forever; re-acquiring a lease you already hold renews it.
 #
-# Exit codes: 0 ok, 1 not held / not free, 2 usage, 4 timed out waiting.
+# Exit codes: 0 ok, 1 not held / not free, 2 usage, 3 lock unavailable,
+# 4 timed out waiting.
 
 set -u
 DIR="${TAPSMITH_LEASE_DIR:-$HOME/.tapsmith/device-leases}"
@@ -25,77 +29,101 @@ mkdir -p "$DIR"
 
 usage() { sed -n '4,10p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 safe() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
+lease_file() { printf '%s/%s.lease' "$DIR" "$(safe "$1")"; }
+field() { sed -n "s/^$1=//p" "$2" 2>/dev/null; }   # field <name> <lease file>
 
-expired() {  # $1 = lease dir
-  local since now
-  since=$(cat "$1/since" 2>/dev/null || echo 0)
-  now=$(date +%s)
-  [ $((now - since)) -gt $((TTL_HOURS * 3600)) ]
+# Run "$0 __locked <args>" while holding <target>'s lock.
+with_lock() {  # with_lock <target> <op> <args…>
+  local lk="$DIR/.$(safe "$1").lock"; shift
+  if command -v lockf >/dev/null; then
+    lockf -k -t 30 "$lk" "$0" __locked "$@"
+  elif command -v flock >/dev/null; then
+    flock -w 30 "$lk" "$0" __locked "$@"
+  else
+    echo "device-lease: needs lockf (macOS) or flock (Linux)" >&2; return 3
+  fi
+  local rc=$?
+  # lockf/flock report their own timeout as 75 / 1; surface it as "lock unavailable".
+  [ $rc -eq 75 ] && return 3
+  return $rc
 }
 
-reap() {
-  for l in "$DIR"/*/; do
-    [ -d "$l" ] || continue
-    if expired "$l" && mv "$l" "${l%/}.reaped.$$" 2>/dev/null; then
-      rm -rf "${l%/}.reaped.$$"
-      echo "reaped expired lease $(basename "$l")" >&2
-    fi
-  done
+live() {  # live <lease file>: exists and not expired
+  local since
+  [ -f "$1" ] || return 1
+  since=$(field since "$1"); since=${since:-0}
+  [ $(( $(date +%s) - since )) -le $((TTL_HOURS * 3600)) ]
 }
 
-try_acquire() {  # $1 target, $2 owner
-  local l="$DIR/$(safe "$1")"
-  if mkdir "$l" 2>/dev/null; then
-    printf '%s\n' "$2" > "$l/owner"; printf '%s\n' "$1" > "$l/target"; date +%s > "$l/since"
-    return 0
+# ── Operations, only ever called with the target's lock held ────────────────
+locked_acquire() {  # target owner
+  local f; f=$(lease_file "$1")
+  if live "$f" && [ "$(field owner "$f")" != "$2" ]; then
+    echo "BUSY $1 is leased by $(field owner "$f")" >&2; return 1
   fi
-  if [ "$(cat "$l/owner" 2>/dev/null)" = "$2" ]; then date +%s > "$l/since"; return 0; fi
-  # Expired: move it aside first. mv is atomic, so of several workers reaping
-  # the same stale lease only one wins, and nobody deletes a fresh one.
-  if expired "$l" && mv "$l" "$l.reaped.$$" 2>/dev/null; then
-    rm -rf "$l.reaped.$$"; try_acquire "$1" "$2"; return $?
+  local tmp="$f.tmp.$$"
+  printf 'owner=%s\ntarget=%s\nsince=%s\n' "$2" "$1" "$(date +%s)" > "$tmp" && mv -f "$tmp" "$f" || {
+    rm -f "$tmp"; echo "device-lease: could not write $f" >&2; return 1; }
+  echo "LEASED $1 to $2"
+}
+locked_release() {  # target owner
+  local f; f=$(lease_file "$1")
+  if ! live "$f"; then rm -f "$f"; echo "not leased: $1"; return 0; fi
+  if [ "$(field owner "$f")" != "$2" ]; then
+    echo "refusing: $1 is leased by $(field owner "$f"), not $2" >&2; return 1
   fi
-  return 1
+  rm -f "$f"; echo "RELEASED $1"
+}
+locked_reap() {  # target
+  local f; f=$(lease_file "$1")
+  if [ -f "$f" ] && ! live "$f"; then
+    echo "reaped expired lease on $1 (was $(field owner "$f"))" >&2; rm -f "$f"
+  fi
 }
 
 cmd="${1:-}"; shift || true
 case "$cmd" in
+  __locked)
+    op="$1"; shift
+    case "$op" in
+      acquire) locked_acquire "$@" ;;
+      release) locked_release "$@" ;;
+      reap)    locked_reap "$@" ;;
+      *) exit 2 ;;
+    esac
+    ;;
   acquire)
     [ $# -ge 2 ] || usage
     target="$1"; owner="$2"; wait_min=0
     [ "${3:-}" = "--wait" ] && wait_min="${4:-0}"
     deadline=$(( $(date +%s) + wait_min * 60 ))
     while :; do
-      if try_acquire "$target" "$owner"; then echo "LEASED $target to $owner"; exit 0; fi
+      with_lock "$target" acquire "$target" "$owner" 2>/dev/null && exit 0
       [ "$(date +%s)" -ge "$deadline" ] && break
       sleep 30
     done
-    holder=$(cat "$DIR/$(safe "$target")/owner" 2>/dev/null)
-    echo "BUSY $target is leased by $holder" >&2
+    with_lock "$target" acquire "$target" "$owner" && exit 0   # final try, with the message
     [ "$wait_min" -gt 0 ] && exit 4 || exit 1
     ;;
   release)
     [ $# -ge 2 ] || usage
-    l="$DIR/$(safe "$1")"
-    if [ ! -d "$l" ]; then echo "not leased: $1"; exit 0; fi
-    if [ "$(cat "$l/owner" 2>/dev/null)" != "$2" ]; then
-      echo "refusing: $1 is leased by $(cat "$l/owner"), not $2" >&2; exit 1
-    fi
-    rm -rf "$l"; echo "RELEASED $1"
+    with_lock "$1" release "$1" "$2"
     ;;
   holder)
     [ $# -ge 1 ] || usage
-    l="$DIR/$(safe "$1")"
-    if [ -d "$l" ] && ! expired "$l"; then cat "$l/owner"; exit 0; fi
+    f=$(lease_file "$1")
+    live "$f" && { field owner "$f"; exit 0; }
     exit 1
     ;;
-  list)
-    reap 2>/dev/null
-    for l in "$DIR"/*/; do
-      [ -d "$l" ] || continue
-      echo "$(cat "$l/target") $(cat "$l/owner") since $(date -r "$(cat "$l/since")" '+%H:%M')"
+  list|reap)
+    for f in "$DIR"/*.lease; do
+      [ -f "$f" ] || continue
+      t=$(field target "$f")
+      with_lock "$t" reap "$t"
+      [ "$cmd" = list ] && live "$f" &&
+        echo "$t $(field owner "$f") since $(date -r "$(field since "$f")" '+%H:%M')"
     done
+    exit 0
     ;;
-  reap) reap ;;
   *) usage ;;
 esac

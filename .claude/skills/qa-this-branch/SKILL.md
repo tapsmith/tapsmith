@@ -38,9 +38,10 @@ References — read each when its phase needs it, not all up front:
 | `references/probes.md` | Phases 3–4 — probe recipes, environment traps, cleanup |
 | `references/report-format.md` | Phase 5 — the report file contract and verdict rules |
 
-`${CLAUDE_SKILL_DIR}` below is this skill's directory. Use it for the scripts and
-references — `.claude/` is git-ignored, so the skill does not exist inside a fresh
-worktree and a repo-relative path breaks there.
+`${CLAUDE_SKILL_DIR}` below is this skill's directory — the copy this session loaded,
+whose instructions you are following. Use it for the scripts and references rather than
+a repo-relative path: a worktree of an older branch may hold an older copy of the skill,
+or none.
 
 ## Arguments
 
@@ -107,11 +108,13 @@ coverage**, and a lead marked fixed is still a must-test row: prove the fix.
 - **Never re-run a check CI runs** — read its result for this SHA instead
   (`references/automated-coverage.md` has the table, how to prove the SHA matches, and the
   four narrow exceptions).
-- **Test branch code, not published code.** From the repo root `npx tapsmith` resolves to a
-  published, npx-cached build with the same version number, and the session's registered
-  `tapsmith-headless` MCP server runs that too. Use `node packages/tapsmith/dist/cli.js …`
-  (always safe, and the only safe form in a worktree) or `cd e2e && npx tapsmith …` in the
-  main checkout.
+- **Test branch code, not published code — never `npx tapsmith`.** npx falls back to a
+  published, npx-cached build with the same version number whenever the local bin is
+  missing (a worktree's `e2e/`, the repo root), and `--no-install` does not stop it: it
+  still runs the cached copy. The session's registered `tapsmith-headless` MCP server
+  runs published code too. Always invoke the branch's CLI by path:
+  `node <repo>/packages/tapsmith/dist/cli.js …` (from `e2e/`,
+  `node ../packages/tapsmith/dist/cli.js …`).
 - **Everything runs `dist/`**, so build before any probe (`cd packages/tapsmith && npm run
   build`) and restart server processes (UI server, MCP server) after any rebuild. Rust,
   agent and test-app changes need their own rebuilds, and a **fresh worktree has no local
