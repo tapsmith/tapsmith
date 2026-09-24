@@ -187,7 +187,9 @@ export default function OcclusionScreen() {
           accessibilityRole="button"
           accessibilityLabel={inputCovered ? "Uncover input" : "Cover input"}
         >
-          <Text style={styles.smallButtonText}>{inputCovered ? "Uncover input" : "Cover input"}</Text>
+          <Text style={styles.smallButtonText}>
+            {inputCovered ? "Uncover input" : "Cover input"}
+          </Text>
         </TouchableOpacity>
       </View>
 
