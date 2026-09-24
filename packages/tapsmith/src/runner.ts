@@ -1650,10 +1650,12 @@ async function runSuiteContext(
         // daemon launches the mitmproxy redirector, and the stock launcher
         // reuses any "mitmproxy" Network Extension manager that is not yet
         // `connected` — two launchers inside that ~150ms window overwrite each
-        // other's socket path, the second start is skipped, and that daemon
-        // silently ends up on the host-wide system-proxy fallback. Waiting for
-        // each start to return (the daemon only returns once the extension has
-        // connected back) keeps the launches out of each other's window.
+        // other's socket path and the second start is skipped. The daemons now
+        // serialise launches themselves with a host-wide lock (ios_redirect.rs);
+        // waiting for each start to return here keeps a group's own launches
+        // apart as well. Each start returns as soon as the extension has
+        // connected back; the daemon holds the lock a moment longer in the
+        // background, so a following member's start may wait briefly for it.
         //
         // A group also requires per-device isolation: entries are stamped with
         // the capturing device's name, and the system-proxy fallback records

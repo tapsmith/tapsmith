@@ -178,8 +178,10 @@ pub enum Conflict {
     /// The service already has an HTTP(S) proxy that Tapsmith did not set.
     ForeignProxy {
         service: String,
-        server: String,
-        port: u16,
+        /// The foreign HTTP / HTTPS (secure web) settings, as (server, port);
+        /// `None` for a kind that isn't in the way. At least one is set.
+        http: Option<(String, u16)>,
+        https: Option<(String, u16)>,
     },
 }
 
@@ -194,16 +196,32 @@ impl std::fmt::Display for Conflict {
             ),
             Conflict::ForeignProxy {
                 service,
-                server,
-                port,
-            } => write!(
-                f,
-                "the \"{service}\" network service already has an HTTP proxy ({server}:{port}) \
-                 that Tapsmith did not set, and Tapsmith will not overwrite it. If it was left \
-                 behind by an earlier run, turn it off with: \
-                 networksetup -setwebproxystate \"{service}\" off && \
-                 networksetup -setsecurewebproxystate \"{service}\" off"
-            ),
+                http,
+                https,
+            } => {
+                // Name only the settings in the way, each with its own
+                // endpoint: turning off a kind that isn't foreign could switch
+                // off an unrelated entry.
+                let mut set = Vec::new();
+                let mut commands = Vec::new();
+                for (kind, flag, entry) in [
+                    ("HTTP", "-setwebproxystate", http),
+                    ("HTTPS", "-setsecurewebproxystate", https),
+                ] {
+                    if let Some((server, port)) = entry {
+                        set.push(format!("{kind} {server}:{port}"));
+                        commands.push(format!("networksetup {flag} \"{service}\" off"));
+                    }
+                }
+                write!(
+                    f,
+                    "the \"{service}\" network service already has a proxy ({}) that Tapsmith \
+                     did not set, and Tapsmith will not overwrite it. If it was left behind by \
+                     an earlier run, turn it off with: {}",
+                    set.join(", "),
+                    commands.join(" && ")
+                )
+            }
         }
     }
 }
@@ -244,14 +262,14 @@ pub fn plan_acquire(
             .as_ref()
             .is_some_and(|r| r.service == service && s.points_at(r.port))
     };
-    for s in [http, https] {
-        if s.enabled && !ours(s) {
-            return Err(Conflict::ForeignProxy {
-                service: service.to_string(),
-                server: s.server.clone(),
-                port: s.port,
-            });
-        }
+    let foreign = |s: &ProxySetting| (s.enabled && !ours(s)).then(|| (s.server.clone(), s.port));
+    let (http, https) = (foreign(http), foreign(https));
+    if http.is_some() || https.is_some() {
+        return Err(Conflict::ForeignProxy {
+            service: service.to_string(),
+            http,
+            https,
+        });
     }
     Ok(AcquirePlan { stale })
 }
@@ -850,9 +868,12 @@ pub struct NeFailure {
 }
 
 /// The cached failure to act on instead of launching the redirector, if any.
-/// Multi-device callers (`require_isolation`) always retry: for them the
-/// failure is usually the transient launch race, and there is no fallback to
-/// skip ahead to.
+/// Multi-device callers (`require_isolation`) always retry: there is no
+/// fallback to skip ahead to, so a cached refusal would only keep the member's
+/// capture off for the cache window, while a retry on its next test recovers
+/// as soon as the extension answers. (The runner does not *re-run a file* on
+/// this refusal — `worker-protocol.ts` treats it as deterministic — so the
+/// retry happens test by test, not through session recovery.)
 pub fn cached_ne_failure(
     cache: Option<&NeFailure>,
     require_isolation: bool,
@@ -1073,15 +1094,44 @@ mod tests {
             plan_acquire(None, false, 10, "Wi-Fi", &charles, &off),
             Err(Conflict::ForeignProxy {
                 service: "Wi-Fi".into(),
-                server: "127.0.0.1".into(),
-                port: 8888
+                http: Some(("127.0.0.1".into(), 8888)),
+                https: None,
             })
         );
         let corp = setting(true, "proxy.corp", 3128);
+        let conflict = plan_acquire(None, false, 10, "Wi-Fi", &off, &corp).unwrap_err();
         assert!(matches!(
-            plan_acquire(None, false, 10, "Wi-Fi", &off, &corp),
-            Err(Conflict::ForeignProxy { .. })
+            conflict,
+            Conflict::ForeignProxy {
+                http: None,
+                https: Some(_),
+                ..
+            }
         ));
+        // The hint turns off only the settings in the way…
+        let hint = conflict.to_string();
+        assert!(
+            hint.contains("-setsecurewebproxystate \"Wi-Fi\" off"),
+            "{hint}"
+        );
+        assert!(!hint.contains("-setwebproxystate"), "{hint}");
+        // …and every one of them, so one command clears a leftover on both.
+        let both = plan_acquire(None, false, 10, "Wi-Fi", &corp, &corp)
+            .unwrap_err()
+            .to_string();
+        assert!(both.contains("-setwebproxystate \"Wi-Fi\" off"), "{both}");
+        assert!(
+            both.contains("-setsecurewebproxystate \"Wi-Fi\" off"),
+            "{both}"
+        );
+        // Different proxies per kind: each is named with its own endpoint.
+        let mixed = plan_acquire(None, false, 10, "Wi-Fi", &charles, &corp)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            mixed.contains("HTTP 127.0.0.1:8888, HTTPS proxy.corp:3128"),
+            "{mixed}"
+        );
     }
 
     #[test]
@@ -1098,7 +1148,10 @@ mod tests {
                 &user,
                 &off
             ),
-            Err(Conflict::ForeignProxy { port: 8888, .. })
+            Err(Conflict::ForeignProxy {
+                http: Some((_, 8888)),
+                ..
+            })
         ));
     }
 

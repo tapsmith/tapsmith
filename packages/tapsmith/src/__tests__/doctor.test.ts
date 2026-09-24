@@ -302,6 +302,16 @@ describe('assessSystemProxy()', () => {
     expect(r.status === 'warn' && r.fix).not.toContain('"Wi-Fi"');
   });
 
+  it('never offers to switch off a live daemon\'s entry on the same service', () => {
+    // The daemon owns Wi-Fi HTTP; another tool moved only Wi-Fi HTTPS.
+    const r = assessSystemProxy(
+      [setting({}), setting({ kind: 'HTTPS', port: 8888 })],
+      record,
+      true,
+    );
+    expect(r.status === 'warn' && r.fix).toBe('Run: networksetup -setsecurewebproxystate "Wi-Fi" off');
+  });
+
   it('reports a localhost proxy as localhost and never as Tapsmith\'s', () => {
     const r = assessSystemProxy([setting({ server: 'localhost' })], record, true);
     expect(r.status).toBe('warn');

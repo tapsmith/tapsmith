@@ -560,9 +560,10 @@ export function assessSystemProxy(
 }
 
 function assessFlagged(loopback: ServiceProxySetting[], allOurs: boolean): SystemProxyAssessment {
-  const services = [...new Set(loopback.map((s) => s.service))];
-  const fix = services
-    .map((svc) => `networksetup -setwebproxystate "${svc}" off && networksetup -setsecurewebproxystate "${svc}" off`)
+  // One command per flagged (service, kind): turning off both kinds per
+  // service would also switch off a live daemon's entry on the same service.
+  const fix = [...new Set(loopback.map((s) =>
+    `networksetup -${s.kind === 'HTTP' ? 'setwebproxystate' : 'setsecurewebproxystate'} "${s.service}" off`))]
     .join(' && ');
   const where = loopback.map((s) => `${s.kind} ${s.server}:${s.port} on ${s.service}`).join(', ');
   if (allOurs) {

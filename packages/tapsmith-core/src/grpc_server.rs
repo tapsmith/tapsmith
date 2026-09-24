@@ -5864,18 +5864,17 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                                     });
                                 warn!("Network Extension redirector unavailable: {e}");
                             }
-                            // Note the most common local cause of an NE failure:
-                            // two daemons launching the redirector at once share
-                            // one NETransparentProxyManager, and the loser's
-                            // control channel never connects.
+                            // Two daemons launching the redirector at once used to
+                            // be the most common local cause of an NE failure (they
+                            // share one NETransparentProxyManager and the loser's
+                            // control channel never connects); launches are now
+                            // serialised by `ios_redirect::LaunchLock`.
                             if decision == ios::system_proxy::FallbackDecision::RefuseIsolation {
                                 let msg = format!(
                                     "iOS network capture unavailable for this device: the \
                                      Network Extension redirector failed ({e}) and the \
                                      macOS system-proxy fallback is not device-isolated, so \
-                                     it is refused for multi-device runs. If another \
-                                     Tapsmith daemon is capturing on this Mac, the \
-                                     redirector session may already be owned by it; see \
+                                     it is refused for multi-device runs. See \
                                      docs/ios-network-capture.md#multi-device-groups"
                                 );
                                 warn!("{msg}");

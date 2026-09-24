@@ -106,9 +106,25 @@ const MAX_CONSECUTIVE_ACCEPT_FAILURES: u32 = 32;
 const CONTROL_CHANNEL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// How long to wait for another daemon's redirector launch to finish before
-/// launching anyway. A holder releases within `CONTROL_CHANNEL_TIMEOUT` of
-/// taking the lock, so this waits out two back-to-back launches.
+/// launching anyway. A healthy launch holds the lock for well under a second
+/// (dial-back, then the launcher's exit, then `LAUNCH_LOCK_GRACE`). A failing
+/// one holds it until its error return: up to `CONTROL_CHANNEL_TIMEOUT` when
+/// the accept times out, or about 15 s when the extension connects but the
+/// initial InterceptConf write then times out; the slowest possible success holds it for
+/// about 20.5 s (a 10 s accept, the 5 s InterceptConf write bound, then
+/// `LAUNCHER_EXIT_WAIT` 5 s, then the 0.5 s grace). So 25 s waits out any
+/// single holder, and running unserialised after it only happens behind a
+/// queue of failing or pathologically slow launches.
 const LAUNCH_LOCK_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// How long the launch lock is kept after the extension has connected, the
+/// initial InterceptConf is accepted and the launcher has exited (see
+/// `IosRedirect::start`). Off the capture's critical path.
+const LAUNCH_LOCK_GRACE: Duration = Duration::from_millis(500);
+
+/// Cap on waiting for the launcher process to exit before releasing the lock
+/// (it normally exits right after handing the extension its socket path).
+const LAUNCHER_EXIT_WAIT: Duration = Duration::from_secs(5);
 
 /// Host-wide lock serialising redirector launches across daemons (PILOT-197,
 /// PILOT-319). The stock launcher reuses any `mitmproxy` Network Extension
@@ -149,6 +165,14 @@ impl LaunchLock {
             // SAFETY: flock on a descriptor owned by `file` for its lifetime.
             if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
                 return Some(Self { _file: file });
+            }
+            // Only "another daemon holds it" is worth waiting for. Anything
+            // else (a home directory on a filesystem without flock, …) will
+            // not change by polling, so launch unserialised at once.
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
+                warn!(path = %path.display(), "Cannot lock redirector launch lock ({err}); launching unserialised");
+                return None;
             }
             if Instant::now() >= deadline {
                 warn!(
@@ -470,8 +494,9 @@ impl IosRedirect {
         }
 
         // Serialise the launch → connect window with every other daemon on
-        // this Mac (see `LaunchLock`). Held until the control channel below is
-        // accepted or times out.
+        // this Mac (see `LaunchLock`). On success it is released in the
+        // background after the launcher exits plus a grace (below); on an
+        // error return it drops with the error.
         let launch_lock = match launch_lock_path() {
             Some(path) => LaunchLock::acquire(&path, LAUNCH_LOCK_TIMEOUT).await,
             None => None,
@@ -497,7 +522,11 @@ impl IosRedirect {
         // aborting the task would leave the OS-level child process
         // orphaned (visible in `ps` as a stranded "Mitmproxy Redirector").
         let launcher_path = listener_path.clone();
+        let (launcher_done_tx, launcher_done_rx) = tokio::sync::oneshot::channel::<()>();
         let launcher_handle = tokio::spawn(async move {
+            // Signals (by dropping) when the launcher has exited, for the
+            // launch lock's release below.
+            let _launcher_done = launcher_done_tx;
             let out = Command::new(&redirector_bin)
                 .arg(&launcher_path)
                 .stdout(std::process::Stdio::piped())
@@ -546,9 +575,6 @@ impl IosRedirect {
                 )
             })?
             .context("accepting System Extension control channel")?;
-        // The extension has dialled back, so its configuration is `connected`
-        // and another daemon's launcher can no longer hijack it.
-        drop(launch_lock);
         debug!("System Extension control channel connected");
 
         let mut control = Framed::new(control_stream, LengthDelimitedCodec::new());
@@ -556,6 +582,21 @@ impl IosRedirect {
             .await
             .context("sending initial InterceptConf")?;
         debug!(pids = initial_pids.len(), "initial InterceptConf accepted");
+
+        // Keep the next daemon's launch out a little longer, without delaying
+        // this capture: the extension dials back from inside its provider's
+        // start, which may still be finishing, and the stock launcher only
+        // leaves a configuration alone once it reports `connected`. A
+        // background task holds the lock until this launcher process has
+        // exited (bounded) plus a short grace, then releases it. The flow
+        // accept loop below starts immediately.
+        if let Some(lock) = launch_lock {
+            tokio::spawn(async move {
+                let _ = timeout(LAUNCHER_EXIT_WAIT, launcher_done_rx).await;
+                tokio::time::sleep(LAUNCH_LOCK_GRACE).await;
+                drop(lock);
+            });
+        }
 
         // Refresh task owns the control channel for the remainder of the
         // session. It polls `ps` every PID_REFRESH_INTERVAL and writes a
