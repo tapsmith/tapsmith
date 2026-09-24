@@ -2394,7 +2394,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               break;
             }
             case 'network': {
-              const networkMsg: NetworkMessage = { type: 'network', filePath: worker.currentFile?.filePath, testFullName: worker.currentTest ?? '', projectName: worker.currentFile?.projectName, entries: msg.entries, bodies: msg.bodies, bodyMode: msg.bodyMode, networkCaptureEnabled: msg.networkCaptureEnabled };
+              const networkMsg: NetworkMessage = { type: 'network', filePath: worker.currentFile?.filePath, testFullName: worker.currentTest ?? '', projectName: worker.currentFile?.projectName, entries: msg.entries, bodies: msg.bodies, bodyMode: msg.bodyMode, networkCaptureEnabled: msg.networkCaptureEnabled, networkCaptureRoute: msg.networkCaptureRoute };
               networkBuffer.add(networkMsg);
               broadcast(networkMsg);
               break;

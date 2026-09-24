@@ -130,6 +130,7 @@ const NETWORK_STYLES = `
   .net-empty { color: var(--color-text-faintest); font-size: 12px; padding: 24px; text-align: center; }
   .net-empty-note { color: var(--color-text-faintest); font-size: 11px; margin-top: 6px; }
   .net-empty-inline { color: var(--color-text-faintest); font-size: 11px; font-style: italic; }
+  .net-host-wide { padding: 6px 10px; font-size: 11px; color: var(--color-warning); border-bottom: 1px solid var(--color-border); background: var(--color-bg-secondary); }
 `;
 
 let stylesInjected = false;
@@ -152,6 +153,21 @@ interface Props {
    * the device whose proxy captured them and a device filter is offered.
    */
   deviceNames?: string[]
+  /**
+   * The capture ran through the host-wide macOS system proxy (iOS simulator
+   * fallback), so entries may come from any app on the Mac and requests to
+   * localhost are missing.
+   */
+  hostWideCapture?: boolean
+}
+
+function HostWideCaptureNotice() {
+  return (
+    <div class="net-host-wide" data-testid="network-host-wide-notice" role="note">
+      Captured through the macOS system proxy because the Network Extension was unavailable.
+      These requests may include traffic from other apps on the Mac, and requests to localhost are not captured.
+    </div>
+  );
 }
 
 type ResourceType = 'all' | 'fetch' | 'doc' | 'js' | 'css' | 'img' | 'font' | 'media' | 'other'
@@ -320,7 +336,7 @@ function routeBadge(routeAction?: string): preact.JSX.Element | null {
 
 // ─── Component ───
 
-export function NetworkTab({ entries, bodies, deviceNames, networkCaptureEnabled }: Props) {
+export function NetworkTab({ entries, bodies, deviceNames, networkCaptureEnabled, hostWideCapture }: Props) {
   injectStyles();
 
   const showDevices = !!deviceNames && deviceNames.length > 1;
@@ -413,10 +429,13 @@ export function NetworkTab({ entries, bodies, deviceNames, networkCaptureEnabled
 
   if (entries.length === 0) {
     return (
-      <div class="no-content" data-testid="no-content">
-        No network requests captured
-        {networkCaptureEnabled === false && <div class="no-content-note">Enable network capture in your trace config to record HTTP requests.</div>}
-      </div>
+      <>
+        {hostWideCapture && <HostWideCaptureNotice />}
+        <div class="no-content" data-testid="no-content">
+          No network requests captured
+          {networkCaptureEnabled === false && <div class="no-content-note">Enable network capture in your trace config to record HTTP requests.</div>}
+        </div>
+      </>
     );
   }
 
@@ -442,6 +461,7 @@ export function NetworkTab({ entries, bodies, deviceNames, networkCaptureEnabled
 
   return (
     <div class="net-container">
+      {hostWideCapture && <HostWideCaptureNotice />}
       <div class="net-toolbar">
         <input
           class="net-search"

@@ -45,6 +45,17 @@ test.describe("Loading a trace", () => {
     await expect(actions.isolation).toHaveText("warm · per test")
   })
 
+  test("shows how network traffic was captured in the Metadata tab", async ({ viewer, actions }) => {
+    await viewer.open({
+      metadata: {
+        device: { serial: "8C2F-SIM", platform: "ios", isEmulator: true, networkCaptureRoute: "ios-system-proxy" },
+      },
+      events: [actionEvent({ actionIndex: 0, action: "tap" })],
+    })
+    await actions.metadataTab.click()
+    await expect(actions.networkRoute).toHaveText("macOS system proxy (host-wide)")
+  })
+
   test("renders one filmstrip frame per traced event", async ({ viewer, filmstrip }) => {
     await viewer.open({
       events: [

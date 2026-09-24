@@ -203,8 +203,35 @@ export const RECOVERABLE_INFRASTRUCTURE_PATTERNS = [
  */
 export function isRecoverableInfrastructureError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
-  return RECOVERABLE_INFRASTRUCTURE_PATTERNS.some((pattern) => message.includes(pattern));
+  // A deterministic refusal cancels only the capture pattern's match: the same
+  // message can also carry a genuine agent/transport failure (soft-assertion
+  // errors are appended to the test error), which must stay recoverable.
+  const refused = DETERMINISTIC_CAPTURE_REFUSALS.some((pattern) => message.includes(pattern));
+  return RECOVERABLE_INFRASTRUCTURE_PATTERNS.some((pattern) =>
+    message.includes(pattern) && !(refused && pattern === 'Network capture disabled'));
 }
+
+/**
+ * "Network capture disabled" is recoverable in general — a session restart can
+ * bring back a capture that failed transiently. These daemon refusals (the iOS
+ * system-proxy fallback's policy, PILOT-319) are not: a restarted session gets
+ * the same answer until the cause changes, so recovering only restarts the app,
+ * fails the retry, and can retire a healthy worker. Substrings of the daemon's
+ * messages in `grpc_server.rs` / `ios/system_proxy.rs`.
+ */
+export const DETERMINISTIC_CAPTURE_REFUSALS = [
+  // Not on CI and not opted in (FallbackDecision::RefuseLocal).
+  'so it is only used on CI',
+  // A multi-device group, which needs per-device attribution
+  // (FallbackDecision::RefuseIsolation). On CI, with no Network Extension, it
+  // is the answer to every start; locally its old transient cause, two
+  // daemons launching the redirector at once, is serialised by the daemon.
+  'it is refused for multi-device runs',
+  // Another live daemon owns the host proxy (Conflict::OtherDaemon).
+  'already routes the macOS system proxy',
+  // A proxy the user configured (Conflict::ForeignProxy).
+  'Tapsmith will not overwrite it',
+] as const;
 
 // Generous budget: a session-setup failure fails the whole shard (there is
 // no outer retry around setup), and each failed attempt can itself take

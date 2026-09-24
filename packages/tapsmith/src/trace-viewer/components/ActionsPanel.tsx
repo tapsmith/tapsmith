@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'preact/hooks';
 import type { ComponentChildren } from 'preact';
 import { Check, X, Type, Clock, Play, ExternalLink, MoveHorizontal, ArrowUpDown, CircleDot, ChevronDown, Hand, Pointer, Eye, Keyboard, RotateCcw, Target, Globe, Send, AlertTriangle } from 'lucide-preact';
-import type { AnyTraceEvent, ActionTraceEvent, AssertionTraceEvent, GroupTraceEvent, TraceMetadata } from '../../trace/types.js';
+import type { AnyTraceEvent, ActionTraceEvent, AssertionTraceEvent, GroupTraceEvent, NetworkCaptureRoute, TraceMetadata } from '../../trace/types.js';
 import type { InFlightAction } from '../types.js';
 import { deviceTagStyle } from './device-frames.js';
 
@@ -150,6 +150,18 @@ function formatGroupName(name: string): string {
     case 'App reset': return 'APP RESET';
     default: return name.toUpperCase();
   }
+}
+
+const NETWORK_ROUTE_LABELS: Record<NetworkCaptureRoute, string> = {
+  'ios-network-extension': 'Network Extension (per-process)',
+  'ios-system-proxy': 'macOS system proxy (host-wide)',
+  'ios-device-proxy': 'Wi-Fi proxy profile',
+  'android-transparent': 'transparent redirect',
+  'android-http-proxy': 'HTTP proxy setting',
+};
+
+function networkRouteLabel(route: NetworkCaptureRoute | undefined): string | undefined {
+  return route ? NETWORK_ROUTE_LABELS[route] ?? route : undefined;
 }
 
 function formatDuration(ms: number): string {
@@ -394,7 +406,7 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
               ? groupDevices.map((d) => <>
                   <span class="metadata-label">Device {d.name}</span>
                   <span class="metadata-value" data-testid="metadata-device">
-                    {[d.model, d.serial, d.osVersion, d.isEmulator ? 'emulator' : 'physical'].filter(Boolean).join(' · ')}
+                    {[d.model, d.serial, d.osVersion, d.isEmulator ? 'emulator' : 'physical', networkRouteLabel(d.networkCaptureRoute)].filter(Boolean).join(' · ')}
                   </span>
                 </>)
               : <>
@@ -410,6 +422,10 @@ export function ActionsPanel({ events, actionEvents: _actionEvents, selectedInde
                 </>}
                 <span class="metadata-label">Physical</span>
                 <span class="metadata-value">{metadata.device.isEmulator ? 'No' : 'Yes'}</span>
+                {metadata.device.networkCaptureRoute && <>
+                  <span class="metadata-label">Network capture</span>
+                  <span class="metadata-value" data-testid="metadata-network-route">{networkRouteLabel(metadata.device.networkCaptureRoute)}</span>
+                </>}
               </>}
             <span class="metadata-label">Actions</span>
             <span class="metadata-value">{metadata.actionCount}</span>

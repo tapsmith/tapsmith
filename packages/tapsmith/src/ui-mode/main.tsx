@@ -505,7 +505,13 @@ function App() {
     testDuration: viewedTestNode?.duration ?? 0,
     startTime: 0,
     endTime: viewedTestNode?.duration ?? 0,
-    device: { serial: testDeviceSerial, isEmulator: deviceIsEmulator },
+    device: {
+      serial: testDeviceSerial,
+      isEmulator: deviceIsEmulator,
+      // Drives the Network tab's host-wide banner and the Metadata tab's
+      // route row, as the packaged trace's metadata does.
+      ...(currentTrace?.networkCaptureRoute ? { networkCaptureRoute: currentTrace.networkCaptureRoute } : {}),
+    },
     traceConfig: { screenshots: true, snapshots: true, sources: true, network: currentTrace?.networkCaptureEnabled ?? true, deviceLogs: false, daemonLogs: false },
     actionCount: liveActionCount,
     screenshotCount: screenshots.size,
@@ -518,7 +524,7 @@ function App() {
     appResetScope: viewedIsolation?.appResetScope,
     appState: viewedIsolation?.appState,
     devices: viewedGroupDevices,
-  }), [viewedTestName, viewedTestFile, viewedTestNode, viewedTestProject, isRunning, liveActionCount, screenshots.size, testDeviceSerial, deviceIsEmulator, tapsmithVersion, viewedIsolation, viewedGroupDevices, currentTrace?.networkCaptureEnabled]);
+  }), [viewedTestName, viewedTestFile, viewedTestNode, viewedTestProject, isRunning, liveActionCount, screenshots.size, testDeviceSerial, deviceIsEmulator, tapsmithVersion, viewedIsolation, viewedGroupDevices, currentTrace?.networkCaptureEnabled, currentTrace?.networkCaptureRoute]);
 
   // Prefer a real completed event at this index; fall back to a synthesized
   // one from the in-flight slot so ScreenshotPanel can render the before-
@@ -1105,7 +1111,13 @@ function App() {
           }
           const next = new Map(map);
           const networkBodies = mergeNetworkBodies(msg.entries, data.networkBodies, updates, msg.bodyMode === 'patch');
-          next.set(key, { ...data, network: msg.entries, networkBodies, networkCaptureEnabled: msg.networkCaptureEnabled ?? data.networkCaptureEnabled });
+          next.set(key, {
+            ...data, network: msg.entries, networkBodies,
+            networkCaptureEnabled: msg.networkCaptureEnabled ?? data.networkCaptureEnabled,
+            // `null` = this attempt captured no route: clear, so a retry never
+            // keeps the previous attempt's. Absent (older workers) = keep.
+            networkCaptureRoute: msg.networkCaptureRoute === undefined ? data.networkCaptureRoute : msg.networkCaptureRoute ?? undefined,
+          });
           return next;
         });
         break;

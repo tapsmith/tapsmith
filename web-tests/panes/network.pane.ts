@@ -10,6 +10,11 @@ export type NetworkDetailTab = "Headers" | "Payload" | "Response" | "Timing"
 export class NetworkPane {
   constructor(private page: Page) {}
 
+  /** The warning shown when capture went through the host-wide macOS system proxy. */
+  get hostWideNotice() {
+    return this.page.getByRole("note").filter({ hasText: "macOS system proxy" })
+  }
+
   get table() {
     return this.page.getByRole("table")
   }

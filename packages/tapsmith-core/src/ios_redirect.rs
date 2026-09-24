@@ -105,6 +105,130 @@ const MAX_CONSECUTIVE_ACCEPT_FAILURES: u32 = 32;
 /// listener after spawning the launcher binary.
 const CONTROL_CHANNEL_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long to wait for another daemon's redirector launch to finish before
+/// launching anyway. A healthy launch holds the lock for well under a second
+/// (dial-back, then the launcher's exit, then `LAUNCH_LOCK_GRACE`). A failing
+/// one holds it until its error return: up to `CONTROL_CHANNEL_TIMEOUT` when
+/// the accept times out, or about 15 s when the extension connects but the
+/// initial InterceptConf write then times out; the slowest possible success holds it for
+/// about 20.5 s (a 10 s accept, the 5 s InterceptConf write bound, then
+/// `LAUNCHER_EXIT_WAIT` 5 s, then the 0.5 s grace). So 25 s waits out any
+/// single holder, and running unserialised after it only happens behind a
+/// queue of failing or pathologically slow launches.
+const LAUNCH_LOCK_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// How long the launch lock is kept after the extension has connected, the
+/// initial InterceptConf is accepted and the launcher has exited (see
+/// `IosRedirect::start`). Off the capture's critical path.
+const LAUNCH_LOCK_GRACE: Duration = Duration::from_millis(500);
+
+/// Cap on waiting for the launcher process to exit before releasing the lock
+/// (it normally exits right after handing the extension its socket path).
+const LAUNCHER_EXIT_WAIT: Duration = Duration::from_secs(5);
+
+/// Host-wide lock serialising redirector launches across daemons (PILOT-197,
+/// PILOT-319). The stock launcher reuses any `mitmproxy` Network Extension
+/// configuration that is not yet `connected`: two daemons launching within the
+/// same ~150 ms overwrite each other's socket path, the second start is
+/// skipped, and that daemon's control channel never connects. Holding this
+/// `flock` from spawning the launcher until the extension has dialled back
+/// keeps every launch out of every other's window. Released on drop.
+pub(crate) struct LaunchLock {
+    _file: std::fs::File,
+}
+
+impl LaunchLock {
+    /// Take the lock at `path`, polling (without blocking the runtime) up to
+    /// `wait`. `None` when it could not be taken in time or the file could not
+    /// be opened — the caller then launches unserialised, as before, rather
+    /// than failing capture outright.
+    pub(crate) async fn acquire(path: &Path, wait: Duration) -> Option<Self> {
+        use std::os::unix::io::AsRawFd;
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let file = match std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)
+        {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(path = %path.display(), "Cannot open redirector launch lock ({e}); launching unserialised");
+                return None;
+            }
+        };
+        let deadline = Instant::now() + wait;
+        loop {
+            // SAFETY: flock on a descriptor owned by `file` for its lifetime.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Some(Self { _file: file });
+            }
+            // Only "another daemon holds it" is worth waiting for. Anything
+            // else (a home directory on a filesystem without flock, …) will
+            // not change by polling, so launch unserialised at once.
+            let err = std::io::Error::last_os_error();
+            if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
+                warn!(path = %path.display(), "Cannot lock redirector launch lock ({err}); launching unserialised");
+                return None;
+            }
+            if Instant::now() >= deadline {
+                warn!(
+                    path = %path.display(),
+                    "Another daemon's redirector launch is still holding the lock after {}s; launching unserialised",
+                    wait.as_secs()
+                );
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}
+
+/// Stops an abandoned redirector launch: aborts the launcher task (whose
+/// `kill_on_drop` child then dies) and unlinks the listener socket. Used by
+/// `IosRedirect::start` between spawning the launcher and a successful
+/// connect; `disarm` hands the launcher over once the session is up.
+struct LaunchCleanup {
+    launcher: Option<JoinHandle<()>>,
+    socket: PathBuf,
+}
+
+impl LaunchCleanup {
+    /// Stop the launcher and wait (bounded) for it to be gone, so the launch
+    /// lock is only released after the child has stopped.
+    async fn stop(&mut self) {
+        if let Some(handle) = self.launcher.take() {
+            handle.abort();
+            let _ = timeout(Duration::from_secs(2), handle).await;
+        }
+        let _ = std::fs::remove_file(&self.socket);
+    }
+
+    fn disarm(mut self) -> JoinHandle<()> {
+        self.launcher
+            .take()
+            .expect("LaunchCleanup disarmed after stop")
+    }
+}
+
+impl Drop for LaunchCleanup {
+    /// Cancellation (the start future dropped mid-connect): abort without
+    /// waiting — Drop can't await — and still remove the socket.
+    fn drop(&mut self) {
+        if let Some(handle) = self.launcher.take() {
+            handle.abort();
+            let _ = std::fs::remove_file(&self.socket);
+        }
+    }
+}
+
+fn launch_lock_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".tapsmith").join("ios-redirector-launch.lock"))
+}
+
 /// How long to wait for a write to the SE control channel before giving up.
 /// Guards against hangs if the SE stops draining its side (crash, suspension,
 /// kernel quirk) — without this, the refresh task and the initial conf send
@@ -407,9 +531,19 @@ impl IosRedirect {
             }
         }
 
+        // Serialise the launch → connect window with every other daemon on
+        // this Mac (see `LaunchLock`). On success it is released in the
+        // background after the launcher exits plus a grace (below); on an
+        // error return it drops with the error.
+        let launch_lock = match launch_lock_path() {
+            Some(path) => LaunchLock::acquire(&path, LAUNCH_LOCK_TIMEOUT).await,
+            None => None,
+        };
+
         info!(
             redirector = %redirector_bin.display(),
             listener = %listener_path.display(),
+            serialised = launch_lock.is_some(),
             "spawning redirector launcher"
         );
 
@@ -426,7 +560,11 @@ impl IosRedirect {
         // aborting the task would leave the OS-level child process
         // orphaned (visible in `ps` as a stranded "Mitmproxy Redirector").
         let launcher_path = listener_path.clone();
+        let (launcher_done_tx, launcher_done_rx) = tokio::sync::oneshot::channel::<()>();
         let launcher_handle = tokio::spawn(async move {
+            // Signals (by dropping) when the launcher has exited, for the
+            // launch lock's release below.
+            let _launcher_done = launcher_done_tx;
             let out = Command::new(&redirector_bin)
                 .arg(&launcher_path)
                 .stdout(std::process::Stdio::piped())
@@ -454,9 +592,20 @@ impl IosRedirect {
             }
         });
 
-        let (control_stream, _) = timeout(CONTROL_CHANNEL_TIMEOUT, listener.accept())
-            .await
-            .map_err(|_| {
+        // Until the extension has connected and accepted its first
+        // configuration, a failure (or this future being cancelled) must stop
+        // the launcher — dropping its JoinHandle would only detach the task,
+        // leaving the child running — and remove our socket. Declared after
+        // `launch_lock`, so it runs before the lock is released: the next
+        // daemon's launch can't overlap a launcher we are abandoning.
+        let mut launch_cleanup = LaunchCleanup {
+            launcher: Some(launcher_handle),
+            socket: listener_path.clone(),
+        };
+        let connected = async {
+            let (control_stream, _) = timeout(CONTROL_CHANNEL_TIMEOUT, listener.accept())
+                .await
+                .map_err(|_| {
                 anyhow::anyhow!(
                     "Mitmproxy Redirector System Extension did not connect within {}s.\n\
                      \n\
@@ -475,13 +624,39 @@ impl IosRedirect {
                 )
             })?
             .context("accepting System Extension control channel")?;
-        debug!("System Extension control channel connected");
+            debug!("System Extension control channel connected");
 
-        let mut control = Framed::new(control_stream, LengthDelimitedCodec::new());
-        send_intercept_conf(&mut control, &initial_pids)
-            .await
-            .context("sending initial InterceptConf")?;
-        debug!(pids = initial_pids.len(), "initial InterceptConf accepted");
+            let mut control = Framed::new(control_stream, LengthDelimitedCodec::new());
+            send_intercept_conf(&mut control, &initial_pids)
+                .await
+                .context("sending initial InterceptConf")?;
+            debug!(pids = initial_pids.len(), "initial InterceptConf accepted");
+            Ok::<_, anyhow::Error>(control)
+        }
+        .await;
+        let control = match connected {
+            Ok(control) => control,
+            Err(e) => {
+                launch_cleanup.stop().await;
+                return Err(e);
+            }
+        };
+        let launcher_handle = launch_cleanup.disarm();
+
+        // Keep the next daemon's launch out a little longer, without delaying
+        // this capture: the extension dials back from inside its provider's
+        // start, which may still be finishing, and the stock launcher only
+        // leaves a configuration alone once it reports `connected`. A
+        // background task holds the lock until this launcher process has
+        // exited (bounded) plus a short grace, then releases it. The flow
+        // accept loop below starts immediately.
+        if let Some(lock) = launch_lock {
+            tokio::spawn(async move {
+                let _ = timeout(LAUNCHER_EXIT_WAIT, launcher_done_rx).await;
+                tokio::time::sleep(LAUNCH_LOCK_GRACE).await;
+                drop(lock);
+            });
+        }
 
         // Refresh task owns the control channel for the remainder of the
         // session. It polls `ps` every PID_REFRESH_INTERVAL and writes a
@@ -1081,6 +1256,94 @@ fn extract_brew_tarball(tar_path: &Path) -> Result<()> {
     }
     drop(guard); // explicit cleanup of any leftover tmp files
     Ok(())
+}
+
+#[cfg(test)]
+mod launch_lock_tests {
+    use super::*;
+
+    /// A stand-in launcher task that runs until aborted; `rx` closes when it
+    /// is gone (its sender is dropped with the task).
+    fn fake_launcher() -> (JoinHandle<()>, tokio::sync::oneshot::Receiver<()>) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            let _alive = tx;
+            std::future::pending::<()>().await;
+        });
+        (handle, rx)
+    }
+
+    #[tokio::test]
+    async fn a_failed_launch_stops_its_launcher_and_removes_its_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("redirector.sock");
+        std::fs::write(&socket, b"").unwrap();
+        let (handle, rx) = fake_launcher();
+        let mut cleanup = LaunchCleanup {
+            launcher: Some(handle),
+            socket: socket.clone(),
+        };
+        cleanup.stop().await;
+        // stop() returned only after the launcher task was gone.
+        assert!(rx.await.is_err(), "launcher still running");
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_launch_still_aborts_its_launcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("redirector.sock");
+        std::fs::write(&socket, b"").unwrap();
+        let (handle, rx) = fake_launcher();
+        drop(LaunchCleanup {
+            launcher: Some(handle),
+            socket: socket.clone(),
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), rx)
+                .await
+                .unwrap()
+                .is_err(),
+            "launcher still running"
+        );
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn a_connected_launch_keeps_its_launcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("redirector.sock");
+        std::fs::write(&socket, b"").unwrap();
+        let (handle, _rx) = fake_launcher();
+        let launcher = LaunchCleanup {
+            launcher: Some(handle),
+            socket: socket.clone(),
+        }
+        .disarm();
+        assert!(!launcher.is_finished());
+        assert!(socket.exists(), "the live session's socket was removed");
+        launcher.abort();
+    }
+
+    #[tokio::test]
+    async fn a_second_launch_waits_for_the_first_to_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("launch.lock");
+        let first = LaunchLock::acquire(&path, Duration::from_secs(1)).await;
+        assert!(first.is_some());
+        // Held: a second daemon's launch does not get in.
+        assert!(LaunchLock::acquire(&path, Duration::from_millis(200))
+            .await
+            .is_none());
+        // Released (the first daemon's extension connected): it does.
+        let waiter = {
+            let path = path.clone();
+            tokio::spawn(async move { LaunchLock::acquire(&path, Duration::from_secs(5)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        drop(first);
+        assert!(waiter.await.unwrap().is_some());
+    }
 }
 
 #[cfg(test)]

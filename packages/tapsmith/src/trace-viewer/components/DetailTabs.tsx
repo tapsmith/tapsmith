@@ -53,6 +53,13 @@ function deviceForEvent(
   return group.find((d) => d.name === event.deviceId) ?? metadata.device;
 }
 
+/** Whether any device's capture went through the host-wide macOS system proxy. */
+function capturedHostWide(metadata: TraceMetadata | undefined): boolean {
+  if (!metadata) return false;
+  const devices = [...(metadata.devices ?? []), metadata.device].filter(Boolean);
+  return devices.some((d) => d.networkCaptureRoute === 'ios-system-proxy');
+}
+
 /**
  * The Call tab's "Device" line. The group name (`alice`) leads only when the
  * test declared a group: a single-device run still records one (`device-1`)
@@ -222,7 +229,7 @@ export function DetailTabs({ event, events, hierarchies, sources, metadata, netw
         {activeTab === 'hierarchy' && <HierarchyTabWrapper event={event} hierarchies={hierarchies} onNodeSelect={onHierarchyNodeSelect} group={group} screenshotVariant={screenshotVariant} />}
 
         {activeTab === 'locator' && locatorTab}
-        {activeTab === 'network' && <NetworkTab networkCaptureEnabled={metadata?.traceConfig?.network} entries={networkEntries} bodies={networkBodies} deviceNames={deviceNames} />}
+        {activeTab === 'network' && <NetworkTab networkCaptureEnabled={metadata?.traceConfig?.network} entries={networkEntries} bodies={networkBodies} deviceNames={deviceNames} hostWideCapture={capturedHostWide(metadata)} />}
         {activeTab === 'errors' && <ErrorsTab event={event} events={events} testError={testError} sources={sources} metadata={metadata} />}
       </div>
     </div>

@@ -36,12 +36,13 @@ See [Telemetry](telemetry.md) for exactly what is (and is not) collected.
 | Variable | Description |
 |---|---|
 | `TAPSMITH_REDIRECTOR_APP` | Override the path to the mitmproxy Redirector app binary. Default search order: (1) this env var, (2) `/Applications/Mitmproxy Redirector.app/Contents/MacOS/Mitmproxy Redirector`, (3) `~/.tapsmith/redirector/` (auto-extracted from brew cask). |
+| `TAPSMITH_IOS_SYSTEM_PROXY_FALLBACK` | Whether an iOS simulator whose Network Extension redirector fails may fall back to the host-wide macOS system proxy, which records every app on the Mac. `1`/`true`/`on`/`yes` always allows it, `0`/`false`/`off`/`no` never does; unset, it is allowed only when `CI` is set. Read by the daemon, so set it in the environment the CLI or UI mode starts from. See [When the Network Extension is unavailable](ios-network-capture.md#when-the-network-extension-is-unavailable). |
 
 ## CI and Reporters
 
 | Variable | Description |
 |---|---|
-| `CI` | When set (and not `"false"`), Tapsmith skips the Android device-health preflight and disables interactive progress output. Most CI providers set this automatically. Reporter selection is no longer affected — `list` is the default everywhere; set `reporter: 'dot'` explicitly for compact CI output. |
+| `CI` | When set (and not `"false"`), Tapsmith skips the Android device-health preflight and disables interactive progress output. It also lets the daemon use the host-wide iOS system-proxy capture fallback (for the daemon, `0` and any casing of `false` also count as unset; override with `TAPSMITH_IOS_SYSTEM_PROXY_FALLBACK`). Most CI providers set this automatically. Reporter selection is no longer affected — `list` is the default everywhere; set `reporter: 'dot'` explicitly for compact CI output. |
 | `GITHUB_ACTIONS` | When set (GitHub Actions sets it automatically), Tapsmith auto-adds the `github` reporter for inline annotations on test failures. |
 | `GITHUB_STEP_SUMMARY` | Path to the GitHub Actions step summary file. The GitHub reporter writes a Markdown summary table when this is set. |
 

@@ -813,6 +813,26 @@ message StartNetworkCaptureResponse {
   bool success = 2;
   uint32 proxy_port = 3;     // port the proxy is listening on
   string error_message = 4;
+  // How the device's traffic reaches the proxy. UNSPECIFIED when success is
+  // false. The runner records it per device in the trace metadata, so a trace
+  // captured through the host-wide system proxy says so.
+  NetworkCaptureRoute route = 5;
+}
+
+// How a device's traffic is routed into the capture proxy.
+enum NetworkCaptureRoute {
+  NETWORK_CAPTURE_ROUTE_UNSPECIFIED = 0;
+  // iOS simulator: per-PID macOS Network Extension redirector. Device-isolated.
+  NETWORK_CAPTURE_ROUTE_IOS_NETWORK_EXTENSION = 1;
+  // iOS simulator: macOS system HTTP(S) proxy fallback. Host-wide: records
+  // every process on the Mac, and never sees requests to localhost.
+  NETWORK_CAPTURE_ROUTE_IOS_SYSTEM_PROXY = 2;
+  // Physical iOS device: the installed Wi-Fi proxy profile.
+  NETWORK_CAPTURE_ROUTE_IOS_DEVICE_PROXY = 3;
+  // Android: iptables transparent redirect.
+  NETWORK_CAPTURE_ROUTE_ANDROID_TRANSPARENT = 4;
+  // Android: `settings global http_proxy` fallback (proxy-aware clients only).
+  NETWORK_CAPTURE_ROUTE_ANDROID_HTTP_PROXY = 5;
 }
 
 message StopNetworkCaptureRequest {
