@@ -118,6 +118,24 @@ describe('mergeBlobs input checks', () => {
     expect(mergeError().message).toMatch(/^Invalid blob file report-a\.jsonl: malformed test or suite entry \(/);
   });
 
+  it('names the file when a suite holds a null test entry', () => {
+    fs.writeFileSync(path.join(tmpDir, 'report-a.jsonl'), JSON.stringify({
+      version: 1, duration: 1, tests: [], suites: [{ name: 's', durationMs: 1, tests: [null], suites: [] }],
+    }));
+    expect(mergeError().message).toMatch(/^Invalid blob file report-a\.jsonl: malformed test or suite entry \(/);
+  });
+
+  it('writes nothing when a later blob is refused', () => {
+    fs.writeFileSync(path.join(tmpDir, 'report-a.jsonl'), JSON.stringify({
+      version: 1, duration: 1, tests: [], suites: [], screenshots: { 'shot.png': 'eA==' },
+    }));
+    fs.writeFileSync(path.join(tmpDir, 'report-b.jsonl'), JSON.stringify({
+      version: 1, duration: 1, tests: [null], suites: [],
+    }));
+    expect(mergeError().message).toMatch(/^Invalid blob file report-b\.jsonl/);
+    expect(fs.existsSync(path.join(tmpDir, 'shot.png'))).toBe(false);
+  });
+
   it('names the file when a blob cannot be read (a directory named *.jsonl)', () => {
     fs.mkdirSync(path.join(tmpDir, 'report-a.jsonl'));
     expect(mergeError().message).toMatch(/^Invalid blob file report-a\.jsonl: cannot read it \(/);

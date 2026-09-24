@@ -2290,16 +2290,6 @@ async function main(): Promise<void> {
       reporters.push(new BlobReporter());
     }
   }
-  // UI mode reports through its own server, never these reporters, so it
-  // must not empty a blob directory it will not rewrite.
-  if (!args.ui) {
-    const { prepareBlobOutputDirs } = await import('./merge-reports.js');
-    const refusal = prepareBlobOutputDirs(reporters, config);
-    if (refusal) {
-      console.error(red(refusal));
-      process.exit(1);
-    }
-  }
   const reporter = new ReporterDispatcher(reporters);
 
   // Compute the effective parallelism BEFORE handing config to the reporter,
@@ -2389,6 +2379,19 @@ async function main(): Promise<void> {
   const initialProject = projects.find((p) => p.testFiles.length > 0) ?? projects[0];
   const initialEffectiveConfig = initialProject.effectiveConfig;
   const shouldShowLaunchProgress = args.ui || !args.watch;
+  // Empty blob output directories here: after every argument refusal (a
+  // refused run must not cost the previous blob) and before any device
+  // launch (a run that dies launching must not leave the previous blob
+  // posing as its own). UI mode reports through its own server, never these
+  // reporters, so it must not empty a directory it will not rewrite.
+  if (!args.ui) {
+    const { prepareBlobOutputDirs } = await import('./merge-reports.js');
+    const refusal = prepareBlobOutputDirs(reporters, config);
+    if (refusal) {
+      console.error(red(refusal));
+      process.exit(1);
+    }
+  }
   printTapsmithBanner();
   // After the tsx re-exec, so it prints exactly once, and before any worker
   // is forked, so no child ever races it (PILOT-330).

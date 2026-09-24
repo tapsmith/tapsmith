@@ -256,31 +256,36 @@ export function mergeBlobs(blobDir: string): FullResult {
   const allSuites: SuiteResult[] = [];
   let totalDuration = 0;
 
+  // First pass: validate and restore every blob, writing nothing, so a
+  // refused merge leaves the directory exactly as it found it.
   for (const { file, blob } of blobs) {
     totalDuration = Math.max(totalDuration, blob.duration);
-    checkAttachmentKeys(file, blob);
-
-    let tests: TestResult[];
-    let suites: SuiteResult[];
     try {
-      tests = blob.tests.map((t) => restoreTest(t, blobDir));
-      suites = blob.suites.map((s) => deserializeSuite(s, blobDir));
+      checkAttachmentKeys(file, blob);
+      allTests.push(...blob.tests.map((t) => restoreTest(t, blobDir)));
+      allSuites.push(...blob.suites.map((s) => deserializeSuite(s, blobDir)));
     } catch (err) {
+      if (err instanceof BlobMergeError) throw err;
       throw new BlobMergeError(
         `Invalid blob file ${file}: malformed test or suite entry (${(err as Error).message})`,
       );
     }
-    allTests.push(...tests);
-    allSuites.push(...suites);
+  }
 
-    // Restore screenshots to disk
-    if (isRecord(blob.screenshots)) {
-      for (const [key, base64] of Object.entries(blob.screenshots)) {
-        if (typeof base64 !== 'string') continue;
-        const screenshotPath = path.join(blobDir, key);
+  // Second pass: restore screenshots to disk.
+  for (const { file, blob } of blobs) {
+    if (!isRecord(blob.screenshots)) continue;
+    for (const [key, base64] of Object.entries(blob.screenshots)) {
+      if (typeof base64 !== 'string') continue;
+      const screenshotPath = path.join(blobDir, key);
+      try {
         if (!fs.existsSync(screenshotPath)) {
           fs.writeFileSync(screenshotPath, Buffer.from(base64, 'base64'));
         }
+      } catch (err) {
+        throw new BlobMergeError(
+          `Cannot restore screenshot ${key} from ${file} into ${blobDir}: ${(err as Error).message}`,
+        );
       }
     }
   }
