@@ -183,26 +183,26 @@ If the redirector cannot be started (the extension is not approved, or its contr
 [tapsmith] Network capture warning: <udid>: capturing through the macOS system-proxy fallback (the Network Extension redirector is unavailable). This is host-wide: …
 ```
 
-On a developer Mac the Network Extension is available, so an NE failure there is a real problem to fix, not something to paper over by recording your own browsing. Capture is disabled instead, with `Network capture disabled: … the Network Extension redirector failed (…)` and a pointer to `npx tapsmith doctor`. To allow the fallback locally anyway, or to refuse it on CI, set:
+On a developer Mac the Network Extension is available, so an NE failure there is a real problem to fix, not something to paper over by recording your own browsing. Capture is disabled instead, with `Network capture disabled: … the Network Extension redirector failed (…)` and a pointer to `npx tapsmith doctor`. The daemon retries the redirector at most once a minute (each failed attempt costs a 10 s wait), so once you fix the extension, capture comes back within a minute without restarting UI mode. To allow the fallback locally anyway, or to refuse it on CI, set:
 
 | `TAPSMITH_IOS_SYSTEM_PROXY_FALLBACK` | Effect |
 | --- | --- |
-| unset | Fallback allowed only when `CI` is set (and not `false`/`0`) |
-| `1` / `true` / `on` | Always allow the fallback |
-| `0` / `false` / `off` | Never use the fallback, even on CI |
+| unset | Fallback allowed only when `CI` is set (and not `false`/`0`, in any case) |
+| `1` / `true` / `on` / `yes` | Always allow the fallback |
+| `0` / `false` / `off` / `no` | Never use the fallback, even on CI |
 
 **One daemon at a time.** There is only one system proxy per Mac, so only one daemon can hold the fallback. The owner is recorded in `~/.tapsmith/ios-system-proxy.json` under a file lock:
 
 - A second daemon that needs the fallback while another live daemon holds it gets `Network capture disabled: … another Tapsmith daemon (pid N) already routes the macOS system proxy …`, instead of re-pointing the proxy at itself and leaving the first daemon capturing nothing. Parallel iOS workers (`--workers N`) on a runner without the Network Extension therefore capture on one worker only.
 - A proxy you configured yourself (Charles, Proxyman, a corporate proxy) is never overwritten; the fallback is refused with the command to turn it off if it was left behind.
-- A daemon only switches the proxy off while it still owns it, so the first daemon to exit can't turn it off under another, and it puts your original proxy bypass list back.
+- A daemon only switches the proxy off while it still owns it, so the first daemon to exit can't turn it off under another. It puts back your original proxy bypass list (unless you have changed it since). A disabled HTTP/HTTPS proxy server/port you had saved is replaced, not restored: `networksetup` can only write a server by switching it on, and briefly enabling a proxy you had turned off is worse than losing the saved address.
 - If a daemon dies without cleaning up, the next daemon to start resets the proxy, and `npx tapsmith doctor` flags it in the meantime.
 
-Once a daemon has fallen back it keeps the fallback (and the same proxy port) for its lifetime, and each device's trace records `"networkCaptureRoute": "ios-system-proxy"` in `metadata.json`, which the trace viewer's Network tab shows as a warning banner.
+Once a daemon has fallen back it keeps the fallback (and the same proxy port) across tests until it exits, switches device, or is asked for a device-isolated capture (a [multi-device group](#multi-device-groups) on the same daemon), which releases the host-wide proxy and retries the redirector instead. Each device's trace records `"networkCaptureRoute": "ios-system-proxy"` in `metadata.json`, which the trace viewer's Network tab shows as a warning banner.
 
 ### Multi-device groups
 
-Each device of a [device group](multi-device.md) captures on its own daemon, and the runner labels every entry with the device that captured it. That label is only honest on a per-device route, so for a group the runner asks each daemon to **require isolation**: the system-proxy fallback above is refused and that device's capture is disabled with a message naming the device (`Network capture disabled: [bob] …`), instead of recording the whole Mac's traffic under one device's name. The other members keep capturing, and the disabled member retries the redirector on its next test rather than staying disabled for the run — a single-device run, which can fall back, remembers the failure and skips straight to the system proxy.
+Each device of a [device group](multi-device.md) captures on its own daemon, and the runner labels every entry with the device that captured it. That label is only honest on a per-device route, so for a group the runner asks each daemon to **require isolation**: the system-proxy fallback above is refused and that device's capture is disabled with a message naming the device (`Network capture disabled: [bob] …`), instead of recording the whole Mac's traffic under one device's name. The other members keep capturing, and the disabled member retries the redirector on its next test rather than staying disabled for the run — a single-device run remembers the failure for a minute and skips the 10 s redirector wait on the tests in between, going straight to the system proxy on CI or straight to "capture disabled" locally.
 
 The runner also starts the members' captures one at a time. The stock mitmproxy launcher reuses any `mitmproxy` extension configuration that is not yet connected, so two daemons launching within the same ~150 ms overwrite each other's socket path and the second one silently loses the extension. If a member still reports `Network Extension redirector unavailable`, check that no other Tapsmith run (for example a parallel `--workers` run) started its redirector at the same moment, and look for `System Extension control channel connected` in each daemon's debug log.
 

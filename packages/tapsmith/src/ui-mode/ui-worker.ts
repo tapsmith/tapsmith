@@ -407,9 +407,9 @@ async function runFileWithRecovery(
         projectUseOptions,
         projectName,
         testFilter,
-        onNetworkEntries: (entries, networkCaptureEnabled) => {
+        onNetworkEntries: (entries, networkCaptureEnabled, networkCaptureRoute) => {
           for (const { entries: safe, bodies } of encodeBodies(entries)) {
-            send({ type: 'network', workerId, entries: safe, bodies, bodyMode: 'patch', networkCaptureEnabled });
+            send({ type: 'network', workerId, entries: safe, bodies, bodyMode: 'patch', networkCaptureEnabled, networkCaptureRoute: networkCaptureRoute ?? null });
           }
         },
       });

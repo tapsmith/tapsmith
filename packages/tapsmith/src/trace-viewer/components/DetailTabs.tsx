@@ -53,19 +53,19 @@ function deviceForEvent(
   return group.find((d) => d.name === event.deviceId) ?? metadata.device;
 }
 
+/** Whether any device's capture went through the host-wide macOS system proxy. */
+function capturedHostWide(metadata: TraceMetadata | undefined): boolean {
+  if (!metadata) return false;
+  const devices = [...(metadata.devices ?? []), metadata.device].filter(Boolean);
+  return devices.some((d) => d.networkCaptureRoute === 'ios-system-proxy');
+}
+
 /**
  * The Call tab's "Device" line. The group name (`alice`) leads only when the
  * test declared a group: a single-device run still records one (`device-1`)
  * so its events have a `deviceId`, but that name is the runner's, not the
  * author's, and showing it read as a device the user never configured.
  */
-/** Whether any device's capture went through the host-wide macOS system proxy. */
-function capturedHostWide(metadata: TraceMetadata | undefined): boolean {
-  if (!metadata) return false;
-  const devices = metadata.devices ?? (metadata.device ? [metadata.device] : []);
-  return devices.some((d) => d.networkCaptureRoute === 'ios-system-proxy');
-}
-
 function deviceLine(metadata: TraceMetadata, event: { deviceId?: string }): string | undefined {
   const d = deviceForEvent(metadata, event);
   if (!d?.serial) return undefined;

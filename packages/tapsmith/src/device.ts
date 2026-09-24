@@ -873,7 +873,10 @@ export class Device {
     } catch (err) {
       this._networkCaptureActive = false;
       this._networkCaptureError = err instanceof Error ? err.message : String(err);
-      this._networkCaptureRoute = undefined;
+      // The daemon's state is unknown (a timed-out start may have completed),
+      // and a proxy kept running from an earlier test still routes the same
+      // way; keep its route so entries drained from it stay labelled.
+      if (!this._networkCaptureEverStarted) this._networkCaptureRoute = undefined;
       throw err;
     }
     // Kept across the stop that ends the test: the trace metadata is written

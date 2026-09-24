@@ -50,6 +50,39 @@ test("network requests and selected bodies update while the test is running", as
   // No test-status or run-end message: all updates occurred during execution.
 })
 
+for (const networkCaptureRoute of ["ios-system-proxy", "ios-network-extension", undefined] as const) {
+  const hostWide = networkCaptureRoute === "ios-system-proxy"
+  test(`warns about a host-wide system-proxy capture while the test runs (${networkCaptureRoute ?? "no route"})`, async ({ app, detailTabs, page, explorer }) => {
+    app.send({ type: "run-start", fileCount: 1 })
+    app.send({ type: "test-start", fullName: FULL_NAME, filePath: GESTURES_FILE })
+    app.send({
+      type: "network", testFullName: FULL_NAME, networkCaptureEnabled: true, networkCaptureRoute,
+      entries: [networkEntry({ index: 0, url: "https://chat.google.com/preconnect" })],
+    })
+    await explorer.expandAll()
+    await explorer.clickNode("double tap registers double tap gesture")
+    await detailTabs.select("Network")
+    const network = new NetworkPane(page)
+    await expect(network.rows).toHaveCount(1)
+    await expect(network.hostWideNotice).toHaveCount(hostWide ? 1 : 0)
+  })
+}
+
+test("a retry whose capture has no route clears the previous attempt's host-wide warning", async ({ app, detailTabs, page, explorer }) => {
+  app.send({ type: "run-start", fileCount: 1 })
+  app.send({ type: "test-start", fullName: FULL_NAME, filePath: GESTURES_FILE })
+  const entries = [networkEntry({ index: 0, url: "https://api.acme.dev/items" })]
+  app.send({ type: "network", testFullName: FULL_NAME, networkCaptureEnabled: true, networkCaptureRoute: "ios-system-proxy", entries })
+  await explorer.expandAll()
+  await explorer.clickNode("double tap registers double tap gesture")
+  await detailTabs.select("Network")
+  const network = new NetworkPane(page)
+  await expect(network.hostWideNotice).toHaveCount(1)
+  // Attempt 2 (same test, same trace key) captured with no route.
+  app.send({ type: "network", testFullName: FULL_NAME, networkCaptureEnabled: true, networkCaptureRoute: null, entries })
+  await expect(network.hostWideNotice).toHaveCount(0)
+})
+
 for (const enabled of [true, false, undefined]) {
   test(`empty network hint requires explicit disabled capture (${enabled})`, async ({ app, detailTabs, page, explorer }) => {
     app.send({ type: "run-start", fileCount: 1 })

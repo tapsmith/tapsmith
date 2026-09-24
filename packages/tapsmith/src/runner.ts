@@ -33,7 +33,7 @@ import { appendEventsToTrace, packageTrace, readTraceActionCount } from './trace
 import { TraceCollector, screenshotFileName, setActiveTraceCollector, withActiveTraceCollector } from './trace/trace-collector.js';
 import type { AnyTraceEvent } from './trace/types.js';
 import { getSimulatorScreenScale } from './ios-simulator.js';
-import type { NetworkEntry, TraceDeviceInfo } from './trace/types.js';
+import type { NetworkCaptureRoute, NetworkEntry, TraceDeviceInfo } from './trace/types.js';
 import { TestAbortedError, isAbortError } from './abort.js';
 import {
   appResetAction,
@@ -815,8 +815,13 @@ export interface RunOptions {
    * matches any pattern in either set is skipped.
    */
   projectGrepInvert?: RegExp[];
-  /** Full snapshots during a test and after its final drain. Enables live polling in UI mode. */
-  onNetworkEntries?: (entries: NetworkEntry[], networkCaptureEnabled?: boolean) => void;
+  /**
+   * Full snapshots during a test and after its final drain. Enables live
+   * polling in UI mode. `networkCaptureRoute` is how this attempt's capture
+   * reached the proxy — `ios-system-proxy` (host-wide, may include other apps'
+   * traffic) whenever any device used it (PILOT-319).
+   */
+  onNetworkEntries?: (entries: NetworkEntry[], networkCaptureEnabled?: boolean, networkCaptureRoute?: NetworkCaptureRoute) => void;
   /**
    * Append a unique query parameter to the dynamic import URL so Node.js
    * treats it as a new module. Required by persistent processes (UI workers)
@@ -1601,6 +1606,19 @@ async function runSuiteContext(
       const networkCapturingDevices = new Set<Device>();
       const networkDrainDevices = (): Device[] =>
         devices.filter((d) => networkCapturingDevices.has(d) || d._networkProxyRunning);
+      // UI mode's live view builds its own metadata, so it is told this
+      // attempt's route directly (the trace records it per device in
+      // metadata.json): the host-wide one if any device used it, since that
+      // is what the Network tab must warn about, else the primary's.
+      // Same device set as the packaged metadata (`routedDevices`), so the
+      // live view and the saved trace always agree.
+      const routedDevices = (): Set<Device> =>
+        (traceConfig.network ? new Set(networkDrainDevices()) : new Set<Device>());
+      const captureRoute = (): NetworkCaptureRoute | undefined => {
+        const routed = routedDevices();
+        if ([...routed].some((d) => d._networkCaptureRoute === 'ios-system-proxy')) return 'ios-system-proxy';
+        return primary && routed.has(primary) ? primary._networkCaptureRoute : undefined;
+      };
 
       if (recording && primary) {
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-trace-'));
@@ -1651,7 +1669,13 @@ async function runSuiteContext(
               if (!res.success && res.errorMessage) {
                 _warnCaptureOnce('Network capture disabled', forDevice(d, res.errorMessage));
               } else if (res.errorMessage) {
-                _warnCaptureOnce('Network capture warning', forDevice(d, res.errorMessage));
+                // The daemon joins independent warnings with newlines, and
+                // which ones appear varies between the first start and the
+                // per-test reuse of a running proxy; dedupe each on its own
+                // so a persistent one prints once per run.
+                for (const line of res.errorMessage.split('\n')) {
+                  if (line.trim()) _warnCaptureOnce('Network capture warning', forDevice(d, line));
+                }
               }
             } catch (err) {
               _warnCaptureOnce(
@@ -1761,7 +1785,7 @@ async function runSuiteContext(
             opts.reporter?.onTestStart?.(fullName, opts.testFilePath, { project: opts.projectName });
           }
 
-          opts.onNetworkEntries?.([], traceConfig.network);
+          opts.onNetworkEntries?.([], traceConfig.network, captureRoute());
           if (traceCollector && opts.onNetworkEntries) {
             const liveCollector = traceCollector;
             const unsupported = new Set<Device>();
@@ -1785,7 +1809,7 @@ async function runSuiteContext(
                 networkSnapshotEntries(),
                 liveCollector.events, requestContext.getNetworkEntries(),
               );
-            }, (entries) => opts.onNetworkEntries?.(entries, traceConfig.network), opts.abortSignal);
+            }, (entries) => opts.onNetworkEntries?.(entries, traceConfig.network, captureRoute()), opts.abortSignal);
           }
 
           // Replay beforeAll events into this test's trace so they appear in
@@ -2208,7 +2232,7 @@ async function runSuiteContext(
 
         // Notify UI mode with the full set of network entries (device + API)
         if (networkEntries && opts.onNetworkEntries) {
-          opts.onNetworkEntries(networkEntries, traceConfig.network);
+          opts.onNetworkEntries(networkEntries, traceConfig.network, captureRoute());
         }
         if (collector) {
           const retain = shouldRetain(traceConfig.mode, status === 'passed', attempt);
@@ -2232,7 +2256,10 @@ async function runSuiteContext(
                 testDuration: Date.now() - attemptStart,
                 startTime: attemptStart,
                 endTime: Date.now(),
-                ...(await traceDeviceMetadata(opts, networkCapturingDevices)),
+                // Every device whose entries were drained into this trace —
+                // including one whose start failed this attempt while its
+                // proxy kept running — records the route those entries took.
+                ...(await traceDeviceMetadata(opts, routedDevices())),
                 tapsmithVersion: version,
                 error: error?.message,
                 outputDir,

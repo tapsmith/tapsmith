@@ -174,12 +174,14 @@ pub struct TapsmithServiceImpl {
     /// reported on every `StartNetworkCapture` response — including the
     /// per-test reuse path, which would otherwise lose it after the first test.
     proxy_route: Arc<RwLock<proto::NetworkCaptureRoute>>,
-    /// Sticky flag: once the Network Extension fails, skip the 10s
-    /// `IosRedirect::start` timeout on subsequent `start_network_capture`
-    /// calls and go straight to the system proxy fallback. Without this,
-    /// every per-test start/stop cycle pays the NE timeout (~10s × N tests).
+    /// The last Network Extension failure. For `NE_RETRY_AFTER`, later
+    /// `start_network_capture` calls skip the 10s `IosRedirect::start` timeout
+    /// and go straight to the system-proxy fallback, or to "capture disabled"
+    /// when the fallback is refused; after that the redirector is tried again.
+    /// Without this, every per-test start/stop cycle pays the NE timeout
+    /// (~10s × N tests). Cleared when the redirector connects.
     #[cfg(target_os = "macos")]
-    ios_ne_unavailable: Arc<RwLock<bool>>,
+    ios_ne_unavailable: Arc<RwLock<Option<ios::system_proxy::NeFailure>>>,
     /// Session cache of `simctl get_app_container` results keyed by
     /// `udid\0bundle_id`. The data-container path of an installed app is
     /// stable (it changes only on reinstall) and is plain host filesystem —
@@ -378,7 +380,7 @@ impl TapsmithServiceImpl {
             ios_system_proxy: Arc::new(RwLock::new(None)),
             proxy_route: Arc::new(RwLock::new(proto::NetworkCaptureRoute::Unspecified)),
             #[cfg(target_os = "macos")]
-            ios_ne_unavailable: Arc::new(RwLock::new(false)),
+            ios_ne_unavailable: Arc::new(RwLock::new(None)),
             ios_app_container_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
             ios_ca_cert_installed: Arc::new(RwLock::new(std::collections::HashSet::new())),
             ios_agent_config: Arc::new(RwLock::new(None)),
@@ -1968,19 +1970,27 @@ impl TapsmithServiceImpl {
         // (after `proxy.stop()`) because Rust drops locals in reverse
         // declaration order. We rely on an explicit `drop()` call below
         // to get the right ordering.
+        //
+        // The `network_proxy` write guard is held across every slot take below
+        // — the same guard `start_network_capture` holds while it fills them —
+        // so a start can neither be half-way through filling the slots nor
+        // begin between our takes. Otherwise a lease stored around our take is
+        // orphaned (host proxy pointing at a stopped listener) or released
+        // under a capture that has just started.
+        let mut proxy_guard = self.network_proxy.write().await;
+        let proxy = proxy_guard.take();
         #[cfg(target_os = "macos")]
         let ios_redirect = self.ios_redirect.write().await.take();
         #[cfg(target_os = "macos")]
         let system_proxy = self.ios_system_proxy.write().await.take();
-        let proxy = self.network_proxy.write().await.take();
         let serial = self.proxy_device_serial.write().await.take();
         let platform = self.proxy_platform.write().await.take();
         let reverse_port = self.proxy_reverse_port.write().await.take();
         let ca_cert_path = self.proxy_ca_cert_path.write().await.take();
         self.proxy_http_ports.write().await.clear();
         let used_iptables = std::mem::replace(&mut *self.proxy_uses_iptables.write().await, false);
-
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
+        drop(proxy_guard);
 
         // Reset macOS system proxy if we set it as a fallback.
         #[cfg(target_os = "macos")]
@@ -5465,6 +5475,16 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         http_ports.sort_unstable();
         http_ports.dedup();
 
+        // A capture kept alive on the host-wide system proxy (from an earlier
+        // non-isolated start on this daemon) must not be reused by a caller
+        // that needs per-device attribution: tear it down and take the fresh
+        // path, which tries the redirector and otherwise refuses.
+        #[cfg(target_os = "macos")]
+        if req.require_isolation && self.ios_system_proxy.read().await.is_some() {
+            info!("Isolated capture requested; releasing the host-wide system-proxy capture");
+            self.cleanup_network_proxy().await;
+        }
+
         let mut proxy_guard = self.network_proxy.write().await;
         // If a proxy is already running (pre-started for physical iOS OCSP
         // passthrough during start_agent), reuse it instead of erroring.
@@ -5516,11 +5536,35 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             );
             // The system-proxy fallback keeps its proxy across tests, so every
             // later start lands here: repeat its warning (the runner dedupes
-            // it) and check nothing has re-pointed the host proxy since.
+            // it) and check nothing has re-pointed the host proxy since. The
+            // check shells out to networksetup, so every lock is released
+            // first: a slow configd must not stall other capture RPCs.
+            #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+            let mut route = *self.proxy_route.read().await;
             #[cfg(target_os = "macos")]
-            if let Some(lease) = self.ios_system_proxy.read().await.clone() {
-                warnings.push(system_proxy_fallback_warning(&serial));
-                if !ios::system_proxy::still_applied(&lease).await {
+            let held_lease = self.ios_system_proxy.read().await.clone();
+            // A held lease IS the host-wide route, whatever `proxy_route` says:
+            // a start cancelled between publishing the lease and writing the
+            // route would otherwise report UNSPECIFIED here and lose the
+            // trace's host-wide warning for every later test.
+            #[cfg(target_os = "macos")]
+            if held_lease.is_some() {
+                route = proto::NetworkCaptureRoute::IosSystemProxy;
+            }
+            #[cfg(target_os = "macos")]
+            let capture_serial = self
+                .proxy_device_serial
+                .read()
+                .await
+                .clone()
+                .unwrap_or_else(|| serial.clone());
+            drop(proxy_guard);
+            #[cfg(target_os = "macos")]
+            if let Some(lease) = held_lease {
+                warnings.push(system_proxy_fallback_warning(&capture_serial));
+                // Only a successful read that disagrees counts as "changed";
+                // a read that fails (slow configd) says nothing.
+                if ios::system_proxy::still_applied(&lease).await == Some(false) {
                     warnings.push(format!(
                         "The macOS system proxy on \"{}\" no longer points at this daemon \
                          (127.0.0.1:{}); something changed it during the run, so this device's \
@@ -5529,12 +5573,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     ));
                 }
             }
-            let route = *self.proxy_route.read().await;
             return Ok(Response::new(proto::StartNetworkCaptureResponse {
                 request_id,
                 success: true,
                 proxy_port: u32::from(existing_port),
-                error_message: warnings.join("; "),
+                error_message: join_capture_warnings(&warnings),
                 route: route.into(),
             }));
         }
@@ -5750,6 +5793,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         }
 
         let route: proto::NetworkCaptureRoute;
+        #[cfg(target_os = "macos")]
+        let mut pending_lease: Option<ios::system_proxy::PendingLease> = None;
         match platform {
             Platform::Ios if !is_ios_physical => {
                 // PILOT-182: route the simulator's traffic into the MITM
@@ -5775,20 +5820,23 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     // outside CI — a developer Mac has the Network Extension, so
                     // falling back there hides a real failure behind a capture
                     // of the developer's own browsing (PILOT-319).
-                    let fallback_allowed =
-                        !req.require_isolation && ios::system_proxy::fallback_allowed_from_env();
-                    // The "NE previously failed" cache exists to skip a doomed
-                    // launch when the system-proxy fallback is going to be used
-                    // anyway. When that fallback is refused, consulting the
-                    // cache would turn one transient failure (typically two
-                    // daemons launching the redirector at once) into "capture
-                    // disabled" for every later test on this device: always
-                    // retry the redirector instead, and leave the cache
-                    // untouched for callers that can fall back.
-                    let ne_known_bad = fallback_allowed && *self.ios_ne_unavailable.read().await;
-                    let ne_result = if ne_known_bad {
-                        debug!("Skipping NE attempt (previously failed) — using system proxy");
-                        Err(anyhow::anyhow!("cached: NE previously unavailable"))
+                    let decision = ios::system_proxy::fallback_decision(
+                        req.require_isolation,
+                        ios::system_proxy::fallback_allowed_from_env(),
+                    );
+                    // A recent NE failure skips the doomed launch (each waits
+                    // out a 10 s control-channel timeout) and goes straight to
+                    // the decision above; see `cached_ne_failure` for why it
+                    // expires and why multi-device callers never use it.
+                    let cached_ne_error = ios::system_proxy::cached_ne_failure(
+                        self.ios_ne_unavailable.read().await.as_ref(),
+                        req.require_isolation,
+                        std::time::Instant::now(),
+                    );
+                    let ne_known_bad = cached_ne_error.is_some();
+                    let ne_result = if let Some(cached) = cached_ne_error {
+                        debug!("Skipping NE attempt (previously failed: {cached})");
+                        Err(anyhow::anyhow!("{cached}"))
                     } else {
                         crate::ios_redirect::IosRedirect::start(
                             serial.clone(),
@@ -5800,6 +5848,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     match ne_result {
                         Ok(redirect) => {
                             *self.ios_redirect.write().await = Some(redirect);
+                            *self.ios_ne_unavailable.write().await = None;
                             route = proto::NetworkCaptureRoute::IosNetworkExtension;
                             info!(
                                 %serial, host_port,
@@ -5807,18 +5856,19 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                             );
                         }
                         Err(e) => {
-                            if !ne_known_bad && fallback_allowed {
-                                *self.ios_ne_unavailable.write().await = true;
-                                warn!(
-                                    "Network Extension redirector unavailable: {e} — \
-                                     falling back to macOS system proxy"
-                                );
+                            if !ne_known_bad && !req.require_isolation {
+                                *self.ios_ne_unavailable.write().await =
+                                    Some(ios::system_proxy::NeFailure {
+                                        message: e.to_string(),
+                                        at: std::time::Instant::now(),
+                                    });
+                                warn!("Network Extension redirector unavailable: {e}");
                             }
                             // Note the most common local cause of an NE failure:
                             // two daemons launching the redirector at once share
                             // one NETransparentProxyManager, and the loser's
                             // control channel never connects.
-                            if req.require_isolation {
+                            if decision == ios::system_proxy::FallbackDecision::RefuseIsolation {
                                 let msg = format!(
                                     "iOS network capture unavailable for this device: the \
                                      Network Extension redirector failed ({e}) and the \
@@ -5837,7 +5887,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                                     ..Default::default()
                                 }));
                             }
-                            if !fallback_allowed {
+                            if decision == ios::system_proxy::FallbackDecision::RefuseLocal {
                                 let msg = format!(
                                     "iOS network capture unavailable for {serial}: the Network \
                                      Extension redirector failed ({e}). Run `npx tapsmith \
@@ -5856,9 +5906,13 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                                     ..Default::default()
                                 }));
                             }
+                            // `acquire` releases a lease whose caller was
+                            // cancelled mid-acquire; from here until the capture
+                            // is published the guard does the same.
                             match ios::system_proxy::acquire(host_port).await {
                                 Ok(lease) => {
-                                    *self.ios_system_proxy.write().await = Some(lease);
+                                    pending_lease =
+                                        Some(ios::system_proxy::PendingLease::new(lease));
                                     route = proto::NetworkCaptureRoute::IosSystemProxy;
                                     warnings.push(system_proxy_fallback_warning(&serial));
                                 }
@@ -5999,6 +6053,15 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 warnings.push("networkHttpPorts was not applied: Android transparent iptables capture is unavailable".to_string());
             }
         }
+        // Publish the system-proxy lease and the proxy together: the slot is
+        // locked first, then the lease is disarmed and both are stored with no
+        // await in between, so a cancellation either releases the lease with
+        // the unpublished proxy or leaves both published.
+        #[cfg(target_os = "macos")]
+        if let Some(pending) = pending_lease {
+            let mut lease_slot = self.ios_system_proxy.write().await;
+            *lease_slot = Some(pending.disarm());
+        }
         *proxy_guard = Some(proxy);
 
         // If a NetworkRoute stream is active, install its handler on the
@@ -6019,7 +6082,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             request_id,
             success: true,
             proxy_port: host_port as u32,
-            error_message: warnings.join("\n"),
+            error_message: join_capture_warnings(&warnings),
             route: route.into(),
         }))
     }
@@ -6122,8 +6185,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             }));
         }
 
-        let proxy = self.network_proxy.write().await.take();
-        let Some(proxy) = proxy else {
+        // Every slot is taken under the `network_proxy` write guard, as in
+        // `cleanup_network_proxy`, so a start that begins right after can't
+        // have its fresh route, serial or system-proxy lease swept up here.
+        let mut proxy_guard = self.network_proxy.write().await;
+        let Some(proxy) = proxy_guard.take() else {
             return Ok(Response::new(proto::StopNetworkCaptureResponse {
                 request_id,
                 success: false,
@@ -6131,39 +6197,45 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_message: "Network capture is not running".to_string(),
             }));
         };
-
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
-
-        // Revert proxy settings based on platform
         let serial = self.proxy_device_serial.write().await.take();
         let platform = self.proxy_platform.write().await.take();
         let reverse_port = self.proxy_reverse_port.write().await.take();
         let ca_cert_path = self.proxy_ca_cert_path.write().await.take();
         let used_iptables = std::mem::replace(&mut *self.proxy_uses_iptables.write().await, false);
+        #[cfg(target_os = "macos")]
+        let ios_redirect = self.ios_redirect.write().await.take();
+        #[cfg(target_os = "macos")]
+        let system_proxy = self.ios_system_proxy.write().await.take();
+        drop(proxy_guard);
+
+        // Host-wide state first and unconditionally (as `cleanup_network_proxy`
+        // does): a lease taken here must never be dropped unreleased, even if
+        // a cancelled start left the serial/platform slots unset.
+        #[cfg(target_os = "macos")]
+        if let Some(redirect) = ios_redirect {
+            drop(redirect);
+            debug!("iOS redirector session torn down");
+        }
+        #[cfg(target_os = "macos")]
+        if let Some(lease) = system_proxy {
+            ios::system_proxy::release(lease).await;
+        }
+
+        // Revert proxy settings based on platform
         if let Some(serial) = &serial {
             match platform {
                 Some(Platform::Ios) => {
-                    // PILOT-182 simulators: drop the redirector session handle
-                    // BEFORE `proxy.stop()`. Drop closes the control channel,
-                    // which tells the SE to remove this worker's per-PID
-                    // filter; the accept + refresh tasks abort and the Unix
-                    // socket file is unlinked. No host state lingers.
+                    // PILOT-182 simulators: the redirector session handle was
+                    // dropped above, BEFORE `proxy.stop()`. Drop closes the
+                    // control channel, which tells the SE to remove this
+                    // worker's per-PID filter; the accept + refresh tasks abort
+                    // and the Unix socket file is unlinked.
                     //
                     // PILOT-185 physical devices: the ios_redirect slot is
-                    // always None on that path, so the take() below is a
-                    // no-op — the device's own HTTP proxy setting (installed
-                    // via mobileconfig) is the routing mechanism and it
-                    // persists across runs by design.
-                    #[cfg(target_os = "macos")]
-                    {
-                        if let Some(redirect) = self.ios_redirect.write().await.take() {
-                            drop(redirect);
-                            debug!(%serial, "iOS redirector session torn down");
-                        }
-                        if let Some(lease) = self.ios_system_proxy.write().await.take() {
-                            ios::system_proxy::release(lease).await;
-                        }
-                    }
+                    // always None on that path — the device's own HTTP proxy
+                    // setting (installed via mobileconfig) is the routing
+                    // mechanism and it persists across runs by design.
                     info!(%serial, "iOS proxy stopped");
                 }
                 _ => {
@@ -8785,6 +8857,18 @@ fn system_proxy_fallback_warning(serial: &str) -> String {
     )
 }
 
+/// Capture-start warnings as one line each, newline-separated. The runner
+/// dedupes line by line (the set of warnings differs between a fresh start and
+/// the per-test reuse of a running proxy), so a warning that embeds multi-line
+/// tool output is flattened rather than split into fragments.
+fn join_capture_warnings(warnings: &[String]) -> String {
+    warnings
+        .iter()
+        .map(|w| w.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// An applied port set is meaningful only while its redirect still exists.
 fn capture_port_update(
     applied: &[u16],
@@ -9504,6 +9588,18 @@ mod tests {
         assert_eq!(
             capture_port_update(&[8080], &[], true, Some(1234)),
             Ok(Some(1234))
+        );
+    }
+
+    #[test]
+    fn capture_warnings_are_one_line_each() {
+        let joined = join_capture_warnings(&[
+            "Failed to install CA cert: simctl said\n  line two\n".to_string(),
+            "host-wide".to_string(),
+        ]);
+        assert_eq!(
+            joined,
+            "Failed to install CA cert: simctl said line two\nhost-wide"
         );
     }
 }

@@ -401,6 +401,8 @@ export interface NetworkMessage {
   filePath?: string
   /** Effective network capture setting for this test; absent for older workers. */
   networkCaptureEnabled?: boolean
+  /** How the capture reached the proxy; `ios-system-proxy` is host-wide (entries may include other apps' traffic). */
+  networkCaptureRoute?: import('../trace/types.js').NetworkCaptureRoute | null
   /** Omitted for full snapshots, including reconnect replay. */
   bodyMode?: 'patch'
   testFullName: string
@@ -1017,6 +1019,8 @@ export interface UIWorkerNetworkMessage {
   type: 'network'
   /** Effective network capture setting for this test; absent for older workers. */
   networkCaptureEnabled?: boolean
+  /** How the capture reached the proxy; `ios-system-proxy` is host-wide. */
+  networkCaptureRoute?: import('../trace/types.js').NetworkCaptureRoute | null
   /** Omitted for full snapshots, including reconnect replay. */
   bodyMode?: 'patch'
   workerId: number

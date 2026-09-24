@@ -788,6 +788,107 @@ describe('generated trace archive', () => {
     expect(archive.metadata.device.networkCaptureRoute).toBe('ios-system-proxy');
   });
 
+  it('prints a persistent capture warning once even when the first start bundles it with another', async () => {
+    const tag = `w-${Date.now()}`;
+    const replies = [`${tag} CA install failed\n${tag} host-wide`, `${tag} host-wide`];
+    const log: CaptureLog = { screenshots: [], hierarchies: [] };
+    const client = makeCapturingClient(log, {
+      startNetworkCapture: vi.fn(async () => ({
+        requestId: '1', success: true, proxyPort: 12345, errorMessage: replies.shift() ?? `${tag} host-wide`, route: 'ios-system-proxy',
+      })),
+    });
+    const device = new Device(client, { package: 'com.example.app' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      pushContext();
+      tapsmithTest('first', async () => { await device.tapXY(1, 2); });
+      tapsmithTest('second', async () => { await device.tapXY(1, 2); });
+      const ctx = popContext();
+      await runSuiteContext(ctx, '', [], [], makeOpts(device, {
+        trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: true, deviceLogs: false },
+      }));
+      const lines = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes(tag));
+      expect(lines.filter((l) => l.includes('host-wide'))).toHaveLength(1);
+      expect(lines.filter((l) => l.includes('CA install failed'))).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  for (const route of ['ios-system-proxy', 'ios-network-extension'] as const) {
+    it(`tells UI mode the capture route on every network publish (${route})`, async () => {
+      const log: CaptureLog = { screenshots: [], hierarchies: [] };
+      const client = makeCapturingClient(log, {
+        startNetworkCapture: vi.fn(async () => ({
+          requestId: '1', success: true, proxyPort: 12345, errorMessage: '', route,
+        })),
+      });
+      const device = new Device(client, { package: 'com.example.app' });
+      const routes: Array<string | undefined> = [];
+      pushContext();
+      tapsmithTest('route', async () => { await device.tapXY(1, 2); });
+      const ctx = popContext();
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(device, {
+        trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: true, deviceLogs: false },
+      }, {
+        onNetworkEntries: (_entries, _enabled, networkCaptureRoute) => { routes.push(networkCaptureRoute); },
+      }));
+      expect(result.tests[0].error?.message).toBeUndefined();
+      expect(routes.length).toBeGreaterThan(0);
+      expect(routes.every((r) => r === route)).toBe(true);
+    });
+  }
+
+  it('keeps the route on a trace drained from a running proxy after that test\'s start threw', async () => {
+    const log: CaptureLog = { screenshots: [], hierarchies: [] };
+    let calls = 0;
+    const client = makeCapturingClient(log, {
+      startNetworkCapture: vi.fn(async () => {
+        if (++calls === 1) return { requestId: '1', success: true, proxyPort: 12345, errorMessage: '', route: 'ios-system-proxy' };
+        throw new Error('4 DEADLINE_EXCEEDED');
+      }),
+    });
+    const device = new Device(client, { package: 'com.example.app' });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      pushContext();
+      tapsmithTest('first', async () => { await device.tapXY(1, 2); });
+      tapsmithTest('second', async () => { await device.tapXY(1, 2); });
+      const ctx = popContext();
+      const liveRoutes: Array<string | undefined> = [];
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(device, {
+        trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: true, deviceLogs: false },
+      }, {
+        onNetworkEntries: (_e, _enabled, route) => { liveRoutes.push(route); },
+      }));
+      const second = readArchive(result.tests[1].tracePath!);
+      expect(second.metadata.device.networkCaptureRoute).toBe('ios-system-proxy');
+      // UI mode's live view agrees with the saved trace.
+      expect(liveRoutes.at(-1)).toBe('ios-system-proxy');
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('records no route for a later file that runs with network capture off', async () => {
+    const log: CaptureLog = { screenshots: [], hierarchies: [] };
+    const client = makeCapturingClient(log, {
+      startNetworkCapture: vi.fn(async () => ({
+        requestId: '1', success: true, proxyPort: 12345, errorMessage: '', route: 'ios-system-proxy',
+      })),
+    });
+    const device = new Device(client, { package: 'com.example.app' });
+    // State an earlier file's host-wide capture leaves on the session's device.
+    Object.assign(device, { _networkCaptureEverStarted: true, _networkCaptureRoute: 'ios-system-proxy' });
+    pushContext();
+    tapsmithTest('network off', async () => { await device.tapXY(1, 2); });
+    const ctx = popContext();
+    const result = await runSuiteContext(ctx, '', [], [], makeOpts(device, {
+      trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: false, deviceLogs: false },
+    }));
+    expect(readArchive(result.tests[0].tracePath!).metadata.device.networkCaptureRoute).toBeUndefined();
+  });
+
   it('records no route when capture failed to start', async () => {
     const { archive } = await runThreeActions({
       trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: true, deviceLogs: false },

@@ -510,6 +510,8 @@ export interface SystemProxyOwnerRecord {
   pid: number
   port: number
   service: string
+  /** Owner's `ps -o lstart=` start time; absent in records from older daemons. */
+  started?: string
 }
 
 export function parseNetworksetupProxy(stdout: string): { enabled: boolean; server: string; port: number } {
@@ -545,17 +547,25 @@ export function assessSystemProxy(
     }
     return { status: 'pass', label: 'macOS system proxy not set by Tapsmith' };
   }
+  // The daemon always writes 127.0.0.1, so a `localhost` entry is never its.
   const ours = (s: ServiceProxySetting): boolean =>
-    !!record && record.service === s.service && record.port === s.port;
+    !!record && s.server === '127.0.0.1' && record.service === s.service && record.port === s.port;
   if (record && ownerAlive && loopback.every(ours)) {
     return { status: 'pass', label: `macOS system proxy in use by a running Tapsmith daemon ${dim(`(pid ${record.pid}, iOS fallback)`)}` };
   }
+  // A live daemon's own entries are never reported or offered for switching
+  // off — only the others, even when both kinds are present.
+  const flagged = record && ownerAlive ? loopback.filter((s) => !ours(s)) : loopback;
+  return assessFlagged(flagged, flagged.every(ours));
+}
+
+function assessFlagged(loopback: ServiceProxySetting[], allOurs: boolean): SystemProxyAssessment {
   const services = [...new Set(loopback.map((s) => s.service))];
   const fix = services
     .map((svc) => `networksetup -setwebproxystate "${svc}" off && networksetup -setsecurewebproxystate "${svc}" off`)
     .join(' && ');
-  const where = loopback.map((s) => `${s.kind} 127.0.0.1:${s.port} on ${s.service}`).join(', ');
-  if (loopback.every(ours)) {
+  const where = loopback.map((s) => `${s.kind} ${s.server}:${s.port} on ${s.service}`).join(', ');
+  if (allOurs) {
     return {
       status: 'warn',
       label: `macOS system proxy left behind by an exited Tapsmith daemon (${where}) — host traffic is being sent to a dead port. The next Tapsmith run resets it automatically`,
@@ -573,6 +583,7 @@ function listNetworkServices(): string[] {
   const out = execFileSync('/usr/sbin/networksetup', ['-listallnetworkservices'], {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 5_000,
   });
   return out
     .split('\n')
@@ -595,19 +606,48 @@ function readOwnerRecord(): SystemProxyOwnerRecord | undefined {
   try {
     const raw = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.tapsmith', 'ios-system-proxy.json'), 'utf-8')) as Partial<SystemProxyOwnerRecord>;
     if (typeof raw.pid === 'number' && typeof raw.port === 'number' && typeof raw.service === 'string') {
-      return { pid: raw.pid, port: raw.port, service: raw.service };
+      return {
+        pid: raw.pid, port: raw.port, service: raw.service,
+        started: typeof raw.started === 'string' ? raw.started : undefined,
+      };
     }
   } catch { /* no record */ }
   return undefined;
 }
 
-function isProcessAlive(pid: number): boolean {
+/**
+ * Whether the record's owner is still running — the same process, not one
+ * that reused its pid after the owner was killed (that must still read as
+ * "left behind"). Mirrors the daemon's check: the recorded start time must
+ * match, falling back to the process name for records without one. A `ps`
+ * failure on a live pid counts as live, as in the daemon, so doctor never
+ * tells the user to switch off a running daemon's proxy.
+ */
+function isLiveOwner(record: SystemProxyOwnerRecord): boolean {
   try {
-    process.kill(pid, 0);
-    return true;
+    process.kill(record.pid, 0);
   } catch (err) {
-    return (err as NodeJS.ErrnoException).code === 'EPERM';
+    if ((err as NodeJS.ErrnoException).code !== 'EPERM') return false;
   }
+  const ps = (field: string): string | undefined => {
+    try {
+      return execFileSync('/bin/ps', ['-p', String(record.pid), '-o', `${field}=`], {
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+        timeout: 5_000,
+        // Same zone and locale the daemon records `started` in.
+        env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' },
+      }).trim();
+    } catch {
+      return undefined;
+    }
+  };
+  if (record.started) {
+    const started = ps('lstart');
+    return started === undefined || started === record.started;
+  }
+  const comm = ps('comm');
+  return comm === undefined || comm.includes('tapsmith');
 }
 
 function checkSystemProxy(report: Reporter): void {
@@ -615,11 +655,14 @@ function checkSystemProxy(report: Reporter): void {
     const settings: ServiceProxySetting[] = [];
     for (const service of listNetworkServices()) {
       try {
-        settings.push(readServiceProxy(service, 'HTTP'), readServiceProxy(service, 'HTTPS'));
+        settings.push(readServiceProxy(service, 'HTTP'));
       } catch { /* service without proxy settings (e.g. some VPNs) */ }
+      try {
+        settings.push(readServiceProxy(service, 'HTTPS'));
+      } catch { /* read independently: one failing must not drop the other */ }
     }
     const record = readOwnerRecord();
-    const result = assessSystemProxy(settings, record, record ? isProcessAlive(record.pid) : false);
+    const result = assessSystemProxy(settings, record, record ? isLiveOwner(record) : false);
     if (result.status === 'pass') pass(report, 'system-proxy', result.label);
     else warn(report, 'system-proxy', result.label, result.fix);
   } catch {

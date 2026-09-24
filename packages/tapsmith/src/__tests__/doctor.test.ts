@@ -290,6 +290,25 @@ describe('assessSystemProxy()', () => {
     );
   });
 
+  it('never offers to switch off a live daemon\'s proxy when another loopback proxy is also set', () => {
+    const r = assessSystemProxy(
+      [setting({}), setting({ kind: 'HTTPS' }), setting({ service: 'Ethernet', port: 8888 })],
+      record,
+      true,
+    );
+    expect(r.status).toBe('warn');
+    expect(r.label).toContain('HTTP 127.0.0.1:8888 on Ethernet');
+    expect(r.label).not.toContain('52429');
+    expect(r.status === 'warn' && r.fix).not.toContain('"Wi-Fi"');
+  });
+
+  it('reports a localhost proxy as localhost and never as Tapsmith\'s', () => {
+    const r = assessSystemProxy([setting({ server: 'localhost' })], record, true);
+    expect(r.status).toBe('warn');
+    expect(r.label).toContain('HTTP localhost:52429');
+    expect(r.label).toContain('which Tapsmith does not own');
+  });
+
   it('warns about an unowned loopback proxy (pre-record leftover or another local proxy)', () => {
     const r = assessSystemProxy([setting({ port: 8888 })], record, true);
     expect(r.status).toBe('warn');

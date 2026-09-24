@@ -559,7 +559,7 @@ The checks cover:
 - **Core:** Node.js version, daemon binary presence, config file
 - **Android:** ADB, ANDROID_HOME, connected devices, agent APKs, app APK
 - **iOS:** Xcode, simulators, xctestrun file (macOS only)
-- **Network Capture:** MITM CA certificate, AVD system image compatibility (Google Play images can't capture HTTPS — see [Android emulator image requirements](network.md#android-emulator-image-requirements)), mitmproxy installation, Network Extension status
+- **Network Capture:** MITM CA certificate, AVD system image compatibility (Google Play images can't capture HTTPS — see [Android emulator image requirements](network.md#android-emulator-image-requirements)), mitmproxy installation, Network Extension status, and a macOS system proxy left behind by an exited daemon (with the command to clear it)
 
 Exit code is 0 when all checks pass (warnings are acceptable), 1 when any hard error is found.
 
