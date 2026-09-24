@@ -1057,13 +1057,14 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
   // requires of TypeScript files. Undo exactly what the registration did,
   // leaving any handler the config itself installed while loading.
   const extensions = createRequire(import.meta.url).extensions;
-  const before = { ...extensions };
+  // Descriptors, not a spread: tsx installs `.mjs` non-enumerable.
+  const before = Object.getOwnPropertyDescriptors(extensions);
   let installed: typeof before = before;
   let unregisterCjs: (() => void) | undefined;
   let unregisterEsm: (() => Promise<void>) | undefined;
   try {
     unregisterCjs = cjs.register();
-    installed = { ...extensions };
+    installed = Object.getOwnPropertyDescriptors(extensions);
     unregisterEsm = esm.register();
     // A query gives the config a URL the failed native attempt did not leave
     // in the ESM cache; without it Node replays that failure. Only the config
@@ -1071,7 +1072,8 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
     // (a `.ts` helper using `__dirname`, run as ESM) stays cached as failed.
     // tsx's namespaced API would re-key the whole graph, but it cannot load a
     // CommonJS-compiled config (tsx 4.23) or hook a CommonJS config's own
-    // `require` calls.
+    // `require` calls. The config sees the query in `import.meta.url`
+    // (`fileURLToPath` and `import.meta.dirname` are unaffected).
     const url = `${pathToFileURL(configPath).href}?tapsmith-config=${Date.now()}`;
     const mod = (await import(url)) as Record<string, unknown>;
     return unwrapCommonJsConfig(mod);
@@ -1081,11 +1083,13 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
     unregisterCjs?.();
     await unregisterEsm?.();
     for (const key of Object.keys(installed)) {
-      if (installed[key] === before[key]) continue;
-      const current = Object.prototype.hasOwnProperty.call(extensions, key) ? extensions[key] : undefined;
+      const tsxValue = installed[key]?.value;
+      const previous = before[key];
+      if (tsxValue === previous?.value) continue;
+      const current = Object.getOwnPropertyDescriptor(extensions, key)?.value;
       // Changed since registration by someone other than tsx: leave it.
-      if (current !== undefined && current !== installed[key] && current !== before[key]) continue;
-      if (key in before) extensions[key] = before[key];
+      if (current !== undefined && current !== tsxValue && current !== previous?.value) continue;
+      if (previous) Object.defineProperty(extensions, key, previous);
       else delete extensions[key];
     }
   }

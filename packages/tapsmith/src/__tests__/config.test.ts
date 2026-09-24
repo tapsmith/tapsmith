@@ -376,9 +376,9 @@ describe('loadConfig rootDir anchoring', () => {
       expect(out.error).toMatch(/local-missing/);
     });
 
-    // A native load running while another load's tsx hooks are registered
-    // would be compiled by them and lose the CommonJS unwrap: silently the
-    // defaults. Loads, native ones included, run one at a time.
+    // A native load running while another load's tsx hooks are registered is
+    // compiled by them; the CommonJS unwrap must still give the right config
+    // rather than, silently, the defaults.
     it('loads a native config correctly while another config is loading through tsx', () => {
       const slow = path.join(root, 'slow');
       fs.mkdirSync(slow);
@@ -432,6 +432,51 @@ describe('loadConfig rootDir anchoring', () => {
       );
       expect(out).toEqual([{ platform: 'ios', retries: 2 }, { platform: 'ios', retries: 2 }]);
     }, 15_000);
+
+    // A fallback load started inside another must run within it, not queue
+    // behind itself. It is reached when the nested config fails natively even
+    // under the outer load's tsx hooks — here an import neither can resolve,
+    // which must surface as the outer config's error, not hang.
+    it('does not deadlock on a fallback load started inside another', () => {
+      const base = path.join(root, 'base');
+      fs.mkdirSync(base);
+      writePackage(base, 'module');
+      fs.writeFileSync(path.join(base, 'tapsmith.config.ts'), 'import { x } from "./missing.js";\nexport default { x };\n', 'utf-8');
+      const outer = path.join(root, 'outer');
+      fs.mkdirSync(outer);
+      writePackage(outer, 'module');
+      const configModule = path.resolve(__dirname, '..', 'config.ts');
+      const file = path.join(outer, 'tapsmith.config.ts');
+      fs.writeFileSync(
+        file,
+        `const { loadConfig } = await import(${JSON.stringify(configModule)});\nconst b = await loadConfig(${JSON.stringify(base)});\n`
+        + 'enum N { Zero = 0 }\nexport default { retries: N.Zero, b };\n',
+        'utf-8',
+      );
+      const out = inBareNode<{ error?: string }>(
+        'const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error("deadlock")), 10000).unref());\n'
+        + `try { await Promise.race([loadConfig(${JSON.stringify(outer)}), timeout]); emit({}); } catch (e) { emit({ error: e.message }); }\n`,
+      );
+      expect(out.error).toContain(`Failed to load config file ${file}:`);
+      expect(out.error).toMatch(/missing/);
+      expect(out.error).not.toContain('deadlock');
+    }, 15_000);
+
+    // tsx installs its `.mjs` handler non-enumerable; restoring from a spread
+    // missed it and deleted a `.mjs` handler that was there before.
+    it('restores a non-enumerable require.extensions handler after a tsx load', () => {
+      writePackage(root, 'commonjs');
+      writeHelper(root);
+      fs.writeFileSync(path.join(root, 'tapsmith.config.ts'), TS_CONFIG, 'utf-8');
+      const out = inBareNode<{ kept: boolean; enumerable: boolean }>(
+        'const handler = () => undefined;\n'
+        + 'Object.defineProperty(ext, ".mjs", { value: handler, writable: true, configurable: true, enumerable: false });\n'
+        + `await loadConfig(${JSON.stringify(root)});\n`
+        + 'const d = Object.getOwnPropertyDescriptor(ext, ".mjs");\n'
+        + 'emit({ kept: d?.value === handler, enumerable: Boolean(d?.enumerable) });\n',
+      );
+      expect(out).toEqual({ kept: true, enumerable: false });
+    });
 
     it('unwraps an ahead-of-time compiled CommonJS config loaded natively', () => {
       writePackage(root, 'commonjs');
