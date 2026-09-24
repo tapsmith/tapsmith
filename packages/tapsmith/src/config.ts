@@ -10,7 +10,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ReporterConfig } from './reporter.js';
 import type { TraceMode, TraceConfig } from './trace/types.js';
 import type { VideoMode, VideoConfig } from './video/types.js';
@@ -896,23 +896,32 @@ const LOADER_ERROR_CODES = new Set([
 function isLoaderError(err: unknown): boolean {
   const code = (err as { code?: unknown } | null)?.code;
   if (typeof code === 'string' && LOADER_ERROR_CODES.has(code)) return true;
-  // A SyntaxError is a parse failure only when Node's compiler threw it. One
-  // the config raised while running (`JSON.parse` of a bad file, a bad
-  // `RegExp`) has a frame in the config's own code first, and retrying it
-  // through tsx would run the config's side effects a second time.
-  return err instanceof SyntaxError && firstStackFrameIsNodeInternal(err);
+  // Node strips a `.ts` config's types and, finding `import`/`export`, runs it
+  // as ESM even in a package without `"type": "module"`, where tsx compiles
+  // it to CommonJS and `__dirname`/`require` exist. The config has started
+  // running by then — as it always did in `tapsmith test`'s bare parent
+  // before the tsx child ran it again.
+  if (err instanceof ReferenceError && /is not defined in ES module scope/.test(err.message)) return true;
+  // A SyntaxError is a parse or link failure only when Node's loader threw
+  // it: the first located frame is a compile or link step. One the config
+  // raised while running (`JSON.parse` of a bad file, read or required; a bad
+  // `RegExp` or `vm` script) starts elsewhere, and retrying it through tsx
+  // would run the config's side effects a second time.
+  return err instanceof SyntaxError && firstStackFrameIsCompileStep(err);
 }
 
-function firstStackFrameIsNodeInternal(err: Error): boolean {
+// The ESM and CommonJS compile steps, and ESM linking (a named import the
+// target does not export — a type-only import, which tsx elides).
+const COMPILE_STEP_FRAME = /^(?:compileSourceTextModule|wrapSafe|compileFunctionForCJSLoader|#?(?:async)?[Ii]nstantiate|ModuleJob\.#?_?(?:async)?[Ii]nstantiate|ModuleJob\.(?:sync)?[Ll]ink) \(node:/;
+
+function firstStackFrameIsCompileStep(err: Error): boolean {
   for (const line of (err.stack ?? '').split('\n')) {
-    const frame = /^\s+at (?:async )?(?:.*? \((.*)\)|(.*))$/.exec(line);
+    const frame = /^\s+at (?:async )?(.*)$/.exec(line);
     if (!frame) continue;
-    const location = frame[1] ?? frame[2] ?? '';
     // Builtins such as `JSON.parse` report no location; the next frame is
-    // whoever called them. `Object.<anonymous> (/p/config.js:3:1)` — a
-    // CommonJS module's top level — does have one, and it is the config's.
-    if (location === '<anonymous>' || location === 'native') continue;
-    return location.startsWith('node:');
+    // whoever called them.
+    if (/\((?:<anonymous>|native)\)$/.test(frame[1])) continue;
+    return COMPILE_STEP_FRAME.test(frame[1]);
   }
   return false;
 }
@@ -974,7 +983,7 @@ function errorMessage(err: unknown): string {
  */
 function configLoadError(configPath: string, err: unknown, nativeError?: unknown): Error {
   let detail = errorMessage(err);
-  if (nativeError !== undefined && errorMessage(nativeError) !== detail) {
+  if (nativeError !== undefined && errorMessage(nativeError) !== detail && isUnresolvedForTsxToo(nativeError)) {
     detail += `\n(Without tsx, Node reported: ${errorMessage(nativeError)})`;
   }
   const error = new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
@@ -983,6 +992,22 @@ function configLoadError(configPath: string, err: unknown, nativeError?: unknown
   const causeStack = err instanceof Error ? err.stack : undefined;
   if (causeStack) error.stack = `${error.name}: ${error.message}\nCaused by: ${causeStack}`;
   return error;
+}
+
+/**
+ * Whether Node's error names an import tsx could not resolve either — the
+ * one kind of native failure worth showing beside tsx's own error. Anything
+ * else (TypeScript it cannot strip, an extension it does not know) only says
+ * why tsx was needed, and next to the config's own error it misleads. So does
+ * a `./helpers.js` that tsx resolved to `helpers.ts`.
+ */
+function isUnresolvedForTsxToo(nativeError: unknown): boolean {
+  const { code, url } = nativeError as { code?: unknown; url?: unknown };
+  if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') return false;
+  if (typeof url !== 'string' || !url.startsWith('file:')) return true;
+  const missing = fileURLToPath(url);
+  const stem = missing.replace(/\.[cm]?jsx?$/, '');
+  return !['.ts', '.tsx', '.mts', '.cts'].some((ext) => fs.existsSync(stem + ext));
 }
 
 async function importConfigModuleWithTsx(configPath: string, nativeError: unknown): Promise<Record<string, unknown>> {

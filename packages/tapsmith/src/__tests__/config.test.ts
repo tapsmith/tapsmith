@@ -301,6 +301,50 @@ describe('loadConfig rootDir anchoring', () => {
       expect(out.runs).toBe(1);
     });
 
+    it('rejects a config that requires a malformed JSON file, without running it twice', () => {
+      writePackage(root, 'module');
+      fs.writeFileSync(path.join(root, 'data.json'), '{bad\n', 'utf-8');
+      const file = path.join(root, 'tapsmith.config.mjs');
+      fs.writeFileSync(
+        file,
+        'import { createRequire } from "node:module";\nglobalThis.__runs = (globalThis.__runs ?? 0) + 1;\n'
+        + 'const data = createRequire(import.meta.url)("./data.json");\nexport default { data };\n',
+        'utf-8',
+      );
+      const out = inBareNode<{ error?: string; runs?: number }>(
+        `try { await loadConfig(${JSON.stringify(root)}); emit({}); }\n`
+        + 'catch (e) { emit({ error: e.message, runs: globalThis.__runs }); }\n',
+      );
+      expect(out.error).toContain(`Failed to load config file ${file}:`);
+      expect(out.runs).toBe(1);
+    });
+
+    // Node runs a stripped `.ts` config as ESM when it sees `import`, even in
+    // a package without "type": "module"; tsx compiles it to CommonJS there,
+    // where `__dirname` exists.
+    it('loads a TypeScript config using __dirname in a package without "type": "module"', () => {
+      writePackage(root, 'commonjs');
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(
+        file,
+        'import * as path from "node:path";\nexport default { platform: path.basename(__dirname) ? "ios" : "android", retries: 2 };\n',
+        'utf-8',
+      );
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+
+    // Why tsx was needed ("enum not supported") is not the config's error,
+    // and beside the config's own throw it would point at the wrong cause.
+    it('reports only the config\'s own error when it throws under tsx', () => {
+      writePackage(root, 'module');
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(file, 'enum Mode { A }\nthrow new Error("Set APK_PATH " + Mode.A);\n', 'utf-8');
+      const out = inBareNode<{ error?: string }>(
+        `try { await loadConfig(${JSON.stringify(root)}); emit({}); } catch (e) { emit({ error: e.message }); }\n`,
+      );
+      expect(out.error).toBe(`Failed to load config file ${file}: Set APK_PATH 0`);
+    });
+
     // Loader failures bare Node raises and tsx does not, beyond the common
     // ones above: each must fall back rather than stop the CLI's parent.
     it('loads a TypeScript config with a directory import and an attribute-less JSON import', () => {
@@ -315,6 +359,16 @@ describe('loadConfig rootDir anchoring', () => {
         + 'export default { platform, retries: settings.retries };\n',
         'utf-8',
       );
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+
+    // Node's linker rejects a named import of a type-only export; tsx elides
+    // the import, so it must fall back rather than fail.
+    it('loads a TypeScript config with a type-only named import', () => {
+      writePackage(root, 'module');
+      fs.writeFileSync(path.join(root, 'types.ts'), 'export type Platform = "ios";\nexport const platform: Platform = "ios";\n', 'utf-8');
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(file, 'import { Platform, platform } from "./types.ts";\nconst p: Platform = platform;\nexport default { platform: p, retries: 2 };\n', 'utf-8');
       expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
     });
 
