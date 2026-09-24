@@ -1927,22 +1927,10 @@ async function main(): Promise<void> {
   }
 
   if (args.command === 'merge-reports') {
-    const blobDir = args.files[0] ?? 'blob-report';
-    const resolvedDir = path.resolve(process.cwd(), blobDir);
-    if (!fs.existsSync(resolvedDir)) {
-      console.error(red(`No blob directory found at ${resolvedDir}`));
-      process.exit(1);
-    }
-    const { mergeBlobs } = await import('./reporters/blob.js');
+    const { runMergeReports } = await import('./merge-reports.js');
     const config = await loadConfig(undefined, args.config);
-    const result = mergeBlobs(resolvedDir);
-    console.log(bold('Merging blob reports'));
-    console.log(dim(resolvedDir));
-    console.log();
-    const reporters = await createReporters(config.reporter ?? 'list');
-    const dispatcher = new ReporterDispatcher(reporters);
-    dispatcher.onRunStart(config, 0);
-    await dispatcher.onRunEnd(result);
+    const code = await runMergeReports(args.files[0] ?? 'blob-report', config);
+    if (code !== 0) process.exit(code);
     return;
   }
 
@@ -2242,6 +2230,10 @@ async function main(): Promise<void> {
     }
     if (testFiles.length === 0) {
       console.log(dim(`Shard ${current}/${total}: no test files in this shard.`));
+      // Still leave this shard's (empty) blob, or merge-reports would report
+      // the shard as missing whenever there are fewer files than shards.
+      const { writeEmptyShardBlob } = await import('./merge-reports.js');
+      await writeEmptyShardBlob(config);
       process.exit(0);
     }
     shardMessage = `Shard ${current}/${total}: running ${testFiles.length} file(s)`;
