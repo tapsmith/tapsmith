@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { runMergeReports, writeEmptyShardBlob } from '../merge-reports.js';
+import { prepareBlobOutputDirs, runMergeReports, writeEmptyShardBlob } from '../merge-reports.js';
+import { BlobReporter } from '../reporters/blob.js';
+import { ListReporter } from '../reporters/list.js';
 import { mergeBlobs } from '../reporters/blob.js';
 import type { TapsmithConfig } from '../config.js';
 
@@ -69,11 +71,14 @@ describe('runMergeReports', () => {
     expect(err[0]).not.toMatch(/\n\s+at /);
   });
 
-  it('exits 1 when a shard is missing', async () => {
+  it('still reports the shards that are there when one is missing, then exits 1', async () => {
     const dir = path.join(tmpDir, 'blobs');
     writeBlob(dir, 'a.jsonl', { current: 1, total: 2 });
-    expect(await runMergeReports(dir, config())).toBe(1);
-    expect(err.join('\n')).toMatch(/^merge-reports: Missing shard 2\/2/);
+    const reportDir = path.join(tmpDir, 'report');
+    expect(await runMergeReports(dir, config({ reporter: [['html', { outputFolder: reportDir, open: 'never' }]] }))).toBe(1);
+    expect(fs.existsSync(path.join(reportDir, 'index.html'))).toBe(true);
+    expect(out.join('\n')).toContain('Merged 1 blob report (shards 1 of 2; missing 2/2): failed — 1 passed');
+    expect(err.join('\n')).toMatch(/merge-reports: Missing shard 2\/2/);
   });
 
   it('exits 0 on a failed merged status, as Playwright does, and says it failed', async () => {
@@ -104,6 +109,22 @@ describe('writeEmptyShardBlob', () => {
     expect(merged.tests.map((t) => t.fullName)).toEqual(['shard1.jsonl']);
   });
 
+  it('logs a refused outputDir like any reporter error instead of crashing the shard', async () => {
+    await expect(writeEmptyShardBlob(config({
+      shard: { current: 1, total: 1 },
+      reporter: [['blob', { outputDir: '.' }]],
+    }))).resolves.toBeUndefined();
+    expect(err.join('')).toContain('Reporter error in onRunStart: Blob reporter outputDir');
+  });
+
+  it('does not load the other configured reporters (the empty-shard path runs before the tsx re-exec)', async () => {
+    await writeEmptyShardBlob(config({
+      shard: { current: 1, total: 1 },
+      reporter: ['./no-such-reporter.ts', 'blob'],
+    }));
+    expect(fs.readdirSync(path.join(tmpDir, 'blob-report')).some((f) => f.endsWith('.jsonl'))).toBe(true);
+  });
+
   it('honours a configured blob outputDir', async () => {
     await writeEmptyShardBlob(config({
       shard: { current: 1, total: 1 },
@@ -111,5 +132,19 @@ describe('writeEmptyShardBlob', () => {
     }));
     expect(fs.readdirSync(path.join(tmpDir, 'custom-blobs')).some((f) => f.endsWith('.jsonl'))).toBe(true);
     expect(fs.existsSync(path.join(tmpDir, 'blob-report'))).toBe(false);
+  });
+});
+
+describe('prepareBlobOutputDirs', () => {
+  it('empties each blob reporter directory before launch, leaving other reporters alone', () => {
+    const dir = path.join(tmpDir, 'blob-report');
+    writeBlob(dir, 'old.jsonl', { current: 1, total: 2 });
+    prepareBlobOutputDirs([new ListReporter(), new BlobReporter()], config());
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+
+  it('logs a refused outputDir instead of throwing', () => {
+    expect(() => prepareBlobOutputDirs([new BlobReporter({ outputDir: '.' })], config())).not.toThrow();
+    expect(err.join('')).toContain('Reporter error in onRunStart: Blob reporter outputDir');
   });
 });

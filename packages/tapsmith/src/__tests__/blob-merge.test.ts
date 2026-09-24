@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { BlobReporter, BlobMergeError, mergeBlobs, describeMergedBlobs } from '../reporters/blob.js';
+import { BlobReporter, BlobMergeError, mergeBlobs, describeMergedBlobs, incompleteMergeMessage } from '../reporters/blob.js';
 import type { FullResult } from '../reporter.js';
 import type { TapsmithConfig } from '../config.js';
 import type { TestResult } from '../runner.js';
@@ -111,6 +111,13 @@ describe('mergeBlobs input checks', () => {
     );
   });
 
+  it('names the file when a nested suite entry is malformed', () => {
+    fs.writeFileSync(path.join(tmpDir, 'report-a.jsonl'), JSON.stringify({
+      version: 1, duration: 1, tests: [], suites: [{ name: 's', durationMs: 1 }],
+    }));
+    expect(mergeError().message).toMatch(/^Invalid blob file report-a\.jsonl: malformed test or suite entry \(/);
+  });
+
   it('refuses a malformed shard field', () => {
     writeBlob('report-a.jsonl', { shard: { current: 0, total: 2 } });
     expect(mergeError().message).toBe('Invalid blob file report-a.jsonl: malformed "shard"');
@@ -120,10 +127,13 @@ describe('mergeBlobs input checks', () => {
 // ─── Shards ───
 
 describe('mergeBlobs shard checks', () => {
-  it('refuses when a shard is missing, naming it', () => {
-    writeBlob('report-1.jsonl', { shard: { current: 1, total: 3 } });
-    writeBlob('report-3.jsonl', { shard: { current: 3, total: 3 } });
-    expect(mergeError().message).toBe(
+  it('merges the shards that are there when one is missing, as failed, and names the missing one', () => {
+    writeBlob('report-1.jsonl', { shard: { current: 1, total: 3 }, tests: ['one'] });
+    writeBlob('report-3.jsonl', { shard: { current: 3, total: 3 }, tests: ['three'] });
+    const merged = mergeBlobs(tmpDir);
+    expect(merged.tests.map((t) => t.fullName)).toEqual(['one', 'three']);
+    expect(merged.status).toBe('failed');
+    expect(incompleteMergeMessage(merged)).toBe(
       'Missing shard 2/3: found blob reports for shards 1, 3 of 3. '
       + 'Check that every shard job finished and uploaded its blob-report directory.',
     );
@@ -131,7 +141,25 @@ describe('mergeBlobs shard checks', () => {
 
   it('lists every missing shard', () => {
     writeBlob('report-2.jsonl', { shard: { current: 2, total: 4 } });
-    expect(mergeError().message).toMatch(/^Missing shards 1\/4, 3\/4, 4\/4: found blob reports for shard 2 of 4\./);
+    expect(incompleteMergeMessage(mergeBlobs(tmpDir)))
+      .toMatch(/^Missing shards 1\/4, 3\/4, 4\/4: found blob reports for shard 2 of 4\./);
+  });
+
+  it('has no incomplete message for a complete or an unsharded set', () => {
+    writeBlob('report-1.jsonl', { shard: { current: 1, total: 1 } });
+    expect(incompleteMergeMessage(mergeBlobs(tmpDir))).toBeUndefined();
+    fs.rmSync(path.join(tmpDir, 'report-1.jsonl'));
+    writeBlob('report-a.jsonl');
+    expect(incompleteMergeMessage(mergeBlobs(tmpDir))).toBeUndefined();
+  });
+
+  it('refuses sharded blobs mixed with an unsharded one, which would count every test twice', () => {
+    writeBlob('report-1.jsonl', { shard: { current: 1, total: 1 } });
+    writeBlob('report-full.jsonl');
+    expect(mergeError().message).toBe(
+      'Blob reports mix sharded and unsharded runs (report-1.jsonl is shard 1/1, report-full.jsonl is not sharded). '
+      + 'Merge each run from its own directory.',
+    );
   });
 
   it('refuses the same shard twice, naming both files', () => {
@@ -178,6 +206,13 @@ describe('describeMergedBlobs', () => {
     writeBlob('report-2.jsonl', { shard: { current: 2, total: 2 }, tests: ['b'] });
     const result = mergeBlobs(tmpDir);
     expect(describeMergedBlobs(result)).toBe('Merged 2 blob reports (shards 1–2 of 2): passed — 2 passed');
+  });
+
+  it('names the missing shards in the summary', () => {
+    writeBlob('report-1.jsonl', { shard: { current: 1, total: 3 }, tests: ['a'] });
+    writeBlob('report-3.jsonl', { shard: { current: 3, total: 3 }, tests: ['b'] });
+    expect(describeMergedBlobs(mergeBlobs(tmpDir)))
+      .toBe('Merged 2 blob reports (shards 1, 3 of 3; missing 2/3): failed — 2 passed');
   });
 
   it('reports a failed merged status with its counts', () => {
@@ -258,6 +293,35 @@ describe('BlobReporter output directory', () => {
     const reporter = new BlobReporter({ outputDir: '..' });
     expect(() => reporter.onRunStart(makeConfig({ rootDir }), 1)).toThrow(/contains the project root/);
     expect(fs.existsSync(rootDir)).toBe(true);
+  });
+
+  it('refuses an ancestor reached through a symlink', () => {
+    const real = path.join(tmpDir, 'real');
+    const rootDir = path.join(real, 'project');
+    fs.mkdirSync(rootDir, { recursive: true });
+    const link = path.join(tmpDir, 'link');
+    fs.symlinkSync(real, link);
+    const reporter = new BlobReporter({ outputDir: link });
+    expect(() => reporter.onRunStart(makeConfig({ rootDir }), 1)).toThrow(/contains the project root/);
+    expect(fs.existsSync(rootDir)).toBe(true);
+  });
+
+  it.runIf(process.platform === 'darwin')('refuses an ancestor spelled in a different case (case-insensitive macOS volume)', () => {
+    const rootDir = path.join(tmpDir, 'project');
+    fs.mkdirSync(rootDir);
+    const variant = tmpDir.toUpperCase();
+    if (!fs.existsSync(variant)) return; // case-sensitive volume: the variant is a different path
+    const reporter = new BlobReporter({ outputDir: variant });
+    expect(() => reporter.onRunStart(makeConfig({ rootDir }), 1)).toThrow(/contains the project root/);
+    expect(fs.existsSync(rootDir)).toBe(true);
+  });
+
+  it('prepareOutputDir clears before the run starts', () => {
+    const outputDir = path.join(tmpDir, 'blob-report');
+    fs.mkdirSync(outputDir);
+    fs.writeFileSync(path.join(outputDir, 'report-old.jsonl'), '{}');
+    new BlobReporter({ outputDir }).prepareOutputDir(makeConfig());
+    expect(fs.existsSync(outputDir)).toBe(false);
   });
 
   it('writes a mergeable blob for a shard with no tests', async () => {

@@ -773,7 +773,10 @@ jobs:
         run: npx tapsmith merge-reports ../all-blob-reports -c
           tapsmith.config.android-ci.mjs
 
+      # always(): merge-reports exits 1 when a shard's blob is missing, but it
+      # still writes the report for the shards that did finish.
       - name: Upload HTML report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-report

@@ -152,7 +152,7 @@ export class ReporterDispatcher implements TapsmithReporter {
 export async function createReporters(
   config: ReporterConfig | undefined,
 ): Promise<TapsmithReporter[]> {
-  const descriptions = normalizeConfig(config);
+  const descriptions = normalizeReporterConfig(config);
   const reporters: TapsmithReporter[] = [];
 
   for (const desc of descriptions) {
@@ -163,7 +163,8 @@ export async function createReporters(
   return reporters;
 }
 
-function normalizeConfig(config: ReporterConfig | undefined): ReporterDescription[] {
+/** The `reporter` config as a list of descriptions, defaults applied. */
+export function normalizeReporterConfig(config: ReporterConfig | undefined): ReporterDescription[] {
   if (!config) {
     // Default to `list` everywhere (including CI). The per-test list output is
     // more legible than `dot` when a CI log is the only artifact you have to

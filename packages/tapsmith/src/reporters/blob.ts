@@ -67,17 +67,17 @@ export class BlobReporter implements TapsmithReporter {
    * Clears the output directory, as Playwright's blob reporter does. Blob file
    * names are unique per run, so without this a second run into the same
    * directory leaves two blobs and `merge-reports` counts every test twice.
-   * Unlike Playwright (which clears when it writes), this clears at run start:
-   * a run that dies before the end then leaves no blob at all, rather than the
-   * previous run's blob posing as this run's shard.
+   * Unlike Playwright (which clears when it writes), this clears at run start
+   * — `tapsmith test` calls it as soon as reporters exist, before any device
+   * launch — so a run that dies before the end leaves no blob at all, rather
+   * than the previous run's blob posing as this run's shard.
    */
-  onRunStart(config: TapsmithConfig, _fileCount: number): void {
+  prepareOutputDir(config: TapsmithConfig): void {
     this._config = config;
-    this._startTime = new Date();
     this._refusal = undefined;
     const outputDir = this._resolveOutputDir();
     for (const protectedDir of new Set([path.resolve(config.rootDir ?? process.cwd()), process.cwd()])) {
-      if (isSameOrAncestor(outputDir, protectedDir)) {
+      if (containsDir(outputDir, protectedDir)) {
         // Remembered so onRunEnd writes nothing either: the dispatcher logs
         // and swallows hook errors, and a blob dropped into the project root
         // would be picked up by the next merge.
@@ -89,6 +89,11 @@ export class BlobReporter implements TapsmithReporter {
       }
     }
     fs.rmSync(outputDir, { recursive: true, force: true });
+  }
+
+  onRunStart(config: TapsmithConfig, _fileCount: number): void {
+    this._startTime = new Date();
+    this.prepareOutputDir(config);
   }
 
   private _resolveOutputDir(): string {
@@ -184,9 +189,10 @@ export class BlobReporter implements TapsmithReporter {
 
 /**
  * A blob directory that cannot be merged: no blobs, a corrupt or foreign
- * file, a newer blob format, or a shard set with a hole or a duplicate.
- * The message is the whole user-facing explanation, so the CLI prints it
- * without a stack.
+ * file, a newer blob format, or a shard set that holds a shard twice or mixes
+ * runs. The message is the whole user-facing explanation, so the CLI prints
+ * it without a stack. (A *missing* shard is not thrown: the shards that are
+ * there still merge, and {@link incompleteMergeMessage} reports the hole.)
  */
 export class BlobMergeError extends Error {
   override name = 'BlobMergeError';
@@ -200,6 +206,7 @@ interface ParsedBlob {
 interface MergeInfo {
   blobCount: number
   shardTotal?: number
+  missingShards: number[]
 }
 
 const mergeInfo = new WeakMap<FullResult, MergeInfo>();
@@ -210,9 +217,10 @@ const mergeInfo = new WeakMap<FullResult, MergeInfo>();
  *
  * Throws {@link BlobMergeError} rather than merging something misleading:
  * an empty directory (Playwright: "No report files found"), an invalid file,
- * a blob from a newer Tapsmith, or a sharded set that is missing a shard,
- * holds one twice, or mixes shard splits. Unsharded blobs are merged as-is,
- * any number of them, as Playwright does.
+ * a blob from a newer Tapsmith, or a sharded set that holds a shard twice,
+ * mixes shard splits, or mixes in unsharded blobs. Unsharded-only sets merge
+ * as-is, any number of them, as Playwright does. A set missing a shard merges
+ * what is there with status `failed`; {@link incompleteMergeMessage} says so.
  */
 export function mergeBlobs(blobDir: string): FullResult {
   let entries: string[];
@@ -231,7 +239,7 @@ export function mergeBlobs(blobDir: string): FullResult {
   }
 
   const blobs = files.map((file) => ({ file, blob: parseBlob(blobDir, file) }));
-  const shardTotal = checkShards(blobs);
+  const { total: shardTotal, missing: missingShards } = checkShards(blobs);
   blobs.sort((a, b) =>
     (a.blob.shard?.current ?? 0) - (b.blob.shard?.current ?? 0) || a.file.localeCompare(b.file));
 
@@ -239,36 +247,65 @@ export function mergeBlobs(blobDir: string): FullResult {
   const allSuites: SuiteResult[] = [];
   let totalDuration = 0;
 
-  for (const { blob } of blobs) {
+  for (const { file, blob } of blobs) {
     totalDuration = Math.max(totalDuration, blob.duration);
 
+    let tests: TestResult[];
+    let suites: SuiteResult[];
+    try {
+      tests = blob.tests.map((t) => restoreTest(t, blobDir));
+      suites = blob.suites.map((s) => deserializeSuite(s, blobDir));
+    } catch (err) {
+      throw new BlobMergeError(
+        `Invalid blob file ${file}: malformed test or suite entry (${(err as Error).message})`,
+      );
+    }
+    allTests.push(...tests);
+    allSuites.push(...suites);
+
     // Restore screenshots to disk
-    if (blob.screenshots) {
+    if (isRecord(blob.screenshots)) {
       for (const [key, base64] of Object.entries(blob.screenshots)) {
+        if (typeof base64 !== 'string') continue;
         const screenshotPath = path.join(blobDir, key);
         if (!fs.existsSync(screenshotPath)) {
           fs.writeFileSync(screenshotPath, Buffer.from(base64, 'base64'));
         }
       }
     }
-
-    for (const t of blob.tests) {
-      allTests.push(restoreTest(t, blobDir));
-    }
-    for (const s of blob.suites) {
-      allSuites.push(deserializeSuite(s, blobDir));
-    }
   }
 
   const hasFailed = allTests.some((t) => t.status === 'failed');
   const result: FullResult = {
-    status: hasFailed ? 'failed' : 'passed',
+    // A merge with a hole in it is not a pass, whatever the shards present say.
+    status: hasFailed || missingShards.length > 0 ? 'failed' : 'passed',
     duration: totalDuration,
     tests: allTests,
     suites: allSuites,
   };
-  mergeInfo.set(result, { blobCount: blobs.length, shardTotal });
+  mergeInfo.set(result, { blobCount: blobs.length, shardTotal, missingShards });
   return result;
+}
+
+/**
+ * For a merge missing one or more shards, the error explaining which; else
+ * undefined. `merge-reports` still reports the shards that are there (a CI
+ * report with a hole beats no report), then prints this and exits 1.
+ */
+export function incompleteMergeMessage(result: FullResult): string | undefined {
+  const info = mergeInfo.get(result);
+  if (!info?.shardTotal || info.missingShards.length === 0) return undefined;
+  const { shardTotal: total, missingShards: missing } = info;
+  const found = presentShards(info);
+  return `Missing shard${missing.length === 1 ? '' : 's'} ${missing.map((n) => `${n}/${total}`).join(', ')}: `
+    + `found blob reports for shard${found.length === 1 ? '' : 's'} ${found.join(', ')} of ${total}. `
+    + 'Check that every shard job finished and uploaded its blob-report directory.';
+}
+
+function presentShards(info: MergeInfo): number[] {
+  const present: number[] = [];
+  for (let i = 1; i <= (info.shardTotal ?? 0); i++) if (!info.missingShards.includes(i)) present.push(i);
+  return present;
 }
 
 /**
@@ -281,7 +318,12 @@ export function describeMergedBlobs(result: FullResult): string {
   const info = mergeInfo.get(result);
   const count = info?.blobCount ?? 0;
   let what = `Merged ${count} blob report${count === 1 ? '' : 's'}`;
-  if (info?.shardTotal) what += ` (shards 1–${info.shardTotal} of ${info.shardTotal})`;
+  if (info?.shardTotal) {
+    what += info.missingShards.length === 0
+      ? ` (shards 1–${info.shardTotal} of ${info.shardTotal})`
+      : ` (shards ${presentShards(info).join(', ')} of ${info.shardTotal}; `
+        + `missing ${info.missingShards.map((n) => `${n}/${info.shardTotal}`).join(', ')})`;
+  }
   const counts = (['passed', 'failed', 'skipped'] as const)
     .map((status) => [status, result.tests.filter((t) => t.status === status).length] as const)
     .filter(([status, n]) => n > 0 || status === 'passed')
@@ -325,14 +367,23 @@ function parseBlob(blobDir: string, file: string): BlobData {
 }
 
 /**
- * Sharded blobs must be one complete split: a single total, each shard once,
- * none missing. Returns that total, or undefined when nothing is sharded.
+ * Sharded blobs must be one split, each shard at most once, with no unsharded
+ * blob mixed in (that is a stale full run, which would count every test
+ * twice). Returns the split's total and any shards missing from it; both
+ * empty when nothing is sharded.
  */
-function checkShards(blobs: ParsedBlob[]): number | undefined {
+function checkShards(blobs: ParsedBlob[]): { total?: number; missing: number[] } {
   const sharded = blobs.filter((b) => b.blob.shard);
-  if (sharded.length === 0) return undefined;
+  if (sharded.length === 0) return { missing: [] };
 
   const first = sharded[0];
+  const unsharded = blobs.find((b) => !b.blob.shard);
+  if (unsharded) {
+    throw new BlobMergeError(
+      `Blob reports mix sharded and unsharded runs (${first.file} is shard ${shardLabel(first)}, `
+      + `${unsharded.file} is not sharded). Merge each run from its own directory.`,
+    );
+  }
   const total = first.blob.shard!.total;
   const other = sharded.find((b) => b.blob.shard!.total !== total);
   if (other) {
@@ -359,15 +410,7 @@ function checkShards(blobs: ParsedBlob[]): number | undefined {
 
   const missing: number[] = [];
   for (let i = 1; i <= total; i++) if (!byShard.has(i)) missing.push(i);
-  if (missing.length > 0) {
-    const found = [...byShard.keys()].sort((a, b) => a - b);
-    throw new BlobMergeError(
-      `Missing shard${missing.length === 1 ? '' : 's'} ${missing.map((n) => `${n}/${total}`).join(', ')}: `
-      + `found blob reports for shard${found.length === 1 ? '' : 's'} ${found.join(', ')} of ${total}. `
-      + 'Check that every shard job finished and uploaded its blob-report directory.',
-    );
-  }
-  return total;
+  return { total, missing };
 }
 
 function shardLabel(b: ParsedBlob): string {
@@ -378,9 +421,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** True when `dir` is `target` or one of its ancestors. */
-function isSameOrAncestor(dir: string, target: string): boolean {
-  const rel = path.relative(dir, target);
+/**
+ * True when `dir` is `target` or one of its ancestors. Compared on real
+ * paths (macOS reports cwd as /private/tmp/… for /tmp/…) and case-folded on
+ * the platforms whose default filesystems are case-insensitive, so neither a
+ * symlink nor a case variant slips an ancestor past the guard.
+ */
+function containsDir(dir: string, target: string): boolean {
+  if (!fs.existsSync(dir)) return false; // nothing there to delete
+  const norm = (p: string): string => {
+    let real = p;
+    try {
+      real = fs.realpathSync.native(p);
+    } catch {
+      // keep the resolved path
+    }
+    return process.platform === 'darwin' || process.platform === 'win32' ? real.toLowerCase() : real;
+  };
+  const rel = path.relative(norm(dir), norm(target));
   return rel === '' || (rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel));
 }
 

@@ -2286,6 +2286,8 @@ async function main(): Promise<void> {
       reporters.push(new BlobReporter());
     }
   }
+  const { prepareBlobOutputDirs } = await import('./merge-reports.js');
+  prepareBlobOutputDirs(reporters, config);
   const reporter = new ReporterDispatcher(reporters);
 
   // Compute the effective parallelism BEFORE handing config to the reporter,
