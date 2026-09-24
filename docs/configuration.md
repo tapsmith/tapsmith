@@ -403,7 +403,11 @@ The CLI flag takes precedence over the config file:
 npx tapsmith test --device R5CR10XXXXX
 ```
 
-For multi-worker runs, prefer `launchEmulators + avd` instead of `device`.
+A pinned device hosts one worker, so `device` (or `--device`) caps its run to
+a single worker in every mode, and `--device` with a `--workers N` the run
+cannot use (any N > 1 when every project runs on that device's platform and
+there is more than one file to spread) is refused. In a config spanning Android and iOS, the pin applies only to the
+projects of its own platform. For multi-worker runs, use `launchEmulators + avd` instead of `device`.
 
 ### Custom Daemon Address
 

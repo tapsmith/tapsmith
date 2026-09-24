@@ -35,6 +35,7 @@ function makeDispatcher(overrides: Partial<TestDispatcher> = {}): TestDispatcher
     getTestTree: () => [],
     getSessionInfo: () => ({ timeout: 0, retries: 0, projects: [] }),
     resolveDeviceName: () => undefined,
+    deviceChoiceError: async () => null,
     toggleWatch: () => ({ enabled: false }),
     ...overrides,
   };

@@ -45,6 +45,8 @@ vi.mock('../device.js', () => ({
 
 vi.mock('../emulator.js', () => ({
   isPackageInstalled: vi.fn(() => true),
+  // The installed build matches: only `forceInstall` can make a worker reinstall.
+  installedApkMatches: vi.fn(() => true),
   waitForPackageIndexed: vi.fn(async () => {}),
 }));
 
@@ -203,6 +205,7 @@ describe('worker-runner IPC reporting', () => {
         deviceName: 'device-1',
         daemonPort: 19_000,
         config: makeSerializedConfig({ package: 'com.example.app' }),
+        forceInstall: false,
       } satisfies MainToWorkerMessage);
       await ready;
 
@@ -244,5 +247,61 @@ describe('worker-runner IPC reporting', () => {
       sessionPreflightMocks.launchConfiguredApp.mockClear();
       sessionPreflightMocks.ensureSessionReady.mockClear();
     }
+  });
+});
+
+// `--force-install` never reached parallel workers: the dispatcher's init
+// message had no field for it, so `--workers 4 --force-install` kept every
+// matching build (PILOT-261).
+describe('worker-runner init', () => {
+  async function initWorker(forceInstall: boolean): Promise<ReturnType<typeof vi.fn>> {
+    vi.resetModules();
+    const beforeListeners = process.listeners('message');
+    const originalSend = process.send;
+    let resolveReady!: () => void;
+    const ready = new Promise<void>((resolve) => { resolveReady = resolve; });
+    Object.defineProperty(process, 'send', {
+      configurable: true,
+      value: vi.fn((msg: WorkerToMainMessage) => {
+        if (msg.type === 'ready') resolveReady();
+        return true;
+      }),
+    });
+    try {
+      await import('../worker-runner.js');
+      const { Device } = await import('../device.js');
+      const listener = process.listeners('message').find((l) => !beforeListeners.includes(l)) as (m: MainToWorkerMessage) => void;
+      listener({
+        type: 'init',
+        workerId: 0,
+        deviceSerial: 'device-1',
+        deviceName: 'device-1',
+        daemonPort: 19_000,
+        config: makeSerializedConfig({ package: 'com.example.app', apk: 'app.apk' }),
+        forceInstall,
+      } satisfies MainToWorkerMessage);
+      await ready;
+      // The mocked module outlives resetModules: this init's Device is the latest.
+      const device = vi.mocked(Device).mock.results.at(-1)!.value as { installApk: ReturnType<typeof vi.fn> };
+      return device.installApk;
+    } finally {
+      for (const listener of process.listeners('message')) {
+        if (!beforeListeners.includes(listener)) process.removeListener('message', listener);
+      }
+      if (originalSend) Object.defineProperty(process, 'send', { configurable: true, value: originalSend });
+      else Reflect.deleteProperty(process, 'send');
+      sessionPreflightMocks.launchConfiguredApp.mockClear();
+      sessionPreflightMocks.ensureSessionReady.mockClear();
+    }
+  }
+
+  it('reinstalls a matching build when told to force the install', async () => {
+    const installApk = await initWorker(true);
+    expect(installApk).toHaveBeenCalledWith('/tmp/app.apk');
+  });
+
+  it('keeps a matching build otherwise', async () => {
+    const installApk = await initWorker(false);
+    expect(installApk).not.toHaveBeenCalled();
   });
 });

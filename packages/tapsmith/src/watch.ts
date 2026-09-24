@@ -64,6 +64,11 @@ export interface WatchModeContext {
   screenshotDir?: string
   launchedEmulators: LaunchedEmulator[]
   /**
+   * `--force-install`, for the workers watch sets up — except the one on the
+   * CLI's primary group, which the CLI already force-installed.
+   */
+  forceInstall: boolean
+  /**
    * Sticky reset capabilities for the primary device, shared with the CLI's
    * startup launch (which probes for in-app hooks). Threaded into every
    * watch-run child — they are forked fresh per run — and updated from each
@@ -150,6 +155,43 @@ export function reconcileFailedFiles(
     if (failedFilePaths.has(f)) failedFiles.add(f);
     else failedFiles.delete(f);
   }
+}
+
+/** Whether a worker on `workerBucket` may run a file of `projectName`. */
+function workerServesFile(
+  file: { projectName?: string },
+  workerBucket: string | undefined,
+  bucketByProject: ReadonlyMap<string, string> | undefined,
+): boolean {
+  if (!workerBucket || !bucketByProject || !file.projectName) return true;
+  const sig = bucketByProject.get(file.projectName);
+  return !sig || sig === workerBucket;
+}
+
+/**
+ * Remove and return the first queued file a worker on `workerBucket` may run:
+ * in a multi-target session only files of its own device target.
+ */
+export function takeFileForWorker<T extends { projectName?: string }>(
+  queue: T[],
+  workerBucket: string | undefined,
+  bucketByProject: ReadonlyMap<string, string> | undefined,
+): T | undefined {
+  const idx = queue.findIndex((f) => workerServesFile(f, workerBucket, bucketByProject));
+  return idx >= 0 ? queue.splice(idx, 1)[0] : undefined;
+}
+
+/**
+ * The queued files none of the live workers may run — a device target whose
+ * workers all failed to start or retired. Waiting on them hung the run with
+ * no output (PILOT-313), so the dispatcher fails them instead.
+ */
+export function filesNoWorkerCanRun<T extends { projectName?: string }>(
+  queue: T[],
+  liveWorkerBuckets: Array<string | undefined>,
+  bucketByProject: ReadonlyMap<string, string> | undefined,
+): T[] {
+  return queue.filter((f) => !liveWorkerBuckets.some((b) => workerServesFile(f, b, bucketByProject)));
 }
 
 // ─── Watch mode coordinator ───
@@ -411,6 +453,9 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         daemonPort,
         config: workerConfig,
         screenshotDir: ctx.screenshotDir,
+        // The worker on the CLI's own group sets it up afresh (it does not
+        // adopt), but the CLI already force-installed there this session.
+        forceInstall: ctx.forceInstall && deviceSerial !== ctx.deviceSerial,
         ...(members.length > 0 ? {
           groupMembers: members.map((m, i) => ({ name: groupNames[i + 1].name, deviceSerial: m.serial, daemonPort: m.daemonPort })),
         } : {}),
@@ -455,26 +500,36 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
 
         function maybeResolve(): void {
           if (settled) return;
-          if (fileQueue.length > 0) return;
-          if (activeWorkers.every((w) => w.retired || !w.busy)) settle();
+          const live = activeWorkers.filter((w) => !w.retired);
+          if (live.some((w) => w.busy)) return;
+          // A live worker can still take something (it has not been handed
+          // work yet, at the start of a dispatch): leave the queue to it.
+          const stranded = filesNoWorkerCanRun(fileQueue, live.map((w) => w.bucketSignature), ctx.bucketByProject);
+          if (stranded.length < fileQueue.length) return;
+          // Whatever is still queued is a file no live worker may take. Fail
+          // it loudly: waiting for a worker that will never come left the
+          // re-run silent forever (PILOT-313).
+          for (const file of stranded) {
+            const err = new Error(
+              `No watch worker can run this file: the device target of ${file.projectName ? `project "${file.projectName}"` : 'its project'} `
+              + 'has no live worker (its workers failed to start or became unavailable). Restart watch mode to set its devices up again.',
+            );
+            const { result, suite } = makeErrorResult(file.filePath, err, file.projectName);
+            allResults.push(result);
+            allSuites.push(suite);
+            failedFilePaths.add(file.filePath);
+            reporter.onTestFileStart?.(file.filePath);
+            reporter.onTestEnd?.(result);
+            reporter.onTestFileEnd?.(file.filePath, [result]);
+          }
+          fileQueue.length = 0;
+          settle();
         }
 
         function dispatchNext(worker: WatchWorkerHandle): void {
           if (worker.retired) return;
           // Multi-bucket: only take a file whose project's bucket matches this worker.
-          let next: TaggedFile | undefined;
-          if (worker.bucketSignature && ctx.bucketByProject) {
-            const matchIdx = fileQueue.findIndex((f) => {
-              if (!f.projectName) return true;
-              const sig = ctx.bucketByProject!.get(f.projectName);
-              return !sig || sig === worker.bucketSignature;
-            });
-            if (matchIdx >= 0) {
-              next = fileQueue.splice(matchIdx, 1)[0];
-            }
-          } else {
-            next = fileQueue.shift();
-          }
+          const next = takeFileForWorker(fileQueue, worker.bucketSignature, ctx.bucketByProject);
           if (!next) {
             worker.busy = false;
             maybeResolve();
@@ -552,6 +607,9 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
 
           dispatchNext(worker);
         }
+        // No live worker at all (every one retired in an earlier round):
+        // nothing above would ever settle this dispatch, so fail its files.
+        maybeResolve();
       });
     } finally {
       // Remove dispatch-scoped listeners to prevent stale handlers from
@@ -612,7 +670,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     // tags and suppresses file headers when running in parallel.
     const reporterConfig = useParallel()
       ? { ...ctx.config, workers: watchWorkers.length }
-      : ctx.config;
+      : { ...ctx.config, workers: 1 };
     reporter.onRunStart(reporterConfig, totalFiles);
 
     if (useParallel()) {
@@ -814,7 +872,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
 
     const reporterConfig = useParallel()
       ? { ...ctx.config, workers: watchWorkers.length }
-      : ctx.config;
+      : { ...ctx.config, workers: 1 };
     reporter.onRunStart(reporterConfig, files.length);
 
     if (useParallel() && tagged.length > 1) {

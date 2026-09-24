@@ -94,10 +94,6 @@ function dim(s: string): string {
   return `${DIM}${s}${RESET}`;
 }
 
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
 function printTapsmithBanner(): void {
   console.log();
   const banner = figlet.textSync('Tapsmith', { font: 'Three Point' });
@@ -1481,7 +1477,11 @@ async function provisionWorkerGroups(
   const config = state.effectiveConfig;
   const groupSize = state.deviceGroup.length;
   const firstGroup = state.sessions.map((s) => s.serial);
-  const pinned = state.deviceGroup.slice(1).some((e) => e.device);
+  // Any pin — `--device` or root `device` on the primary included — fixes
+  // the session to the one group the setup opened. Extra workers used to be
+  // spread onto every other connected device beside a `--device` primary
+  // (PILOT-313). `state.deviceGroup` predates the setup's auto-pick.
+  const pinned = state.deviceGroup.some((e) => e.device);
   if (config.workers <= 1 || pinned) return { workerGroups: undefined, launched: [] };
   const provision = await provisionMultiWorkerDevices(config, modeName, {
     ...opts,
@@ -1535,24 +1535,36 @@ async function provisionDevicesForBucket(
   effectiveConfig: TapsmithConfig,
   desiredWorkers: number,
   progress?: LaunchProgressSink,
-  pinnedMembers: string[] = [],
+  /**
+   * The bucket's device group as it was before the sequential setup (see
+   * `pinnedBucketSignatures`) when it pins anything. Never re-resolved from
+   * `effectiveConfig`: that setup has since written its auto-picked serial
+   * onto the root config `use`-less projects share.
+   */
+  pinnedGroup?: readonly DeviceGroupEntry[],
 ): Promise<{ serials: string[]; launched: LaunchedEmulator[]; reusedSimulatorCount: number }> {
   if (desiredWorkers <= 0) return { serials: [], launched: [], reusedSimulatorCount: 0 };
-  if (pinnedMembers.length > 0) {
+  const pinnedMembers = (pinnedGroup ?? []).flatMap((e) => (e.device ? [e.device] : []));
+  if (pinnedGroup && pinnedMembers.length > 0) {
     // A pinned group is exactly one worker: the primary (pinned or the first
     // device found), then the members in order — each keeping its pin, the
     // unpinned ones taking the next free device provisioned here. Nothing to
     // provision when every entry is pinned.
-    const group = resolveDeviceGroup(effectiveConfig);
-    const pool = group.every((e) => e.device)
-      ? { serials: [] as string[], launched: [] as LaunchedEmulator[], reusedSimulatorCount: 0 }
-      : await provisionDevicesForBucket({ ...effectiveConfig, devices: undefined }, group.length, progress);
+    const group = pinnedGroup.map((e) => ({ ...e }));
+    if (group.every((e) => e.device)) {
+      // Every device named outright: the same pins-only group (and the same
+      // refusal of an Android pin that is not connected) as the parallel path.
+      const { pinnedWorkerDevices } = await import('./dispatcher.js');
+      const pins = pinnedWorkerDevices(group, listConnectedDeviceSerials(), effectiveConfig.platform === 'ios')!;
+      return { serials: pins, launched: [], reusedSimulatorCount: 0 };
+    }
+    const pool = await provisionDevicesForBucket({ ...effectiveConfig, devices: undefined, device: undefined }, group.length, progress);
     const first = group[0].device ?? pool.serials.find((s) => !pinnedMembers.includes(s));
     const members = first ? assignGroupMemberDevices(group, first, pool.serials) : undefined;
     return {
       // Short of devices: hand back what there is, so the caller's
       // `< groupSize` check reports the shortfall with the real list.
-      serials: members ? [first!, ...members] : first ? [first, ...pinnedMembers] : pinnedMembers,
+      serials: members ? [first!, ...members] : first ? [first, ...pinnedMembers.filter((s) => s !== first)] : pinnedMembers,
       launched: pool.launched,
       reusedSimulatorCount: pool.reusedSimulatorCount,
     };
@@ -1669,7 +1681,9 @@ async function provisionDevicesForBucket(
 async function provisionPerProjectDevices(
   rootConfig: TapsmithConfig,
   projects: import('./project.js').ResolvedProject[],
-  budgetCap?: number,
+  budgetCap: number | undefined,
+  /** Buckets that pin a device, taken before the sequential setup ran (see `allocateBucketWorkers`). */
+  pinnedSignatures: import('./project.js').PinnedBuckets,
   progress?: LaunchProgressSink,
 ): Promise<PerProjectProvisionResult> {
   progress?.start('worker-devices', 'preparing devices across project targets');
@@ -1693,7 +1707,7 @@ async function provisionPerProjectDevices(
   }
 
   // Allocate workers across buckets
-  const allocation = allocateBucketWorkers(rootConfig.workers, bucketEntries, budgetCap);
+  const allocation = allocateBucketWorkers(rootConfig.workers, bucketEntries, budgetCap, pinnedSignatures);
 
   // Provision each bucket's devices in parallel — Android emulators and
   // iOS simulators both have multi-second cold-start costs, and there's
@@ -1707,14 +1721,18 @@ async function provisionPerProjectDevices(
     // group any of them declares (a smaller project runs on the first N).
     const bucketEffective = sharedDeviceGroup(bucketProjects).config;
     const groupSize = deviceGroupSize(bucketEffective);
-    const pinned = resolveDeviceGroup(bucketEffective).slice(1).flatMap((e) => (e.device ? [e.device] : []));
+    // Every pin, the primary's included, from the snapshot taken before the
+    // sequential setup: that setup has since written its auto-picked serial
+    // onto the root config `use`-less projects share, which is not a pin.
+    const snapshot = pinnedSignatures.get(signature);
+    const pinned = [...(snapshot?.pins ?? [])];
     const workersWanted = pinned.length > 0 ? 1 : desiredWorkers;
     const desiredDevices = workersWanted * groupSize;
     progress?.update(
       'worker-devices',
       { state: 'running', detail: `preparing ${desiredDevices} device(s) for ${bucketProjects.map((p) => p.name).join(', ')}` },
     );
-    const provisioned = await provisionDevicesForBucket(bucketEffective, desiredDevices, progress, pinned);
+    const provisioned = await provisionDevicesForBucket(bucketEffective, desiredDevices, progress, snapshot?.group);
 
     if (provisioned.serials.length === 0) {
       throw new Error(
@@ -2057,6 +2075,7 @@ async function main(): Promise<void> {
     config.reporter = args.reporter;
   }
 
+
   // Validate watch mode constraints
   if (args.watch) {
     if (args.shard) {
@@ -2281,29 +2300,78 @@ async function main(): Promise<void> {
   // so reporters can correctly suppress file headings / show project tags
   // when buckets or per-project `workers:` push the actual concurrency above
   // the global `config.workers` value.
-  const { allocateBucketWorkers, bucketizeProjects, sharedDeviceGroup } = await import('./project.js');
+  const { allocateBucketWorkers, bucketizeProjects, pinnedBucketSignatures, sharedDeviceGroup, workerPlanNote, platformOfSerial, scopeDevicePinToPlatform, devicePinWorkersConflict, devicesPinnedByManyBuckets } = await import('./project.js');
+  // A root `device` (from `--device` or the config) reached every project,
+  // the other platform's too, whose bucket then counted as pinned to a serial
+  // it cannot drive. Keep it on the projects of the device's own platform.
+  if (config.device && new Set(projects.map((p) => p.effectiveConfig.platform ?? 'android')).size > 1) {
+    scopeDevicePinToPlatform(projects, config.device, platformOfSerial(config.device));
+  }
   const budgetCap = isExplicitWorkers(config) ? config.workers : undefined;
-  const allocation = allocateBucketWorkers(config.workers, bucketizeProjects(projects), budgetCap);
+  const runBuckets = bucketizeProjects(projects);
+  // Before any device setup: the sequential setup writes the device it
+  // auto-picks onto the effective config, which would read as a pin later.
+  const pinnedSignatures = pinnedBucketSignatures(runBuckets);
+  // The root's own `device` (the user's pin, or none) as it is before any
+  // setup writes an auto-picked serial onto it — see the project switch.
+  const rootDeviceBeforeSetup = config.device;
+  const allocation = allocateBucketWorkers(config.workers, runBuckets, budgetCap, pinnedSignatures);
   // The group a device target's sessions form: the largest `use.devices`
   // among the projects sharing that signature. A single-device project on a
   // target that also hosts a group project runs on the group's primary.
   const bucketGroup = (signature: string): DeviceGroupEntry[] =>
     sharedDeviceGroup(projects.filter((p) => p.deviceSignature === signature)).group;
-  const totalWorkers = [...allocation.values()].reduce((s, n) => s + n, 0);
+  // The one-worker cap is per device, not per bucket: projects for two apps
+  // inheriting one `--device` are two buckets, and each got a worker on it.
+  // The sequential path runs them one after another on the device; UI and
+  // watch keep a worker per target alive, so they cannot share one.
+  const sharedPins = devicesPinnedByManyBuckets(runBuckets, pinnedSignatures);
+  const describeSharedPins = sharedPins.map((p) => `${p.serial} (${p.projects.join(', ')})`).join('; ');
+  if (sharedPins.length > 0 && (args.ui || args.watch)) {
+    console.error(red(
+      `${args.ui ? 'UI mode' : 'Watch mode'} runs each device target on a worker of its own, but these devices are pinned by `
+      + `more than one: ${describeSharedPins}. Pass --project to run one of them, or pin each project to its own device.`,
+    ));
+    process.exit(1);
+  }
+  const totalWorkers = sharedPins.length > 0 ? 1 : [...allocation.values()].reduce((s, n) => s + n, 0);
   const maxFilesInAnyWave = Math.max(...projectWaves.map((wave) =>
     wave.reduce((sum, p) => sum + p.testFiles.length, 0),
   ));
+  // A pinned device hosts one worker, so `--device` with a `--workers N` the
+  // pin leaves unusable asks for two different runs. Both are explicit on this
+  // command line: refuse rather than pick one — silently dropping either used
+  // to run on devices the user never named (PILOT-261, PILOT-313). A `workers`
+  // from the config file is a default, and the pin caps it with a note.
+  const pinConflict = devicePinWorkersConflict(args.device, args.workers, totalWorkers, maxFilesInAnyWave);
+  if (pinConflict) {
+    console.error(red(pinConflict));
+    process.exit(1);
+  }
   const effectiveWorkers = Math.min(totalWorkers, maxFilesInAnyWave);
 
   // Warn only when the irreducible minimum (one worker per active bucket)
   // exceeds the user's explicit --workers value. Per-project `workers:`
   // inflation is now capped by the budget, so this only fires when there
   // are genuinely more device buckets than workers.
-  let workerPlanWarning: string | undefined;
-  if (isExplicitWorkers(config) && totalWorkers > config.workers) {
-    const activeBuckets = [...allocation.values()].filter((n) => n > 0).length;
-    workerPlanWarning = `requested ${countLabel(config.workers, 'worker')}; running ${totalWorkers} because ${countLabel(activeBuckets, 'device target')} ${activeBuckets === 1 ? 'needs a worker' : 'need one each'}`;
-  }
+  // A pin capping the count is explained too, or a `workers: 4` config run
+  // with `--device` looks like parallelism silently stopped working.
+  // The shared-pin note only when it changed something: a one-worker run
+  // already runs its projects one after another.
+  const workerPlanWarning = sharedPins.length > 0
+    ? (config.workers > 1
+      ? `running one worker: ${describeSharedPins} — a device pinned by several projects runs them one after another`
+      : undefined)
+    : workerPlanNote({
+    requested: config.workers,
+    explicit: isExplicitWorkers(config),
+    fromCli: args.workers !== undefined,
+    running: totalWorkers,
+    activeBuckets: [...allocation.values()].filter((n) => n > 0).length,
+    pins: [...new Set(runBuckets
+      .filter((b) => (allocation.get(b.signature) ?? 0) > 0)
+      .flatMap((b) => pinnedSignatures.get(b.signature)?.pins ?? []))],
+  });
 
   // Reflect the effective parallelism on the config so reporters see the
   // real worker count. Downstream dispatcher paths pass `workers` explicitly,
@@ -2371,6 +2439,7 @@ async function main(): Promise<void> {
         reporter,
         testFiles,
         workers: totalWorkers,
+        forceInstall: args.forceInstall,
         workerCap: budgetCap,
         projects: hasProjects ? projects : undefined,
         projectWaves: hasProjects ? projectWaves : undefined,
@@ -2423,6 +2492,9 @@ async function main(): Promise<void> {
     && !args.ui
     && !args.watch
     && !anyExplicitWorkers
+    // A device pinned by several targets runs them one after another whatever
+    // --workers says, so the tip would be advice that cannot help.
+    && sharedPins.length === 0
   ) {
     process.stderr.write(
       dim(`Multiple device targets detected (${uniqueSignatures.size}). Tip: pass --workers ${uniqueSignatures.size} to run them in parallel.\n`),
@@ -2477,7 +2549,7 @@ async function main(): Promise<void> {
 
       if (isMultiBucketSequential) {
         // Multi-device-target projects: provision per-bucket devices.
-        const perBucket = await provisionPerProjectDevices(config, projects, budgetCap, launchProgress);
+        const perBucket = await provisionPerProjectDevices(config, projects, budgetCap, pinnedSignatures, launchProgress);
         uiWorkerGroups = perBucket.workerGroups;
         uiConfigByDevice = perBucket.configByDevice;
         uiDeviceGroupByDevice = perBucket.deviceGroupByDevice;
@@ -2522,6 +2594,7 @@ async function main(): Promise<void> {
         testFiles,
         screenshotDir: uiScreenshotDir,
         launchedEmulators,
+        forceInstall: args.forceInstall,
         projects: hasProjects ? projects : undefined,
         projectWaves: hasProjects ? projectWaves : undefined,
         workers: uiWorkersOverride,
@@ -2578,7 +2651,7 @@ async function main(): Promise<void> {
       let watchWorkersOverride: number | undefined;
 
       if (isMultiBucketSequential) {
-        const perBucket = await provisionPerProjectDevices(config, projects, budgetCap);
+        const perBucket = await provisionPerProjectDevices(config, projects, budgetCap, pinnedSignatures);
         watchWorkerGroups = perBucket.workerGroups;
         watchConfigByDevice = perBucket.configByDevice;
         watchDeviceGroupByDevice = perBucket.deviceGroupByDevice;
@@ -2605,6 +2678,7 @@ async function main(): Promise<void> {
         testFiles,
         screenshotDir: watchScreenshotDir,
         launchedEmulators,
+        forceInstall: args.forceInstall,
         // The startup launch already probed for in-app hooks into this shared
         // object; watch-run children seed from it and report back, so warm
         // per-policy resets survive the fresh-child-per-run boundary.
@@ -2694,6 +2768,13 @@ async function main(): Promise<void> {
           teardownSequentialDevice(currentSequentialState);
           // Reset emulator tracking — the new state owns its own list
           launchedEmulators = [];
+          // A `use`-less project's config *is* the root config, which now holds
+          // the previous target's device (mirrored after the first setup for
+          // the UI/watch handoff, which never reaches this loop). Put the
+          // root's own device back, or this project is set up pinned to the
+          // other target's serial — another platform's, even — and a scoped
+          // `--device` for this platform is lost.
+          if (project.effectiveConfig === config) config.device = rootDeviceBeforeSetup;
           try {
             currentSequentialState = await setupSequentialDevice(
               project.effectiveConfig,

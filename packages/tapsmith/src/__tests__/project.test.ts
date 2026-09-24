@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers, bucketizeProjects, type ResolvedProject } from '../project.js';
+import { resolveProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers as allocateWithPins, bucketizeProjects, pinnedBucketSignatures, workerPlanNote, devicePinWorkersConflict, platformOfSerial, scopeDevicePinToPlatform, devicesPinnedByManyBuckets, type ResolvedProject } from '../project.js';
 import { effectiveConfigForProject, type TapsmithConfig } from '../config.js';
 
 function makeConfig(overrides: Partial<TapsmithConfig> = {}): TapsmithConfig {
@@ -450,6 +450,11 @@ describe('resolveProjects() — device validation', () => {
 // ─── allocateBucketWorkers ───
 
 describe('allocateBucketWorkers()', () => {
+  // Pins read live from the projects — what every caller passes when it
+  // allocates before device setup.
+  const allocateBucketWorkers = (budget: number, buckets: ReturnType<typeof bucketizeProjects>, cap?: number) =>
+    allocateWithPins(budget, buckets, cap, pinnedBucketSignatures(buckets));
+
   function makeProject(
     name: string,
     fileCount: number,
@@ -622,6 +627,87 @@ describe('allocateBucketWorkers()', () => {
     expect(total).toBe(3);
   });
 
+  // A pinned device (root `device`, `--device`, or a `use.devices` pin) can
+  // host exactly one worker. Every path used to hand such a bucket its full
+  // share and then either ignore the pin (Android parallel, watch) or pile
+  // extra workers onto other devices beside it (PILOT-261, PILOT-313).
+  describe('pinned device targets', () => {
+    function pinnedProject(name: string, fileCount: number, pin: Partial<TapsmithConfig>, workers?: number): ResolvedProject {
+      return { ...makeProject(name, fileCount, workers), effectiveConfig: makeConfig(pin) };
+    }
+
+    it('gives a bucket pinned by root `device` one worker whatever the budget', () => {
+      const buckets = bucketizeProjects([pinnedProject('a', 8, { device: 'emulator-5554' })]);
+      expect(allocateBucketWorkers(4, buckets).get('a')).toBe(1);
+    });
+
+    it('gives a bucket pinned by a group member one worker', () => {
+      const buckets = bucketizeProjects([pinnedProject('a', 8, { devices: [{ name: 'alice' }, { name: 'bob', device: 'X' }] })]);
+      expect(allocateBucketWorkers(4, buckets).get('a')).toBe(1);
+    });
+
+    it('caps an explicit per-project `workers` on a pinned bucket at one', () => {
+      const buckets = bucketizeProjects([pinnedProject('a', 8, { device: 'emulator-5554' }, 3)]);
+      expect(allocateBucketWorkers(1, buckets).get('a')).toBe(1);
+    });
+
+    it('hands the budget a pinned bucket cannot use to the unpinned ones', () => {
+      const buckets = bucketizeProjects([
+        pinnedProject('pinned', 8, { device: 'emulator-5554' }),
+        makeProject('free', 2),
+      ]);
+      const alloc = allocateBucketWorkers(4, buckets);
+      expect(alloc.get('pinned')).toBe(1);
+      expect(alloc.get('free')).toBe(3);
+    });
+
+    it('never scales a pinned bucket above one to meet budgetCap', () => {
+      const buckets = bucketizeProjects([
+        pinnedProject('pinned', 8, { device: 'emulator-5554' }),
+        makeProject('free', 2, 1),
+      ]);
+      const alloc = allocateBucketWorkers(1, buckets, 4);
+      expect(alloc.get('pinned')).toBe(1);
+      expect(alloc.get('free')).toBe(3);
+    });
+
+    it('takes the pins it is handed, not whatever the configs say by now', () => {
+      // The sequential setup writes its auto-picked serial onto the effective
+      // config; an allocation made after that must not read it as a pin.
+      const buckets = bucketizeProjects([pinnedProject('a', 8, { device: 'emulator-5554' })]);
+      expect(allocateWithPins(4, buckets, undefined, new Set()).get('a')).toBe(4);
+    });
+
+    it('counts only the pins the shared group is provisioned on', () => {
+      // A smaller compatible group may pin a member the largest leaves free;
+      // provisioning follows the largest group, so capping the bucket for
+      // that pin cost parallelism and named a device no worker used.
+      const trio = { ...makeProject('trio', 4), deviceSignature: 'shared', effectiveConfig: makeConfig({ devices: [{ name: 'alice' }, { name: 'bob' }, { name: 'carol' }] }) };
+      const pair = { ...makeProject('pair', 4), deviceSignature: 'shared', effectiveConfig: makeConfig({ devices: [{ name: 'alice' }, { name: 'bob', device: 'emulator-5558' }] }) };
+      expect([...pinnedBucketSignatures(bucketizeProjects([trio, pair])).keys()]).toEqual([]);
+      // A pin on the largest group does count.
+      const pinnedTrio = { ...trio, effectiveConfig: makeConfig({ devices: [{ name: 'alice' }, { name: 'bob', device: 'emulator-5558' }, { name: 'carol' }] }) };
+      expect([...pinnedBucketSignatures(bucketizeProjects([pinnedTrio, pair])).keys()]).toEqual(['shared']);
+    });
+
+    // The sequential setup later writes its auto-picked serial onto the root
+    // config that `use`-less projects share; the snapshot must keep the pins
+    // as they were, or a bucket reads another platform's auto-pick as its pin.
+    it('snapshots the pinned serials, not just which buckets are pinned', () => {
+      const project = pinnedProject('a', 8, { device: 'emulator-5554' });
+      const snapshot = pinnedBucketSignatures(bucketizeProjects([project]));
+      project.effectiveConfig.device = 'SIM-UDID';
+      expect(snapshot.get('a')?.pins).toEqual(['emulator-5554']);
+      // The group too: provisioning builds the bucket's devices from it.
+      expect(snapshot.get('a')?.group).toEqual([{ name: 'device-1', device: 'emulator-5554' }]);
+    });
+
+    it('still gives a pinned bucket with no files zero workers', () => {
+      const buckets = bucketizeProjects([pinnedProject('a', 0, { device: 'emulator-5554' })]);
+      expect(allocateBucketWorkers(4, buckets).get('a')).toBe(0);
+    });
+  });
+
   it('budgetCap scales down mixed explicit and implicit allocation', () => {
     const buckets = bucketizeProjects([
       makeProject('explicit', 4, 3),
@@ -632,5 +718,146 @@ describe('allocateBucketWorkers()', () => {
     const alloc = allocateBucketWorkers(2, buckets, 3);
     expect(alloc.get('explicit')).toBe(2);
     expect(alloc.get('implicit')).toBe(1);
+  });
+});
+
+// ─── Worker plan messages ───
+
+describe('devicePinWorkersConflict()', () => {
+  it('refuses --device with --workers above one, naming both', () => {
+    expect(devicePinWorkersConflict('emulator-5554', 3, 1)).toMatch(/--device emulator-5554 pins the run to one device, so it cannot run --workers 3/);
+  });
+
+  // Scoped to one platform in a mixed config, --device leaves the other
+  // platform's bucket free to use the workers — as it could on main.
+  it('allows --workers the run can still use beside the pin', () => {
+    expect(devicePinWorkersConflict('emulator-5554', 2, 2)).toBeUndefined();
+    expect(devicePinWorkersConflict('emulator-5554', 3, 2)).toMatch(/cannot run --workers 3/);
+  });
+
+  // Fewer files than workers already leaves the extra workers idle; the pin
+  // takes nothing away there, and main ran the pair sequentially on the pin.
+  it('allows --workers the run could not have used anyway', () => {
+    expect(devicePinWorkersConflict('emulator-5554', 2, 1, 1)).toBeUndefined();
+    expect(devicePinWorkersConflict('emulator-5554', 3, 1, 2)).toMatch(/cannot run --workers 3/);
+  });
+
+  it('allows either alone, or --workers 1', () => {
+    expect(devicePinWorkersConflict('emulator-5554', undefined, 1)).toBeUndefined();
+    expect(devicePinWorkersConflict('emulator-5554', 1, 1)).toBeUndefined();
+    expect(devicePinWorkersConflict(undefined, 4, 4)).toBeUndefined();
+  });
+});
+
+describe('workerPlanNote()', () => {
+  it('says the config asked, when the count came from the config', () => {
+    expect(workerPlanNote({ requested: 2, explicit: true, fromCli: false, running: 1, activeBuckets: 1, pins: ['emulator-5554'] }))
+      .toBe('config asks for 2 workers; running 1 because emulator-5554 is a pinned device (a pinned device hosts one worker)');
+  });
+
+  it('says the user asked, when --workers set the count', () => {
+    expect(workerPlanNote({ requested: 3, explicit: true, fromCli: true, running: 1, activeBuckets: 1, pins: ['emulator-5554'] }))
+      .toBe('requested 3 workers; running 1 because emulator-5554 is a pinned device (a pinned device hosts one worker)');
+  });
+
+  // A config file's `workers` also counts as explicit (it is what the user
+  // asked for), but it was not asked on the command line: the note used to
+  // say "requested 2 workers" for a `workers: 2` in the config.
+  it('says the config asked when an explicit count came from the config file', () => {
+    expect(workerPlanNote({ requested: 1, explicit: true, fromCli: false, running: 2, activeBuckets: 2, pins: [] }))
+      .toBe('config asks for 1 worker; running 2 because 2 device targets need one each');
+  });
+
+  it('explains running more than requested by the device targets', () => {
+    expect(workerPlanNote({ requested: 1, explicit: true, fromCli: true, running: 2, activeBuckets: 2, pins: [] }))
+      .toBe('requested 1 worker; running 2 because 2 device targets need one each');
+  });
+
+  it('is silent when the plan matches, or nothing pinned explains a shortfall', () => {
+    expect(workerPlanNote({ requested: 2, explicit: false, fromCli: false, running: 2, activeBuckets: 1, pins: [] })).toBeUndefined();
+    expect(workerPlanNote({ requested: 4, explicit: false, fromCli: false, running: 2, activeBuckets: 1, pins: [] })).toBeUndefined();
+  });
+});
+
+// `--device` lands on the root config, so every project inherits it — the
+// iOS project of an android+ios config too, whose bucket then became "fully
+// pinned" to an Android serial and failed where it used to run on simulators.
+describe('--device platform scoping', () => {
+  it('tells an adb-connected serial from a simulator or device UDID', () => {
+    expect(platformOfSerial('emulator-5554')).toBe('android');
+    expect(platformOfSerial('R5CR10XXXXX')).toBe('android');
+    expect(platformOfSerial('4324E8D7-E006-4766-94FF-F6FD9655320F')).toBe('ios');
+    expect(platformOfSerial('00008110-001A2C3E0E83801E')).toBe('ios');
+    // A pre-XS iPhone's 40-hex UDID.
+    expect(platformOfSerial('a1b2c3d4e5f60718293a4b5c6d7e8f9012345678')).toBe('ios');
+    // An emulator serial is Android even before adb lists it (still booting, or launched later).
+    expect(platformOfSerial('emulator-5560')).toBe('android');
+    // iOS identifiers are always UDID-shaped, so anything else is Android —
+    // a physical phone that is unplugged right now included.
+    expect(platformOfSerial('R5CR10XXXXX')).toBe('android');
+    expect(platformOfSerial('192.168.1.5:5555')).toBe('android');
+  });
+
+  function project(name: string, platform: 'android' | 'ios', device?: string): ResolvedProject {
+    const effectiveConfig = makeConfig({ platform, device });
+    return {
+      name, testMatch: [], testIgnore: [], dependencies: [], testFiles: ['a.test.ts'],
+      effectiveConfig, deviceSignature: deviceSignature(effectiveConfig),
+    };
+  }
+
+  it('drops the inherited pin from projects of the other platform, and re-signs them', () => {
+    const android = project('android', 'android', 'emulator-5554');
+    const ios = project('ios', 'ios', 'emulator-5554');
+    const iosSignature = ios.deviceSignature;
+    scopeDevicePinToPlatform([android, ios], 'emulator-5554', 'android');
+    expect(android.effectiveConfig.device).toBe('emulator-5554');
+    expect(ios.effectiveConfig.device).toBeUndefined();
+    expect(ios.deviceSignature).toBe(deviceSignature(makeConfig({ platform: 'ios' })));
+    expect(ios.deviceSignature).not.toBe(iosSignature);
+  });
+
+  it('copies rather than mutating a config other projects (or the root) share', () => {
+    const shared = makeConfig({ platform: 'ios', device: 'emulator-5554' });
+    const ios = { ...project('ios', 'ios'), effectiveConfig: shared };
+    scopeDevicePinToPlatform([ios], 'emulator-5554', 'android');
+    expect(shared.device).toBe('emulator-5554');
+    expect(ios.effectiveConfig.device).toBeUndefined();
+  });
+
+  it('keeps a project\'s own different pin', () => {
+    const ios = project('ios', 'ios', 'SIM-1');
+    scopeDevicePinToPlatform([ios], 'emulator-5554', 'android');
+    expect(ios.effectiveConfig.device).toBe('SIM-1');
+  });
+});
+
+// A pinned device hosts one worker — per device, not per bucket. Two projects
+// for different apps are two buckets, both inheriting `--device`, and each got
+// a worker on the one device.
+describe('devicesPinnedByManyBuckets()', () => {
+  function project(name: string, pin: Partial<TapsmithConfig>): ResolvedProject {
+    const effectiveConfig = makeConfig({ platform: 'android', ...pin });
+    return {
+      name, testMatch: [], testIgnore: [], dependencies: [], testFiles: ['a.test.ts'],
+      effectiveConfig, deviceSignature: deviceSignature(effectiveConfig),
+    };
+  }
+
+  it('names a device two buckets are pinned to, with the projects', () => {
+    const buckets = bucketizeProjects([
+      project('app-a', { device: 'emulator-5554', package: 'a' }),
+      project('app-b', { device: 'emulator-5554', package: 'b' }),
+    ]);
+    expect(devicesPinnedByManyBuckets(buckets, pinnedBucketSignatures(buckets)))
+      .toEqual([{ serial: 'emulator-5554', projects: ['app-a', 'app-b'] }]);
+  });
+
+  it('is empty when every pinned bucket has its own device', () => {
+    const buckets = bucketizeProjects([
+      project('app-a', { device: 'emulator-5554', package: 'a' }),
+      project('app-b', { device: 'emulator-5556', package: 'b' }),
+    ]);
+    expect(devicesPinnedByManyBuckets(buckets, pinnedBucketSignatures(buckets))).toEqual([]);
   });
 });

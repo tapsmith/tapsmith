@@ -35,7 +35,7 @@ import type { ResolvedProject } from '../project.js';
 import { collectTransitiveDeps, projectLabel } from '../project.js';
 import { LaunchSetupError } from '../dispatcher.js';
 import { STOPPED_BY_USER } from '../abort.js';
-import { classifyEntryStatus, isInterruptedEntry } from '../mcp/test-dispatcher.js';
+import { classifyEntryStatus, isInterruptedEntry, uiDeviceChoiceError } from '../mcp/test-dispatcher.js';
 import type { LaunchedEmulator } from '../emulator.js';
 import { preserveEmulatorsForReuse, getRunningAvdName } from '../emulator.js';
 import { listSimulators, getSimulatorScreenScale } from '../ios-simulator.js';
@@ -156,6 +156,11 @@ export interface UIServerContext {
   testFiles: string[]
   screenshotDir?: string
   launchedEmulators: LaunchedEmulator[]
+  /**
+   * `--force-install`: workers reinstall the app on the devices they set up
+   * at startup (the CLI already did the primary). Never on a respawn.
+   */
+  forceInstall: boolean
   projects?: ResolvedProject[]
   /** Dependency-ordered project waves from topologicalSort(). */
   projectWaves?: ResolvedProject[][]
@@ -1167,6 +1172,43 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         configPath: ctx.configPath,
       };
     },
+    async deviceChoiceError(files, device, project) {
+      // What `validateProjectChoice` refuses by name — an unknown project, a
+      // file under several projects with none named — and files that match
+      // nothing (the run names them) are left to it, as headless does; a
+      // device refusal would hide the real problem.
+      const requested = resolveRequested(files);
+      const projects = realProjects();
+      if (requested.length === 0) return null;
+      if (project !== undefined && !projects.some((p) => p.name === project)) return null;
+      if (project === undefined && requested.some((f) => projects.filter((p) => p.testFiles.includes(f)).length > 1)) return null;
+      let serial: string;
+      try {
+        serial = testDispatcher.resolveDeviceName(device, project) ?? device;
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      // Every worker slot, retired ones included: the run respawns them before
+      // it dispatches, so a retired worker can take the file too. Workers spawn
+      // on the first run; until then, the ones planned — the session info
+      // lists only the CLI's primary then.
+      const workers = uiWorkers.length > 0
+        ? uiWorkers.map((w) => ({ bucket: w.bucketSignature, devices: workerDevicesInfo(w).map((d) => d.deviceSerial) }))
+        : workerGroups.map((g) => ({
+          bucket: ctx.bucketByDevice?.get(g[0]),
+          // A single-worker session plans only the primary's serial; its
+          // group members were opened beside it by the CLI.
+          devices: g[0] === ctx.deviceSerial
+            ? [...new Set([...g, ...(ctx.primaryGroupMembers ?? []).map((m) => m.serial)])]
+            : g,
+        }));
+      // A multi-target session routes each file to a worker of its own target.
+      const fileProjects = requested.flatMap((f) => (project !== undefined
+        ? [project]
+        : projects.filter((p) => p.testFiles.includes(f)).map((p) => p.name)));
+      const fileBuckets = new Set(fileProjects.map((name) => ctx.bucketByProject?.get(name)));
+      return uiDeviceChoiceError({ device, serial, workers, fileBuckets });
+    },
     resolveDeviceName(name, project) {
       // Live workers first (each lists its group, primary first); before the
       // workers spawn, the primary the CLI set up and the members it opened.
@@ -1675,6 +1717,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           },
           adopt,
           true,
+          // The CLI already force-installed its own device this session; a
+          // multi-bucket session does not adopt it, so skip it here (as watch does).
+          ctx.forceInstall && deviceSerial !== ctx.deviceSerial,
         ),
       );
     }
@@ -1781,21 +1826,27 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     daemonPort: number,
     agentPort: number,
     daemonBin: string,
-    stalePids?: number[],
+    stalePids: number[] | undefined,
     /**
      * Listeners squatting on this worker's member daemon ports, keyed by port
      * (startup only). A respawn passes none: the startup squatters were
      * killed then, and `awaitDaemonExit` has just freed the ports, so a
      * remembered PID could by now belong to an unrelated process.
      */
-    staleMemberPidsByPort?: Map<number, number[]>,
-    events?: {
+    staleMemberPidsByPort: Map<number, number[]> | undefined,
+    events: {
       onProgress?: (message: string) => void
       onReady?: () => void
-    },
-    adopt?: AdoptTarget,
+    } | undefined,
+    adopt: AdoptTarget | undefined,
     /** The adopted primary's startup launch is still unconsumed (initial spawn only). */
-    adoptPrepared = false,
+    adoptPrepared: boolean,
+    /**
+     * `--force-install` applies. Required, with no default: a spawn site that
+     * forgot it would drop the flag silently (PILOT-261). The initial spawn
+     * passes it; a respawn passes false (it must not wipe the app mid-session).
+     */
+    forceInstall: boolean,
   ): Promise<UIWorkerHandle> {
     // The rest of this worker's device group (`use.devices`), each on a
     // daemon of its own — adopted from the CLI when it opened them beside
@@ -2009,6 +2060,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         screenshotDir: ctx.screenshotDir,
         adoptPrimary: !!adopt,
         adoptPrepared: !!adopt && adoptPrepared,
+        forceInstall,
         ...(members.length > 0 ? {
           groupMembers: members.map((m) => ({
             name: m.name,
@@ -2829,6 +2881,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
       const newWorker = await initializeOneWorker(
         worker.id, worker.deviceSerial, daemonPort, agentPort, daemonBin, undefined, undefined, undefined, adopt,
+        false, false,
       );
       // Preserve the friendly display name from before respawn.
       newWorker.displayName = worker.displayName;

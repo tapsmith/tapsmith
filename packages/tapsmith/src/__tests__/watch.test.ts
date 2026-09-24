@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { RunQueue, mapKeyToAction, type RunRequest, type WatchAction } from '../watch-queue.js';
-import { reconcileFailedFiles } from '../watch.js';
+import { reconcileFailedFiles, takeFileForWorker, filesNoWorkerCanRun } from '../watch.js';
 import type { WatchRunMessage, WatchRunChildMessage } from '../watch-run.js';
 
 // ─── Tests for mapKeyToAction ───
@@ -307,5 +307,35 @@ describe('reconcileFailedFiles', () => {
     const failedFiles = new Set<string>(['dependent.test.ts']);
     reconcileFailedFiles(failedFiles, [], new Set());
     expect([...failedFiles]).toEqual(['dependent.test.ts']);
+  });
+});
+
+// ─── Worker file routing ───
+
+// A multi-target watch session routes each file to a worker on its project's
+// device target. When no live worker serves that target (its workers failed to
+// start, or retired), the file used to sit in the queue forever: the re-run was
+// "dispatched" and printed nothing again (PILOT-313).
+describe('watch worker file routing', () => {
+  const bucketByProject = new Map([['android', 'sig-a'], ['ios', 'sig-i']]);
+  const file = (filePath: string, projectName?: string) => ({ filePath, projectName });
+
+  it('hands a worker the first file of its own target, leaving the rest queued', () => {
+    const queue = [file('i.test.ts', 'ios'), file('a.test.ts', 'android')];
+    expect(takeFileForWorker(queue, 'sig-a', bucketByProject)).toEqual(file('a.test.ts', 'android'));
+    expect(queue).toEqual([file('i.test.ts', 'ios')]);
+  });
+
+  it('lets any worker take a file with no project, or a single-target session\'s files', () => {
+    expect(takeFileForWorker([file('x.test.ts')], 'sig-a', bucketByProject)).toEqual(file('x.test.ts'));
+    expect(takeFileForWorker([file('i.test.ts', 'ios')], undefined, bucketByProject)).toEqual(file('i.test.ts', 'ios'));
+    expect(takeFileForWorker([file('i.test.ts', 'ios')], 'sig-a', undefined)).toEqual(file('i.test.ts', 'ios'));
+  });
+
+  it('finds the queued files no live worker can take', () => {
+    const queue = [file('i.test.ts', 'ios'), file('a.test.ts', 'android'), file('x.test.ts')];
+    expect(filesNoWorkerCanRun(queue, ['sig-a'], bucketByProject)).toEqual([file('i.test.ts', 'ios')]);
+    expect(filesNoWorkerCanRun(queue, ['sig-a', 'sig-i'], bucketByProject)).toEqual([]);
+    expect(filesNoWorkerCanRun(queue, [undefined], bucketByProject)).toEqual([]);
   });
 });

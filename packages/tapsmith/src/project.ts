@@ -5,7 +5,7 @@
  * dependency constraints and shared `use` options.
  */
 
-import { deviceGroupSize, effectiveConfigForProject, resolveDeviceGroup, type DeviceGroupEntry, type TapsmithConfig, type ProjectConfig, type UseOptions } from './config.js';
+import { deviceGroupSize, effectiveConfigForProject, pinnedDeviceSerials, resolveDeviceGroup, type DeviceGroupEntry, type TapsmithConfig, type ProjectConfig, type UseOptions } from './config.js';
 import { matchesTestFile } from './test-file-discovery.js';
 
 // ─── Types ───
@@ -163,11 +163,22 @@ export function sharedDeviceGroup(
  * 5. When `budgetCap` is set, the total allocation is scaled down to fit
  *    within the cap. Each active bucket keeps at least 1 worker, so the
  *    effective minimum is `active.length`.
+ * 6. A bucket that pins a device (root `device`, `--device`, or a
+ *    `use.devices` pin) gets exactly 1 worker — a pinned device hosts one —
+ *    whatever its projects' `workers` say. It consumes 1 from the budget,
+ *    and the rest goes to the unpinned buckets.
  */
 export function allocateBucketWorkers(
   totalBudget: number,
   bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
-  budgetCap?: number,
+  budgetCap: number | undefined,
+  /**
+   * Signatures of the buckets that pin a device — {@link pinnedBucketSignatures},
+   * taken *before* any device setup. Required, not derived here: the
+   * sequential setup writes the device it auto-picked onto the effective
+   * config, so reading pins afterwards mistakes that pick for a user's pin.
+   */
+  pinnedSignatures: { has(signature: string): boolean },
 ): Map<string, number> {
   const result = new Map<string, number>();
 
@@ -179,9 +190,16 @@ export function allocateBucketWorkers(
   }
   if (active.length === 0) return result;
 
+  const pinned = active.filter((b) => pinnedSignatures.has(b.signature));
+  for (const b of pinned) result.set(b.signature, 1);
+  const scalable = active.filter((b) => !pinned.includes(b));
+  const scaleBudget = (cap: number) => scaleToBudget(result, cap - pinned.length, scalable);
+  if (scalable.length === 0) return result;
+  const budget = Math.max(0, totalBudget - pinned.length);
+
   const explicit: typeof active = [];
   const implicit: typeof active = [];
-  for (const b of active) {
+  for (const b of scalable) {
     const explicitValues = b.projects
       .map((p) => p.workers)
       .filter((w): w is number => typeof w === 'number' && w > 0);
@@ -194,7 +212,7 @@ export function allocateBucketWorkers(
   }
 
   if (implicit.length === 0) {
-    if (budgetCap !== undefined) scaleToBudget(result, budgetCap, active);
+    if (budgetCap !== undefined) scaleBudget(budgetCap);
     return result;
   }
 
@@ -206,7 +224,7 @@ export function allocateBucketWorkers(
   for (const b of implicit) {
     result.set(b.signature, 1);
   }
-  let remaining = Math.max(0, totalBudget - implicit.length);
+  let remaining = Math.max(0, budget - implicit.length);
 
   if (remaining > 0 && implicitFiles > 0) {
     const ranked = implicit
@@ -220,7 +238,7 @@ export function allocateBucketWorkers(
       let madeProgress = false;
       for (const r of ranked) {
         if (remaining === 0) break;
-        const fairShare = Math.floor((totalBudget * r.files) / implicitFiles);
+        const fairShare = Math.floor((budget * r.files) / implicitFiles);
         const current = result.get(r.signature) ?? 1;
         if (current < fairShare) {
           result.set(r.signature, current + 1);
@@ -241,8 +259,121 @@ export function allocateBucketWorkers(
     }
   }
 
-  if (budgetCap !== undefined) scaleToBudget(result, budgetCap, active);
+  if (budgetCap !== undefined) scaleBudget(budgetCap);
   return result;
+}
+
+/** A pinned bucket as it was before device setup: the serials it pins and its device group. */
+export interface PinnedBucket {
+  /** Every serial the bucket's shared group pins, primary first. */
+  pins: readonly string[]
+  /** The bucket's shared device group, primary first, pins as the user set them. */
+  group: readonly DeviceGroupEntry[]
+}
+
+/** Pinned buckets by signature — see {@link pinnedBucketSignatures}. */
+export type PinnedBuckets = ReadonlyMap<string, PinnedBucket>;
+
+/**
+ * The buckets whose device target pins a device (root `device`, `--device`, a
+ * `use.devices` pin), each fixed to one worker, with the serials they pin.
+ * Call it before any device setup — see `allocateBucketWorkers` — and read
+ * the pins from here afterwards, never from the configs again: the setup
+ * writes its auto-picked serial onto the root config `use`-less projects
+ * share, and a bucket re-reading its pins then took another platform's
+ * auto-pick for one.
+ */
+export function pinnedBucketSignatures(
+  bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
+): Map<string, PinnedBucket> {
+  const snapshot = new Map<string, PinnedBucket>();
+  for (const b of bucketEntries) {
+    const pins = bucketPins(b.projects);
+    if (pins.length === 0) continue;
+    snapshot.set(b.signature, { pins, group: bucketGroup(b.projects) });
+  }
+  return snapshot;
+}
+
+/** The device group a bucket is provisioned for (its shared group; any project's on a mismatch). */
+function bucketGroup(projects: ResolvedProject[]): DeviceGroupEntry[] {
+  try {
+    return resolveDeviceGroup(sharedDeviceGroup(projects).config).map((e) => ({ ...e }));
+  } catch {
+    return resolveDeviceGroup(projects[0].effectiveConfig).map((e) => ({ ...e }));
+  }
+}
+
+/**
+ * The pins a bucket's devices are provisioned on: its shared group's (the
+ * largest `use.devices` group, which is what every embedder provisions), so
+ * the one-worker cap never fires for a pin nobody honours. An incompatible
+ * set of groups is reported by `sharedDeviceGroup` wherever the bucket is
+ * provisioned; here it counts any project's pin.
+ */
+export function bucketPins(projects: ResolvedProject[]): string[] {
+  try {
+    return pinnedDeviceSerials(sharedDeviceGroup(projects).config);
+  } catch {
+    return [...new Set(projects.flatMap((p) => pinnedDeviceSerials(p.effectiveConfig)))];
+  }
+}
+
+const countLabel = (count: number, singular: string): string => `${count} ${count === 1 ? singular : `${singular}s`}`;
+
+/**
+ * Why `--device` and `--workers` cannot be combined, or `undefined` when they
+ * can. A pinned device hosts one worker, so when the pin leaves fewer workers
+ * usable than `--workers` asks for, the two ask for different runs — both
+ * explicit on the command line, so neither silently wins. In a config that
+ * spans platforms the pin holds one platform's bucket to one worker and the
+ * other bucket may use the rest; that is not a conflict.
+ */
+export function devicePinWorkersConflict(
+  device: string | undefined,
+  workers: number | undefined,
+  /** Workers the allocation can run with the pin applied. */
+  usableWorkers: number,
+  /**
+   * Workers the run could use at all (its largest wave's file count). Past
+   * that, extra workers sit idle with or without a pin, so asking for them is
+   * no conflict: `--device X --workers 2` on one file runs on X, as it did.
+   */
+  usefulWorkers: number = Number.POSITIVE_INFINITY,
+): string | undefined {
+  if (!device || workers === undefined || workers <= 1 || Math.min(workers, usefulWorkers) <= usableWorkers) return undefined;
+  return `--device ${device} pins the run to one device, so it cannot run --workers ${workers} in parallel. `
+    + 'Drop --device to spread the run across devices, or drop --workers to run on that device.';
+}
+
+/**
+ * The note explaining a worker count that differs from the one asked for:
+ * more because every device target needs a worker, fewer because a pinned
+ * device hosts one. `undefined` when there is nothing to explain.
+ */
+export function workerPlanNote(opts: {
+  /** `workers` as the config or `--workers` gave it. */
+  requested: number
+  /** The user set it — in the config file or with `--workers` (`isExplicitWorkers`). */
+  explicit: boolean
+  /** It came from `--workers` on this command line, not the config file. */
+  fromCli: boolean
+  running: number
+  activeBuckets: number
+  /** The pins of the active buckets that were capped to one worker. */
+  pins: string[]
+}): string | undefined {
+  const { requested, explicit, fromCli, running, activeBuckets, pins } = opts;
+  const asked = `${fromCli ? 'requested' : 'config asks for'} ${countLabel(requested, 'worker')}`;
+  if (explicit && running > requested) {
+    return `${asked}; running ${running} because ${countLabel(activeBuckets, 'device target')} `
+      + `${activeBuckets === 1 ? 'needs a worker' : 'need one each'}`;
+  }
+  if (running < requested && pins.length > 0) {
+    return `${asked}; running ${running} because `
+      + `${pins.join(', ')} ${pins.length === 1 ? 'is a pinned device' : 'are pinned devices'} (a pinned device hosts one worker)`;
+  }
+  return undefined;
 }
 
 /**
@@ -256,7 +387,8 @@ function scaleToBudget(
   cap: number,
   active: Array<{ signature: string; projects: ResolvedProject[] }>,
 ): void {
-  const total = [...result.values()].reduce((s, n) => s + n, 0);
+  if (active.length === 0) return;
+  const total = active.reduce((s, b) => s + (result.get(b.signature) ?? 0), 0);
   if (total === cap) return;
 
   const effectiveCap = Math.max(cap, active.length);
@@ -589,4 +721,62 @@ function detectCycles(projects: ProjectConfig[]): void {
   for (const p of projects) {
     dfs(p.name, []);
   }
+}
+
+// ─── `--device` platform scoping ───
+
+// Simulator UDID, current physical UDID, pre-XS physical UDID (40 hex).
+const IOS_UDID = /^(?:[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}|[0-9A-F]{8}-[0-9A-F]{16}|[0-9A-F]{40})$/i;
+
+/**
+ * The platform a device serial belongs to. iOS identifiers — simulators and
+ * physical devices alike — always have a UDID's shape; Android serials are
+ * free-form (emulator-5554, a USB serial, host:port for wireless adb), so
+ * anything else is Android, connected right now or not.
+ */
+export function platformOfSerial(serial: string): 'android' | 'ios' {
+  return IOS_UDID.test(serial) ? 'ios' : 'android';
+}
+
+/**
+ * Confine a `--device` pin to the projects of the device's own platform.
+ *
+ * The flag is applied to the root config, so every project inherits it —
+ * including the other platform's, whose bucket then counted as pinned to a
+ * serial it cannot drive. Those projects get a copy of their effective config
+ * without the pin (it may be the root config itself, shared) and a fresh
+ * device signature. A project pinning a device of its own is left alone.
+ */
+export function scopeDevicePinToPlatform(
+  projects: ResolvedProject[],
+  serial: string,
+  platform: 'android' | 'ios',
+): void {
+  for (const p of projects) {
+    if ((p.effectiveConfig.platform ?? 'android') === platform || p.effectiveConfig.device !== serial) continue;
+    p.effectiveConfig = { ...p.effectiveConfig, device: undefined };
+    p.deviceSignature = deviceSignature(p.effectiveConfig);
+  }
+}
+
+/**
+ * Devices more than one active pinned bucket is pinned to, with the projects
+ * pinning them. A pinned device hosts one worker, and the cap is per device:
+ * two buckets for different apps inheriting one `--device` each got a worker
+ * on it, and two agents drove one device at once.
+ */
+export function devicesPinnedByManyBuckets(
+  bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
+  pinnedSignatures: PinnedBuckets,
+): Array<{ serial: string; projects: string[] }> {
+  const bucketsBySerial = new Map<string, Array<{ signature: string; projects: ResolvedProject[] }>>();
+  for (const b of bucketEntries) {
+    if (!pinnedSignatures.has(b.signature) || !b.projects.some((p) => p.testFiles.length > 0)) continue;
+    for (const serial of new Set(pinnedSignatures.get(b.signature)?.pins)) {
+      bucketsBySerial.set(serial, [...(bucketsBySerial.get(serial) ?? []), b]);
+    }
+  }
+  return [...bucketsBySerial]
+    .filter(([, buckets]) => buckets.length > 1)
+    .map(([serial, buckets]) => ({ serial, projects: buckets.flatMap((b) => b.projects.map((p) => p.name)) }));
 }

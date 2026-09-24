@@ -6,7 +6,7 @@ import { STOPPED_BY_USER } from '../abort.js';
 import type { WatchRunAbortMessage } from '../watch-run.js';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { minimatch } from 'minimatch';
-import { resolveProjects, topologicalSort, type ResolvedProject } from '../project.js';
+import { platformOfSerial, resolveProjects, scopeDevicePinToPlatform, topologicalSort, type ResolvedProject } from '../project.js';
 import { discoverTestFiles } from '../test-file-discovery.js';
 import {
   deserializeTestResult,
@@ -19,7 +19,7 @@ import type { WatchRunMessage, WatchRunChildMessage } from '../watch-run.js';
 import { RunQueue } from '../watch-queue.js';
 import { telemetry } from '../telemetry.js';
 import { ensurePlatformTarget, platformTargetIsLive, type PlatformTarget } from './connection.js';
-import { deviceGroupNames, deviceGroupSize, resolveDeviceGroup, type TapsmithConfig } from '../config.js';
+import { deviceGroupNames, deviceGroupSize, pinnedDeviceSerials, primaryDevicePin, resolveDeviceGroup, type TapsmithConfig } from '../config.js';
 import { deviceGroupSignature, deviceSignature } from '../project.js';
 import { matchesTestFilter } from '../test-filter.js';
 import type {
@@ -77,6 +77,8 @@ export function platformKeyForProject(
 }
 
 const DISCOVERY_CONCURRENCY = 4;
+/** The least time between two device-tool retries of failed targets. */
+const TARGET_RETRY_INTERVAL_MS = 5_000;
 const DISCOVERY_TIMEOUT_MS = 30_000;
 const RUN_CHILD_TIMEOUT_MS = 60 * 60 * 1000;
 
@@ -127,6 +129,9 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   private _discoveryErrors = new Map<string, string>();
   private _devicesReady = false;
   private _devicesPromise: Promise<void> | null = null;
+  /** Config, projects and test files loaded — see `_ensureSession`. */
+  private _sessionReady = false;
+  private _sessionPromise: Promise<void> | null = null;
   private _configPath: string | null = null;
   private _configWarning: string | null = null;
   /** Daemon + device per platform, keyed by platform (or DEFAULT_PLATFORM_KEY). */
@@ -141,6 +146,14 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   private _retriedTargets = new Set<string>();
   /** Per-project serialized configs handed to workers, built on first use. */
   private _projectConfigs = new Map<string, SerializedConfig>();
+  /**
+   * The device a `run_tests` call pinned each target to (PILOT-342). Kept for
+   * the session's life, so a target resolved again (its daemon died, it had
+   * no device) comes back on the same device.
+   */
+  private readonly _devicePins = new Map<string, string>();
+  /** A `run_tests` `device` to pin while the targets are first resolved. */
+  private _pendingPin: { device: string; files: string[]; project?: string } | null = null;
 
   constructor(options?: { configFile?: string }) {
     this._configFile = options?.configFile;
@@ -192,11 +205,15 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     if (validFiles.length === 0) {
       return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
     }
-
+    // Running from here, before the first await: resolving devices takes
+    // seconds on a first run, and a second run arriving meanwhile must meet
+    // the guard above.
     this._isRunning = true;
     this._stopRequested = false;
     this._testResults.clear();
     try {
+      // Only once something will run: resolving targets picks devices.
+      await this.ensureDevicesReady();
       let totalPassed = 0, totalFailed = 0, totalSkipped = 0, totalDuration = 0;
       let totalInterrupted = 0;
       for (const f of validFiles) {
@@ -242,6 +259,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
 
   async runAll(): Promise<TestRunResult> {
     await this._ensureInitialized();
+    await this.ensureDevicesReady();
     if (this._isRunning) {
       return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
     }
@@ -534,6 +552,127 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     };
   }
 
+  /**
+   * Whether `device` can be honoured for a run of `files`, and why not.
+   *
+   * A session keeps one device per target for its whole life: moving a target
+   * would leave the agent it started attached to the previous device, and the
+   * device tools pointed at it. So `device` can *choose* a target's device only
+   * while that target is still unresolved — the session's first call, or a
+   * target that found no device — and otherwise only confirm the one it has.
+   * Anything else is refused: running the tests somewhere the caller did not
+   * name is how one session took a device from under another.
+   */
+  async deviceChoiceError(files: string[], device: string, project?: string): Promise<string | null> {
+    // Everything that can refuse or ignore the request is decided from the
+    // session alone, before any target is resolved: resolving auto-picks, and
+    // an auto-pick spent on a refused call is the session's one chance to
+    // choose gone — the retry the refusal itself suggests was then refused.
+    await this._ensureSession();
+    if (!this._config) return null;
+    // An unknown project is `validateProjectChoice`'s to refuse, by name —
+    // and so is a file under several projects with none named, even when
+    // they share one target.
+    // Real projects only: the one a config without projects gets is not a
+    // name validateProjectChoice accepts.
+    if (project !== undefined && !this._projects.some((p) => !p.synthesized && p.name === project)) return null;
+    if (project === undefined && this._hasRealProjects() && this.resolveRequestedFiles(files)
+      .some((f) => this._projects.filter((p) => p.testFiles.includes(f)).length > 1)) return null;
+    const keys = this._targetKeysFor(files, project);
+    // Nothing matches: the run reports the files by name.
+    if (keys.length === 0) return null;
+    if (keys.length > 1) {
+      return `\`device\` names one device, but these files run on ${keys.length} device targets `
+        + `(${keys.map((k) => this._describeTargetKey(k)).join(', ')}). Pass \`project\` to pick one, or run them separately.`;
+    }
+    const key = keys[0];
+
+    const pending = !this._devicesReady ? { device, files, project } : null;
+    if (pending) this._pendingPin = pending;
+    try {
+      await this.ensureDevicesReady();
+    } finally {
+      // Only our own: a concurrent call may have replaced it meanwhile.
+      if (pending && this._pendingPin === pending) this._pendingPin = null;
+    }
+    let serial: string;
+    try {
+      // Within the files' own group when they run on one: names are unique
+      // per group, not per session.
+      serial = this.resolveDeviceName(device, project ?? this._projectForTargetKey(key)) ?? device;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+
+    const effective = this._wantedConfigs(this._config).find((c) => targetKeyFor(c) === key);
+    const configPin = effective ? primaryDevicePin(effective) : undefined;
+    // Resolved on this very device a moment ago: once is enough.
+    const triedJustNow = pending !== null && this._devicePins.get(key) === device;
+    // A member *name* means nothing until its group's devices are known, so it
+    // cannot choose the device of a target that has none.
+    // Not during a run: it retries its own target, and two resolutions of one
+    // target start two daemons.
+    // A retry of failed targets may be under way (a device tool's, or another
+    // call's here): let every one land first rather than resolve the same
+    // target twice (two daemons). A loop: a waiter woken with another may find
+    // that one has started the next retry.
+    while (this._retryPromise) await this._retryPromise;
+    if (!triedJustNow && !this._isRunning && !this._targets.has(key) && this._targetErrors.has(key) && effective && !configPin
+      && this._canPinPrimary(effective, device)) {
+      // No device yet, so nothing to move: resolve it on the requested one.
+      this._devicePins.set(key, serial);
+      this._retriedTargets.add(key);
+      this._retryPromise = this._resolveOnePlatformTarget(effective);
+      try {
+        await this._retryPromise;
+      } finally {
+        this._retryPromise = null;
+      }
+    }
+    const target = this._targets.get(key);
+    // A target's recorded failure, as one sentence ending in a single period.
+    const reasonOf = (k: string): string =>
+      `${(this._targetErrors.get(k) ?? 'its target did not resolve').replace(/\.\s*$/, '')}.`;
+    if (!target) {
+      // Set up on the named device and failed (a typo, an offline device):
+      // say so and forget the pin, so a later run without `device` may find
+      // one rather than retrying this serial for the rest of the session.
+      // The config pins another device: that wins, device or none yet. A
+      // member of this target's own group, by name or pinned serial, is not
+      // another device — the run reports why the group has none.
+      const ownMember = effective !== undefined
+        && resolveDeviceGroup(effective).some((e) => e.name === device || e.device === serial);
+      if (configPin && configPin !== serial && !ownMember) {
+        return `The config pins ${configPin} for ${this._describeTargetKey(key)} tests, not ${device}, and that device is not set up yet: `
+          + `${reasonOf(key)} Change \`device\` in the config to run on ${device}.`;
+      }
+      const pinned = this._devicePins.get(key);
+      if (pinned !== undefined && (pinned === device || pinned === serial)) {
+        this._devicePins.delete(key);
+        return `Could not set up ${device} for ${this._describeTargetKey(key)} tests: `
+          + `${reasonOf(key)} Nothing is pinned; fix the device and pass \`device\` again.`;
+      }
+      // Otherwise the run reports the target's own failure.
+      return null;
+    }
+    const serials = [target.deviceSerial, ...(target.members ?? []).map((m) => m.deviceSerial)];
+    if (serials.includes(serial)) {
+      // Confirmed: hold the target to it, so a target resolved again (its
+      // daemon died) cannot come back on another device.
+      if (effective && !configPin && !this._devicePins.has(key)) this._devicePins.set(key, target.deviceSerial);
+      return null;
+    }
+
+    const where = this._describeTargetKey(key);
+    return `This session runs ${where} tests on ${serials.join(' + ')}, not ${device}. `
+      + 'A headless MCP session keeps the device it started on for its whole life (moving it would strand the agent '
+      + 'it started there), so `device` can confirm that device but not choose another. '
+      + (configPin
+        ? `The config pins ${configPin}; change \`device\` there and restart the MCP server to run on ${device}.`
+        : `To run on ${device}, restart the MCP server and pass \`device\` to run_tests before any other run or device tool, `
+          + `or set \`device: '${device}'\` in the config.`);
+  }
+
   toggleWatch(filePath: string, options?: { testFilter?: string; project?: string }): { enabled: boolean } {
     const { testFilter, project: projectName } = options ?? {};
     const existing = this._findWatchEntry(filePath, projectName, testFilter);
@@ -579,9 +718,18 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * part of initialization that costs the time: a forked discovery child per
    * test file. On a suite of any size that is minutes, and a `tap` that waits
    * for it is a `tap` the MCP client times out.
+   *
+   * Only what needs a device calls this — runs and device tools. Listing tests
+   * or reading session info used to resolve every target too, auto-picking a
+   * device (another session's, as likely as not) before a `run_tests` could
+   * name one, and the documented flow starts with `tapsmith_list_tests`
+   * (PILOT-342).
    */
-  async ensureDevicesReady(): Promise<void> {
-    if (this._initialized || this._devicesReady) return;
+  async ensureDevicesReady(opts?: { retryFailedTargets?: boolean; project?: string }): Promise<void> {
+    if (this._devicesReady) {
+      if (opts?.retryFailedTargets) await this._retryFailedTargets(opts.project);
+      return;
+    }
     if (this._devicesPromise) {
       await this._devicesPromise;
       return;
@@ -594,21 +742,85 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     }
   }
 
+  /** A retry of failed targets in flight, shared by concurrent device tools. */
+  private _retryPromise: Promise<void> | null = null;
+
+  /** When device tools last retried the failed targets (see `_retryFailedTargets`). */
+  private _lastTargetRetryAt = 0;
+
+  /**
+   * Resolve again every target that found no device (see `ensureDevicesReady`).
+   *
+   * Budgeted: only when no target serves at all — a missing platform beside a
+   * working one would otherwise start and discard a daemon on every tap of the
+   * working one — never while a run is in flight (it retries its own target,
+   * and two resolutions of one target start two daemons), and at most once per
+   * {@link TARGET_RETRY_INTERVAL_MS}, so a tool loop does not churn daemons.
+   */
+  private async _retryFailedTargets(project?: string): Promise<void> {
+    if (this._retryPromise) return this._retryPromise;
+    const config = this._config;
+    if (!config || this._targetErrors.size === 0 || this._isRunning) return;
+    // A tool that names a project wants that project's target: retry it alone
+    // when it failed, whatever else serves. Otherwise only when nothing serves.
+    const namedKey = project !== undefined && this._projects.some((p) => p.name === project)
+      ? platformKeyForProject(this._projects, project, config.platform)
+      : undefined;
+    if (namedKey !== undefined ? !this._targetErrors.has(namedKey) || this._targets.has(namedKey) : this._targets.size > 0) return;
+    if (Date.now() - this._lastTargetRetryAt < TARGET_RETRY_INTERVAL_MS) return;
+    this._lastTargetRetryAt = Date.now();
+    const failed = this._wantedConfigs(config).filter((c) => (namedKey !== undefined
+      ? targetKeyFor(c) === namedKey
+      : this._targetErrors.has(targetKeyFor(c))));
+    this._retryPromise = (async () => {
+      for (const effective of failed) await this._resolveOnePlatformTarget(effective);
+    })();
+    try {
+      await this._retryPromise;
+    } finally {
+      this._retryPromise = null;
+    }
+  }
+
+  /** Config, projects and test files, loaded once and shared. */
+  private async _ensureSession(): Promise<void> {
+    if (this._sessionReady) return;
+    if (this._sessionPromise) {
+      await this._sessionPromise;
+      return;
+    }
+    this._sessionPromise = this._prepareSession();
+    try {
+      await this._sessionPromise;
+    } finally {
+      this._sessionPromise = null;
+    }
+  }
+
   private async _initialize(): Promise<void> {
     log('Initializing test dispatcher...');
-    // Shares the in-flight promise, so a device tool and a run racing to
-    // initialize resolve the same targets once rather than twice.
-    await this.ensureDevicesReady();
+    await this._ensureSession();
 
     if (this._testFiles.length > 0 && this._scripts) {
       await this._discoverTestTree();
     }
 
     this._initialized = true;
-    log(`Initialized: ${this._testFiles.length} test file(s), device=${this._deviceSerial ?? 'none'}`);
+    log(`Initialized: ${this._testFiles.length} test file(s)`);
   }
 
   private async _prepareDevices(): Promise<void> {
+    // Shares the in-flight session load, so a device tool and a run racing to
+    // start resolve the same targets once rather than twice.
+    await this._ensureSession();
+    const config = this._config;
+    if (config) this._applyPendingPin(config);
+    await this._resolvePlatformTargets(config);
+    this._devicesReady = true;
+    log(`Devices ready: ${this._testFiles.length} test file(s), device=${this._deviceSerial ?? 'none'}`);
+  }
+
+  private async _prepareSession(): Promise<void> {
     // Reset, not append. This runs again after a throw — `ensureDevicesReady`
     // only latches on success — and the per-project branch pushes, so a config
     // that failed partway through left its files behind and the next attempt
@@ -638,6 +850,11 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     if (config) {
       try {
         this._projects = resolveProjects(config);
+        // As the CLI does: a root `device` pins only the projects of its own
+        // platform, not the other platform's target too.
+        if (config.device && new Set(this._projects.map((p) => p.effectiveConfig.platform ?? 'android')).size > 1) {
+          scopeDevicePinToPlatform(this._projects, config.device, platformOfSerial(config.device));
+        }
         this._projectWaves = topologicalSort(this._projects);
       } catch {
         this._projects = [];
@@ -673,15 +890,12 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       }
     }
 
-    await this._resolvePlatformTargets(config);
-
     if (config) {
       this._serializedConfig = serializeConfig(config);
     }
 
     this._scripts = resolveScripts(this._testFiles);
-    this._devicesReady = true;
-    log(`Devices ready: ${this._testFiles.length} test file(s), device=${this._deviceSerial ?? 'none'}`);
+    this._sessionReady = true;
   }
 
   // ─── Device targets ───
@@ -710,11 +924,21 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     this._retriedTargets.clear();
     if (!config) return;
 
-    for (const effective of this._wantedConfigs(config)) {
+    // Pinned targets first, so they take their devices before an unpinned
+    // target's auto-pick can. An unpinned target on the same platform then
+    // reuses that daemon and shares its device — the shared-device model —
+    // rather than grabbing the pinned device first. (Steering it *away* from
+    // the pin instead repointed the shared daemon under the pinned target.)
+    const wanted = this._wantedConfigs(config);
+    // Any pin counts, a group member's included: an unpinned target resolving
+    // first could otherwise take the device a member is pinned to.
+    const pinned = wanted.filter((c) => pinnedDeviceSerials(c).length > 0 || this._devicePins.has(targetKeyFor(c)));
+    for (const effective of [...pinned, ...wanted.filter((c) => !pinned.includes(c))]) {
       await this._resolveOnePlatformTarget(effective);
     }
 
-    this._deviceSerial = [...this._targets.values()][0]?.deviceSerial ?? null;
+    // In project order, as before targets were resolved pinned-first.
+    this._deviceSerial = wanted.map((c) => this._targets.get(targetKeyFor(c))?.deviceSerial).find((s) => s !== undefined) ?? null;
   }
 
   /**
@@ -737,11 +961,81 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     return [...byKey.values()];
   }
 
+  /**
+   * Pin the target a pending `run_tests` `device` is for, before anything
+   * auto-picks one. Only an unambiguous request pins: files spanning two
+   * targets would pin one of them to a device it cannot use, and a group
+   * member's *name* means nothing until its group's devices are known.
+   * `deviceChoiceError` refuses both afterwards.
+   */
+  private _applyPendingPin(config: TapsmithConfig): void {
+    const pin = this._pendingPin;
+    if (!pin) return;
+    if (this._isGroupMemberName(pin.device)) return;
+    const keys = this._targetKeysFor(pin.files, pin.project);
+    if (keys.length !== 1) return;
+    const effective = this._wantedConfigs(config).find((c) => targetKeyFor(c) === keys[0]);
+    // A device pinned in the config wins; `deviceChoiceError` says so.
+    if (effective && !primaryDevicePin(effective) && this._canPinPrimary(effective, pin.device)) {
+      this._devicePins.set(keys[0], pin.device);
+    }
+  }
+
+  /**
+   * Whether `device` may become the primary of the target `effective` builds.
+   * Not a member's *name*, and not a serial the config pins to another member:
+   * "run on bob's device" would otherwise put alice on it too.
+   */
+  private _canPinPrimary(effective: TapsmithConfig, device: string): boolean {
+    return !this._isGroupMemberName(device) && !pinnedDeviceSerials(effective).includes(device);
+  }
+
+  /** Whether `device` is a `use.devices` member name rather than a serial. */
+  private _isGroupMemberName(device: string): boolean {
+    return this._projects.some((p) => resolveDeviceGroup(p.effectiveConfig).some((e) => e.name === device));
+  }
+
+  /**
+   * The distinct targets a run of `files` could use. Stricter than the
+   * routing in `runFiles`, which falls back to the first project holding a
+   * file: a file under several projects counts every one of them, and an
+   * unknown `project` counts none. `run_tests` refuses both, and a pin taken
+   * from the fallback would land on a target the caller never chose.
+   */
+  private _targetKeysFor(files: string[], project?: string): string[] {
+    if (project !== undefined && !this._projects.some((p) => p.name === project)) return [];
+    const root = this._config?.platform;
+    const keys = new Set<string>();
+    for (const f of this.resolveRequestedFiles(files)) {
+      const owners = project !== undefined
+        ? this._projects.filter((p) => p.name === project)
+        : this._projects.filter((p) => p.testFiles.includes(f));
+      if (owners.length === 0) keys.add(platformKeyForProject(this._projects, undefined, root));
+      for (const p of owners) keys.add(platformKeyForProject(this._projects, this._realProjectName(p), root));
+    }
+    return [...keys];
+  }
+
+  /**
+   * A target key as a caller would name it: a group target by its project
+   * (it has one), any other by its platform — several projects share it.
+   */
+  private _describeTargetKey(key: string): string {
+    const group = key.includes('|') ? this._projectForTargetKey(key) : undefined;
+    if (group) return `project "${group}"`;
+    const platform = key.split('|')[0];
+    return platform === DEFAULT_PLATFORM_KEY ? 'its' : platform;
+  }
+
+
+
   /** Resolve (or re-resolve) a single platform, leaving the others alone. */
   private async _resolveOnePlatformTarget(effective: TapsmithConfig): Promise<void> {
     const key = targetKeyFor(effective);
+    // A `run_tests` pin applies only where the config leaves the primary free.
+    const pin = primaryDevicePin(effective) ? undefined : this._devicePins.get(key);
     try {
-      const target = await ensurePlatformTarget(effective);
+      const target = await ensurePlatformTarget(pin ? { ...effective, device: pin } : effective, pin ? 'run_tests' : 'config');
       this._targets.set(key, target);
       this._targetErrors.delete(key);
       this._deviceSerial ??= target.deviceSerial;
@@ -865,6 +1159,9 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    */
   private async _ensureTargetForProject(projectName?: string): Promise<PlatformTarget> {
     const key = platformKeyForProject(this._projects, projectName, this._config?.platform);
+    // A device tool's or a run_tests `device`'s retry may be resolving this
+    // target now: wait for it rather than resolve it a second time.
+    if (this._retryPromise) await this._retryPromise;
     await this._dropTargetIfDaemonDied(key);
     if (this._config && this._targetErrors.has(key) && !this._retriedTargets.has(key)) {
       this._retriedTargets.add(key);

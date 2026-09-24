@@ -6,6 +6,7 @@ import {
   effectiveConfigForProject,
   MAX_DEVICE_GROUP_SIZE,
   primaryDevicePin,
+  pinnedDeviceSerials,
   resolveDeviceGroup,
   validateDevicesOption,
   type TapsmithConfig,
@@ -126,6 +127,25 @@ describe('primaryDevicePin', () => {
 
   it('lets the first member\'s pin win over root `device`', () => {
     expect(primaryDevicePin(makeConfig({ device: 'emulator-5554', devices: [{ name: 'alice', device: 'X' }] }))).toBe('X');
+  });
+});
+
+// A pinned device can host exactly one worker, so every embedder that sizes a
+// worker pool asks this whether the target pins anything (PILOT-261/313).
+describe('pinnedDeviceSerials', () => {
+  it('lists root `device` (and so `--device`) as the primary\'s pin', () => {
+    expect(pinnedDeviceSerials(makeConfig({ device: 'emulator-5554' }))).toEqual(['emulator-5554']);
+  });
+
+  it('lists every pinned member of a group, primary first', () => {
+    const config = makeConfig({ devices: [{ name: 'alice' }, { name: 'bob', device: 'X' }, { name: 'carol', device: 'Y' }] });
+    expect(pinnedDeviceSerials(config)).toEqual(['X', 'Y']);
+    expect(pinnedDeviceSerials({ ...config, device: 'P' })).toEqual(['P', 'X', 'Y']);
+  });
+
+  it('is empty when nothing is pinned', () => {
+    expect(pinnedDeviceSerials(makeConfig())).toEqual([]);
+    expect(pinnedDeviceSerials(makeConfig({ devices: 3 }))).toEqual([]);
   });
 });
 

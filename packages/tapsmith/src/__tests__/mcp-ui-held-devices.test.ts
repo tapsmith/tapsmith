@@ -51,6 +51,12 @@ describe('assertNotHeldByUi', () => {
     expect(() => assertNotHeldByUi('emulator-5554', held, 'bob'))
       .toThrow(/pinned for group member "bob" in your config/);
   });
+
+  // A run_tests `device` is the caller's, not the config's.
+  it('names a run_tests device as requested, not as pinned in the config', () => {
+    expect(() => assertNotHeldByUi('emulator-5554', held, undefined, 'run_tests'))
+      .toThrow(/Device "emulator-5554", requested with `device`, is being driven by a running `tapsmith test --ui` session/);
+  });
 });
 
 describe('noDeviceMessage with UI-held devices', () => {

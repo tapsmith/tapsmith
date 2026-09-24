@@ -866,6 +866,13 @@ export interface UIWorkerInitMessage {
    */
   adoptPrepared?: boolean
   /**
+   * `--force-install`: reinstall the app on every device this worker sets up
+   * (an adopted device was installed by the CLI already). Set on the initial
+   * spawn only — a respawn mid-session must not wipe the app under test.
+   * Required, like `InitMessage.forceInstall`.
+   */
+  forceInstall: boolean
+  /**
    * The rest of the device group (`devices[1..]`) for a `use.devices`
    * project, each on a daemon the server spawned for it. Omitted for
    * single-device workers.
