@@ -55,7 +55,7 @@ Each worker gets its own daemon instance and device connection. Workers remain a
 
 If only one device is available despite `workers > 1`, watch mode falls back to single-worker mode automatically.
 
-A pinned device (`--device`, or `device` in the config) hosts one worker, so watch mode stays on exactly that device whatever `workers` says, and prints a note when it caps the count. `--device` combined with `--workers N` (N > 1) is refused.
+A pinned device (`--device`, or `device` in the config) hosts one worker, so watch mode stays on exactly that device whatever `workers` says, and prints a note when it caps the count. `--device` combined with a `--workers N` the pin leaves unusable (any N > 1 in a single-platform config) is refused.
 
 ## New file detection
 

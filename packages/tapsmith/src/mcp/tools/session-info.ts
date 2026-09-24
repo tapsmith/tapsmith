@@ -39,6 +39,10 @@ export function registerSessionInfoTool(server: McpServer, dispatcher: TestDispa
         lines.push(`Device: ${targets[0].device ?? info.device ?? unavailable(targets[0])}`);
       } else if (info.device) {
         lines.push(`Device: ${info.device}`);
+      } else {
+        // A headless session picks its devices only when something needs one,
+        // so a `run_tests` can still name the device to use.
+        lines.push('Device: not chosen yet — the first test run or device tool picks one (tapsmith_run_tests can name it with `device`)');
       }
       if (info.platform) lines.push(`Platform: ${info.platform}`);
       if (info.package) lines.push(`Package: ${info.package}`);

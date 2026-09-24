@@ -63,7 +63,10 @@ export interface WatchModeContext {
   testFiles: string[]
   screenshotDir?: string
   launchedEmulators: LaunchedEmulator[]
-  /** `--force-install`, for the workers watch sets up (the CLI already did the primary). */
+  /**
+   * `--force-install`, for the workers watch sets up — except the one on the
+   * CLI's primary group, which the CLI already force-installed.
+   */
   forceInstall: boolean
   /**
    * Sticky reset capabilities for the primary device, shared with the CLI's
@@ -450,7 +453,9 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         daemonPort,
         config: workerConfig,
         screenshotDir: ctx.screenshotDir,
-        forceInstall: ctx.forceInstall,
+        // The worker on the CLI's own group sets it up afresh (it does not
+        // adopt), but the CLI already force-installed there this session.
+        forceInstall: ctx.forceInstall && deviceSerial !== ctx.deviceSerial,
         ...(members.length > 0 ? {
           groupMembers: members.map((m, i) => ({ name: groupNames[i + 1].name, deviceSerial: m.serial, daemonPort: m.daemonPort })),
         } : {}),
@@ -602,6 +607,9 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
 
           dispatchNext(worker);
         }
+        // No live worker at all (every one retired in an earlier round):
+        // nothing above would ever settle this dispatch, so fail its files.
+        maybeResolve();
       });
     } finally {
       // Remove dispatch-scoped listeners to prevent stale handlers from

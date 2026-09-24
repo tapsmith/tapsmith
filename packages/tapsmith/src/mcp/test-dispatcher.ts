@@ -178,12 +178,21 @@ export interface TestDispatcher {
   toggleWatch(filePath: string, options?: { testFilter?: string; project?: string }): { enabled: boolean }
 }
 
+/** One UI worker as `uiDeviceChoiceError` sees it: its device target and its devices. */
+export interface UiWorkerDevices {
+  /** Bucket signature in a multi-target session; `undefined` otherwise. */
+  bucket: string | undefined
+  /** The worker's devices, primary first. */
+  devices: string[]
+}
+
 /**
  * UI mode's answer to {@link TestDispatcher.deviceChoiceError}. A UI session
- * hands each run to whichever of its workers is free, so `device` can only be
- * honoured when the session has one worker and `device` is on it. The tool used
- * to document `device` as "ignored in UI mode" and ignore it — a caller naming
- * a device got its tests run on another one without a word.
+ * hands each run to a free worker of the files' own device target, so
+ * `device` can only be honoured when exactly one worker could take the run
+ * and `device` is on it. The tool used to document `device` as "ignored in UI
+ * mode" and ignore it — a caller naming a device got its tests run on another
+ * one without a word.
  *
  * @internal — exported for unit testing.
  */
@@ -192,20 +201,29 @@ export function uiDeviceChoiceError(opts: {
   device: string
   /** `device` resolved from a group member name to its serial (else `device`). */
   serial: string
-  /** Every device the session's workers drive. */
-  sessionDevices: string[]
-  /** Workers a run can land on. */
-  workerCount: number
+  /** Every worker of the session (the planned ones, before they spawn). */
+  workers: UiWorkerDevices[]
+  /** The device targets the requested files run on; `undefined` for a file with none. */
+  fileBuckets: ReadonlySet<string | undefined>
 }): string | null {
-  const { device, serial, sessionDevices, workerCount } = opts;
+  const { device, serial, workers, fileBuckets } = opts;
+  const sessionDevices = [...new Set(workers.flatMap((w) => w.devices))];
   if (!sessionDevices.includes(serial)) {
     return `${device} is not a device this UI session drives `
       + `(${sessionDevices.length > 0 ? sessionDevices.join(', ') : 'none yet'}). UI mode runs tests only on its own workers: `
       + 'omit `device` (use `project` to pick a platform), or start the UI session with `--device` on the device you want.';
   }
-  if (workerCount > 1) {
-    return `UI mode hands each run to whichever of its ${workerCount} workers is free, so \`device\` cannot pin this run to ${device}. `
+  // Only the files' own target's workers can take the run.
+  const anyWorker = fileBuckets.size === 0 || fileBuckets.has(undefined);
+  const eligible = workers.filter((w) => anyWorker || w.bucket === undefined || fileBuckets.has(w.bucket));
+  if (eligible.length > 1) {
+    return `UI mode hands each run to whichever of its ${eligible.length} workers is free, so \`device\` cannot pin this run to ${device}. `
       + 'Omit `device` (use `project` to pick a platform), or start the UI session with `--device` to use only that device.';
+  }
+  const theirs = eligible[0]?.devices ?? [];
+  if (!theirs.includes(serial)) {
+    return `In this UI session these files run on ${theirs.join(' + ') || 'no worker'}, not ${device}: `
+      + 'each device target has its own worker. Omit `device`, or pass `project` for the target you mean.';
   }
   return null;
 }

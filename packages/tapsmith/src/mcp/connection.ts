@@ -118,16 +118,7 @@ export function getAllDaemonAddresses(): string | null {
   return _connections.map(c => c.address).join(',');
 }
 
-export async function ensureConnected(
-  device?: string,
-  /**
-   * The device the caller is about to pin, for a first-time discovery that
-   * starts its own daemon: it would otherwise point that daemon — agent and
-   * all — at whichever device looked best, which may be another session's
-   * (PILOT-342). Ignored once the pool exists.
-   */
-  preferDevice?: string,
-): Promise<TapsmithGrpcClient> {
+export async function ensureConnected(device?: string): Promise<TapsmithGrpcClient> {
   if (_ready && _connections.length > 0) {
     if (device) {
       const conn = _deviceIndex.get(device);
@@ -152,9 +143,9 @@ export async function ensureConnected(
   // First-time init (with mutex to prevent concurrent discovery)
   if (_connectingPromise) {
     await _connectingPromise;
-    return ensureConnected(device, preferDevice);
+    return ensureConnected(device);
   }
-  _connectingPromise = discover(preferDevice);
+  _connectingPromise = discover();
   try {
     await _connectingPromise;
   } finally {
@@ -534,7 +525,25 @@ export async function listAllDevices(): Promise<DeviceInfoProto[]> {
 
 // ─── Discovery ───
 
-async function discover(preferDevice?: string): Promise<void> {
+/**
+ * Whether discovery's own daemon should select a device (and start its agent).
+ *
+ * Only where nothing else will. A headless session with a config resolves a
+ * target per platform before any run or device tool, and `prepareTarget`
+ * selects the device and starts the agent then — on the device the run named,
+ * if it named one. Selecting here first put an agent on whichever device
+ * looked best, another session's as likely as not, on nothing more than a
+ * `list_devices` (PILOT-342). Without a config there are no targets, and a UI
+ * session's endpoint normally adopts the UI's own daemons, so those keep the
+ * old behaviour.
+ *
+ * @internal — exported for unit testing.
+ */
+export function discoverySelectsDevice(opts: { uiMode: boolean; hasConfig: boolean }): boolean {
+  return opts.uiMode || !opts.hasConfig;
+}
+
+async function discover(): Promise<void> {
   const config = await loadMcpConfig(_configFile).then((result) => result.config).catch(() => null);
   _discoveredConfig = config;
 
@@ -710,13 +719,11 @@ async function discover(preferDevice?: string): Promise<void> {
     // claiming this daemon for a *different* device must know it is repointing
     // one — otherwise the daemon reports an agent connected and the second
     // platform silently runs against the first one's.
-    // A config pin wins over the caller's preference, as it does for targets,
-    // and a device a UI session holds is never preferred: the target's own
-    // guard refuses that pin by name.
-    const preferred = preferDevice && config && !primaryDevicePin(config) && !uiHeldDevices().has(preferDevice)
-      ? { ...config, device: preferDevice }
-      : config;
-    conn.preparedDevice = await setDeviceAndAgent(conn.client, preferred);
+    // A device a UI session holds is never preferred: the target's own guard
+    // refuses that pin by name.
+    conn.preparedDevice = discoverySelectsDevice({ uiMode: _uiMode, hasConfig: config !== null })
+      ? await setDeviceAndAgent(conn.client, config)
+      : undefined;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`Daemon started but setup failed: ${msg}`);
@@ -910,8 +917,12 @@ export async function platformTargetIsLive(target: PlatformTarget): Promise<bool
  * requested. Each project's *effective* config carries its own platform, app
  * and agent paths, so resolve a target per platform from that instead.
  */
-export async function ensurePlatformTarget(config: TapsmithConfig): Promise<PlatformTarget> {
-  const primary = await ensurePrimaryTarget(config);
+export async function ensurePlatformTarget(
+  config: TapsmithConfig,
+  /** Where the primary's pin came from, for the missing-device message. */
+  pinSource: 'config' | 'run_tests' = 'config',
+): Promise<PlatformTarget> {
+  const primary = await ensurePrimaryTarget(config, pinSource);
   const group = resolveDeviceGroup(config);
   if (group.length <= 1) return primary;
   // A `use.devices` project: one more daemon + device per member, each
@@ -971,14 +982,13 @@ async function ensureMemberTarget(
   return { name, address: conn.address, deviceSerial: serial };
 }
 
-async function ensurePrimaryTarget(config: TapsmithConfig): Promise<PlatformTarget> {
+async function ensurePrimaryTarget(config: TapsmithConfig, pinSource: 'config' | 'run_tests' = 'config'): Promise<PlatformTarget> {
   const platform = config.platform;
   const key = platform ?? 'default';
   // The first group member's pin, root `device` included. Reading `config.device`
   // here honoured `bob`'s pin and auto-picked `alice`'s.
   const wanted = primaryDevicePin(config);
-  // Discovery's own daemon starts on the pin too, not on an auto-pick.
-  await ensureConnected(undefined, wanted);
+  await ensureConnected();
   // After discovery, which learns what UI sessions hold; before this target
   // starts any daemon: a pinned device another session drives is refused
   // outright, not silently taken over.
@@ -1026,7 +1036,7 @@ async function ensurePrimaryTarget(config: TapsmithConfig): Promise<PlatformTarg
     // yet another one.
     discardDaemon(conn);
     await refreshDeviceIndex();
-    throw new Error(noDeviceMessage(platform, wanted, visible, uiHeldDevices()));
+    throw new Error(noDeviceMessage(platform, wanted, visible, uiHeldDevices(), pinSource));
   }
 
   conn.claimedBy = key;
@@ -1081,7 +1091,18 @@ export function assertNotHeldByUi(wanted: string | undefined, held: Set<string>,
   );
 }
 
-export function noDeviceMessage(platform?: string, wanted?: string, visible: string[] = [], heldByUi: Iterable<string> = []): string {
+export function noDeviceMessage(
+  platform?: string,
+  wanted?: string,
+  visible: string[] = [],
+  heldByUi: Iterable<string> = [],
+  /**
+   * Where `wanted` came from: the config, or a `run_tests` call's `device`.
+   * The fix differs — edit the config, or pass another device — and telling a
+   * caller to edit a config that pins nothing sends them the wrong way.
+   */
+  source: 'config' | 'run_tests' = 'config',
+): string {
   const what = platform ? `No ${platform} device is available.` : 'No device is available.';
   // The devices are there, but a UI session is driving every one of them. Telling
   // the user to boot a simulator beside the one they are looking at would send
@@ -1095,6 +1116,14 @@ export function noDeviceMessage(platform?: string, wanted?: string, visible: str
   // A pinned serial that does not exist is a different problem with a
   // different fix, and telling the user to boot a simulator when one is
   // already booted sends them looking in the wrong place entirely.
+  if (wanted && visible.length > 0 && source === 'run_tests') {
+    return `Device "${wanted}" is not available. `
+      + `${platform ? `Visible ${platform} devices` : 'Visible devices'}: ${visible.join(', ')}. `
+      + 'Pass one of those as `device`, or start that device.';
+  }
+  if (wanted && source === 'run_tests') {
+    return `Device "${wanted}" is not available, and no other ${platform ?? 'device'} was found. Start it, or pass another \`device\`.`;
+  }
   if (wanted && visible.length > 0) {
     return `Device "${wanted}" from your config is not available. `
       + `${platform ? `Visible ${platform} devices` : 'Visible devices'}: ${visible.join(', ')}. `

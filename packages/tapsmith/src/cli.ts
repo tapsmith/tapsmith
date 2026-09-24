@@ -94,10 +94,6 @@ function dim(s: string): string {
   return `${DIM}${s}${RESET}`;
 }
 
-function countLabel(count: number, singular: string, plural = `${singular}s`): string {
-  return `${count} ${count === 1 ? singular : plural}`;
-}
-
 function printTapsmithBanner(): void {
   console.log();
   const banner = figlet.textSync('Tapsmith', { font: 'Three Point' });
@@ -1549,9 +1545,14 @@ async function provisionDevicesForBucket(
     // unpinned ones taking the next free device provisioned here. Nothing to
     // provision when every entry is pinned.
     const group = resolveDeviceGroup(effectiveConfig);
-    const pool = group.every((e) => e.device)
-      ? { serials: [] as string[], launched: [] as LaunchedEmulator[], reusedSimulatorCount: 0 }
-      : await provisionDevicesForBucket({ ...effectiveConfig, devices: undefined }, group.length, progress);
+    if (group.every((e) => e.device)) {
+      // Every device named outright: the same pins-only group (and the same
+      // refusal of an Android pin that is not connected) as the parallel path.
+      const { pinnedWorkerDevices } = await import('./dispatcher.js');
+      const pins = pinnedWorkerDevices(group, listConnectedDeviceSerials(), effectiveConfig.platform === 'ios')!;
+      return { serials: pins, launched: [], reusedSimulatorCount: 0 };
+    }
+    const pool = await provisionDevicesForBucket({ ...effectiveConfig, devices: undefined }, group.length, progress);
     const first = group[0].device ?? pool.serials.find((s) => !pinnedMembers.includes(s));
     const members = first ? assignGroupMemberDevices(group, first, pool.serials) : undefined;
     return {
@@ -2067,18 +2068,6 @@ async function main(): Promise<void> {
     config.reporter = args.reporter;
   }
 
-  // A pinned device hosts one worker, so `--device` and `--workers N` ask for
-  // two different runs. Both are explicit on this command line: refuse rather
-  // than pick one — silently dropping either used to run on devices the user
-  // never named (PILOT-261, PILOT-313). A `workers` from the config file is
-  // a default, and the pin caps it to one below.
-  if (args.device && args.workers !== undefined && args.workers > 1) {
-    console.error(red(
-      `--device ${args.device} pins the run to one device, so it cannot run --workers ${args.workers} in parallel. `
-      + 'Drop --device to spread the run across devices, or drop --workers to run on that device.',
-    ));
-    process.exit(1);
-  }
 
   // Validate watch mode constraints
   if (args.watch) {
@@ -2304,7 +2293,13 @@ async function main(): Promise<void> {
   // so reporters can correctly suppress file headings / show project tags
   // when buckets or per-project `workers:` push the actual concurrency above
   // the global `config.workers` value.
-  const { allocateBucketWorkers, bucketizeProjects, pinnedBucketSignatures, sharedDeviceGroup } = await import('./project.js');
+  const { allocateBucketWorkers, bucketizeProjects, bucketPins, pinnedBucketSignatures, sharedDeviceGroup, workerPlanNote, platformOfSerial, scopeDevicePinToPlatform, devicePinWorkersConflict, devicesPinnedByManyBuckets } = await import('./project.js');
+  // A root `device` (from `--device` or the config) reached every project,
+  // the other platform's too, whose bucket then counted as pinned to a serial
+  // it cannot drive. Keep it on the projects of the device's own platform.
+  if (config.device && new Set(projects.map((p) => p.effectiveConfig.platform ?? 'android')).size > 1) {
+    scopeDevicePinToPlatform(projects, config.device, platformOfSerial(config.device));
+  }
   const budgetCap = isExplicitWorkers(config) ? config.workers : undefined;
   const runBuckets = bucketizeProjects(projects);
   // Before any device setup: the sequential setup writes the device it
@@ -2316,7 +2311,30 @@ async function main(): Promise<void> {
   // target that also hosts a group project runs on the group's primary.
   const bucketGroup = (signature: string): DeviceGroupEntry[] =>
     sharedDeviceGroup(projects.filter((p) => p.deviceSignature === signature)).group;
-  const totalWorkers = [...allocation.values()].reduce((s, n) => s + n, 0);
+  // The one-worker cap is per device, not per bucket: projects for two apps
+  // inheriting one `--device` are two buckets, and each got a worker on it.
+  // The sequential path runs them one after another on the device; UI and
+  // watch keep a worker per target alive, so they cannot share one.
+  const sharedPins = devicesPinnedByManyBuckets(runBuckets, pinnedSignatures);
+  const describeSharedPins = sharedPins.map((p) => `${p.serial} (${p.projects.join(', ')})`).join('; ');
+  if (sharedPins.length > 0 && (args.ui || args.watch)) {
+    console.error(red(
+      `${args.ui ? 'UI mode' : 'Watch mode'} runs each device target on a worker of its own, but these devices are pinned by `
+      + `more than one: ${describeSharedPins}. Pass --project to run one of them, or pin each project to its own device.`,
+    ));
+    process.exit(1);
+  }
+  const totalWorkers = sharedPins.length > 0 ? 1 : [...allocation.values()].reduce((s, n) => s + n, 0);
+  // A pinned device hosts one worker, so `--device` with a `--workers N` the
+  // pin leaves unusable asks for two different runs. Both are explicit on this
+  // command line: refuse rather than pick one — silently dropping either used
+  // to run on devices the user never named (PILOT-261, PILOT-313). A `workers`
+  // from the config file is a default, and the pin caps it with a note.
+  const pinConflict = devicePinWorkersConflict(args.device, args.workers, totalWorkers);
+  if (pinConflict) {
+    console.error(red(pinConflict));
+    process.exit(1);
+  }
   const maxFilesInAnyWave = Math.max(...projectWaves.map((wave) =>
     wave.reduce((sum, p) => sum + p.testFiles.length, 0),
   ));
@@ -2326,19 +2344,24 @@ async function main(): Promise<void> {
   // exceeds the user's explicit --workers value. Per-project `workers:`
   // inflation is now capped by the budget, so this only fires when there
   // are genuinely more device buckets than workers.
-  let workerPlanWarning: string | undefined;
-  if (isExplicitWorkers(config) && totalWorkers > config.workers) {
-    const activeBuckets = [...allocation.values()].filter((n) => n > 0).length;
-    workerPlanWarning = `requested ${countLabel(config.workers, 'worker')}; running ${totalWorkers} because ${countLabel(activeBuckets, 'device target')} ${activeBuckets === 1 ? 'needs a worker' : 'need one each'}`;
-  } else if (totalWorkers < config.workers && [...pinnedSignatures].some((sig) => (allocation.get(sig) ?? 0) > 0)) {
-    // A pin capped the config's `workers`: say so, or a `workers: 4` config
-    // run with `--device` looks like parallelism silently stopped working.
-    const pins = [...new Set(projects
-      .filter((p) => pinnedSignatures.has(p.deviceSignature))
-      .flatMap((p) => pinnedDeviceSerials(p.effectiveConfig)))];
-    workerPlanWarning = `config asks for ${countLabel(config.workers, 'worker')}; running ${totalWorkers} because `
-      + `${pins.join(', ')} ${pins.length === 1 ? 'is a pinned device' : 'are pinned devices'} (a pinned device hosts one worker)`;
-  }
+  // A pin capping the count is explained too, or a `workers: 4` config run
+  // with `--device` looks like parallelism silently stopped working.
+  // The shared-pin note only when it changed something: a one-worker run
+  // already runs its projects one after another.
+  const workerPlanWarning = sharedPins.length > 0
+    ? (config.workers > 1
+      ? `running one worker: ${describeSharedPins} — a device pinned by several projects runs them one after another`
+      : undefined)
+    : workerPlanNote({
+    requested: config.workers,
+    explicit: isExplicitWorkers(config),
+    fromCli: args.workers !== undefined,
+    running: totalWorkers,
+    activeBuckets: [...allocation.values()].filter((n) => n > 0).length,
+    pins: [...new Set(runBuckets
+      .filter((b) => pinnedSignatures.has(b.signature) && (allocation.get(b.signature) ?? 0) > 0)
+      .flatMap((b) => bucketPins(b.projects)))],
+  });
 
   // Reflect the effective parallelism on the config so reporters see the
   // real worker count. Downstream dispatcher paths pass `workers` explicitly,

@@ -212,6 +212,15 @@ describe('run_tests `device`', () => {
     expect(order[0]).toBe('device');
   });
 
+  it('treats an empty device as none', async () => {
+    const { dispatcher, runs } = makeDispatcher(SINGLE_PLATFORM);
+    let asked = false;
+    dispatcher.deviceChoiceError = async () => { asked = true; return 'refused'; };
+    await runTool(dispatcher)({ files: [HOME], device: '' }, extra);
+    expect(asked).toBe(false);
+    expect(runs).toHaveLength(1);
+  });
+
   it('does not ask when no device is given', async () => {
     const { dispatcher } = makeDispatcher(SINGLE_PLATFORM);
     let asked = false;

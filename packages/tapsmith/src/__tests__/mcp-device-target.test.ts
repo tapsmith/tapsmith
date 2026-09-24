@@ -194,23 +194,45 @@ describe('sessionDevicesFrom', () => {
 });
 
 describe('uiDeviceChoiceError', () => {
-  it('accepts the device of a one-worker session, by serial', () => {
-    expect(uiDeviceChoiceError({ device: 'emulator-5554', serial: 'emulator-5554', sessionDevices: ['emulator-5554'], workerCount: 1 }))
-      .toBeNull();
-  });
+  const worker = (bucket: string | undefined, ...devices: string[]) => ({ bucket, devices });
+  const choose = (device: string, workers: Array<{ bucket: string | undefined; devices: string[] }>, fileBuckets: Array<string | undefined> = [undefined], serial = device) =>
+    uiDeviceChoiceError({ device, serial, workers, fileBuckets: new Set(fileBuckets) });
 
-  it('accepts a group member of a one-worker session by its name', () => {
-    expect(uiDeviceChoiceError({ device: 'bob', serial: 'emulator-5556', sessionDevices: ['emulator-5554', 'emulator-5556'], workerCount: 1 }))
-      .toBeNull();
+  it('accepts the device of a one-worker session, by serial or by a member name', () => {
+    expect(choose('emulator-5554', [worker(undefined, 'emulator-5554')])).toBeNull();
+    expect(choose('bob', [worker(undefined, 'emulator-5554', 'emulator-5556')], [undefined], 'emulator-5556')).toBeNull();
   });
 
   it('refuses a device the session does not drive, listing the ones it does', () => {
-    expect(uiDeviceChoiceError({ device: 'emulator-5560', serial: 'emulator-5560', sessionDevices: ['emulator-5554'], workerCount: 1 }))
+    expect(choose('emulator-5560', [worker(undefined, 'emulator-5554')]))
       .toMatch(/emulator-5560 is not a device this UI session drives \(emulator-5554\)/);
   });
 
   it('refuses to pin a run when several workers could take it', () => {
-    expect(uiDeviceChoiceError({ device: 'emulator-5554', serial: 'emulator-5554', sessionDevices: ['emulator-5554', 'emulator-5556'], workerCount: 2 }))
+    expect(choose('emulator-5554', [worker(undefined, 'emulator-5554'), worker(undefined, 'emulator-5556')]))
       .toMatch(/whichever of its 2 workers is free/);
+  });
+
+  // A multi-target session routes each file to a worker of its own target.
+  it('accepts the one worker of the files\' own target', () => {
+    expect(choose('emulator-5554', [worker('android', 'emulator-5554'), worker('ios', 'SIM-1')], ['android'])).toBeNull();
+  });
+
+  it('refuses a device of another target than the files run on', () => {
+    expect(choose('SIM-1', [worker('android', 'emulator-5554'), worker('ios', 'SIM-1')], ['android']))
+      .toMatch(/these files run on emulator-5554, not SIM-1/);
+  });
+});
+
+// With every target failed, a device tool reached the unprepared discovery
+// daemon and reported a daemon-level error rather than why there is no device.
+describe('device tools when no target resolved', () => {
+  it('report the targets\' own failure', async () => {
+    const dispatcher = {
+      ensureDevicesReady: async () => {},
+      resolveDeviceName: () => undefined,
+      getSessionInfo: () => ({ timeout: 0, retries: 0, projects: [], deviceTargets: [{ platform: 'android', error: 'No online Android device found' }] }),
+    } as unknown as TestDispatcher;
+    await expect(deviceClientFor({}, dispatcher)).rejects.toThrow(/No online Android device found/);
   });
 });

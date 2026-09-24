@@ -2360,11 +2360,19 @@ npx tapsmith test --device emulator-5554
 ```
 
 A pinned device hosts exactly one worker, in every mode — sequential, parallel,
-watch and UI. A `workers` value from the config is capped to one (with a note
-saying so), and `--device` combined with `--workers N` (N > 1) is refused: the two
-ask for different runs. The same holds for `device` in the config and for pinned
-`use.devices` members. For multi-worker emulator runs, use config-based
-provisioning with `workers`, `launchEmulators`, and `avd` instead.
+watch and UI. `--device` combined with a `--workers N` the run cannot use is
+refused: both are on the command line and ask for different runs. In a
+single-platform config that is any N > 1; in a config whose projects span
+Android and iOS, `--device` (like a root `device` in the config) pins only the
+projects of that device's platform, and the other platform's projects may use
+the remaining workers — unless the device is pinned by several projects of its
+platform (two apps, say), in which case the whole run uses one worker and runs
+them one after another (UI and watch mode refuse that: they keep a worker per
+target alive). Any other worker count — a `workers` value in the config,
+or `--workers N` with a `device` pinned in the config or by `use.devices`
+members — is capped to one for that device target, with a note saying so. For multi-worker
+emulator runs, use config-based provisioning with `workers`, `launchEmulators`,
+and `avd` instead.
 
 ### `tapsmith test --workers <n>` / `tapsmith test -j <n>`
 

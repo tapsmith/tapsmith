@@ -42,6 +42,8 @@ function makeDispatcher(files: string[]): {
   const dispatcher = new HeadlessTestDispatcher();
   const internals = internalsOf(dispatcher);
   internals._ensureInitialized = async () => {};
+  // Runs resolve device targets too; the targets are scripted below.
+  (internals as unknown as { _devicesReady: boolean })._devicesReady = true;
   internals._testFiles = files;
   return { dispatcher, internals };
 }

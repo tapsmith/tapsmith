@@ -44,6 +44,14 @@ export async function deviceClientFor(
   // tool of a session pay for a discovery child per test file.
   if (dispatcher?.ensureDevicesReady) await dispatcher.ensureDevicesReady();
   else await dispatcher?.ensureInitialized?.();
+  // Nothing named and no target resolved: say why, rather than hand the call
+  // to a pool daemon no target prepared (no device selected, no agent).
+  if (!request.device && !request.project) {
+    const targets = sessionTargetsOf(dispatcher);
+    if (targets.length > 0 && targets.every((t) => t.error && !t.device)) {
+      throw new Error(`No device is available to this session: ${targets.map((t) => (t.platform ? `${t.platform}: ${t.error}` : t.error)).join('; ')}`);
+    }
+  }
   const project = request.project
     ? await resolveProject(request.project, dispatcher)
     : undefined;
@@ -99,6 +107,16 @@ export function withGroupNames(err: unknown, requested: string | undefined, disp
   const names = groupNamesOf(dispatcher);
   if (names.length === 0) return err;
   return new Error(`${err.message}. Group names: ${names.join(', ')}`);
+}
+
+/** The session's device targets as its dispatcher reports them (none without one). */
+function sessionTargetsOf(dispatcher?: TestDispatcher): Array<{ platform?: string; device?: string; error?: string }> {
+  if (!dispatcher) return [];
+  try {
+    return dispatcher.getSessionInfo().deviceTargets ?? [];
+  } catch {
+    return [];
+  }
 }
 
 /** Group member names the session's device tools accept, in target order. */

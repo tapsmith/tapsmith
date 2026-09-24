@@ -272,8 +272,74 @@ export function pinnedBucketSignatures(
   bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
 ): Set<string> {
   return new Set(bucketEntries
-    .filter((b) => b.projects.some((p) => pinnedDeviceSerials(p.effectiveConfig).length > 0))
+    .filter((b) => bucketPins(b.projects).length > 0)
     .map((b) => b.signature));
+}
+
+/**
+ * The pins a bucket's devices are provisioned on: its shared group's (the
+ * largest `use.devices` group, which is what every embedder provisions), so
+ * the one-worker cap never fires for a pin nobody honours. An incompatible
+ * set of groups is reported by `sharedDeviceGroup` wherever the bucket is
+ * provisioned; here it counts any project's pin.
+ */
+export function bucketPins(projects: ResolvedProject[]): string[] {
+  try {
+    return pinnedDeviceSerials(sharedDeviceGroup(projects).config);
+  } catch {
+    return [...new Set(projects.flatMap((p) => pinnedDeviceSerials(p.effectiveConfig)))];
+  }
+}
+
+const countLabel = (count: number, singular: string): string => `${count} ${count === 1 ? singular : `${singular}s`}`;
+
+/**
+ * Why `--device` and `--workers` cannot be combined, or `undefined` when they
+ * can. A pinned device hosts one worker, so when the pin leaves fewer workers
+ * usable than `--workers` asks for, the two ask for different runs — both
+ * explicit on the command line, so neither silently wins. In a config that
+ * spans platforms the pin holds one platform's bucket to one worker and the
+ * other bucket may use the rest; that is not a conflict.
+ */
+export function devicePinWorkersConflict(
+  device: string | undefined,
+  workers: number | undefined,
+  /** Workers the allocation can run with the pin applied. */
+  usableWorkers: number,
+): string | undefined {
+  if (!device || workers === undefined || workers <= 1 || workers <= usableWorkers) return undefined;
+  return `--device ${device} pins the run to one device, so it cannot run --workers ${workers} in parallel. `
+    + 'Drop --device to spread the run across devices, or drop --workers to run on that device.';
+}
+
+/**
+ * The note explaining a worker count that differs from the one asked for:
+ * more because every device target needs a worker, fewer because a pinned
+ * device hosts one. `undefined` when there is nothing to explain.
+ */
+export function workerPlanNote(opts: {
+  /** `workers` as the config or `--workers` gave it. */
+  requested: number
+  /** The user set it — in the config file or with `--workers` (`isExplicitWorkers`). */
+  explicit: boolean
+  /** It came from `--workers` on this command line, not the config file. */
+  fromCli: boolean
+  running: number
+  activeBuckets: number
+  /** The pins of the active buckets that were capped to one worker. */
+  pins: string[]
+}): string | undefined {
+  const { requested, explicit, fromCli, running, activeBuckets, pins } = opts;
+  const asked = `${fromCli ? 'requested' : 'config asks for'} ${countLabel(requested, 'worker')}`;
+  if (explicit && running > requested) {
+    return `${asked}; running ${running} because ${countLabel(activeBuckets, 'device target')} `
+      + `${activeBuckets === 1 ? 'needs a worker' : 'need one each'}`;
+  }
+  if (running < requested && pins.length > 0) {
+    return `${asked}; running ${running} because `
+      + `${pins.join(', ')} ${pins.length === 1 ? 'is a pinned device' : 'are pinned devices'} (a pinned device hosts one worker)`;
+  }
+  return undefined;
 }
 
 /**
@@ -621,4 +687,62 @@ function detectCycles(projects: ProjectConfig[]): void {
   for (const p of projects) {
     dfs(p.name, []);
   }
+}
+
+// ─── `--device` platform scoping ───
+
+// Simulator UDID, current physical UDID, pre-XS physical UDID (40 hex).
+const IOS_UDID = /^(?:[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}|[0-9A-F]{8}-[0-9A-F]{16}|[0-9A-F]{40})$/i;
+
+/**
+ * The platform a device serial belongs to. iOS identifiers — simulators and
+ * physical devices alike — always have a UDID's shape; Android serials are
+ * free-form (emulator-5554, a USB serial, host:port for wireless adb), so
+ * anything else is Android, connected right now or not.
+ */
+export function platformOfSerial(serial: string): 'android' | 'ios' {
+  return IOS_UDID.test(serial) ? 'ios' : 'android';
+}
+
+/**
+ * Confine a `--device` pin to the projects of the device's own platform.
+ *
+ * The flag is applied to the root config, so every project inherits it —
+ * including the other platform's, whose bucket then counted as pinned to a
+ * serial it cannot drive. Those projects get a copy of their effective config
+ * without the pin (it may be the root config itself, shared) and a fresh
+ * device signature. A project pinning a device of its own is left alone.
+ */
+export function scopeDevicePinToPlatform(
+  projects: ResolvedProject[],
+  serial: string,
+  platform: 'android' | 'ios',
+): void {
+  for (const p of projects) {
+    if ((p.effectiveConfig.platform ?? 'android') === platform || p.effectiveConfig.device !== serial) continue;
+    p.effectiveConfig = { ...p.effectiveConfig, device: undefined };
+    p.deviceSignature = deviceSignature(p.effectiveConfig);
+  }
+}
+
+/**
+ * Devices more than one active pinned bucket is pinned to, with the projects
+ * pinning them. A pinned device hosts one worker, and the cap is per device:
+ * two buckets for different apps inheriting one `--device` each got a worker
+ * on it, and two agents drove one device at once.
+ */
+export function devicesPinnedByManyBuckets(
+  bucketEntries: Array<{ signature: string; projects: ResolvedProject[] }>,
+  pinnedSignatures: ReadonlySet<string>,
+): Array<{ serial: string; projects: string[] }> {
+  const bucketsBySerial = new Map<string, Array<{ signature: string; projects: ResolvedProject[] }>>();
+  for (const b of bucketEntries) {
+    if (!pinnedSignatures.has(b.signature) || !b.projects.some((p) => p.testFiles.length > 0)) continue;
+    for (const serial of new Set(bucketPins(b.projects))) {
+      bucketsBySerial.set(serial, [...(bucketsBySerial.get(serial) ?? []), b]);
+    }
+  }
+  return [...bucketsBySerial]
+    .filter(([, buckets]) => buckets.length > 1)
+    .map(([serial, buckets]) => ({ serial, projects: buckets.flatMap((b) => b.projects.map((p) => p.name)) }));
 }

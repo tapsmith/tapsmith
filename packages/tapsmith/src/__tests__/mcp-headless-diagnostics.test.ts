@@ -630,6 +630,16 @@ describe('tapsmith_session_info device targets', () => {
     expect(text).not.toContain('(device)');
   });
 
+  // A headless session picks its devices on the first run or device tool, so
+  // reading session info must not pick one — and must say none is chosen yet
+  // rather than print no Device line at all.
+  it('says no device is chosen yet before anything needed one', async () => {
+    const text = await callSessionInfo(makeDispatcher({
+      getSessionInfo: () => ({ timeout: 0, retries: 0, projects: [], deviceTargets: [] }),
+    }));
+    expect(text).toContain('Device: not chosen yet');
+  });
+
   it('keeps the single-device line for a single-platform session', async () => {
     const text = await callSessionInfo(makeDispatcher({
       getSessionInfo: () => ({
@@ -1351,6 +1361,16 @@ describe('noDeviceMessage', () => {
 
   it('leaves that advice out when no platform is in play', () => {
     expect(noDeviceMessage(undefined, 'OLD-UDID', ['SIM-1'])).not.toContain('top level');
+  });
+
+  // A run_tests `device` that is not there is the caller's serial, not the
+  // config's — telling them to edit their config sends them the wrong way.
+  it('names a run_tests device as requested, not as the config\'s', () => {
+    const msg = noDeviceMessage('android', 'emulator-5560x', ['emulator-5554'], [], 'run_tests');
+    expect(msg).toContain('"emulator-5560x"');
+    expect(msg).toContain('emulator-5554');
+    expect(msg).not.toContain('config');
+    expect(noDeviceMessage('android', 'emulator-5560x', [], [], 'run_tests')).not.toContain('config');
   });
 
   it('keeps the start-a-device advice when the config pins nothing', () => {

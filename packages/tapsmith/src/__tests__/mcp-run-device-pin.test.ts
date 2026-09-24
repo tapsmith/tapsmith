@@ -25,7 +25,7 @@ vi.mock('../mcp/connection.js', async (importOriginal) => {
     ...actual,
     ensurePlatformTarget: async (config: TapsmithConfig) => {
       hoisted.resolved.push({ platform: config.platform, device: config.device });
-      if (hoisted.failing.has(config.platform ?? 'default')) throw new Error('No online Android device found');
+      if (hoisted.failing.has(config.platform ?? 'default')) throw new Error('No online Android device found.');
       return {
         address: '127.0.0.1:50100',
         deviceSerial: primaryDevicePin(config) ?? (config.platform === 'ios' ? 'SIM-AUTO' : hoisted.autoPick),
@@ -135,8 +135,8 @@ describe('run_tests `device` in a headless MCP session', () => {
     const error = await d.deviceChoiceError([path.join(root, 'a.test.ts'), path.join(root, 'b.test.ts')], 'emulator-5560');
     expect(error).toMatch(/run on 2 device targets/);
     expect(error).toContain('project');
-    // Neither target was pinned to a serial that can serve only one of them.
-    expect(hoisted.resolved.map((r) => r.device)).toEqual([undefined, undefined]);
+    // Refused before anything was resolved: no target pinned, none auto-picked.
+    expect(hoisted.resolved).toEqual([]);
   });
 
   it('pins only the target of the project the files run under', async () => {
@@ -175,9 +175,264 @@ describe('run_tests `device` in a headless MCP session', () => {
     expect(await d.deviceChoiceError([file], 'emulator-5560')).toContain('emulator-5556');
   });
 
+  // A refused call must leave nothing behind: the pin used to land on the
+  // first project owning the file before the project check refused the call.
+  describe('a call refused for its project pins nothing', () => {
+    const shared = `export default {
+      testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "android", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["a.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`;
+
+    it('when the file runs under two projects and none is named', async () => {
+      writeProject(shared);
+      const d = dispatcher();
+      // validateProjectChoice refuses it by name ("needs a `project`").
+      expect(await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'SIM-1')).toBeNull();
+      expect(hoisted.resolved).toEqual([]);
+    });
+
+    it('when the named project does not exist', async () => {
+      writeProject(shared);
+      const d = dispatcher();
+      expect(await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'SIM-1', 'iso')).toBeNull();
+      expect(hoisted.resolved).toEqual([]);
+    });
+  });
+
+  it('never pins a group member\'s name as a serial when re-resolving a target that found no device', async () => {
+    writeProject(`export default {
+      platform: "android", package: "com.x", testMatch: ["**/*.test.ts"],
+      projects: [{ name: "chat", use: { devices: [{ name: "alice" }, { name: "bob" }] } }],
+    }\n`);
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    hoisted.failing.clear();
+    await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'alice', 'chat');
+    expect(hoisted.resolved.map((r) => r.device)).not.toContain('alice');
+  });
+
+  it('keeps a concurrent call\'s pending pin when an earlier call finishes', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    const internals = d as unknown as {
+      _pendingPin: unknown
+      _resolvePlatformTargets(config: unknown): Promise<void>
+    };
+    const mine = { device: 'emulator-5560', files: [], project: undefined };
+    const resolve = internals._resolvePlatformTargets.bind(d);
+    // Another call replaces the pending pin while the first is resolving.
+    internals._resolvePlatformTargets = async (config) => {
+      internals._pendingPin = mine;
+      await resolve(config);
+    };
+    await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5560');
+    expect(internals._pendingPin).toBe(mine);
+  });
+
+  it('still pins after the test list has been read', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    await d.ensureInitialized();
+    expect(hoisted.resolved).toEqual([]);
+    expect(await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5560')).toBeNull();
+    expect(hoisted.resolved).toEqual([{ platform: 'android', device: 'emulator-5560' }]);
+  });
+
+  it('refuses, and drops the pin, when the named device cannot be set up', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    const error = await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5556x');
+    expect(error).toMatch(/Could not set up emulator-5556x/);
+    expect(error).toContain('No online Android device found');
+    // The embedded reason ends in a period of its own.
+    expect(error).not.toContain('..');
+    // A later run without `device` is free to find one.
+    hoisted.failing.clear();
+    const internals = d as unknown as { _resolvePlatformTargets(config: unknown): Promise<void>; _config: unknown };
+    await internals._resolvePlatformTargets(internals._config);
+    expect(hoisted.resolved.at(-1)).toEqual({ platform: 'android', device: undefined });
+  });
+
+  it('never pins the primary onto a device the config pins to another member', async () => {
+    writeProject(`export default {
+      platform: "android", package: "com.x", testMatch: ["**/*.test.ts"],
+      projects: [{ name: "chat", use: { devices: [{ name: "alice" }, { name: "bob", device: "emulator-5558" }] } }],
+    }\n`);
+    const d = dispatcher();
+    await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5558');
+    expect(hoisted.resolved.map((r) => r.device)).not.toContain('emulator-5558');
+  });
+
+  // Refusing (or ignoring) a first call must not resolve targets: the auto-pick
+  // spent the session's one chance to choose, so following the refusal's own
+  // advice was refused next.
+  it('resolves nothing for a refused first call, so the corrected retry still pins', async () => {
+    writeProject(`export default {
+      testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "android", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["a.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`);
+    const d = dispatcher();
+    const file = path.join(root, 'a.test.ts');
+    // Each refused (by validateProjectChoice) or ignored without resolving anything.
+    expect(await d.deviceChoiceError([file], 'SIM-1')).toBeNull();
+    expect(await d.deviceChoiceError([file], 'SIM-1', 'iso')).toBeNull();
+    expect(await d.deviceChoiceError([path.join(root, 'nope.test.ts')], 'SIM-1')).toBeNull();
+    expect(hoisted.resolved).toEqual([]);
+    expect(await d.deviceChoiceError([file], 'SIM-1', 'ios')).toBeNull();
+    expect(hoisted.resolved).toContainEqual({ platform: 'ios', device: 'SIM-1' });
+  });
+
+  it('tries a failing device once per call', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5556x');
+    expect(hoisted.resolved.filter((r) => r.device === 'emulator-5556x')).toHaveLength(1);
+  });
+
+  it('keeps a confirmed device when the target has to be resolved again', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    expect(await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5556')).toBeNull();
+    const internals = d as unknown as { _resolvePlatformTargets(config: unknown): Promise<void>; _config: unknown };
+    await internals._resolvePlatformTargets(internals._config);
+    expect(hoisted.resolved.at(-1)).toEqual({ platform: 'android', device: 'emulator-5556' });
+  });
+
+  // Every target resolves on the first device need. An unpinned one used to
+  // resolve first and could take the very device another target was pinned
+  // to; resolving the pinned one first lets the other share its daemon.
+  it('resolves a pinned target before the unpinned ones', async () => {
+    writeProject(`export default {
+      platform: "android", package: "com.x", testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "solo", testMatch: ["a.test.ts"] },
+        { name: "chat", testMatch: ["b.test.ts"], use: { devices: [{ name: "alice" }, { name: "bob" }] } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    const d = dispatcher();
+    expect(await d.deviceChoiceError([path.join(root, 'b.test.ts')], 'emulator-5560', 'chat')).toBeNull();
+    expect(hoisted.resolved).toEqual([
+      { platform: 'android', device: 'emulator-5560' },
+      { platform: 'android', device: undefined },
+    ]);
+  });
+
+  // Resolving devices takes seconds on a first run; a second run arriving in
+  // that window used to pass the "already running" guard too.
+  it('refuses a second run while the first is still resolving devices', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    await d.ensureInitialized();
+    const internals = d as unknown as { _resolvePlatformTargets(config: unknown): Promise<void>; _runFileInChild: unknown };
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const resolve = internals._resolvePlatformTargets.bind(d);
+    internals._resolvePlatformTargets = async (config) => { await gate; await resolve(config); };
+    internals._runFileInChild = async () => ({ results: [], suite: { name: 'a', tests: [], suites: [], durationMs: 0 } });
+    const first = d.runFiles([path.join(root, 'a.test.ts')]);
+    await new Promise((r) => setImmediate(r));
+    expect(d.isRunning()).toBe(true);
+    release();
+    await first;
+  });
+
+  // The CLI keeps a root `device` on the projects of its own platform; the
+  // headless session resolves projects itself and must do the same.
+  it('does not pin the other platform\'s target to a root device', async () => {
+    writeProject(`export default {
+      device: "emulator-5554", testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "android", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["b.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    expect(hoisted.resolved).toContainEqual({ platform: 'android', device: 'emulator-5554' });
+    expect(hoisted.resolved).toContainEqual({ platform: 'ios', device: undefined });
+  });
+
+  // Group names are unique per group, not per session; the files already say
+  // which group they run on, so a name is resolved within that one.
+  it('resolves a member name within the files\' own group', async () => {
+    writeProject(`export default {
+      platform: "android", package: "com.x", testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "chatA", testMatch: ["a.test.ts"], use: { devices: [{ name: "alice" }, { name: "bob" }] } },
+        { name: "chatB", testMatch: ["b.test.ts"], use: { devices: [{ name: "alice" }, { name: "bob" }], package: "com.y" } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    // Each group on devices of its own, as the pool would resolve them.
+    const internals = d as unknown as { _targets: Map<string, { address: string; deviceSerial: string; members?: unknown[] }> };
+    const keys = [...internals._targets.keys()];
+    internals._targets.set(keys[0], { address: 'a', deviceSerial: 'emulator-5554', members: [{ name: 'bob', address: 'b', deviceSerial: 'emulator-5556' }] });
+    internals._targets.set(keys[1], { address: 'c', deviceSerial: 'emulator-5558', members: [{ name: 'bob', address: 'd', deviceSerial: 'emulator-5560' }] });
+    expect(await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'alice')).toBeNull();
+  });
+
+  // Two projects on one target: the file maps to one target key, but the call
+  // is still refused for its project, and it must not resolve anything first.
+  it('resolves nothing for a file under two projects of one target when no project is named', async () => {
+    writeProject(`export default {
+      platform: "android", package: "com.x", testMatch: ["**/*.test.ts"],
+      projects: [{ name: "smoke", testMatch: ["a.test.ts"] }, { name: "full", testMatch: ["a.test.ts"] }],
+    }\n`);
+    const d = dispatcher();
+    expect(await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5560')).toBeNull();
+    expect(hoisted.resolved).toEqual([]);
+  });
+
+  // A config pin wins over `device` — also while its target has no device yet;
+  // returning early there let the run go to the config's device silently.
+  it('refuses a device other than the config\'s pin while that target has no device', async () => {
+    writeProject('export default { platform: "android", device: "emulator-5554", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    const error = await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5556');
+    expect(error).toContain('The config pins emulator-5554');
+    expect(error).not.toContain('..');
+  });
+
+  it('treats the project a config without projects gets as unknown, resolving nothing', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    expect(await d.deviceChoiceError([path.join(root, 'a.test.ts')], 'emulator-5560', 'default')).toBeNull();
+    expect(hoisted.resolved).toEqual([]);
+  });
+
   it('leaves files that match nothing to the run, which reports them', async () => {
     writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
     const d = dispatcher();
     expect(await d.deviceChoiceError([path.join(root, 'missing.test.ts')], 'emulator-5560')).toBeNull();
+  });
+});
+
+// The pool's first-time discovery starts its own daemon. It used to point it
+// at the "best" device and start an agent there before any target existed —
+// another session's device in the report, and after a mere list_devices.
+// With a config, the session's targets choose (prepareTarget sets the device
+// and starts the agent), so discovery chooses nothing.
+describe('discovery daemon device selection', () => {
+  it('selects nothing in a headless session with a config', async () => {
+    const { discoverySelectsDevice } = await import('../mcp/connection.js');
+    expect(discoverySelectsDevice({ uiMode: false, hasConfig: true })).toBe(false);
+  });
+
+  it('still selects one where nothing else would: no config, or a UI session\'s endpoint', async () => {
+    const { discoverySelectsDevice } = await import('../mcp/connection.js');
+    expect(discoverySelectsDevice({ uiMode: false, hasConfig: false })).toBe(true);
+    expect(discoverySelectsDevice({ uiMode: true, hasConfig: true })).toBe(true);
   });
 });
