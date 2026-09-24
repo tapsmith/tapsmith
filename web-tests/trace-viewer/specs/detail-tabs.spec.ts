@@ -4,7 +4,7 @@
 import { test, expect } from "../fixtures.js"
 import { actionEvent, assertionEvent, consoleEvent } from "../trace-builder.js"
 
-const SOURCE_PATH = "/repo/e2e/tests/gestures.test.ts"
+const SOURCE_PATH = "e2e/tests/gestures.test.ts"
 const SOURCE = `import { describe, expect, test } from "../fixtures.js"
 
 describe("Gestures screen", () => {

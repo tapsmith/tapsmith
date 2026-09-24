@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Tapsmith trace archive — format version 2",
+  "description": "A parsed Tapsmith trace archive (.zip). The root describes what a reader gets after unzipping: `members` is the archive's member names, `metadata` is metadata.json, `events` is trace.json (NDJSON, one event per line), `network` is network.json (NDJSON), and `sources` is sources.json. Readers must ignore fields, event types and members they do not recognise; only a change an existing reader could misread bumps `metadata.version`. Cross-references (a body path naming a member, a stack frame naming a sources key) are not expressible here — see docs/trace-format.md.",
+  "type": "object",
+  "required": ["members", "metadata", "events"],
+  "properties": {
+    "members": {
+      "description": "Every member name in the zip.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/memberPath" }
+    },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "events": {
+      "description": "trace.json, one object per line, in recording order.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/event" }
+    },
+    "network": {
+      "description": "network.json, one entry per line. Absent when nothing was captured.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/networkEntry" }
+    },
+    "sources": {
+      "description": "sources.json: source file contents keyed by the path stack frames carry.",
+      "type": "object",
+      "propertyNames": { "$ref": "#/$defs/projectPath" },
+      "additionalProperties": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "projectPath": {
+      "description": "A local file path as recorded in the archive: POSIX separators, relative to the project's rootDir. May climb with `..` for a file outside rootDir; never absolute.",
+      "type": "string",
+      "pattern": "^(?![A-Za-z]:)(?!/)[^\\\\]+$"
+    },
+    "memberPath": {
+      "description": "A path inside the archive: POSIX, relative to the archive root, with no `..` segment.",
+      "type": "string",
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!(.*/)?\\.\\.(/|$))[^\\\\]+$"
+    },
+    "rect": {
+      "type": "object",
+      "required": ["left", "top", "right", "bottom"],
+      "properties": {
+        "left": { "type": "number" },
+        "top": { "type": "number" },
+        "right": { "type": "number" },
+        "bottom": { "type": "number" }
+      }
+    },
+    "point": {
+      "type": "object",
+      "required": ["x", "y"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" }
+      }
+    },
+    "sourceLocation": {
+      "type": "object",
+      "required": ["file", "line"],
+      "properties": {
+        "file": { "$ref": "#/$defs/projectPath" },
+        "line": { "type": "integer", "minimum": 1 },
+        "column": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "stack": {
+      "description": "User-code call stack, top frame first.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/sourceLocation" }
+    },
+    "deviceInfo": {
+      "type": "object",
+      "required": ["serial", "isEmulator"],
+      "properties": {
+        "serial": { "type": "string" },
+        "name": { "description": "Device group name; matches events' `deviceId`.", "type": "string" },
+        "platform": { "enum": ["android", "ios"] },
+        "model": { "type": "string" },
+        "osVersion": { "type": "string" },
+        "screenResolution": {
+          "type": "object",
+          "required": ["width", "height"],
+          "properties": {
+            "width": { "type": "number" },
+            "height": { "type": "number" }
+          }
+        },
+        "isEmulator": { "type": "boolean" },
+        "packageName": { "type": "string" },
+        "devicePixelRatio": { "type": "number" }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "required": [
+        "version", "tapsmithVersion", "testFile", "testName", "testStatus", "testDuration",
+        "startTime", "endTime", "device", "traceConfig", "actionCount", "screenshotCount"
+      ],
+      "properties": {
+        "version": { "description": "Archive format version.", "const": 2 },
+        "tapsmithVersion": { "type": "string" },
+        "testFile": {
+          "description": "Test file, as a projectPath. Empty for a manual `device.tracing` trace recorded outside the test runner.",
+          "anyOf": [{ "const": "" }, { "$ref": "#/$defs/projectPath" }]
+        },
+        "testName": { "type": "string" },
+        "testStatus": { "enum": ["passed", "failed", "skipped", "running", "idle"] },
+        "testDuration": { "type": "number", "minimum": 0 },
+        "startTime": { "description": "ms since the Unix epoch.", "type": "number" },
+        "endTime": { "description": "ms since the Unix epoch.", "type": "number" },
+        "device": { "$ref": "#/$defs/deviceInfo" },
+        "devices": {
+          "description": "Every device of a multi-device test, primary first. Absent for one device.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/deviceInfo" }
+        },
+        "traceConfig": {
+          "type": "object",
+          "required": ["screenshots", "snapshots", "sources", "network", "deviceLogs", "daemonLogs"],
+          "properties": {
+            "screenshots": { "type": "boolean" },
+            "snapshots": { "type": "boolean" },
+            "sources": { "type": "boolean" },
+            "network": { "type": "boolean" },
+            "deviceLogs": { "type": "boolean" },
+            "daemonLogs": { "type": "boolean" }
+          }
+        },
+        "actionCount": {
+          "description": "Size of the action-index space (one past the highest index used).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "screenshotCount": { "type": "integer", "minimum": 0 },
+        "error": { "type": "string" },
+        "project": { "type": "string" },
+        "appState": { "$ref": "#/$defs/projectPath" },
+        "appReset": { "type": "string" },
+        "appResetScope": { "type": "string" }
+      }
+    },
+    "event": {
+      "description": "One trace.json line. The base fields are common to every type; the per-type shape applies when `type` is known. An unknown `type` is valid and should be skipped by readers.",
+      "type": "object",
+      "required": ["type", "actionIndex", "timestamp"],
+      "properties": {
+        "type": { "type": "string" },
+        "actionIndex": { "type": "integer", "minimum": 0 },
+        "timestamp": { "description": "ms since the Unix epoch.", "type": "number" },
+        "deviceId": { "description": "Device group name (multi-device tests).", "type": "string" }
+      },
+      "allOf": [
+        {
+          "if": { "type": "object", "required": ["type"], "properties": { "type": { "const": "action" } } },
+          "then": { "$ref": "#/$defs/actionEvent" }
+        },
+        {
+          "if": { "type": "object", "required": ["type"], "properties": { "type": { "const": "assertion" } } },
+          "then": { "$ref": "#/$defs/assertionEvent" }
+        },
+        {
+          "if": { "type": "object", "required": ["type"], "properties": { "type": { "enum": ["group-start", "group-end"] } } },
+          "then": { "$ref": "#/$defs/groupEvent" }
+        },
+        {
+          "if": { "type": "object", "required": ["type"], "properties": { "type": { "const": "console" } } },
+          "then": { "$ref": "#/$defs/consoleEvent" }
+        },
+        {
+          "if": { "type": "object", "required": ["type"], "properties": { "type": { "const": "attachment" } } },
+          "then": { "$ref": "#/$defs/attachmentEvent" }
+        },
+        {
+          "if": { "type": "object", "required": ["type"], "properties": { "type": { "const": "error" } } },
+          "then": { "$ref": "#/$defs/errorEvent" }
+        }
+      ]
+    },
+    "timing": {
+      "type": "object",
+      "properties": {
+        "duration": { "type": "number", "minimum": 0 },
+        "wallDuration": { "type": "number", "minimum": 0 },
+        "gapBefore": { "type": "number", "minimum": 0 },
+        "trailingTime": { "type": "number", "minimum": 0 },
+        "startTime": { "type": "number" },
+        "endTime": { "type": "number" }
+      }
+    },
+    "actionEvent": {
+      "description": "A device action. `category` is an open set (known: tap, type, swipe, scroll, press-key, navigation, device, assertion, screenshot, api, network, webview, other).",
+      "type": "object",
+      "$ref": "#/$defs/timing",
+      "required": [
+        "category", "action", "duration", "success",
+        "hasScreenshotBefore", "hasScreenshotAfter", "hasHierarchyBefore", "hasHierarchyAfter"
+      ],
+      "properties": {
+        "category": { "type": "string" },
+        "action": { "type": "string" },
+        "selector": { "description": "Serialized selector JSON.", "type": "string" },
+        "inputValue": { "type": "string" },
+        "success": { "type": "boolean" },
+        "error": { "type": "string" },
+        "errorStack": { "description": "Display text; may name local paths.", "type": "string" },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "point": { "$ref": "#/$defs/point" },
+        "endPoint": { "$ref": "#/$defs/point" },
+        "hasScreenshotBefore": { "type": "boolean" },
+        "hasScreenshotAfter": { "type": "boolean" },
+        "hasHierarchyBefore": { "type": "boolean" },
+        "hasHierarchyAfter": { "type": "boolean" },
+        "sourceLocation": { "$ref": "#/$defs/sourceLocation" },
+        "stack": { "$ref": "#/$defs/stack" },
+        "waitTime": { "type": "number", "minimum": 0 },
+        "retryCount": { "type": "integer", "minimum": 0 },
+        "log": { "type": "array", "items": { "type": "string" } },
+        "detail": { "type": "string" },
+        "origin": { "description": "Open set (known: inline, prepared, skipped).", "type": "string" }
+      }
+    },
+    "assertionEvent": {
+      "type": "object",
+      "$ref": "#/$defs/timing",
+      "required": ["assertion", "passed", "soft", "negated", "duration", "attempts"],
+      "properties": {
+        "assertion": { "type": "string" },
+        "selector": { "type": "string" },
+        "expected": { "type": "string" },
+        "actual": { "type": "string" },
+        "passed": { "type": "boolean" },
+        "soft": { "type": "boolean" },
+        "negated": { "type": "boolean" },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "error": { "type": "string" },
+        "bounds": { "$ref": "#/$defs/rect" },
+        "sourceLocation": { "$ref": "#/$defs/sourceLocation" },
+        "stack": { "$ref": "#/$defs/stack" },
+        "hasScreenshotBefore": { "type": "boolean" },
+        "hasScreenshotAfter": { "type": "boolean" },
+        "hasHierarchyBefore": { "type": "boolean" },
+        "hasHierarchyAfter": { "type": "boolean" }
+      }
+    },
+    "groupEvent": {
+      "type": "object",
+      "required": ["name"],
+      "properties": { "name": { "type": "string" } }
+    },
+    "consoleEvent": {
+      "type": "object",
+      "required": ["level", "message", "source"],
+      "properties": {
+        "level": { "enum": ["log", "warn", "error", "info", "debug"] },
+        "message": { "type": "string" },
+        "source": { "enum": ["test", "device", "daemon"] }
+      }
+    },
+    "attachmentEvent": {
+      "description": "Reserved: not emitted yet. The attachment's bytes live at `path`.",
+      "type": "object",
+      "required": ["name", "contentType", "path", "size"],
+      "properties": {
+        "name": { "type": "string" },
+        "contentType": { "type": "string" },
+        "path": { "$ref": "#/$defs/memberPath" },
+        "size": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "errorEvent": {
+      "type": "object",
+      "required": ["message"],
+      "properties": {
+        "message": { "type": "string" },
+        "stack": { "description": "Display text; may name local paths.", "type": "string" }
+      }
+    },
+    "networkEntry": {
+      "description": "One captured request. `routeAction` is an open set (known: mocked, aborted, continued, fetched, passthrough). Bodies are archive members named by the *BodyPath fields, never inlined.",
+      "type": "object",
+      "required": [
+        "index", "actionIndex", "startTime", "endTime", "method", "url", "status", "contentType",
+        "requestSize", "responseSize", "duration", "requestHeaders", "responseHeaders"
+      ],
+      "properties": {
+        "index": { "type": "integer", "minimum": 0 },
+        "deviceId": { "type": "string" },
+        "actionIndex": { "type": "integer", "minimum": 0 },
+        "startTime": { "type": "number" },
+        "observedStartTime": { "type": "number" },
+        "endTime": { "type": "number" },
+        "method": { "type": "string" },
+        "url": { "type": "string" },
+        "status": { "type": "integer" },
+        "contentType": { "type": "string" },
+        "requestSize": { "type": "integer", "minimum": 0 },
+        "responseSize": { "type": "integer", "minimum": 0 },
+        "duration": { "type": "number", "minimum": 0 },
+        "inFlight": { "type": "boolean" },
+        "requestBodyPath": { "$ref": "#/$defs/memberPath" },
+        "responseBodyPath": { "$ref": "#/$defs/memberPath" },
+        "requestHeaders": { "type": "object", "additionalProperties": { "type": "string" } },
+        "responseHeaders": { "type": "object", "additionalProperties": { "type": "string" } },
+        "routeAction": { "type": "string" },
+        "requestBody": false,
+        "responseBody": false
+      }
+    }
+  }
+}

@@ -10,10 +10,23 @@
 
 import * as fs from "node:fs"
 import { unzipSync } from "fflate"
+import { Ajv2020 } from "ajv/dist/2020.js"
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 /** Smallest plausible real device screen edge, in pixels. */
 const MIN_SCREEN_EDGE = 200
+
+/**
+ * The published format contract (PILOT-331). Read from the monorepo rather
+ * than the installed package so `--verify-only` against a downloaded CI
+ * artifact checks the schema of the checkout it runs in.
+ */
+const SCHEMA = JSON.parse(
+  fs.readFileSync(new URL("../../packages/tapsmith/schema/trace-format.schema.json", import.meta.url), "utf8"),
+)
+/** The format version the schema describes, i.e. the one the packager writes. */
+const FORMAT_VERSION = SCHEMA.$defs.metadata.properties.version.const
+const validateArchive = new Ajv2020({ allErrors: true, strict: true }).compile(SCHEMA)
 
 // ─── Archive reading ───
 
@@ -26,12 +39,14 @@ export function readArchive(zipPath) {
   const events = ndjson("trace.json")
   return {
     files,
+    members: Object.keys(files).sort(),
     metadata: files["metadata.json"] ? JSON.parse(text("metadata.json")) : {},
     events,
     // Actions and assertions both occupy a slot in the action-index space and
     // can own captures.
     steps: events.filter((e) => e.type === "action" || e.type === "assertion"),
     network: ndjson("network.json"),
+    sources: files["sources.json"] ? JSON.parse(text("sources.json")) : {},
   }
 }
 
@@ -109,7 +124,7 @@ class Report {
 
 function checkMetadata(archive, r) {
   const m = archive.metadata
-  r.check(m.version === 1, `metadata.version should be 1, got ${m.version}`)
+  r.check(m.version === FORMAT_VERSION, `metadata.version should be ${FORMAT_VERSION}, got ${m.version}`)
   r.check(m.testStatus === "passed", `metadata.testStatus should be "passed", got "${m.testStatus}"`)
   r.check(!!m.testName, "metadata.testName is empty")
   r.check(!!m.tapsmithVersion, "metadata.tapsmithVersion is empty")
@@ -557,6 +572,51 @@ function checkNetwork(archive, r, expectedHost) {
 }
 
 /**
+ * The archive against the published format contract: the JSON Schema a
+ * server-side indexer would validate an upload with, plus the
+ * cross-references a schema cannot express.
+ */
+function checkFormat(archive, r) {
+  const { members, metadata, events, network, sources } = archive
+  const schemaValid = validateArchive({ members, metadata, events, network, sources })
+  if (!schemaValid) {
+    // One failure per violation, each naming where it is — a schema error
+    // without its instance path is unactionable in a CI log.
+    for (const e of validateArchive.errors ?? []) {
+      // `if`/`then` wrappers repeat the real error one level up; skip them.
+      if (e.keyword === "if") continue
+      const params = e.params?.missingProperty ? ` ('${e.params.missingProperty}')` : ""
+      r.check(false, `schema: ${e.instancePath || "/"} ${e.message}${params}`)
+    }
+  }
+
+  // Structured paths name sources.json keys, so the Source tab — and an
+  // indexer — can resolve every frame from the archive alone.
+  if (!metadata.traceConfig?.sources) return
+  const framed = archive.steps.filter((s) => Array.isArray(s.stack) && s.stack.length > 0)
+  if (!r.check(framed.length > 0, "no step recorded a call stack — source attribution is not running")) return
+  let resolved = 0
+  for (const step of framed) {
+    for (const frame of step.stack) {
+      if (
+        r.check(
+          typeof frame.file === "string" && frame.file in sources,
+          `step ${step.actionIndex} has a stack frame in ${frame.file}, which sources.json does not hold`,
+        )
+      ) {
+        resolved++
+      }
+    }
+  }
+  r.check(
+    !!metadata.testFile && metadata.testFile in sources,
+    `metadata.testFile (${metadata.testFile}) is not in sources.json`,
+  )
+  const schemaState = schemaValid ? "schema-valid" : "schema violations (see failures)"
+  r.note(`format v${metadata.version}: ${schemaState}, ${resolved} stack frames resolved to sources.json`)
+}
+
+/**
  * Run every content check against a parsed archive.
  *
  * @param archive Parsed by {@link readArchive}.
@@ -569,6 +629,7 @@ function checkNetwork(archive, r, expectedHost) {
 export function checkArchive(archive, { expectedHost = null } = {}) {
   const r = new Report()
   checkMetadata(archive, r)
+  checkFormat(archive, r)
   checkEventStream(archive, r)
   checkScreenshots(archive, r)
   checkHierarchies(archive, r)

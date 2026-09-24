@@ -2121,6 +2121,8 @@ await device.tracing.stop();
 
 Returns the path to the created zip file, or `undefined` if no path was specified.
 
+The archive follows the versioned [trace archive format](trace-format.md). Local paths in it are relative to the project's `rootDir`, or to the working directory when `device.tracing` is used outside the test runner. The archive can be validated against the JSON Schema the package exports as `tapsmith/trace-format.schema.json`.
+
 ### `device.tracing.group(name)` / `device.tracing.groupEnd()`
 
 Group actions in the trace viewer for better organization.

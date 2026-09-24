@@ -16,6 +16,7 @@ import type {
   NetworkEntry,
 } from "../trace/types.js";
 import { sortEventsByStartTime } from "../trace/sort-events.js";
+import { traceFormatProblem } from "../trace/trace-format.js";
 import { ActionsPanel } from "./components/ActionsPanel.js";
 import { ScreenshotPanel } from "./components/ScreenshotPanel.js";
 import { DetailTabs } from "./components/DetailTabs.js";
@@ -80,6 +81,9 @@ function parseTraceZip(buf: Uint8Array): TraceData {
   } catch (e) {
     throw new Error(`Failed to parse metadata.json: ${e instanceof Error ? e.message : String(e)}`);
   }
+  // Before any field is read: a newer format may have moved or re-meant them.
+  const formatProblem = traceFormatProblem(metadata);
+  if (formatProblem) throw new Error(formatProblem);
 
   const traceRaw = files["trace.json"];
   const rawEvents: AnyTraceEvent[] = traceRaw

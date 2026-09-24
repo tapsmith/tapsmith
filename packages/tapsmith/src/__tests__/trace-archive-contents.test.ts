@@ -775,6 +775,156 @@ describe('generated trace archive', () => {
     expect(archive.metadata.traceConfig).toMatchObject({ network: true });
   });
 
+  it('writes a manual device.tracing archive relative to config.rootDir, not the working directory', async () => {
+    // config.rootDir differs from process.cwd() whenever the config pins
+    // rootDir or an MCP server roots at its config file. The manual trace
+    // must spell the same file the way the runner's own trace does.
+    const helper = path.join(tempRoot, 'e2e', 'helper.ts');
+    fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(helper, 'helper source');
+    const manualPath = path.join(tempRoot, 'manual.zip');
+    expect(path.relative(process.cwd(), tempRoot)).not.toBe('');
+
+    const log: CaptureLog = { screenshots: [], hierarchies: [] };
+    const device = new Device(makeCapturingClient(log), { package: 'com.example.app' });
+
+    pushContext();
+    tapsmithTest('manually traced', async () => {
+      await device.tracing.start({ screenshots: false, snapshots: false });
+      // Stack frames from this SDK-internal test file are filtered, so record
+      // one the way a user-code frame arrives: absolute, under rootDir.
+      device.tracing._currentCollector!.addActionEvent({
+        category: 'tap', action: 'tap', duration: 1, success: true,
+        hasScreenshotBefore: false, hasScreenshotAfter: false,
+        hasHierarchyBefore: false, hasHierarchyAfter: false,
+        stack: [{ file: helper, line: 1 }],
+      });
+      await device.tracing.stop({ path: manualPath });
+    });
+    const ctx = popContext();
+
+    const result = await runSuiteContext(ctx, '', [], [], makeOpts(device, { trace: 'off' }));
+    expect(result.tests[0].error?.message).toBeUndefined();
+
+    const archive = readArchive(manualPath);
+    const action = archive.actions[0];
+    expect(action.stack?.[0].file).toBe('e2e/helper.ts');
+    const sources = JSON.parse(new TextDecoder().decode(archive.files['sources.json'])) as Record<string, string>;
+    expect(sources).toEqual({ 'e2e/helper.ts': 'helper source' });
+  });
+
+  it('names the test file in a manual trace and spells its symlinked directory lexically', async () => {
+    // rootDir/e2e links into another tree. The runner's own trace spells the
+    // helper `e2e/screens/…`; a manual trace of the same test must too, which
+    // needs the test file as the mapper's seed.
+    const elsewhere = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-manual-linked-')));
+    try {
+      fs.mkdirSync(path.join(elsewhere, 'screens'));
+      fs.writeFileSync(path.join(elsewhere, 'x.test.ts'), 'the test');
+      fs.writeFileSync(path.join(elsewhere, 'screens', 'login.ts'), 'the screen');
+      fs.symlinkSync(elsewhere, path.join(tempRoot, 'e2e'), 'dir');
+      const testFile = path.join(tempRoot, 'e2e', 'x.test.ts');
+      const manualPath = path.join(tempRoot, 'manual-linked.zip');
+
+      const log: CaptureLog = { screenshots: [], hierarchies: [] };
+      const device = new Device(makeCapturingClient(log), { package: 'com.example.app' });
+
+      pushContext();
+      tapsmithTest('manually traced through a link', async () => {
+        await device.tracing.start({ screenshots: false, snapshots: false });
+        device.tracing._currentCollector!.addActionEvent({
+          category: 'tap', action: 'tap', duration: 1, success: true,
+          hasScreenshotBefore: false, hasScreenshotAfter: false,
+          hasHierarchyBefore: false, hasHierarchyAfter: false,
+          // Realpath'd, the way the ESM loader reports modules.
+          stack: [{ file: path.join(elsewhere, 'screens', 'login.ts'), line: 1 }],
+        });
+        await device.tracing.stop({ path: manualPath });
+      });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(device, { trace: 'off' }, { testFilePath: testFile }));
+      expect(result.tests[0].error?.message).toBeUndefined();
+
+      const archive = readArchive(manualPath);
+      expect(archive.metadata.testFile).toBe('e2e/x.test.ts');
+      expect(archive.actions[0].stack?.[0].file).toBe('e2e/screens/login.ts');
+      // The named test file is snapshotted even though no frame reached it,
+      // as in the runner's own traces.
+      const sources = JSON.parse(new TextDecoder().decode(archive.files['sources.json'])) as Record<string, string>;
+      expect(sources['e2e/x.test.ts']).toBe('the test');
+    } finally {
+      fs.rmSync(elsewhere, { recursive: true, force: true });
+    }
+  });
+
+  // The two call sites the per-test packaging tests don't reach. Both are
+  // threaded config.rootDir by a required parameter, but a wrong value would
+  // still compile — assert what lands in the archive.
+  const userFrameAction = (file: string) => ({
+    category: 'tap' as const, action: 'tap', duration: 1, success: true,
+    hasScreenshotBefore: false, hasScreenshotAfter: false,
+    hasHierarchyBefore: false, hasHierarchyAfter: false,
+    stack: [{ file, line: 1 }],
+  });
+  const traceOn = { mode: 'on' as const, screenshots: false, snapshots: false, sources: true, network: false, deviceLogs: false };
+
+  it('writes the beforeAll-failure trace relative to config.rootDir', async () => {
+    const testFile = path.join(tempRoot, 'e2e', 'setup.test.ts');
+    const helper = path.join(tempRoot, 'e2e', 'screens', 'setup.ts');
+    fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(testFile, 'the test');
+    fs.writeFileSync(helper, 'the setup helper');
+
+    const log: CaptureLog = { screenshots: [], hierarchies: [] };
+    const device = new Device(makeCapturingClient(log), { package: 'com.example.app' });
+
+    pushContext();
+    tapsmithTest.beforeAll(async () => {
+      getActiveTraceCollector()!.addActionEvent(userFrameAction(helper));
+      throw new Error('setup failed');
+    });
+    tapsmithTest('never runs', async () => {});
+    const ctx = popContext();
+
+    const result = await runSuiteContext(ctx, '', [], [], makeOpts(device, { trace: traceOn }, { testFilePath: testFile }));
+    expect(result.tests[0].status).toBe('failed');
+    expect(result.tests[0].tracePath).toBeTruthy();
+
+    const archive = readArchive(result.tests[0].tracePath!);
+    expect(archive.metadata.testFile).toBe('e2e/setup.test.ts');
+    expect(archive.actions[0].stack?.[0].file).toBe('e2e/screens/setup.ts');
+  });
+
+  it('writes the frames an afterAll hook appends relative to config.rootDir, with their sources', async () => {
+    const testFile = path.join(tempRoot, 'e2e', 'teardown.test.ts');
+    const helper = path.join(tempRoot, 'e2e', 'screens', 'logout.ts');
+    fs.mkdirSync(path.dirname(helper), { recursive: true });
+    fs.writeFileSync(testFile, 'the test');
+    fs.writeFileSync(helper, 'the logout helper');
+
+    const log: CaptureLog = { screenshots: [], hierarchies: [] };
+    const device = new Device(makeCapturingClient(log), { package: 'com.example.app' });
+
+    pushContext();
+    tapsmithTest('the last test', async () => {
+      await device.tapXY(1, 2);
+    });
+    tapsmithTest.afterAll(async () => {
+      getActiveTraceCollector()!.addActionEvent(userFrameAction(helper));
+    });
+    const ctx = popContext();
+
+    const result = await runSuiteContext(ctx, '', [], [], makeOpts(device, { trace: traceOn }, { testFilePath: testFile }));
+    expect(result.tests[0].status).toBe('passed');
+
+    const archive = readArchive(result.tests[0].tracePath!);
+    const appended = archive.actions.at(-1)!;
+    expect(appended.stack?.[0].file).toBe('e2e/screens/logout.ts');
+    const sources = JSON.parse(new TextDecoder().decode(archive.files['sources.json'])) as Record<string, string>;
+    expect(sources['e2e/screens/logout.ts']).toBe('the logout helper');
+  });
+
   it('snapshots the test source alongside the events that reference it', async () => {
     const testFile = path.join(tempRoot, 'source-under-test.ts');
     fs.writeFileSync(testFile, 'export const marker = "traced source";\n');
@@ -794,8 +944,9 @@ describe('generated trace archive', () => {
 
     const archive = readArchive(result.tests[0].tracePath!);
     const sources = JSON.parse(new TextDecoder().decode(archive.files['sources.json'])) as Record<string, string>;
-    // sources.json is keyed by forward-slash absolute path.
-    expect(sources[testFile.replace(/\\/g, '/')]).toContain('traced source');
-    expect(archive.metadata.testFile).toBe(testFile);
+    // Keyed and named relative to config.rootDir, so the archive does not
+    // record where on the recording machine the project lived (PILOT-331).
+    expect(sources['source-under-test.ts']).toContain('traced source');
+    expect(archive.metadata.testFile).toBe('source-under-test.ts');
   });
 });

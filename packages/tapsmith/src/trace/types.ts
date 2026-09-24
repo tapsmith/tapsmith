@@ -3,16 +3,19 @@
  *
  * Defines the schema for trace archives produced by the Tapsmith test runner.
  * A trace archive is a .zip file containing:
- *   - trace.json     — NDJSON event log
- *   - metadata.json  — device/test/version info
+ *   - metadata.json  — format version, device/test info
+ *   - trace.json     — NDJSON event log (actions, assertions, groups, console
+ *                      and device/daemon logs, errors)
  *   - screenshots/   — PNGs keyed by action index
  *   - hierarchy/     — View hierarchy XML snapshots
- *   - logcat/        — Logcat segments per action
- *   - console/       — Test-code console output per action
- *   - sources/       — Test source files (optional)
- *   - attachments/   — User-added attachments
- *   - network.json   — NDJSON network request log
- *   - network/       — Large request/response bodies
+ *   - sources.json   — Source files referenced by stack frames (optional)
+ *   - network.json   — NDJSON network request log (optional)
+ *   - network/       — Request/response bodies
+ *
+ * This is the public archive contract: keep it in step with
+ * `schema/trace-format.schema.json` and `docs/trace-format.md`, and bump
+ * `TRACE_FORMAT_VERSION` (trace-format.ts) for any change an existing reader
+ * could misread.
  */
 
 // ─── Trace Event Types ───
@@ -25,8 +28,6 @@ export type TraceEventType =
   | 'console'
   | 'attachment'
   | 'error'
-  | 'step-start'
-  | 'step-end'
 
 /** Action categories for display grouping. */
 export type ActionCategory =
@@ -201,6 +202,7 @@ export interface ConsoleTraceEvent extends TraceEvent {
   source: 'test' | 'device' | 'daemon'
 }
 
+/** Reserved in the format; nothing emits it yet. */
 export interface AttachmentTraceEvent extends TraceEvent {
   type: 'attachment'
   /** Attachment name. */
@@ -232,11 +234,15 @@ export interface SourceLocation {
 // ─── Trace Metadata ───
 
 export interface TraceMetadata {
-  /** Format version for forward compatibility. */
-  version: 1
+  /**
+   * Archive format version (`TRACE_FORMAT_VERSION` in trace-format.ts). A
+   * reader must refuse a version newer than it knows; see
+   * docs/trace-format.md for what bumps it.
+   */
+  version: number
   /** Tapsmith SDK version. */
   tapsmithVersion: string
-  /** Test file path. */
+  /** Test file path — POSIX, relative to the project's rootDir (v2+; absolute in v1). */
   testFile: string
   /** Fully qualified test name. */
   testName: string
@@ -266,7 +272,7 @@ export interface TraceMetadata {
   error?: string
   /** Project name this test belongs to (when projects are configured). */
   project?: string
-  /** Path to the app state archive restored before this test. */
+  /** App state archive restored before this test — POSIX, relative to rootDir (v2+). */
   appState?: string
   /** Declared app reset mode in effect for this test's scope. */
   appReset?: string
