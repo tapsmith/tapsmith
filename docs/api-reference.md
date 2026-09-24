@@ -2220,6 +2220,13 @@ The HTML report is a self-contained page with pass/fail summary, filtering, and 
 | --- | --- | --- |
 | `outputDir` | `string` | `"blob-report"` |
 
+The blob reporter empties `outputDir` at the start of every run, as Playwright's does, so each
+run leaves exactly one blob (plus its trace and video attachments) and an earlier run's results
+can't be merged as though they were this run's. Point `outputDir` at a dedicated directory. The
+reporter refuses an `outputDir` that is, or contains, the project root and writes nothing in that
+case. A shard that gets no test files still writes an empty blob, so `merge-reports` can tell an
+empty shard from a missing one.
+
 ### Custom reporters
 
 Implement the `TapsmithReporter` interface:
@@ -2684,6 +2691,20 @@ Merge blob reports from sharded CI runs into a single HTML report.
 npx tapsmith merge-reports           # reads from blob-report/
 npx tapsmith merge-reports ./blobs   # custom directory
 ```
+
+It checks the blobs before merging, and exits with status 1 and a one-line error if:
+
+- the directory holds no blob reports (`*.jsonl`), for example after a failed artifact download;
+- a file is not a valid blob report (`Invalid blob file <name>: …`);
+- a blob was written by a newer Tapsmith (its blob format is newer than this version reads);
+- the sharded blobs don't form one complete split: a shard is missing, a shard appears twice, or
+  the blobs come from different splits (say `1/3` and `2/4`). Merge each run, such as Android
+  and iOS, from its own directory. Blobs from unsharded runs are merged without these checks.
+
+Once the blobs are merged, the command exits 0 even if the merged run has failed tests. Playwright's
+`merge-reports` does the same, since the shard jobs already carry the failure. The last line
+gives the merged status, e.g. `Merged 3 blob reports (shards 1–3 of 3): failed — 41 passed, 2 failed`.
+A `blob` reporter in the config is skipped here: merging reads blobs and never writes one.
 
 ### `tapsmith show-report [dir]`
 

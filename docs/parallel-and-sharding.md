@@ -383,6 +383,12 @@ npx tapsmith show-report
 
 The `merge-reports` command reads all blob files from the specified directory and produces a unified HTML report in `tapsmith-report/`. This report contains results from every shard, ordered and grouped as if the suite had run on a single machine.
 
+`merge-reports` refuses a merge it can't trust, with exit status 1: an empty directory, a corrupt
+blob, a missing or duplicated shard, or blobs from different shard splits. Each shard's
+`blob-report/` is emptied at the start of its run, so re-running a shard locally replaces its blob
+instead of adding a second one. A merge whose tests failed still exits 0, as in Playwright, and
+its last line gives the merged status. See [`tapsmith merge-reports`](api-reference.md#tapsmith-merge-reports-dir).
+
 ### Combining Workers and Sharding
 
 Each shard can still use multiple workers internally. The total parallelism is **shards x workers**:
