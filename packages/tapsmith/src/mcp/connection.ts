@@ -543,8 +543,28 @@ export function discoverySelectsDevice(opts: { uiMode: boolean; hasConfig: boole
   return opts.uiMode || !opts.hasConfig;
 }
 
+/**
+ * The config discovery works from, and whether the session has one.
+ *
+ * A config that fails to load still counts as one (`config` is then null):
+ * the session's tools report the load error, and treating it as "no config"
+ * would let discovery pick a device and start an agent on it — the PILOT-342
+ * behaviour a config exists to prevent — because the file has a syntax error.
+ * Before PILOT-262 a broken discovered config loaded as the defaults, which
+ * counted too; only a broken `--config` file used to let discovery choose.
+ *
+ * @internal — exported for unit testing.
+ */
+export async function loadDiscoveryConfig(
+  configFile: string | undefined,
+): Promise<{ config: TapsmithConfig | null; hasConfig: boolean }> {
+  return loadMcpConfig(configFile)
+    .then((result) => ({ config: result.config, hasConfig: true }))
+    .catch(() => ({ config: null, hasConfig: true }));
+}
+
 async function discover(): Promise<void> {
-  const config = await loadMcpConfig(_configFile).then((result) => result.config).catch(() => null);
+  const { config, hasConfig } = await loadDiscoveryConfig(_configFile);
   _discoveredConfig = config;
 
   // Collect candidate addresses from all sources, remembering where each came
@@ -721,7 +741,7 @@ async function discover(): Promise<void> {
     // platform silently runs against the first one's.
     // A device a UI session holds is never preferred: the target's own guard
     // refuses that pin by name.
-    conn.preparedDevice = discoverySelectsDevice({ uiMode: _uiMode, hasConfig: config !== null })
+    conn.preparedDevice = discoverySelectsDevice({ uiMode: _uiMode, hasConfig })
       ? await setDeviceAndAgent(conn.client, config)
       : undefined;
   } catch (err) {

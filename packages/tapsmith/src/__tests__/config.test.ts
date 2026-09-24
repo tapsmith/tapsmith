@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
@@ -165,25 +167,81 @@ describe('loadConfig rootDir anchoring', () => {
     });
   });
 
-  // The CLI loads the config before it re-execs under tsx, so a TypeScript
-  // config must load through tsx itself rather than rely on the process's
-  // loader — otherwise a valid config that bare Node cannot import (a `.js`
-  // specifier for a `.ts` helper, a non-erasable TS construct) would now be a
-  // hard error instead of the silent fallback that used to mask it.
-  it('loads a TypeScript config that imports a TypeScript helper through a .js specifier', async () => {
-    fs.writeFileSync(path.join(root, 'helpers.ts'), 'export const platform: string = "ios";\n', 'utf-8');
-    const file = path.join(root, 'tapsmith.config.ts');
-    fs.writeFileSync(
-      file,
-      'import { platform } from "./helpers.js";\n'
+  // The CLI loads the config before it re-execs under tsx, so configs must
+  // load through tsx itself rather than rely on the process's loader —
+  // otherwise a valid config that bare Node cannot import (a `.js` specifier
+  // for a `.ts` helper, an enum) would now be a hard error instead of the
+  // silent fallback that used to mask it. Vitest transforms dynamic imports
+  // itself, so these load the source in a bare `node` child to see what the
+  // CLI's parent process sees.
+  describe('in a process not running under tsx', () => {
+    const configModule = path.resolve(__dirname, '..', 'config.ts');
+
+    function loadInBareNode(dir: string): { path?: string; platform?: string; retries?: number } {
+      const script = `const { loadConfig, configPathOf } = await import(${JSON.stringify(configModule)});\n`
+        + `const c = await loadConfig(${JSON.stringify(dir)});\n`
+        + 'process.stdout.write(JSON.stringify({ path: configPathOf(c), platform: c.platform, retries: c.retries }));\n';
+      const out = execFileSync(process.execPath, ['--input-type=module', '-e', script], {
+        cwd: dir,
+        encoding: 'utf-8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      return JSON.parse(out) as { path?: string; platform?: string; retries?: number };
+    }
+
+    function writeHelper(dir: string): void {
+      fs.writeFileSync(path.join(dir, 'helpers.ts'), 'export const platform: string = "ios";\n', 'utf-8');
+    }
+
+    const TS_CONFIG = 'import { platform } from "./helpers.js";\n'
       + 'enum Retries { None = 0, Some = 2 }\n'
-      + 'export default { platform, retries: Retries.Some };\n',
-      'utf-8',
-    );
-    const config = await loadConfig(root);
-    expect(configPathOf(config)).toBe(file);
-    expect(config.platform).toBe('ios');
-    expect(config.retries).toBe(2);
+      + 'export default { platform, retries: Retries.Some };\n';
+
+    it('loads a TypeScript config in a package without "type": "module"', () => {
+      // tsx compiles it to CommonJS here, so this also covers unwrapping the
+      // `__esModule` default.
+      fs.writeFileSync(path.join(root, 'package.json'), '{}\n', 'utf-8');
+      writeHelper(root);
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(file, TS_CONFIG, 'utf-8');
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+
+    it('loads a TypeScript config in a "type": "module" package', () => {
+      fs.writeFileSync(path.join(root, 'package.json'), '{ "type": "module" }\n', 'utf-8');
+      writeHelper(root);
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(file, TS_CONFIG, 'utf-8');
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+
+    it('loads a JavaScript config that imports a TypeScript helper', () => {
+      fs.writeFileSync(path.join(root, 'package.json'), '{ "type": "module" }\n', 'utf-8');
+      writeHelper(root);
+      const file = path.join(root, 'tapsmith.config.js');
+      fs.writeFileSync(file, 'import { platform } from "./helpers.js";\nexport default { platform, retries: 2 };\n', 'utf-8');
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+  });
+
+  // tsx's CJS unregister deletes the extension handlers it replaced rather
+  // than restoring them; in the CLI's tsx child that stripped tsx's own `.ts`
+  // handler and broke later extensionless requires of TypeScript files.
+  it('leaves require.extensions as it found them', async () => {
+    const extensions = createRequire(import.meta.url).extensions;
+    const hadTs = Object.prototype.hasOwnProperty.call(extensions, '.ts');
+    const previous = extensions['.ts'];
+    const sentinel = (() => undefined) as unknown as NodeJS.RequireExtensions[string];
+    extensions['.ts'] = sentinel;
+    try {
+      fs.writeFileSync(path.join(root, 'tapsmith.config.ts'), 'export default { platform: "ios" }\n', 'utf-8');
+      await loadConfig(root);
+      expect(extensions['.ts']).toBe(sentinel);
+      expect(Object.keys(extensions)).not.toContain('.tsx');
+    } finally {
+      if (hadTs) extensions['.ts'] = previous;
+      else delete extensions['.ts'];
+    }
   });
 });
 import {

@@ -697,6 +697,26 @@ export function parseDoctorConfigFlag(argv: string[]): string | undefined {
   return undefined;
 }
 
+/**
+ * How doctor reports a config that `loadConfig` rejected.
+ *
+ * Always a failure: `tapsmith test` exits on the same error. There is no
+ * "no config file" case to filter out — without one `loadConfig` returns the
+ * defaults instead of rejecting — so an error that merely mentions ENOENT (a
+ * config reading a missing file at the top level) is a real one too.
+ *
+ * @internal — exported for unit testing.
+ */
+export function configLoadFailure(message: string): { message: string; hint: string } {
+  if (message.startsWith('Config file not found')) {
+    return { message, hint: 'Check the -c/--config path' };
+  }
+  return {
+    message: `Config file has errors: ${message}`,
+    hint: 'Fix the error in the config file named above; tapsmith test stops on it too',
+  };
+}
+
 export async function runDoctor(argv: string[] = []): Promise<void> {
   const jsonMode = argv.includes('--json');
   const printing = !jsonMode;
@@ -724,16 +744,8 @@ export async function runDoctor(argv: string[] = []): Promise<void> {
     const { loadConfig } = await import('./config.js');
     config = await loadConfig(undefined, configFile);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    if (configFile && msg.includes('Config file not found')) {
-      // The user explicitly asked for this config — a missing file is a
-      // hard error, not a syntax problem in the default config.
-      fail(report, 'config-load', msg, 'Check the -c/--config path');
-    } else if (msg.includes('Could not find') || msg.includes('ENOENT')) {
-      // No config file — fine, checkConfigFile() will report it
-    } else {
-      warn(report, 'config-load', `Config file has errors: ${msg}`, `Fix the syntax error in ${configFile ?? 'tapsmith.config.ts'}`);
-    }
+    const failure = configLoadFailure(err instanceof Error ? err.message : String(err));
+    fail(report, 'config-load', failure.message, failure.hint);
   }
 
   // AVDs can be configured top-level or per-project (projects[].use.avd).

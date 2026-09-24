@@ -595,6 +595,26 @@ describe('discovery daemon device selection', () => {
     expect(discoverySelectsDevice({ uiMode: false, hasConfig: true })).toBe(false);
   });
 
+  // A config that exists but fails to import makes loadConfig reject
+  // (PILOT-262); discovery must not read that as "no config" and claim a
+  // device the session's targets would never have chosen.
+  it('counts a config that fails to load as a config', async () => {
+    const fs = await import('node:fs');
+    const os = await import('node:os');
+    const path = await import('node:path');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-discovery-cfg-'));
+    try {
+      const file = path.join(dir, 'tapsmith.config.mjs');
+      fs.writeFileSync(file, 'throw new Error("boom")\n');
+      const { loadDiscoveryConfig, discoverySelectsDevice } = await import('../mcp/connection.js');
+      const { config, hasConfig } = await loadDiscoveryConfig(file);
+      expect(config).toBeNull();
+      expect(discoverySelectsDevice({ uiMode: false, hasConfig })).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('still selects one where nothing else would: no config, or a UI session\'s endpoint', async () => {
     const { discoverySelectsDevice } = await import('../mcp/connection.js');
     expect(discoverySelectsDevice({ uiMode: false, hasConfig: false })).toBe(true);

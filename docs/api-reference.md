@@ -2080,7 +2080,7 @@ correct device.
 
 ### `loadConfig(dir?: string): Promise<TapsmithConfig>`
 
-Load configuration from a `tapsmith.config.ts`, `tapsmith.config.js`, or `tapsmith.config.mjs` file. Falls back to defaults if no config file exists. This is used internally by the CLI.
+Load configuration from the first of `tapsmith.config.ts`, `tapsmith.config.js` and `tapsmith.config.mjs` that exists in `dir` (default: the working directory). Falls back to defaults only if none exists: when the file exists but cannot be imported, the promise rejects with `Failed to load config file <path>: <reason>`, the import error as its `cause`, rather than trying the next candidate. TypeScript configs load without a TypeScript loader in the calling process. This is used internally by the CLI.
 
 ---
 
