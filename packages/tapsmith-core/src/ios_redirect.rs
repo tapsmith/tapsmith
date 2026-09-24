@@ -105,6 +105,68 @@ const MAX_CONSECUTIVE_ACCEPT_FAILURES: u32 = 32;
 /// listener after spawning the launcher binary.
 const CONTROL_CHANNEL_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long to wait for another daemon's redirector launch to finish before
+/// launching anyway. A holder releases within `CONTROL_CHANNEL_TIMEOUT` of
+/// taking the lock, so this waits out two back-to-back launches.
+const LAUNCH_LOCK_TIMEOUT: Duration = Duration::from_secs(25);
+
+/// Host-wide lock serialising redirector launches across daemons (PILOT-197,
+/// PILOT-319). The stock launcher reuses any `mitmproxy` Network Extension
+/// configuration that is not yet `connected`: two daemons launching within the
+/// same ~150 ms overwrite each other's socket path, the second start is
+/// skipped, and that daemon's control channel never connects. Holding this
+/// `flock` from spawning the launcher until the extension has dialled back
+/// keeps every launch out of every other's window. Released on drop.
+pub(crate) struct LaunchLock {
+    _file: std::fs::File,
+}
+
+impl LaunchLock {
+    /// Take the lock at `path`, polling (without blocking the runtime) up to
+    /// `wait`. `None` when it could not be taken in time or the file could not
+    /// be opened — the caller then launches unserialised, as before, rather
+    /// than failing capture outright.
+    pub(crate) async fn acquire(path: &Path, wait: Duration) -> Option<Self> {
+        use std::os::unix::io::AsRawFd;
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let file = match std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(path)
+        {
+            Ok(f) => f,
+            Err(e) => {
+                warn!(path = %path.display(), "Cannot open redirector launch lock ({e}); launching unserialised");
+                return None;
+            }
+        };
+        let deadline = Instant::now() + wait;
+        loop {
+            // SAFETY: flock on a descriptor owned by `file` for its lifetime.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+                return Some(Self { _file: file });
+            }
+            if Instant::now() >= deadline {
+                warn!(
+                    path = %path.display(),
+                    "Another daemon's redirector launch is still holding the lock after {}s; launching unserialised",
+                    wait.as_secs()
+                );
+                return None;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+}
+
+fn launch_lock_path() -> Option<PathBuf> {
+    dirs::home_dir().map(|h| h.join(".tapsmith").join("ios-redirector-launch.lock"))
+}
+
 /// How long to wait for a write to the SE control channel before giving up.
 /// Guards against hangs if the SE stops draining its side (crash, suspension,
 /// kernel quirk) — without this, the refresh task and the initial conf send
@@ -407,9 +469,18 @@ impl IosRedirect {
             }
         }
 
+        // Serialise the launch → connect window with every other daemon on
+        // this Mac (see `LaunchLock`). Held until the control channel below is
+        // accepted or times out.
+        let launch_lock = match launch_lock_path() {
+            Some(path) => LaunchLock::acquire(&path, LAUNCH_LOCK_TIMEOUT).await,
+            None => None,
+        };
+
         info!(
             redirector = %redirector_bin.display(),
             listener = %listener_path.display(),
+            serialised = launch_lock.is_some(),
             "spawning redirector launcher"
         );
 
@@ -475,6 +546,9 @@ impl IosRedirect {
                 )
             })?
             .context("accepting System Extension control channel")?;
+        // The extension has dialled back, so its configuration is `connected`
+        // and another daemon's launcher can no longer hijack it.
+        drop(launch_lock);
         debug!("System Extension control channel connected");
 
         let mut control = Framed::new(control_stream, LengthDelimitedCodec::new());
@@ -1081,6 +1155,31 @@ fn extract_brew_tarball(tar_path: &Path) -> Result<()> {
     }
     drop(guard); // explicit cleanup of any leftover tmp files
     Ok(())
+}
+
+#[cfg(test)]
+mod launch_lock_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_second_launch_waits_for_the_first_to_release() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("launch.lock");
+        let first = LaunchLock::acquire(&path, Duration::from_secs(1)).await;
+        assert!(first.is_some());
+        // Held: a second daemon's launch does not get in.
+        assert!(LaunchLock::acquire(&path, Duration::from_millis(200))
+            .await
+            .is_none());
+        // Released (the first daemon's extension connected): it does.
+        let waiter = {
+            let path = path.clone();
+            tokio::spawn(async move { LaunchLock::acquire(&path, Duration::from_secs(5)).await })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        drop(first);
+        assert!(waiter.await.unwrap().is_some());
+    }
 }
 
 #[cfg(test)]

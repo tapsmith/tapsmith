@@ -203,8 +203,26 @@ export const RECOVERABLE_INFRASTRUCTURE_PATTERNS = [
  */
 export function isRecoverableInfrastructureError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
+  if (DETERMINISTIC_CAPTURE_REFUSALS.some((pattern) => message.includes(pattern))) return false;
   return RECOVERABLE_INFRASTRUCTURE_PATTERNS.some((pattern) => message.includes(pattern));
 }
+
+/**
+ * "Network capture disabled" is recoverable in general — a session restart can
+ * bring back a capture that failed transiently. These daemon refusals (the iOS
+ * system-proxy fallback's policy, PILOT-319) are not: a restarted session gets
+ * the same answer until the cause changes, so recovering only restarts the app,
+ * fails the retry, and can retire a healthy worker. Substrings of the daemon's
+ * messages in `grpc_server.rs` / `ios/system_proxy.rs`.
+ */
+const DETERMINISTIC_CAPTURE_REFUSALS = [
+  // Not on CI and not opted in (FallbackDecision::RefuseLocal).
+  'so it is only used on CI',
+  // Another live daemon owns the host proxy (Conflict::OtherDaemon).
+  'already routes the macOS system proxy',
+  // A proxy the user configured (Conflict::ForeignProxy).
+  'Tapsmith will not overwrite it',
+] as const;
 
 // Generous budget: a session-setup failure fails the whole shard (there is
 // no outer retry around setup), and each failed attempt can itself take
