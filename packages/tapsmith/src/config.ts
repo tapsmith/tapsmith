@@ -912,7 +912,7 @@ function isLoaderError(err: unknown): boolean {
 
 // The ESM and CommonJS compile steps, and ESM linking (a named import the
 // target does not export — a type-only import, which tsx elides).
-const COMPILE_STEP_FRAME = /^(?:compileSourceTextModule|wrapSafe|compileFunctionForCJSLoader|#?(?:async)?[Ii]nstantiate|ModuleJob\.#?_?(?:async)?[Ii]nstantiate|ModuleJob\.(?:sync)?[Ll]ink) \(node:/;
+const COMPILE_STEP_FRAME = /^(?:compileSourceTextModule|wrapSafe|compileFunctionForCJSLoader|#?(?:async)?[Ii]nstantiate|ModuleJob\.#?_?(?:async)?[Ii]nstantiate|ModuleJob\.(?:sync)?[Ll]ink|ModuleJobSync\.\w+) \(node:/;
 
 function firstStackFrameIsCompileStep(err: Error): boolean {
   for (const line of (err.stack ?? '').split('\n')) {
@@ -963,7 +963,7 @@ async function importConfigModule(configPath: string): Promise<Record<string, un
   try {
     return (await import(pathToFileURL(configPath).href)) as Record<string, unknown>;
   } catch (err) {
-    if (!isLoaderError(err)) throw configLoadError(configPath, err);
+    if (!isLoaderError(err) || !tsxCouldLoad(configPath, err)) throw configLoadError(configPath, err);
     nativeError = err;
   }
   const result = configImportQueue.then(() => importConfigModuleWithTsx(configPath, nativeError));
@@ -981,17 +981,33 @@ function errorMessage(err: unknown): string {
  * one (tsx's for a config that runs and throws; Node's for a mistyped import
  * that tsx then trips over something else on).
  */
-function configLoadError(configPath: string, err: unknown, nativeError?: unknown): Error {
+function configLoadError(configPath: string, err: unknown, nativeError?: unknown, note?: string): Error {
   let detail = errorMessage(err);
   if (nativeError !== undefined && errorMessage(nativeError) !== detail && isUnresolvedForTsxToo(nativeError)) {
     detail += `\n(Without tsx, Node reported: ${errorMessage(nativeError)})`;
   }
+  if (note) detail += `\n(${note})`;
   const error = new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
   // Callers print `stack`, which never includes `cause`: without this the
   // trace shows Tapsmith's loader frames and not the line in the config.
   const causeStack = err instanceof Error ? err.stack : undefined;
   if (causeStack) error.stack = `${error.name}: ${error.message}\nCaused by: ${causeStack}`;
   return error;
+}
+
+/**
+ * Whether retrying through tsx could get past Node's loader error. A missing
+ * module with no TypeScript source beside it, or a CommonJS global used in a
+ * file that is ESM whatever loads it, fails under tsx too — after running the
+ * config a second time.
+ */
+function tsxCouldLoad(configPath: string, nativeError: unknown): boolean {
+  if (nativeError instanceof ReferenceError && /\.mjs$/.test(configPath)) return false;
+  const code = (nativeError as { code?: unknown }).code;
+  if ((code === 'ERR_MODULE_NOT_FOUND' || code === 'MODULE_NOT_FOUND') && isUnresolvedForTsxToo(nativeError)) {
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -1018,7 +1034,15 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
       configEsmImport = undefined;
       throw err;
     });
-  const [esmImport, cjs] = await Promise.all([configEsmImport, import('tsx/cjs/api')]);
+  let esmImport: Awaited<NonNullable<typeof configEsmImport>>;
+  let cjs: typeof import('tsx/cjs/api');
+  try {
+    [esmImport, cjs] = await Promise.all([configEsmImport, import('tsx/cjs/api')]);
+  } catch (tsxError) {
+    // Not the config's fault, but the config's own error is still the one to
+    // show: the retry that might have got past it could not start.
+    throw configLoadError(configPath, nativeError, undefined, `tsx, which could have loaded it, failed to start: ${errorMessage(tsxError)}`);
+  }
   // tsx's CJS unregister deletes the `.ts`/`.tsx`/`.jsx`/`.mjs` handlers it
   // replaced instead of restoring them, so in a process already running under
   // tsx it would strip tsx's own handlers and break later extensionless
