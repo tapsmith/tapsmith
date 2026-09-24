@@ -53,6 +53,15 @@ interface SerializedSuite {
   suites: SerializedSuite[]
 }
 
+/**
+ * The blob reporter's outputDir is, or contains, the project root or the
+ * working directory — clearing it would delete the project. A config error:
+ * `tapsmith test` reports it on one line and exits before launching devices.
+ */
+export class BlobOutputDirError extends Error {
+  override name = 'BlobOutputDirError';
+}
+
 export class BlobReporter implements TapsmithReporter {
   private _outputDir: string;
   private _config?: TapsmithConfig;
@@ -81,8 +90,8 @@ export class BlobReporter implements TapsmithReporter {
         // Remembered so onRunEnd writes nothing either: the dispatcher logs
         // and swallows hook errors, and a blob dropped into the project root
         // would be picked up by the next merge.
-        this._refusal = new Error(
-          `Blob reporter outputDir ${outputDir} contains the project root (${protectedDir}). `
+        this._refusal = new BlobOutputDirError(
+          `Blob reporter outputDir ${outputDir} contains the project root or working directory (${protectedDir}). `
           + 'It is cleared at the start of every run; point outputDir at a dedicated directory such as "blob-report".',
         );
         throw this._refusal;
@@ -249,6 +258,7 @@ export function mergeBlobs(blobDir: string): FullResult {
 
   for (const { file, blob } of blobs) {
     totalDuration = Math.max(totalDuration, blob.duration);
+    checkAttachmentKeys(file, blob);
 
     let tests: TestResult[];
     let suites: SuiteResult[];
@@ -333,7 +343,12 @@ export function describeMergedBlobs(result: FullResult): string {
 
 function parseBlob(blobDir: string, file: string): BlobData {
   const invalid = (reason: string) => new BlobMergeError(`Invalid blob file ${file}: ${reason}`);
-  const content = fs.readFileSync(path.join(blobDir, file), 'utf-8').trim();
+  let content: string;
+  try {
+    content = fs.readFileSync(path.join(blobDir, file), 'utf-8').trim();
+  } catch (err) {
+    throw invalid(`cannot read it (${(err as Error).message})`);
+  }
   if (!content) throw invalid('the file is empty');
   let parsed: unknown;
   try {
@@ -411,6 +426,31 @@ function checkShards(blobs: ParsedBlob[]): { total?: number; missing: number[] }
   const missing: number[] = [];
   for (let i = 1; i <= total; i++) if (!byShard.has(i)) missing.push(i);
   return { total, missing };
+}
+
+/**
+ * Screenshot, trace and video keys are bare file names inside the blob
+ * directory (the reporter writes basenames). Anything else — `../x`, an
+ * absolute path — would read or write outside it, so the blob is refused.
+ */
+function checkAttachmentKeys(file: string, blob: BlobData): void {
+  const keys: unknown[] = isRecord(blob.screenshots) ? Object.keys(blob.screenshots) : [];
+  const visit = (t: SerializedTest): void => {
+    keys.push(t.screenshotKey, t.traceKey, t.videoKey);
+  };
+  const visitSuite = (s: SerializedSuite): void => {
+    (Array.isArray(s?.tests) ? s.tests : []).forEach(visit);
+    (Array.isArray(s?.suites) ? s.suites : []).forEach(visitSuite);
+  };
+  blob.tests.forEach((t) => { if (isRecord(t)) visit(t); });
+  blob.suites.forEach((s) => { if (isRecord(s)) visitSuite(s); });
+  for (const key of keys) {
+    if (key === undefined || key === null) continue;
+    if (typeof key !== 'string' || key === '' || key === '.' || key === '..'
+      || path.basename(key) !== key || key.includes('/') || key.includes('\\')) {
+      throw new BlobMergeError(`Invalid blob file ${file}: attachment name ${JSON.stringify(key)} is not a plain file name`);
+    }
+  }
 }
 
 function shardLabel(b: ParsedBlob): string {

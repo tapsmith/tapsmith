@@ -361,7 +361,10 @@ merge-reports:
     - name: Merge reports
       run: npx tapsmith merge-reports all-blob-reports
 
+    # always(): with a shard missing, merge-reports exits 1 but still
+    # writes the report for the shards that finished.
     - name: Upload HTML report
+      if: always()
       uses: actions/upload-artifact@v4
       with:
         name: tapsmith-report

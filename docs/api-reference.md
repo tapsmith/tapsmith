@@ -2222,9 +2222,9 @@ The HTML report is a self-contained page with pass/fail summary, filtering, and 
 
 The blob reporter empties `outputDir` at the start of every run (before any device launch), as Playwright's does, so each
 run leaves exactly one blob (plus its trace and video attachments) and an earlier run's results
-can't be merged as though they were this run's. Point `outputDir` at a dedicated directory. The
-reporter refuses an `outputDir` that is, or contains, the project root and writes nothing in that
-case. A shard that gets no test files still writes an empty blob, so `merge-reports` can tell an
+can't be merged as though they were this run's. Point `outputDir` at a dedicated directory. If
+`outputDir` is, or contains, the project root or the working directory, `tapsmith test` stops
+with an error before launching any device. Clearing it would delete the project. A shard that gets no test files still writes an empty blob, so `merge-reports` can tell an
 empty shard from a missing one.
 
 ### Custom reporters
@@ -2711,7 +2711,8 @@ Once a complete set is merged, the command exits 0 even if the merged run has fa
 Playwright's `merge-reports` does the same, since the shard jobs already carry the failure. The
 last line gives the merged status, e.g.
 `Merged 3 blob reports (shards 1–3 of 3): failed — 41 passed, 2 failed`.
-A `blob` reporter in the config is skipped here: merging reads blobs and never writes one.
+A `blob` reporter in the config is skipped here, because merging reads blobs and never writes one. If
+`blob` is the only reporter configured, the merge falls back to `list`.
 
 ### `tapsmith show-report [dir]`
 

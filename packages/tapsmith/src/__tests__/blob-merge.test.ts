@@ -118,6 +118,27 @@ describe('mergeBlobs input checks', () => {
     expect(mergeError().message).toMatch(/^Invalid blob file report-a\.jsonl: malformed test or suite entry \(/);
   });
 
+  it('names the file when a blob cannot be read (a directory named *.jsonl)', () => {
+    fs.mkdirSync(path.join(tmpDir, 'report-a.jsonl'));
+    expect(mergeError().message).toMatch(/^Invalid blob file report-a\.jsonl: cannot read it \(/);
+  });
+
+  it.each([
+    ['a screenshot key', { screenshots: { '../escape.png': 'eA==' } }],
+    ['a trace key', { tests: [{ name: 'a', fullName: 'a', status: 'passed', durationMs: 1, traceKey: '/etc/passwd' }] }],
+    ['a nested video key', { suites: [{ name: 's', durationMs: 1, suites: [], tests: [
+      { name: 'a', fullName: 'a', status: 'passed', durationMs: 1, videoKey: 'sub/dir.webm' },
+    ] }] }],
+  ])('refuses %s that is not a plain file name, writing nothing outside the directory', (_what, extra) => {
+    const inner = path.join(tmpDir, 'blobs');
+    fs.mkdirSync(inner);
+    fs.writeFileSync(path.join(inner, 'report-a.jsonl'), JSON.stringify({
+      version: 1, duration: 1, tests: [], suites: [], screenshots: {}, ...extra,
+    }));
+    expect(mergeError(inner).message).toMatch(/^Invalid blob file report-a\.jsonl: attachment name .* is not a plain file name$/);
+    expect(fs.existsSync(path.join(tmpDir, 'escape.png'))).toBe(false);
+  });
+
   it('refuses a malformed shard field', () => {
     writeBlob('report-a.jsonl', { shard: { current: 0, total: 2 } });
     expect(mergeError().message).toBe('Invalid blob file report-a.jsonl: malformed "shard"');
@@ -274,7 +295,7 @@ describe('BlobReporter output directory', () => {
     fs.writeFileSync(keep, 'x');
     const reporter = new BlobReporter({ outputDir: '.' });
     expect(() => reporter.onRunStart(makeConfig({ rootDir: tmpDir }), 1)).toThrow(
-      `Blob reporter outputDir ${tmpDir} contains the project root (${tmpDir}). `
+      `Blob reporter outputDir ${tmpDir} contains the project root or working directory (${tmpDir}). `
       + 'It is cleared at the start of every run; point outputDir at a dedicated directory such as "blob-report".',
     );
     expect(fs.existsSync(keep)).toBe(true);

@@ -2233,7 +2233,11 @@ async function main(): Promise<void> {
       // Still leave this shard's (empty) blob, or merge-reports would report
       // the shard as missing whenever there are fewer files than shards.
       const { writeEmptyShardBlob } = await import('./merge-reports.js');
-      await writeEmptyShardBlob(config);
+      const refusal = await writeEmptyShardBlob(config);
+      if (refusal) {
+        console.error(red(refusal));
+        process.exit(1);
+      }
       process.exit(0);
     }
     shardMessage = `Shard ${current}/${total}: running ${testFiles.length} file(s)`;
@@ -2286,8 +2290,16 @@ async function main(): Promise<void> {
       reporters.push(new BlobReporter());
     }
   }
-  const { prepareBlobOutputDirs } = await import('./merge-reports.js');
-  prepareBlobOutputDirs(reporters, config);
+  // UI mode reports through its own server, never these reporters, so it
+  // must not empty a blob directory it will not rewrite.
+  if (!args.ui) {
+    const { prepareBlobOutputDirs } = await import('./merge-reports.js');
+    const refusal = prepareBlobOutputDirs(reporters, config);
+    if (refusal) {
+      console.error(red(refusal));
+      process.exit(1);
+    }
+  }
   const reporter = new ReporterDispatcher(reporters);
 
   // Compute the effective parallelism BEFORE handing config to the reporter,

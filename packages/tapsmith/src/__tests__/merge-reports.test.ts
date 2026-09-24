@@ -99,6 +99,15 @@ describe('runMergeReports', () => {
   });
 });
 
+describe('runMergeReports with a blob-only config', () => {
+  it('falls back to the list reporter rather than producing no report', async () => {
+    const dir = path.join(tmpDir, 'blob-report');
+    writeBlob(dir, 'a.jsonl', undefined, 'failed');
+    expect(await runMergeReports(dir, config({ reporter: 'blob' }))).toBe(0);
+    expect(out.join('')).toContain('Failures:');
+  });
+});
+
 describe('writeEmptyShardBlob', () => {
   it('writes a blob for a shard with no files, so the merge sees every shard', async () => {
     const shard2 = config({ shard: { current: 2, total: 2 }, reporter: 'list' });
@@ -109,12 +118,13 @@ describe('writeEmptyShardBlob', () => {
     expect(merged.tests.map((t) => t.fullName)).toEqual(['shard1.jsonl']);
   });
 
-  it('logs a refused outputDir like any reporter error instead of crashing the shard', async () => {
-    await expect(writeEmptyShardBlob(config({
+  it('returns a refused outputDir as a message rather than throwing, and writes nothing', async () => {
+    const refusal = await writeEmptyShardBlob(config({
       shard: { current: 1, total: 1 },
       reporter: [['blob', { outputDir: '.' }]],
-    }))).resolves.toBeUndefined();
-    expect(err.join('')).toContain('Reporter error in onRunStart: Blob reporter outputDir');
+    }));
+    expect(refusal).toMatch(/^Blob reporter outputDir .* contains the project root or working directory/);
+    expect(fs.readdirSync(tmpDir)).toEqual([]);
   });
 
   it('does not load the other configured reporters (the empty-shard path runs before the tsx re-exec)', async () => {
@@ -143,8 +153,14 @@ describe('prepareBlobOutputDirs', () => {
     expect(fs.existsSync(dir)).toBe(false);
   });
 
-  it('logs a refused outputDir instead of throwing', () => {
-    expect(() => prepareBlobOutputDirs([new BlobReporter({ outputDir: '.' })], config())).not.toThrow();
-    expect(err.join('')).toContain('Reporter error in onRunStart: Blob reporter outputDir');
+  it('returns a refused outputDir as a message, deleting nothing', () => {
+    fs.writeFileSync(path.join(tmpDir, 'keep.ts'), 'x');
+    expect(prepareBlobOutputDirs([new BlobReporter({ outputDir: '.' })], config()))
+      .toMatch(/contains the project root or working directory/);
+    expect(fs.existsSync(path.join(tmpDir, 'keep.ts'))).toBe(true);
+  });
+
+  it('returns undefined when every outputDir is safe', () => {
+    expect(prepareBlobOutputDirs([new BlobReporter()], config())).toBeUndefined();
   });
 });
