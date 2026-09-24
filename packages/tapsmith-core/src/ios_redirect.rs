@@ -187,6 +187,44 @@ impl LaunchLock {
     }
 }
 
+/// Stops an abandoned redirector launch: aborts the launcher task (whose
+/// `kill_on_drop` child then dies) and unlinks the listener socket. Used by
+/// `IosRedirect::start` between spawning the launcher and a successful
+/// connect; `disarm` hands the launcher over once the session is up.
+struct LaunchCleanup {
+    launcher: Option<JoinHandle<()>>,
+    socket: PathBuf,
+}
+
+impl LaunchCleanup {
+    /// Stop the launcher and wait (bounded) for it to be gone, so the launch
+    /// lock is only released after the child has stopped.
+    async fn stop(&mut self) {
+        if let Some(handle) = self.launcher.take() {
+            handle.abort();
+            let _ = timeout(Duration::from_secs(2), handle).await;
+        }
+        let _ = std::fs::remove_file(&self.socket);
+    }
+
+    fn disarm(mut self) -> JoinHandle<()> {
+        self.launcher
+            .take()
+            .expect("LaunchCleanup disarmed after stop")
+    }
+}
+
+impl Drop for LaunchCleanup {
+    /// Cancellation (the start future dropped mid-connect): abort without
+    /// waiting — Drop can't await — and still remove the socket.
+    fn drop(&mut self) {
+        if let Some(handle) = self.launcher.take() {
+            handle.abort();
+            let _ = std::fs::remove_file(&self.socket);
+        }
+    }
+}
+
 fn launch_lock_path() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".tapsmith").join("ios-redirector-launch.lock"))
 }
@@ -554,9 +592,20 @@ impl IosRedirect {
             }
         });
 
-        let (control_stream, _) = timeout(CONTROL_CHANNEL_TIMEOUT, listener.accept())
-            .await
-            .map_err(|_| {
+        // Until the extension has connected and accepted its first
+        // configuration, a failure (or this future being cancelled) must stop
+        // the launcher — dropping its JoinHandle would only detach the task,
+        // leaving the child running — and remove our socket. Declared after
+        // `launch_lock`, so it runs before the lock is released: the next
+        // daemon's launch can't overlap a launcher we are abandoning.
+        let mut launch_cleanup = LaunchCleanup {
+            launcher: Some(launcher_handle),
+            socket: listener_path.clone(),
+        };
+        let connected = async {
+            let (control_stream, _) = timeout(CONTROL_CHANNEL_TIMEOUT, listener.accept())
+                .await
+                .map_err(|_| {
                 anyhow::anyhow!(
                     "Mitmproxy Redirector System Extension did not connect within {}s.\n\
                      \n\
@@ -575,13 +624,24 @@ impl IosRedirect {
                 )
             })?
             .context("accepting System Extension control channel")?;
-        debug!("System Extension control channel connected");
+            debug!("System Extension control channel connected");
 
-        let mut control = Framed::new(control_stream, LengthDelimitedCodec::new());
-        send_intercept_conf(&mut control, &initial_pids)
-            .await
-            .context("sending initial InterceptConf")?;
-        debug!(pids = initial_pids.len(), "initial InterceptConf accepted");
+            let mut control = Framed::new(control_stream, LengthDelimitedCodec::new());
+            send_intercept_conf(&mut control, &initial_pids)
+                .await
+                .context("sending initial InterceptConf")?;
+            debug!(pids = initial_pids.len(), "initial InterceptConf accepted");
+            Ok::<_, anyhow::Error>(control)
+        }
+        .await;
+        let control = match connected {
+            Ok(control) => control,
+            Err(e) => {
+                launch_cleanup.stop().await;
+                return Err(e);
+            }
+        };
+        let launcher_handle = launch_cleanup.disarm();
 
         // Keep the next daemon's launch out a little longer, without delaying
         // this capture: the extension dials back from inside its provider's
@@ -1201,6 +1261,69 @@ fn extract_brew_tarball(tar_path: &Path) -> Result<()> {
 #[cfg(test)]
 mod launch_lock_tests {
     use super::*;
+
+    /// A stand-in launcher task that runs until aborted; `rx` closes when it
+    /// is gone (its sender is dropped with the task).
+    fn fake_launcher() -> (JoinHandle<()>, tokio::sync::oneshot::Receiver<()>) {
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let handle = tokio::spawn(async move {
+            let _alive = tx;
+            std::future::pending::<()>().await;
+        });
+        (handle, rx)
+    }
+
+    #[tokio::test]
+    async fn a_failed_launch_stops_its_launcher_and_removes_its_socket() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("redirector.sock");
+        std::fs::write(&socket, b"").unwrap();
+        let (handle, rx) = fake_launcher();
+        let mut cleanup = LaunchCleanup {
+            launcher: Some(handle),
+            socket: socket.clone(),
+        };
+        cleanup.stop().await;
+        // stop() returned only after the launcher task was gone.
+        assert!(rx.await.is_err(), "launcher still running");
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_launch_still_aborts_its_launcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("redirector.sock");
+        std::fs::write(&socket, b"").unwrap();
+        let (handle, rx) = fake_launcher();
+        drop(LaunchCleanup {
+            launcher: Some(handle),
+            socket: socket.clone(),
+        });
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), rx)
+                .await
+                .unwrap()
+                .is_err(),
+            "launcher still running"
+        );
+        assert!(!socket.exists());
+    }
+
+    #[tokio::test]
+    async fn a_connected_launch_keeps_its_launcher() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("redirector.sock");
+        std::fs::write(&socket, b"").unwrap();
+        let (handle, _rx) = fake_launcher();
+        let launcher = LaunchCleanup {
+            launcher: Some(handle),
+            socket: socket.clone(),
+        }
+        .disarm();
+        assert!(!launcher.is_finished());
+        assert!(socket.exists(), "the live session's socket was removed");
+        launcher.abort();
+    }
 
     #[tokio::test]
     async fn a_second_launch_waits_for_the_first_to_release() {
