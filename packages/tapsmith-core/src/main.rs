@@ -190,6 +190,11 @@ async fn main() -> Result<()> {
                 warn!("xcrun not found on PATH: {e}. iOS device operations will not be available.")
             }
         }
+
+        // Undo a macOS system proxy left behind by a daemon that died without
+        // cleaning up (PILOT-319). A no-op unless an owner record exists.
+        #[cfg(target_os = "macos")]
+        ios::system_proxy::recover_stale().await;
     });
 
     let service = TapsmithServiceImpl::new(device_manager, agent_connection, daemon_log_bus);

@@ -466,6 +466,46 @@ test.describe("Network tab", () => {
       await expect(network.prettyToggle).toBeVisible()
     })
   })
+
+  // PILOT-319: a trace captured through the host-wide system proxy holds other
+  // apps' traffic and misses localhost — the tab must say so, not just list it.
+  test.describe("capture route", () => {
+    const iosSim = (networkCaptureRoute?: "ios-system-proxy" | "ios-network-extension") => ({
+      device: {
+        serial: "8C2F-SIM",
+        platform: "ios" as const,
+        isEmulator: true,
+        ...(networkCaptureRoute ? { networkCaptureRoute } : {}),
+      },
+    })
+
+    test("warns when capture went through the macOS system proxy", async ({ viewer, detailTabs, network }) => {
+      await openWithNetwork(viewer, { metadata: iosSim("ios-system-proxy") })
+      await detailTabs.select("Network")
+
+      await expect(network.hostWideNotice).toContainText("other apps on the Mac")
+      await expect(network.hostWideNotice).toContainText("localhost")
+      await expect(network.rows).toHaveCount(4)
+    })
+
+    test("warns on an empty system-proxy capture too", async ({ viewer, detailTabs, network }) => {
+      await viewer.open({ network: [], metadata: iosSim("ios-system-proxy") })
+      await detailTabs.select("Network")
+
+      await expect(detailTabs.noContent).toContainText("No network requests captured")
+      await expect(network.hostWideNotice).toBeVisible()
+    })
+
+    for (const route of ["ios-network-extension", undefined] as const) {
+      test(`shows no warning for an isolated or unrecorded route (${route ?? "none"})`, async ({ viewer, detailTabs, network }) => {
+        await openWithNetwork(viewer, { metadata: iosSim(route) })
+        await detailTabs.select("Network")
+
+        await expect(network.rows).toHaveCount(4)
+        await expect(network.hostWideNotice).toHaveCount(0)
+      })
+    }
+  })
 })
 
 for (const enabled of [true, false]) {

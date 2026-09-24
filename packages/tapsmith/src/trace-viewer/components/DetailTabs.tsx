@@ -59,6 +59,13 @@ function deviceForEvent(
  * so its events have a `deviceId`, but that name is the runner's, not the
  * author's, and showing it read as a device the user never configured.
  */
+/** Whether any device's capture went through the host-wide macOS system proxy. */
+function capturedHostWide(metadata: TraceMetadata | undefined): boolean {
+  if (!metadata) return false;
+  const devices = metadata.devices ?? (metadata.device ? [metadata.device] : []);
+  return devices.some((d) => d.networkCaptureRoute === 'ios-system-proxy');
+}
+
 function deviceLine(metadata: TraceMetadata, event: { deviceId?: string }): string | undefined {
   const d = deviceForEvent(metadata, event);
   if (!d?.serial) return undefined;
@@ -222,7 +229,7 @@ export function DetailTabs({ event, events, hierarchies, sources, metadata, netw
         {activeTab === 'hierarchy' && <HierarchyTabWrapper event={event} hierarchies={hierarchies} onNodeSelect={onHierarchyNodeSelect} group={group} screenshotVariant={screenshotVariant} />}
 
         {activeTab === 'locator' && locatorTab}
-        {activeTab === 'network' && <NetworkTab networkCaptureEnabled={metadata?.traceConfig?.network} entries={networkEntries} bodies={networkBodies} deviceNames={deviceNames} />}
+        {activeTab === 'network' && <NetworkTab networkCaptureEnabled={metadata?.traceConfig?.network} entries={networkEntries} bodies={networkBodies} deviceNames={deviceNames} hostWideCapture={capturedHostWide(metadata)} />}
         {activeTab === 'errors' && <ErrorsTab event={event} events={events} testError={testError} sources={sources} metadata={metadata} />}
       </div>
     </div>

@@ -154,20 +154,20 @@ Check the daemon logs — run `tapsmith test` with `RUST_LOG=tapsmith_core=debug
 
 ### My host's web browser traffic went through Tapsmith's proxy
 
-This should not happen with PILOT-182's NE-based approach. The NE filters by PID, so only the simulator's process tree's traffic is redirected; your browser's PID is not in the filter. If you are still seeing host traffic being affected, check that `networksetup -getwebproxy Wi-Fi` shows `Enabled: No`. If a stale proxy setting is still configured from a pre-PILOT-182 Tapsmith version, clear it with:
+This should not happen with the Network Extension: it filters by PID, so only the simulator's process tree's traffic is redirected and your browser's PID is not in the filter. Host traffic in a trace means the daemon used the [system-proxy fallback](#when-the-network-extension-is-unavailable); the trace viewer's Network tab says so in a banner, and the trace's `metadata.json` records `"networkCaptureRoute": "ios-system-proxy"` for the device.
+
+If your Mac can't reach the network after a run, a daemon may have been killed while it held the fallback. `npx tapsmith doctor` reports this as `macOS system proxy left behind…` with the exact command to clear it, and the next Tapsmith daemon to start resets it automatically. To clear it by hand:
 
 ```sh
-sudo networksetup -setwebproxystate Wi-Fi off
-sudo networksetup -setsecurewebproxystate Wi-Fi off
+networksetup -setwebproxystate Wi-Fi off
+networksetup -setsecurewebproxystate Wi-Fi off
 ```
 
-You can also remove the (no-longer-used) legacy sudoers file:
+You can also remove the (no-longer-used) legacy sudoers file from pre-PILOT-182 versions:
 
 ```sh
 sudo rm /etc/sudoers.d/zzz-tapsmith-networksetup
 ```
-
-Tapsmith itself never modifies these on modern versions.
 
 ### Parallel iOS workers still see empty network tabs
 
@@ -175,7 +175,30 @@ Verify the fix is in place: run with debug logs and look for `tapsmith_core::ios
 
 ### When the Network Extension is unavailable
 
-If the redirector cannot be started (the extension is not approved, or its control channel does not connect within 10 s), the daemon falls back to setting the **macOS system HTTP/HTTPS proxy** on the active network service and prints `Using macOS system proxy fallback — not PID-isolated (affects all host traffic)`. This is what CI runners use, where a System Extension cannot be approved. It is host-wide: the trace records whatever any process on the Mac sends, `localhost` and `127.0.0.1` are on the bypass list so requests to a server the test hosts are *not* captured, and only one daemon at a time can own the setting — a second daemon's `networksetup` call replaces the first's port, and the first daemon to exit switches the proxy off for the survivor. Once a daemon has fallen back it stays on the fallback for its lifetime.
+If the redirector cannot be started (the extension is not approved, or its control channel does not connect within 10 s), the daemon can fall back to setting the **macOS system HTTP/HTTPS proxy** on the active network service. This is what CI runners use, where a System Extension cannot be approved. It is host-wide: the trace records whatever any process on the Mac sends (browser preconnects, `trustd` OCSP checks, other apps), and `localhost` and `127.0.0.1` are on the bypass list, so requests to a server the test hosts are *not* captured.
+
+**The fallback is used on CI only.** When the `CI` environment variable is set (as it is on GitHub Actions, GitLab, CircleCI, Buildkite and most other CI systems), the daemon falls back and prints, once per device:
+
+```
+[tapsmith] Network capture warning: <udid>: capturing through the macOS system-proxy fallback (the Network Extension redirector is unavailable). This is host-wide: …
+```
+
+On a developer Mac the Network Extension is available, so an NE failure there is a real problem to fix, not something to paper over by recording your own browsing. Capture is disabled instead, with `Network capture disabled: … the Network Extension redirector failed (…)` and a pointer to `npx tapsmith doctor`. To allow the fallback locally anyway, or to refuse it on CI, set:
+
+| `TAPSMITH_IOS_SYSTEM_PROXY_FALLBACK` | Effect |
+| --- | --- |
+| unset | Fallback allowed only when `CI` is set (and not `false`/`0`) |
+| `1` / `true` / `on` | Always allow the fallback |
+| `0` / `false` / `off` | Never use the fallback, even on CI |
+
+**One daemon at a time.** There is only one system proxy per Mac, so only one daemon can hold the fallback. The owner is recorded in `~/.tapsmith/ios-system-proxy.json` under a file lock:
+
+- A second daemon that needs the fallback while another live daemon holds it gets `Network capture disabled: … another Tapsmith daemon (pid N) already routes the macOS system proxy …`, instead of re-pointing the proxy at itself and leaving the first daemon capturing nothing. Parallel iOS workers (`--workers N`) on a runner without the Network Extension therefore capture on one worker only.
+- A proxy you configured yourself (Charles, Proxyman, a corporate proxy) is never overwritten; the fallback is refused with the command to turn it off if it was left behind.
+- A daemon only switches the proxy off while it still owns it, so the first daemon to exit can't turn it off under another, and it puts your original proxy bypass list back.
+- If a daemon dies without cleaning up, the next daemon to start resets the proxy, and `npx tapsmith doctor` flags it in the meantime.
+
+Once a daemon has fallen back it keeps the fallback (and the same proxy port) for its lifetime, and each device's trace records `"networkCaptureRoute": "ios-system-proxy"` in `metadata.json`, which the trace viewer's Network tab shows as a warning banner.
 
 ### Multi-device groups
 
@@ -287,7 +310,7 @@ Tapsmith also detects this at test time: if the daemon notices that the host's c
 
 - The Tapsmith CA is generated once per machine and stored under `~/.tapsmith/ca.pem`. It is installed into the simulator's trust store at the start of the first capture session and **persists** there across subsequent runs. Tapsmith does not currently remove the CA at session end — to wipe it, `xcrun simctl erase <udid>` (erases the simulator) or remove the cert manually from the simulator's keychain.
 - Only traffic from the simulator's process tree (as reported by `ps`) is routed through the proxy. Host browsers, IDEs, and other apps are unaffected.
-- The macOS system proxy (`networksetup -setwebproxy`) is only touched when the Network Extension is unavailable and Tapsmith falls back to it (see [When the Network Extension is unavailable](#when-the-network-extension-is-unavailable)). In that mode every process on the Mac is proxied, so the trace can contain host traffic (browser preconnects, `trustd` OCSP checks) alongside the simulator's. Tapsmith disables the proxy again when the daemon exits; the server/port values it wrote stay visible in `networksetup -getwebproxy` with `Enabled: No`.
+- The macOS system proxy (`networksetup -setwebproxy`) is only touched when the Network Extension is unavailable and Tapsmith falls back to it, which by default happens on CI only (see [When the Network Extension is unavailable](#when-the-network-extension-is-unavailable)). In that mode every process on the Mac is proxied, so the trace can contain host traffic (browser preconnects, `trustd` OCSP checks) alongside the simulator's — be careful sharing such a trace; its `metadata.json` records `"networkCaptureRoute": "ios-system-proxy"` and the viewer flags it. Tapsmith disables the proxy again when the daemon exits and restores your proxy bypass list; the server/port values it wrote stay visible in `networksetup -getwebproxy` with `Enabled: No`.
 - Request and response bodies are truncated to 1 MiB each in the captured trace to prevent runaway memory usage.
 
 ## Attribution

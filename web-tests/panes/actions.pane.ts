@@ -50,6 +50,11 @@ export class ActionsPane {
     return this.page.getByTestId("metadata-isolation")
   }
 
+  /** The Network capture row of the Metadata tab: how the device's traffic was captured. */
+  get networkRoute() {
+    return this.page.getByTestId("metadata-network-route")
+  }
+
   /** Per-row device badges — present only in a multi-device trace. */
   get deviceTags() {
     return this.page.getByTestId("action-device")

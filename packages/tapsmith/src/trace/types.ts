@@ -289,7 +289,30 @@ export interface TraceDeviceInfo {
   packageName?: string
   /** Device pixel ratio (e.g. 3 for retina iOS). Bounds are in logical points; screenshots in pixels. */
   devicePixelRatio?: number
+  /**
+   * How this device's network traffic reached the capture proxy, when network
+   * capture ran. `ios-system-proxy` means the host-wide macOS fallback: the
+   * captured entries may include traffic from other apps on the Mac, and
+   * requests to localhost are missing. Absent in older traces.
+   */
+  networkCaptureRoute?: NetworkCaptureRoute
 }
+
+/**
+ * Route a device's traffic took into the capture proxy (mirrors the daemon's
+ * `NetworkCaptureRoute` enum):
+ * - `ios-network-extension` — iOS simulator, per-process Network Extension (isolated)
+ * - `ios-system-proxy` — iOS simulator, macOS system proxy fallback (host-wide)
+ * - `ios-device-proxy` — physical iOS device, installed Wi-Fi proxy profile
+ * - `android-transparent` — Android iptables transparent redirect
+ * - `android-http-proxy` — Android global HTTP proxy fallback (proxy-aware clients only)
+ */
+export type NetworkCaptureRoute =
+  | 'ios-network-extension'
+  | 'ios-system-proxy'
+  | 'ios-device-proxy'
+  | 'android-transparent'
+  | 'android-http-proxy'
 
 export interface TraceConfigSnapshot {
   screenshots: boolean

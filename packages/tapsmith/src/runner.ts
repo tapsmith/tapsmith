@@ -57,7 +57,12 @@ import { filterEntriesByHosts } from './trace/filter-hosts.js';
 
 // ─── Trace Device Info ───
 
-async function buildTraceDeviceInfo(opts: RunOptions, rd: RunDevice, index: number): Promise<TraceDeviceInfo> {
+async function buildTraceDeviceInfo(
+  opts: RunOptions,
+  rd: RunDevice,
+  index: number,
+  networkCapturing?: ReadonlySet<Device>,
+): Promise<TraceDeviceInfo> {
   // The primary's serial historically came from `config.device`; group
   // members carry their own.
   const serial = rd.serial ?? (index === 0 ? opts.config.device : undefined) ?? 'unknown';
@@ -71,6 +76,9 @@ async function buildTraceDeviceInfo(opts: RunOptions, rd: RunDevice, index: numb
       ? getSimulatorScreenScale(serial)
       : undefined,
   };
+  if (rd.device && networkCapturing?.has(rd.device) && rd.device._networkCaptureRoute) {
+    info.networkCaptureRoute = rd.device._networkCaptureRoute;
+  }
   if (rd.device?._fetchDeviceInfo) {
     try {
       const cached = await rd.device._fetchDeviceInfo(serial);
@@ -85,10 +93,15 @@ async function buildTraceDeviceInfo(opts: RunOptions, rd: RunDevice, index: numb
 /**
  * Trace metadata for every device of the run: `device` (the primary, kept for
  * readers of older traces) and `devices` (the whole group, primary first).
+ * `networkCapturing` is the set of devices whose capture started for this
+ * test; each of them records the route its traffic took.
  */
-async function traceDeviceMetadata(opts: RunOptions): Promise<{ device: TraceDeviceInfo; devices: TraceDeviceInfo[] }> {
+async function traceDeviceMetadata(
+  opts: RunOptions,
+  networkCapturing?: ReadonlySet<Device>,
+): Promise<{ device: TraceDeviceInfo; devices: TraceDeviceInfo[] }> {
   const group = opts.devices.length > 0 ? opts.devices : [{ name: 'device-1', device: undefined as unknown as Device }];
-  const devices = await Promise.all(group.map((rd, i) => buildTraceDeviceInfo(opts, rd, i)));
+  const devices = await Promise.all(group.map((rd, i) => buildTraceDeviceInfo(opts, rd, i, networkCapturing)));
   return { device: devices[0], devices };
 }
 
@@ -2219,7 +2232,7 @@ async function runSuiteContext(
                 testDuration: Date.now() - attemptStart,
                 startTime: attemptStart,
                 endTime: Date.now(),
-                ...(await traceDeviceMetadata(opts)),
+                ...(await traceDeviceMetadata(opts, networkCapturingDevices)),
                 tapsmithVersion: version,
                 error: error?.message,
                 outputDir,

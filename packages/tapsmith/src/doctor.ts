@@ -494,6 +494,139 @@ function checkNetworkExtension(report: Reporter): void {
   }
 }
 
+// ─── macOS system proxy (PILOT-319) ───
+
+/** One service's `networksetup -getwebproxy` / `-getsecurewebproxy` reading. */
+export interface ServiceProxySetting {
+  service: string
+  kind: 'HTTP' | 'HTTPS'
+  enabled: boolean
+  server: string
+  port: number
+}
+
+/** `~/.tapsmith/ios-system-proxy.json`, written by the daemon that holds the fallback. */
+export interface SystemProxyOwnerRecord {
+  pid: number
+  port: number
+  service: string
+}
+
+export function parseNetworksetupProxy(stdout: string): { enabled: boolean; server: string; port: number } {
+  const field = (name: string): string =>
+    stdout.split('\n').find((l) => l.startsWith(`${name}:`))?.slice(name.length + 1).trim() ?? '';
+  return {
+    enabled: field('Enabled').toLowerCase() === 'yes',
+    server: field('Server'),
+    port: Number.parseInt(field('Port'), 10) || 0,
+  };
+}
+
+export type SystemProxyAssessment =
+  | { status: 'pass'; label: string }
+  | { status: 'warn'; label: string; fix: string };
+
+/**
+ * Judge the host's system proxy. Tapsmith's iOS fallback points the active
+ * service at `127.0.0.1:<port>`; a daemon killed before shutdown leaves that
+ * behind, and every app on the Mac then fails to connect until it's cleared.
+ */
+export function assessSystemProxy(
+  settings: ServiceProxySetting[],
+  record: SystemProxyOwnerRecord | undefined,
+  ownerAlive: boolean,
+): SystemProxyAssessment {
+  const enabled = settings.filter((s) => s.enabled);
+  const loopback = enabled.filter((s) => s.server === '127.0.0.1' || s.server === 'localhost');
+  if (loopback.length === 0) {
+    if (enabled.length > 0) {
+      const s = enabled[0];
+      return { status: 'pass', label: `macOS system proxy is ${s.server}:${s.port} on ${s.service} ${dim('(not set by Tapsmith; the iOS fallback will not overwrite it)')}` };
+    }
+    return { status: 'pass', label: 'macOS system proxy not set by Tapsmith' };
+  }
+  const ours = (s: ServiceProxySetting): boolean =>
+    !!record && record.service === s.service && record.port === s.port;
+  if (record && ownerAlive && loopback.every(ours)) {
+    return { status: 'pass', label: `macOS system proxy in use by a running Tapsmith daemon ${dim(`(pid ${record.pid}, iOS fallback)`)}` };
+  }
+  const services = [...new Set(loopback.map((s) => s.service))];
+  const fix = services
+    .map((svc) => `networksetup -setwebproxystate "${svc}" off && networksetup -setsecurewebproxystate "${svc}" off`)
+    .join(' && ');
+  const where = loopback.map((s) => `${s.kind} 127.0.0.1:${s.port} on ${s.service}`).join(', ');
+  if (loopback.every(ours)) {
+    return {
+      status: 'warn',
+      label: `macOS system proxy left behind by an exited Tapsmith daemon (${where}) — host traffic is being sent to a dead port. The next Tapsmith run resets it automatically`,
+      fix: `Run: ${fix}`,
+    };
+  }
+  return {
+    status: 'warn',
+    label: `macOS system proxy points at ${where}, which Tapsmith does not own. If an earlier Tapsmith run left it behind, turn it off; if it is another local proxy (Charles, Proxyman), the iOS system-proxy fallback will refuse to run while it is set`,
+    fix: `Run: ${fix}`,
+  };
+}
+
+function listNetworkServices(): string[] {
+  const out = execFileSync('/usr/sbin/networksetup', ['-listallnetworkservices'], {
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return out
+    .split('\n')
+    .slice(1) // "An asterisk (*) denotes that a network service is disabled."
+    .map((l) => l.replace(/^\*/, '').trim())
+    .filter(Boolean);
+}
+
+function readServiceProxy(service: string, kind: 'HTTP' | 'HTTPS'): ServiceProxySetting {
+  const flag = kind === 'HTTP' ? '-getwebproxy' : '-getsecurewebproxy';
+  const out = execFileSync('/usr/sbin/networksetup', [flag, service], {
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 5_000,
+  });
+  return { service, kind, ...parseNetworksetupProxy(out) };
+}
+
+function readOwnerRecord(): SystemProxyOwnerRecord | undefined {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.tapsmith', 'ios-system-proxy.json'), 'utf-8')) as Partial<SystemProxyOwnerRecord>;
+    if (typeof raw.pid === 'number' && typeof raw.port === 'number' && typeof raw.service === 'string') {
+      return { pid: raw.pid, port: raw.port, service: raw.service };
+    }
+  } catch { /* no record */ }
+  return undefined;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+function checkSystemProxy(report: Reporter): void {
+  try {
+    const settings: ServiceProxySetting[] = [];
+    for (const service of listNetworkServices()) {
+      try {
+        settings.push(readServiceProxy(service, 'HTTP'), readServiceProxy(service, 'HTTPS'));
+      } catch { /* service without proxy settings (e.g. some VPNs) */ }
+    }
+    const record = readOwnerRecord();
+    const result = assessSystemProxy(settings, record, record ? isProcessAlive(record.pid) : false);
+    if (result.status === 'pass') pass(report, 'system-proxy', result.label);
+    else warn(report, 'system-proxy', result.label, result.fix);
+  } catch {
+    warn(report, 'system-proxy', 'Could not check the macOS system proxy');
+  }
+}
+
 // ─── Main entry point ───
 
 /**
@@ -627,6 +760,7 @@ export async function runDoctor(argv: string[] = []): Promise<void> {
   if (process.platform === 'darwin') {
     checkMitmproxy(report);
     checkNetworkExtension(report);
+    checkSystemProxy(report);
   }
 
   // ─── Summary ───

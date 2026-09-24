@@ -3,16 +3,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  assessSystemProxy,
   buildDoctorJson,
   isSupportedNodeVersion,
   parseAvdImageTag,
   parseAvdApiLevel,
   parseDoctorConfigFlag,
+  parseNetworksetupProxy,
   scanAvdImageTags,
   stripAnsi,
   summarizeAvdImages,
   type AvdImageInfo,
   type CheckEntry,
+  type ServiceProxySetting,
 } from '../doctor.js';
 
 describe('buildDoctorJson()', () => {
@@ -240,5 +243,56 @@ describe('parseDoctorConfigFlag()', () => {
     expect(() => parseDoctorConfigFlag(['-c'])).toThrow(/Missing value for -c/);
     expect(() => parseDoctorConfigFlag(['-c', '--json'])).toThrow(/Missing value for -c/);
     expect(() => parseDoctorConfigFlag(['--config='])).toThrow(/Missing value for --config/);
+  });
+});
+
+describe('parseNetworksetupProxy()', () => {
+  it('reads an enabled proxy', () => {
+    expect(parseNetworksetupProxy('Enabled: Yes\nServer: 127.0.0.1\nPort: 52429\nAuthenticated Proxy Enabled: 0\n'))
+      .toEqual({ enabled: true, server: '127.0.0.1', port: 52429 });
+  });
+
+  it('reads a disabled, empty proxy', () => {
+    expect(parseNetworksetupProxy('Enabled: No\nServer: \nPort: 0\nAuthenticated Proxy Enabled: 0\n'))
+      .toEqual({ enabled: false, server: '', port: 0 });
+  });
+});
+
+describe('assessSystemProxy()', () => {
+  const setting = (over: Partial<ServiceProxySetting>): ServiceProxySetting => ({
+    service: 'Wi-Fi', kind: 'HTTP', enabled: true, server: '127.0.0.1', port: 52429, ...over,
+  });
+  const record = { pid: 4242, port: 52429, service: 'Wi-Fi' };
+
+  it('passes when no proxy is set', () => {
+    expect(assessSystemProxy([setting({ enabled: false }), setting({ kind: 'HTTPS', enabled: false })], undefined, false).status)
+      .toBe('pass');
+  });
+
+  it('passes a proxy that is not on loopback (not Tapsmith)', () => {
+    const r = assessSystemProxy([setting({ server: 'proxy.corp', port: 3128 })], undefined, false);
+    expect(r.status).toBe('pass');
+    expect(stripAnsi(r.label)).toContain('not set by Tapsmith');
+  });
+
+  it('passes while the owning daemon is running', () => {
+    const r = assessSystemProxy([setting({}), setting({ kind: 'HTTPS' })], record, true);
+    expect(r.status).toBe('pass');
+    expect(stripAnsi(r.label)).toContain('pid 4242');
+  });
+
+  it('warns about a proxy left by an exited daemon, with the reset command', () => {
+    const r = assessSystemProxy([setting({}), setting({ kind: 'HTTPS' })], record, false);
+    expect(r.status).toBe('warn');
+    expect(r.label).toContain('left behind by an exited Tapsmith daemon');
+    expect(r.status === 'warn' && r.fix).toBe(
+      'Run: networksetup -setwebproxystate "Wi-Fi" off && networksetup -setsecurewebproxystate "Wi-Fi" off',
+    );
+  });
+
+  it('warns about an unowned loopback proxy (pre-record leftover or another local proxy)', () => {
+    const r = assessSystemProxy([setting({ port: 8888 })], record, true);
+    expect(r.status).toBe('warn');
+    expect(r.label).toContain('which Tapsmith does not own');
   });
 });

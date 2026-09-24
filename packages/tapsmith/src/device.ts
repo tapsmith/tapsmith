@@ -35,7 +35,7 @@ import { withActionProgress } from './action-progress.js';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import { Tracing } from './trace/tracing.js';
 import { type TraceCollector, getActiveTraceCollector, extractStack } from './trace/trace-collector.js';
-import type { ActionCategory, ConsoleLevel } from './trace/types.js';
+import type { ActionCategory, ConsoleLevel, NetworkCaptureRoute } from './trace/types.js';
 import { tracedAction, type TracedActionExtra } from './trace/traced-action.js';
 import { appResetModeFromWire } from './grpc-client.js';
 import {
@@ -172,6 +172,12 @@ export class Device {
    */
   private _networkCaptureEverStarted = false;
   private _networkCaptureError: string | undefined;
+  /**
+   * @internal — How the last successful capture start routed this device's
+   * traffic (recorded per device in trace metadata). Undefined when capture
+   * is not running or the daemon predates route reporting.
+   */
+  _networkCaptureRoute: NetworkCaptureRoute | undefined;
   /** Set by the runner on retry attempts — see _setForceColdDeepLinks. */
   private _forceColdDeepLinks = false;
 
@@ -867,8 +873,12 @@ export class Device {
     } catch (err) {
       this._networkCaptureActive = false;
       this._networkCaptureError = err instanceof Error ? err.message : String(err);
+      this._networkCaptureRoute = undefined;
       throw err;
     }
+    // Kept across the stop that ends the test: the trace metadata is written
+    // after capture has been drained.
+    this._networkCaptureRoute = res.success ? res.route : undefined;
     if (res.success) {
       this._networkCaptureActive = true;
       this._networkCaptureEverStarted = true;

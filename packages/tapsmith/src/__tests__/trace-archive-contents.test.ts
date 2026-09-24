@@ -775,6 +775,31 @@ describe('generated trace archive', () => {
     expect(archive.metadata.traceConfig).toMatchObject({ network: true });
   });
 
+  it('records the route each device captured through (PILOT-319)', async () => {
+    const { archive } = await runThreeActions({
+      trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: true, deviceLogs: false },
+    }, {
+      startNetworkCapture: vi.fn(async () => ({
+        requestId: '1', success: true, proxyPort: 12345, errorMessage: 'host-wide warning', route: 'ios-system-proxy',
+      })),
+    });
+
+    // Single-device traces carry only `device` (`devices` is written for groups).
+    expect(archive.metadata.device.networkCaptureRoute).toBe('ios-system-proxy');
+  });
+
+  it('records no route when capture failed to start', async () => {
+    const { archive } = await runThreeActions({
+      trace: { mode: 'on', screenshots: false, snapshots: false, sources: false, network: true, deviceLogs: false },
+    }, {
+      startNetworkCapture: vi.fn(async () => ({
+        requestId: '1', success: false, proxyPort: 0, errorMessage: 'NE failed', route: undefined,
+      })),
+    });
+
+    expect(archive.metadata.device.networkCaptureRoute).toBeUndefined();
+  });
+
   it('snapshots the test source alongside the events that reference it', async () => {
     const testFile = path.join(tempRoot, 'source-under-test.ts');
     fs.writeFileSync(testFile, 'export const marker = "traced source";\n');

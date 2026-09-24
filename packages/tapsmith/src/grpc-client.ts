@@ -13,6 +13,7 @@ import * as crypto from 'node:crypto';
 import { type Selector, selectorToProto } from './selectors.js';
 import { TestAbortedError } from './abort.js';
 import { isCurrentAttemptClosed, fencedRejection } from './attempt-fence.js';
+import type { NetworkCaptureRoute } from './trace/types.js';
 
 // ─── Types mirroring proto messages ───
 
@@ -271,6 +272,19 @@ const APP_RESET_WIRE_MODE: Record<AppResetRequestMode, string> = {
 export function appResetModeFromWire(value: string): AppResetRequestMode | undefined {
   return (Object.keys(APP_RESET_WIRE_MODE) as AppResetRequestMode[])
     .find((k) => APP_RESET_WIRE_MODE[k] === value);
+}
+
+const NETWORK_CAPTURE_ROUTE_WIRE: Record<string, NetworkCaptureRoute> = {
+  NETWORK_CAPTURE_ROUTE_IOS_NETWORK_EXTENSION: 'ios-network-extension',
+  NETWORK_CAPTURE_ROUTE_IOS_SYSTEM_PROXY: 'ios-system-proxy',
+  NETWORK_CAPTURE_ROUTE_IOS_DEVICE_PROXY: 'ios-device-proxy',
+  NETWORK_CAPTURE_ROUTE_ANDROID_TRANSPARENT: 'android-transparent',
+  NETWORK_CAPTURE_ROUTE_ANDROID_HTTP_PROXY: 'android-http-proxy',
+};
+
+/** Map the wire `NetworkCaptureRoute` enum name; undefined for UNSPECIFIED or an unknown value. */
+export function networkCaptureRouteFromProto(value: string | undefined): NetworkCaptureRoute | undefined {
+  return value ? NETWORK_CAPTURE_ROUTE_WIRE[value] : undefined;
 }
 
 // ─── Swipe / scroll options exposed to the SDK ───
@@ -993,12 +1007,19 @@ export class TapsmithGrpcClient {
 
   // ── Trace Support (PILOT-85) ──
 
-  async startNetworkCapture(options?: { requireIsolation?: boolean; httpPorts?: number[] }): Promise<{ success: boolean; proxyPort: number; errorMessage: string }> {
-    return this.call('startNetworkCapture', {
+  async startNetworkCapture(options?: { requireIsolation?: boolean; httpPorts?: number[] }): Promise<{
+    success: boolean;
+    proxyPort: number;
+    errorMessage: string;
+    /** How traffic reaches the proxy; undefined on failure or from an older daemon. */
+    route?: NetworkCaptureRoute;
+  }> {
+    const res = await this.call<{ success: boolean; proxyPort: number; errorMessage: string; route?: string }>('startNetworkCapture', {
       requestId: requestId(),
       requireIsolation: options?.requireIsolation ?? false,
       httpPorts: options?.httpPorts ?? [],
     });
+    return { ...res, route: networkCaptureRouteFromProto(res.route) };
   }
 
   async stopNetworkCapture(options?: { keepRunning?: boolean }): Promise<{
