@@ -977,7 +977,12 @@ function configLoadError(configPath: string, err: unknown, nativeError?: unknown
   if (nativeError !== undefined && errorMessage(nativeError) !== detail) {
     detail += `\n(Without tsx, Node reported: ${errorMessage(nativeError)})`;
   }
-  return new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
+  const error = new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
+  // Callers print `stack`, which never includes `cause`: without this the
+  // trace shows Tapsmith's loader frames and not the line in the config.
+  const causeStack = err instanceof Error ? err.stack : undefined;
+  if (causeStack) error.stack = `${error.name}: ${error.message}\nCaused by: ${causeStack}`;
+  return error;
 }
 
 async function importConfigModuleWithTsx(configPath: string, nativeError: unknown): Promise<Record<string, unknown>> {

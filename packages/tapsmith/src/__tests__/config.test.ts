@@ -130,11 +130,14 @@ describe('loadConfig rootDir anchoring', () => {
       );
     });
 
-    it('keeps the import error as the cause', async () => {
-      writeConfig(root, 'throw new Error("boom")\n');
+    it('keeps the import error as the cause, and its trace in the stack', async () => {
+      // The CLI prints `stack`, never `cause`; the config's line must be in it.
+      const file = writeConfig(root, 'function explode() { throw new Error("boom"); }\nexplode();\n');
       const err = await loadConfig(root).catch((e: unknown) => e);
       expect((err as Error).cause).toBeInstanceOf(Error);
       expect(((err as Error).cause as Error).message).toBe('boom');
+      expect((err as Error).stack).toContain('Caused by: Error: boom');
+      expect((err as Error).stack).toContain(`${path.basename(file)}:1`);
     });
 
     it('rejects a discovered config whose own import cannot be resolved', async () => {
