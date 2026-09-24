@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseVerifyArgs, pickVerifyTarget, cleanupVerifySmokeTest, scaffoldVerifySmokeTest, summarizeVerifyReport } from '../verify.js';
+import { parseVerifyArgs, pickVerifyTarget, cleanupVerifySmokeTest, scaffoldVerifySmokeTest, summarizeVerifyReport, runVerify } from '../verify.js';
 
 describe('parseVerifyArgs()', () => {
   it('parses --json and --config', () => {
@@ -92,6 +92,32 @@ describe('scaffoldVerifySmokeTest()', () => {
       expect(fs.existsSync(testDir)).toBe(false);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+// A config that exists but cannot be loaded is a CONFIG_ERROR (PILOT-262).
+// The fix must point at the file: `init --yes` refuses to overwrite it.
+describe('runVerify() with a config that fails to load', () => {
+  it('reports CONFIG_ERROR naming the file, with a fix that does not suggest init', async () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-verify-cfg-')));
+    const cwd = process.cwd();
+    const exitCode = process.exitCode;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const file = path.join(dir, 'tapsmith.config.mjs');
+      fs.writeFileSync(file, 'throw new Error("boom")\n');
+      process.chdir(dir);
+      await runVerify(['--json']);
+      const out = JSON.parse(String(log.mock.calls[0]?.[0])) as { error: { code: string; message: string; fix: string } };
+      expect(out.error.code).toBe('CONFIG_ERROR');
+      expect(out.error.message).toContain(`Failed to load config file ${file}: boom`);
+      expect(out.error.fix).not.toMatch(/init/);
+    } finally {
+      log.mockRestore();
+      process.chdir(cwd);
+      process.exitCode = exitCode;
+      fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 });

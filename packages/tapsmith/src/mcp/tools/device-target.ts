@@ -50,7 +50,7 @@ export async function deviceClientFor(
   const configError = sessionConfigErrorOf(dispatcher);
   if (configError && !request.device) {
     throw new Error(
-      `The Tapsmith config could not be loaded, so this session has no device to use: ${configError} `
+      `The Tapsmith config could not be loaded, so this session has no device to use: ${configError}\n`
       + 'Fix the config and restart the MCP server (the load is not retried within a session), or pass `device` to use one directly.',
     );
   }

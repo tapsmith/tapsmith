@@ -456,6 +456,30 @@ describe('tapsmith_session_info config reporting', () => {
   });
 });
 
+// A config that exists but failed to load (PILOT-262) is not "using built-in
+// defaults", and nothing will pick a device; the tools must not say so.
+describe('a session whose config failed to load', () => {
+  const configError = 'Failed to load config file /project/tapsmith.config.ts: boom';
+  const info = { timeout: 0, retries: 0, projects: [], configError, configWarning: `Failed to load the Tapsmith config: ${configError}` };
+
+  it('session_info says the config failed to load, not that defaults are in use', async () => {
+    const { server, tools } = makeToolCapture();
+    registerSessionInfoTool(server, makeDispatcher({ getSessionInfo: () => info }));
+    const result = await tools.get('tapsmith_session_info')!({}, extra);
+    const text = result.content.map((c) => (c.type === 'text' ? c.text : '')).join('\n');
+    expect(text).toContain('Config: failed to load');
+    expect(text).not.toContain('built-in defaults');
+    expect(text).not.toContain('picks one');
+    expect(text).toContain('WARNING: Failed to load the Tapsmith config');
+  });
+
+  it('list_tests says why nothing was discovered', async () => {
+    const text = await callListTests(makeDispatcher({ getSessionInfo: () => info }));
+    expect(text).toContain('the Tapsmith config could not be loaded');
+    expect(text).toContain(configError);
+  });
+});
+
 describe('loadMcpConfig config-file reporting', () => {
   let root: string;
   let originalCwd: string;

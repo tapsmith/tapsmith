@@ -861,9 +861,6 @@ export function configPathOf(config: TapsmithConfig): string | undefined {
   return (config as unknown as Record<symbol, string | undefined>)[CONFIG_PATH];
 }
 
-/** tsx's ESM hooks for config imports: one namespaced registration per process. */
-let configEsmImport: Promise<(specifier: string, parentURL: string) => Promise<unknown>> | undefined;
-
 /** tsx fallback imports run one at a time; see `importConfigModule`. */
 let configImportQueue: Promise<unknown> = Promise.resolve();
 
@@ -930,11 +927,7 @@ function firstStackFrameIsCompileStep(err: Error): boolean {
  * Import a config file, rejecting with an error that names it.
  *
  * Natively first, exactly as before, so a config the process can import
- * shares its module instances (the SDK included) with the process. A config
- * that needs the fallback gets its own instances of everything it imports —
- * the namespace is carried to every import in its graph — so nothing may
- * rely on identity between config values and the process's modules beyond
- * the `Symbol.for` markers used here. Only when
+ * shares its module instances (the SDK included) with the process. Only when
  * the process's loader cannot handle it does the import go through tsx. The
  * CLI loads the config before it re-execs under tsx, and bare Node cannot
  * import every valid config: a TypeScript one with a `./helpers.js`
@@ -943,16 +936,19 @@ function firstStackFrameIsCompileStep(err: Error): boolean {
  * with a load failure now fatal it would break those configs outright. A
  * config that ran and threw is reported as it is, not run a second time.
  *
- * The fallback's ESM goes through one namespaced tsx registration, created on
- * first use and kept: Node cannot remove a `module.register` hook, so one per
- * load would grow the hook chain for the life of the process, and the
- * namespace keeps it off every import but the config's own graph (and gives
- * the config a fresh URL, clear of the failed native attempt's cache entry).
- * CommonJS — which tsx compiles a TypeScript config to in a package without
- * `"type": "module"` — needs tsx's global `require` hooks, registered only
- * for the duration of the import. Fallback loads are serialised because those
- * hooks are process-global: two overlapping loads would each restore the
- * other's half-registered state.
+ * The fallback registers tsx's ESM and CommonJS hooks for the duration of the
+ * import — what the `tsx` binary does, and CommonJS is what tsx compiles a
+ * TypeScript config to in a package without `"type": "module"`. The config
+ * is imported under a fresh URL, so it and anything it imports through tsx
+ * are separate module instances from the process's: nothing may rely on
+ * identity between config values and the process's modules beyond the
+ * `Symbol.for` markers used here. tsx's namespaced registration would scope
+ * the hooks more tightly, but from tsx 4.23 it cannot load a CommonJS-compiled
+ * config at all. Node cannot remove a `module.register` hook, so each
+ * fallback load leaves one deactivated hook behind; fallback loads are rare
+ * and few per process. They are serialised because the hooks are
+ * process-global: two overlapping loads would each restore the other's
+ * half-registered state.
  *
  * Validation errors raised after the import (by `applyConfigDefaults`) already
  * say what is wrong and propagate as they are, and so does a failure to load
@@ -1027,17 +1023,10 @@ function isUnresolvedForTsxToo(nativeError: unknown): boolean {
 }
 
 async function importConfigModuleWithTsx(configPath: string, nativeError: unknown): Promise<Record<string, unknown>> {
-  configEsmImport ??= import('tsx/esm/api')
-    .then((esm) => esm.register({ namespace: 'tapsmith-config' }).import)
-    .catch((err: unknown) => {
-      // Not cached: a later load in this process should try again.
-      configEsmImport = undefined;
-      throw err;
-    });
-  let esmImport: Awaited<NonNullable<typeof configEsmImport>>;
+  let esm: typeof import('tsx/esm/api');
   let cjs: typeof import('tsx/cjs/api');
   try {
-    [esmImport, cjs] = await Promise.all([configEsmImport, import('tsx/cjs/api')]);
+    [esm, cjs] = await Promise.all([import('tsx/esm/api'), import('tsx/cjs/api')]);
   } catch (tsxError) {
     // Not the config's fault, but the config's own error is still the one to
     // show: the retry that might have got past it could not start.
@@ -1052,8 +1041,12 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
   const before = { ...extensions };
   const unregisterCjs = cjs.register();
   const installed = { ...extensions };
+  const unregisterEsm = esm.register();
   try {
-    const mod = (await esmImport(pathToFileURL(configPath).href, import.meta.url)) as Record<string, unknown>;
+    // A query gives the config a URL the failed native attempt did not leave
+    // in the ESM cache; without it Node replays that failure.
+    const url = `${pathToFileURL(configPath).href}?tapsmith-config=${Date.now()}`;
+    const mod = (await import(url)) as Record<string, unknown>;
     // A config compiled to CommonJS comes back with the whole `module.exports`
     // — the `__esModule`-marked object whose own `default` is the config — as
     // the namespace's `default`. The tsx binary unwraps that itself; the
@@ -1067,6 +1060,7 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
     throw configLoadError(configPath, err, nativeError);
   } finally {
     unregisterCjs();
+    await unregisterEsm();
     for (const key of Object.keys(installed)) {
       if (installed[key] === before[key]) continue;
       const current = Object.prototype.hasOwnProperty.call(extensions, key) ? extensions[key] : undefined;
