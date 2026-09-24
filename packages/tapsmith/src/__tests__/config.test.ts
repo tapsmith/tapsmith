@@ -345,24 +345,57 @@ describe('loadConfig rootDir anchoring', () => {
       expect(out.error).toBe(`Failed to load config file ${file}: Set APK_PATH 0`);
     });
 
-    // Errors tsx cannot get past either: retrying would only run the
-    // config's side effects a second time.
-    it('does not retry through tsx a missing module with no TypeScript source, or __dirname in an .mjs config', () => {
+    // Loader failures tsx gets past that Node's error cannot identify: an
+    // extensionless require of a `.ts` file, a tsconfig `paths` alias.
+    it('loads a CommonJS config requiring a TypeScript helper without its extension', () => {
       writePackage(root, 'commonjs');
-      const cjsFile = path.join(root, 'tapsmith.config.js');
-      fs.writeFileSync(cjsFile, 'globalThis.__runs = (globalThis.__runs ?? 0) + 1;\nrequire("./local-missing");\nmodule.exports = {};\n', 'utf-8');
-      const esmDir = path.join(root, 'esm');
-      fs.mkdirSync(esmDir);
-      const esmFile = path.join(esmDir, 'tapsmith.config.mjs');
-      fs.writeFileSync(esmFile, 'globalThis.__runs = (globalThis.__runs ?? 0) + 1;\nexport default { here: __dirname };\n', 'utf-8');
-      const out = inBareNode<{ cjs: [string, number]; esm: [string, number] }>(
-        'const attempt = async (d) => { globalThis.__runs = 0; try { await loadConfig(d); return ["", globalThis.__runs]; } catch (e) { return [e.message, globalThis.__runs]; } };\n'
-        + `emit({ cjs: await attempt(${JSON.stringify(root)}), esm: await attempt(${JSON.stringify(esmDir)}) });\n`,
+      writeHelper(root);
+      const file = path.join(root, 'tapsmith.config.js');
+      fs.writeFileSync(file, 'const { platform } = require("./helpers");\nmodule.exports = { platform, retries: 2 };\n', 'utf-8');
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+
+    it('loads a TypeScript config importing through a tsconfig paths alias', () => {
+      writePackage(root, 'module');
+      fs.mkdirSync(path.join(root, 'src'));
+      fs.writeFileSync(path.join(root, 'src', 'helpers.ts'), 'export const platform: string = "ios";\n', 'utf-8');
+      fs.writeFileSync(path.join(root, 'tsconfig.json'), '{ "compilerOptions": { "baseUrl": ".", "paths": { "@/*": ["src/*"] } } }\n', 'utf-8');
+      const file = path.join(root, 'tapsmith.config.ts');
+      fs.writeFileSync(file, 'import { platform } from "@/helpers";\nexport default { platform, retries: 2 };\n', 'utf-8');
+      expect(loadInBareNode(root)).toEqual({ path: file, platform: 'ios', retries: 2 });
+    });
+
+    it('still rejects a config whose missing module tsx cannot find either, naming it', () => {
+      writePackage(root, 'commonjs');
+      const file = path.join(root, 'tapsmith.config.js');
+      fs.writeFileSync(file, 'require("./local-missing");\nmodule.exports = {};\n', 'utf-8');
+      const out = inBareNode<{ error?: string }>(
+        `try { await loadConfig(${JSON.stringify(root)}); emit({}); } catch (e) { emit({ error: e.message }); }\n`,
       );
-      expect(out.cjs[0]).toContain(`Failed to load config file ${cjsFile}:`);
-      expect(out.cjs[1]).toBe(1);
-      expect(out.esm[0]).toContain(`Failed to load config file ${esmFile}:`);
-      expect(out.esm[1]).toBe(1);
+      expect(out.error).toContain(`Failed to load config file ${file}:`);
+      expect(out.error).toMatch(/local-missing/);
+    });
+
+    // A native load running while another load's tsx hooks are registered
+    // would be compiled by them and lose the CommonJS unwrap: silently the
+    // defaults. Loads, native ones included, run one at a time.
+    it('loads a native config correctly while another config is loading through tsx', () => {
+      const slow = path.join(root, 'slow');
+      fs.mkdirSync(slow);
+      writePackage(slow, 'module');
+      fs.writeFileSync(path.join(slow, 'tapsmith.config.ts'), 'enum M { A = 1 }\nawait new Promise((r) => setTimeout(r, 300));\nexport default { retries: M.A };\n', 'utf-8');
+      const plain = path.join(root, 'plain');
+      fs.mkdirSync(plain);
+      writePackage(plain, 'commonjs');
+      fs.writeFileSync(path.join(plain, 'tapsmith.config.ts'), 'const platform: string = "ios";\nexport default { platform, retries: 3 };\n', 'utf-8');
+      const out = inBareNode<Array<{ platform?: string; retries?: number }>>(
+        `const a = loadConfig(${JSON.stringify(slow)});\n`
+        + 'await new Promise((r) => setTimeout(r, 100));\n'
+        + `const b = loadConfig(${JSON.stringify(plain)});\n`
+        + 'const cs = await Promise.all([a, b]);\n'
+        + 'emit(cs.map((c) => ({ platform: c.platform, retries: c.retries })));\n',
+      );
+      expect(out).toEqual([{ platform: undefined, retries: 1 }, { platform: 'ios', retries: 3 }]);
     });
 
     // A type-only named import reached through require(esm) is rejected by
