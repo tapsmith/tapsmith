@@ -2107,16 +2107,19 @@ class CommandHandler {
         case "hideKeyboard":
             // Check if keyboard is actually shown before attempting dismissal.
             // A tree that cannot be read is no evidence either way: refuse
-            // rather than report a keyboard gone that may still be up.
-            // An app that is not in front has no keyboard of its own up (a
-            // defensive call after another app came to the front).
-            let appState = safeAppState(app)
-            guard appState != .notRunning, appState != .runningBackground,
-                  appState != .runningBackgroundSuspended else {
-                snapshotFinder.clearFocusedTextInputHint()
-                return ["success": true]
-            }
+            // rather than report a keyboard gone that may still be up —
+            // unless the app is not in front (a defensive call after another
+            // app came to the front), which has no keyboard of its own up.
+            // `app.state` is only consulted once the tree has failed: it is
+            // unreliable for an externally launched app until XCUITest
+            // attaches (see `dismissOpenURLDialogAndWaitForContent`).
             guard let kbSnapshot = try? snapshotFinder.takeSnapshot() else {
+                let appState = safeAppState(app)
+                if appState == .notRunning || appState == .runningBackground
+                    || appState == .runningBackgroundSuspended {
+                    snapshotFinder.clearFocusedTextInputHint()
+                    return ["success": true]
+                }
                 throw AgentError.actionFailed("hideKeyboard could not read the screen to check for the keyboard")
             }
             guard hasKeyboardInSnapshot(kbSnapshot.dictionaryRepresentation) else {

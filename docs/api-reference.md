@@ -523,7 +523,7 @@ if (await device.isKeyboardShown()) {
 
 ### `device.hideKeyboard(): Promise<void>`
 
-Hide the soft keyboard if it is visible. Resolves at once when no keyboard is shown.
+Hide the soft keyboard if it is visible. Resolves at once when no keyboard is shown, or when the app is not in the foreground. On iOS it throws if the app is in front but its screen cannot be read, since it cannot tell whether a keyboard is up.
 
 ```typescript
 await device.hideKeyboard();

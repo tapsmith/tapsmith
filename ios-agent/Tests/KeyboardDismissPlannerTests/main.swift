@@ -235,6 +235,41 @@ do {
 }
 
 do {
+    // A headerless screen that is one full-screen scroll view holding the
+    // field: that scroll view is the field's screen root, and is dragged.
+    let field = R(16, 80, 370, 44)
+    let rows: [Row] = [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .scrollView, "", "", screen),
+        (4, .other, "", "", R(0, 0, 402, 600)),
+        (5, .textField, "Email", "", field),
+    ] + keyboardWindows()
+    checkTrue("full-screen scroll view holding the field: drag",
+              planner(rows).scrollSwipeStart(focusedFrame: field) != nil)
+    // A field in a scroll view (not full screen) gets a blank spot beside it:
+    // the scroll view around it is not in the way.
+    let inScroll: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 758)),
+        (5, .other, "", "", R(0, 116, 402, 600)),
+        (6, .textField, "Email", "", R(16, 132, 370, 44)),
+    ] + keyboardWindows()
+    checkTrue("field inside a scroll view: blank spot beside it",
+              planner(inScroll).blankPoint(focusedFrame: R(16, 132, 370, 44)) != nil)
+}
+
+do {
+    // A stale off-screen keyboard element before the real one: the real one
+    // still counts.
+    var rows = keyboardWindows()
+    rows.insert((2, .keyboard, "", "", R(0, 900, 402, 243)), at: 1)
+    checkTrue("stale off-screen keyboard before the real one: region from the real one",
+              planner(appHead + rows).keyboardRegion.map { $0.minY < 874 && $0.minY >= 529 } ?? false,
+              "\(String(describing: planner(appHead + rows).keyboardRegion))")
+}
+
+do {
     // The largest scroll view has no clear spot; a smaller one does.
     let rows: [Row] = appHead + [
         (4, .collectionView, "", "", R(0, 116, 402, 300)),

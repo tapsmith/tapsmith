@@ -117,10 +117,20 @@ struct KeyboardDismissPlanner {
     /// The screen area the keyboard covers, or nil when no keyboard is on
     /// screen (none in the tree, or one that is zero-sized or off screen).
     var keyboardRegion: CGRect? {
-        guard let region = analyzer.keyboardRegion(keyboardWindows: keyboardWindows) else { return nil }
-        let onScreen = region.intersection(screen)
-        guard !onScreen.isNull, onScreen.width > 0, onScreen.height > 0 else { return nil }
-        return onScreen
+        if let region = analyzer.keyboardRegion(keyboardWindows: keyboardWindows) {
+            let onScreen = region.intersection(screen)
+            if !onScreen.isNull, onScreen.width > 0, onScreen.height > 0 { return onScreen }
+        }
+        // The analyzer reads the first sized keyboard element; a stale one
+        // left off screen (a keyboard-type switch) can come before the real
+        // one. Any keyboard element on screen still covers its own frame.
+        for node in nodes where node.elementType == .keyboard {
+            let onScreen = node.frame.intersection(screen)
+            if !onScreen.isNull, onScreen.width > 0, onScreen.height > 0 {
+                return CGRect(x: screen.minX, y: onScreen.minY, width: screen.width, height: screen.maxY - onScreen.minY)
+            }
+        }
+        return nil
     }
 
     /// The part of the screen an app touch may use: below the status bar and
@@ -208,9 +218,11 @@ struct KeyboardDismissPlanner {
         let dragY = screen.height * Self.swipeFraction
         let dragX = screen.width * Self.swipeFraction
         let root = fieldIndex(focusedFrame).flatMap { screenRoot(of: $0) }
+        // The root itself counts: on a headerless screen it can be the
+        // scroll view the field is in.
         func inFieldsScreen(_ i: Int) -> Bool {
             guard let root else { return true }
-            return i > root && i < nodes[root].subtreeEnd
+            return i >= root && i < nodes[root].subtreeEnd
         }
 
         // Scroll views left visible above the keyboard, largest first.
@@ -282,6 +294,9 @@ struct KeyboardDismissPlanner {
         let area = touchableArea
         guard !area.isNull, let field = fieldIndex(focusedFrame) else { return nil }
         let windows = keyboardWindows
+        // The field's own containers (a scroll view it is in, a tap-to-dismiss
+        // wrapper) are where the tap is meant to land, not in its way.
+        let fieldAncestors = Set(analyzer.ancestors(of: field))
         // Never a container covering the whole screen: that is where a sheet's
         // backdrop lives (a headerless screen's root looks the same, so such a
         // screen gets no blank tap).
@@ -289,6 +304,7 @@ struct KeyboardDismissPlanner {
             let rect = nodes[container].frame.intersection(area)
             if rect.isNull { continue }
             let point = clearestPoint(in: rect) { i in
+                if fieldAncestors.contains(i) { return false }
                 if let w = nodes[i].window, windows.contains(w) { return false }
                 return !isPlain(i)
             }
