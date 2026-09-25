@@ -9,7 +9,7 @@ import { defineConfig, type TapsmithConfig } from '../config.js';
 let tempDir: string;
 let stateFile: string;
 
-function harness(opts: { env?: NodeJS.ProcessEnv; config?: TapsmithConfig | Error } = {}) {
+function harness(opts: { env?: NodeJS.ProcessEnv; config?: TapsmithConfig | Error; realLoader?: boolean } = {}) {
   const out: string[] = [];
   const err: string[] = [];
   const telemetry = new Telemetry({
@@ -24,7 +24,7 @@ function harness(opts: { env?: NodeJS.ProcessEnv; config?: TapsmithConfig | Erro
     telemetry,
     stdout: (t) => out.push(t),
     stderr: (t) => err.push(t),
-    loadConfig: async () => {
+    loadConfig: opts.realLoader ? undefined : async () => {
       if (opts.config instanceof Error) throw opts.config;
       return opts.config ?? defineConfig();
     },
@@ -91,17 +91,17 @@ describe('tapsmith telemetry status', () => {
   });
 
   it('flags a present-but-unreadable config instead of silently reporting enabled (PILOT-330 review)', async () => {
-    // A tapsmith.config in the cwd that loadConfig could not import returns
-    // defaults with no path; status must say the config was not consulted.
+    // A tapsmith.config in the cwd that cannot be imported makes loadConfig
+    // reject (PILOT-262); status must say the config was not consulted.
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-cli-cwd-'));
     fs.writeFileSync(path.join(dir, 'tapsmith.config.mjs'), 'throw new Error("boom")\n');
     const cwd = process.cwd();
     process.chdir(dir);
     try {
-      // loadConfig here stands in for the swallowed import failure: defaults, no path.
-      const h = harness({ config: defineConfig() });
+      const h = harness({ realLoader: true });
       expect(await h.run(['status'])).toBe(0);
-      expect(h.text()).toContain('could not be read here');
+      expect(h.text()).toContain('config could not be loaded');
+      expect(h.text()).toContain('boom');
       h.out.length = 0;
       expect(await h.run(['status', '--json'])).toBe(0);
       expect(JSON.parse(h.text())).toMatchObject({ configConsulted: false });

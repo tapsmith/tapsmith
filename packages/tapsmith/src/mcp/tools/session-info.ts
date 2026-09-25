@@ -15,7 +15,9 @@ export function registerSessionInfoTool(server: McpServer, dispatcher: TestDispa
       // Name the config first: everything below is derived from it, and a
       // session running on synthesized defaults is otherwise indistinguishable
       // from one backed by a real project.
-      lines.push(`Config: ${info.configPath ?? 'none — using built-in defaults'}`);
+      // A config that exists but failed to load is not "using defaults": the
+      // session has no config, and device tools refuse until it is fixed.
+      lines.push(`Config: ${info.configPath ?? (info.configError ? 'failed to load — see the warning below' : 'none — using built-in defaults')}`);
       // One device line per platform: a multi-platform session runs on several
       // at once, and a platform that failed to provision must not look like it
       // is simply sharing the other one's device.
@@ -39,6 +41,8 @@ export function registerSessionInfoTool(server: McpServer, dispatcher: TestDispa
         lines.push(`Device: ${targets[0].device ?? info.device ?? unavailable(targets[0])}`);
       } else if (info.device) {
         lines.push(`Device: ${info.device}`);
+      } else if (info.configError) {
+        lines.push('Device: none — device tools need the config (or an explicit `device`)');
       } else {
         // A headless session picks its devices only when something needs one,
         // so a `run_tests` can still name the device to use — with synthesized

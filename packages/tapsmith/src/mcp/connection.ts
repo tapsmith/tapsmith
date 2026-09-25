@@ -528,22 +528,26 @@ export async function listAllDevices(): Promise<DeviceInfoProto[]> {
 /**
  * Whether discovery's own daemon should select a device (and start its agent).
  *
- * Only where nothing else will. A headless session with a config resolves a
- * target per platform before any run or device tool, and `prepareTarget`
- * selects the device and starts the agent then — on the device the run named,
- * if it named one. Selecting here first put an agent on whichever device
- * looked best, another session's as likely as not, on nothing more than a
- * `list_devices` (PILOT-342). Without a config there are no targets, and a UI
- * session's endpoint normally adopts the UI's own daemons, so those keep the
- * old behaviour.
+ * Only in a UI session, whose endpoint normally adopts the UI's own daemons.
+ * A headless session resolves a target per platform before any run or device
+ * tool, and `prepareTarget` selects the device and starts the agent then — on
+ * the device the run named, if it named one. Selecting here first put an
+ * agent on whichever device looked best, another session's as likely as not,
+ * on nothing more than a `list_devices` (PILOT-342).
+ *
+ * That holds with no config file too (the session runs on the defaults, which
+ * still resolve targets), and with one that fails to load: the load error is
+ * the session's answer, not a reason to claim a device (PILOT-262).
  *
  * @internal — exported for unit testing.
  */
-export function discoverySelectsDevice(opts: { uiMode: boolean; hasConfig: boolean }): boolean {
-  return opts.uiMode || !opts.hasConfig;
+export function discoverySelectsDevice(opts: { uiMode: boolean }): boolean {
+  return opts.uiMode;
 }
 
 async function discover(): Promise<void> {
+  // A config that fails to load leaves discovery without one; the session's
+  // tools report the load error.
   const config = await loadMcpConfig(_configFile).then((result) => result.config).catch(() => null);
   _discoveredConfig = config;
 
@@ -721,7 +725,7 @@ async function discover(): Promise<void> {
     // platform silently runs against the first one's.
     // A device a UI session holds is never preferred: the target's own guard
     // refuses that pin by name.
-    conn.preparedDevice = discoverySelectsDevice({ uiMode: _uiMode, hasConfig: config !== null })
+    conn.preparedDevice = discoverySelectsDevice({ uiMode: _uiMode })
       ? await setDeviceAndAgent(conn.client, config)
       : undefined;
   } catch (err) {

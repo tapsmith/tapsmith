@@ -166,8 +166,11 @@ export async function runVerify(argv: string[]): Promise<void> {
     try {
       config = await loadConfig(undefined, args.config);
     } catch (err) {
+      // A config that exists but cannot be loaded, a missing --config path or
+      // an invalid value: not a missing config, so not `init --yes`, which
+      // would refuse to overwrite an existing one.
       emitError(args.json, 'CONFIG_ERROR', `Could not load config: ${err instanceof Error ? err.message : String(err)}`,
-        'Run: npx tapsmith init --yes (or npx tapsmith doctor --json to diagnose)');
+        'Fix the config problem described above (npx tapsmith doctor --json also reports it)');
       return;
     }
 

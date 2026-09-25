@@ -15,7 +15,12 @@ export function registerListTestsTool(server: McpServer, dispatcher: TestDispatc
       const projects = dispatcher.getProjects();
       const failures = dispatcher.getDiscoveryErrors?.() ?? [];
       if (tree.length === 0 && failures.length === 0) {
-        return { content: [{ type: 'text' as const, text: 'No test files discovered.' }] };
+        // With no config there is nothing to discover from; say why.
+        const configError = dispatcher.getSessionInfo().configError;
+        const text = configError
+          ? `No test files discovered: the Tapsmith config could not be loaded.\n${configError}`
+          : 'No test files discovered.';
+        return { content: [{ type: 'text' as const, text }] };
       }
 
       const lines: string[] = [];

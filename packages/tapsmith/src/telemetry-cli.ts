@@ -8,9 +8,8 @@
  */
 
 import * as os from 'node:os';
-import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { loadConfig, configPathOf, CONFIG_CANDIDATES, type TapsmithConfig } from './config.js';
+import { loadConfig, configPathOf, type TapsmithConfig } from './config.js';
 import { telemetry as defaultTelemetry, TELEMETRY_DOCS_URL, type Telemetry, type TelemetryStatus } from './telemetry.js';
 
 export interface TelemetryCommandDeps {
@@ -70,10 +69,8 @@ function tilde(file: string): string {
 interface ConfigView {
   status: TelemetryStatus;
   configPath: string | undefined;
-  /** Set when loading the config threw (an explicit `-c` file, or a validation error). */
+  /** Set when loading the config threw: a file that exists but cannot be imported, or a validation error. */
   configError: string | undefined;
-  /** A config file is present in the cwd but was not consulted (import failed, swallowed). */
-  configPresentButUnread: boolean;
 }
 
 /**
@@ -94,19 +91,12 @@ async function resolveConfigView(
     configError = err instanceof Error ? err.message : String(err);
   }
   const configPath = config ? configPathOf(config) : undefined;
-  // Discovery returns defaults (no path) both when nothing exists and when a
-  // present file failed to import; only the latter is a caveat worth naming.
-  const configPresentButUnread = !configError && !configPath && !configFile
-    && CONFIG_CANDIDATES.some((name) => fs.existsSync(path.resolve(process.cwd(), name)));
-  return { status: telemetry.status(config), configPath, configError, configPresentButUnread };
+  return { status: telemetry.status(config), configPath, configError };
 }
 
 function configNote(view: ConfigView): string | undefined {
   if (view.configError) {
     return `the config could not be loaded (${view.configError}); its \`telemetry\` key was not consulted`;
-  }
-  if (view.configPresentButUnread) {
-    return 'a tapsmith config file is present but could not be read here; its `telemetry` key was not consulted';
   }
   return undefined;
 }

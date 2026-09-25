@@ -5,6 +5,7 @@ import * as path from 'node:path';
 import {
   assessSystemProxy,
   buildDoctorJson,
+  configLoadFailure,
   isSupportedNodeVersion,
   parseAvdImageTag,
   parseAvdApiLevel,
@@ -323,5 +324,29 @@ describe('assessSystemProxy()', () => {
     const r = assessSystemProxy([setting({ port: 8888 })], record, true);
     expect(r.status).toBe('warn');
     expect(r.label).toContain('which Tapsmith does not own');
+  });
+});
+
+// A config that exists but cannot be imported now stops `tapsmith test`
+// (PILOT-262), so doctor must fail on it too — including when the import
+// error happens to mention ENOENT, which doctor used to read as "no config".
+describe('configLoadFailure', () => {
+  it('reports an unloadable config as a config error, naming the file', () => {
+    const failure = configLoadFailure(
+      "Failed to load config file /p/tapsmith.config.ts: ENOENT: no such file or directory, open '/p/.env'",
+    );
+    expect(failure.message).toContain('/p/tapsmith.config.ts');
+    expect(failure.message).toContain('ENOENT');
+    expect(failure.hint).not.toContain('tapsmith.config.ts');
+  });
+
+  it('does not point at a named file for a validation error that names none', () => {
+    const failure = configLoadFailure('config: telemetry must be a boolean (got "no")');
+    expect(failure.message).toContain('telemetry must be a boolean');
+    expect(failure.hint).not.toMatch(/named above/);
+  });
+
+  it('points a missing --config file at the flag', () => {
+    expect(configLoadFailure('Config file not found: /p/ci.config.ts').hint).toBe('Check the -c/--config path');
   });
 });

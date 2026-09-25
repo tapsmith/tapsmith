@@ -54,6 +54,19 @@ describe('deviceClientFor project routing', () => {
     );
   });
 
+  // A config that exists but fails to load leaves the session with no
+  // projects and no targets (PILOT-262). The tool must say so, not answer
+  // "unknown project" or reach a daemon nothing prepared.
+  it('names the config load error when the session has no config', async () => {
+    const base = dispatcherWith([]);
+    const dispatcher: TestDispatcher = {
+      ...base,
+      getSessionInfo: () => ({ ...base.getSessionInfo(), configError: 'Failed to load config file /p/tapsmith.config.ts: boom' }),
+    };
+    await expect(deviceClientFor({}, dispatcher)).rejects.toThrow(/config could not be loaded.*\/p\/tapsmith\.config\.ts: boom/s);
+    await expect(deviceClientFor({ project: 'ios' }, dispatcher)).rejects.toThrow(/config could not be loaded/);
+  });
+
   it('points at `device` when the session cannot resolve project names', async () => {
     // No dispatcher: the tool has no way to map a name to a platform, so the
     // caller needs the escape hatch rather than a confusing "unknown project".

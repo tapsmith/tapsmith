@@ -456,6 +456,30 @@ describe('tapsmith_session_info config reporting', () => {
   });
 });
 
+// A config that exists but failed to load (PILOT-262) is not "using built-in
+// defaults", and nothing will pick a device; the tools must not say so.
+describe('a session whose config failed to load', () => {
+  const configError = 'Failed to load config file /project/tapsmith.config.ts: boom';
+  const info = { timeout: 0, retries: 0, projects: [], configError, configWarning: `Failed to load the Tapsmith config: ${configError}` };
+
+  it('session_info says the config failed to load, not that defaults are in use', async () => {
+    const { server, tools } = makeToolCapture();
+    registerSessionInfoTool(server, makeDispatcher({ getSessionInfo: () => info }));
+    const result = await tools.get('tapsmith_session_info')!({}, extra);
+    const text = result.content.map((c) => (c.type === 'text' ? c.text : '')).join('\n');
+    expect(text).toContain('Config: failed to load');
+    expect(text).not.toContain('built-in defaults');
+    expect(text).not.toContain('picks one');
+    expect(text).toContain('WARNING: Failed to load the Tapsmith config');
+  });
+
+  it('list_tests says why nothing was discovered', async () => {
+    const text = await callListTests(makeDispatcher({ getSessionInfo: () => info }));
+    expect(text).toContain('the Tapsmith config could not be loaded');
+    expect(text).toContain(configError);
+  });
+});
+
 describe('loadMcpConfig config-file reporting', () => {
   let root: string;
   let originalCwd: string;
@@ -512,28 +536,27 @@ describe('loadMcpConfig config-file reporting', () => {
   });
 
   // The working directory's config is the one the user meant. When it is
-  // broken, quietly adopting a nested one instead reports a config the session
-  // is not running under and buries the import error the user has to fix.
-  it('reports a broken working-directory config instead of falling back to a nested one', async () => {
-    fs.writeFileSync(path.join(root, 'tapsmith.config.mjs'), 'throw new Error("boom")\n');
+  // broken, quietly adopting a nested one instead would report a config the
+  // session is not running under and bury the import error the user has to
+  // fix; so would running on defaults. The load rejects, and the dispatcher
+  // turns that rejection into the session's config warning (PILOT-262).
+  it('rejects a broken working-directory config instead of falling back to a nested one', async () => {
+    const broken = path.join(root, 'tapsmith.config.mjs');
+    fs.writeFileSync(broken, 'throw new Error("boom")\n');
     fs.mkdirSync(path.join(root, 'e2e'));
     fs.writeFileSync(path.join(root, 'e2e', 'tapsmith.config.mjs'), 'export default { platform: "ios" }\n');
     process.chdir(root);
-    const result = await loadMcpConfig();
-    expect(result.configPath).toBeUndefined();
-    expect(result.warning).toContain('could not be loaded');
-    expect(result.warning).toContain('tapsmith.config.mjs');
-    // And it points at the alternative rather than only saying "fix it".
-    expect(result.warning).toContain('e2e');
+    await expect(loadMcpConfig()).rejects.toThrow(`Failed to load config file ${broken}: boom\n`);
+    // And it points at the alternative rather than only failing.
+    await expect(loadMcpConfig()).rejects.toThrow(/pass one of the configs below it \(e2e\/tapsmith\.config\.mjs\)/);
   });
 
-  it('reports a broken nested config rather than passing defaults off as it', async () => {
+  it('rejects a broken nested config rather than passing defaults off as it', async () => {
     fs.mkdirSync(path.join(root, 'e2e'));
-    fs.writeFileSync(path.join(root, 'e2e', 'tapsmith.config.mjs'), 'throw new Error("boom")\n');
+    const broken = path.join(root, 'e2e', 'tapsmith.config.mjs');
+    fs.writeFileSync(broken, 'throw new Error("boom")\n');
     process.chdir(root);
-    const result = await loadMcpConfig();
-    expect(result.configPath).toBeUndefined();
-    expect(result.warning).toContain('could not be loaded');
+    await expect(loadMcpConfig()).rejects.toThrow(`Failed to load config file ${broken}: boom`);
   });
 });
 
@@ -1397,5 +1420,34 @@ describe('noDeviceMessage', () => {
     expect(noDeviceMessage('ios')).toContain('Boot a simulator');
     expect(noDeviceMessage('android')).toContain('Start an emulator');
     expect(noDeviceMessage()).toContain('Connect a device');
+  });
+});
+
+// A config file that exists but fails to load leaves the session without a
+// config (PILOT-262). The dispatcher must say so in its session info — device
+// tools read `configError` to answer with the load error — and forget it once
+// a config loads.
+describe('HeadlessTestDispatcher config load errors', () => {
+  it('records the load error, and clears it after a config loads', async () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-dispatch-cfg-')));
+    try {
+      const broken = path.join(dir, 'broken.config.mjs');
+      fs.writeFileSync(broken, 'throw new Error("boom")\n');
+      const good = path.join(dir, 'good.config.mjs');
+      fs.writeFileSync(good, 'export default { platform: "ios" }\n');
+      const dispatcher = new HeadlessTestDispatcher({ configFile: broken });
+      const internals = dispatcher as unknown as { _configFile?: string; _loadConfigWithFallback(): Promise<unknown> };
+
+      expect(await internals._loadConfigWithFallback()).toBeNull();
+      const info = dispatcher.getSessionInfo();
+      expect(info.configError).toContain(`Failed to load config file ${broken}: boom`);
+      expect(info.configWarning).toContain('boom');
+
+      internals._configFile = good;
+      expect(await internals._loadConfigWithFallback()).not.toBeNull();
+      expect(dispatcher.getSessionInfo().configError).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

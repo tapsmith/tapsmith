@@ -9,6 +9,9 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { createRequire } from 'node:module';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ReporterConfig } from './reporter.js';
 import type { TraceMode, TraceConfig } from './trace/types.js';
 import type { VideoMode, VideoConfig } from './video/types.js';
@@ -851,13 +854,245 @@ function withConfigPath(config: TapsmithConfig, configPath?: string): TapsmithCo
 /**
  * The file a config was read from, or undefined for built-in defaults.
  *
- * Existence is not enough to report: `loadConfig` warns and moves on when a
- * candidate throws on import, so the file that exists may not be the one in
- * effect — and naming it would misreport the session exactly the way an
- * unnamed synthesized config does.
+ * Undefined means no config file exists: `loadConfig` rejects when one exists
+ * but cannot be imported, so a config this returns undefined for was never
+ * backed by a file (PILOT-262).
  */
 export function configPathOf(config: TapsmithConfig): string | undefined {
   return (config as unknown as Record<symbol, string | undefined>)[CONFIG_PATH];
+}
+
+/** tsx fallback imports run one at a time; see `importConfigModule`. */
+let configImportQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Failures of the process's own loader, as opposed to the config running and
+ * throwing — each one something tsx handles and bare Node does not: a
+ * specifier it cannot resolve (`./helpers.js` for `helpers.ts`, a directory
+ * import), TypeScript it cannot strip (an `enum`, a `.ts` file inside
+ * node_modules), an extension it does not know, a JSON import without its
+ * `type` attribute. Raised by a static import, they come before any of the
+ * config's code runs; raised by a dynamic import or `require` while it runs,
+ * the retry evaluates the config a second time — as `tapsmith test` always
+ * has, parent and tsx child each evaluating it — and the stack cannot tell
+ * the two apart, so they are treated alike.
+ */
+const LOADER_ERROR_CODES = new Set([
+  'ERR_MODULE_NOT_FOUND',
+  'MODULE_NOT_FOUND',
+  'ERR_UNSUPPORTED_DIR_IMPORT',
+  'ERR_UNKNOWN_FILE_EXTENSION',
+  'ERR_UNKNOWN_MODULE_FORMAT',
+  'ERR_UNSUPPORTED_TYPESCRIPT_SYNTAX',
+  'ERR_INVALID_TYPESCRIPT_SYNTAX',
+  'ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING',
+  'ERR_IMPORT_ATTRIBUTE_MISSING',
+  'ERR_IMPORT_ASSERTION_TYPE_MISSING',
+  'ERR_REQUIRE_ESM',
+]);
+
+function isLoaderError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (typeof code === 'string' && LOADER_ERROR_CODES.has(code)) return true;
+  // Node strips a `.ts` config's types and, finding `import`/`export`, runs it
+  // as ESM even in a package without `"type": "module"`, where tsx compiles
+  // it to CommonJS and `__dirname`/`require` exist. The config has started
+  // running by then — as it always did in `tapsmith test`'s bare parent
+  // before the tsx child ran it again.
+  if (err instanceof ReferenceError && /is not defined in ES module scope/.test(err.message)) return true;
+  // A SyntaxError is a parse or link failure only when Node's loader threw
+  // it: the first located frame is a compile or link step. One the config
+  // raised while running (`JSON.parse` of a bad file, read or required; a bad
+  // `RegExp` or `vm` script) starts elsewhere, and retrying it through tsx
+  // would run the config's side effects a second time.
+  return err instanceof SyntaxError && firstStackFrameIsCompileStep(err);
+}
+
+// The ESM and CommonJS compile steps, and ESM linking (a named import the
+// target does not export — a type-only import, which tsx elides).
+const COMPILE_STEP_FRAME = /^(?:compileSourceTextModule|wrapSafe|compileFunctionForCJSLoader|#?(?:async)?[Ii]nstantiate|ModuleJob\.#?_?(?:async)?[Ii]nstantiate|ModuleJob\.(?:sync)?[Ll]ink|ModuleJobSync\.\w+) \(node:/;
+
+function firstStackFrameIsCompileStep(err: Error): boolean {
+  for (const line of (err.stack ?? '').split('\n')) {
+    const frame = /^\s+at (?:async )?(.*)$/.exec(line);
+    if (!frame) continue;
+    // Builtins such as `JSON.parse` report no location; the next frame is
+    // whoever called them.
+    if (/\((?:<anonymous>|native)\)$/.test(frame[1])) continue;
+    return COMPILE_STEP_FRAME.test(frame[1]);
+  }
+  return false;
+}
+
+/**
+ * Import a config file, rejecting with an error that names it.
+ *
+ * Natively first, exactly as before, so a config the process can import
+ * shares its module instances (the SDK included) with the process. Only when
+ * the process's loader cannot handle it does the import go through tsx. The
+ * CLI loads the config before it re-execs under tsx, and bare Node cannot
+ * import every valid config: a TypeScript one with a `./helpers.js`
+ * specifier for `helpers.ts` or an `enum`, or a JavaScript one that imports a
+ * TypeScript helper. The old warn-and-use-defaults fallback hid that, and
+ * with a load failure now fatal it would break those configs outright. A
+ * config that ran and threw is reported as it is, not run a second time.
+ *
+ * The fallback registers tsx's ESM and CommonJS hooks for the duration of the
+ * import — what the `tsx` binary does, and CommonJS is what tsx compiles a
+ * TypeScript config to in a package without `"type": "module"`. The config
+ * is imported under a fresh URL, so it and anything it imports through tsx
+ * are separate module instances from the process's: nothing may rely on
+ * identity between config values and the process's modules beyond the
+ * `Symbol.for` markers used here. tsx's namespaced registration would scope
+ * the hooks more tightly, but from tsx 4.23 it cannot load a CommonJS-compiled
+ * config at all. Node cannot remove a `module.register` hook, so each
+ * fallback load leaves one deactivated hook behind; fallback loads are rare
+ * and few per process. Fallback loads are serialised because the hooks are
+ * process-global: two overlapping ones would each restore the other's
+ * half-registered state. A load started from inside one (a config calling
+ * `loadConfig`) runs within it rather than queueing behind it.
+ *
+ * Validation errors raised after the import (by `applyConfigDefaults`) already
+ * say what is wrong and propagate as they are, and so does a failure to load
+ * tsx itself, which is not the config's fault.
+ */
+/**
+ * Set while a tsx fallback load runs: a config that calls `loadConfig` itself
+ * (one config extending another) must not queue behind its own load.
+ */
+const insideFallbackLoad = new AsyncLocalStorage<true>();
+
+async function importConfigModule(configPath: string): Promise<Record<string, unknown>> {
+  let nativeError: unknown;
+  try {
+    // Not queued: a native import that runs while another load's tsx hooks
+    // are registered is compiled by them, and `unwrapCommonJsConfig` gives
+    // the same result either way.
+    return unwrapCommonJsConfig((await import(pathToFileURL(configPath).href)) as Record<string, unknown>);
+  } catch (err) {
+    // Every loader failure is retried: whether tsx can get past one (an
+    // extensionless require of a `.ts` file, a tsconfig `paths` alias) cannot
+    // be told from Node's error, and a valid config failing is worse than an
+    // invalid one being evaluated a second time before it fails — which
+    // `tapsmith test` has always done, in its bare parent and its tsx child.
+    if (!isLoaderError(err)) throw configLoadError(configPath, err);
+    nativeError = err;
+  }
+  if (insideFallbackLoad.getStore()) return importConfigModuleWithTsx(configPath, nativeError);
+  const result = configImportQueue.then(() =>
+    insideFallbackLoad.run(true, () => importConfigModuleWithTsx(configPath, nativeError)));
+  configImportQueue = result.catch(() => undefined);
+  return result;
+}
+
+/**
+ * A config compiled to CommonJS — by tsx in a package without
+ * `"type": "module"`, or ahead of time (`exports.__esModule = true;
+ * exports.default = …`) — comes back with the whole `module.exports` as the
+ * namespace's `default`: the `__esModule`-marked object whose own `default`
+ * is the config. The tsx binary unwraps that itself; Node and tsx's
+ * in-process hooks do not.
+ */
+function unwrapCommonJsConfig(mod: Record<string, unknown>): Record<string, unknown> {
+  const exportsObject = mod.default as { __esModule?: unknown } | undefined;
+  if (exportsObject && typeof exportsObject === 'object' && exportsObject.__esModule === true) {
+    return exportsObject as Record<string, unknown>;
+  }
+  return mod;
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * The rejection for a config that could not be imported. When the tsx retry
+ * failed too, Node's own error rides along: either one can be the actionable
+ * one (tsx's for a config that runs and throws; Node's for a mistyped import
+ * that tsx then trips over something else on).
+ */
+function configLoadError(configPath: string, err: unknown, nativeError?: unknown, note?: string): Error {
+  let detail = errorMessage(err);
+  if (nativeError !== undefined && errorMessage(nativeError) !== detail && isUnresolvedForTsxToo(nativeError)) {
+    detail += `\n(Without tsx, Node reported: ${errorMessage(nativeError)})`;
+  }
+  if (note) detail += `\n(${note})`;
+  const error = new Error(`Failed to load config file ${configPath}: ${detail}`, { cause: err });
+  // Callers print `stack`, which never includes `cause`: without this the
+  // trace shows Tapsmith's loader frames and not the line in the config.
+  const causeStack = err instanceof Error ? err.stack : undefined;
+  if (causeStack) error.stack = `${error.name}: ${error.message}\nCaused by: ${causeStack}`;
+  return error;
+}
+
+/**
+ * Whether Node's error names an import tsx could not resolve either — the
+ * one kind of native failure worth showing beside tsx's own error. Anything
+ * else (TypeScript it cannot strip, an extension it does not know) only says
+ * why tsx was needed, and next to the config's own error it misleads. So does
+ * a `./helpers.js` that tsx resolved to `helpers.ts`.
+ */
+function isUnresolvedForTsxToo(nativeError: unknown): boolean {
+  const { code, url } = nativeError as { code?: unknown; url?: unknown };
+  if (code !== 'ERR_MODULE_NOT_FOUND' && code !== 'MODULE_NOT_FOUND') return false;
+  if (typeof url !== 'string' || !url.startsWith('file:')) return true;
+  const missing = fileURLToPath(url);
+  const stem = missing.replace(/\.[cm]?jsx?$/, '');
+  return !['.ts', '.tsx', '.mts', '.cts'].some((ext) => fs.existsSync(stem + ext));
+}
+
+async function importConfigModuleWithTsx(configPath: string, nativeError: unknown): Promise<Record<string, unknown>> {
+  let esm: typeof import('tsx/esm/api');
+  let cjs: typeof import('tsx/cjs/api');
+  try {
+    [esm, cjs] = await Promise.all([import('tsx/esm/api'), import('tsx/cjs/api')]);
+  } catch (tsxError) {
+    // Not the config's fault, but the config's own error is still the one to
+    // show: the retry that might have got past it could not start.
+    throw configLoadError(configPath, nativeError, undefined, `tsx, which could have loaded it, failed to start: ${errorMessage(tsxError)}`);
+  }
+  // tsx's CJS unregister deletes the `.ts`/`.tsx`/`.jsx`/`.mjs` handlers it
+  // replaced instead of restoring them, so in a process already running under
+  // tsx it would strip tsx's own handlers and break later extensionless
+  // requires of TypeScript files. Undo exactly what the registration did,
+  // leaving any handler the config itself installed while loading.
+  const extensions = createRequire(import.meta.url).extensions;
+  // Descriptors, not a spread: tsx installs `.mjs` non-enumerable.
+  const before = Object.getOwnPropertyDescriptors(extensions);
+  let installed: typeof before = before;
+  let unregisterCjs: (() => void) | undefined;
+  let unregisterEsm: (() => Promise<void>) | undefined;
+  try {
+    unregisterCjs = cjs.register();
+    installed = Object.getOwnPropertyDescriptors(extensions);
+    unregisterEsm = esm.register();
+    // A query gives the config a URL the failed native attempt did not leave
+    // in the ESM cache; without it Node replays that failure. Only the config
+    // itself gets one: a module it imports that Node evaluated and that threw
+    // (a `.ts` helper using `__dirname`, run as ESM) stays cached as failed.
+    // tsx's namespaced API would re-key the whole graph, but it cannot load a
+    // CommonJS-compiled config (tsx 4.23) or hook a CommonJS config's own
+    // `require` calls. The config sees the query in `import.meta.url`
+    // (`fileURLToPath` and `import.meta.dirname` are unaffected).
+    const url = `${pathToFileURL(configPath).href}?tapsmith-config=${Date.now()}`;
+    const mod = (await import(url)) as Record<string, unknown>;
+    return unwrapCommonJsConfig(mod);
+  } catch (err) {
+    throw configLoadError(configPath, err, nativeError);
+  } finally {
+    unregisterCjs?.();
+    await unregisterEsm?.();
+    for (const key of Object.keys(installed)) {
+      const tsxValue = installed[key]?.value;
+      const previous = before[key];
+      if (tsxValue === previous?.value) continue;
+      const current = Object.getOwnPropertyDescriptor(extensions, key)?.value;
+      // Changed since registration by someone other than tsx: leave it.
+      if (current !== undefined && current !== tsxValue && current !== previous?.value) continue;
+      if (previous) Object.defineProperty(extensions, key, previous);
+      else delete extensions[key];
+    }
+  }
 }
 
 export async function loadConfig(dir?: string, configFile?: string): Promise<TapsmithConfig> {
@@ -868,7 +1103,7 @@ export async function loadConfig(dir?: string, configFile?: string): Promise<Tap
     if (!fs.existsSync(configPath)) {
       throw new Error(`Config file not found: ${configPath}`);
     }
-    const mod = await import(configPath);
+    const mod = await importConfigModule(configPath);
     // Keep the original for rawHasExplicitWorkers — omitUndefined produces a
     // fresh object, dropping the non-enumerable EXPLICIT_WORKERS symbol that
     // defineConfig-produced configs carry.
@@ -886,19 +1121,11 @@ export async function loadConfig(dir?: string, configFile?: string): Promise<Tap
   for (const name of CONFIG_CANDIDATES) {
     const configPath = path.resolve(root, name);
     if (fs.existsSync(configPath)) {
-      let mod: Record<string, unknown>;
-      try {
-        // For .ts files we rely on tsx / ts-node being available at runtime.
-        // Only the import is tolerated-and-skipped: a config that cannot be
-        // read falls through to the next candidate. Validation errors from
-        // applyConfigDefaults below must PROPAGATE — silently discarding a
-        // whole config because one key is malformed would, for `telemetry`,
-        // turn an opt-out into a run that reports (PILOT-330 review).
-        mod = await import(configPath);
-      } catch (err) {
-        console.warn(`Warning: failed to load ${configPath}: ${err}`);
-        continue;
-      }
+      // The first candidate that exists is the config, loadable or not. A
+      // broken one is a hard error, never a reason to try the next candidate
+      // or fall back to the defaults: either would run the session under a
+      // config the user is not editing (PILOT-262).
+      const mod = await importConfigModule(configPath);
       const original: Partial<TapsmithConfig> = (mod.default as Partial<TapsmithConfig>) ?? mod;
       const raw = omitUndefined(original);
       const merged = applyConfigDefaults(

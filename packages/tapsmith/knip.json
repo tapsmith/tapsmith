@@ -8,8 +8,5 @@
     "src/index.ts",
     "scripts/fetch-bezels.mjs"
   ],
-  "ignoreDependencies": [
-    "tsx"
-  ],
   "ignoreExportsUsedInFile": true
 }

@@ -114,6 +114,12 @@ export interface SessionInfo {
   configPath?: string
   /** Why the session has no config file, and what it means for the caller. */
   configWarning?: string
+  /**
+   * Set when a config file exists but could not be loaded. The session then
+   * has no config, no projects and no device targets: device tools report
+   * this instead of reaching a daemon nothing prepared.
+   */
+  configError?: string
 }
 
 export interface TestDispatcher {
