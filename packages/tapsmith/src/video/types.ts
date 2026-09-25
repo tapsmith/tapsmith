@@ -59,10 +59,11 @@ export function resolveVideoConfig(
 ): VideoConfig {
   // == null also catches explicit `video: null` from untyped .mjs configs.
   if (input == null) return { ...DEFAULT_VIDEO_CONFIG };
+  // `|| 'off'`: an untyped config's '' or `{ mode: false }` means off (see resolveTraceConfig).
   if (typeof input === 'string') {
-    return { ...DEFAULT_VIDEO_CONFIG, mode: input };
+    return { ...DEFAULT_VIDEO_CONFIG, mode: input || 'off' };
   }
-  return { ...DEFAULT_VIDEO_CONFIG, ...input, mode: input.mode ?? 'off' };
+  return { ...DEFAULT_VIDEO_CONFIG, ...input, mode: input.mode || 'off' };
 }
 
 // Re-export the shared decision helpers under video-flavoured names so

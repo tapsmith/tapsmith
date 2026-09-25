@@ -160,9 +160,14 @@ function parseShard(value: string): { current: number; total: number } {
   return { current, total };
 }
 
-/** `pattern` or `/pattern/flags`, as `--grep` has always accepted. */
+/**
+ * `pattern` or `/pattern/flags`, as `--grep` has always accepted. Empty means
+ * not given (`--grep-invert "$EXCLUDE"` with an empty variable would
+ * otherwise skip every test); commander stores that as ''.
+ */
 function regex(flag: string) {
-  return (value: string): RegExp => {
+  return (value: string): RegExp | undefined => {
+    if (value === '') return undefined;
     try {
       const match = value.match(/^\/(.*)\/([dgimsuvy]*)$/);
       return match ? new RegExp(match[1]!, match[2]) : new RegExp(value);
@@ -356,8 +361,8 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
         config: opts.config as string | undefined,
         forceInstall: opts.forceInstall as boolean,
         tsxReexec: opts.__tsxReexec as boolean,
-        grep: opts.grep as RegExp | undefined,
-        grepInvert: opts.grepInvert as RegExp | undefined,
+        grep: (opts.grep as RegExp | '' | undefined) || undefined,
+        grepInvert: (opts.grepInvert as RegExp | '' | undefined) || undefined,
         reporter: (opts.reporter as string | undefined) || undefined,
         project: opts.project as string[] | undefined,
       };
@@ -606,9 +611,11 @@ function prepareCommandArgs(cmd: Command, args: string[]): string[] {
     const next = args[i + 1];
     const option = byFlag.get(token) ?? bundleEndingInValueFlag(token, byFlag);
     if (option && next !== undefined && next.startsWith('-') && next !== '-') {
+      // For a bundle (`-wd`), keep its other flags in the suggested rewrite.
+      const rest = byFlag.get(token) ? '' : `${token.slice(0, -1)} `;
       cmd.error(
         `error: option '${option.flags}' argument missing (got the flag '${next}'). `
-          + `If '${next}' really is the value, write ${option.long}=${next}`,
+          + `If '${next}' really is the value, write ${rest}${option.long}=${next}`,
         { code: 'commander.optionMissingArgument', exitCode: 1 },
       );
     }
@@ -671,6 +678,9 @@ export async function runCli(argv: string[], deps: RunCliDeps): Promise<number> 
           args = [...argv.slice(0, index + 1), ...prepareCommandArgs(cmd, rest)];
         }
       }
+    } else if ((argv.includes('--') ? argv.slice(0, argv.indexOf('--')) : argv).some((t) => HELP_FLAGS.has(t))) {
+      // Help wins here too: `tapsmith -c ci.mjs test --help`.
+      args = ['--help'];
     } else {
       // `tapsmith -c ci.mjs test`: the old parser took options anywhere.
       const misplaced = argv.find((t) => t.startsWith('-') && !ROOT_FLAGS.has(t));

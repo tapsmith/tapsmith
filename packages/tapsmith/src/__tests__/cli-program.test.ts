@@ -196,6 +196,8 @@ describe('tapsmith test', () => {
       const h = await usageError(['test', ...argv]);
       expect(h.err).toContain(flag);
       expect(h.err).toMatch(/argument missing/);
+      // The suggested rewrite keeps the bundle's other flags.
+      expect(h.err).toContain(`write -w ${flag}=`);
     });
 
     it('still reads a bundle whose value flag carries its value', async () => {
@@ -287,6 +289,14 @@ describe('help', () => {
       expect(h.out).toContain(`Usage: tapsmith ${argv[0]}`);
     },
   );
+
+  it('--help wins over a misplaced option before the command', async () => {
+    for (const argv of [['-c', 'x', 'test', '--help'], ['--help', '-c', 'x', 'test']]) {
+      const h = await run(argv);
+      expect(h.code, argv.join(' ')).toBe(0);
+      expect(h.out, argv.join(' ')).toMatch(/Usage: tapsmith/);
+    }
+  });
 
   it('a --help after -- is a file, not a help request', async () => {
     expect((await testArgs(['--', '--help'])).files).toEqual(['--help']);
@@ -395,8 +405,10 @@ describe('commands', () => {
     },
   );
 
-  it('an empty --device, --reporter, --trace, --video or --ui-dev-url means unset, as `--device "$SERIAL"` with an empty variable always has', async () => {
-    const args = await testArgs(['--device', '', '--reporter=', '--trace', '', '--video=', '--ui-dev-url=']);
+  it('an empty --device, --reporter, --trace, --video, --grep, --grep-invert or --ui-dev-url means unset, as `--device "$SERIAL"` with an empty variable always has', async () => {
+    const args = await testArgs(['--device', '', '--reporter=', '--trace', '', '--video=', '--ui-dev-url=', '--grep', '', '--grep-invert=']);
+    expect(args.grep).toBeUndefined();
+    expect(args.grepInvert).toBeUndefined();
     expect(args.device).toBeUndefined();
     expect(args.reporter).toBeUndefined();
     expect(args.trace).toBeUndefined();
