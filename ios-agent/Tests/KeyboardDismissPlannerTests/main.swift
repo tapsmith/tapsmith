@@ -100,6 +100,15 @@ let appHead: [Row] = [
 /// The /occlusion top field's frame, as the live focus query reports it.
 let occlusionInput = R(17, 133, 368, 43)
 
+/// A focused field in the screen's content: `withField` puts it first under
+/// `appHead`'s content container, above the keyboard.
+let contentFieldFrame = R(16, 480, 200, 30)
+func withField(_ rows: [Row]) -> [Row] {
+    var rows = rows
+    rows.insert((4, .textField, "Field", "", contentFieldFrame), at: appHead.count)
+    return rows
+}
+
 /// /occlusion with the keyboard up: no scroll view.
 let occlusionContent: [Row] = [
     (4, .other, "", "", R(16, 132, 370, 45)),
@@ -147,7 +156,7 @@ check("no keyboard: no blank spot", noKeyboard.blankPoint(focusedFrame: occlusio
 // PILOT-363: the old drag started at the screen centre (201, 437) whatever
 // was there — on /occlusion that is "Pass-through action", which the drag
 // pressed. Without a scroll view there is no drag at all.
-check("no scroll view: no drag", planner(occlusion).scrollSwipeStart(focusedFrame: nil), nil)
+check("no scroll view: no drag", planner(occlusion).scrollSwipeStart(focusedFrame: occlusionInput), nil)
 
 do {
     let p = planner(scrollScreen).scrollSwipeStart(focusedFrame: R(16, 180, 370, 44))
@@ -170,14 +179,14 @@ do {
         (4, .scrollView, "", "", R(0, 116, 402, 758)),
         (5, .button, "Big", "", R(0, 116, 402, 758)),
     ] + keyboardWindows()
-    check("scroll view full of controls: no drag", planner(full).scrollSwipeStart(focusedFrame: nil), nil)
+    check("scroll view full of controls: no drag", planner(withField(full)).scrollSwipeStart(focusedFrame: contentFieldFrame), nil)
     // A web view is not dragged: WKWebView does not dismiss on drag, and the
     // page sees the gesture.
     let web: [Row] = appHead + [(4, .webView, "", "", R(0, 116, 402, 758))] + keyboardWindows()
-    check("web view: no drag", planner(web).scrollSwipeStart(focusedFrame: nil), nil)
+    check("web view: no drag", planner(withField(web)).scrollSwipeStart(focusedFrame: contentFieldFrame), nil)
     for type in [XCUIElement.ElementType.table, .collectionView] {
         let list: [Row] = appHead + [(4, type, "", "", R(0, 116, 402, 758))] + keyboardWindows()
-        checkTrue("\(type.rawValue) is dragged", planner(list).scrollSwipeStart(focusedFrame: nil) != nil)
+        checkTrue("\(type.rawValue) is dragged", planner(withField(list)).scrollSwipeStart(focusedFrame: contentFieldFrame) != nil)
     }
 }
 
@@ -191,7 +200,7 @@ do {
         (5, .webView, "", "", R(0, 416, 402, 458)),
     ] + keyboardWindows()
     check("scroll content of role-less rows, text and a web view: no drag",
-          planner(rows).scrollSwipeStart(focusedFrame: nil), nil)
+          planner(withField(rows)).scrollSwipeStart(focusedFrame: contentFieldFrame), nil)
 }
 
 do {
@@ -260,6 +269,20 @@ do {
 }
 
 do {
+    // No focused field known: no drag (a scroll view behind a sheet's
+    // backdrop cannot be told from the field's own).
+    let rows: [Row] = appHead + [(4, .scrollView, "", "", R(0, 116, 402, 758))] + keyboardWindows()
+    check("no focused field known: no drag", planner(rows).scrollSwipeStart(focusedFrame: nil), nil)
+    // A horizontal carousel inside a tappable card: a vertical drag that does
+    // not scroll it would press the card.
+    let card: [Row] = withField(appHead + [
+        (4, .other, "Open card", "", R(0, 116, 402, 300)),
+        (5, .scrollView, "", "", R(0, 116, 402, 300)),
+    ] + keyboardWindows())
+    check("scroll view inside a labeled card: no drag", planner(card).scrollSwipeStart(focusedFrame: contentFieldFrame), nil)
+}
+
+do {
     // A field in a table cell whose row selection does something: the cell
     // is not a blank spot, though it wraps the field.
     let field = R(100, 200, 280, 44)
@@ -299,7 +322,7 @@ do {
         (4, .scrollView, "", "", R(0, 420, 402, 200)),
     ] + keyboardWindows()
     checkTrue("falls back to a smaller scroll view with a clear spot",
-              planner(rows).scrollSwipeStart(focusedFrame: nil).map { R(0, 420, 402, 109).contains($0) } ?? false)
+              planner(withField(rows)).scrollSwipeStart(focusedFrame: contentFieldFrame).map { R(0, 420, 402, 109).contains($0) } ?? false)
 }
 
 do {
@@ -324,14 +347,14 @@ do {
         (3, .other, "", "", R(0, 116, 402, 758)),
         (4, .button, "Cover", "", R(0, 116, 402, 758)),
     ] + keyboardWindows()
-    check("scroll view under another screen's control: no drag", planner(covered).scrollSwipeStart(focusedFrame: nil), nil)
+    check("scroll view under another screen's control: no drag", planner(withField(covered)).scrollSwipeStart(focusedFrame: contentFieldFrame), nil)
 }
 
 do {
     let behindKeyboard: [Row] = appHead + [
         (4, .scrollView, "", "", R(0, 540, 402, 300)),
     ] + keyboardWindows()
-    check("scroll view behind the keyboard: no drag", planner(behindKeyboard).scrollSwipeStart(focusedFrame: nil), nil)
+    check("scroll view behind the keyboard: no drag", planner(withField(behindKeyboard)).scrollSwipeStart(focusedFrame: contentFieldFrame), nil)
 }
 
 do {
@@ -339,7 +362,7 @@ do {
     let keyboardScroller = appHead + occlusionContent + keyboardWindows(extraKeys: [
         (4, .scrollView, "", "", R(0, 200, 402, 300)),
     ])
-    check("keyboard's own scroll view: no drag", planner(keyboardScroller).scrollSwipeStart(focusedFrame: nil), nil)
+    check("keyboard's own scroll view: no drag", planner(keyboardScroller).scrollSwipeStart(focusedFrame: occlusionInput), nil)
 }
 
 // MARK: - 2. Dismiss key

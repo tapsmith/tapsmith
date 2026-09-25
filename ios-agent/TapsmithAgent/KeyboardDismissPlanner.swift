@@ -208,20 +208,24 @@ struct KeyboardDismissPlanner {
     /// on screen above the keyboard with a spot clear of its controls. The
     /// drag goes up (then, if that did not work, left) by `swipeFraction` of
     /// the screen from this point, so the point leaves room for it inside the
-    /// scroll view. With the focused field known (`focusedFrame`), only a
-    /// scroll view in the field's own screen or sheet (`screenRoot`) counts —
-    /// not the screen behind a sheet. Scroll views are tried largest first.
+    /// scroll view. Only a scroll view in the focused field's (`focusedFrame`)
+    /// own screen or sheet (`screenRoot`) counts — not the screen behind a
+    /// sheet — so without a known focused field there is no drag. Scroll
+    /// views are tried largest first.
     func scrollSwipeStart(focusedFrame: CGRect?) -> CGPoint? {
         let area = touchableArea
         guard !area.isNull else { return nil }
         let windows = keyboardWindows
         let dragY = screen.height * Self.swipeFraction
         let dragX = screen.width * Self.swipeFraction
-        // A field in a keyboard window (an input accessory composer) has no
-        // screen of its own there: any scroll view of the app may be dragged.
-        let field = fieldIndex(focusedFrame)
-        let fieldInKeyboard = field.flatMap { nodes[$0].window }.map { windows.contains($0) } ?? false
-        let root = fieldInKeyboard ? nil : field.flatMap { screenRoot(of: $0) }
+        // Without the focused field there is no telling which screen is the
+        // field's: a scroll view left behind a sheet's backdrop looks like any
+        // other. A field in a keyboard window (an input accessory composer)
+        // has no screen of its own there: any scroll view of the app may be
+        // dragged.
+        guard let field = fieldIndex(focusedFrame) else { return nil }
+        let fieldInKeyboard = nodes[field].window.map { windows.contains($0) } ?? false
+        let root = fieldInKeyboard ? nil : screenRoot(of: field)
         // The root itself counts: on a headerless screen it can be the
         // scroll view the field is in.
         func inFieldsScreen(_ i: Int) -> Bool {
@@ -263,7 +267,12 @@ struct KeyboardDismissPlanner {
         // covers a scroll view left in the tree). A drag that does not start a
         // scroll (sideways in a vertical list, any drag in a carousel) presses
         // what it starts on, and a role-less Pressable is a labeled `.other`.
-        let ancestors = Set(analyzer.ancestors(of: scroll))
+        // Its plain ancestors and enclosing scroll views are transparent; a
+        // cell or labeled Pressable around it takes a drag that does not
+        // scroll this one (a vertical drag on a horizontal carousel) as a press.
+        let ancestors = Set(analyzer.ancestors(of: scroll).filter {
+            isPlain($0) || Self.draggableScrollerTypes.contains(nodes[$0].elementType)
+        })
         return clearestPoint(in: starts) { i in
             if i == scroll || ancestors.contains(i) { return false }
             if let w = nodes[i].window, windows.contains(w) { return false }
