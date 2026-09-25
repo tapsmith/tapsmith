@@ -148,10 +148,14 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', { tim
       env: { ...process.env, NODE_PATH: path.dirname(PKG_DIR), TAPSMITH_TELEMETRY: '0' },
     });
     let reply: UIDiscoverChildMessage;
+    let replyTimer: NodeJS.Timeout | undefined;
     try {
       reply = await new Promise<UIDiscoverChildMessage>((resolve, reject) => {
         // Both streams drained: an unread pipe can fill and stall the child.
         let output = '';
+        // Rejects inside the suite's 60 s budget, so a hung child is killed by
+        // the finally below instead of outliving a test vitest abandoned.
+        replyTimer = setTimeout(() => reject(new Error(`discovery did not reply within 45 s:\n${output}`)), 45_000);
         child.stdout?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
         child.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
         child.on('message', (msg: UIDiscoverChildMessage) => resolve(msg));
@@ -162,6 +166,7 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', { tim
         child.send({ type: 'discover', filePath });
       });
     } finally {
+      clearTimeout(replyTimer);
       // A hung child would otherwise outlive the test with its IPC channel open.
       if (child.exitCode === null && child.signalCode === null) child.kill();
     }
