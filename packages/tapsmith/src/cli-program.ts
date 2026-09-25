@@ -169,7 +169,7 @@ function regex(flag: string) {
   return (value: string): RegExp | undefined => {
     if (value === '') return undefined;
     try {
-      const match = value.match(/^\/(.*)\/([dgimsuvy]*)$/);
+      const match = value.match(/^\/(.*)\/([gimsuy]*)$/);
       return match ? new RegExp(match[1]!, match[2]) : new RegExp(value);
     } catch (err) {
       throw new InvalidArgumentError(`${flag} is not a valid regular expression: ${(err as Error).message}`);
@@ -583,9 +583,19 @@ function prepareCommandArgs(cmd: Command, args: string[]): string[] {
     if (option.short) byFlag.set(option.short, option);
   }
 
+  const longNames = new Set(cmd.options.map((o) => o.long).filter((l): l is string => !!l));
+
   const out: string[] = [];
   for (let i = 0; i < args.length; i++) {
     const token = args[i]!;
+    // `-grep x` would read as `-g rep` plus a file named x.
+    const singleDashLong = /^-([a-zA-Z][a-zA-Z-]+)(=.*)?$/s.exec(token);
+    if (singleDashLong && longNames.has(`--${singleDashLong[1]}`)) {
+      cmd.error(
+        `error: unknown option '${token}'\n(Did you mean --${singleDashLong[1]}?)`,
+        { code: 'commander.unknownOption', exitCode: 1 },
+      );
+    }
     if (token === '--') {
       // The tsx re-exec appends its marker to the user's argv, so it can land
       // after `--`; it is never a file.
@@ -698,7 +708,10 @@ export async function runCli(argv: string[], deps: RunCliDeps): Promise<number> 
     return state.exitCode;
   } catch (err) {
     if (!(err instanceof CommanderError)) throw err;
-    if (state.json && state.command && err.exitCode !== 0) {
+    if (state.json && state.command === 'list-devices' && err.exitCode !== 0) {
+      // list-devices has always reported errors as { error: <message> }.
+      io.out(JSON.stringify({ error: state.jsonError ?? err.message }) + '\n');
+    } else if (state.json && state.command && err.exitCode !== 0) {
       io.out(JSON.stringify({
         error: {
           code: jsonErrorCode(state.command, err.code),

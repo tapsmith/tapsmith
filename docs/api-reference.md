@@ -2361,8 +2361,8 @@ flag followed by another flag is an error, not a value: `tapsmith test --device 
 value that really starts with `-`, use the `=` form: `--grep=-slow`.
 
 An empty value (`--device "$SERIAL"` with an empty variable) means the flag was not given for `--device`,
-`--trace`, `--video` and `--reporter`: the run falls back to automatic device selection or the config's
-setting. An empty `-c` / `--config` is an error rather than a silent fallback to `tapsmith.config.*`, which
+`--trace`, `--video`, `--grep`, `--grep-invert` and `--reporter`: the run falls back to automatic device
+selection or the config's setting. An empty `-c` / `--config` is an error rather than a silent fallback to `tapsmith.config.*`, which
 could run a different config than the one meant.
 
 A usage error (unknown command or flag, missing or invalid value) prints one line naming the problem and the
@@ -2370,7 +2370,8 @@ command's `--help`, and exits with code 1. An unknown command suggests the neare
 (`unknown command 'tset'` / `Did you mean test?`), even when `--help` is also given. Commands with a `--json`
 mode (`init`, `verify`, `doctor`, `list-devices`, `telemetry`) report usage errors under `--json` as JSON on
 stdout — `{ "error": { "code", "message", "fix" } }`, with `code` `BAD_ARGS`, or for `init` `UNKNOWN_FLAG` /
-`MISSING_FLAG_VALUE` like its other errors. `mcp-server` keeps stdout for the protocol and reports usage errors
+`MISSING_FLAG_VALUE` like its other errors. `list-devices` keeps the shape of its other errors,
+`{ "error": "<message>" }`. `mcp-server` keeps stdout for the protocol and reports usage errors
 on stderr.
 
 ### `tapsmith test [files...]`

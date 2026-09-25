@@ -211,6 +211,19 @@ describe('tapsmith test', () => {
     });
   });
 
+  it.each([['-grep', '--grep'], ['-device', '--device'], ['-config', '--config'], ['-workers', '--workers']])(
+    'refuses the single-dash long flag %s instead of reading it as a short flag with a value',
+    async (typo, long) => {
+      const h = await usageError(['test', typo, 'x']);
+      expect(h.err).toContain(`unknown option '${typo}'`);
+      expect(h.err).toContain(`Did you mean ${long}?`);
+    },
+  );
+
+  it('keeps a /pattern/ with a flag it has never taken as a literal pattern', async () => {
+    expect((await testArgs(['--grep', '/api/v'])).grep).toEqual(new RegExp('/api/v'));
+  });
+
   it('rejects an unknown option', async () => {
     // --retries included: documented once, never implemented (a follow-up adds it Playwright-style).
     expect((await usageError(['test', '--retries', '2'])).err).toMatch(/unknown option '--retries'/);
@@ -504,7 +517,7 @@ describe('usage errors under --json', () => {
     [['init', '--json', 'yes'], 'UNKNOWN_FLAG'],
     [['verify', '--json', '--bogus'], 'BAD_ARGS'],
     [['doctor', '--json', '--bogus'], 'BAD_ARGS'],
-    [['list-devices', '--json', 'extra'], 'BAD_ARGS'],
+
     [['telemetry', '--json', 'toggle'], 'BAD_ARGS'],
     [['-c', 'x.mjs', 'doctor', '--json'], 'BAD_ARGS'],
   ])('%j prints a JSON error with code %s on stdout', async (argv, code) => {
@@ -514,6 +527,12 @@ describe('usage errors under --json', () => {
     expect(parsed.error.code).toBe(code);
     expect(parsed.error.message).toBeTruthy();
     expect(parsed.error.fix).toContain(`tapsmith ${argv.find((t) => !t.startsWith('-') && t !== 'x.mjs')} --help`);
+  });
+
+  it('list-devices keeps its own { error: <message> } JSON error shape', async () => {
+    const h = await usageError(['list-devices', '--json', 'extra']);
+    expect(h.err).toBe('');
+    expect(JSON.parse(h.out)).toEqual({ error: expect.stringMatching(/too many arguments/) });
   });
 
   it('mcp-server usage errors go to stderr, keeping the stdio channel clean', async () => {
