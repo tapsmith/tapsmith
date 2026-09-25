@@ -676,6 +676,8 @@ export async function runCli(argv: string[], deps: RunCliDeps): Promise<number> 
       const misplaced = argv.find((t) => t.startsWith('-') && !ROOT_FLAGS.has(t));
       const later = argv.find((t) => !t.startsWith('-') && findCommand(program, t));
       if (misplaced && later) {
+        state.command = later;
+        state.json = JSON_ERROR_COMMANDS.has(later) && argv.includes('--json');
         program.error(
           `error: unknown option '${misplaced}'. '${misplaced}' goes after the command: tapsmith ${later} ${misplaced} …`,
           { code: 'commander.unknownOption', exitCode: 1 },

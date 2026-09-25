@@ -625,6 +625,9 @@ describe('defineConfig()', () => {
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the runtime guard against untyped config files
     expect(() => defineConfig({ [key]: true as any })).toThrow(new RegExp(`${key} must be one of .*\\(got true\\)`));
+    // An array has no `mode` and used to resolve to off without a word.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the runtime guard against untyped config files
+    expect(() => defineConfig({ [key]: ['on'] as any })).toThrow(new RegExp(`${key} must be one of .*\\(got \\["on"\\]\\)`));
   });
 
   it.each(['trace', 'video'] as const)('accepts every valid %s mode and the unset forms', (key) => {

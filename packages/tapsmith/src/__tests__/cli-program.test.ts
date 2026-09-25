@@ -494,13 +494,14 @@ describe('usage errors under --json', () => {
     [['doctor', '--json', '--bogus'], 'BAD_ARGS'],
     [['list-devices', '--json', 'extra'], 'BAD_ARGS'],
     [['telemetry', '--json', 'toggle'], 'BAD_ARGS'],
+    [['-c', 'x.mjs', 'doctor', '--json'], 'BAD_ARGS'],
   ])('%j prints a JSON error with code %s on stdout', async (argv, code) => {
     const h = await usageError(argv);
     expect(h.err).toBe('');
     const parsed = JSON.parse(h.out) as { error: { code: string; message: string; fix: string } };
     expect(parsed.error.code).toBe(code);
     expect(parsed.error.message).toBeTruthy();
-    expect(parsed.error.fix).toContain(`tapsmith ${argv[0]} --help`);
+    expect(parsed.error.fix).toContain(`tapsmith ${argv.find((t) => !t.startsWith('-') && t !== 'x.mjs')} --help`);
   });
 
   it('mcp-server usage errors go to stderr, keeping the stdio channel clean', async () => {
