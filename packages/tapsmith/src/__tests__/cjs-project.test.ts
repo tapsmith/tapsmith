@@ -8,8 +8,9 @@
  * drive the *built* package through it: the CLI's tsx re-exec, the discovery
  * child every UI-mode and MCP session forks, and config loading.
  *
- * They need `dist/` (`npm run build`). CI builds before the unit tests; a
- * local run without a build skips them rather than testing stale output.
+ * They test `dist/`, so rebuild (`npm run build`, or `npx tsc` for the SDK
+ * alone) after changing the code they cover — a stale dist is tested as-is.
+ * CI builds before the unit tests; a local run with no build skips them.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -27,9 +28,6 @@ const DIST_BUILT = fs.existsSync(path.join(DIST_DIR, 'cli.js'));
 if (!DIST_BUILT && !process.env.CI) {
   console.warn('cjs-project.test.ts: skipped — dist/ is not built (run `npm run build`).');
 }
-
-/** A PATH with node on it and nothing that could supply a `tsx` of its own. */
-const BARE_PATH = [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter);
 
 const TEST_FILE = 'import { test, describe, expect } from "tapsmith";\n'
   + '// Named after the module format tsx actually compiled this file to, so a\n'
@@ -90,11 +88,16 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', () =>
     }
 
     function runCli(cli: string, env: Record<string, string> = {}): ReturnType<typeof spawnSync> {
+      // A PATH holding node and nothing else: node's own bin directory, or
+      // Homebrew's, is exactly where a global tsx would be found.
+      const bareBin = path.join(root, 'path-bin');
+      fs.mkdirSync(bareBin);
+      fs.symlinkSync(process.execPath, path.join(bareBin, 'node'));
       return spawnSync(process.execPath, [cli, 'test', 'tests/login.test.ts'], {
         cwd: root,
         encoding: 'utf-8',
         timeout: 60_000,
-        env: { ...process.env, PATH: BARE_PATH, TAPSMITH_TELEMETRY: '0', ...env },
+        env: { ...process.env, PATH: bareBin, TAPSMITH_TELEMETRY: '0', ...env },
       });
     }
 

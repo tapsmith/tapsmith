@@ -1,6 +1,6 @@
 /**
- * Fail fast, with the real cause, when the SDK is loaded as CommonJS without
- * `import.meta` (PILOT-382).
+ * Fail fast, with the real cause, when the SDK is loaded without
+ * `import.meta.dirname` — in practice, compiled to CommonJS (PILOT-382).
  *
  * Tapsmith ships ESM. A CommonJS test or config file — any `.ts` file in a
  * package without `"type": "module"` — makes its TypeScript loader compile
@@ -11,14 +11,17 @@
  * a path from `import.meta.dirname` at load time dies with an
  * unrelated-looking `The "paths[0]" argument must be of type string`.
  *
+ * Some ESM hosts (a test runner's VM modules, a bundler) can also leave
+ * `dirname` out, so the message leads with what is missing, not with a cause.
+ *
  * `index.ts` imports this module first, so it runs before any of those.
  */
 
 export function moduleFormatError(dirname: unknown): string | undefined {
   if (typeof dirname === 'string') return undefined;
   return [
-    'Tapsmith was loaded as CommonJS without `import.meta.dirname`, so it cannot locate its own files.',
-    'A TypeScript loader compiled Tapsmith\'s ESM build to CommonJS — typically a tsx older than 4.23, ts-node,',
+    'Tapsmith was loaded without `import.meta.dirname`, so it cannot locate its own files.',
+    'Usually a TypeScript loader compiled Tapsmith\'s ESM build to CommonJS — a tsx older than 4.23, ts-node,',
     'or a custom require hook running a test or config file in a package without "type": "module".',
     'Fix: run tests with the Tapsmith CLI (`npx tapsmith test`), which uses the tsx it ships with;',
     'upgrade tsx to 4.23 or newer if you register it yourself; or add "type": "module" to your package.json.',
