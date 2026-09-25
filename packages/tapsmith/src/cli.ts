@@ -31,6 +31,7 @@ import {
 import type { PreparedState, ResetCapabilities } from './app-reset.js';
 import { installActionProgressPrinter } from './action-progress-renderer.js';
 import { discoverTestFiles } from './test-file-discovery.js';
+import { resolveTsxBin } from './child-scripts.js';
 import {
   resolveTraceConfig,
   isNetworkTracingEnabled,
@@ -137,10 +138,19 @@ function needsTsx(testFiles: string[]): boolean {
 }
 
 function reExecWithTsx(args: string[]): never {
-  // Find tsx binary — first check local node_modules, then global
+  // The same lookup the UI-mode and MCP children use: our own node_modules,
+  // then the hoisted `<project>/node_modules/.bin` a normal npm install puts
+  // it in, then the package itself, then PATH. Checking only our own
+  // node_modules missed the hoisted copy whenever the CLI ran outside
+  // npx/npm scripts (which put `.bin` on PATH) — `spawn tsx ENOENT`.
   const tapsmithPkgDir = path.resolve(import.meta.dirname, '..');
-  const localTsx = path.join(tapsmithPkgDir, 'node_modules', '.bin', 'tsx');
-  const tsxBin = fs.existsSync(localTsx) ? localTsx : 'tsx';
+  const tsxBin = resolveTsxBin(tapsmithPkgDir);
+  if (!tsxBin) {
+    // tsx is one of our dependencies, so a missing one means a broken install.
+    console.error(red('TypeScript test files were found, but Tapsmith could not find the tsx loader it runs them with.'));
+    console.error(dim('tsx ships as a dependency of tapsmith; reinstall it (npm install tapsmith), or install tsx: npm install -D tsx'));
+    process.exit(1);
+  }
 
   const cliPath = process.argv[1];
   const result = spawn(tsxBin, [cliPath, ...args, '--__tsx-reexec'], {
@@ -158,8 +168,8 @@ function reExecWithTsx(args: string[]): never {
 
   // Keep alive until child exits
   result.on('error', (err) => {
-    console.error(red(`Failed to start tsx: ${err.message}`));
-    console.error(dim('Install tsx: npm install -g tsx'));
+    console.error(red(`Failed to start tsx (${tsxBin}): ${err.message}`));
+    console.error(dim('tsx ships as a dependency of tapsmith; reinstall it (npm install tapsmith), or install tsx: npm install -D tsx'));
     process.exit(1);
   });
 
