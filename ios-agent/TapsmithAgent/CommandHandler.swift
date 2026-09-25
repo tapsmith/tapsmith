@@ -2115,40 +2115,9 @@ class CommandHandler {
                 return ["success": true]
             }
 
-            // Dismiss the keyboard using a tiny swipe gesture (Maestro's approach).
-            // A small vertical swipe triggers keyboard dismissal via the scroll
-            // interaction, bypassing keyboardShouldPersistTaps.
-            Thread.sleep(forTimeInterval: 0.3) // Let keyboard fully appear/settle
-            // Use cached screen size to avoid app.windows.firstMatch.frame.size
-            // which triggers quiescence on Xcode 26.
-            let kbScreenSize = snapshotFinder.screenSize
-            let midX = CGFloat(kbScreenSize.width / 2)
-            let midY = CGFloat(kbScreenSize.height / 2)
-            // Try vertical swipe first
-            if !EventSynthesizer.swipe(
-                from: CGPoint(x: midX, y: midY),
-                to: CGPoint(x: midX, y: midY - kbScreenSize.height * 0.03),
-                duration: 0.05
-            ) {
-                // Fallback: tap above keyboard area
-                actionExecutor.tapCoordinates(x: Int(midX), y: 15)
-            }
-            // VERIFY the keyboard actually left the hierarchy instead of
-            // sleeping a fixed interval: returning while dismissal is still
-            // in flight makes the very next action race the app's keyboard
-            // relayout (e.g. KeyboardAvoidingView) — observed as a Sign-in
-            // tap landing on a moving layout and silently missing.
-            if !waitForKeyboardDismissed(timeout: 3.0) {
-                // Genuinely still showing — try a horizontal swipe. (This
-                // fallback used to fire unconditionally, landing on app
-                // content whenever the first swipe had already worked.)
-                _ = EventSynthesizer.swipe(
-                    from: CGPoint(x: midX, y: midY),
-                    to: CGPoint(x: midX - kbScreenSize.width * 0.03, y: midY),
-                    duration: 0.05
-                )
-                _ = waitForKeyboardDismissed(timeout: 2.0)
-            }
+            // Let the keyboard finish appearing before planning around it.
+            Thread.sleep(forTimeInterval: 0.3)
+            try dismissKeyboard()
             // The keyboard leaving the hierarchy precedes the app's own
             // animated relayout completing — give that a beat to settle.
             Thread.sleep(forTimeInterval: 0.35)
@@ -2234,6 +2203,86 @@ class CommandHandler {
             return nil
         }
         return String(data: data, encoding: .utf8)
+    }
+
+    /// Put the software keyboard away the ways a user would, trying each in
+    /// turn until it is gone (PILOT-363; see `KeyboardDismissPlanner` for
+    /// what each one may touch), or throw naming what was tried. Every
+    /// strategy is planned on a fresh snapshot, so a keyboard that finished
+    /// leaving during the previous one's wait ends it without another touch.
+    private func dismissKeyboard() throws {
+        var attempts: [(KeyboardDismissPlanner.Strategy, KeyboardDismissPlanner.Outcome)] = []
+        for strategy in KeyboardDismissPlanner.Strategy.allCases {
+            guard let snapshot = try? snapshotFinder.takeSnapshot() else {
+                throw AgentError.actionFailed("hideKeyboard could not read the screen to dismiss the keyboard")
+            }
+            guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
+            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+            let outcome = runDismissStrategy(strategy, planner: planner)
+            if outcome == .keyboardStayed, waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) {
+                NSLog("[TapsmithCommand] hideKeyboard: dismissed by \(strategy.summary)")
+                return
+            }
+            attempts.append((strategy, outcome))
+        }
+        // The last wait can end just before the keyboard leaves.
+        if !hasKeyboardInSnapshot((try? app.snapshot())?.dictionaryRepresentation ?? [:]) { return }
+        throw AgentError.actionFailed(KeyboardDismissPlanner.failureMessage(attempts))
+    }
+
+    /// How long to wait for the keyboard to leave after a strategy ran.
+    private func dismissWait(for strategy: KeyboardDismissPlanner.Strategy) -> TimeInterval {
+        strategy == .scrollSwipe ? 2.0 : 1.5
+    }
+
+    /// Run one dismiss strategy. `.keyboardStayed` means it touched the screen
+    /// (the caller waits to see whether the keyboard left); `.notPossible`
+    /// means nothing was touched.
+    private func runDismissStrategy(
+        _ strategy: KeyboardDismissPlanner.Strategy,
+        planner: KeyboardDismissPlanner
+    ) -> KeyboardDismissPlanner.Outcome {
+        let screen = snapshotFinder.screenSize
+        switch strategy {
+        case .scrollSwipe:
+            guard let start = planner.scrollSwipeStart() else {
+                return .notPossible("no scroll view on screen above the keyboard")
+            }
+            let dy = CGFloat(screen.height) * KeyboardDismissPlanner.swipeFraction
+            let dx = CGFloat(screen.width) * KeyboardDismissPlanner.swipeFraction
+            guard EventSynthesizer.swipe(
+                from: start, to: CGPoint(x: start.x, y: start.y - dy), duration: 0.05
+            ) else { return .notPossible("the drag could not be synthesized") }
+            // Gone already: the caller's wait after this return sees that at once.
+            if waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) { return .keyboardStayed }
+            // A horizontal scroll view drags sideways.
+            _ = EventSynthesizer.swipe(
+                from: start, to: CGPoint(x: start.x - dx, y: start.y), duration: 0.05
+            )
+            return .keyboardStayed
+        case .dismissKey:
+            guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
+            guard EventSynthesizer.tap(at: key) else { return .notPossible("the tap could not be synthesized") }
+            return .keyboardStayed
+        case .blankTap:
+            guard let point = planner.blankPoint() else {
+                return .notPossible("no blank spot above the keyboard")
+            }
+            guard EventSynthesizer.tap(at: point) else { return .notPossible("the tap could not be synthesized") }
+            return .keyboardStayed
+        case .returnKey:
+            switch planner.returnKey(focusedInput: snapshotFinder.liveFocusedTextInput()?.elementType) {
+            case .notPossible(let why):
+                return .notPossible(why)
+            case .press:
+                // Typed rather than tapped: a key tap aimed at a keyboard that
+                // starts leaving would land on the app behind it.
+                guard actionExecutor.typeTextWithoutFocus("\n") else {
+                    return .notPossible("the key press could not be synthesized")
+                }
+                return .keyboardStayed
+            }
+        }
     }
 
     /// Poll the snapshot tree until the keyboard disappears or the deadline

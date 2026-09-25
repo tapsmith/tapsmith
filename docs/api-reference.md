@@ -523,11 +523,22 @@ if (await device.isKeyboardShown()) {
 
 ### `device.hideKeyboard(): Promise<void>`
 
-Hide the soft keyboard if it is visible.
+Hide the soft keyboard if it is visible. Resolves at once when no keyboard is shown.
 
 ```typescript
 await device.hideKeyboard();
 ```
+
+On Android this presses BACK, which the soft keyboard always obeys.
+
+iOS has no API that puts the keyboard away, so `hideKeyboard()` does what a user would. It tries these in order and stops as soon as the keyboard is gone:
+
+1. **Drag a scroll view** a few points, if the screen has one above the keyboard. The drag starts away from the scroll view's controls.
+2. **Tap the keyboard's own dismiss key**, where it has one (iPad).
+3. **Tap a blank spot** above the keyboard, where no control, text, or image is drawn. This works on screens that dismiss the keyboard when you tap outside the field.
+4. **Press the return key**, but only in a single-line field whose return key reads "return" or "done". This also submits the field, as it would for a user (React Native's `onSubmitEditing` fires). An action key such as "go", "send", "search" or "next" is never pressed, and neither is return in a multi-line field, where it would type a new line.
+
+If the keyboard is still up after all of them, `hideKeyboard()` throws instead of reporting success. The error lists what it tried and why each step failed. Dismiss the keyboard the way your screen allows: tap its own Done or close button, or call `device.pressKey("enter")` if submitting the field is fine.
 
 ### `device.wake(): Promise<void>`
 
