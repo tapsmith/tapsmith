@@ -77,6 +77,11 @@ struct KeyboardDismissPlanner {
     /// A container covering this much of the screen is a window or modal
     /// root, where a sheet's backdrop lives: never part of a field's scope.
     static let fullScreenFraction: CGFloat = 0.95
+    /// A container covering this much of the screen roots the field's own
+    /// screen for the drag: a navigation screen's content (about 87% of an
+    /// iPhone below its bar) or a page sheet (about 93%), never the window
+    /// holding the screen a sheet was presented over.
+    static let screenRootFraction: CGFloat = 0.85
 
     /// Return-key labels whose press only ends editing (plus the submit
     /// every return fires). Everything else is an app action.
@@ -193,7 +198,7 @@ struct KeyboardDismissPlanner {
     private func screenRoot(of field: Int) -> Int? {
         analyzer.ancestors(of: field).first { a in
             let f = nodes[a].frame.intersection(screen)
-            return !f.isNull && f.width * f.height >= screen.width * screen.height * Self.fullScreenFraction
+            return !f.isNull && f.width * f.height >= screen.width * screen.height * Self.screenRootFraction
         }
     }
 
@@ -226,9 +231,12 @@ struct KeyboardDismissPlanner {
         guard let field = fieldIndex(focusedFrame) else { return nil }
         let fieldInKeyboard = nodes[field].window.map { windows.contains($0) } ?? false
         let root = fieldInKeyboard ? nil : screenRoot(of: field)
-        // The root itself counts: on a headerless screen it can be the
-        // scroll view the field is in.
+        // A scroll view holding the field always counts (the root can be its
+        // same-sized content container); otherwise it must be inside the root,
+        // which itself counts (a headerless screen's root scroll view).
+        let fieldAncestors = Set(analyzer.ancestors(of: field))
         func inFieldsScreen(_ i: Int) -> Bool {
+            if fieldAncestors.contains(i) { return true }
             guard let root else { return true }
             return i >= root && i < nodes[root].subtreeEnd
         }

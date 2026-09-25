@@ -2258,6 +2258,14 @@ class CommandHandler {
             if outcome == .keyboardStayed { touchedScreen = true }
             if outcome == .keyboardStayed, waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) {
                 NSLog("[TapsmithCommand] hideKeyboard: dismissed by \(strategy.summary)")
+                // Off screen first, out of the tree a moment later: give it
+                // that moment, so isKeyboardShown() (any keyboard element)
+                // agrees straight after. Best effort — it is already gone
+                // from the screen.
+                let treeDeadline = Date(timeIntervalSinceNow: 1.0)
+                while keyboardPresence() == .offScreen, Date() < treeDeadline {
+                    Thread.sleep(forTimeInterval: 0.1)
+                }
                 return
             }
             attempts.append((strategy, outcome))
@@ -2272,8 +2280,12 @@ class CommandHandler {
 
     /// How long to wait for the keyboard to leave after a strategy ran.
     private func dismissWait(for strategy: KeyboardDismissPlanner.Strategy) -> TimeInterval {
-        strategy == .scrollSwipe ? 2.0 : 1.5
+        // The drag strategy waits after each of its drags itself.
+        strategy == .scrollSwipe ? 0 : 1.5
     }
+
+    /// How long to wait for the keyboard to leave after one dismiss drag.
+    private static let dragWait: TimeInterval = 2.0
 
     /// Run one dismiss strategy. `.keyboardStayed` means it touched the screen
     /// (the caller waits to see whether the keyboard left); `.notPossible`
@@ -2295,7 +2307,7 @@ class CommandHandler {
                 from: start, to: CGPoint(x: start.x, y: start.y - dy), duration: 0.05
             ) else { return .notPossible("the drag could not be synthesized") }
             // Gone already: the caller's wait after this return sees that at once.
-            if waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) { return .keyboardStayed }
+            if waitForKeyboardDismissed(timeout: Self.dragWait) { return .keyboardStayed }
             // A horizontal scroll view drags sideways — planned again, since the
             // first drag may have scrolled a control under the old point.
             guard let snapshot = try? snapshotFinder.takeSnapshot(),
@@ -2306,6 +2318,7 @@ class CommandHandler {
             _ = EventSynthesizer.swipe(
                 from: again, to: CGPoint(x: again.x - dx, y: again.y), duration: 0.05
             )
+            _ = waitForKeyboardDismissed(timeout: Self.dragWait)
             return .keyboardStayed
         case .dismissKey:
             guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
@@ -2337,13 +2350,14 @@ class CommandHandler {
 
     /// Poll the snapshot tree until the keyboard disappears or the deadline
     /// passes. Returns true once the keyboard is gone.
+    /// Always checks at least once, so a zero timeout is a single check.
     private func waitForKeyboardDismissed(timeout: TimeInterval) -> Bool {
         let deadline = Date(timeIntervalSinceNow: timeout)
-        while Date() < deadline {
+        while true {
             if keyboardGoneNow() == true { return true }
+            if Date() >= deadline { return false }
             Thread.sleep(forTimeInterval: 0.15)
         }
-        return false
     }
 
     /// Whether one snapshot shows no keyboard on screen (none in the tree, or

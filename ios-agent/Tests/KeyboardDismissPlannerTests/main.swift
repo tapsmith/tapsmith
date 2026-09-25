@@ -269,6 +269,40 @@ do {
 }
 
 do {
+    // A page sheet (it starts below the status bar, so it covers about 93%
+    // of the screen) over a list screen that is still in the tree: the
+    // sheet roots the field's screen, and the list behind it is not dragged.
+    let field = R(16, 120, 370, 44)
+    let rows: [Row] = [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (4, .table, "", "", R(0, 116, 402, 758)),
+        (3, .other, "", "", R(0, 62, 402, 812)),
+        (4, .textField, "Title", "", field),
+    ] + keyboardWindows()
+    check("page sheet over a list: the list behind is not dragged",
+          planner(rows).scrollSwipeStart(focusedFrame: field), nil)
+}
+
+do {
+    // A ScrollView (87% of the screen, under a navigation bar) whose content
+    // container is the same size: the field's screen root is that container,
+    // inside the scroll view, and the scroll view holding the field is still
+    // dragged (the /keyboard "Put in scroll view" layout).
+    let field = R(17, 133, 368, 43)
+    let rows: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 758)),
+        (5, .other, "", "", R(0, 116, 402, 758)),
+        (6, .textField, "Plain input", "", field),
+        (6, .button, "Centre action", "", R(16, 415, 370, 443)),
+    ] + keyboardWindows()
+    checkTrue("scroll view holding the field, same-sized content: drag",
+              planner(rows).scrollSwipeStart(focusedFrame: field) != nil)
+}
+
+do {
     // No focused field known: no drag (a scroll view behind a sheet's
     // backdrop cannot be told from the field's own).
     let rows: [Row] = appHead + [(4, .scrollView, "", "", R(0, 116, 402, 758))] + keyboardWindows()
