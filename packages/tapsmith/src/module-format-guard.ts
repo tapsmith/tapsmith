@@ -28,5 +28,6 @@ export function moduleFormatError(dirname: unknown): string | undefined {
   ].join('\n');
 }
 
-const error = moduleFormatError(import.meta.dirname);
+// `?.`: a transform may replace `import.meta` itself with `undefined`.
+const error = moduleFormatError(import.meta?.dirname);
 if (error) throw new Error(error);

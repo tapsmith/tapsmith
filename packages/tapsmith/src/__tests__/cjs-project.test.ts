@@ -97,7 +97,9 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', () =>
         cwd: root,
         encoding: 'utf-8',
         timeout: 60_000,
-        env: { ...process.env, PATH: bareBin, TAPSMITH_TELEMETRY: '0', ...env },
+        // NODE_PATH and HOME (~/.node_modules) would let resolveTsxBin's
+        // require.resolve step find a tsx installed on this machine.
+        env: { ...process.env, PATH: bareBin, NODE_PATH: '', HOME: root, TAPSMITH_TELEMETRY: '0', ...env },
       });
     }
 
@@ -146,11 +148,13 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', () =>
     let reply: UIDiscoverChildMessage;
     try {
       reply = await new Promise<UIDiscoverChildMessage>((resolve, reject) => {
-        let stderr = '';
-        child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+        // Both streams drained: an unread pipe can fill and stall the child.
+        let output = '';
+        child.stdout?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+        child.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
         child.on('message', (msg: UIDiscoverChildMessage) => resolve(msg));
         child.on('error', reject);
-        child.on('exit', (code) => reject(new Error(`discovery exited (${code}) without replying:\n${stderr}`)));
+        child.on('exit', (code) => reject(new Error(`discovery exited (${code}) without replying:\n${output}`)));
         child.send({ type: 'discover', filePath });
       });
     } finally {
