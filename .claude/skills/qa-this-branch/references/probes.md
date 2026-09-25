@@ -8,8 +8,9 @@ cd packages/tapsmith && npm run build      # with an arm64 node — see §0
 
 ## 0. Environment and build freshness (once per session, and after each rebuild)
 
-**Node must be arm64.** Check, don't assume — whether this shell runs under Rosetta has
-changed over time:
+**On an Apple-Silicon Mac, node must be arm64** (elsewhere — Intel Macs, Linux — the
+native arch is right; skip this). Check, don't assume — whether this shell runs under
+Rosetta has changed over time:
 
 ```bash
 node -p process.arch     # arm64 → nothing to do
@@ -22,11 +23,19 @@ symlink** — `arch -arm64 node` is not enough, children re-resolve `node` from 
 
 ```bash
 ARM_NODE=$(for n in ~/.nvm/versions/node/*/bin/node; do
-  [ "$("$n" -p process.arch 2>/dev/null)" = arm64 ] && echo "$n"; done | tail -1)
-SHIM=<this session's scratchpad>/nodebin
+  [ "$("$n" -p process.arch 2>/dev/null)" = arm64 ] && echo "$n"; done | sort -V | tail -1)
+[ -n "$ARM_NODE" ] || ARM_NODE=$(for n in $(which -a node); do [ "$("$n" -p process.arch)" = arm64 ] && echo "$n" && break; done)
+[ -n "$ARM_NODE" ] || { echo "no arm64 node found (nvm or PATH) — install one before probing" >&2; exit 1; }
+SHIM=<this session's scratchpad>/nodebin     # a fixed path: write it out literally below
 mkdir -p "$SHIM" && ln -sf "$ARM_NODE" "$SHIM/node"
-export PATH="$SHIM:$(dirname "$ARM_NODE"):$PATH"
 ```
+
+Shell state does not persist between Bash calls, so the symlink survives but `SHIM` and
+`PATH` do not: **every** later node-dependent command must set PATH itself, with the
+literal shim path — `PATH="<scratchpad>/nodebin:$PATH" node …` — in the same call. A
+`PATH="$SHIM:$PATH"` in a fresh shell expands to `:$PATH` (the current directory first)
+and runs the x64 node again. The recipes below write `$SHIM`; substitute the literal
+path. If node is already arm64, skip the prefix entirely.
 
 `Cannot find module @rollup/rollup-darwin-x64` means node_modules is arm64 and the shell
 picked the wrong node: fix PATH, do not reinstall.
@@ -44,14 +53,15 @@ like product bugs. Check each one the triage says you need:
 
 **Worktree specifics.** Use the scripts via `${CLAUDE_SKILL_DIR}` (the skill copy this
 session loaded), not the worktree's own `.claude/skills/`, which may be older or absent;
-invoke the CLI by path (`node ../packages/tapsmith/dist/cli.js` from `e2e/`), never npx; `npm ci` is needed in `packages/tapsmith`
+invoke the CLI by path (`node ../packages/tapsmith/dist/cli.js` from `e2e/`), never npx;
+`npm ci` in `e2e/` too (its configs import `tapsmith`); `npm ci` is needed in `packages/tapsmith`
 (and `web-tests/` if used) before the first build.
 
 ## 1. Read CI — do not re-run it
 
 `automated-coverage.md` has the job table and the four checks that a run really covers
 HEAD (SHA match, not advisory, the spec actually ran, it asserts your observable). With no
-PR there is no CI run at all — every workflow is PR-triggered — so those cells are
+PR there is no CI run at all — for a feature branch every workflow is PR-triggered — so those cells are
 `pending-ci`.
 
 ## 2. `web-tests/` as a harness (not as a suite)
@@ -92,6 +102,8 @@ node <repo>/packages/tapsmith/dist/cli.js mcp-server --config tapsmith.config.io
 ```
 
 with `cwd` set to `e2e/` and `stderr: 'pipe'`, then drives tool calls.
+Pass `device: <leased udid-or-serial>` on `run_tests` and every device tool call — the
+server has no `--device` flag, and an unpinned call may auto-pick someone else's device.
 
 - **Capture and print the child's stderr** — discovery and run failures are logged only
   there, so tool results alone hide real breakage. This is the whole point of the harness.
@@ -99,7 +111,8 @@ with `cwd` set to `e2e/` and `stderr: 'pipe'`, then drives tool calls.
 - Swap `command` for `packages/tapsmith/node_modules/.bin/tsx` to A/B the tsx loader when
   discovery counts look wrong.
 - The SDK client's `close()` sends SIGTERM and **orphans the daemon** — that is a harness
-  artifact (real clients shut down cleanly); `pgrep -fl tapsmith-core` and kill yours.
+  artifact (real clients shut down cleanly); find yours with `lsof -nP -iTCP:<its port> -sTCP:LISTEN`
+  (the port is in the harness's stderr) and kill that PID — not by pattern (§10).
 - To confirm a finding against a *real* client before reporting it:
 
 ```bash
@@ -148,23 +161,36 @@ target that gives you that, and never run the whole suite "to check".
 ```bash
 cd e2e
 # an artifact to inspect (§8) — one file, trace forced on
-PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.ios.mjs --trace on
-# mode 2: parallel workers. CI passes --workers 1, so no job covers this at all
-PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.android.mjs --workers 2
+PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.ios.mjs --device <leased udid> --trace on
+# mode 2: parallel workers. CI passes --workers 1, so no job covers this at all.
+# Cannot be pinned: lease platform:android first (SKILL.md ground rules). Needs >= 2 files —
+# one file runs sequentially and never touches the worker path
+PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file-a>.test.ts tests/<file-b>.test.ts -c tapsmith.config.android.mjs --workers 2
 # mode 3: headless watch. No CI job starts a watch coordinator
-PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.ios.mjs --watch
+PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.ios.mjs --device <leased udid> --watch
 ```
 
 Configs: `tapsmith.config.{mjs,ios.mjs,android.mjs,ios-device.mjs,ios-mixed.mjs}` and the
-`*-ci*` variants. `npx` is safe **from `e2e/` in the main checkout** (symlinked to
-`packages/tapsmith`); it is not safe from the repo root, and does not work in a worktree.
+`*-ci*` variants. Never `npx tapsmith` (SKILL.md ground rules) — from `e2e/`, always
+`node ../packages/tapsmith/dist/cli.js`.
 
-**Throwaway probe tests** go in `e2e/qa-tmp/<name>.test.ts` with a config at
-`e2e/qa-<name>.config.mjs` that spreads an existing one and sets `testMatch:
-["**/qa-tmp/<name>.test.ts"]`. Not a dot-dir — glob skips those, so `e2e/.qa-tmp/` is
-silently undiscovered — and there is no `testDir` option. Pick a `testMatch` no existing
-config matches, so a colleague's live UI session does not pick your files up. Remove both
-and confirm with `git status --short` before reporting.
+**Throwaway probe tests** go in `e2e/qa-tmp/<name>.qaprobe.ts` — a suffix no existing
+config's `**/*.test.ts` matches, so a colleague's live UI or watch session never discovers
+them. Not a dot-dir: glob skips those, so `e2e/.qa-tmp/` is silently undiscovered. The
+config must replace **`projects`**, not just the top-level `testMatch`: every e2e config
+defines projects, and a project's own `testMatch` wins (`project.ts`:
+`p.testMatch ?? config.testMatch`), so a spread config with only a new top-level
+`testMatch` still runs the whole `default` project — the entire suite. There is no
+`testDir` option.
+
+```js
+// e2e/qa-<name>.config.mjs
+import base from "./tapsmith.config.android.mjs";
+const def = base.projects.find((p) => p.name === "default");
+export default { ...base, projects: [{ ...def, name: "qa-probe", testMatch: ["**/qa-tmp/<name>.qaprobe.ts"] }] };
+```
+
+Remove both and confirm with `git status --short` before reporting.
 
 Emulator/simulator caveats: right after navigation the Android a11y tree can lag the
 rendered screen by whole screens, so a single clean "element absent" probe is not truth —
@@ -177,7 +203,7 @@ Check `"${CLAUDE_SKILL_DIR}/scripts/device-availability.sh"` first (the UI serve
 lifetime — the longest-held claim of any mode), then:
 
 ```bash
-cd e2e && PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test --ui -c tapsmith.config.ios.mjs --ui-port 7788
+cd e2e && PATH="$SHIM:$PATH" node ../packages/tapsmith/dist/cli.js test --ui -c tapsmith.config.ios.mjs --device <leased udid> --ui-port 7788
 ```
 
 Never pipe this through `head` (SIGPIPE kills it mid-boot). Then drive the page with
@@ -208,8 +234,8 @@ verified item from "the suite went green".
 ## 9. Base-branch A/B (regression vs. pre-existing)
 
 ```bash
-merge=$(git merge-base HEAD origin/main)
-git worktree add /private/tmp/.../scratchpad/base "$merge"   # build there; keeps your tree intact
+merge=$(git merge-base HEAD origin/<base>)   # the base from Phase 0, not always main
+git worktree add "<this session's scratchpad>/base-<unix-ts>" "$merge"   # build there; keeps your tree intact
 ```
 
 A worktree is safer than `git stash` when a probe is mid-flight. Compare byte-identically
@@ -217,33 +243,37 @@ A worktree is safer than `git stash` when a probe is mid-flight. Compare byte-id
 
 ## 10. Cleanup checklist
 
-First release every device lease you took (`scripts/device-lease.sh list` shows them;
-`release <target> <owner>` for each of yours). Never release another owner's lease.
+First release every lease **this QA run newly acquired** — keep a list as you acquire,
+because `device-lease.sh list` cannot tell them apart from your caller's: under
+`lease-owner=` they share an owner, and re-acquiring a lease the caller already held only
+renews it (that one is not yours to release). Never release a `devices=` target or
+another owner's lease. `"${CLAUDE_SKILL_DIR}/scripts/device-lease.sh" release <target> <owner>`
+for each on your list.
 
-`"${CLAUDE_SKILL_DIR}/scripts/device-availability.sh"` lists the leftovers it found under "Leftovers" — that
-section is your cleanup list.
+**Kill by PID, not by pattern.** Record the PID of everything you start (the UI server
+from `lsof … -sTCP:LISTEN`, daemons from your run's log, background probes), and kill
+those. Beyond that, only true orphans: PPID 1 **and** not held by anyone else — other
+workers and the user may be running builds and daemons right now, and a `pgrep -f
+tapsmith-core` also matches their `cargo`/`rustc` builds inside `packages/tapsmith-core`.
+`scripts/device-availability.sh` lists leftovers it is confident are orphans under
+"Leftovers"; anything under "Active-use signals" is off limits.
 
 ```bash
-pgrep -fl tapsmith-core          # daemons you orphaned (no ESTABLISHED conn = orphan)
-pgrep -f ui-worker               # PPID 1 = orphan from a dead UI server, safe to kill
-pgrep -fl xcodebuild             # iOS agents outlive their daemons and accumulate
-ls ~/.tapsmith/daemons/          # stale ui-port / registry entries
-git worktree remove <path>
+ps -o pid,ppid,etime,command -p <pid>   # confirm each PID is what you started before killing it
+ls ~/.tapsmith/daemons/                 # stale ui-port / registry entries you created
+git worktree remove <path>              # only worktrees you created
 ```
-
-Kill what you started, plus orphans that are provably nobody's (PPID 1, or a daemon with
-no client). Never kill a live session: anything the availability check flagged as an
-*active-use* signal is off limits unless the user says otherwise.
 
 Two traps when killing leftovers, both of which silently no-op:
 
 - **`adb logcat` ignores SIGTERM** — a plain `kill` (or `pkill -f`) leaves it running.
   Use `kill -9`.
-- **This shell is zsh, which does not word-split unquoted `$vars`** — `for p in $pids`
+- **zsh (the default macOS shell) does not word-split unquoted `$vars`** — `for p in $pids`
   and `kill $pids` pass the whole newline-joined list as one argument (`illegal pid`).
   Pipe through `xargs` instead:
 
 ```bash
-ps -eo pid,ppid,command | grep 'adb .*logcat' | grep -v grep |
+# only orphaned logcats for serials YOU drove this session — the user may have started others
+ps -eo pid,ppid,command | grep -E 'adb -s (<serial you drove>|<another>) .*logcat' | grep -v grep |
   awk '$2==1 {print $1}' | xargs -n1 kill -9
 ```

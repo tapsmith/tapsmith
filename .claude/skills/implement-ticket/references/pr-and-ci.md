@@ -44,7 +44,8 @@ From `origin/<base>`, named by ticket type, key lowercased:
 | CI or review-thread fixes | batch them, then push once |
 | docs/description-only tweaks while E2E is running | wait for E2E to finish, unless it is already red |
 
-Before any push: package checks green, `git status` clean, `git log origin/<branch>..HEAD`
+Before any push: package checks green, `git status` clean, and `git log origin/<branch>..HEAD`
+(before the first push, when that ref does not exist yet: `git log origin/<base>..HEAD`)
 lists what you expect.
 
 ## The PR
@@ -82,7 +83,10 @@ the branch is a gate failure.
 Watch in the background, so QA and other work continue meanwhile:
 
 ```bash
-gh pr checks <n> --watch --interval 60     # run_in_background; exits non-zero on failure
+# first wait until checks have registered — right after a push, gh reports "no checks
+# reported" and exits at once, which looks like a finished (or failed) watch
+until [ "$(gh pr view <n> --json statusCheckRollup -q '.statusCheckRollup | length')" -gt 0 ]; do sleep 20; done
+gh pr checks <n> --watch --fail-fast --interval 60   # run both in the background; returns at the first failure
 ```
 
 Judge only runs on the **head SHA** (`gh pr view <n> --json headRefOid`) — older runs are
@@ -124,7 +128,8 @@ For each unresolved thread, decide as a review-loop triage card would — read t
 build the scenario, judge likelihood and impact:
 
 - **Fix** → with a test if behaviour changes; after pushing, reply with what changed (and
-  the commit) and resolve the thread.
+  the commit). Resolve it if it is a bot's thread; leave a human's thread for them to
+  resolve unless they asked you to.
 - **Won't fix** → reply with the specific reason (the scenario cannot happen because …;
   Playwright does the same; out of scope, proposed as a follow-up) and resolve it if it
   is a bot's thread. Leave a human's thread open for them.

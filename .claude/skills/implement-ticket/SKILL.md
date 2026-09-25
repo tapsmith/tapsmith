@@ -25,6 +25,12 @@ References, read when the phase needs them:
 `${CLAUDE_SKILL_DIR}` is this skill's directory; sibling skills are
 `/review-loop` and `/qa-this-branch` (invoke them with the Skill tool).
 
+**The skill-directory placeholder is not a shell variable.** Claude Code fills in the
+`CLAUDE_SKILL_DIR` placeholder only in this SKILL.md; the Bash environment does not have
+it, and the reference files contain the placeholder literally. This skill's directory is
+`${CLAUDE_SKILL_DIR}` — use that absolute path wherever a command in a reference file
+writes the `CLAUDE_SKILL_DIR` placeholder, or the command runs `/scripts/…` and fails.
+
 ## Arguments
 
 `$ARGUMENTS` is free text. Tokens, in any order; leftover text is extra guidance for the
@@ -33,8 +39,9 @@ plan (constraints, hints, "don't touch X").
 | token | meaning | default |
 |---|---|---|
 | `PILOT-123` (any `KEY-n`) | the ticket | required, unless resuming on a branch whose name carries it |
+| `also=<KEY>,…` | further tickets combined into this one change: each is read as an intent source (Phase 1), its ACs join the plan and QA's intent (pass `ticket=` the primary key and the others as focus), and the PR title and body carry every key. State, branch and leases stay keyed on the primary | none |
 | `autonomous` | skip the plan checkpoint; record assumptions instead of asking | interactive |
-| `base=<ref>` | branch to build on and target | `main` |
+| `base=<ref>` | branch to build on and target. CI only triggers on PRs to `main`, so any other base is a stop-and-ask: the gate cannot be met without CI | `main` |
 | `jira` | also move the ticket (In Progress at start, In Review at the end) and comment the PR link on it | no Jira writes |
 | `leave-draft` | stop at the gate with the PR still a draft | mark it ready for review |
 | `max-qa=<n>` | cap on QA → fix cycles before escalating | `3` |
@@ -67,14 +74,35 @@ device-holding work (a device-tier test, a local e2e file, anything QA does for 
 check and **lease** a target with the qa-this-branch skill's scripts:
 
 ```bash
-"${CLAUDE_SKILL_DIR}/../qa-this-branch/scripts/device-availability.sh"        # pick a target not marked [LEASED]
+"${CLAUDE_SKILL_DIR}/../qa-this-branch/scripts/device-availability.sh"        # target rule: qa-this-branch SKILL.md ground rules
 "${CLAUDE_SKILL_DIR}/../qa-this-branch/scripts/device-lease.sh" acquire <udid-or-serial> <KEY>
 ```
 
+Pick a target exactly as qa-this-branch's ground rules say — `device-availability.sh
+--pick <platform> --owner <KEY>` prints one that is not `[IN USE]`, not attached and not
+`[LEASED]` by someone else (sessions the user starts by hand never take leases, so
+`[LEASED]` alone misses them); lease it, confirm it with `--check <id> --owner <KEY>`, and pin every run
+to it with `--device`, or
+lease the whole platform for a run that picks its own devices (`--workers N`, device groups),
+as those ground rules describe.
 Hold the lease only while you need the device; release it when that work is done
-(`… release <target> <KEY>`), and always before you finish or block. If none is free,
-run `acquire … --wait 60` with `run_in_background` and do device-free work meanwhile — you
-are re-invoked when it exits (0 = leased, 4 = still busy: carry on device-free, try later).
+(`… release <target> <KEY>`), and always before you finish or block. Leases expire after
+6 hours, so re-run `acquire` (it renews your own lease) before each device-holding launch
+— **including immediately before invoking `/qa-this-branch` with `devices=`**, since QA
+must not renew a lease it did not take — and never keep one device session (a UI or watch
+run) open longer than the 6-hour TTL.
+**If `--pick` exits 4**, nothing of that platform is booted: boot one (or let a
+single-device run boot its configured device) — that is not "busy". **If none is free**
+(`--pick` exits 1: every target in use or leased, or a live session's device unidentified), do device-free work and poll `--pick` every few minutes,
+for up to 60 minutes. `acquire --wait` is only for waiting on a specific target that is
+`[LEASED]` by another owner — it knows nothing about unleased live sessions and returns 0
+at once for them — and run in the background it exits 0 = leased; 4 = still leased by
+someone else; 3 = lock fault, not a busy device (retry once; if it recurs, report an
+environment problem); 2 = your command was wrong (`--wait` takes whole minutes); 1 =
+busy (only without `--wait`). Only exit 0 means you hold the lease. Still no device after
+60 minutes: let QA mark those cells UNTESTED `device busy`; if that makes QA `incomplete`,
+that is stop rule 5. Before you block or finish, stop any such waiter that is still
+running (TaskStop), then release whatever it may have acquired.
 
 ## Worker mode
 
@@ -112,24 +140,42 @@ Only these. Everything else you decide, and record the decision in the state fil
    `max-qa`; the same CI job fails for the same branch-caused reason after three fix
    attempts.
 5. **`/qa-this-branch` returns `incomplete`** for a reason you cannot remove (device
-   busy, environment you must not change), or raises `open_questions` about intent.
+   busy, environment you must not change), or raises an `open_questions` item that a
+   **stated** criterion depends on (a contradiction in the ticket itself).
 6. **A human reviewer requests changes you disagree with**, or asks a question only the
    user can answer.
+7. **A base other than `main`** was requested (`base=`) — CI never runs on it, so the
+   gate cannot be met.
+8. **The ticket cannot be read** (no Jira connector, or no access): ask the user to paste
+   it; never guess a ticket's content from its key.
+
+Not an immediate stop: a device check that says every target is taken, or that a live
+session's device is unidentified. That is "device busy" — follow *Devices* (device-free
+work, poll `--pick` for up to 60 minutes). Only if it persists and QA returns
+`incomplete` because of it does rule 5 apply.
 
 When you stop, update the state file, say exactly what is blocked and what you need, and
 leave the branch pushed and the PR in a coherent state.
 
 ## Phase 0 — Set up or resume
 
-1. **Resume check first.** Look for `<state dir>/state.md` (below), then a
-   local or remote branch whose name carries the key (`git branch -a | grep -i <key>`),
-   then an open PR (`gh pr list --search <KEY> --state open`). If any exists, follow
+1. **Resume check first.** Find where the ticket's branch is checked out, if anywhere
+   (`git worktree list`, matching the key as below): that checkout's state dir holds the
+   state file, and you work there. Look for `<state dir>/state.md` (below), then a
+   local or remote branch whose name carries the key as a whole token
+   (`git branch -a | grep -iE '(^|[^0-9a-z])pilot-12([^0-9]|$)'` for PILOT-12 — an
+   unanchored grep also matches PILOT-120…129),
+   then an open PR (`gh pr list --search <KEY> --state open`, keeping only PRs whose title
+   or branch carries the exact key — the search also matches PILOT-120…129). If any
+   exists, follow
    `references/state.md` to resume from the recorded phase — never start over on top of
    existing work, and never create a second branch or PR for the same ticket.
-2. **Clean start.** The working tree must be clean; if the user has uncommitted work in
-   the main checkout, create a worktree
-   (`git worktree add .claude/worktrees/<branch> origin/<base>`) instead of touching it.
-   `git fetch origin`, then branch from `origin/<base>` using the naming in
+2. **Clean start.** `git fetch origin` first. The working tree must be clean; if the user
+   has uncommitted work in the main checkout, create a worktree
+   (`git worktree add "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.claude/worktrees/<branch>" origin/<base>`
+   — anchored on the main checkout's root via the common git dir, so it lands in the
+   main `.claude/worktrees/` even when run from inside another worktree) instead of
+   touching it. Branch from `origin/<base>` using the naming in
    `references/pr-and-ci.md`. With `worktree=`, the coordinator has already made a
    worktree (detached at `origin/<base>`): create your branch inside it
    (`git -C <worktree> switch -c <branch>`) and do not make another.
@@ -194,8 +240,11 @@ Update docs in the slice that changes the behaviour, not at the end.
 When the plan's slices are all built and the package checks are green:
 
 1. **`/review-loop`** — decide by the table below; pass `commit` so its fixes land as
-   commits, and `base=<base>`. Read its outcome word: `clean` → go on; `max-rounds` →
-   go on, and say in the PR that the loop hit its cap; `oscillation` → stop and ask.
+   commits, `worktree=<the checkout your branch is in>`, `base=origin/<base>` (after a fetch — local `<base>` may be stale, and a stale
+   base puts upstream commits in the reviewed diff), and `ledger=<state dir>/review-loop/`
+   so parallel workers never share a ledger. Read its outcome word: `clean` → go on; `max-rounds` →
+   go on, and say in the PR that the loop hit its cap; `oscillation` → stop and ask;
+   `stopped-by-user` → stop, and report where the loop was left.
 
    | Change | review-loop |
    |---|---|
@@ -211,29 +260,32 @@ When the plan's slices are all built and the package checks are green:
 
 ## Phase 5 — QA
 
-Invoke `/qa-this-branch` with `autonomous ticket=<KEY> #<pr> report=<state dir>/qa-<unix-ts>.md`
+Invoke `/qa-this-branch` with `autonomous ticket=<KEY> #<pr> worktree=<the checkout your branch is in> report=<state dir>/qa-<unix-ts>/report.md` (one directory per cycle, so each cycle's evidence stays with its report)
 plus the plan's QA items as focus text (focus adds emphasis; it never shrinks QA's
-matrix). If you hold device leases, pass them as `devices=<ids>` so QA uses yours rather
-than competing with you. On later cycles, add `leads=<previous report path>`. Parse the last two lines of its reply (`QA_VERDICT:` /
+matrix). Always pass `lease-owner=<KEY>` so QA leases under your name — your own
+device leases then never block the platform leases QA needs for mode 2 or device groups —
+and, if you hold device leases, `devices=<ids>` so QA uses yours first. On later cycles, add `leads=<previous report path>`. Parse the last two lines of its reply (`QA_VERDICT:` /
 `QA_REPORT:`) and act:
 
 | Verdict | Do |
 |---|---|
 | `needs-fixes` | For each blocking finding: add the automated test its card suggests, watch it fail, fix, go green (Phase 3 discipline). Fix cheap minors too; propose tickets for pre-existing bugs. Then decide re-review (below), push, and re-run QA with `leads=`. |
-| `incomplete` | Remove the gap if you can (rebuild, free a device, wait for one), then re-run. If you cannot, stop and ask (rule 5). |
+| `incomplete` | Remove the gap if you can (rebuild; release a device *you* hold; wait for one by polling `--pick` as *Devices* says — never kill or disturb a session you did not start), then re-run. If you cannot, stop and ask (rule 5). |
 | `ready-pending-ci` | Push if anything is unpushed, then wait for the listed checks (Phase 6). |
 | `ready` | On to Phase 6. |
 
 Every QA run is a full retest — never ask QA to skip anything because a previous cycle
-passed it. `open_questions` in the report are rule 5: resolve them from the ticket if you
-can, otherwise ask (interactive) or record the assumption in the PR (autonomous).
+passed it. For each `open_questions` item: resolve it from the ticket if you can. One
+about an **inferred** criterion is stop case 1 — take the conservative reading and
+disclose it in the PR (in worker mode that is `DEFAULT_SAFE: yes`); one that a **stated**
+criterion depends on is rule 5.
 
 **What a change after review or QA re-triggers:**
 
 | You changed | Re-run |
 |---|---|
 | product logic (more than a trivial, fully tested line) | `/review-loop` (`max-rounds=3`), then QA |
-| a small fix with its own new test | QA only |
+| a small fix with its own new test (a few lines, no design change) | QA only — this is the one post-review logic change the gate allows without a re-review |
 | tests, docs or comments only | package checks only; QA need not re-run |
 
 After `max-qa` cycles without `ready`/`ready-pending-ci`, stop and ask (rule 4).
@@ -265,8 +317,10 @@ checklist with evidence:
 - [ ] the last `/qa-this-branch` verdict is `ready` or `ready-pending-ci`, on a tree that
       differs from head only by tests/docs/comments — otherwise re-run it;
 - [ ] `/review-loop` ended `clean` (or `max-rounds`, disclosed), or was skipped per the
-      table, and no product logic changed after it without a re-review;
-- [ ] every CI check on head is green; no job is green only because a step is advisory;
+      table, and no product logic changed after it without a re-review — except the
+      small, individually tested fixes the Phase 5 table routes to QA only;
+- [ ] every CI check on head is green, the `CI` and both E2E workflows actually ran on
+      head (zero checks is not green), and no job is green only because a step is advisory;
 - [ ] no unresolved review thread you can act on; no outstanding "changes requested";
 - [ ] the branch merges cleanly into `<base>` (merge `<base>` in if not, then re-check);
 - [ ] every commit is signed off; the package checks pass locally;
@@ -303,9 +357,9 @@ DEFAULT_SAFE: <yes|no>
 ```
 
 `DEFAULT_SAFE: yes` only for stop case 1 (scope ambiguity where a conservative reading
-exists and can be disclosed in the PR). Cases 2–6 — an API shape with no precedent, a
-split, a loop that will not converge, QA `incomplete`, a disputed human review — are
-`no`: they need a person, and a coordinator must not answer them with your default.
+exists and can be disclosed in the PR). Cases 2–8 — an API shape with no precedent, a
+split, a loop that will not converge, QA `incomplete`, a disputed human review, a
+non-main base, an unreadable ticket — are `no`: they need a person, and a coordinator must not answer them with your default.
 
 Save durable lessons (a new environment trap, a CI flake signature, a design rule a
 reviewer taught you) to memory. Not the ticket's status — that lives in the PR.

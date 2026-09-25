@@ -24,7 +24,7 @@ Nothing here relaxes a worker's own rules. Workers never merge; neither do you.
 | `sessions` | run workers as background Claude sessions instead of subagents (see *Worker hosts*) | subagents |
 | `autonomous` | skip the batch checkpoint and plan reviews | interactive |
 | `jira`, `leave-draft`, `max-qa=<n>` | passed through to every worker | worker defaults |
-| `base=<ref>` | base for every ticket | `main` |
+| `base=<ref>` | base for every ticket, passed through to every worker. CI only runs on PRs to `main`, so a non-main base is a stop-and-ask for the whole batch before any worker starts | `main` |
 
 ## Why the parallelism cap is low
 
@@ -37,7 +37,7 @@ other. Raise `max-parallel` only for batches that are mostly device-free.
 ## The coordinator's state
 
 `<main checkout>/.claude/state/implement-tickets/<batch-id>.md` (git-ignored; survives
-the session). `<batch-id>` is the date plus the sorted keys, e.g.
+the session). `<batch-id>` is the start date plus the keys sorted numerically, e.g.
 `2026-09-25-PILOT-12-15-19`. Update it on every event.
 
 ```markdown
@@ -62,7 +62,8 @@ the session). `<batch-id>` is the date plus the sorted keys, e.g.
 
 ## Phase 0 — Resume or start
 
-If a coordinator state file exists for these keys, or any ticket already has a worktree,
+If a coordinator state file exists for these keys (match on the keys part of the name,
+`*-<sorted keys>.md` — the date prefix is the start date, not today's), or any ticket already has a worktree,
 branch or PR, **resume**: rebuild the table from the state file and from reality (each
 ticket's worktree state file at `<worktree>/.claude/state/implement-ticket/<KEY>/state.md`,
 its branch, its PR). Workers from an earlier session are gone, so re-launch any ticket
@@ -84,7 +85,9 @@ description names). Then decide a **lane** for each:
   tickets in `runner.ts` or `app-reset.ts`). Parallel branches there mean merge
   conflicts and, worse, two designs for one mechanism. Run them one after the other.
 - **combine with <KEY>** — really one change (one root cause, one PR's worth). Propose
-  combining; one worker takes both keys' ACs, and the PR title carries both keys.
+  combining; one worker takes both: `/implement-ticket <primary KEY> also=<other KEY> …`
+  (implement-ticket reads every key's ticket, and its state and branch are keyed on the
+  primary). Record the pairing in the coordinator state so a resume finds both.
 - **hold** — too big for one PR, too unclear to start, already fixed, or a duplicate. Say
   why and what would unblock it.
 
@@ -104,16 +107,21 @@ For each ticket that is ready to start, up to `max-parallel` running at once:
 
    ```bash
    git fetch origin
-   git worktree add --detach .claude/worktrees/<key-lowercase> origin/<base>
+   git worktree add --detach "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.claude/worktrees/<key-lowercase>" origin/<base>
    ```
 2. **Start the worker** on its host (below) with:
-   `/implement-ticket <KEY> worker worktree=<absolute worktree path> [plan-review] [pass-through flags]`
+   `/implement-ticket <KEY> worker worktree=<absolute worktree path> base=<base> [also=<KEY>] [plan-review] [pass-through flags]`
    — `plan-review` in interactive mode, so the user approves every plan in one batch.
 3. Record the worker's id/name, and move on. Launch all ready workers in one message so
    they start together.
 
-A worker slot frees when its worker returns `ready-to-merge`, `blocked` or `planned`
-(a planned or blocked worker is idle until you answer it). Fill free slots from the
+A slot is a worker that is **building**: `max-parallel` caps building workers, not
+started ones. A worker that returns `ready-to-merge`, `blocked` or `planned` is idle
+and frees its slot. A ready worker may need resuming later (another PR merged: it must
+merge `main` and re-run its gate); until it has, report it as `ready (stale vs main)`,
+never plain `ready`. Resuming an idle
+worker (relaying "go" or an answer) needs a free slot like starting a new one does —
+resume in lane order, and queue the rest until slots free. Fill free slots from the
 queue in lane order.
 
 ## Worker hosts
@@ -125,7 +133,7 @@ queue in lane order.
 > `<KEY> worker worktree=<path> …`, and follow that skill exactly. You are a worker in a
 > batch coordinated by another agent; never ask the user anything directly. End your
 > final message with the skill's result lines (`IMPLEMENT_TICKET:`, `PR:`, `STATE:`, and
-> `QUESTION:`/`OPTIONS:`/`DEFAULT:` when blocked).
+> `QUESTION:`/`OPTIONS:`/`DEFAULT:`/`DEFAULT_SAFE:` when blocked).
 
 You are notified when each worker stops. To answer or instruct a stopped worker, send it
 a message with `SendMessage` (its agent id is in the tool result; keep it in the state
@@ -181,8 +189,9 @@ timer.
 The batch is done when every ticket is `ready-to-merge` or `held` with a reason. Print:
 the table (ticket → PR → state), what the user must decide or merge and in which order
 (dependencies first), the questions answered on their behalf, and follow-ups the workers
-proposed. Clean up only what is safe: device leases your workers left behind (`release`
-with their owner name), never a worktree whose PR is still open. End with:
+proposed. Clean up only what is safe: device leases your workers left behind — owners
+`<KEY>` and the QA runs they started, `qa:<their branch>:*` (`device-lease.sh list` shows
+owners; `release` each with its exact owner) — never a worktree whose PR is still open. End with:
 
 ```
 IMPLEMENT_TICKETS: <ready>/<total> ready-to-merge, <held> held

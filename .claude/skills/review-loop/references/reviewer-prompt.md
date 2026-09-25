@@ -16,8 +16,7 @@ asking for fewer, surer findings — that moves precision to the wrong end of th
 
 ```
 You are reviewing a code change for correctness. You have NOT seen this change being
-written and you must form your own view from the code. Do not modify any file except
-the findings file named at the end of this prompt, which you must write. Do not
+written and you must form your own view from the code. Do not modify any files. Do not
 spawn subagents — run every phase below yourself, in this context, in order.
 
 Repository: {{repo_root}}
@@ -157,24 +156,26 @@ pad.
 ## Pre-existing (out of scope)
 - <path>:<line> — <one line>
 
-Also write this exact output to `{{findings_file}}` (create the file; overwrite if it
-exists) before you finish, so it survives if the parent conversation is summarised.
+Return this output as your final message. Do not write it to a file; the parent saves it.
 ```
 
 ## Notes on filling the template
 
+- `{{repo_root}}` is the loop's repo root (step 0) — the `worktree=` path when given.
 - `{{diff_command}}` must show **committed and uncommitted** work against the base, e.g.
-  `git diff {{merge_base}}` (working tree vs merge-base). If the target is a PR checked out
+  `git -C {{repo_root}} diff {{merge_base}}` (working tree vs merge-base). If the target is a PR checked out
   locally, the same command works; if the user gave an explicit `A..B` range, use
   `git diff A B` and say so in the scope line.
-- `{{untracked_files}}` is the output of `git ls-files --others --exclude-standard`, one
+- `{{untracked_files}}` is the output of `git -C {{repo_root}} ls-files --others --exclude-standard`, one
   path per line, or `none`. Run it yourself; do not leave it to the reviewer.
 - `{{change_brief}}` is three to eight lines written by **you** in the main context at the
   start of the loop, describing what the change is for and the design choices that are
   deliberate. Identical across rounds unless the design itself changes. It is the one
   piece of author context the reviewer gets; it exists so intent mismatches are caught,
   so keep it to intent — no "this has been checked", no quality opinions, no history.
-- `{{findings_file}}` is `<ledger dir>/findings-<unix timestamp>.md`. Not `round-N`.
+- The findings file (`<ledger dir>/findings-<unix timestamp>.md`, never `round-N`) is
+  written by **you**, from the reviewer's returned text, as soon as it returns. It is not
+  in the prompt: the reviewer never sees a path that could hint at rounds.
 - `{{scope_description}}` names the branch and the base, nothing else.
 - `{{focus}}` is whatever the user passed as free text, or `none`. If the user's focus text
   itself mentions earlier rounds or fixes, paraphrase it into a present-tense concern.

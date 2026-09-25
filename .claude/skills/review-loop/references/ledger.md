@@ -1,7 +1,8 @@
 # Ledger
 
-The ledger is the loop's only state. It lives at `{{ledger_file}}` (the session
-scratchpad; the path is decided once in step 0 and reused). Write it before the first
+The ledger is the loop's only state. It lives at `<ledger dir>/ledger.md` — the
+`ledger=` directory, else `<session scratchpad>/review-loop/` — decided once in step 0 and
+reused. Write it before the first
 review and update it after **every** triage card and every fix — never only at the end of
 a round. If the conversation is summarised mid-loop, the ledger is how the loop resumes:
 re-read it, find the last incomplete card, continue.
@@ -43,7 +44,7 @@ Verdict: FIX | WON'T FIX | OUT OF SCOPE | INVALID — <one sentence>
 Fixed in: <files>            (FIX only, appended after the fix)
 Test: <file, or why none>    (FIX only)
 
-### R1-F2 — repeats R0-F… , verdict stands      (one-line card for a final repeat)
+### R2-F4 — repeats R1-F2, verdict stands      (one-line card for a final repeat, in a later round)
 
 Pre-existing (not triaged):
 - <path>:<line> — <one line>

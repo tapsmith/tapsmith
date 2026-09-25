@@ -44,9 +44,10 @@ pilot-report/
 # Claude
 .mcp.json
 *-session-prompt.md
-# Personal settings and worktrees stay local; project skills are shared.
-.claude/*
-!.claude/skills/
+# Personal settings, state and worktrees stay local, at any depth; only the root
+# project skills are shared.
+**/.claude/*
+!/.claude/skills/
 
 # Worktrees
 .worktrees/

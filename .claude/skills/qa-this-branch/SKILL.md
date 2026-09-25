@@ -13,8 +13,9 @@ readable and parseable.
 
 Six failure modes to design against, all of which have happened here before:
 
-1. **A mode was never exercised.** Tapsmith assembles a run through seven separately
-   wired paths, and CI only drives the sequential headless one on a device. A change that
+1. **A mode was never exercised.** Tapsmith has seven user-facing run modes, assembled by
+   five separately wired embedders (CLAUDE.md), and CI only drives the sequential
+   headless one on a device. A change that
    works in `tapsmith test` can be inert or broken in UI-mode MCP.
 2. **A probe ran but proved nothing.** "The suite went green" does not prove the new code
    ran. Assert the specific observable (trace rung, log line, pane content, tool payload).
@@ -43,6 +44,12 @@ whose instructions you are following. Use it for the scripts and references rath
 a repo-relative path: a worktree of an older branch may hold an older copy of the skill,
 or none.
 
+**The skill-directory placeholder is not a shell variable.** Claude Code fills in the
+`CLAUDE_SKILL_DIR` placeholder only in this SKILL.md; the Bash environment does not have
+it, and the reference files contain the placeholder literally. This skill's directory is
+`${CLAUDE_SKILL_DIR}` — use that absolute path wherever a command in a reference file
+writes the `CLAUDE_SKILL_DIR` placeholder, or the command runs `/scripts/…` and fails.
+
 ## Arguments
 
 `$ARGUMENTS` is free text. Any of these tokens may appear in any order; leftover text is
@@ -52,13 +59,15 @@ or none.
 |---|---|---|
 | `#123` / `pr 123` | QA that PR's head; base = the PR's base | the current checkout |
 | `branch=<name>` | QA that branch | the current checkout |
-| `base=<ref>` | diff against this ref's merge-base | PR base, else `origin/HEAD`, else `main` |
+| `base=<ref>` | base branch name (compared as `origin/<base>`) | PR base, else the branch `origin/HEAD` points to, else `main` |
 | `ticket=<KEY>` | intent source | detected (`references/intent.md`) |
 | `platform=ios\|android\|both` | device platforms to probe | from the triage; `both` for any device-affecting change |
 | `budget=<minutes>` | wall-clock cap for Phases 3–4 | `90` |
 | `leads=<path>` | a previous QA report whose findings become must-test rows | none |
 | `report=<path>` | where to write the report | `<scratchpad>/qa-this-branch/report-<unix-ts>.md` |
-| `devices=<id,…>` | device targets (UDIDs / serials) the caller has **already leased for you** — use only these, and do not lease or release them | lease your own (ground rules) |
+| `worktree=<path>` | test the branch checked out at this path (e.g. a worker's worktree); run every command there | the current checkout |
+| `devices=<id,…>` | device targets (UDIDs / serials) the caller has **already leased for you** — use these first, and never release them | lease your own (ground rules) |
+| `lease-owner=<owner>` | lease under this owner name instead of `qa:<branch>:<ts>` — the caller's, so its leases count as yours (a platform lease is refused while *another* owner holds a device of that platform). Release only leases you acquired in this run | `qa:<branch>:<ts>` |
 | `autonomous` / `interactive` | see below | `interactive` if a person typed `/qa-this-branch`; `autonomous` if another skill or agent invoked you |
 
 **Interactive** — show the plan (intent + matrix) and wait for the go-ahead before Phase 4;
@@ -89,19 +98,48 @@ coverage**, and a lead marked fixed is still a must-test row: prove the fix.
   "${CLAUDE_SKILL_DIR}/scripts/device-availability.sh"   # exit 0 = FREE, 3 = BUSY
   ```
 
-  FREE → pick a listed target that is not `[LEASED]`, and **lease it before using it**:
+  Pick a target marked neither `[IN USE]`, `[agent runner attached]` nor `[LEASED]` by
+  someone else, and **lease it before using it** (owner: `lease-owner=` if given, else
+  `qa:<branch>:<unix-ts of this run>`, unique to this QA run):
 
   ```bash
-  "${CLAUDE_SKILL_DIR}/scripts/device-lease.sh" acquire <udid-or-serial> "qa:<branch>"
+  "${CLAUDE_SKILL_DIR}/scripts/device-lease.sh" acquire <udid-or-serial> "qa:<branch>:<ts>"
   ```
 
-  Exit 1 means another worker just took it — pick another. Release every lease you took
-  in cleanup (`… release <target> "qa:<branch>"`). Parallel workers (implement-tickets)
-  rely on leases; the availability check alone has a race between check and claim. With
-  `devices=`, the caller already holds the leases: use only those targets.
-  BUSY → use a target it lists as unheld and unleased; only when every target is taken,
-  stop and ask (interactive) or mark the device cells UNTESTED `device busy: <what holds
-  it>` (autonomous). Re-run it before each new device-holding launch. Booted simulators, running emulators, idle MCP servers and PPID-1
+  Exit 0 = leased; 1 = someone just took it (pick another); 2 = your command was wrong
+  (fix it); 3 = a lock fault, not a busy device (retry once, then report it as an
+  environment problem — never as "device busy"). Release every lease you took in
+  cleanup. With `devices=`, the caller already holds those leases: use those
+  `[LEASED]` targets first. When a cell needs more (a platform lease for mode 2 or a
+  device group, the other platform), acquire it under `lease-owner=` when given — so the
+  caller's own device lease does not block you — and release only what you acquired. Parallel workers rely on leases; the check
+  alone has a race between check and claim.
+  **Then pin every run to the leased device** — `--device <udid-or-serial>` on a
+  single-device `tapsmith test` (the e2e configs otherwise choose a simulator or AVD by
+  name, which can resolve to someone else's leased device). A run that picks or boots
+  devices itself cannot be pinned: `--workers N` (the CLI refuses `--device` with it), a
+  multi-device group (`use.devices` — its members auto-pick), and anything that
+  provisions extra simulators. For those, lease the **whole platform**
+  (`acquire platform:android <owner>` / `platform:ios`), which is refused while anyone
+  else holds one of its devices and blocks everyone else until you release it. A lease
+  only stops other *leases*: before the run, the full report must also show no
+  `[IN USE]` target and no unidentified live session on that platform (a session started
+  by hand takes no lease, and the run would auto-pick its device). If you cannot get both,
+  mark the cell UNTESTED `device busy`. Over MCP, pin with the tools'
+  `device` argument (modes.md).
+  **Waiting for a device.** Poll `device-availability.sh --pick <ios|android> --owner
+  <your lease owner>`, which prints a target that is not in use, not attached and not
+  leased by anyone else. Exit 1 = every booted target is taken (or a live session on that
+  platform drives an unidentified device); exit 4 = **nothing of that platform is
+  booted** — that is not "busy": boot one (`xcrun simctl boot <udid>`, or start an AVD,
+  or let a single-device run boot its configured one) and pick again. Do **not** wait
+  with `acquire --wait` alone: it only waits on leases and returns at once for a device
+  an unleased live session is driving. When `--pick` gives a target, lease it, then
+  confirm **that** target with `--check <id> --owner <owner>` (exit 0) before launching —
+  a second `--pick` confirms *a* target, not yours. **Every target taken, or
+  unidentified** — interactive: stop and ask; autonomous: poll every few minutes for up
+  to 60 while doing device-free work, then mark the cells UNTESTED `device busy: <what
+  holds it>`. Re-run it before each new device-holding launch. Booted simulators, running emulators, idle MCP servers and PPID-1
   orphans are **not** active use — the script already separates them. A collision symptom
   after claiming ("hierarchy contains no elements after relaunch", "Failed to connect to
   agent socket" that never recovers) means you took something: back off and report it.
@@ -126,16 +164,20 @@ coverage**, and a lead marked fixed is still a must-test row: prove the fix.
 
 ## Phase 0 — Set up the target
 
-1. **Resolve target and base.** No arguments → the current checkout. `#123`/`branch=` that
-   is not what's checked out → do **not** switch the user's checkout; create a worktree:
-   `git worktree add .claude/worktrees/qa-<name> <ref>` (for a PR, `gh pr checkout <n>`
+1. **Resolve target and base.** `worktree=` → that checkout; use it for every command
+   (absolute paths or `git -C`). No arguments → the current checkout. `#123`/`branch=`
+   whose branch is already checked out in some worktree (`git worktree list`) → use that
+   worktree; git refuses to check a branch out twice. Otherwise do **not** switch the
+   user's checkout; create a worktree:
+   `git worktree add "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")/.claude/worktrees/qa-<name>" <ref>` (for a PR, `gh pr checkout <n>`
    inside it). Record `merge=$(git merge-base HEAD origin/<base>)` after `git fetch`.
 2. **Record what you are testing**: `git rev-parse HEAD`, whether the tree is dirty
    (`git status --short` — uncommitted work is in scope, and CI has never seen it),
    whether the branch is pushed (`git rev-parse @{u}` / `git status -sb`), and whether a PR
    exists (`gh pr view --json number,url,baseRefName,headRefOid,body 2>/dev/null`). **No
    PR is a normal state** — intent then comes from the ticket and commits, and there is no
-   CI evidence at all: every workflow is PR-triggered, so pushing alone runs nothing.
+   CI evidence at all: for a feature branch every workflow is PR-triggered, so pushing
+   alone runs nothing.
 3. **Check the environment** once: node is arm64 (probes.md §0), and the builds you will
    need are fresh for this tree (SDK `dist/`, daemon, agents, test-app — probes.md §0 has
    the staleness checks). If HEAD is the base branch with a clean tree, stop: nothing to QA
@@ -186,7 +228,8 @@ against an inferred one is reported with the inference visible and the question 
 
    Do the subtraction before planning probes. A typical SDK branch ends with most cells
    `covered`/`pending-ci` and the work on modes 2–7, assert-gaps, intent rows and artifacts.
-4. **Write the plan file** (`<scratchpad>/qa-this-branch/plan.md`): intent, inventories,
+4. **Write the plan file** beside the report (`<report dir>/plan-<unix-ts>.md` — never a
+   fixed shared name; parallel QA runs may share a scratchpad): intent, inventories,
    the full matrix including `covered` rows (so the reasoning is visible), and which probes
    need a device. Interactive: show it and wait. Autonomous: print a short summary, go on.
 

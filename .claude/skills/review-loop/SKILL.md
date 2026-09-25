@@ -1,6 +1,6 @@
 ---
 name: review-loop
-description: Review → triage → fix → repeat until a fresh reviewer finds nothing worth fixing. A fresh-context reviewer on a different model (Opus by default) reviews the branch diff; the main context prints the findings, then for each one verifies it, writes repro steps, expected and actual outcome, likelihood and impact, prints that card with its verdict, fixes every FIX verdict, runs the package-local checks, and starts the next round. Use when asked to review-loop, "review until clean", "loop review and fix", or to harden a just-implemented change before opening a PR.
+description: Review → triage → fix → repeat until a fresh reviewer finds nothing worth fixing. A fresh-context reviewer (Opus by default; model= picks another) reviews the branch diff; the main context prints the findings, then for each one verifies it, writes repro steps, expected and actual outcome, likelihood and impact, prints that card with its verdict, fixes every FIX verdict, runs the package-local checks, and starts the next round. Use when asked to review-loop, "review until clean", "loop review and fix", or to harden a just-implemented change before opening a PR.
 ---
 
 # review-loop
@@ -18,7 +18,9 @@ before round 1. They are short and they are the contract.
 ## Roles
 
 - **Reviewer** — a fresh `general-purpose` Agent (never `fork`), model from the `model=`
-  argument, default `opus`. It has not seen the change being written. It runs seven
+  argument, default `opus`. Its independence comes from the fresh context, not the model: with
+  the default it may be the same model as the main context. Pass `model=` to get a
+  genuinely different second opinion. It has not seen the change being written. It runs seven
   finder angles inline, dedups, sweeps for gaps, and is tuned for **recall**: every
   plausible defect comes back, because verification is the triage step's job. One
   reviewer per round, whole diff every round — fixes can break things the last round
@@ -44,6 +46,8 @@ text handed to the reviewer verbatim:
 | `model=<opus\|sonnet\|fable\|haiku>` | reviewer model | `opus` |
 | `max-rounds=<n>` | safety cap | `8` |
 | `commit` | one commit per round with fixes, following the project's commit conventions (sign-off flag if the project requires DCO) | no commits; fixes stay in the working tree |
+| `worktree=<path>` | review the branch checked out at this path, and make every fix, check and commit there (`git -C <path>`, absolute paths) — for callers whose own shell sits in another checkout | the current checkout |
+| `ledger=<dir>` | directory for the ledger and findings files — pass a distinct one whenever several loops can run in one session (e.g. parallel workers sharing a scratchpad) | `<session scratchpad>/review-loop/` |
 
 Unless an explicit `A..B` range was given, the diff is **merge-base → working tree**,
 committed and uncommitted together, plus untracked files. Nothing the user has written is
@@ -51,10 +55,15 @@ out of the reviewer's sight.
 
 ## Step 0 — set up (once)
 
-1. Resolve the base and record `git merge-base HEAD <base>`. If HEAD *is* the base branch
+1. Resolve the repo root — `worktree=` if given, else the current checkout — and run
+   every git command, check, edit and commit of the loop against it (`git -C <root>`,
+   absolute paths): a shell whose working directory resets would otherwise review and
+   commit in the wrong checkout. Resolve the base and record
+   `git -C <root> merge-base HEAD <base>`. If HEAD *is* the base branch
    and the working tree is clean, stop and say there is nothing to review.
-2. Decide the ledger path: `<session scratchpad>/review-loop/ledger.md` (the scratchpad
-   directory is named in your system prompt). Reviewer findings files go beside it as
+2. Decide the ledger path: `<ledger dir>/ledger.md`, where the ledger dir is `ledger=` or
+   else `<session scratchpad>/review-loop/` (the scratchpad directory is named in your
+   system prompt). Reviewer findings files go beside it as
    `findings-<unix timestamp>.md` — never a name that reveals the round. Create the
    directory.
 3. Write the **change brief**: 3–8 lines on what the change is for and which design
@@ -78,7 +87,10 @@ notification — do not start triage on a prediction of what it will say, and do
 other work on the tree while it reads.
 
 If the reviewer's output does not follow the required format, do not guess at it: send it
-one message asking for the output in the exact format, then continue.
+one message asking for the output in the exact format, then continue. Save its output
+verbatim to the round's findings file yourself — reviewers return findings as text
+(a harness may refuse a subagent's file writes), and the file is what survives a
+summary.
 
 **As soon as it returns, print the findings list to the user** — one line per finding
 with id, where, kind, confidence and the reviewer's claim, plus the pre-existing list — in
@@ -127,9 +139,11 @@ If the round had at least one `fix`, status `done` and go to step 1. Otherwise s
   is clean; a round with `NO FINDINGS` is clean.
 - **max-rounds** — the cap was reached with fixes still being made in the last round. Say
   so plainly; do not describe the tree as clean.
-- **oscillation** — a finding with the same `where` and substantially the same claim has
-  been given `fix` in two different rounds. Something is being fixed back and forth. Stop,
-  leave the tree as it is, and put both rows in front of the user.
+- **oscillation** — a fix would undo or contradict an earlier fix of the same finding
+  (same `where`, substantially the same claim), or the same finding has been given `fix`
+  in three different rounds. Something is being fixed back and forth, or is not
+  converging. Stop, leave the tree as it is, and put the rows in front of the user. A
+  second `fix` that completes an incomplete first one is not oscillation.
 - **stopped-by-user** — the user interrupts. Update the ledger's outcome before replying.
 
 Do not stop for any other reason. Not because the round was long, not because the reviewer

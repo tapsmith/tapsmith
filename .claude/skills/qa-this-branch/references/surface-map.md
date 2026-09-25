@@ -49,7 +49,7 @@ If a changed path is not in the tables below, find its importers
 | `trace-viewer/components/**`, `trace-viewer/*.ts` | **trace viewer AND UI mode** | UI mode imports these; cover with `web-tests --project=trace-viewer` |
 | `trace/**` | both viewers + `read_trace` MCP tool + `show-trace` | trace format is a contract |
 | `reporters/**`, `reporter.ts`, `action-progress*.ts` | 1, 2, 3 output; `show-report`, `merge-reports` | |
-| `daemon-bin.ts`, `agent-resolve.ts`, `grpc-client.ts` | all 7 | resolution order: npm package → monorepo build → env var → PATH; test at least the monorepo path |
+| `daemon-bin.ts`, `agent-resolve.ts`, `grpc-client.ts` | all 7 | resolution order (daemon-bin.ts): `TAPSMITH_DAEMON_BIN` → monorepo build relative to cwd → npm platform package → monorepo build relative to `dist/` → PATH; test at least the env-var and monorepo paths |
 | `emulator.ts`, `ios-simulator*.ts`, `ios-device*.ts`, `ios-*network*.ts`, `create-avd.ts`, `setup-ios*.ts`, `build-ios-agent.ts`, `verify*.ts`, `doctor.ts`, `env-scan.ts` | device bring-up for all 7 + those subcommands | usually needs a real device; `--json` modes are cheap to check |
 | `init*.ts`, `agents-md.ts`, `legacy-cleanup.ts` | `tapsmith init` | run it into a scratch dir |
 | `telemetry.ts`, `telemetry-cli.ts` | all 7 (one event per file, tagged by `runMode`) | the payload key list is a public contract (`docs/telemetry.md`); check opt-outs and each embedder's `runMode` |
@@ -104,7 +104,7 @@ Walk this list for any SPA change and mark each pane affected / not.
 - **Detail tabs** (`DetailTabs.tsx`) — tab switching and per-tab emptiness.
 - **Network tab** (`NetworkTab.tsx`) — entries, bodies, filtering.
 - **Hierarchy tree** (`HierarchyTree.tsx`, `hierarchy-utils.ts`) — a11y tree rendering.
-- **Selector playground** (`SelectorPlayground.tsx`, `selector-generation.ts`,
+- **Locator playground** (`LocatorPlayground.tsx`, `selector-generation.ts`,
   `selector-matching.ts`, `selector-pick.ts`, `selector-uniqueness.ts`) — generation,
   match counts, uniqueness, pick mode.
 - **Timeline filmstrip** (`TimelineFilmstrip.tsx`), **TopBar**, source view

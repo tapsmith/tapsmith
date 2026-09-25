@@ -1,9 +1,19 @@
 # The run modes, and what only each one can break
 
-Seven separately-assembled paths. The parent-side state threading differs in each, so a
-per-session concern (capabilities, install/preflight checks, passthrough hosts, a new
-config key) has to be wired seven times. This is the list to walk for every inventory
-item.
+Seven user-facing modes, assembled by the **five embedders** CLAUDE.md lists (`cli.ts`,
+`worker-runner.ts`, `ui-worker.ts`, `watch-run.ts`, `mcp/headless-dispatcher.ts` — UI watch
+and UI MCP run through UI mode's `ui-worker.ts`). A per-session concern (capabilities,
+install/preflight checks, passthrough hosts, a new config key) has to be wired through all
+five embedders, and then observed working in all seven modes — each mode has its own
+parent-side state and entry point. This is the list to walk for every inventory item.
+
+How each mode is pinned to your lease (SKILL.md ground rules: lease, then pin):
+
+| Mode | Pin |
+|---|---|
+| 1, 3, 5, 6 — a single-device `tapsmith test` (incl. `--watch`, `--ui`) | `--device <leased udid-or-serial>` |
+| 2 — `--workers N`, and any multi-device group run | cannot be pinned (the CLI refuses `--device` with `--workers N`; group members auto-pick): lease `platform:<ios\|android>` instead |
+| 4, 7 — MCP | `mcp-server` takes only `--config`. Pass `device` on `run_tests` and every device tool; make the session's **first** call one that names the device (`tapsmith_watch` and the listing tools take none), since the first device-naming call pins the session and an unpinned run auto-picks any device |
 
 All commands assume `cd packages/tapsmith && npm run build` has just run and node is
 arm64 (`references/probes.md` §0). They invoke the branch's CLI by path from `e2e/`
@@ -17,7 +27,7 @@ rules) — no mode needs the user's permission when it reports FREE.
 ## 1. Headless sequential — `src/cli.ts`
 
 ```bash
-cd e2e && node ../packages/tapsmith/dist/cli.js test tests/home.test.ts -c tapsmith.config.ios.mjs
+cd e2e && node ../packages/tapsmith/dist/cli.js test tests/home.test.ts -c tapsmith.config.ios.mjs --device <leased udid>
 ```
 
 The only path device CI exercises — on both platforms, 5 shards each, on your PR — so
@@ -32,8 +42,14 @@ rejection path (bad value, mutually-exclusive combination — e.g. `--watch` wit
 ## 2. Headless parallel workers — `src/worker-runner.ts` + `src/dispatcher.ts`
 
 ```bash
-cd e2e && node ../packages/tapsmith/dist/cli.js test -c tapsmith.config.ios.mjs --workers 2
+cd e2e && node ../packages/tapsmith/dist/cli.js test tests/<file-a>.test.ts tests/<file-b>.test.ts -c tapsmith.config.ios.mjs --workers 2
 ```
+
+The CLI only parallelises when a wave has more files than one worker can take
+(`cli.ts`: `effectiveWorkers = min(workers, files in the largest wave)`); with a single
+file it silently runs **sequentially** and mode 2 is never exercised. Give it at least
+two files in the same project, and confirm from the output that workers ran (per-worker
+lines, `Worker 0 (…)`/`Worker 1 (…)`) before recording the cell as mode 2.
 
 Only path with worker-protocol serialisation (`src/worker-protocol.ts`): anything that
 must reach a test run has to survive being sent to a forked child. Per-worker daemons and
@@ -49,7 +65,7 @@ socket-name collision; merged reporter/trace output.
 ## 3. Headless watch — `src/watch.ts`, `src/watch-run.ts`, `src/watch-queue.ts`
 
 ```bash
-cd e2e && node ../packages/tapsmith/dist/cli.js test -c tapsmith.config.ios.mjs --watch
+cd e2e && node ../packages/tapsmith/dist/cli.js test -c tapsmith.config.ios.mjs --device <leased udid> --watch
 # then change a file's *content* (append a comment line, restore it after) — `touch` does not trigger
 ```
 
@@ -74,7 +90,8 @@ Forks the same `watch-run.ts` children as mode 3, but the parent-side state is s
 sharing child code does **not** mean sharing the wiring. Tools:
 `list_tests`, `run_tests`, `stop_tests`, `suite_status`, `list_results`, `read_trace`,
 `watch`, `session_info`, `list_devices`, plus the device tools (`tap`, `type`, `swipe`,
-`press_key`, `snapshot`, `screenshot`, `launch_app`, `test_selector`).
+`press_key`, `snapshot`, `screenshot`, `launch_app`, `test_locator`) — all prefixed
+`tapsmith_` on the wire (`tapsmith_test_locator`).
 
 Check: the server logs discovery and run failures **to stderr only** — a tool result can
 look clean over a real failure, so always capture stderr. `run_tests` wants absolute
@@ -88,7 +105,7 @@ re-register against `node <repo>/packages/tapsmith/dist/cli.js mcp-server`.
 ## 5. UI mode — `src/ui-mode/ui-server.ts` + `src/ui-mode/ui-worker.ts` + the SPA
 
 ```bash
-cd e2e && node ../packages/tapsmith/dist/cli.js test --ui -c tapsmith.config.ios.mjs --ui-port 7788
+cd e2e && node ../packages/tapsmith/dist/cli.js test --ui -c tapsmith.config.ios.mjs --device <leased udid> --ui-port 7788
 ```
 
 It holds the device for its whole lifetime — the longest claim of any mode — so run the
@@ -117,7 +134,8 @@ statuses updating rather than resetting, and re-runs while a run is in flight.
 
 ## 7. UI MCP — the UI server's `/mcp` HTTP endpoint (`src/mcp/http-session-router.ts`)
 
-The `tapsmith-ui` MCP server registered in this project points at
+If a `tapsmith-ui` MCP server is registered in your local Claude Code config (`.mcp.json`
+is git-ignored, so this is per-machine), it points at
 `http://localhost:9274/mcp` and **only connects while a UI session is running** — a
 ConnectionRefused there means no UI server, not a broken feature. After launching one,
 the session may need `/mcp` reconnected before `mcp__tapsmith-ui__*` tools appear.

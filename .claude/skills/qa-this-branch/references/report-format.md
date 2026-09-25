@@ -5,7 +5,9 @@ decides whether to fix, push, open a PR or mark the PR ready). Keep the front ma
 exact; the body is for humans.
 
 Default path: `<scratchpad>/qa-this-branch/report-<unix-ts>.md` (override with
-`report=`). Screenshots, traces and probe logs go beside it in `evidence/`.
+`report=`). Screenshots, traces and probe logs go beside it in `evidence-<unix-ts>/` —
+the same timestamp as the report, never a shared `evidence/`, so a later cycle writing to
+the same directory cannot overwrite an earlier report's evidence.
 
 ## Front matter
 
@@ -84,7 +86,7 @@ In this order:
    - **Repro:** exact commands, from a clean state
    - **Expected:** … (cite the AC or the base-branch behaviour)
    - **Actual:** … (quoted output)
-   - **Evidence:** evidence/f1-worker-log.txt, trace field `…`
+   - **Evidence:** evidence-<ts>/f1-worker-log.txt, trace field `…`
    - **Base branch:** behaves correctly at merge-base facaf56 → regression
    - **Automated test that should catch this:** `src/__tests__/dispatcher.test.ts` —
      assert each worker's init message carries the pin (or: "not automatable because …")

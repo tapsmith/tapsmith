@@ -40,8 +40,9 @@ host-side unit tests.
 **Device-tier red/green.** Check and lease a device first (SKILL.md *Devices*), and
 release it when the slice is green. Build what the test needs fresh (SDK `dist/`,
 daemon, agent, test-app — stale builds are the commonest false red; see qa-this-branch
-`references/probes.md` §0). Then one file:
-`cd e2e && node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.<android|ios>.mjs`.
+`references/probes.md` §0). In a fresh worktree run `npm ci` in `e2e/` first (its configs import `tapsmith`). Then one file:
+`cd e2e && node ../packages/tapsmith/dist/cli.js test tests/<file>.test.ts -c tapsmith.config.<android|ios>.mjs --device <leased udid-or-serial>`
+— always pinned to your lease: the configs pick a device by name otherwise.
 Running a single e2e file while iterating is the edit loop, not duplicate coverage.
 If no device is free, write the e2e test anyway, mark it unverified-locally in the state
 file, and let CI's E2E run be its first red/green — and say so in the PR.

@@ -23,7 +23,7 @@ Workflows change — skim `ci.yml` at HEAD if the branch touches `.github/`.
 
 | Job | Runs | So never hand-run |
 |---|---|---|
-| **Proto Lint** | `buf lint`, `buf breaking --against origin/main` | proto lint/breaking |
+| **Proto Lint** | `buf lint`; `buf breaking --against origin/main` **advisory** (`continue-on-error`, PRs only) | proto lint — but **not** breaking-change detection: read that step's own conclusion, or run `buf breaking` yourself for a proto change |
 | **TypeScript** | typecheck, lint, `vitest run`, knip, build in `packages/tapsmith`; **E2E helper tests** (`cd e2e && npm test`) | the SDK's static gates, its whole vitest suite, the e2e helper tests |
 | **Rust** (ubuntu) | `cargo fmt --check`, `clippy -D warnings`, `cargo test`, release build | daemon gates and unit tests |
 | **Rust (macOS)** | the same four, plus **iOS agent host-side unit tests** | the macOS variants, `ios-agent/Tests/run-unit-tests.sh` |

@@ -7,8 +7,9 @@
   "duplicates"), and attachments. Fetch it with whichever Jira connector in this session
   reaches the project (load via ToolSearch). No connector → ask the user to paste it; do
   not guess a ticket's content from its key.
-- **Is it already done?** `git log origin/<base> --grep <KEY>`, `gh pr list --search <KEY>
-  --state all`, and a read of the current code. A ticket fixed as a side effect of another
+- **Is it already done?** `git log origin/<base> -E --grep '<KEY>([^0-9]|$)'`,
+  `gh pr list --search <KEY> --state all` (then keep only exact-key matches — PILOT-12
+  must not match PILOT-123), and a read of the current code. A ticket fixed as a side effect of another
   PR gets a short report, not a new PR.
 - **Read the code and its tests.** Every file the change will touch, its callers
   (`grep -rn`), and the tests that already cover it. Know what currently happens before

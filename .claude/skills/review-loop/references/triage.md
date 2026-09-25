@@ -41,9 +41,12 @@ re-report a finding already in the ledger. Before the verify step, check each ne
 against every earlier card by `where` and the substance of the claim:
 
 - **Matches a `fix` card** — the code has changed since, so this is a new finding about the
-  fixed code. Triage it normally. If the fix did not actually remove the problem, it will
-  show up here — that is the loop working. If it earns a second `fix` verdict, that is the
-  **oscillation** exit in SKILL.md: stop and put both cards in front of the user.
+  fixed code. Triage it normally. If the fix did not fully remove the problem, it shows up
+  here and gets a second `fix` — that is the loop working: an incomplete fix, not
+  oscillation. It **is** the **oscillation** exit in SKILL.md when the new fix would undo
+  or contradict the earlier one (putting back what it removed, or reintroducing the
+  problem it solved), or when the same finding reaches a **third** `fix` — then stop and
+  put the cards in front of the user.
 - **Matches a `won't-fix` or `invalid` card, first repeat** — two independent reviewers
   found it. Triage it again from scratch — verify, scenario, likelihood, impact and
   verdict — without re-reading the old card first; then compare **verdicts**, not a
