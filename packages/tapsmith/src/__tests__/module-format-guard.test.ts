@@ -49,7 +49,9 @@ function importWithBlanked(pattern: string): { stdout: string; stderr: string } 
     + '} });\n'
     + `try { await import(${JSON.stringify(pathToFileURL(DIST_INDEX).href)}); console.log("loaded"); }\n`
     + 'catch (err) { console.log(err.message); }\n';
-  return spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+  // --no-warnings: registerHooks is experimental on some Node 22 releases,
+  // and its warning on stderr would fail the assertion below.
+  return spawnSync(process.execPath, ['--no-warnings', '--input-type=module', '-e', script], {
     encoding: 'utf-8',
     timeout: 60_000,
     env: { ...process.env, TAPSMITH_TELEMETRY: '0' },
