@@ -194,12 +194,15 @@ inuse() {
 # it is how a run that picks or boots its own devices (--workers N, device
 # groups) claims them, since those devices cannot be named in advance.
 leased() {
-  local h
-  if h=$("$LEASE" holder "$1" 2>/dev/null); then
-    printf '  [LEASED by %s — not yours unless you are %s]' "$h" "$h"
-  elif h=$("$LEASE" holder "platform:$2" 2>/dev/null); then
-    printf '  [LEASED: whole %s platform, by %s — not yours unless you are %s]' "$2" "$h" "$h"
-  fi
+  local h rc
+  # holder exits 0 = held, 1 = free; anything else is a lease-tool fault, and
+  # an unknown lease state must never read as free (fail closed).
+  h=$("$LEASE" holder "$1" 2>/dev/null); rc=$?
+  if [ $rc -eq 0 ]; then printf '  [LEASED by %s — not yours unless you are %s]' "$h" "$h"; return; fi
+  [ $rc -ne 1 ] && { printf '  [LEASE STATE UNKNOWN: device-lease.sh failed (%s)]' "$rc"; return; }
+  h=$("$LEASE" holder "platform:$2" 2>/dev/null); rc=$?
+  if [ $rc -eq 0 ]; then printf '  [LEASED: whole %s platform, by %s — not yours unless you are %s]' "$2" "$h" "$h"
+  elif [ $rc -ne 1 ]; then printf '  [LEASE STATE UNKNOWN: device-lease.sh failed (%s)]' "$rc"; fi
 }
 # One line per target: platform, id, flags (empty flags = free for anyone).
 list_targets() {
