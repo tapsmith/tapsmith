@@ -74,6 +74,9 @@ struct KeyboardDismissPlanner {
     /// A labeled `.other` this large (a fraction of the screen) is a screen
     /// container with a testID, not a control.
     static let containerAreaFraction: CGFloat = 0.5
+    /// A container covering this much of the screen is a window or modal
+    /// root, where a sheet's backdrop lives: never part of a field's scope.
+    static let fullScreenFraction: CGFloat = 0.95
 
     /// Return-key labels whose press only ends editing (plus the submit
     /// every return fires). Everything else is an app action.
@@ -134,6 +137,39 @@ struct KeyboardDismissPlanner {
         }
     }
 
+    /// Indices of the nodes inside the `.keyboard` element itself — the keys,
+    /// without the accessory bars and input views around it in its window.
+    private func keyIndices() -> [Int] {
+        nodes.indices.filter { i in analyzer.ancestors(of: i).contains { nodes[$0].elementType == .keyboard } }
+    }
+
+    // MARK: - The focused field's scope
+
+    /// The focused field's node, matched by the live focus query's frame.
+    private func fieldIndex(_ focusedFrame: CGRect?) -> Int? {
+        guard let focusedFrame else { return nil }
+        return nodes.indices.last(where: {
+            Self.textInputTypes.contains(nodes[$0].elementType)
+                && OcclusionAnalyzer.framesMatch(nodes[$0].frame, focusedFrame, tolerance: 1.5)
+        })
+    }
+
+    /// The field's ancestors, nearest first, up to (not including) the first
+    /// that covers nearly the whole screen: the containers a touch meant for
+    /// the field's own screen or sheet may use. Past them is a window or modal
+    /// root, holding whatever surrounds the field (a sheet's backdrop, the
+    /// screen behind a sheet).
+    private func scopeAncestors(of field: Int) -> [Int] {
+        var result: [Int] = []
+        for a in analyzer.ancestors(of: field) {
+            let f = nodes[a].frame.intersection(screen)
+            if nodes[a].elementType == .window || nodes[a].elementType == .application { break }
+            if !f.isNull, f.width * f.height >= screen.width * screen.height * Self.fullScreenFraction { break }
+            result.append(a)
+        }
+        return result
+    }
+
     private func isKeyLike(_ node: Node) -> Bool {
         (node.elementType == .button || node.elementType == .key)
             && node.frame.width > 0 && node.frame.height > 0
@@ -145,18 +181,29 @@ struct KeyboardDismissPlanner {
     /// on screen above the keyboard with a spot clear of its controls. The
     /// drag goes up (then, if that did not work, left) by `swipeFraction` of
     /// the screen from this point, so the point leaves room for it inside the
-    /// scroll view.
-    func scrollSwipeStart() -> CGPoint? {
+    /// scroll view. With the focused field known (`focusedFrame`), only a
+    /// scroll view holding the field or inside the field's own screen or
+    /// sheet counts — not the screen behind a sheet.
+    func scrollSwipeStart(focusedFrame: CGRect?) -> CGPoint? {
         let area = touchableArea
         guard !area.isNull else { return nil }
         let windows = keyboardWindows
         let dragY = screen.height * Self.swipeFraction
         let dragX = screen.width * Self.swipeFraction
+        let field = fieldIndex(focusedFrame)
+        let fieldAncestors = field.map { Set(analyzer.ancestors(of: $0)) } ?? []
+        let scope = field.map { scopeAncestors(of: $0).last ?? $0 }
+        func inFieldsScreen(_ i: Int) -> Bool {
+            guard field != nil, let scope else { return true }
+            if fieldAncestors.contains(i) { return true }
+            return i > scope && i < nodes[scope].subtreeEnd
+        }
 
         // The largest scroll view left visible above the keyboard.
         var best: (index: Int, visible: CGRect)?
         for (i, node) in nodes.enumerated() where Self.draggableScrollerTypes.contains(node.elementType) {
             if let w = node.window, windows.contains(w) { continue }
+            if !inFieldsScreen(i) { continue }
             let visible = node.frame.intersection(area)
             guard !visible.isNull,
                   visible.width >= Self.minScrollExtent,
@@ -173,17 +220,16 @@ struct KeyboardDismissPlanner {
         )
         guard starts.width > 0, starts.height > 0 else { return nil }
 
-        // Under the point: the scroll view, its ancestors, its content other
-        // than controls, and plain containers — nothing drawn over it from
-        // elsewhere (a screen whose own content covers a scroll view left in
-        // the tree). Never a control: a drag that does not start a scroll (a
-        // sideways drag in a vertical list, any drag in a carousel) presses it.
-        let subtree = scroll..<nodes[scroll].subtreeEnd
+        // Under the point: the scroll view, its ancestors, and plain
+        // containers — no control, text, image or web view of its content, and
+        // nothing drawn over it from elsewhere (a screen whose own content
+        // covers a scroll view left in the tree). A drag that does not start a
+        // scroll (sideways in a vertical list, any drag in a carousel) presses
+        // what it starts on, and a role-less Pressable is a labeled `.other`.
         let ancestors = Set(analyzer.ancestors(of: scroll))
         return clearestPoint(in: starts) { i in
             if i == scroll || ancestors.contains(i) { return false }
             if let w = nodes[i].window, windows.contains(w) { return false }
-            if subtree.contains(i) { return OcclusionAnalyzer.interactiveTypes.contains(nodes[i].elementType) }
             return !isPlain(i)
         }
     }
@@ -213,13 +259,12 @@ struct KeyboardDismissPlanner {
     /// field is not known or not in the tree.
     func blankPoint(focusedFrame: CGRect?) -> CGPoint? {
         let area = touchableArea
-        guard !area.isNull, let focusedFrame,
-              let field = nodes.indices.last(where: {
-                  Self.textInputTypes.contains(nodes[$0].elementType)
-                      && OcclusionAnalyzer.framesMatch(nodes[$0].frame, focusedFrame, tolerance: 1.5)
-              }) else { return nil }
+        guard !area.isNull, let field = fieldIndex(focusedFrame) else { return nil }
         let windows = keyboardWindows
-        for container in analyzer.ancestors(of: field) {
+        // Never a container covering the whole screen: that is where a sheet's
+        // backdrop lives (a headerless screen's root looks the same, so such a
+        // screen gets no blank tap).
+        for container in scopeAncestors(of: field) {
             let rect = nodes[container].frame.intersection(area)
             if rect.isNull { continue }
             let point = clearestPoint(in: rect) { i in
@@ -242,7 +287,9 @@ struct KeyboardDismissPlanner {
         guard Self.singleLineInputTypes.contains(focused) else {
             return .notPossible("the focused field is multi-line, where return types a new line")
         }
-        let keys = keyboardNodeIndices().filter { isKeyLike(nodes[$0]) }
+        // The keys inside the keyboard element only: an accessory bar's "Done"
+        // button would not be the key that "\n" presses.
+        let keys = keyIndices().filter { isKeyLike(nodes[$0]) }
         guard let key = keys.first(where: { Self.returnKeyIdentifiers.contains(nodes[$0].identifier) })
             ?? keys.first(where: {
                 nodes[$0].identifier.isEmpty && Self.returnKeyLabels.contains(nodes[$0].label.lowercased())

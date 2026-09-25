@@ -2118,7 +2118,12 @@ class CommandHandler {
 
             // Let the keyboard finish appearing before planning around it.
             Thread.sleep(forTimeInterval: 0.3)
-            try dismissKeyboard()
+            do {
+                try dismissKeyboard()
+            } catch {
+                if touchedScreen { snapshotFinder.clearFocusedTextInputHint() }
+                throw error
+            }
             // The keyboard leaving the hierarchy precedes the app's own
             // animated relayout completing — give that a beat to settle.
             Thread.sleep(forTimeInterval: 0.35)
@@ -2212,6 +2217,10 @@ class CommandHandler {
     /// strategy is planned on a fresh snapshot, so a keyboard that finished
     /// leaving during the previous one's wait ends it without another touch.
     private func dismissKeyboard() throws {
+        // Whether a strategy touched the app (it may have moved focus: the
+        // return key's submit handler focusing the next field). The caller
+        // clears the focused-field hint then, even when this throws.
+        touchedScreen = false
         var attempts: [(KeyboardDismissPlanner.Strategy, KeyboardDismissPlanner.Outcome)] = []
         for strategy in KeyboardDismissPlanner.Strategy.allCases {
             guard let snapshot = try? snapshotFinder.takeSnapshot() else {
@@ -2219,7 +2228,15 @@ class CommandHandler {
             }
             guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
             let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+            // A keyboard element with nothing on screen (zero-sized, off
+            // screen) covers nothing: there is nothing to put away, and no
+            // reason to touch the app or submit the field.
+            guard planner.keyboardRegion != nil else {
+                NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area; nothing to dismiss")
+                return
+            }
             let outcome = runDismissStrategy(strategy, planner: planner)
+            if outcome == .keyboardStayed { touchedScreen = true }
             if outcome == .keyboardStayed, waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) {
                 NSLog("[TapsmithCommand] hideKeyboard: dismissed by \(strategy.summary)")
                 return
@@ -2230,6 +2247,9 @@ class CommandHandler {
         if keyboardGoneNow() == true { return }
         throw AgentError.actionFailed(KeyboardDismissPlanner.failureMessage(attempts))
     }
+
+    /// Set by `dismissKeyboard`: whether any strategy touched the screen.
+    private var touchedScreen = false
 
     /// How long to wait for the keyboard to leave after a strategy ran.
     private func dismissWait(for strategy: KeyboardDismissPlanner.Strategy) -> TimeInterval {
@@ -2246,8 +2266,9 @@ class CommandHandler {
         let screen = snapshotFinder.screenSize
         switch strategy {
         case .scrollSwipe:
-            guard let start = planner.scrollSwipeStart() else {
-                return .notPossible("no scroll view on screen above the keyboard")
+            let focusedFrame = snapshotFinder.liveFocusedTextInput()?.frame
+            guard let start = planner.scrollSwipeStart(focusedFrame: focusedFrame) else {
+                return .notPossible("no scroll view with room clear of its controls above the keyboard")
             }
             let dy = CGFloat(screen.height) * KeyboardDismissPlanner.swipeFraction
             let dx = CGFloat(screen.width) * KeyboardDismissPlanner.swipeFraction
@@ -2256,9 +2277,15 @@ class CommandHandler {
             ) else { return .notPossible("the drag could not be synthesized") }
             // Gone already: the caller's wait after this return sees that at once.
             if waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) { return .keyboardStayed }
-            // A horizontal scroll view drags sideways.
+            // A horizontal scroll view drags sideways — planned again, since the
+            // first drag may have scrolled a control under the old point.
+            guard let snapshot = try? snapshotFinder.takeSnapshot(),
+                  hasKeyboardInSnapshot(snapshot.dictionaryRepresentation),
+                  let again = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screen)
+                      .scrollSwipeStart(focusedFrame: focusedFrame)
+            else { return .keyboardStayed }
             _ = EventSynthesizer.swipe(
-                from: start, to: CGPoint(x: start.x - dx, y: start.y), duration: 0.05
+                from: again, to: CGPoint(x: again.x - dx, y: again.y), duration: 0.05
             )
             return .keyboardStayed
         case .dismissKey:

@@ -138,7 +138,7 @@ func notInside(_ p: CGPoint, _ rects: [CGRect]) -> Bool {
 // MARK: - No keyboard
 
 let noKeyboard = planner(appHead + occlusionContent)
-check("no keyboard: no scroll drag", noKeyboard.scrollSwipeStart(), nil)
+check("no keyboard: no scroll drag", noKeyboard.scrollSwipeStart(focusedFrame: nil), nil)
 check("no keyboard: no dismiss key", noKeyboard.dismissKey(), nil)
 check("no keyboard: no blank spot", noKeyboard.blankPoint(focusedFrame: occlusionInput), nil)
 
@@ -147,10 +147,10 @@ check("no keyboard: no blank spot", noKeyboard.blankPoint(focusedFrame: occlusio
 // PILOT-363: the old drag started at the screen centre (201, 437) whatever
 // was there — on /occlusion that is "Pass-through action", which the drag
 // pressed. Without a scroll view there is no drag at all.
-check("no scroll view: no drag", planner(occlusion).scrollSwipeStart(), nil)
+check("no scroll view: no drag", planner(occlusion).scrollSwipeStart(focusedFrame: nil), nil)
 
 do {
-    let p = planner(scrollScreen).scrollSwipeStart()
+    let p = planner(scrollScreen).scrollSwipeStart(focusedFrame: R(16, 180, 370, 44))
     checkTrue("scroll view: drag offered", p != nil)
     if let p {
         let dragY = screen.height * Planner.swipeFraction
@@ -170,15 +170,51 @@ do {
         (4, .scrollView, "", "", R(0, 116, 402, 758)),
         (5, .button, "Big", "", R(0, 116, 402, 758)),
     ] + keyboardWindows()
-    check("scroll view full of controls: no drag", planner(full).scrollSwipeStart(), nil)
+    check("scroll view full of controls: no drag", planner(full).scrollSwipeStart(focusedFrame: nil), nil)
     // A web view is not dragged: WKWebView does not dismiss on drag, and the
     // page sees the gesture.
     let web: [Row] = appHead + [(4, .webView, "", "", R(0, 116, 402, 758))] + keyboardWindows()
-    check("web view: no drag", planner(web).scrollSwipeStart(), nil)
+    check("web view: no drag", planner(web).scrollSwipeStart(focusedFrame: nil), nil)
     for type in [XCUIElement.ElementType.table, .collectionView] {
         let list: [Row] = appHead + [(4, type, "", "", R(0, 116, 402, 758))] + keyboardWindows()
-        checkTrue("\(type.rawValue) is dragged", planner(list).scrollSwipeStart() != nil)
+        checkTrue("\(type.rawValue) is dragged", planner(list).scrollSwipeStart(focusedFrame: nil) != nil)
     }
+}
+
+do {
+    // Role-less Pressables (labeled .other), text and a web view inside the
+    // scroll content block the start as much as buttons do.
+    let rows: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 758)),
+        (5, .other, "Row one", "", R(0, 116, 402, 200)),
+        (5, .staticText, "Heading", "", R(0, 316, 402, 100)),
+        (5, .webView, "", "", R(0, 416, 402, 458)),
+    ] + keyboardWindows()
+    check("scroll content of role-less rows, text and a web view: no drag",
+          planner(rows).scrollSwipeStart(focusedFrame: nil), nil)
+}
+
+do {
+    // A sheet with a field over a screen whose scroll view is still in the
+    // tree, behind an unlabeled backdrop: the screen behind is not dragged.
+    let field = R(16, 316, 370, 44)
+    let rows: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 758)),
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (3, .other, "", "", R(0, 300, 402, 574)),
+        (4, .textField, "Comment", "", field),
+    ] + keyboardWindows()
+    check("scroll view behind a sheet: no drag", planner(rows).scrollSwipeStart(focusedFrame: field), nil)
+    // A scroll view inside the field's own sheet is.
+    let inSheet: [Row] = appHead + [
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (3, .other, "", "", R(0, 300, 402, 574)),
+        (4, .textField, "Comment", "", field),
+        (4, .scrollView, "", "", R(0, 370, 402, 504)),
+    ] + keyboardWindows()
+    checkTrue("scroll view in the field's sheet: drag", planner(inSheet).scrollSwipeStart(focusedFrame: field) != nil)
 }
 
 do {
@@ -189,14 +225,14 @@ do {
         (3, .other, "", "", R(0, 116, 402, 758)),
         (4, .button, "Cover", "", R(0, 116, 402, 758)),
     ] + keyboardWindows()
-    check("scroll view under another screen's control: no drag", planner(covered).scrollSwipeStart(), nil)
+    check("scroll view under another screen's control: no drag", planner(covered).scrollSwipeStart(focusedFrame: nil), nil)
 }
 
 do {
     let behindKeyboard: [Row] = appHead + [
         (4, .scrollView, "", "", R(0, 540, 402, 300)),
     ] + keyboardWindows()
-    check("scroll view behind the keyboard: no drag", planner(behindKeyboard).scrollSwipeStart(), nil)
+    check("scroll view behind the keyboard: no drag", planner(behindKeyboard).scrollSwipeStart(focusedFrame: nil), nil)
 }
 
 do {
@@ -204,7 +240,7 @@ do {
     let keyboardScroller = appHead + occlusionContent + keyboardWindows(extraKeys: [
         (4, .scrollView, "", "", R(0, 200, 402, 300)),
     ])
-    check("keyboard's own scroll view: no drag", planner(keyboardScroller).scrollSwipeStart(), nil)
+    check("keyboard's own scroll view: no drag", planner(keyboardScroller).scrollSwipeStart(focusedFrame: nil), nil)
 }
 
 // MARK: - 2. Dismiss key
@@ -288,6 +324,23 @@ do {
               p.map { sheet.contains($0) && notInside($0, [field]) } ?? false, "\(String(describing: p))")
 }
 
+do {
+    // A sheet with no blank room over a close-on-press backdrop: no blank tap
+    // (the walk stops before the full-screen modal root holding the backdrop).
+    let field = R(16, 316, 370, 44)
+    let rows: [Row] = appHead + [
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (3, .other, "", "", R(0, 300, 402, 574)),
+        (4, .textField, "Comment", "", field),
+        (4, .button, "Post", "", R(0, 300, 402, 16)),
+        (4, .button, "Cancel", "", R(0, 360, 402, 170)),
+        (4, .button, "Left", "", R(0, 316, 16, 44)),
+        (4, .button, "Right", "", R(386, 316, 16, 44)),
+    ] + keyboardWindows()
+    check("sheet with no room: no blank tap on the backdrop", planner(rows).blankPoint(focusedFrame: field), nil)
+}
+
 // MARK: - 4. Return key
 
 check("single-line field, return key: press it",
@@ -306,6 +359,17 @@ for (label, id) in [("go", "Return"), ("send", "Send"), ("Search", "Search"), ("
     check("action return key \"\(label)\" (id \(id)): do not press",
           planner(appHead + keyboardWindows(returnLabel: label, returnId: id)).returnKey(focusedInput: .textField),
           .notPossible("the return key is \"\(label)\", an app action"))
+}
+// An accessory toolbar's Done button (outside the .keyboard element, in its
+// window) does not stand in for a "send" return key.
+do {
+    // In tree order the accessory comes first: it is in the input view's
+    // window, ahead of the keys.
+    var rows = keyboardWindows(returnLabel: "send", returnId: "Send")
+    rows.insert((4, .button, "Done", "Done", R(330, 490, 60, 39)), at: 4)
+    check("accessory Done does not approve a send key",
+          planner(appHead + rows).returnKey(focusedInput: .textField),
+          .notPossible("the return key is \"send\", an app action"))
 }
 check("keyboard without a return key",
       planner(appHead + keyboardWindows(returnLabel: "space", returnId: "space")).returnKey(focusedInput: .textField),
