@@ -154,7 +154,9 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', () =>
         child.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
         child.on('message', (msg: UIDiscoverChildMessage) => resolve(msg));
         child.on('error', reject);
-        child.on('exit', (code) => reject(new Error(`discovery exited (${code}) without replying:\n${output}`)));
+        // 'close', not 'exit': it fires only once the IPC channel and stdio are
+        // done, so a reply sent just before the child exits has been delivered.
+        child.on('close', (code) => reject(new Error(`discovery exited (${code}) without replying:\n${output}`)));
         child.send({ type: 'discover', filePath });
       });
     } finally {
