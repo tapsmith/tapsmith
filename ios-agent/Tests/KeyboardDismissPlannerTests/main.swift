@@ -97,6 +97,9 @@ let appHead: [Row] = [
     (3, .other, "", "", R(0, 116, 402, 758)),
 ]
 
+/// The /occlusion top field's frame, as the live focus query reports it.
+let occlusionInput = R(17, 133, 368, 43)
+
 /// /occlusion with the keyboard up: no scroll view.
 let occlusionContent: [Row] = [
     (4, .other, "", "", R(16, 132, 370, 45)),
@@ -137,7 +140,7 @@ func notInside(_ p: CGPoint, _ rects: [CGRect]) -> Bool {
 let noKeyboard = planner(appHead + occlusionContent)
 check("no keyboard: no scroll drag", noKeyboard.scrollSwipeStart(), nil)
 check("no keyboard: no dismiss key", noKeyboard.dismissKey(), nil)
-check("no keyboard: no blank spot", noKeyboard.blankPoint(), nil)
+check("no keyboard: no blank spot", noKeyboard.blankPoint(focusedFrame: occlusionInput), nil)
 
 // MARK: - 1. Scroll view drag
 
@@ -160,14 +163,22 @@ do {
 }
 
 do {
-    // A scroll view whose content is all controls: the drag still goes to
-    // the scroll view (it takes the drag), on a control.
+    // A scroll view whose visible content is all controls: no drag. A drag
+    // that does not start a scroll (sideways in a vertical list) presses the
+    // control it starts on.
     let full: [Row] = appHead + [
         (4, .scrollView, "", "", R(0, 116, 402, 758)),
         (5, .button, "Big", "", R(0, 116, 402, 758)),
     ] + keyboardWindows()
-    let p = planner(full).scrollSwipeStart()
-    checkTrue("scroll view full of controls: drag on a control", p.map { R(0, 116, 402, 413).contains($0) } ?? false, "\(String(describing: p))")
+    check("scroll view full of controls: no drag", planner(full).scrollSwipeStart(), nil)
+    // A web view is not dragged: WKWebView does not dismiss on drag, and the
+    // page sees the gesture.
+    let web: [Row] = appHead + [(4, .webView, "", "", R(0, 116, 402, 758))] + keyboardWindows()
+    check("web view: no drag", planner(web).scrollSwipeStart(), nil)
+    for type in [XCUIElement.ElementType.table, .collectionView] {
+        let list: [Row] = appHead + [(4, type, "", "", R(0, 116, 402, 758))] + keyboardWindows()
+        checkTrue("\(type.rawValue) is dragged", planner(list).scrollSwipeStart() != nil)
+    }
 }
 
 do {
@@ -214,7 +225,7 @@ do {
 // MARK: - 3. Blank spot
 
 do {
-    let p = planner(occlusion).blankPoint()
+    let p = planner(occlusion).blankPoint(focusedFrame: occlusionInput)
     checkTrue("occlusion: blank spot found", p != nil)
     if let p {
         checkTrue("blank spot: above the keyboard, below the status bar", p.y < 529 && p.y > Planner.statusBarAllowance, "\(p)")
@@ -224,31 +235,57 @@ do {
         }
         checkTrue("blank spot: clear of every control, text, bar and input", notInside(p, rows.map(\.frame)), "\(p)")
     }
+    check("no focused field known: no blank spot", planner(occlusion).blankPoint(focusedFrame: nil), nil)
+    check("focused field not in the tree: no blank spot",
+          planner(occlusion).blankPoint(focusedFrame: R(0, 600, 50, 20)), nil)
+}
+
+/// A screen holding only a field at `field`, inside `content`.
+func fieldScreen(_ content: [Row], field: CGRect = R(16, 132, 370, 44)) -> [Row] {
+    appHead + content + [(4, .textField, "Field", "", field)] + keyboardWindows()
 }
 
 do {
+    let field = R(16, 132, 370, 44)
     // Every spot above the keyboard is a control: no blank spot.
-    let wall = appHead + [(4, .button, "Wall", "", R(0, 0, 402, 874))] + keyboardWindows()
-    check("screen of controls: no blank spot", planner(wall).blankPoint(), nil)
+    check("screen of controls: no blank spot",
+          planner(fieldScreen([(4, .button, "Wall", "", R(0, 0, 402, 874))])).blankPoint(focusedFrame: field), nil)
     // The only gap is the status bar strip.
-    let underStatusBar = appHead + [(4, .button, "Wall", "", R(0, 50, 402, 824))] + keyboardWindows()
-    check("status bar strip is not a blank spot", planner(underStatusBar).blankPoint(), nil)
+    check("status bar strip is not a blank spot",
+          planner(fieldScreen([(4, .button, "Wall", "", R(0, 50, 402, 824))])).blankPoint(focusedFrame: field), nil)
     // A small testID'd view (an icon-only Pressable) is not blank.
-    let icon = appHead + [
+    let icon = fieldScreen([
         (4, .button, "Wall", "", R(0, 0, 402, 400)),
         (4, .other, "", "icon-button", R(0, 400, 402, 129)),
-    ] + keyboardWindows()
-    check("small testID'd view is not blank", planner(icon).blankPoint(), nil)
+    ])
+    check("small testID'd view is not blank", planner(icon).blankPoint(focusedFrame: field), nil)
     // A screen-sized testID'd container is.
-    let container = appHead + [
-        (4, .other, "", "screen-root", R(0, 116, 402, 758)),
-    ] + keyboardWindows()
-    checkTrue("screen-sized testID'd container is blank", planner(container).blankPoint() != nil)
+    checkTrue("screen-sized testID'd container is blank",
+              planner(fieldScreen([(4, .other, "", "screen-root", R(0, 116, 402, 758))])).blankPoint(focusedFrame: field) != nil)
     // The hooks marker, even screen-sized (as on CI), takes no touches.
-    let marker = appHead + [
+    let marker: [Row] = appHead + [
+        (4, .textField, "Field", "", field),
         (2, .staticText, "tapsmith-hooks:1;epoch=0", "tapsmith-hooks", screen),
     ] + keyboardWindows()
-    checkTrue("hooks marker does not block a blank spot", planner(marker).blankPoint() != nil)
+    checkTrue("hooks marker does not block a blank spot", planner(marker).blankPoint(focusedFrame: field) != nil)
+}
+
+do {
+    // A sheet over a full-screen backdrop that closes it when tapped (an
+    // unlabeled Pressable, indistinguishable from a plain view). The blank
+    // spot must be inside the sheet, beside the field, not on the backdrop.
+    let sheet = R(0, 300, 402, 574)
+    let field = R(16, 316, 370, 44)
+    let rows: [Row] = appHead + [
+        (4, .other, "", "", R(0, 116, 402, 758)),
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (3, .other, "", "", sheet),
+        (4, .textField, "Comment", "", field),
+    ] + keyboardWindows()
+    let p = planner(rows).blankPoint(focusedFrame: field)
+    checkTrue("sheet: blank spot inside the sheet, not on the backdrop",
+              p.map { sheet.contains($0) && notInside($0, [field]) } ?? false, "\(String(describing: p))")
 }
 
 // MARK: - 4. Return key
@@ -274,8 +311,19 @@ check("keyboard without a return key",
       planner(appHead + keyboardWindows(returnLabel: "space", returnId: "space")).returnKey(focusedInput: .textField),
       .notPossible("the keyboard has no return key"))
 check("an app button labeled return is not the key",
-      planner(appHead + [(4, .button, "return", "Return", R(16, 300, 100, 40))]).returnKey(focusedInput: .textField),
+      planner(appHead + [(4, .button, "return", "Return", R(16, 300, 100, 40))]
+          + keyboardWindows(returnLabel: "space", returnId: "space")).returnKey(focusedInput: .textField),
       .notPossible("the keyboard has no return key"))
+// Labels are localized, identifiers are not: a French keyboard's default key.
+check("localized default return key: press it",
+      planner(appHead + keyboardWindows(returnLabel: "retour", returnId: "Return")).returnKey(focusedInput: .textField),
+      .press(CGPoint(x: 348, y: 776)))
+check("localized action key: do not press",
+      planner(appHead + keyboardWindows(returnLabel: "aller", returnId: "Go")).returnKey(focusedInput: .textField),
+      .notPossible("the return key is \"aller\", an app action"))
+check("key without an identifier: judged by its label",
+      planner(appHead + keyboardWindows(returnLabel: "done", returnId: "")).returnKey(focusedInput: .textField),
+      .press(CGPoint(x: 348, y: 776)))
 
 // MARK: - Failure message
 

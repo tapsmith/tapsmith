@@ -94,4 +94,17 @@ describe("hideKeyboard() on a screen without a scroll view", () => {
     // iOS dismissed it with one tap on the backdrop; "go" was not pressed.
     await expect(keyboardScreen.counts).toHaveText(counts({ background: platform === "ios" ? 1 : 0 }))
   })
+
+  test("in a scroll view, dismisses without submitting the field or touching a control", async ({ device, keyboardScreen }) => {
+    await keyboardScreen.putInScrollViewButton.tap()
+    await keyboardScreen.openKeyboard("plain")
+
+    await device.hideKeyboard()
+
+    // Put away by the scroll view (drag or touch), not the return key, and
+    // "Centre action" in the middle of the scroll view was not pressed.
+    await expect(keyboardScreen.counts).toHaveText(counts({}))
+    await expect.poll(() => device.isKeyboardShown()).toBe(false)
+    await expect(keyboardScreen.plainInput).toHaveValue("a")
+  })
 })

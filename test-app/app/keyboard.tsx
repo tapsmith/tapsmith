@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import {
   Keyboard,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -21,6 +22,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - The multiline input's return key inserts a newline.
 // - "Dismiss on background tap" wraps the screen in a backdrop that calls
 //   Keyboard.dismiss() when a blank spot is tapped (counted as background).
+// - "Put in scroll view" renders the same content inside a ScrollView
+//   (keyboardShouldPersistTaps="handled"), the kind of screen a drag dismisses
+//   on — which must still touch nothing else.
 // - "Centre action" fills the middle of the screen, where a dismiss gesture
 //   aimed at the screen centre would land. Nothing hideKeyboard() does may
 //   tap it.
@@ -29,6 +33,7 @@ export default function KeyboardScreen() {
   const [goText, setGoText] = useState("")
   const [multilineText, setMultilineText] = useState("")
   const [dismissOnBackgroundTap, setDismissOnBackgroundTap] = useState(false)
+  const [inScrollView, setInScrollView] = useState(false)
   const [centreTaps, setCentreTaps] = useState(0)
   const [plainSubmits, setPlainSubmits] = useState(0)
   const [goSubmits, setGoSubmits] = useState(0)
@@ -43,6 +48,7 @@ export default function KeyboardScreen() {
     setGoText("")
     setMultilineText("")
     setDismissOnBackgroundTap(false)
+    setInScrollView(false)
     setCentreTaps(0)
     setPlainSubmits(0)
     setGoSubmits(0)
@@ -104,6 +110,17 @@ export default function KeyboardScreen() {
         </Text>
       </TouchableOpacity>
 
+      <TouchableOpacity
+        style={styles.smallButton}
+        onPress={() => setInScrollView((v) => !v)}
+        accessibilityRole="button"
+        accessibilityLabel={inScrollView ? "Take out of scroll view" : "Put in scroll view"}
+      >
+        <Text style={styles.smallButtonText}>
+          {inScrollView ? "In a scroll view" : "No scroll view"}
+        </Text>
+      </TouchableOpacity>
+
       {/* Blank space: nothing to tap here. */}
       <View style={styles.blank} />
 
@@ -118,6 +135,17 @@ export default function KeyboardScreen() {
     </View>
   )
 
+  if (inScrollView) {
+    return (
+      <ScrollView
+        style={styles.fill}
+        contentContainerStyle={styles.fill}
+        keyboardShouldPersistTaps="handled"
+      >
+        {content}
+      </ScrollView>
+    )
+  }
   if (!dismissOnBackgroundTap) return content
   return (
     <Pressable

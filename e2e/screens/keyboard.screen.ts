@@ -9,6 +9,7 @@ export class KeyboardScreen {
   get multilineInput() { return this.device.getByTestId("keyboard-multiline-input") }
   get counts() { return this.device.getByTestId("keyboard-counts") }
   get dismissOnBackgroundTapButton() { return this.device.getByRole("button", { name: "Dismiss on background tap" }) }
+  get putInScrollViewButton() { return this.device.getByRole("button", { name: "Put in scroll view" }) }
   get centreAction() { return this.device.getByRole("button", { name: "Centre action" }) }
 
   /** Focus `field` and type into it, so its keyboard is up. */

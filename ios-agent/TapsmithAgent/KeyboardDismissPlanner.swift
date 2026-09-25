@@ -10,15 +10,19 @@ import XCTest
 ///
 /// 1. **Drag a scroll view** (`scrollSwipeStart`). A scroll view dismisses
 ///    the keyboard when dragged (React Native's ScrollView also dismisses on
-///    any touch outside the focused field). Only offered when a scroll view
-///    is actually under the start point: the old unconditional drag at the
-///    screen centre pressed whatever control sat there, because a short fast
-///    drag stays inside a Pressable's press area.
+///    any touch outside the focused field). Only offered when a native scroll
+///    view is actually under the start point, and only from a spot clear of
+///    its controls: the old unconditional drag at the screen centre pressed
+///    whatever control sat there, because a short fast drag stays inside a
+///    Pressable's press area. (A web view is not dragged: WKWebView does not
+///    dismiss on drag, and the page would see the gesture.)
 /// 2. **The keyboard's own dismiss key** (`dismissKey`) — the iPad keyboard
 ///    has one; the iPhone keyboard does not.
 /// 3. **Tap a blank spot** (`blankPoint`): apps often dismiss on a tap
 ///    outside the field. Only where every element under the point is a plain
-///    unlabeled container — no control, text, image, bar, or input.
+///    unlabeled container — no control, text, image, bar, or input — and in
+///    the nearest container of the focused field that has room, so the tap
+///    stays beside the field (inside a sheet, not on its backdrop).
 /// 4. **The return key** (`returnKey`), last because it also submits the
 ///    field. Only for a single-line field (in a text view it types a new line)
 ///    and only when the key reads "return" or "done": "go", "send", "search",
@@ -74,11 +78,19 @@ struct KeyboardDismissPlanner {
     /// Return-key labels whose press only ends editing (plus the submit
     /// every return fires). Everything else is an app action.
     static let dismissingReturnLabels: Set<String> = ["return", "done"]
-    /// Every label UIKit gives the return key (`UIReturnKeyType`), to find the
-    /// key when its identifier is not "Return".
+    /// The same keys by identifier. Identifiers are the key type's English
+    /// name ("Return", "Go"; measured on iOS 26) while labels are localized,
+    /// so the identifier decides whenever the key has one.
+    static let dismissingReturnIdentifiers: Set<String> = ["Return", "Done"]
+    /// Every label UIKit gives the return key (`UIReturnKeyType`), in English.
     static let returnKeyLabels: Set<String> = dismissingReturnLabels.union([
         "go", "google", "join", "next", "route", "search", "send", "yahoo", "emergency call", "continue",
     ])
+    static let returnKeyIdentifiers: Set<String> = dismissingReturnIdentifiers.union([
+        "Go", "Google", "Join", "Next", "Route", "Search", "Send", "Yahoo", "Emergency Call", "Continue",
+    ])
+    /// Scroll views the dismiss drag may use.
+    static let draggableScrollerTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView]
     /// Single-line inputs: return ends editing instead of typing a new line.
     static let singleLineInputTypes: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .searchField]
     static let textInputTypes: Set<XCUIElement.ElementType> = singleLineInputTypes.union([.textView])
@@ -129,10 +141,11 @@ struct KeyboardDismissPlanner {
 
     // MARK: - 1. Scroll view drag
 
-    /// Where to start the dismiss drag, or nil when no scroll view is on
-    /// screen above the keyboard. The drag goes up (then, if that did not
-    /// work, left) by `swipeFraction` of the screen from this point, so the
-    /// point leaves room for it inside the scroll view.
+    /// Where to start the dismiss drag, or nil when no native scroll view is
+    /// on screen above the keyboard with a spot clear of its controls. The
+    /// drag goes up (then, if that did not work, left) by `swipeFraction` of
+    /// the screen from this point, so the point leaves room for it inside the
+    /// scroll view.
     func scrollSwipeStart() -> CGPoint? {
         let area = touchableArea
         guard !area.isNull else { return nil }
@@ -142,7 +155,7 @@ struct KeyboardDismissPlanner {
 
         // The largest scroll view left visible above the keyboard.
         var best: (index: Int, visible: CGRect)?
-        for (i, node) in nodes.enumerated() where OcclusionAnalyzer.scrollerTypes.contains(node.elementType) {
+        for (i, node) in nodes.enumerated() where Self.draggableScrollerTypes.contains(node.elementType) {
             if let w = node.window, windows.contains(w) { continue }
             let visible = node.frame.intersection(area)
             guard !visible.isNull,
@@ -160,25 +173,19 @@ struct KeyboardDismissPlanner {
         )
         guard starts.width > 0, starts.height > 0 else { return nil }
 
-        // Under the point: the scroll view, its ancestors, its content, and
-        // plain containers — nothing drawn over it from elsewhere (a screen
-        // whose own content covers a scroll view left in the tree).
-        // Prefer a point off the content's controls; the drag is taken by the
-        // scroll view either way, so a control is only the fallback.
+        // Under the point: the scroll view, its ancestors, its content other
+        // than controls, and plain containers — nothing drawn over it from
+        // elsewhere (a screen whose own content covers a scroll view left in
+        // the tree). Never a control: a drag that does not start a scroll (a
+        // sideways drag in a vertical list, any drag in a carousel) presses it.
         let subtree = scroll..<nodes[scroll].subtreeEnd
         let ancestors = Set(analyzer.ancestors(of: scroll))
-        func blocks(_ i: Int, avoidControls: Bool) -> Bool {
+        return clearestPoint(in: starts) { i in
             if i == scroll || ancestors.contains(i) { return false }
             if let w = nodes[i].window, windows.contains(w) { return false }
-            if subtree.contains(i) {
-                return avoidControls && OcclusionAnalyzer.interactiveTypes.contains(nodes[i].elementType)
-            }
+            if subtree.contains(i) { return OcclusionAnalyzer.interactiveTypes.contains(nodes[i].elementType) }
             return !isPlain(i)
         }
-        if let point = clearestPoint(in: starts, blockers: { blocks($0, avoidControls: true) }) {
-            return point
-        }
-        return clearestPoint(in: starts, blockers: { blocks($0, avoidControls: false) })
     }
 
     // MARK: - 2. Dismiss key
@@ -197,17 +204,31 @@ struct KeyboardDismissPlanner {
 
     // MARK: - 3. Blank spot
 
-    /// A point on screen, above the keyboard and below the status bar, where
-    /// every element is a plain unlabeled container — the spot furthest from
-    /// anything else. nil when there is none.
-    func blankPoint() -> CGPoint? {
+    /// A point above the keyboard and below the status bar where every
+    /// element is a plain unlabeled container, beside the focused field (at
+    /// `focusedFrame`): inside its nearest ancestor that has such a spot, the
+    /// spot furthest from anything else there. Staying in the field's own
+    /// container keeps the tap off what surrounds it — a sheet's backdrop,
+    /// which closes the sheet. nil when there is none, or when the focused
+    /// field is not known or not in the tree.
+    func blankPoint(focusedFrame: CGRect?) -> CGPoint? {
         let area = touchableArea
-        guard !area.isNull else { return nil }
+        guard !area.isNull, let focusedFrame,
+              let field = nodes.indices.last(where: {
+                  Self.textInputTypes.contains(nodes[$0].elementType)
+                      && OcclusionAnalyzer.framesMatch(nodes[$0].frame, focusedFrame, tolerance: 1.5)
+              }) else { return nil }
         let windows = keyboardWindows
-        return clearestPoint(in: area) { i in
-            if let w = nodes[i].window, windows.contains(w) { return false }
-            return !isPlain(i)
+        for container in analyzer.ancestors(of: field) {
+            let rect = nodes[container].frame.intersection(area)
+            if rect.isNull { continue }
+            let point = clearestPoint(in: rect) { i in
+                if let w = nodes[i].window, windows.contains(w) { return false }
+                return !isPlain(i)
+            }
+            if let point { return point }
         }
+        return nil
     }
 
     // MARK: - 4. Return key
@@ -222,14 +243,23 @@ struct KeyboardDismissPlanner {
             return .notPossible("the focused field is multi-line, where return types a new line")
         }
         let keys = keyboardNodeIndices().filter { isKeyLike(nodes[$0]) }
-        guard let key = keys.first(where: { nodes[$0].identifier == "Return" })
-            ?? keys.first(where: { Self.returnKeyLabels.contains(nodes[$0].label.lowercased()) })
+        guard let key = keys.first(where: { Self.returnKeyIdentifiers.contains(nodes[$0].identifier) })
+            ?? keys.first(where: {
+                nodes[$0].identifier.isEmpty && Self.returnKeyLabels.contains(nodes[$0].label.lowercased())
+            })
         else {
             return .notPossible("the keyboard has no return key")
         }
-        let label = nodes[key].label.lowercased()
-        guard Self.dismissingReturnLabels.contains(label) else {
-            return .notPossible("the return key is \"\(nodes[key].label)\", an app action")
+        let node = nodes[key]
+        let label = node.label.lowercased()
+        // An English action label vetoes the key whatever its identifier; a
+        // label outside the English set (localized) leaves it to the identifier.
+        let actionLabel = Self.returnKeyLabels.contains(label) && !Self.dismissingReturnLabels.contains(label)
+        let dismisses = node.identifier.isEmpty
+            ? Self.dismissingReturnLabels.contains(label)
+            : Self.dismissingReturnIdentifiers.contains(node.identifier) && !actionLabel
+        guard dismisses else {
+            return .notPossible("the return key is \"\(node.label)\", an app action")
         }
         return .press(CGPoint(x: nodes[key].frame.midX, y: nodes[key].frame.midY))
     }

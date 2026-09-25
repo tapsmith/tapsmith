@@ -2106,11 +2106,12 @@ class CommandHandler {
 
         case "hideKeyboard":
             // Check if keyboard is actually shown before attempting dismissal.
-            // Without this, app.windows.firstMatch.frame.size below triggers a
-            // quiescence wait (~30s hang) when no keyboard is present.
-            let kbSnapshot = try? app.snapshot()
-            let kbDict = kbSnapshot.map { $0.dictionaryRepresentation } ?? [:]
-            guard hasKeyboardInSnapshot(kbDict) else {
+            // A tree that cannot be read is no evidence either way: refuse
+            // rather than report a keyboard gone that may still be up.
+            guard let kbSnapshot = try? snapshotFinder.takeSnapshot() else {
+                throw AgentError.actionFailed("hideKeyboard could not read the screen to check for the keyboard")
+            }
+            guard hasKeyboardInSnapshot(kbSnapshot.dictionaryRepresentation) else {
                 snapshotFinder.clearFocusedTextInputHint()
                 return ["success": true]
             }
@@ -2226,7 +2227,7 @@ class CommandHandler {
             attempts.append((strategy, outcome))
         }
         // The last wait can end just before the keyboard leaves.
-        if !hasKeyboardInSnapshot((try? app.snapshot())?.dictionaryRepresentation ?? [:]) { return }
+        if keyboardGoneNow() == true { return }
         throw AgentError.actionFailed(KeyboardDismissPlanner.failureMessage(attempts))
     }
 
@@ -2265,8 +2266,11 @@ class CommandHandler {
             guard EventSynthesizer.tap(at: key) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .blankTap:
-            guard let point = planner.blankPoint() else {
-                return .notPossible("no blank spot above the keyboard")
+            guard let field = snapshotFinder.liveFocusedTextInput() else {
+                return .notPossible("no focused text field to tap beside")
+            }
+            guard let point = planner.blankPoint(focusedFrame: field.frame) else {
+                return .notPossible("no blank spot beside the field above the keyboard")
             }
             guard EventSynthesizer.tap(at: point) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
@@ -2290,11 +2294,18 @@ class CommandHandler {
     private func waitForKeyboardDismissed(timeout: TimeInterval) -> Bool {
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
-            let dict = (try? app.snapshot())?.dictionaryRepresentation ?? [:]
-            if !hasKeyboardInSnapshot(dict) { return true }
+            if keyboardGoneNow() == true { return true }
             Thread.sleep(forTimeInterval: 0.15)
         }
         return false
+    }
+
+    /// Whether one snapshot shows no keyboard: nil when the tree could not be
+    /// read or came back empty (mid-transition, a slow runner), which is no
+    /// evidence the keyboard left.
+    private func keyboardGoneNow() -> Bool? {
+        guard let dict = (try? app.snapshot())?.dictionaryRepresentation, !dict.isEmpty else { return nil }
+        return !hasKeyboardInSnapshot(dict)
     }
 
     /// Check if a keyboard is visible in the snapshot tree by looking for
