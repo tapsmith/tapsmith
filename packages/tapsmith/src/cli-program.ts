@@ -172,6 +172,24 @@ function regex(flag: string) {
   };
 }
 
+/**
+ * `--trace` / `--video`: one of `modes`, or empty, which (like an empty
+ * `--device`) means the flag was not given, so the config's mode applies.
+ */
+function recordingMode(flag: string, modes: readonly string[]) {
+  return (value: string): string => {
+    if (value !== '' && !modes.includes(value)) {
+      throw new InvalidArgumentError(`${flag} must be one of: ${modes.join(', ')}.`);
+    }
+    return value;
+  };
+}
+
+function udid(value: string): string {
+  if (!value) throw new InvalidArgumentError('A device UDID is required (tapsmith setup-ios-device lists them).');
+  return value;
+}
+
 /** A value flag given as `--flag=` with nothing after the `=`. */
 function nonEmpty(flag: string) {
   return (value: string): string => {
@@ -305,13 +323,13 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('-j, --workers <n>', 'Number of parallel workers (default: 1)', positiveInt('--workers'))
     .option('--shard <x/y>', 'Run shard x of y across CI machines (e.g. 1/4)', parseShard)
     .addOption(new Option('--trace [mode]', `Record traces. Modes: ${TRACE_MODES.join(', ')} (on when no mode is given)`)
-      .choices(TRACE_MODES).preset('on'))
+      .argParser(recordingMode('--trace', TRACE_MODES)).preset('on'))
     .addOption(new Option('--video [mode]', `Record the device screen for each test. Modes: same as --trace (on when no mode is given)`)
-      .choices(VIDEO_MODES).preset('on'))
+      .argParser(recordingMode('--video', VIDEO_MODES)).preset('on'))
     .option('-w, --watch', 'Watch test files and re-run on change', false)
     .option('--ui', 'Open interactive UI mode', false)
     .option('--ui-port <port>', 'UI mode server port (default: a free port)', nonNegativeInt('--ui-port'))
-    .addOption(new Option('--ui-dev-url <url>', 'Serve UI mode from a dev server (development only)').argParser(nonEmpty('--ui-dev-url')).hideHelp())
+    .addOption(new Option('--ui-dev-url <url>', 'Serve UI mode from a dev server (development only)').hideHelp())
     .addOption(configOption())
     .option('-g, --grep <pattern>', 'Only run tests whose full name matches this regex', regex('--grep'))
     .option('--grep-invert <pattern>', 'Skip tests whose full name matches this regex', regex('--grep-invert'))
@@ -321,19 +339,20 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .addOption(new Option(TSX_REEXEC_FLAG).hideHelp().default(false))
     .addHelpText('after', TEST_EXAMPLES)
     .action(async (files: string[], opts: Record<string, unknown>) => {
-      // An empty --device / --reporter means not given: `--device "$SERIAL"`
-      // with an empty variable has always fallen back to automatic selection.
+      // An empty value means not given: `--device "$SERIAL"` with an empty
+      // variable has always fallen back to automatic selection, and an empty
+      // --trace / --video / --reporter / --ui-dev-url to the config or env.
       const args: TestCommandArgs = {
         files,
         device: (opts.device as string | undefined) || undefined,
         workers: opts.workers as number | undefined,
         shard: opts.shard as TestCommandArgs['shard'],
-        trace: opts.trace as TraceMode | undefined,
-        video: opts.video as VideoMode | undefined,
+        trace: (opts.trace as TraceMode | '' | undefined) || undefined,
+        video: (opts.video as VideoMode | '' | undefined) || undefined,
         watch: opts.watch as boolean,
         ui: opts.ui as boolean,
         uiPort: opts.uiPort as number | undefined,
-        uiDevUrl: opts.uiDevUrl as string | undefined,
+        uiDevUrl: (opts.uiDevUrl as string | undefined) || undefined,
         config: opts.config as string | undefined,
         forceInstall: opts.forceInstall as boolean,
         tsxReexec: opts.__tsxReexec as boolean,
@@ -466,7 +485,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     program
       .command(name)
       .description(`${verb} a network capture profile (.mobileconfig) for a physical iOS device`)
-      .argument('<udid>', 'Device UDID (see tapsmith setup-ios-device)')
+      .argument('<udid>', 'Device UDID (see tapsmith setup-ios-device)', udid)
       .option('--ssid <name>', 'Wi-Fi SSID the profile targets (default: the host\'s current network)')
       .option('--device-name <name>', 'Friendly name for the profile (default: the device\'s name)')
       .option('--fix-firewall', 'Disable macOS Application Firewall stealth mode via sudo (prompts once)', false)
@@ -476,7 +495,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
   program
     .command('verify-ios-network')
     .description('Verify HTTPS capture for a normal system-trust client on a physical iOS device')
-    .argument('<udid>', 'Device UDID')
+    .argument('<udid>', 'Device UDID', udid)
     .addHelpText('after', VERIFY_IOS_NETWORK_HELP)
     .action((udid: string) => act('verify-ios-network', handlers.verifyIosNetwork)({ udid }));
 
@@ -540,10 +559,13 @@ function prepareCommandArgs(cmd: Command, args: string[]): string[] {
       out.push('--', ...operands.filter((t) => t !== TSX_REEXEC_FLAG));
       break;
     }
-    const shortEquals = /^(-[a-zA-Z])=(.*)$/s.exec(token);
+    // `-j=4`, or a bundle ending in a value flag, `-wd=serial`.
+    const shortEquals = /^-([a-zA-Z]+)=(.*)$/s.exec(token);
     if (shortEquals) {
-      const option = byFlag.get(shortEquals[1]!);
+      const letters = shortEquals[1]!;
+      const option = byFlag.get(`-${letters[letters.length - 1]}`);
       if (option?.long) {
+        if (letters.length > 1) out.push(`-${letters.slice(0, -1)}`);
         out.push(`${option.long}=${shortEquals[2]}`);
         continue;
       }

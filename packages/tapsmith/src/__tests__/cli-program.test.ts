@@ -392,10 +392,21 @@ describe('commands', () => {
     },
   );
 
-  it('an empty --device or --reporter means unset, as a `--device "$SERIAL"` with an empty variable always has', async () => {
-    const args = await testArgs(['--device', '', '--reporter=']);
+  it('an empty --device, --reporter, --trace, --video or --ui-dev-url means unset, as `--device "$SERIAL"` with an empty variable always has', async () => {
+    const args = await testArgs(['--device', '', '--reporter=', '--trace', '', '--video=', '--ui-dev-url=']);
     expect(args.device).toBeUndefined();
     expect(args.reporter).toBeUndefined();
+    expect(args.trace).toBeUndefined();
+    expect(args.video).toBeUndefined();
+    expect(args.uiDevUrl).toBeUndefined();
+  });
+
+  it('a short-flag bundle in = form gives the value to the last flag', async () => {
+    expect(await testArgs(['-wd=emulator-5554'])).toMatchObject({ watch: true, device: 'emulator-5554' });
+  });
+
+  it.each(['configure-ios-network', 'refresh-ios-network', 'verify-ios-network'])('%s refuses an empty UDID', async (command) => {
+    expect((await usageError([command, ''])).err).toMatch(/UDID/);
   });
 
   it('verify and mcp-server take a config', async () => {
