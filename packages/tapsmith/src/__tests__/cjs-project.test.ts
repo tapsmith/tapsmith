@@ -183,7 +183,9 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', () =>
       return JSON.parse(result.stdout) as { platform?: string; retries?: number };
     }
 
-    it('loads when Node can import it natively', () => {
+    // Node 22 before 22.18 strips types only behind a flag, so there this
+    // would take the tsx fallback too and say nothing about native loading.
+    it.skipIf(!process.features.typescript)('loads when Node can import it natively', () => {
       linkPackage();
       fs.writeFileSync(path.join(root, 'tapsmith.config.ts'),
         'import { defineConfig } from "tapsmith";\n'

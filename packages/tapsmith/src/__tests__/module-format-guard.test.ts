@@ -60,8 +60,9 @@ describe.skipIf((!fs.existsSync(DIST_INDEX) && !process.env.CI) || !HAS_REGISTER
   it.each([
     // tsx 4.21.0: import.meta.url is filled in, dirname and filename are not.
     ['dirname and filename are missing', 'import\\.meta\\??\\.(dirname|filename)'],
-    // A transform that stubs out import.meta itself.
-    ['import.meta itself is undefined', 'import\\.meta(?![\\w$])'],
+    // A transform that stubs out import.meta itself. Only code uses (followed
+    // by `.`, `?.` or `)`), so the guard's message text stays intact.
+    ['import.meta itself is undefined', 'import\\.meta(?=\\??\\.|\\))'],
   ])('fails with the explanation, not a TypeError from whichever module needed it first, when %s', (_label, pattern) => {
     const result = importWithBlanked(pattern);
 
