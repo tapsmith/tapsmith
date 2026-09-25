@@ -2127,7 +2127,14 @@ class CommandHandler {
                 return ["success": true]
             }
 
-            // Let the keyboard finish appearing before planning around it.
+            // Let the keyboard finish appearing before planning around it. A
+            // keyboard element with no on-screen area yet may still be sliding
+            // in (hideKeyboard right after a focusing tap on a slow runner):
+            // wait for it rather than call it "nothing to dismiss".
+            let appearDeadline = Date(timeIntervalSinceNow: 1.5)
+            while keyboardOnScreenNow() == false, Date() < appearDeadline {
+                Thread.sleep(forTimeInterval: 0.15)
+            }
             Thread.sleep(forTimeInterval: 0.3)
             do {
                 try dismissKeyboard()
@@ -2240,8 +2247,9 @@ class CommandHandler {
             guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
             let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
             // A keyboard element with nothing on screen (zero-sized, off
-            // screen) covers nothing: there is nothing to put away, and no
-            // reason to touch the app or submit the field.
+            // screen, after the appearance wait above) covers nothing: there is
+            // nothing to put away, and no reason to touch the app or submit the
+            // field. The dismissal checks below use the same notion.
             guard planner.keyboardRegion != nil else {
                 NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area; nothing to dismiss")
                 return
@@ -2338,12 +2346,23 @@ class CommandHandler {
         return false
     }
 
-    /// Whether one snapshot shows no keyboard: nil when the tree could not be
-    /// read or came back empty (mid-transition, a slow runner), which is no
-    /// evidence the keyboard left.
+    /// Whether one snapshot shows no keyboard on screen (none in the tree, or
+    /// one left with no on-screen area — the same test the dismiss loop
+    /// starts each strategy with): nil when the tree could not be read or
+    /// came back empty (mid-transition, a slow runner), which is no evidence
+    /// the keyboard left.
     private func keyboardGoneNow() -> Bool? {
-        guard let dict = (try? app.snapshot())?.dictionaryRepresentation, !dict.isEmpty else { return nil }
-        return !hasKeyboardInSnapshot(dict)
+        keyboardOnScreenNow().map { !$0 }
+    }
+
+    /// Whether one snapshot shows a keyboard with an on-screen area; nil when
+    /// the tree could not be read or came back empty.
+    private func keyboardOnScreenNow() -> Bool? {
+        guard let snapshot = try? app.snapshot(),
+              !snapshot.dictionaryRepresentation.isEmpty else { return nil }
+        guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return false }
+        return KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+            .keyboardRegion != nil
     }
 
     /// Check if a keyboard is visible in the snapshot tree by looking for

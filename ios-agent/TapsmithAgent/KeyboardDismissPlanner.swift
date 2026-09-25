@@ -217,7 +217,11 @@ struct KeyboardDismissPlanner {
         let windows = keyboardWindows
         let dragY = screen.height * Self.swipeFraction
         let dragX = screen.width * Self.swipeFraction
-        let root = fieldIndex(focusedFrame).flatMap { screenRoot(of: $0) }
+        // A field in a keyboard window (an input accessory composer) has no
+        // screen of its own there: any scroll view of the app may be dragged.
+        let field = fieldIndex(focusedFrame)
+        let fieldInKeyboard = field.flatMap { nodes[$0].window }.map { windows.contains($0) } ?? false
+        let root = fieldInKeyboard ? nil : field.flatMap { screenRoot(of: $0) }
         // The root itself counts: on a headerless screen it can be the
         // scroll view the field is in.
         func inFieldsScreen(_ i: Int) -> Bool {
@@ -296,7 +300,11 @@ struct KeyboardDismissPlanner {
         let windows = keyboardWindows
         // The field's own containers (a scroll view it is in, a tap-to-dismiss
         // wrapper) are where the tap is meant to land, not in its way.
-        let fieldAncestors = Set(analyzer.ancestors(of: field))
+        // Only plain ones and scroll views: a cell or labeled row wrapping
+        // the field would take the tap as a press.
+        let fieldAncestors = Set(analyzer.ancestors(of: field).filter {
+            isPlain($0) || Self.draggableScrollerTypes.contains(nodes[$0].elementType)
+        })
         // Never a container covering the whole screen: that is where a sheet's
         // backdrop lives (a headerless screen's root looks the same, so such a
         // screen gets no blank tap).

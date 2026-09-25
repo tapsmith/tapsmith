@@ -260,6 +260,28 @@ do {
 }
 
 do {
+    // A field in a table cell whose row selection does something: the cell
+    // is not a blank spot, though it wraps the field.
+    let field = R(100, 200, 280, 44)
+    let rows: [Row] = appHead + [
+        (4, .table, "", "", R(0, 116, 402, 758)),
+        (5, .cell, "Name", "", R(0, 116, 402, 400)),
+        (6, .textField, "Name", "", field),
+    ] + keyboardWindows()
+    let p = planner(rows).blankPoint(focusedFrame: field)
+    checkTrue("field in a cell: blank spot not on the cell",
+              p.map { !R(0, 116, 402, 400).contains($0) } ?? true, "\(String(describing: p))")
+    // A composer in the keyboard's window (input accessory view): the app's
+    // message list may still be dragged.
+    let composer = R(8, 480, 300, 40)
+    var kb = keyboardWindows()
+    kb.insert((3, .textField, "Message", "", composer), at: 3)
+    let chat: [Row] = appHead + [(4, .scrollView, "", "", R(0, 116, 402, 758))] + kb
+    checkTrue("composer in the keyboard window: the message list is dragged",
+              planner(chat).scrollSwipeStart(focusedFrame: composer) != nil)
+}
+
+do {
     // A stale off-screen keyboard element before the real one: the real one
     // still counts.
     var rows = keyboardWindows()

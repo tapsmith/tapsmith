@@ -35,9 +35,10 @@ describe("hideKeyboard() on a screen without a scroll view", () => {
 
     await device.hideKeyboard()
 
-    // Nothing was tapped: iOS used to drag at the screen centre, pressing
-    // "Centre action". It puts the keyboard away with the field's "return"
-    // key, which also submits the field.
+    // Nothing was pressed: iOS used to drag at the screen centre, pressing
+    // "Centre action". Now it taps a blank spot (nothing happens here) and
+    // then puts the keyboard away with the field's "return" key, which also
+    // submits the field.
     await expect(keyboardScreen.counts).toHaveText(counts({ plainSubmits: platform === "ios" ? 1 : 0 }))
     await expect.poll(() => device.isKeyboardShown()).toBe(false)
     await expect(keyboardScreen.plainInput).toHaveValue("a")
