@@ -10,9 +10,8 @@ import XCTest
 ///
 /// 1. **Drag a scroll view** (`scrollSwipeStart`). A scroll view dismisses
 ///    the keyboard when dragged (React Native's ScrollView also dismisses on
-///    any touch outside the focused field). Only offered when a native scroll
-///    view is actually under the start point, and only from a spot clear of
-///    its controls: the old unconditional drag at the screen centre pressed
+///    any touch outside the focused field). Only the native scroll view the
+///    focused field is in, and only from a spot clear of its controls: the old unconditional drag at the screen centre pressed
 ///    whatever control sat there, because a short fast drag stays inside a
 ///    Pressable's press area. (A web view is not dragged: WKWebView does not
 ///    dismiss on drag, and the page would see the gesture.)
@@ -77,11 +76,6 @@ struct KeyboardDismissPlanner {
     /// A container covering this much of the screen is a window or modal
     /// root, where a sheet's backdrop lives: never part of a field's scope.
     static let fullScreenFraction: CGFloat = 0.95
-    /// A container covering this much of the screen roots the field's own
-    /// screen for the drag: a navigation screen's content (about 87% of an
-    /// iPhone below its bar) or a page sheet (about 93%), never the window
-    /// holding the screen a sheet was presented over.
-    static let screenRootFraction: CGFloat = 0.85
 
     /// Return-key labels whose press only ends editing (plus the submit
     /// every return fires). Everything else is an app action.
@@ -191,17 +185,6 @@ struct KeyboardDismissPlanner {
         return result
     }
 
-    /// The field's nearest ancestor covering nearly the whole screen: the
-    /// root of its screen or of the modal or sheet it is in. Content beside
-    /// the field (a list under a search bar) is inside it; the screen behind
-    /// a sheet, in another branch of the tree, is not.
-    private func screenRoot(of field: Int) -> Int? {
-        analyzer.ancestors(of: field).first { a in
-            let f = nodes[a].frame.intersection(screen)
-            return !f.isNull && f.width * f.height >= screen.width * screen.height * Self.screenRootFraction
-        }
-    }
-
     private func isKeyLike(_ node: Node) -> Bool {
         (node.elementType == .button || node.elementType == .key)
             && node.frame.width > 0 && node.frame.height > 0
@@ -209,51 +192,30 @@ struct KeyboardDismissPlanner {
 
     // MARK: - 1. Scroll view drag
 
-    /// Where to start the dismiss drag, or nil when no native scroll view is
-    /// on screen above the keyboard with a spot clear of its controls. The
-    /// drag goes up (then, if that did not work, left) by `swipeFraction` of
-    /// the screen from this point, so the point leaves room for it inside the
-    /// scroll view. Only a scroll view in the focused field's (`focusedFrame`)
-    /// own screen or sheet (`screenRoot`) counts — not the screen behind a
-    /// sheet — so without a known focused field there is no drag. Scroll
-    /// views are tried largest first.
+    /// Where to start the dismiss drag, or nil. Only a native scroll view
+    /// that holds the focused field (`focusedFrame`) is dragged — the one a
+    /// user would drag to put that field's keyboard away. Any other scroll
+    /// view may belong to a different screen (the one behind a sheet), so
+    /// without a known focused field there is no drag, and a field beside a
+    /// list rather than in it gets none either: the loop moves on to the
+    /// other strategies, and fails loudly if none works. The drag goes up
+    /// (then, if that did not work, left) by `swipeFraction` of the screen
+    /// from this point, so the point leaves room for it inside the scroll
+    /// view, above the keyboard, clear of its controls. The field's scroll
+    /// views are tried nearest first.
     func scrollSwipeStart(focusedFrame: CGRect?) -> CGPoint? {
         let area = touchableArea
-        guard !area.isNull else { return nil }
+        guard !area.isNull, let field = fieldIndex(focusedFrame) else { return nil }
         let windows = keyboardWindows
         let dragY = screen.height * Self.swipeFraction
         let dragX = screen.width * Self.swipeFraction
-        // Without the focused field there is no telling which screen is the
-        // field's: a scroll view left behind a sheet's backdrop looks like any
-        // other. A field in a keyboard window (an input accessory composer)
-        // has no screen of its own there: any scroll view of the app may be
-        // dragged.
-        guard let field = fieldIndex(focusedFrame) else { return nil }
-        let fieldInKeyboard = nodes[field].window.map { windows.contains($0) } ?? false
-        let root = fieldInKeyboard ? nil : screenRoot(of: field)
-        // A scroll view holding the field always counts (the root can be its
-        // same-sized content container); otherwise it must be inside the root,
-        // which itself counts (a headerless screen's root scroll view).
-        let fieldAncestors = Set(analyzer.ancestors(of: field))
-        func inFieldsScreen(_ i: Int) -> Bool {
-            if fieldAncestors.contains(i) { return true }
-            guard let root else { return true }
-            return i >= root && i < nodes[root].subtreeEnd
-        }
-
-        // Scroll views left visible above the keyboard, largest first.
-        var candidates: [(index: Int, visible: CGRect)] = []
-        for (i, node) in nodes.enumerated() where Self.draggableScrollerTypes.contains(node.elementType) {
-            if let w = node.window, windows.contains(w) { continue }
-            if !inFieldsScreen(i) { continue }
-            let visible = node.frame.intersection(area)
+        for scroll in analyzer.ancestors(of: field)
+        where Self.draggableScrollerTypes.contains(nodes[scroll].elementType) {
+            if let w = nodes[scroll].window, windows.contains(w) { continue }
+            let visible = nodes[scroll].frame.intersection(area)
             guard !visible.isNull,
                   visible.width >= Self.minScrollExtent,
                   visible.height >= Self.minScrollExtent else { continue }
-            candidates.append((i, visible))
-        }
-        candidates.sort { $0.visible.width * $0.visible.height > $1.visible.width * $1.visible.height }
-        for (scroll, visible) in candidates {
             if let point = dragStart(in: scroll, visible: visible, dragX: dragX, dragY: dragY) { return point }
         }
         return nil

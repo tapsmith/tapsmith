@@ -2299,7 +2299,7 @@ class CommandHandler {
         case .scrollSwipe:
             let focusedFrame = snapshotFinder.liveFocusedTextInput()?.frame
             guard let start = planner.scrollSwipeStart(focusedFrame: focusedFrame) else {
-                return .notPossible("no scroll view with room clear of its controls above the keyboard")
+                return .notPossible("the field is not in a scroll view with room clear of its controls above the keyboard")
             }
             let dy = CGFloat(screen.height) * KeyboardDismissPlanner.swipeFraction
             let dx = CGFloat(screen.width) * KeyboardDismissPlanner.swipeFraction
