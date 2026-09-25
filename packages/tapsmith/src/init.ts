@@ -5,6 +5,7 @@ import Enquirer from 'enquirer';
 import figlet from 'figlet';
 import { tryExec, scanEnvironment, type EnvScan, type SimulatorInfo } from './env-scan.js';
 import { detectAndroidPackage, detectIosBundleId } from './init-detect.js';
+import type { InitCommandOptions } from './cli-program.js';
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
@@ -446,51 +447,18 @@ test('app launches successfully', async ({ device }) => {
 
 // ─── Main wizard ───
 
-const INIT_USAGE = `Usage: tapsmith init [options]
-
-Interactive wizard when run in a terminal with no options.
-Non-interactive (for scripts and AI agents): pass --yes and/or explicit flags.
-
-Options:
-  -y, --yes                 Accept auto-detected defaults for anything not specified
-  --platform <list>         android, ios, or android,ios (default: inferred from android/ and ios/ dirs)
-  --apk <path>              Android APK (default: auto-detected under android/**/build/outputs/apk/)
-  --package <id>            Android package name (default: read from APK via aapt2)
-  --app <path>              iOS simulator .app bundle (default: auto-detected under ios/)
-  --bundle-id <id>          iOS bundle identifier (default: read from Info.plist)
-  --avd <name>              Android AVD to auto-launch (default: first available)
-  --simulator <name>        iOS simulator name (default: newest available iPhone)
-  --device-type <type>      emulator | physical | both (default: emulator)
-  --network-capture         Enable HTTP(S) trace capture
-  --no-example-test         Skip scaffolding tests/example.test.ts
-  --no-agents-md            Skip scaffolding the AGENTS.md section
-  --force                   Overwrite an existing tapsmith.config.*
-  --json                    Machine-readable output (also on errors)
-  -h, --help                Show this help
-
-Examples:
-  npx tapsmith init --yes
-  npx tapsmith init --yes --platform android --apk ./app-debug.apk
-  npx tapsmith doctor --json   # check environment first
-`;
-
-export async function runInit(argv: string[] = []): Promise<void> {
-  const { parseInitArgs, resolveInitPlan, executeInitPlan, InitError } = await import('./init-noninteractive.js');
+export async function runInit(opts: InitCommandOptions): Promise<void> {
+  const { initArgsFromOptions, resolveInitPlan, executeInitPlan, InitError } = await import('./init-noninteractive.js');
 
   let parsed;
   try {
-    parsed = parseInitArgs(argv);
+    parsed = initArgsFromOptions(opts);
   } catch (err) {
     const initErr = err instanceof InitError
       ? err
       : new InitError('UNEXPECTED_ERROR', err instanceof Error ? err.message : String(err));
-    emitInitError(initErr, argv.includes('--json'));
+    emitInitError(initErr, opts.json);
     process.exit(1);
-    return;
-  }
-
-  if (parsed.help) {
-    console.log(INIT_USAGE);
     return;
   }
 
@@ -503,7 +471,7 @@ export async function runInit(argv: string[] = []): Promise<void> {
       { fix: 'Run non-interactively: npx tapsmith init --yes (see npx tapsmith init --help for all flags)' },
     );
     emitInitError(err, parsed.json);
-    if (!parsed.json) console.error(INIT_USAGE);
+    if (!parsed.json) console.error("  Run 'tapsmith init --help' for every flag.");
     process.exit(1);
   }
 

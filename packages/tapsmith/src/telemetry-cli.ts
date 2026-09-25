@@ -10,6 +10,7 @@
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { loadConfig, configPathOf, type TapsmithConfig } from './config.js';
+import type { TelemetryAction } from './cli-program.js';
 import { telemetry as defaultTelemetry, TELEMETRY_DOCS_URL, type Telemetry, type TelemetryStatus } from './telemetry.js';
 
 export interface TelemetryCommandDeps {
@@ -20,44 +21,10 @@ export interface TelemetryCommandDeps {
   loadConfig?: (configFile?: string) => Promise<TapsmithConfig>;
 }
 
-interface ParsedArgs {
-  subcommand: 'status' | 'enable' | 'disable' | undefined;
+export interface TelemetryCommandArgs {
+  action?: TelemetryAction;
   json: boolean;
-  configFile?: string;
-  help: boolean;
-  error?: string;
-}
-
-function parse(argv: string[]): ParsedArgs {
-  const parsed: ParsedArgs = { subcommand: undefined, json: false, help: false };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--json') parsed.json = true;
-    else if (arg === '--help' || arg === '-h') parsed.help = true;
-    else if (arg === '--config' || arg === '-c') {
-      const value = argv[++i];
-      if (!value) return { ...parsed, error: `${arg} requires a config file path` };
-      parsed.configFile = value;
-    } else if (arg.startsWith('--config=')) parsed.configFile = arg.slice('--config='.length);
-    else if (arg === 'status' || arg === 'enable' || arg === 'disable') {
-      if (parsed.subcommand) return { ...parsed, error: `Unexpected argument: ${arg}` };
-      parsed.subcommand = arg;
-    } else return { ...parsed, error: `Unknown argument: ${arg}` };
-  }
-  return parsed;
-}
-
-function usage(): string {
-  return [
-    'Usage: tapsmith telemetry [status|enable|disable] [--json] [-c <config>]',
-    '',
-    '  status    Show whether anonymous usage telemetry is on, and why not if it is off (default)',
-    '  enable    Turn it on for this machine (does not override TAPSMITH_TELEMETRY=0 or `telemetry: false`)',
-    '  disable   Turn it off for this machine, for every project',
-    '',
-    `Details: ${TELEMETRY_DOCS_URL}`,
-    '',
-  ].join('\n');
+  config?: string;
 }
 
 function tilde(file: string): string {
@@ -137,24 +104,14 @@ function describe(view: ConfigView): string {
 }
 
 /** Runs the command and returns the process exit code. */
-export async function runTelemetryCommand(argv: string[], deps: TelemetryCommandDeps = {}): Promise<number> {
+export async function runTelemetryCommand(args: TelemetryCommandArgs, deps: TelemetryCommandDeps = {}): Promise<number> {
   const telemetry = deps.telemetry ?? defaultTelemetry;
   const stdout = deps.stdout ?? ((text) => process.stdout.write(text));
   const stderr = deps.stderr ?? ((text) => process.stderr.write(text));
   const load = deps.loadConfig ?? ((configFile?: string) => loadConfig(undefined, configFile));
 
-  const args = parse(argv);
-  if (args.error) {
-    stderr(`${args.error}\n\n${usage()}`);
-    return 1;
-  }
-  if (args.help) {
-    stdout(usage());
-    return 0;
-  }
-
-  if (args.subcommand === 'enable' || args.subcommand === 'disable') {
-    const enabling = args.subcommand === 'enable';
+  if (args.action === 'enable' || args.action === 'disable') {
+    const enabling = args.action === 'enable';
     if (!telemetry.setMachineEnabled(enabling)) {
       const stateFile = telemetry.status(undefined).stateFile;
       stderr(`Could not write ${tilde(stateFile)}. `
@@ -163,7 +120,7 @@ export async function runTelemetryCommand(argv: string[], deps: TelemetryCommand
     }
     // Fold the project config in, so `enable` under `telemetry: false` reports
     // the truth and the JSON shape matches `status` (PILOT-330 review).
-    const view = await resolveConfigView(telemetry, load, args.configFile);
+    const view = await resolveConfigView(telemetry, load, args.config);
     if (args.json) {
       stdout(JSON.stringify(jsonPayload(view), null, 2) + '\n');
       return 0;
@@ -182,7 +139,7 @@ export async function runTelemetryCommand(argv: string[], deps: TelemetryCommand
   }
 
   // status (the default)
-  const view = await resolveConfigView(telemetry, load, args.configFile);
+  const view = await resolveConfigView(telemetry, load, args.config);
   if (args.json) {
     stdout(JSON.stringify(jsonPayload(view), null, 2) + '\n');
   } else {

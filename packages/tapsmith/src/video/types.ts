@@ -21,14 +21,17 @@ import { shouldRecord, shouldRetain } from '../trace/trace-mode.js';
  * `retain-on-failure-and-retries`) that mirror the trace config for parity.
  * See `shouldRecord` / `shouldRetain` for exact semantics.
  */
-export type VideoMode =
-  | 'off'
-  | 'on'
-  | 'on-first-retry'
-  | 'on-all-retries'
-  | 'retain-on-failure'
-  | 'retain-on-first-failure'
-  | 'retain-on-failure-and-retries'
+export const VIDEO_MODES = [
+  'off',
+  'on',
+  'on-first-retry',
+  'on-all-retries',
+  'retain-on-failure',
+  'retain-on-first-failure',
+  'retain-on-failure-and-retries',
+] as const;
+
+export type VideoMode = (typeof VIDEO_MODES)[number]
 
 /** Output resolution. Honoured on Android only; iOS records at native res. */
 export interface VideoSize {

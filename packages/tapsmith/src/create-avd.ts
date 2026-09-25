@@ -32,6 +32,8 @@ import * as path from 'node:path';
 import { unzipSync } from 'fflate';
 import Enquirer from 'enquirer';
 import { scanAvdImageTags } from './doctor.js';
+import { DEFAULT_API_LEVEL, DEFAULT_DEVICE_PROFILE, defaultAbi, defaultAvdName } from './avd-defaults.js';
+import type { CreateAvdCommandOptions } from './cli-program.js';
 
 const enquirer = new Enquirer();
 
@@ -61,19 +63,6 @@ export interface CreateAvdOptions {
   force: boolean;
   /** Install the Android SDK cmdline-tools without prompting when missing. */
   installTools: boolean;
-  help: boolean;
-}
-
-export const DEFAULT_API_LEVEL = 36;
-export const DEFAULT_DEVICE_PROFILE = 'medium_phone';
-
-/** Map the host architecture to the matching emulator image ABI. */
-export function defaultAbi(arch: string = process.arch): string {
-  return arch === 'arm64' ? 'arm64-v8a' : 'x86_64';
-}
-
-export function defaultAvdName(api: number): string {
-  return `Tapsmith_Phone_API_${api}`;
 }
 
 /** sdkmanager package path for the Google APIs (rootable) system image. */
@@ -89,61 +78,15 @@ const AVD_NAME_RE = /^[a-zA-Z0-9._-]+$/;
 const DEVICE_PROFILE_RE = /^[a-zA-Z0-9 ._()-]+$/;
 const ABI_RE = /^[a-zA-Z0-9._-]+$/;
 
-export function parseCreateAvdArgs(argv: string[]): CreateAvdOptions {
-  let api = DEFAULT_API_LEVEL;
-  let name: string | undefined;
-  let device = DEFAULT_DEVICE_PROFILE;
-  let abi: string | undefined;
-  let force = false;
-  let installTools = false;
-  let help = false;
-
-  const take = (i: number, flag: string): string => {
-    const value = argv[i];
-    if (value === undefined) throw new Error(`Missing value for ${flag}`);
-    return value;
-  };
-
-  let i = 0;
-  while (i < argv.length) {
-    const arg = argv[i]!;
-    if (arg === '--help' || arg === '-h') {
-      help = true;
-      i += 1;
-    } else if (arg === '--force') {
-      force = true;
-      i += 1;
-    } else if (arg === '--install-tools') {
-      installTools = true;
-      i += 1;
-    } else if (arg === '--api') {
-      api = parseApiLevel(take(i + 1, '--api'));
-      i += 2;
-    } else if (arg.startsWith('--api=')) {
-      api = parseApiLevel(arg.slice('--api='.length));
-      i += 1;
-    } else if (arg === '--name') {
-      name = take(i + 1, '--name');
-      i += 2;
-    } else if (arg.startsWith('--name=')) {
-      name = arg.slice('--name='.length);
-      i += 1;
-    } else if (arg === '--device') {
-      device = take(i + 1, '--device');
-      i += 2;
-    } else if (arg.startsWith('--device=')) {
-      device = arg.slice('--device='.length);
-      i += 1;
-    } else if (arg === '--abi') {
-      abi = take(i + 1, '--abi');
-      i += 2;
-    } else if (arg.startsWith('--abi=')) {
-      abi = arg.slice('--abi='.length);
-      i += 1;
-    } else {
-      throw new Error(`Unknown flag: ${arg}`);
-    }
-  }
+/**
+ * Apply defaults to the raw `create-avd` flags and validate them. The values
+ * reach avdmanager/sdkmanager, which are spawned through a shell on Windows,
+ * so each one is checked against the characters those tools accept.
+ */
+export function resolveCreateAvdOptions(raw: CreateAvdCommandOptions): CreateAvdOptions {
+  const api = raw.api === undefined ? DEFAULT_API_LEVEL : parseApiLevel(raw.api);
+  const { name, abi, force, installTools } = raw;
+  const device = raw.device ?? DEFAULT_DEVICE_PROFILE;
 
   const resolvedName = name ?? defaultAvdName(api);
   if (!AVD_NAME_RE.test(resolvedName)) {
@@ -157,7 +100,7 @@ export function parseCreateAvdArgs(argv: string[]): CreateAvdOptions {
     throw new Error(`Invalid ABI "${resolvedAbi}" — expected e.g. arm64-v8a or x86_64`);
   }
 
-  return { api, name: resolvedName, device, abi: resolvedAbi, force, installTools, help };
+  return { api, name: resolvedName, device, abi: resolvedAbi, force, installTools };
 }
 
 function parseApiLevel(value: string): number {
@@ -498,41 +441,14 @@ export async function createAvd(opts: CreateAvdOptions): Promise<void> {
 
 // ─── CLI entry ───────────────────────────────────────────────────────────
 
-function printHelp(): void {
-  console.log(`
-${bold('tapsmith create-avd')} — Create an Android AVD that supports HTTPS network capture.
-
-Downloads a Google APIs system image (rootable, unlike the Google Play images
-Android Studio preselects) with sdkmanager and creates the AVD with avdmanager.
-If the Android SDK command-line tools are missing, offers to install them into
-ANDROID_HOME first.
-
-${bold('Usage:')}
-  tapsmith create-avd [options]
-
-${bold('Options:')}
-  --api <level>      Android API level (default: ${DEFAULT_API_LEVEL})
-  --name <name>      AVD name (default: Tapsmith_Phone_API_<api>)
-  --device <profile> avdmanager device profile (default: ${DEFAULT_DEVICE_PROFILE})
-  --abi <abi>        System image ABI (default: ${defaultAbi()} for this machine)
-  --force            Overwrite an existing AVD with the same name
-  --install-tools    Install the SDK command-line tools without prompting if missing
-  --help, -h         Show this help
-`);
-}
-
-export async function runCreateAvd(argv: string[]): Promise<void> {
+export async function runCreateAvd(raw: CreateAvdCommandOptions): Promise<void> {
   let opts: CreateAvdOptions;
   try {
-    opts = parseCreateAvdArgs(argv);
+    opts = resolveCreateAvdOptions(raw);
   } catch (err) {
     console.error(red(err instanceof Error ? err.message : String(err)));
-    printHelp();
+    console.error("Run 'tapsmith create-avd --help' for usage.");
     process.exit(1);
-  }
-  if (opts.help) {
-    printHelp();
-    return;
   }
 
   try {

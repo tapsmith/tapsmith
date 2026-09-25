@@ -1,5 +1,5 @@
 /**
- * Non-interactive `tapsmith init` — flag parsing, auto-detection resolution,
+ * Non-interactive `tapsmith init` — flag validation, auto-detection resolution,
  * and file writing. Pure of process.exit and console; the CLI shell in
  * init.ts owns printing and exit codes.
  */
@@ -11,6 +11,7 @@ import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { generateConfig, generateExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
 import * as detectDefaults from './init-detect.js';
+import type { InitCommandOptions } from './cli-program.js';
 
 // ─── Types ───
 
@@ -20,7 +21,6 @@ export interface InitArgs {
   yes: boolean;
   json: boolean;
   force: boolean;
-  help: boolean;
   platforms?: Platform[];
   apk?: string;
   packageName?: string;
@@ -72,70 +72,47 @@ export interface DetectFns {
   detectIosBundleId: (appPath: string) => string | undefined;
 }
 
-// ─── Flag parsing ───
+// ─── Flag validation ───
 
-const VALUE_FLAGS = new Set([
-  '--platform', '--apk', '--package', '--app', '--bundle-id',
-  '--avd', '--simulator', '--device-type',
-]);
-
-export function parseInitArgs(argv: string[]): InitArgs {
-  const args: InitArgs = {
-    yes: false, json: false, force: false, help: false,
-    networkCapture: false, exampleTest: true, agentsMd: true,
-    anySetupFlag: false,
-  };
-
-  const setValue = (flag: string, value: string | undefined): void => {
-    if (value === undefined || value.startsWith('-')) {
-      throw new InitError('MISSING_FLAG_VALUE', `${flag} requires a value`, { fix: `Pass a value: ${flag} <value>` });
-    }
-    args.anySetupFlag = true;
-    switch (flag) {
-      case '--platform': {
-        const platforms = value.split(',').map((p) => p.trim()) as Platform[];
-        for (const p of platforms) {
-          if (p !== 'android' && p !== 'ios') {
-            throw new InitError('INVALID_PLATFORM', `Unknown platform "${p}"`, { fix: 'Use --platform android, --platform ios, or --platform android,ios' });
-          }
-        }
-        args.platforms = platforms;
-        break;
+/**
+ * Validate the parsed `tapsmith init` flags and shape them for the planner.
+ * Values the parser cannot check (the platform list, the device type) are
+ * rejected here with the InitError codes the `--json` contract promises.
+ */
+export function initArgsFromOptions(opts: InitCommandOptions): InitArgs {
+  let platforms: Platform[] | undefined;
+  if (opts.platform !== undefined) {
+    platforms = opts.platform.split(',').map((p) => p.trim()) as Platform[];
+    for (const p of platforms) {
+      if (p !== 'android' && p !== 'ios') {
+        throw new InitError('INVALID_PLATFORM', `Unknown platform "${p}"`, { fix: 'Use --platform android, --platform ios, or --platform android,ios' });
       }
-      case '--apk': args.apk = value; break;
-      case '--package': args.packageName = value; break;
-      case '--app': args.app = value; break;
-      case '--bundle-id': args.bundleId = value; break;
-      case '--avd': args.avd = value; break;
-      case '--simulator': args.simulator = value; break;
-      case '--device-type': {
-        if (value !== 'emulator' && value !== 'physical' && value !== 'both') {
-          throw new InitError('INVALID_DEVICE_TYPE', `Unknown device type "${value}"`, { fix: 'Use --device-type emulator|physical|both' });
-        }
-        args.deviceType = value;
-        break;
-      }
-    }
-  };
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--yes' || arg === '-y') args.yes = true;
-    else if (arg === '--json') args.json = true;
-    else if (arg === '--force') { args.force = true; args.anySetupFlag = true; }
-    else if (arg === '--help' || arg === '-h') args.help = true;
-    else if (arg === '--network-capture') { args.networkCapture = true; args.anySetupFlag = true; }
-    else if (arg === '--no-example-test') { args.exampleTest = false; args.anySetupFlag = true; }
-    else if (arg === '--no-agents-md') { args.agentsMd = false; args.anySetupFlag = true; }
-    else if (VALUE_FLAGS.has(arg)) setValue(arg, argv[++i]);
-    else if (arg.includes('=') && VALUE_FLAGS.has(arg.slice(0, arg.indexOf('=')))) {
-      setValue(arg.slice(0, arg.indexOf('=')), arg.slice(arg.indexOf('=') + 1));
-    } else {
-      throw new InitError('UNKNOWN_FLAG', `Unknown init flag: ${arg}`, { fix: 'Run: npx tapsmith init --help' });
     }
   }
+  const deviceType = opts.deviceType;
+  if (deviceType !== undefined && deviceType !== 'emulator' && deviceType !== 'physical' && deviceType !== 'both') {
+    throw new InitError('INVALID_DEVICE_TYPE', `Unknown device type "${deviceType}"`, { fix: 'Use --device-type emulator|physical|both' });
+  }
 
-  return args;
+  const valueFlags = [opts.platform, opts.apk, opts.package, opts.app, opts.bundleId, opts.avd, opts.simulator, opts.deviceType];
+  return {
+    yes: opts.yes,
+    json: opts.json,
+    force: opts.force,
+    platforms,
+    apk: opts.apk,
+    packageName: opts.package,
+    app: opts.app,
+    bundleId: opts.bundleId,
+    avd: opts.avd,
+    simulator: opts.simulator,
+    deviceType,
+    networkCapture: opts.networkCapture,
+    exampleTest: opts.exampleTest,
+    agentsMd: opts.agentsMd,
+    anySetupFlag: valueFlags.some((v) => v !== undefined)
+      || opts.force || opts.networkCapture || !opts.exampleTest || !opts.agentsMd,
+  };
 }
 
 // ─── Resolution ───

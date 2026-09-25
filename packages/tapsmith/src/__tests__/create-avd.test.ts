@@ -5,76 +5,59 @@ import * as path from 'node:path';
 import { zipSync } from 'fflate';
 import {
   cmdlineToolsPlatform,
-  defaultAbi,
-  defaultAvdName,
   extractCmdlineTools,
   findSdkTool,
   latestCmdlineToolsZip,
-  parseCreateAvdArgs,
+  resolveCreateAvdOptions,
   systemImageDir,
   systemImagePackage,
-  DEFAULT_API_LEVEL,
-  DEFAULT_DEVICE_PROFILE,
 } from '../create-avd.js';
+import { DEFAULT_API_LEVEL, DEFAULT_DEVICE_PROFILE, defaultAbi, defaultAvdName } from '../avd-defaults.js';
+import type { CreateAvdCommandOptions } from '../cli-program.js';
 
-describe('parseCreateAvdArgs()', () => {
+describe('resolveCreateAvdOptions()', () => {
+  const raw = (over: Partial<CreateAvdCommandOptions> = {}): CreateAvdCommandOptions => ({ force: false, installTools: false, ...over });
+
   it('applies defaults when no flags are given', () => {
-    const opts = parseCreateAvdArgs([]);
-    expect(opts).toEqual({
+    expect(resolveCreateAvdOptions(raw())).toEqual({
       api: DEFAULT_API_LEVEL,
       name: `Tapsmith_Phone_API_${DEFAULT_API_LEVEL}`,
       device: DEFAULT_DEVICE_PROFILE,
       abi: defaultAbi(),
       force: false,
       installTools: false,
-      help: false,
     });
   });
 
   it('derives the default name from a custom API level', () => {
-    expect(parseCreateAvdArgs(['--api', '34']).name).toBe('Tapsmith_Phone_API_34');
-    expect(parseCreateAvdArgs(['--api=34']).api).toBe(34);
+    expect(resolveCreateAvdOptions(raw({ api: '34' }))).toMatchObject({ api: 34, name: 'Tapsmith_Phone_API_34' });
   });
 
-  it('accepts explicit name, device, abi, force, and install-tools', () => {
-    const opts = parseCreateAvdArgs(['--name', 'My_AVD', '--device=pixel_7', '--abi', 'x86_64', '--force', '--install-tools']);
-    expect(opts.name).toBe('My_AVD');
-    expect(opts.device).toBe('pixel_7');
-    expect(opts.abi).toBe('x86_64');
-    expect(opts.force).toBe(true);
-    expect(opts.installTools).toBe(true);
-  });
-
-  it('parses --help', () => {
-    expect(parseCreateAvdArgs(['--help']).help).toBe(true);
-    expect(parseCreateAvdArgs(['-h']).help).toBe(true);
+  it('keeps explicit name, device, abi, force, and install-tools', () => {
+    const opts = resolveCreateAvdOptions(raw({ name: 'My_AVD', device: 'pixel_7', abi: 'x86_64', force: true, installTools: true }));
+    expect(opts).toMatchObject({ name: 'My_AVD', device: 'pixel_7', abi: 'x86_64', force: true, installTools: true });
   });
 
   it('rejects invalid API levels', () => {
-    expect(() => parseCreateAvdArgs(['--api', 'banana'])).toThrow(/Invalid API level/);
-    expect(() => parseCreateAvdArgs(['--api', '-3'])).toThrow(/Invalid API level/);
-    expect(() => parseCreateAvdArgs(['--api', '34.5'])).toThrow(/Invalid API level/);
+    for (const api of ['banana', '-3', '34.5', '0']) {
+      expect(() => resolveCreateAvdOptions(raw({ api })), api).toThrow(/Invalid API level/);
+    }
   });
 
   it('rejects invalid AVD names', () => {
-    expect(() => parseCreateAvdArgs(['--name', 'has spaces'])).toThrow(/Invalid AVD name/);
+    expect(() => resolveCreateAvdOptions(raw({ name: 'has spaces' }))).toThrow(/Invalid AVD name/);
   });
 
   it('accepts real avdmanager device ids, including ones with spaces and parens', () => {
-    expect(parseCreateAvdArgs(['--device', 'Nexus 5']).device).toBe('Nexus 5');
-    expect(parseCreateAvdArgs(['--device', '7in WSVGA (Tablet)']).device).toBe('7in WSVGA (Tablet)');
+    expect(resolveCreateAvdOptions(raw({ device: 'Nexus 5' })).device).toBe('Nexus 5');
+    expect(resolveCreateAvdOptions(raw({ device: '7in WSVGA (Tablet)' })).device).toBe('7in WSVGA (Tablet)');
   });
 
   it('rejects device profiles and ABIs containing shell metacharacters', () => {
-    expect(() => parseCreateAvdArgs(['--device', 'pixel_7"&calc'])).toThrow(/Invalid device profile/);
-    expect(() => parseCreateAvdArgs(['--device', 'a|b'])).toThrow(/Invalid device profile/);
-    expect(() => parseCreateAvdArgs(['--abi', 'x86_64;rm -rf /'])).toThrow(/Invalid ABI/);
-    expect(() => parseCreateAvdArgs(['--abi', '%PATH%'])).toThrow(/Invalid ABI/);
-  });
-
-  it('rejects unknown flags and missing values', () => {
-    expect(() => parseCreateAvdArgs(['--bogus'])).toThrow(/Unknown flag/);
-    expect(() => parseCreateAvdArgs(['--name'])).toThrow(/Missing value/);
+    expect(() => resolveCreateAvdOptions(raw({ device: 'pixel_7"&calc' }))).toThrow(/Invalid device profile/);
+    expect(() => resolveCreateAvdOptions(raw({ device: 'a|b' }))).toThrow(/Invalid device profile/);
+    expect(() => resolveCreateAvdOptions(raw({ abi: 'x86_64;rm -rf /' }))).toThrow(/Invalid ABI/);
+    expect(() => resolveCreateAvdOptions(raw({ abi: '%PATH%' }))).toThrow(/Invalid ABI/);
   });
 });
 

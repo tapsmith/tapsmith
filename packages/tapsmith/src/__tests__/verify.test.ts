@@ -2,24 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseVerifyArgs, pickVerifyTarget, cleanupVerifySmokeTest, scaffoldVerifySmokeTest, summarizeVerifyReport, runVerify } from '../verify.js';
-
-describe('parseVerifyArgs()', () => {
-  it('parses --json and --config', () => {
-    expect(parseVerifyArgs(['--json', '--config', 't.config.ts'])).toEqual({ json: true, config: 't.config.ts', help: false });
-    expect(parseVerifyArgs(['--config=t.config.ts'])).toEqual({ json: false, config: 't.config.ts', help: false });
-    expect(parseVerifyArgs([])).toEqual({ json: false, config: undefined, help: false });
-  });
-
-  it('parses --help and -h', () => {
-    expect(parseVerifyArgs(['--help']).help).toBe(true);
-    expect(parseVerifyArgs(['-h']).help).toBe(true);
-  });
-
-  it('throws on unknown flags', () => {
-    expect(() => parseVerifyArgs(['--bogus'])).toThrow(/unknown/i);
-  });
-});
+import { pickVerifyTarget, cleanupVerifySmokeTest, scaffoldVerifySmokeTest, summarizeVerifyReport, runVerify } from '../verify.js';
 
 describe('pickVerifyTarget()', () => {
   it('prefers example.test.ts', () => {
@@ -108,7 +91,7 @@ describe('runVerify() with a config that fails to load', () => {
       const file = path.join(dir, 'tapsmith.config.mjs');
       fs.writeFileSync(file, 'throw new Error("boom")\n');
       process.chdir(dir);
-      await runVerify(['--json']);
+      await runVerify({ json: true });
       const out = JSON.parse(String(log.mock.calls[0]?.[0])) as { error: { code: string; message: string; fix: string } };
       expect(out.error.code).toBe('CONFIG_ERROR');
       expect(out.error.message).toContain(`Failed to load config file ${file}: boom`);

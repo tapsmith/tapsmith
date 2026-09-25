@@ -331,14 +331,22 @@ export interface TraceConfigSnapshot {
 
 // ─── Trace Configuration ───
 
-export type TraceMode =
-  | 'off'
-  | 'on'
-  | 'on-first-retry'
-  | 'on-all-retries'
-  | 'retain-on-failure'
-  | 'retain-on-first-failure'
-  | 'retain-on-failure-and-retries'
+/**
+ * Every trace recording mode, in the order help text and errors list them.
+ * The `TraceMode` type is derived from it, so the CLI's `--trace` choices and
+ * config validation can never drift from the type.
+ */
+export const TRACE_MODES = [
+  'off',
+  'on',
+  'on-first-retry',
+  'on-all-retries',
+  'retain-on-failure',
+  'retain-on-first-failure',
+  'retain-on-failure-and-retries',
+] as const;
+
+export type TraceMode = (typeof TRACE_MODES)[number]
 
 export interface TraceConfig {
   /** Trace recording mode. */

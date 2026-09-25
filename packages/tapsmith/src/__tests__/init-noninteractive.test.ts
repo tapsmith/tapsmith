@@ -2,8 +2,16 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseInitArgs, resolveInitPlan, executeInitPlan, assertConfigWritable, InitError } from '../init-noninteractive.js';
+import { initArgsFromOptions, resolveInitPlan, executeInitPlan, assertConfigWritable, InitError } from '../init-noninteractive.js';
 import type { EnvScan } from '../env-scan.js';
+import type { InitCommandOptions } from '../cli-program.js';
+
+/** `tapsmith init` flags as the CLI hands them over: every boolean present, value flags only when given. */
+function initArgs(over: Partial<InitCommandOptions>) {
+  return initArgsFromOptions({
+    yes: false, json: false, force: false, networkCapture: false, exampleTest: true, agentsMd: true, ...over,
+  });
+}
 
 const baseEnv: EnvScan = {
   nodeVersion: '22.0.0',
@@ -41,46 +49,39 @@ function expectInitError(fn: () => unknown, code: string): InitError {
   return caught as InitError;
 }
 
-describe('parseInitArgs()', () => {
-  it('parses all flags', () => {
-    const args = parseInitArgs([
-      '--yes', '--json', '--force', '--platform', 'android,ios',
-      '--apk', './a.apk', '--package', 'com.x', '--app', './X.app',
-      '--bundle-id', 'com.x.ios', '--avd', 'Pixel_7', '--simulator', 'iPhone 16',
-      '--device-type', 'both', '--network-capture', '--no-example-test', '--no-agents-md',
-    ]);
-    expect(args).toMatchObject({
-      yes: true, json: true, force: true,
-      platforms: ['android', 'ios'],
-      apk: './a.apk', packageName: 'com.x', app: './X.app',
-      bundleId: 'com.x.ios', avd: 'Pixel_7', simulator: 'iPhone 16',
-      deviceType: 'both', networkCapture: true, exampleTest: false, agentsMd: false,
+describe('initArgsFromOptions()', () => {
+  it('maps every flag', () => {
+    expect(initArgs({
+      yes: true, json: true, force: true, platform: 'android,ios', apk: './a.apk', package: 'com.x', app: './X.app',
+      bundleId: 'com.x.ios', avd: 'Pixel_7', simulator: 'iPhone 16', deviceType: 'both', networkCapture: true,
+      exampleTest: false, agentsMd: false,
+    })).toMatchObject({
+      yes: true, json: true, force: true, platforms: ['android', 'ios'],
+      apk: './a.apk', packageName: 'com.x', app: './X.app', bundleId: 'com.x.ios',
+      avd: 'Pixel_7', simulator: 'iPhone 16', deviceType: 'both',
+      networkCapture: true, exampleTest: false, agentsMd: false, anySetupFlag: true,
     });
   });
 
-  it('supports --flag=value form', () => {
-    expect(parseInitArgs(['--platform=android']).platforms).toEqual(['android']);
-  });
-
-  it('throws InitError on unknown flag', () => {
-    expect(() => parseInitArgs(['--bogus'])).toThrow(InitError);
-  });
-
   it('throws InitError on invalid platform or device-type', () => {
-    expect(() => parseInitArgs(['--platform', 'windows'])).toThrow(InitError);
-    expect(() => parseInitArgs(['--device-type', 'cloud'])).toThrow(InitError);
+    expectInitError(() => initArgs({ platform: 'windows' }), 'INVALID_PLATFORM');
+    expectInitError(() => initArgs({ platform: '' }), 'INVALID_PLATFORM');
+    expectInitError(() => initArgs({ deviceType: 'cloud' }), 'INVALID_DEVICE_TYPE');
   });
 
   it('detects whether any setup flag was given', () => {
-    expect(parseInitArgs([]).anySetupFlag).toBe(false);
-    expect(parseInitArgs(['--json']).anySetupFlag).toBe(false);
-    expect(parseInitArgs(['--apk', './a.apk']).anySetupFlag).toBe(true);
+    expect(initArgs({}).anySetupFlag).toBe(false);
+    expect(initArgs({ json: true, yes: true }).anySetupFlag).toBe(false);
+    expect(initArgs({ apk: './a.apk' }).anySetupFlag).toBe(true);
+    expect(initArgs({ force: true }).anySetupFlag).toBe(true);
+    expect(initArgs({ exampleTest: false }).anySetupFlag).toBe(true);
+    expect(initArgs({ networkCapture: true }).anySetupFlag).toBe(true);
   });
 });
 
 describe('resolveInitPlan()', () => {
   it('auto-detects an Android setup with --yes', () => {
-    const plan = resolveInitPlan(parseInitArgs(['--yes', '--platform', 'android']), baseEnv, detectStubs);
+    const plan = resolveInitPlan(initArgs({ yes: true, platform: 'android' }), baseEnv, detectStubs);
     expect(plan.android).toMatchObject({
       apkPath: 'android/app/build/outputs/apk/debug/app-debug.apk',
       packageName: 'com.example.app',
@@ -103,7 +104,7 @@ describe('resolveInitPlan()', () => {
       },
     };
     try {
-      resolveInitPlan(parseInitArgs(['--yes', '--platform', 'android']), baseEnv, detect, tmp);
+      resolveInitPlan(initArgs({ yes: true, platform: 'android' }), baseEnv, detect, tmp);
       expect(probedApk).toBe(path.resolve(tmp, 'android/app-debug.apk'));
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -111,7 +112,7 @@ describe('resolveInitPlan()', () => {
   });
 
   it('picks the newest-runtime simulator for iOS', () => {
-    const plan = resolveInitPlan(parseInitArgs(['--yes', '--platform', 'ios']), baseEnv, detectStubs);
+    const plan = resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), baseEnv, detectStubs);
     expect(plan.ios).toMatchObject({
       appPath: 'ios/build/Build/Products/Debug-iphonesimulator/MyApp.app',
       bundleId: 'com.example.myapp',
@@ -132,7 +133,7 @@ describe('resolveInitPlan()', () => {
       },
     };
     try {
-      resolveInitPlan(parseInitArgs(['--yes', '--platform', 'ios']), baseEnv, detect, tmp);
+      resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), baseEnv, detect, tmp);
       expect(probedApp).toBe(path.resolve(tmp, 'ios/MyApp.app'));
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -141,7 +142,7 @@ describe('resolveInitPlan()', () => {
 
   it('explicit flags beat detection', () => {
     const plan = resolveInitPlan(
-      parseInitArgs(['--yes', '--platform', 'android', '--apk', './custom.apk', '--package', 'com.custom', '--avd', 'Pixel_8']),
+      initArgs({ yes: true, platform: 'android', apk: './custom.apk', package: 'com.custom', avd: 'Pixel_8' }),
       baseEnv,
       detectStubs,
     );
@@ -154,7 +155,7 @@ describe('resolveInitPlan()', () => {
       findApkCandidates: () => ['android/a/app-debug.apk', 'android/b/app-debug.apk'],
     };
     const err = expectInitError(
-      () => resolveInitPlan(parseInitArgs(['--yes', '--platform', 'android']), baseEnv, detect),
+      () => resolveInitPlan(initArgs({ yes: true, platform: 'android' }), baseEnv, detect),
       'AMBIGUOUS_APK',
     );
     expect(err.candidates).toHaveLength(2);
@@ -164,7 +165,7 @@ describe('resolveInitPlan()', () => {
   it('errors NO_APK when nothing found', () => {
     const detect = { ...detectStubs, findApkCandidates: () => [] };
     expectInitError(
-      () => resolveInitPlan(parseInitArgs(['--yes', '--platform', 'android']), baseEnv, detect),
+      () => resolveInitPlan(initArgs({ yes: true, platform: 'android' }), baseEnv, detect),
       'NO_APK',
     );
   });
@@ -173,7 +174,7 @@ describe('resolveInitPlan()', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
     fs.mkdirSync(path.join(tmp, 'android'));
     try {
-      const plan = resolveInitPlan(parseInitArgs(['--yes']), baseEnv, detectStubs, tmp);
+      const plan = resolveInitPlan(initArgs({ yes: true }), baseEnv, detectStubs, tmp);
       expect(plan.platforms).toEqual(['android']);
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
@@ -183,7 +184,7 @@ describe('resolveInitPlan()', () => {
   it('errors NO_PLATFORM when nothing inferable', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
     try {
-      expectInitError(() => resolveInitPlan(parseInitArgs(['--yes']), baseEnv, detectStubs, tmp), 'NO_PLATFORM');
+      expectInitError(() => resolveInitPlan(initArgs({ yes: true }), baseEnv, detectStubs, tmp), 'NO_PLATFORM');
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
@@ -191,7 +192,7 @@ describe('resolveInitPlan()', () => {
 
   it('rejects iOS physical-only as interactive-only', () => {
     expectInitError(() => resolveInitPlan(
-      parseInitArgs(['--yes', '--platform', 'ios', '--device-type', 'physical']),
+      initArgs({ yes: true, platform: 'ios', deviceType: 'physical' }),
       baseEnv,
       detectStubs,
     ), 'IOS_PHYSICAL_INTERACTIVE_ONLY');
@@ -205,7 +206,7 @@ describe('resolveInitPlan()', () => {
       },
     };
     const err = expectInitError(() => resolveInitPlan(
-      parseInitArgs(['--yes', '--platform', 'ios']),
+      initArgs({ yes: true, platform: 'ios' }),
       { ...baseEnv, isMacOS: false },
       detect,
     ), 'IOS_REQUIRES_MACOS');
@@ -214,7 +215,7 @@ describe('resolveInitPlan()', () => {
 
   it('downgrades iOS both to simulators with a warning', () => {
     const plan = resolveInitPlan(
-      parseInitArgs(['--yes', '--platform', 'ios', '--device-type', 'both']),
+      initArgs({ yes: true, platform: 'ios', deviceType: 'both' }),
       baseEnv,
       detectStubs,
     );
@@ -224,7 +225,7 @@ describe('resolveInitPlan()', () => {
 
   it('omits avd with a warning when none available', () => {
     const plan = resolveInitPlan(
-      parseInitArgs(['--yes', '--platform', 'android']),
+      initArgs({ yes: true, platform: 'android' }),
       { ...baseEnv, avds: [] },
       detectStubs,
     );
@@ -241,7 +242,7 @@ describe('executeInitPlan()', () => {
   it('writes config, example test, and AGENTS.md', () => {
     const tmp = makeTmp();
     try {
-      const args = parseInitArgs(['--yes', '--platform', 'android']);
+      const args = initArgs({ yes: true, platform: 'android' });
       const plan = resolveInitPlan(args, baseEnv, detectStubs, tmp);
       const result = executeInitPlan(plan, args, tmp);
       expect(fs.readFileSync(path.join(tmp, 'tapsmith.config.ts'), 'utf8')).toContain("package: 'com.example.app',");
@@ -258,7 +259,7 @@ describe('executeInitPlan()', () => {
   it('respects --no-example-test and --no-agents-md', () => {
     const tmp = makeTmp();
     try {
-      const args = parseInitArgs(['--yes', '--platform', 'android', '--no-example-test', '--no-agents-md']);
+      const args = initArgs({ yes: true, platform: 'android', exampleTest: false, agentsMd: false });
       const plan = resolveInitPlan(args, baseEnv, detectStubs, tmp);
       executeInitPlan(plan, args, tmp);
       expect(fs.existsSync(path.join(tmp, 'tests'))).toBe(false);
@@ -272,7 +273,7 @@ describe('executeInitPlan()', () => {
     const tmp = makeTmp();
     try {
       fs.writeFileSync(path.join(tmp, 'tapsmith.config.ts'), '// existing');
-      const args = parseInitArgs(['--yes', '--platform', 'android']);
+      const args = initArgs({ yes: true, platform: 'android' });
       const plan = resolveInitPlan(args, baseEnv, detectStubs, tmp);
       expectInitError(() => executeInitPlan(plan, args, tmp), 'CONFIG_EXISTS');
       expect(fs.readFileSync(path.join(tmp, 'tapsmith.config.ts'), 'utf8')).toBe('// existing');
@@ -285,7 +286,7 @@ describe('executeInitPlan()', () => {
     const tmp = makeTmp();
     try {
       fs.writeFileSync(path.join(tmp, 'tapsmith.config.ts'), '// existing');
-      const args = parseInitArgs(['--yes', '--force', '--platform', 'android']);
+      const args = initArgs({ yes: true, force: true, platform: 'android' });
       const plan = resolveInitPlan(args, baseEnv, detectStubs, tmp);
       executeInitPlan(plan, args, tmp);
       expect(fs.readFileSync(path.join(tmp, 'tapsmith.config.ts'), 'utf8')).toContain('defineConfig');
@@ -337,7 +338,7 @@ describe('executeInitPlan()', () => {
     try {
       fs.mkdirSync(path.join(tmp, 'tests'));
       fs.writeFileSync(path.join(tmp, 'tests', 'example.test.ts'), '// mine');
-      const args = parseInitArgs(['--yes', '--platform', 'android']);
+      const args = initArgs({ yes: true, platform: 'android' });
       const plan = resolveInitPlan(args, baseEnv, detectStubs, tmp);
       const result = executeInitPlan(plan, args, tmp);
       expect(fs.readFileSync(path.join(tmp, 'tests', 'example.test.ts'), 'utf8')).toBe('// mine');
