@@ -8,7 +8,7 @@
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { runCli, type CliHandlers, type TestCommandArgs } from './cli-program.js';
+import { printsBanner, runCli, type CliHandlers, type TestCommandArgs } from './cli-program.js';
 import { loadConfig, configPathOf, normalizeGrep, resolveDeviceStrategy, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
 import figlet from 'figlet';
 import { TapsmithGrpcClient } from './grpc-client.js';
@@ -98,33 +98,6 @@ function printTapsmithBanner(): void {
   console.log(banner.split('\n').map((line) => `${GREEN}${line}${RESET}`).join('\n'));
   console.log(dim(`v${getVersion()}`));
   console.log();
-}
-
-/**
- * The decorative banner, for the commands that print human output. Not for
- * `mcp-server` (stdout is the protocol), `telemetry` (a settings switch, like
- * --version), `init` (owns its banner, since the wizard is also called
- * directly), `test` (prints it after the tsx re-exec and test discovery, right
- * before the launch output), or any `--json` run. Help never runs an action,
- * so it never gets a banner.
- */
-function shouldPrintBannerForCommand(command: string, opts: Record<string, unknown>): boolean {
-  if (opts.json === true) return false;
-  return new Set([
-    'show-trace',
-    'show-report',
-    'merge-reports',
-    'list-devices',
-    'setup-ios',
-    'setup-ios-device',
-    'build-ios-agent',
-    'create-avd',
-    'configure-ios-network',
-    'refresh-ios-network',
-    'verify-ios-network',
-    'verify',
-    'doctor',
-  ]).has(command);
 }
 
 function warnSequentialUnhealthyDevices(devices: DeviceHealthResult[], progress?: LaunchProgressSink): void {
@@ -1630,7 +1603,7 @@ async function main(): Promise<void> {
     handlers: cliHandlers,
     version: getVersion(),
     beforeAction: (command, opts) => {
-      if (shouldPrintBannerForCommand(command, opts)) printTapsmithBanner();
+      if (printsBanner(command, opts)) printTapsmithBanner();
     },
   });
   // A handler that set process.exitCode itself returns nothing: keep its code.

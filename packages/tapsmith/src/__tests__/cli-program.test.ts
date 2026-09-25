@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { runCli, type CliHandlers } from '../cli-program.js';
+import { runCli, printsBanner, type CliHandlers } from '../cli-program.js';
 
 // ─── Harness ───
 
@@ -231,6 +231,9 @@ describe('help', () => {
     expect(h.calls).toEqual([]);
     expect(h.out).toMatch(/Usage: tapsmith/);
     expect(h.out).toContain('show-trace');
+    // The same help as --help, examples included.
+    expect(h.out).toBe((await run(['--help'])).out);
+    expect(h.out).toContain('Examples:');
   });
 
   it.each([['--help'], ['-h'], ['help']])('%s prints top-level help', async (...argv) => {
@@ -504,5 +507,24 @@ describe('usage errors under --json', () => {
     const h = await usageError(['mcp-server', '--bogus']);
     expect(h.out).toBe('');
     expect(h.err).toMatch(/unknown option/);
+  });
+});
+
+// ─── Banner ───
+
+describe('printsBanner()', () => {
+  it('keeps --json output byte-clean', async () => {
+    for (const command of ['list-devices', 'doctor', 'verify']) {
+      // The options object exactly as the command's handler receives it.
+      const h = await run([command, '--json']);
+      expect(printsBanner(command, h.calls[0]![1] as Record<string, unknown>), command).toBe(false);
+      expect(printsBanner(command, { json: false }), command).toBe(true);
+    }
+  });
+
+  it('never prints for the protocol, settings, wizard and test commands', () => {
+    for (const command of ['mcp-server', 'telemetry', 'init', 'test']) {
+      expect(printsBanner(command, {}), command).toBe(false);
+    }
   });
 });

@@ -175,7 +175,8 @@ export async function runVerify(args: VerifyArgs): Promise<void> {
 
       const child = spawnSync(process.execPath, [
         process.argv[1], 'test', target, '--reporter', 'json',
-        ...(args.config ? ['--config', args.config] : []),
+        // = form: a path that starts with "-" would read as a flag.
+        ...(args.config ? [`--config=${args.config}`] : []),
       ], {
         stdio: args.json ? ['ignore', 'ignore', 'pipe'] : 'inherit',
         maxBuffer: 64 * 1024 * 1024,

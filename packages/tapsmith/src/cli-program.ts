@@ -454,7 +454,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--abi <abi>', `System image ABI (default: ${defaultAbi()} on this machine)`)
     .option('--force', 'Overwrite an existing AVD with the same name', false)
     .option('--install-tools', 'Install the SDK command-line tools without prompting if they are missing', false)
-    .addHelpText('after', '\nDownloads a Google APIs system image (rootable, unlike the Google Play images\nAndroid Studio preselects) with sdkmanager and creates the AVD with avdmanager.')
+    .addHelpText('after', '\nDownloads a Google APIs system image (rootable, unlike the Google Play images\nAndroid Studio preselects) with sdkmanager and creates the AVD with avdmanager.\nIf the Android SDK command-line tools are missing, offers to install them into\nANDROID_HOME first.')
     .action((opts: CreateAvdCommandOptions) => act('create-avd', handlers.createAvd)({ ...opts }));
 
   // ── iOS setup ──
@@ -500,6 +500,36 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .action((udid: string) => act('verify-ios-network', handlers.verifyIosNetwork)({ udid }));
 
   return program;
+}
+
+// ─── Banner ───
+
+const BANNER_COMMANDS = new Set([
+  'show-trace',
+  'show-report',
+  'merge-reports',
+  'list-devices',
+  'setup-ios',
+  'setup-ios-device',
+  'build-ios-agent',
+  'create-avd',
+  'configure-ios-network',
+  'refresh-ios-network',
+  'verify-ios-network',
+  'verify',
+  'doctor',
+]);
+
+/**
+ * Whether a command prints the decorative banner, given the options its
+ * handler receives. Not for `mcp-server` (stdout is the protocol), `telemetry`
+ * (a settings switch, like --version), `init` (owns its banner, since the
+ * wizard is also called directly), `test` (prints it after the tsx re-exec
+ * and test discovery, right before the launch output), or any `--json` run.
+ * Help never runs an action, so it never gets a banner.
+ */
+export function printsBanner(command: string, opts: Record<string, unknown>): boolean {
+  return opts.json !== true && BANNER_COMMANDS.has(command);
 }
 
 // ─── Pre-parse ───
@@ -612,7 +642,7 @@ export async function runCli(argv: string[], deps: RunCliDeps): Promise<number> 
   const program = buildProgram(deps, io, state);
 
   if (argv.length === 0) {
-    io.out(program.helpInformation());
+    program.outputHelp();
     return 0;
   }
 
