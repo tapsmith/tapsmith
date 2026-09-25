@@ -301,7 +301,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .command('test')
     .description('Run test files')
     .argument('[files...]', 'Test files or globs (default: the config\'s testMatch)')
-    .option('-d, --device <serial>', 'Target a specific device or simulator by serial/UDID', nonEmpty('--device'))
+    .option('-d, --device <serial>', 'Target a specific device or simulator by serial/UDID')
     .option('-j, --workers <n>', 'Number of parallel workers (default: 1)', positiveInt('--workers'))
     .option('--shard <x/y>', 'Run shard x of y across CI machines (e.g. 1/4)', parseShard)
     .addOption(new Option('--trace [mode]', `Record traces. Modes: ${TRACE_MODES.join(', ')} (on when no mode is given)`)
@@ -315,15 +315,17 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .addOption(configOption())
     .option('-g, --grep <pattern>', 'Only run tests whose full name matches this regex', regex('--grep'))
     .option('--grep-invert <pattern>', 'Skip tests whose full name matches this regex', regex('--grep-invert'))
-    .option('--reporter <name>', 'Reporter: list, line, dot, json, junit, html, github, blob', nonEmpty('--reporter'))
+    .option('--reporter <name>', 'Reporter: list, line, dot, json, junit, html, github, blob')
     .option('--project <name>', 'Only run this project from the config (repeatable; dependencies run too)', collectProject)
     .option('--force-install', 'Reinstall the app even if it is already installed', false)
     .addOption(new Option(TSX_REEXEC_FLAG).hideHelp().default(false))
     .addHelpText('after', TEST_EXAMPLES)
     .action(async (files: string[], opts: Record<string, unknown>) => {
+      // An empty --device / --reporter means not given: `--device "$SERIAL"`
+      // with an empty variable has always fallen back to automatic selection.
       const args: TestCommandArgs = {
         files,
-        device: opts.device as string | undefined,
+        device: (opts.device as string | undefined) || undefined,
         workers: opts.workers as number | undefined,
         shard: opts.shard as TestCommandArgs['shard'],
         trace: opts.trace as TraceMode | undefined,
@@ -337,7 +339,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
         tsxReexec: opts.__tsxReexec as boolean,
         grep: opts.grep as RegExp | undefined,
         grepInvert: opts.grepInvert as RegExp | undefined,
-        reporter: opts.reporter as string | undefined,
+        reporter: (opts.reporter as string | undefined) || undefined,
         project: opts.project as string[] | undefined,
       };
       await act('test', handlers.test)(args);
@@ -501,6 +503,20 @@ function commandIndex(argv: string[]): number {
 }
 
 /**
+ * For a bundle of short flags (`-wd`), the value flag that would take the
+ * next token as its value: one whose letter ends the bundle. A value flag
+ * earlier in the bundle takes the rest of the bundle instead (`-wdserial`).
+ */
+function bundleEndingInValueFlag(token: string, byFlag: Map<string, Option>): Option | undefined {
+  if (!/^-[a-zA-Z]{2,}$/.test(token)) return undefined;
+  for (let k = 1; k < token.length; k++) {
+    const option = byFlag.get(`-${token[k]}`);
+    if (option) return k === token.length - 1 ? option : undefined;
+  }
+  return undefined;
+}
+
+/**
  * Rewrite `-j=4` to `--workers=4`, and refuse a flag where a value flag
  * expects its value. Returns the argv commander should parse; reports a
  * refused value through `cmd.error`, which throws.
@@ -532,8 +548,8 @@ function prepareCommandArgs(cmd: Command, args: string[]): string[] {
         continue;
       }
     }
-    const option = byFlag.get(token);
     const next = args[i + 1];
+    const option = byFlag.get(token) ?? bundleEndingInValueFlag(token, byFlag);
     if (option && next !== undefined && next.startsWith('-') && next !== '-') {
       cmd.error(
         `error: option '${option.flags}' argument missing (got the flag '${next}'). `
@@ -548,7 +564,8 @@ function prepareCommandArgs(cmd: Command, args: string[]): string[] {
 
 function jsonErrorCode(command: string, commanderCode: string): string {
   if (command === 'init') {
-    if (commanderCode === 'commander.unknownOption') return 'UNKNOWN_FLAG';
+    // init has always called any token it did not know, positional or not, an unknown flag.
+    if (commanderCode === 'commander.unknownOption' || commanderCode === 'commander.excessArguments') return 'UNKNOWN_FLAG';
     if (commanderCode === 'commander.optionMissingArgument') return 'MISSING_FLAG_VALUE';
   }
   return 'BAD_ARGS';
@@ -588,8 +605,26 @@ export async function runCli(argv: string[], deps: RunCliDeps): Promise<number> 
       } else if (cmd && name !== 'help') {
         state.command = name;
         const rest = argv.slice(index + 1);
-        state.json = JSON_ERROR_COMMANDS.has(name) && rest.includes('--json') && !rest.some((t) => HELP_FLAGS.has(t));
-        args = [...argv.slice(0, index + 1), ...prepareCommandArgs(cmd, rest)];
+        const end = rest.indexOf('--');
+        const flags = end >= 0 ? rest.slice(0, end) : rest;
+        if (flags.some((t) => HELP_FLAGS.has(t))) {
+          // Help wins over everything else on the command line, including a
+          // value flag left without its value (`init --platform --help`).
+          args = [...argv.slice(0, index + 1), '--help'];
+        } else {
+          state.json = JSON_ERROR_COMMANDS.has(name) && flags.includes('--json');
+          args = [...argv.slice(0, index + 1), ...prepareCommandArgs(cmd, rest)];
+        }
+      }
+    } else {
+      // `tapsmith -c ci.mjs test`: the old parser took options anywhere.
+      const misplaced = argv.find((t) => t.startsWith('-') && !ROOT_FLAGS.has(t));
+      const later = argv.find((t) => !t.startsWith('-') && findCommand(program, t));
+      if (misplaced && later) {
+        program.error(
+          `error: unknown option '${misplaced}'. '${misplaced}' goes after the command: tapsmith ${later} ${misplaced} …`,
+          { code: 'commander.unknownOption', exitCode: 1 },
+        );
       }
     }
     await program.parseAsync(args, { from: 'user' });

@@ -633,6 +633,11 @@ describe('defineConfig()', () => {
       expect(() => defineConfig({ [key]: { mode } })).not.toThrow();
     }
     expect(() => defineConfig({ [key]: {} })).not.toThrow();
+    // `cond ? 'on' : false` / `{ mode: null }` in an untyped config has always meant off.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say false / null
+    expect(() => defineConfig({ [key]: false as any })).not.toThrow();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say false / null
+    expect(() => defineConfig({ [key]: { mode: null } as any })).not.toThrow();
     expect(() => defineConfig({ [key]: undefined })).not.toThrow();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say null
     expect(() => defineConfig({ [key]: null as any })).not.toThrow();

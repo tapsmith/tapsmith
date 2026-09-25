@@ -715,9 +715,10 @@ export function validateRecordingModes(
   const modes: readonly string[] = RECORDING_MODES;
   for (const key of ['trace', 'video'] as const) {
     const value: unknown = options[key];
-    if (value == null) continue;
+    // false and null have always meant off in untyped configs (`CI ? 'on' : false`).
+    if (value == null || value === false) continue;
     const mode: unknown = typeof value === 'object' ? (value as { mode?: unknown }).mode : value;
-    if (mode === undefined && typeof value === 'object') continue;
+    if (mode == null && typeof value === 'object') continue;
     if (typeof mode !== 'string' || !modes.includes(mode)) {
       throw new Error(
         `${source}: ${key} must be one of ${modes.map((m) => `'${m}'`).join(', ')} (got ${JSON.stringify(mode)})`,

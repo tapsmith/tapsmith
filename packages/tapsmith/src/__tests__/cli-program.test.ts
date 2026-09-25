@@ -188,6 +188,21 @@ describe('tapsmith test', () => {
       expect(h.err).toContain(`${flag}=`);
     });
 
+    it.each([
+      [['-wd', '--workers', '2'], '--device'],
+      [['-wc', '--json'], '--config'],
+      [['-wj', '--ui'], '--workers'],
+    ])('rejects a short-flag bundle ending in a value flag: %j', async (argv, flag) => {
+      const h = await usageError(['test', ...argv]);
+      expect(h.err).toContain(flag);
+      expect(h.err).toMatch(/argument missing/);
+    });
+
+    it('still reads a bundle whose value flag carries its value', async () => {
+      expect(await testArgs(['-wdemulator-5554'])).toMatchObject({ watch: true, device: 'emulator-5554' });
+      expect(await testArgs(['-wd', 'emulator-5554'])).toMatchObject({ watch: true, device: 'emulator-5554' });
+    });
+
     it.each([['--device'], ['--grep'], ['-c'], ['--project']])('rejects %s at the end of argv', async (flag) => {
       const h = await usageError(['test', flag]);
       expect(h.err).toMatch(/argument missing/);
@@ -259,6 +274,21 @@ describe('help', () => {
     expect(h.calls).toEqual([]);
   });
 
+  it.each([['init', '--platform', '--help'], ['test', '--device', '-h'], ['test', '--bogus', '--help']])(
+    '%j prints help instead of a usage error',
+    async (...argv) => {
+      const h = await run(argv);
+      expect(h.code).toBe(0);
+      expect(h.calls).toEqual([]);
+      expect(h.err).toBe('');
+      expect(h.out).toContain(`Usage: tapsmith ${argv[0]}`);
+    },
+  );
+
+  it('a --help after -- is a file, not a help request', async () => {
+    expect((await testArgs(['--', '--help'])).files).toEqual(['--help']);
+  });
+
   it('test --help lists test flags, including --ui and --ui-port, but not the tsx marker', async () => {
     const { out } = await run(['test', '--help']);
     for (const flag of ['--device', '--workers', '--shard', '--trace', '--video', '--ui', '--ui-port', '--grep', '--project', '--force-install']) {
@@ -296,6 +326,11 @@ describe('unknown commands', () => {
   it('a command with no near match gets no suggestion but still fails', async () => {
     const h = await usageError(['xyzzy-nothing']);
     expect(h.err).toMatch(/unknown command 'xyzzy-nothing'/);
+  });
+
+  it('an option before the command says it belongs after the command', async () => {
+    const h = await usageError(['-c', 'ci.mjs', 'test']);
+    expect(h.err).toMatch(/'-c' goes after the command: tapsmith test -c/);
   });
 
   it('points at --help instead of dumping it', async () => {
@@ -350,12 +385,18 @@ describe('commands', () => {
     await usageError(['doctor', '-c', '--json']);
   });
 
-  it.each([['doctor', '--config='], ['test', '--config='], ['test', '--device='], ['test', '--reporter=']])(
-    '%s %s (an empty = value) is an error',
+  it.each([['doctor', '--config='], ['test', '--config='], ['test', '-c', '']])(
+    '%s %s (an empty config path) is an error',
     async (...argv) => {
       expect((await usageError(argv)).err).toMatch(/needs a value/);
     },
   );
+
+  it('an empty --device or --reporter means unset, as a `--device "$SERIAL"` with an empty variable always has', async () => {
+    const args = await testArgs(['--device', '', '--reporter=']);
+    expect(args.device).toBeUndefined();
+    expect(args.reporter).toBeUndefined();
+  });
 
   it('verify and mcp-server take a config', async () => {
     expect((await run(['verify', '--json', '--config=t.mjs'])).calls).toEqual([['verify', { json: true, config: 't.mjs' }]]);
@@ -427,6 +468,7 @@ describe('usage errors under --json', () => {
     [['init', '--json', '--bogus'], 'UNKNOWN_FLAG'],
     [['init', '--json', '--platform'], 'MISSING_FLAG_VALUE'],
     [['init', '--platform', '--json'], 'MISSING_FLAG_VALUE'],
+    [['init', '--json', 'yes'], 'UNKNOWN_FLAG'],
     [['verify', '--json', '--bogus'], 'BAD_ARGS'],
     [['doctor', '--json', '--bogus'], 'BAD_ARGS'],
     [['list-devices', '--json', 'extra'], 'BAD_ARGS'],

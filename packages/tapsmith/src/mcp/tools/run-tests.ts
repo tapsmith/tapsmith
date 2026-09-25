@@ -21,10 +21,13 @@ const PROGRESS_INTERVAL_MS = 10_000;
 let _running = false;
 
 /**
- * The `tapsmith test` argv for a run without a dispatcher. The CLI has no
- * substring filter, so the `test` filter becomes a case-insensitive `--grep`
- * of the escaped literal, which selects the same tests as `matchesTestFilter`.
- * Values go in `=` form: a filter, project or serial may start with `-`.
+ * The `tapsmith test` argv for a run without a dispatcher (only a
+ * `createMcpServer` built without one; both real transports pass one). The
+ * CLI has no substring filter, so the `test` filter becomes a
+ * case-insensitive `--grep` of the escaped literal: the same match as
+ * `matchesTestFilter`, though as a CLI `--grep` it replaces a config `grep`
+ * rather than narrowing it. Values go in `=` form: a filter, project or
+ * serial may start with `-`.
  */
 export function stdioTestArgs(opts: { files: string[]; testFilter?: string; project?: string; device?: string }): string[] {
   const args = ['test', ...opts.files, '--trace', 'on'];

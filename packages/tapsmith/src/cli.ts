@@ -1601,7 +1601,8 @@ const cliHandlers: CliHandlers = {
   mergeReports: async ({ dir, config: configFile }) => {
     const { runMergeReports } = await import('./merge-reports.js');
     const config = await loadConfig(undefined, configFile);
-    return runMergeReports(dir ?? 'blob-report', config);
+    const code = await runMergeReports(dir ?? 'blob-report', config);
+    if (code !== 0) process.exit(code);
   },
 
   listDevices: async (opts) => (await import('./list-devices.js')).runListDevices(opts),
