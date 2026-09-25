@@ -4,6 +4,10 @@
  * Public API re-exports.
  */
 
+// First, before any module that reads import.meta while loading: explains a
+// CommonJS load without import.meta instead of crashing mid-import (PILOT-382).
+import './module-format-guard.js';
+
 // Device
 export { Device, type SwipeOptions, type AppResetOptions, type AppResetResult } from './device.js';
 

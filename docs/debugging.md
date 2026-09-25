@@ -330,6 +330,20 @@ Error: 14 UNAVAILABLE: failed to connect to all addresses
 3. Check that no other process is using port 50051 (the default daemon port)
 4. If using a custom `daemonAddress`, verify the daemon is running at that address
 
+### Tapsmith was loaded as CommonJS
+
+```
+Error: Tapsmith was loaded as CommonJS without `import.meta.dirname`, so it cannot locate its own files.
+```
+
+**What happened:** Tapsmith is an ES module. In a package without `"type": "module"` (the npm default, and most React Native and Expo apps), TypeScript test and config files are compiled to CommonJS, and the loader compiles Tapsmith along with them. The tsx that ships with Tapsmith (4.23 or newer) handles this, so `tapsmith test` needs no change to your project. Older tsx releases, ts-node and custom require hooks don't provide `import.meta.dirname`, and Tapsmith cannot find its own files without it.
+
+**Fixes:**
+
+1. Run tests through the Tapsmith CLI (`npx tapsmith test`), which uses the tsx it ships with
+2. If you register tsx yourself (for example `node --import tsx`), upgrade it to 4.23 or newer
+3. Or add `"type": "module"` to your `package.json`
+
 ## Debugging Locators
 
 When a test fails because an element was not found, the next step is usually figuring out _what elements are actually on screen_ and _what locators would match them_.
