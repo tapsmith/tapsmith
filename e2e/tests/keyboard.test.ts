@@ -95,14 +95,17 @@ describe("hideKeyboard() on a screen without a scroll view", () => {
     await expect(keyboardScreen.counts).toHaveText(counts({ background: platform === "ios" ? 1 : 0 }))
   })
 
-  test("in a scroll view, dismisses without submitting the field or touching a control", async ({ device, keyboardScreen }) => {
+  test("in a scroll view, dismisses without submitting the field or touching a control", async ({ device, platform, keyboardScreen }) => {
     await keyboardScreen.putInScrollViewButton.tap()
     await keyboardScreen.openKeyboard("plain")
+    await expect(keyboardScreen.drags).toHaveText("drags=0")
 
     await device.hideKeyboard()
 
-    // Put away by the scroll view (drag or touch), not the return key, and
-    // "Centre action" in the middle of the scroll view was not pressed.
+    // iOS put it away by dragging the scroll view (a tap would not begin a
+    // drag), not with the return key, and "Centre action" in the middle of
+    // the scroll view was not pressed.
+    if (platform === "ios") await expect(keyboardScreen.drags).not.toHaveText("drags=0")
     await expect(keyboardScreen.counts).toHaveText(counts({}))
     await expect.poll(() => device.isKeyboardShown()).toBe(false)
     await expect(keyboardScreen.plainInput).toHaveValue("a")

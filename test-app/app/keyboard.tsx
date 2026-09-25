@@ -24,7 +24,8 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   Keyboard.dismiss() when a blank spot is tapped (counted as background).
 // - "Put in scroll view" renders the same content inside a ScrollView
 //   (keyboardShouldPersistTaps="handled"), the kind of screen a drag dismisses
-//   on — which must still touch nothing else.
+//   on — which must still touch nothing else. Drags that scroll it are
+//   counted ("drags"), which no tap produces.
 // - "Centre action" fills the middle of the screen, where a dismiss gesture
 //   aimed at the screen centre would land. Nothing hideKeyboard() does may
 //   tap it.
@@ -34,6 +35,7 @@ export default function KeyboardScreen() {
   const [multilineText, setMultilineText] = useState("")
   const [dismissOnBackgroundTap, setDismissOnBackgroundTap] = useState(false)
   const [inScrollView, setInScrollView] = useState(false)
+  const [drags, setDrags] = useState(0)
   const [centreTaps, setCentreTaps] = useState(0)
   const [plainSubmits, setPlainSubmits] = useState(0)
   const [goSubmits, setGoSubmits] = useState(0)
@@ -49,6 +51,7 @@ export default function KeyboardScreen() {
     setMultilineText("")
     setDismissOnBackgroundTap(false)
     setInScrollView(false)
+    setDrags(0)
     setCentreTaps(0)
     setPlainSubmits(0)
     setGoSubmits(0)
@@ -96,6 +99,7 @@ export default function KeyboardScreen() {
       <Text testID="keyboard-counts">
         {`centre=${centreTaps} plainSubmits=${plainSubmits} goSubmits=${goSubmits} background=${backgroundTaps}`}
       </Text>
+      {inScrollView && <Text testID="keyboard-drags">{`drags=${drags}`}</Text>}
 
       <TouchableOpacity
         style={styles.smallButton}
@@ -141,6 +145,7 @@ export default function KeyboardScreen() {
         style={styles.fill}
         contentContainerStyle={styles.fill}
         keyboardShouldPersistTaps="handled"
+        onScrollBeginDrag={() => setDrags((n) => n + 1)}
       >
         {content}
       </ScrollView>

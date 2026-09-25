@@ -2108,6 +2108,14 @@ class CommandHandler {
             // Check if keyboard is actually shown before attempting dismissal.
             // A tree that cannot be read is no evidence either way: refuse
             // rather than report a keyboard gone that may still be up.
+            // An app that is not in front has no keyboard of its own up (a
+            // defensive call after another app came to the front).
+            let appState = safeAppState(app)
+            guard appState != .notRunning, appState != .runningBackground,
+                  appState != .runningBackgroundSuspended else {
+                snapshotFinder.clearFocusedTextInputHint()
+                return ["success": true]
+            }
             guard let kbSnapshot = try? snapshotFinder.takeSnapshot() else {
                 throw AgentError.actionFailed("hideKeyboard could not read the screen to check for the keyboard")
             }
@@ -2282,7 +2290,7 @@ class CommandHandler {
             guard let snapshot = try? snapshotFinder.takeSnapshot(),
                   hasKeyboardInSnapshot(snapshot.dictionaryRepresentation),
                   let again = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screen)
-                      .scrollSwipeStart(focusedFrame: focusedFrame)
+                      .scrollSwipeStart(focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame)
             else { return .keyboardStayed }
             _ = EventSynthesizer.swipe(
                 from: again, to: CGPoint(x: again.x - dx, y: again.y), duration: 0.05

@@ -8,6 +8,8 @@ export class KeyboardScreen {
   /** iOS exposes a multiline field as a text view (no textfield role, no placeholder). */
   get multilineInput() { return this.device.getByTestId("keyboard-multiline-input") }
   get counts() { return this.device.getByTestId("keyboard-counts") }
+  /** How many drags began on the scroll view (only with "Put in scroll view"). */
+  get drags() { return this.device.getByTestId("keyboard-drags") }
   get dismissOnBackgroundTapButton() { return this.device.getByRole("button", { name: "Dismiss on background tap" }) }
   get putInScrollViewButton() { return this.device.getByRole("button", { name: "Put in scroll view" }) }
   get centreAction() { return this.device.getByRole("button", { name: "Centre action" }) }

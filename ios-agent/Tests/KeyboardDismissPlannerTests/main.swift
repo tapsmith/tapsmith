@@ -218,6 +218,48 @@ do {
 }
 
 do {
+    // A headerless screen: a search row and a list side by side under a
+    // full-screen root. The list beside the field is dragged.
+    let field = R(16, 62, 300, 44)
+    let rows: [Row] = [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .other, "", "", R(0, 62, 402, 44)),
+        (4, .searchField, "Search", "", field),
+        (4, .button, "Cancel", "", R(320, 62, 82, 44)),
+        (3, .table, "", "", R(0, 110, 402, 764)),
+    ] + keyboardWindows()
+    checkTrue("headerless screen, list beside the field: drag",
+              planner(rows).scrollSwipeStart(focusedFrame: field).map { R(0, 110, 402, 419).contains($0) } ?? false)
+}
+
+do {
+    // The largest scroll view has no clear spot; a smaller one does.
+    let rows: [Row] = appHead + [
+        (4, .collectionView, "", "", R(0, 116, 402, 300)),
+        (5, .other, "Card", "", R(0, 116, 402, 300)),
+        (4, .scrollView, "", "", R(0, 420, 402, 200)),
+    ] + keyboardWindows()
+    checkTrue("falls back to a smaller scroll view with a clear spot",
+              planner(rows).scrollSwipeStart(focusedFrame: nil).map { R(0, 420, 402, 109).contains($0) } ?? false)
+}
+
+do {
+    // A keyboard element off screen, or zero-sized, covers nothing.
+    var offScreen = keyboardWindows()
+    offScreen = offScreen.map { row in
+        row.type == .keyboard ? (row.depth, row.type, row.label, row.id, R(4.67, 900, 393, 243)) : row
+    }.filter { $0.id != "inputView" && !($0.type == .other && $0.frame.minY == 529) && !($0.type == .other && $0.frame.minY == 573) }
+    let offPlanner = planner(appHead + offScreen.filter { $0.type != .button && $0.type != .key })
+    check("off-screen keyboard: no keyboard region", offPlanner.keyboardRegion, nil)
+    let zero = keyboardWindows().map { row in
+        row.type == .keyboard ? (row.depth, row.type, row.label, row.id, R(0, 874, 0, 0)) : row
+    }
+    check("zero-sized keyboard: no keyboard region", planner(appHead + zero).keyboardRegion, nil)
+}
+
+do {
     // A scroll view left in the tree under a screen that covers it: the
     // point must not be on the covering screen's controls.
     let covered: [Row] = appHead + [
