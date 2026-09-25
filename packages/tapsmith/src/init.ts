@@ -471,7 +471,6 @@ export async function runInit(opts: InitCommandOptions): Promise<void> {
       { fix: 'Run non-interactively: npx tapsmith init --yes (see npx tapsmith init --help for all flags)' },
     );
     emitInitError(err, parsed.json);
-    if (!parsed.json) console.error("  Run 'tapsmith init --help' for every flag.");
     process.exit(1);
   }
 
