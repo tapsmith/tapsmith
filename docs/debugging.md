@@ -341,7 +341,7 @@ Error: Tapsmith was loaded without `import.meta.dirname`, so it cannot locate it
 **Fixes:**
 
 1. Run tests through the Tapsmith CLI (`npx tapsmith test`), which uses the tsx it ships with
-2. If you register tsx yourself (for example `node --import tsx`), upgrade it (4.21.1 and later handle this; Tapsmith ships 4.23)
+2. If you register tsx yourself (for example `node --import tsx`), upgrade it (4.21.1 and later handle this)
 3. Or add `"type": "module"` to your `package.json`
 
 ## Debugging Locators

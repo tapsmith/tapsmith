@@ -24,7 +24,7 @@ export function moduleFormatError(dirname: unknown): string | undefined {
     'Usually a TypeScript loader compiled Tapsmith\'s ESM build to CommonJS — tsx 4.21.0 or older, or another',
     'transform that stubs out import.meta — for a test or config file in a package without "type": "module".',
     'Fix: run tests with the Tapsmith CLI (`npx tapsmith test`), which uses the tsx it ships with;',
-    'upgrade tsx if you register it yourself (Tapsmith ships 4.23); or add "type": "module" to your package.json.',
+    'upgrade tsx if you register it yourself; or add "type": "module" to your package.json.',
   ].join('\n');
 }
 

@@ -58,7 +58,7 @@ function importWithBlanked(pattern: string): { stdout: string; stderr: string } 
   });
 }
 
-describe.skipIf((!fs.existsSync(DIST_INDEX) && !process.env.CI) || !HAS_REGISTER_HOOKS)('the built SDK loaded without import.meta.dirname', () => {
+describe.skipIf((!fs.existsSync(DIST_INDEX) && !process.env.CI) || !HAS_REGISTER_HOOKS)('the built SDK loaded without import.meta.dirname', { timeout: 60_000 }, () => {
   it.each([
     // tsx 4.21.0: import.meta.url is filled in, dirname and filename are not.
     ['dirname and filename are missing', 'import\\.meta\\??\\.(dirname|filename)'],

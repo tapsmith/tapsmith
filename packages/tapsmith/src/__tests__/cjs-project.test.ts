@@ -37,7 +37,9 @@ const TEST_FILE = 'import { test, describe, expect } from "tapsmith";\n'
   + '  test(`runs as ${format}`, async () => { expect(1).toBe(1); });\n'
   + '});\n';
 
-describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', () => {
+// Each test cold-starts node or tsx children (and one copies dist/); vitest's
+// 5 s default also fails synchronous tests that overrun, so allow for a slow runner.
+describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', { timeout: 60_000 }, () => {
   let root: string;
 
   beforeEach(() => {
@@ -167,7 +169,7 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', () =>
     if (reply.type === 'discover-error') throw new Error(reply.error.stack ?? reply.error.message);
     const names = (node: TestTreeNode): string[] => [node.fullName, ...(node.children ?? []).flatMap(names)];
     expect(names(reply.tree)).toContain('login > runs as cjs');
-  }, 60_000);
+  });
 
   describe('a tapsmith.config.ts that imports tapsmith', () => {
     /** Loads the project's config the way the CLI does: the built loadConfig, in bare Node. */
