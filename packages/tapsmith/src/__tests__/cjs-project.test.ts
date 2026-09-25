@@ -10,7 +10,7 @@
  *
  * They test `dist/`, so rebuild (`npm run build`, or `npx tsc` for the SDK
  * alone) after changing the code they cover — a stale dist is tested as-is.
- * CI builds before the unit tests; a local run with no build skips them.
+ * CI compiles dist/ before the unit tests; a local run with no build skips them.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -137,19 +137,26 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('a CommonJS user project', () =>
     const filePath = path.join(root, 'tests', 'login.test.ts');
 
     // The same fork UI mode and the MCP server make for each test file.
-    const reply = await new Promise<UIDiscoverChildMessage>((resolve, reject) => {
-      const child = fork(path.join(DIST_DIR, 'ui-mode', 'ui-discover.js'), [], {
-        cwd: root,
-        execPath: tsx,
-        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-        env: { ...process.env, NODE_PATH: path.dirname(PKG_DIR), TAPSMITH_TELEMETRY: '0' },
-      });
-      let stderr = '';
-      child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-      child.on('message', (msg: UIDiscoverChildMessage) => resolve(msg));
-      child.on('exit', (code) => reject(new Error(`discovery exited (${code}) without replying:\n${stderr}`)));
-      child.send({ type: 'discover', filePath });
+    const child = fork(path.join(DIST_DIR, 'ui-mode', 'ui-discover.js'), [], {
+      cwd: root,
+      execPath: tsx,
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      env: { ...process.env, NODE_PATH: path.dirname(PKG_DIR), TAPSMITH_TELEMETRY: '0' },
     });
+    let reply: UIDiscoverChildMessage;
+    try {
+      reply = await new Promise<UIDiscoverChildMessage>((resolve, reject) => {
+        let stderr = '';
+        child.stderr?.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+        child.on('message', (msg: UIDiscoverChildMessage) => resolve(msg));
+        child.on('error', reject);
+        child.on('exit', (code) => reject(new Error(`discovery exited (${code}) without replying:\n${stderr}`)));
+        child.send({ type: 'discover', filePath });
+      });
+    } finally {
+      // A hung child would otherwise outlive the test with its IPC channel open.
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    }
 
     if (reply.type === 'discover-error') throw new Error(reply.error.stack ?? reply.error.message);
     const names = (node: TestTreeNode): string[] => [node.fullName, ...(node.children ?? []).flatMap(names)];

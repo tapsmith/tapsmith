@@ -336,7 +336,7 @@ Error: 14 UNAVAILABLE: failed to connect to all addresses
 Error: Tapsmith was loaded without `import.meta.dirname`, so it cannot locate its own files.
 ```
 
-**What happened:** Tapsmith is an ES module. In a package without `"type": "module"` (the npm default, and most React Native and Expo apps), TypeScript test and config files are compiled to CommonJS, and the loader compiles Tapsmith along with them. The tsx that ships with Tapsmith (4.23 or newer) handles this, so `tapsmith test` needs no change to your project. Older tsx releases, ts-node and custom require hooks don't provide `import.meta.dirname`, and Tapsmith cannot find its own files without it.
+**What happened:** Tapsmith is an ES module. In a package without `"type": "module"` (the npm default, and most React Native and Expo apps), TypeScript test and config files are compiled to CommonJS, and the loader compiles Tapsmith along with them. The tsx that ships with Tapsmith (4.23 or newer) handles this, so `tapsmith test` needs no change to your project. Older tsx releases, and other transforms that stub out `import.meta` (some bundlers and require hooks), don't provide `import.meta.dirname`, and Tapsmith cannot find its own files without it.
 
 **Fixes:**
 
