@@ -2132,7 +2132,7 @@ class CommandHandler {
             // in (hideKeyboard right after a focusing tap on a slow runner):
             // wait for it rather than call it "nothing to dismiss".
             let appearDeadline = Date(timeIntervalSinceNow: 1.5)
-            while keyboardOnScreenNow() == false, Date() < appearDeadline {
+            while keyboardPresence() == .offScreen, Date() < appearDeadline {
                 Thread.sleep(forTimeInterval: 0.15)
             }
             Thread.sleep(forTimeInterval: 0.3)
@@ -2352,17 +2352,20 @@ class CommandHandler {
     /// came back empty (mid-transition, a slow runner), which is no evidence
     /// the keyboard left.
     private func keyboardGoneNow() -> Bool? {
-        keyboardOnScreenNow().map { !$0 }
+        keyboardPresence().map { $0 != .onScreen }
     }
 
-    /// Whether one snapshot shows a keyboard with an on-screen area; nil when
-    /// the tree could not be read or came back empty.
-    private func keyboardOnScreenNow() -> Bool? {
+    private enum KeyboardPresence { case absent, offScreen, onScreen }
+
+    /// What one snapshot shows of the keyboard: none in the tree, an element
+    /// with no on-screen area, or a keyboard on screen. nil when the tree
+    /// could not be read or came back empty.
+    private func keyboardPresence() -> KeyboardPresence? {
         guard let snapshot = try? app.snapshot(),
               !snapshot.dictionaryRepresentation.isEmpty else { return nil }
-        guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return false }
-        return KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
-            .keyboardRegion != nil
+        guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return .absent }
+        let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+        return planner.keyboardRegion == nil ? .offScreen : .onScreen
     }
 
     /// Check if a keyboard is visible in the snapshot tree by looking for
