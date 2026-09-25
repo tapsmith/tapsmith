@@ -358,6 +358,91 @@ do {
 }
 
 do {
+    // A field in a sheet whose ScrollView content has been scrolled up: the
+    // content container's frame reaches above the sheet, over the backdrop.
+    // The blank spot must stay inside the scroll view's viewport.
+    let field = R(16, 350, 370, 44)
+    let rows: [Row] = appHead + [
+        (2, .other, "", "", screen),
+        (3, .other, "", "", screen),
+        (3, .other, "", "", R(0, 300, 402, 574)),
+        (4, .scrollView, "", "", R(0, 300, 402, 574)),
+        (5, .other, "", "", R(0, 150, 402, 900)),
+        (6, .textField, "Comment", "", field),
+    ] + keyboardWindows()
+    let p = planner(rows).blankPoint(focusedFrame: field)
+    checkTrue("scrolled content in a sheet: blank spot inside the viewport",
+              p.map { R(0, 300, 402, 574).contains($0) } ?? true, "\(String(describing: p))")
+}
+
+do {
+    // A stale off-screen keyboard holding a "return" key before the real one
+    // with a "send" key: the stale key is not judged or pressed.
+    var rows = keyboardWindows(returnLabel: "send", returnId: "Send")
+    rows.insert(contentsOf: [
+        (2, .keyboard, "", "", R(0, 900, 402, 243)),
+        (3, .button, "return", "Return", R(299, 1075, 98, 56)),
+        (3, .button, "Hide keyboard", "", R(330, 1080, 60, 50)),
+    ], at: 1)
+    check("stale keyboard's return key is not the key",
+          planner(appHead + rows).returnKey(focusedInput: .textField),
+          .notPossible("the return key is \"send\", an app action"))
+    check("stale keyboard's dismiss key is not the key", planner(appHead + rows).dismissKey(), nil)
+}
+
+do {
+    // A button in the keyboard's window just above the keyboard region (an
+    // accessory bar the region does not include) blocks the blank spot.
+    let field = R(16, 132, 370, 44)
+    var kb = keyboardWindows()
+    kb.insert((3, .button, "Send", "", R(0, 180, 402, 349)), at: 3)
+    let rows: [Row] = appHead + [
+        (4, .other, "", "", R(0, 116, 402, 758)),
+        (5, .textField, "Field", "", field),
+    ] + kb
+    let p = planner(rows).blankPoint(focusedFrame: field)
+    checkTrue("keyboard-window button blocks the blank spot",
+              p.map { !R(0, 180, 402, 349).insetBy(dx: -7, dy: -7).contains($0) } ?? true, "\(String(describing: p))")
+    // A scroll view in the keyboard's window that holds the field is not
+    // dragged (the keyboard's own scroller).
+    var kb2 = keyboardWindows()
+    kb2.insert(contentsOf: [
+        (3, .scrollView, "", "", R(0, 116, 402, 400)),
+        (4, .textField, "Composer", "", R(16, 132, 200, 30)),
+    ], at: 3)
+    check("keyboard-window scroll view holding the field: no drag",
+          planner(appHead + kb2).scrollSwipeStart(focusedFrame: R(16, 132, 200, 30)), nil)
+    // An inner scroll view inside an outer one is dragged: the outer scroll
+    // view around it does not block its start point.
+    let inner = R(16, 200, 200, 30)
+    let nested: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 758)),
+        (5, .scrollView, "", "", R(0, 150, 402, 350)),
+        (6, .textField, "Field", "", inner),
+    ] + keyboardWindows()
+    checkTrue("inner scroll view inside an outer one: drag in the inner one",
+              planner(nested).scrollSwipeStart(focusedFrame: inner).map { R(0, 150, 402, 350).contains($0) } ?? false)
+    // No keyboard, field known: no drag.
+    let noKb: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 758)),
+        (5, .textField, "Field", "", inner),
+    ]
+    check("no keyboard with a known field: no drag", planner(noKb).scrollSwipeStart(focusedFrame: inner), nil)
+    // A headerless screen: the status bar strip is never the blank spot.
+    let headerless: [Row] = [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .other, "", "", R(0, 0, 402, 800)),
+        (4, .textField, "Field", "", R(16, 62, 370, 44)),
+        (4, .button, "Wall", "", R(0, 106, 402, 700)),
+    ] + keyboardWindows()
+    let hp = planner(headerless).blankPoint(focusedFrame: R(16, 62, 370, 44))
+    checkTrue("status bar strip is not a blank spot (container from y=0)",
+              hp.map { $0.y >= Planner.statusBarAllowance } ?? true, "\(String(describing: hp))")
+}
+
+do {
     // A stale off-screen keyboard element before the real one: the real one
     // still counts.
     var rows = keyboardWindows()

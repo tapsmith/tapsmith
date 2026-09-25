@@ -185,9 +185,26 @@ struct KeyboardDismissPlanner {
         return result
     }
 
+    /// A button or key on screen: a stale keyboard left off screen (a
+    /// keyboard-type switch) keeps its keys in the tree, and they are not the
+    /// keys "\n" or a tap would reach.
     private func isKeyLike(_ node: Node) -> Bool {
-        (node.elementType == .button || node.elementType == .key)
-            && node.frame.width > 0 && node.frame.height > 0
+        guard node.elementType == .button || node.elementType == .key else { return false }
+        let onScreen = node.frame.intersection(screen)
+        return !onScreen.isNull && onScreen.width > 0 && onScreen.height > 0
+    }
+
+    /// `rect` clipped to the viewports of every scroll view around node `i`:
+    /// a scrolled content container reports its full, unclipped frame, and
+    /// the part scrolled past its scroll view is not drawn there (a sheet's
+    /// backdrop may be).
+    private func clippedToScrollers(_ rect: CGRect, around i: Int) -> CGRect {
+        var rect = rect
+        for a in analyzer.ancestors(of: i) where OcclusionAnalyzer.scrollerTypes.contains(nodes[a].elementType) {
+            rect = rect.intersection(nodes[a].frame)
+            if rect.isNull { return .null }
+        }
+        return rect
     }
 
     // MARK: - 1. Scroll view drag
@@ -212,7 +229,7 @@ struct KeyboardDismissPlanner {
         for scroll in analyzer.ancestors(of: field)
         where Self.draggableScrollerTypes.contains(nodes[scroll].elementType) {
             if let w = nodes[scroll].window, windows.contains(w) { continue }
-            let visible = nodes[scroll].frame.intersection(area)
+            let visible = clippedToScrollers(nodes[scroll].frame.intersection(area), around: scroll)
             guard !visible.isNull,
                   visible.width >= Self.minScrollExtent,
                   visible.height >= Self.minScrollExtent else { continue }
@@ -223,7 +240,6 @@ struct KeyboardDismissPlanner {
 
     /// A clear start point for the drag in scroll view `scroll`, or nil.
     private func dragStart(in scroll: Int, visible: CGRect, dragX: CGFloat, dragY: CGFloat) -> CGPoint? {
-        let windows = keyboardWindows
         // Room for the drag: it ends dragY above and dragX left of the start.
         let starts = CGRect(
             x: visible.minX + dragX, y: visible.minY + dragY,
@@ -245,7 +261,8 @@ struct KeyboardDismissPlanner {
         })
         return clearestPoint(in: starts) { i in
             if i == scroll || ancestors.contains(i) { return false }
-            if let w = nodes[i].window, windows.contains(w) { return false }
+            // Keyboard-window nodes block like any other: an accessory bar's
+            // button or the predictive bar is not a blank spot.
             return !isPlain(i)
         }
     }
@@ -276,7 +293,6 @@ struct KeyboardDismissPlanner {
     func blankPoint(focusedFrame: CGRect?) -> CGPoint? {
         let area = touchableArea
         guard !area.isNull, let field = fieldIndex(focusedFrame) else { return nil }
-        let windows = keyboardWindows
         // The field's own containers (a scroll view it is in, a tap-to-dismiss
         // wrapper) are where the tap is meant to land, not in its way.
         // Only plain ones and scroll views: a cell or labeled row wrapping
@@ -288,11 +304,10 @@ struct KeyboardDismissPlanner {
         // backdrop lives (a headerless screen's root looks the same, so such a
         // screen gets no blank tap).
         for container in scopeAncestors(of: field) {
-            let rect = nodes[container].frame.intersection(area)
+            let rect = clippedToScrollers(nodes[container].frame.intersection(area), around: field)
             if rect.isNull { continue }
             let point = clearestPoint(in: rect) { i in
                 if fieldAncestors.contains(i) { return false }
-                if let w = nodes[i].window, windows.contains(w) { return false }
                 return !isPlain(i)
             }
             if let point { return point }

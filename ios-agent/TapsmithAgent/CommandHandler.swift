@@ -2142,6 +2142,14 @@ class CommandHandler {
                 if touchedScreen { snapshotFinder.clearFocusedTextInputHint() }
                 throw error
             }
+            // Off screen first, out of the tree a moment later: give it that
+            // moment on every success path, so isKeyboardShown() (any keyboard
+            // element) agrees straight after. Best effort — it is already
+            // off the screen.
+            let treeDeadline = Date(timeIntervalSinceNow: 1.0)
+            while keyboardPresence() == .offScreen, Date() < treeDeadline {
+                Thread.sleep(forTimeInterval: 0.1)
+            }
             // The keyboard leaving the hierarchy precedes the app's own
             // animated relayout completing — give that a beat to settle.
             Thread.sleep(forTimeInterval: 0.35)
@@ -2258,14 +2266,6 @@ class CommandHandler {
             if outcome == .keyboardStayed { touchedScreen = true }
             if outcome == .keyboardStayed, waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) {
                 NSLog("[TapsmithCommand] hideKeyboard: dismissed by \(strategy.summary)")
-                // Off screen first, out of the tree a moment later: give it
-                // that moment, so isKeyboardShown() (any keyboard element)
-                // agrees straight after. Best effort — it is already gone
-                // from the screen.
-                let treeDeadline = Date(timeIntervalSinceNow: 1.0)
-                while keyboardPresence() == .offScreen, Date() < treeDeadline {
-                    Thread.sleep(forTimeInterval: 0.1)
-                }
                 return
             }
             attempts.append((strategy, outcome))
