@@ -17,7 +17,7 @@ describe('moduleFormatError', () => {
   ])('explains the cause and the fix when import.meta.dirname is %s', (_label, url) => {
     const message = moduleFormatError(url);
     expect(message).toMatch(/loaded without `import\.meta\.dirname`/);
-    expect(message).toMatch(/tsx .*4\.23/);
+    expect(message).toContain('tsx 4.21.0 or older');
     expect(message).toContain('npx tapsmith test');
     expect(message).toContain('"type": "module"');
   });
@@ -27,7 +27,7 @@ describe('moduleFormatError', () => {
 // import.meta at load time (grpc-client.js resolves its proto path on import),
 // or the user sees that module's `paths[0]` TypeError instead. A load hook
 // blanks import.meta.dirname/filename in the built SDK the way an older
-// CommonJS transform does (tsx 4.21 fills in only import.meta.url), then
+// CommonJS transform does (tsx 4.21.0 fills in only import.meta.url), then
 // imports the package entry point.
 const DIST_INDEX = path.resolve(__dirname, '..', '..', 'dist', 'index.js');
 
@@ -58,7 +58,7 @@ function importWithBlanked(pattern: string): { stdout: string; stderr: string } 
 
 describe.skipIf((!fs.existsSync(DIST_INDEX) && !process.env.CI) || !HAS_REGISTER_HOOKS)('the built SDK loaded without import.meta.dirname', () => {
   it.each([
-    // tsx 4.21: import.meta.url is filled in, dirname and filename are not.
+    // tsx 4.21.0: import.meta.url is filled in, dirname and filename are not.
     ['dirname and filename are missing', 'import\\.meta\\??\\.(dirname|filename)'],
     // A transform that stubs out import.meta itself.
     ['import.meta itself is undefined', 'import\\.meta(?![\\w$])'],
