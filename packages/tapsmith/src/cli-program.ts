@@ -124,6 +124,9 @@ export interface RunCliDeps {
   beforeAction?(command: string, opts: Record<string, unknown>): void;
 }
 
+/** Hidden `test` flag the tsx re-exec (cli.ts) appends for its child. */
+const TSX_REEXEC_FLAG = '--__tsx-reexec';
+
 // ─── Value parsers ───
 
 function positiveInt(flag: string) {
@@ -315,7 +318,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--reporter <name>', 'Reporter: list, line, dot, json, junit, html, github, blob', nonEmpty('--reporter'))
     .option('--project <name>', 'Only run this project from the config (repeatable; dependencies run too)', collectProject)
     .option('--force-install', 'Reinstall the app even if it is already installed', false)
-    .addOption(new Option('--__tsx-reexec').hideHelp().default(false))
+    .addOption(new Option(TSX_REEXEC_FLAG).hideHelp().default(false))
     .addHelpText('after', TEST_EXAMPLES)
     .action(async (files: string[], opts: Record<string, unknown>) => {
       const args: TestCommandArgs = {
@@ -514,7 +517,11 @@ function prepareCommandArgs(cmd: Command, args: string[]): string[] {
   for (let i = 0; i < args.length; i++) {
     const token = args[i]!;
     if (token === '--') {
-      out.push(...args.slice(i));
+      // The tsx re-exec appends its marker to the user's argv, so it can land
+      // after `--`; it is never a file.
+      const operands = args.slice(i + 1);
+      if (operands.includes(TSX_REEXEC_FLAG)) out.push(TSX_REEXEC_FLAG);
+      out.push('--', ...operands.filter((t) => t !== TSX_REEXEC_FLAG));
       break;
     }
     const shortEquals = /^(-[a-zA-Z])=(.*)$/s.exec(token);

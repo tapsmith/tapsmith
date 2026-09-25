@@ -159,6 +159,14 @@ describe('tapsmith test', () => {
     expect((await testArgs(['a.test.ts', '--__tsx-reexec'])).tsxReexec).toBe(true);
   });
 
+  it('reads the re-exec marker appended after --, instead of taking it for a file', async () => {
+    // The tsx re-exec appends the marker to the user's argv, which may end in `-- <files>`.
+    expect(await testArgs(['--', '--odd.test.ts', '--__tsx-reexec'])).toMatchObject({
+      files: ['--odd.test.ts'],
+      tsxReexec: true,
+    });
+  });
+
   describe('value flags never swallow the next flag (PILOT-260)', () => {
     it.each([
       [['--device', '--shard=abc'], '--device'],
@@ -239,6 +247,10 @@ describe('help', () => {
       expect(h.calls).toEqual([]);
       expect(h.out).toMatch(/Usage: tapsmith/);
     }
+  });
+
+  it('help <unknown> is an unknown-command error', async () => {
+    expect((await usageError(['help', 'tset'])).err).toMatch(/unknown command 'tset'[\s\S]*Did you mean test\?/);
   });
 
   it('--help wins over other flags on the command line', async () => {
