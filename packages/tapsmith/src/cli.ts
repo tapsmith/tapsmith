@@ -1927,22 +1927,10 @@ async function main(): Promise<void> {
   }
 
   if (args.command === 'merge-reports') {
-    const blobDir = args.files[0] ?? 'blob-report';
-    const resolvedDir = path.resolve(process.cwd(), blobDir);
-    if (!fs.existsSync(resolvedDir)) {
-      console.error(red(`No blob directory found at ${resolvedDir}`));
-      process.exit(1);
-    }
-    const { mergeBlobs } = await import('./reporters/blob.js');
+    const { runMergeReports } = await import('./merge-reports.js');
     const config = await loadConfig(undefined, args.config);
-    const result = mergeBlobs(resolvedDir);
-    console.log(bold('Merging blob reports'));
-    console.log(dim(resolvedDir));
-    console.log();
-    const reporters = await createReporters(config.reporter ?? 'list');
-    const dispatcher = new ReporterDispatcher(reporters);
-    dispatcher.onRunStart(config, 0);
-    await dispatcher.onRunEnd(result);
+    const code = await runMergeReports(args.files[0] ?? 'blob-report', config);
+    if (code !== 0) process.exit(code);
     return;
   }
 
@@ -2242,6 +2230,14 @@ async function main(): Promise<void> {
     }
     if (testFiles.length === 0) {
       console.log(dim(`Shard ${current}/${total}: no test files in this shard.`));
+      // Still leave this shard's (empty) blob, or merge-reports would report
+      // the shard as missing whenever there are fewer files than shards.
+      const { writeEmptyShardBlob } = await import('./merge-reports.js');
+      const refusal = await writeEmptyShardBlob(config);
+      if (refusal) {
+        console.error(red(refusal));
+        process.exit(1);
+      }
       process.exit(0);
     }
     shardMessage = `Shard ${current}/${total}: running ${testFiles.length} file(s)`;
@@ -2383,6 +2379,19 @@ async function main(): Promise<void> {
   const initialProject = projects.find((p) => p.testFiles.length > 0) ?? projects[0];
   const initialEffectiveConfig = initialProject.effectiveConfig;
   const shouldShowLaunchProgress = args.ui || !args.watch;
+  // Empty blob output directories here: after every argument refusal (a
+  // refused run must not cost the previous blob) and before any device
+  // launch (a run that dies launching must not leave the previous blob
+  // posing as its own). UI mode reports through its own server, never these
+  // reporters, so it must not empty a directory it will not rewrite.
+  if (!args.ui) {
+    const { prepareBlobOutputDirs } = await import('./merge-reports.js');
+    const refusal = prepareBlobOutputDirs(reporters, config);
+    if (refusal) {
+      console.error(red(refusal));
+      process.exit(1);
+    }
+  }
   printTapsmithBanner();
   // After the tsx re-exec, so it prints exactly once, and before any worker
   // is forked, so no child ever races it (PILOT-330).

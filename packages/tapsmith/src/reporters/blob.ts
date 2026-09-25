@@ -13,8 +13,11 @@ import type { TapsmithReporter, FullResult } from '../reporter.js';
 import type { TapsmithConfig } from '../config.js';
 import type { TestResult, SuiteResult } from '../runner.js';
 
+/** The blob format this version writes, and the newest it can merge. */
+const BLOB_VERSION = 1;
+
 interface BlobData {
-  version: 1
+  version: typeof BLOB_VERSION
   startTime: string
   config: {
     rootDir: string
@@ -50,23 +53,75 @@ interface SerializedSuite {
   suites: SerializedSuite[]
 }
 
+/**
+ * The blob reporter's outputDir is, or contains, the project root or the
+ * working directory — clearing it would delete the project. A config error:
+ * `tapsmith test` reports it on one line and exits before launching devices.
+ */
+export class BlobOutputDirError extends Error {
+  override name = 'BlobOutputDirError';
+}
+
 export class BlobReporter implements TapsmithReporter {
   private _outputDir: string;
   private _config?: TapsmithConfig;
   private _startTime = new Date();
+  private _refusal?: Error;
 
   constructor(options: Record<string, unknown> = {}) {
     this._outputDir = (options.outputDir as string) ?? 'blob-report';
   }
 
-  onRunStart(config: TapsmithConfig, _fileCount: number): void {
+  /**
+   * Clears the output directory, as Playwright's blob reporter does. Blob file
+   * names are unique per run, so without this a second run into the same
+   * directory leaves two blobs and `merge-reports` counts every test twice.
+   * Unlike Playwright (which clears when it writes), this clears at run start
+   * — `tapsmith test` calls it as soon as reporters exist, before any device
+   * launch — so a run that dies before the end leaves no blob at all, rather
+   * than the previous run's blob posing as this run's shard.
+   */
+  prepareOutputDir(config: TapsmithConfig): void {
     this._config = config;
+    this._refusal = undefined;
+    const outputDir = this._resolveOutputDir();
+    for (const protectedDir of new Set([path.resolve(config.rootDir ?? process.cwd()), process.cwd()])) {
+      if (containsDir(outputDir, protectedDir)) {
+        // Remembered so onRunEnd writes nothing either: the dispatcher logs
+        // and swallows hook errors, and a blob dropped into the project root
+        // would be picked up by the next merge.
+        this._refusal = new BlobOutputDirError(
+          `Blob reporter outputDir ${outputDir} contains the project root or working directory (${protectedDir}). `
+          + 'It is cleared at the start of every run; point outputDir at a dedicated directory such as "blob-report".',
+        );
+        throw this._refusal;
+      }
+    }
+    try {
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    } catch (err) {
+      // A blob that can't be removed would be merged beside this run's, so
+      // this run writes none either (onRunEnd rethrows the refusal).
+      this._refusal = new BlobOutputDirError(
+        `Cannot empty blob reporter outputDir ${outputDir}: ${(err as Error).message}`,
+      );
+      throw this._refusal;
+    }
+  }
+
+  onRunStart(config: TapsmithConfig, _fileCount: number): void {
     this._startTime = new Date();
+    this.prepareOutputDir(config);
+  }
+
+  private _resolveOutputDir(): string {
+    const rootDir = this._config?.rootDir ?? process.cwd();
+    return path.resolve(rootDir, this._outputDir);
   }
 
   async onRunEnd(result: FullResult): Promise<void> {
-    const rootDir = this._config?.rootDir ?? process.cwd();
-    const outputDir = path.resolve(rootDir, this._outputDir);
+    if (this._refusal) throw this._refusal;
+    const outputDir = this._resolveOutputDir();
     fs.mkdirSync(outputDir, { recursive: true });
 
     // Encode screenshots as base64, copy traces/videos as files
@@ -123,7 +178,7 @@ export class BlobReporter implements TapsmithReporter {
     });
 
     const blob: BlobData = {
-      version: 1,
+      version: BLOB_VERSION,
       startTime: this._startTime.toISOString(),
       config: {
         rootDir: this._config?.rootDir ?? process.cwd(),
@@ -151,50 +206,296 @@ export class BlobReporter implements TapsmithReporter {
 // ─── Merge utility ───
 
 /**
+ * A blob directory that cannot be merged: no blobs, a corrupt or foreign
+ * file, a newer blob format, or a shard set that holds a shard twice or mixes
+ * runs. The message is the whole user-facing explanation, so the CLI prints
+ * it without a stack. (A *missing* shard is not thrown: the shards that are
+ * there still merge, and {@link incompleteMergeMessage} reports the hole.)
+ */
+export class BlobMergeError extends Error {
+  override name = 'BlobMergeError';
+}
+
+interface ParsedBlob {
+  file: string
+  blob: BlobData
+}
+
+interface MergeInfo {
+  blobCount: number
+  shardTotal?: number
+  missingShards: number[]
+}
+
+const mergeInfo = new WeakMap<FullResult, MergeInfo>();
+
+/**
  * Merge multiple blob reports into a single FullResult.
  * Used by `npx tapsmith merge-reports <dir>`.
+ *
+ * Throws {@link BlobMergeError} rather than merging something misleading:
+ * an empty directory (Playwright: "No report files found"), an invalid file,
+ * a blob from a newer Tapsmith, or a sharded set that holds a shard twice,
+ * mixes shard splits, or mixes in unsharded blobs. Unsharded-only sets merge
+ * as-is, any number of them, as Playwright does. A set missing a shard merges
+ * what is there with status `failed`; {@link incompleteMergeMessage} says so.
  */
 export function mergeBlobs(blobDir: string): FullResult {
-  const files = fs.readdirSync(blobDir).filter((f) => f.endsWith('.jsonl')).sort();
+  let entries: string[];
+  try {
+    if (!fs.statSync(blobDir).isDirectory()) {
+      throw new BlobMergeError(`${blobDir} is not a directory`);
+    }
+    entries = fs.readdirSync(blobDir);
+  } catch (err) {
+    if (err instanceof BlobMergeError) throw err;
+    throw new BlobMergeError(`Cannot read blob directory ${blobDir}: ${(err as Error).message}`);
+  }
+  const files = entries.filter((f) => f.endsWith('.jsonl')).sort();
+  if (files.length === 0) {
+    throw new BlobMergeError(`No blob reports (*.jsonl) found in ${blobDir}`);
+  }
+
+  const blobs = files.map((file) => ({ file, blob: parseBlob(blobDir, file) }));
+  const { total: shardTotal, missing: missingShards } = checkShards(blobs);
+  blobs.sort((a, b) =>
+    (a.blob.shard?.current ?? 0) - (b.blob.shard?.current ?? 0) || a.file.localeCompare(b.file));
 
   const allTests: TestResult[] = [];
   const allSuites: SuiteResult[] = [];
   let totalDuration = 0;
 
-  for (const file of files) {
-    const content = fs.readFileSync(path.join(blobDir, file), 'utf-8').trim();
-    const blob: BlobData = JSON.parse(content);
-
+  // First pass: validate and restore every blob, writing nothing, so a
+  // refused merge leaves the directory exactly as it found it.
+  for (const { file, blob } of blobs) {
     totalDuration = Math.max(totalDuration, blob.duration);
+    try {
+      checkAttachmentKeys(file, blob);
+      allTests.push(...blob.tests.map((t) => restoreTest(t, blobDir)));
+      allSuites.push(...blob.suites.map((s) => deserializeSuite(s, blobDir)));
+    } catch (err) {
+      if (err instanceof BlobMergeError) throw err;
+      throw new BlobMergeError(
+        `Invalid blob file ${file}: malformed test or suite entry (${(err as Error).message})`,
+      );
+    }
+  }
 
-    // Restore screenshots to disk
-    if (blob.screenshots) {
-      for (const [key, base64] of Object.entries(blob.screenshots)) {
-        const screenshotPath = path.join(blobDir, key);
+  // Second pass: restore screenshots to disk.
+  for (const { file, blob } of blobs) {
+    if (!isRecord(blob.screenshots)) continue;
+    for (const [key, base64] of Object.entries(blob.screenshots)) {
+      if (typeof base64 !== 'string') continue;
+      const screenshotPath = path.join(blobDir, key);
+      try {
         if (!fs.existsSync(screenshotPath)) {
           fs.writeFileSync(screenshotPath, Buffer.from(base64, 'base64'));
         }
+      } catch (err) {
+        throw new BlobMergeError(
+          `Cannot restore screenshot ${key} from ${file} into ${blobDir}: ${(err as Error).message}`,
+        );
       }
-    }
-
-    // Restore tests
-    for (const t of blob.tests) {
-      allTests.push(restoreTest(t, blobDir));
-    }
-
-    // Restore suites
-    for (const s of blob.suites) {
-      allSuites.push(deserializeSuite(s, blobDir));
     }
   }
 
   const hasFailed = allTests.some((t) => t.status === 'failed');
-  return {
-    status: hasFailed ? 'failed' : 'passed',
+  const result: FullResult = {
+    // A merge with a hole in it is not a pass, whatever the shards present say.
+    status: hasFailed || missingShards.length > 0 ? 'failed' : 'passed',
     duration: totalDuration,
     tests: allTests,
     suites: allSuites,
   };
+  mergeInfo.set(result, { blobCount: blobs.length, shardTotal, missingShards });
+  return result;
+}
+
+/**
+ * For a merge missing one or more shards, the error explaining which; else
+ * undefined. `merge-reports` still reports the shards that are there (a CI
+ * report with a hole beats no report), then prints this and exits 1.
+ */
+export function incompleteMergeMessage(result: FullResult): string | undefined {
+  const info = mergeInfo.get(result);
+  if (!info?.shardTotal || info.missingShards.length === 0) return undefined;
+  const { shardTotal: total, missingShards: missing } = info;
+  const found = presentShards(info);
+  return `Missing shard${missing.length === 1 ? '' : 's'} ${missing.map((n) => `${n}/${total}`).join(', ')}: `
+    + `found blob reports for shard${found.length === 1 ? '' : 's'} ${found.join(', ')} of ${total}. `
+    + 'Check that every shard job finished and uploaded its blob-report directory.';
+}
+
+function presentShards(info: MergeInfo): number[] {
+  const present: number[] = [];
+  for (let i = 1; i <= (info.shardTotal ?? 0); i++) if (!info.missingShards.includes(i)) present.push(i);
+  return present;
+}
+
+/**
+ * One line naming what was merged and the merged status, e.g.
+ * `Merged 3 blob reports (shards 1–3 of 3): failed — 10 passed, 2 failed`.
+ * `merge-reports` exits 0 whatever the status (as Playwright's does), so this
+ * line is where a failed merge is stated outright.
+ */
+export function describeMergedBlobs(result: FullResult): string {
+  const info = mergeInfo.get(result);
+  const count = info?.blobCount ?? 0;
+  let what = `Merged ${count} blob report${count === 1 ? '' : 's'}`;
+  if (info?.shardTotal) {
+    what += info.missingShards.length === 0
+      ? ` (shards 1–${info.shardTotal} of ${info.shardTotal})`
+      : ` (shards ${presentShards(info).join(', ')} of ${info.shardTotal}; `
+        + `missing ${info.missingShards.map((n) => `${n}/${info.shardTotal}`).join(', ')})`;
+  }
+  const counts = (['passed', 'failed', 'skipped'] as const)
+    .map((status) => [status, result.tests.filter((t) => t.status === status).length] as const)
+    .filter(([status, n]) => n > 0 || status === 'passed')
+    .map(([status, n]) => `${n} ${status}`);
+  return `${what}: ${result.status} — ${counts.join(', ')}`;
+}
+
+function parseBlob(blobDir: string, file: string): BlobData {
+  const invalid = (reason: string) => new BlobMergeError(`Invalid blob file ${file}: ${reason}`);
+  let content: string;
+  try {
+    content = fs.readFileSync(path.join(blobDir, file), 'utf-8').trim();
+  } catch (err) {
+    throw invalid(`cannot read it (${(err as Error).message})`);
+  }
+  if (!content) throw invalid('the file is empty');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err) {
+    throw invalid(`not valid JSON (${(err as Error).message})`);
+  }
+  if (!isRecord(parsed)) throw invalid('not a JSON object (not a Tapsmith blob report?)');
+  const { version } = parsed;
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 1) {
+    throw invalid('missing or malformed "version"');
+  }
+  if (version > BLOB_VERSION) {
+    throw new BlobMergeError(
+      `Blob report ${file} was created with a newer version of Tapsmith (blob format ${version}; `
+      + `this version reads up to ${BLOB_VERSION}). Upgrade Tapsmith to merge it.`,
+    );
+  }
+  for (const key of ['tests', 'suites'] as const) {
+    if (!Array.isArray(parsed[key])) throw invalid(`missing or malformed "${key}" (not a Tapsmith blob report?)`);
+  }
+  if (typeof parsed.duration !== 'number') throw invalid('missing or malformed "duration"');
+  const { shard } = parsed;
+  if (shard !== undefined && shard !== null) {
+    const ok = isRecord(shard)
+      && Number.isInteger(shard.current) && Number.isInteger(shard.total)
+      && (shard.current as number) >= 1 && (shard.current as number) <= (shard.total as number);
+    if (!ok) throw invalid('malformed "shard"');
+  }
+  return parsed as unknown as BlobData;
+}
+
+/**
+ * Sharded blobs must be one split, each shard at most once, with no unsharded
+ * blob mixed in (that is a stale full run, which would count every test
+ * twice). Returns the split's total and any shards missing from it; both
+ * empty when nothing is sharded.
+ */
+function checkShards(blobs: ParsedBlob[]): { total?: number; missing: number[] } {
+  const sharded = blobs.filter((b) => b.blob.shard);
+  if (sharded.length === 0) return { missing: [] };
+
+  const first = sharded[0];
+  const unsharded = blobs.find((b) => !b.blob.shard);
+  if (unsharded) {
+    throw new BlobMergeError(
+      `Blob reports mix sharded and unsharded runs (${first.file} is shard ${shardLabel(first)}, `
+      + `${unsharded.file} is not sharded). Merge each run from its own directory.`,
+    );
+  }
+  const total = first.blob.shard!.total;
+  const other = sharded.find((b) => b.blob.shard!.total !== total);
+  if (other) {
+    throw new BlobMergeError(
+      `Blob reports come from different shard splits (${first.file} is shard ${shardLabel(first)}, `
+      + `${other.file} is shard ${shardLabel(other)}). Merge each run from its own directory.`,
+    );
+  }
+
+  const byShard = new Map<number, string[]>();
+  for (const b of sharded) {
+    const current = b.blob.shard!.current;
+    byShard.set(current, [...(byShard.get(current) ?? []), b.file]);
+  }
+  for (const [current, files] of [...byShard].sort(([a], [b]) => a - b)) {
+    if (files.length > 1) {
+      throw new BlobMergeError(
+        `Duplicate blob reports for shard ${current}/${total}: ${files.join(', ')}. `
+        + 'Each shard must be merged once — remove the stale file, '
+        + 'or merge runs (e.g. different platforms) from separate directories.',
+      );
+    }
+  }
+
+  const missing: number[] = [];
+  for (let i = 1; i <= total; i++) if (!byShard.has(i)) missing.push(i);
+  return { total, missing };
+}
+
+/**
+ * Screenshot, trace and video keys are bare file names inside the blob
+ * directory (the reporter writes basenames). Anything else — `../x`, an
+ * absolute path — would read or write outside it, so the blob is refused.
+ */
+function checkAttachmentKeys(file: string, blob: BlobData): void {
+  const keys: unknown[] = isRecord(blob.screenshots) ? Object.keys(blob.screenshots) : [];
+  const visit = (t: SerializedTest): void => {
+    keys.push(t.screenshotKey, t.traceKey, t.videoKey);
+  };
+  const visitSuite = (s: SerializedSuite): void => {
+    (Array.isArray(s?.tests) ? s.tests : []).forEach(visit);
+    (Array.isArray(s?.suites) ? s.suites : []).forEach(visitSuite);
+  };
+  blob.tests.forEach((t) => { if (isRecord(t)) visit(t); });
+  blob.suites.forEach((s) => { if (isRecord(s)) visitSuite(s); });
+  for (const key of keys) {
+    if (key === undefined || key === null) continue;
+    if (typeof key !== 'string' || key === '' || key === '.' || key === '..'
+      || path.basename(key) !== key || key.includes('/') || key.includes('\\')
+      // Restored into the merge directory, a *.jsonl would be read as a blob next time.
+      || key.endsWith('.jsonl')) {
+      throw new BlobMergeError(`Invalid blob file ${file}: attachment name ${JSON.stringify(key)} is not a plain file name`);
+    }
+  }
+}
+
+function shardLabel(b: ParsedBlob): string {
+  return `${b.blob.shard!.current}/${b.blob.shard!.total}`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * True when `dir` is `target` or one of its ancestors. Compared on real
+ * paths (macOS reports cwd as /private/tmp/… for /tmp/…) and case-folded on
+ * the platforms whose default filesystems are case-insensitive, so neither a
+ * symlink nor a case variant slips an ancestor past the guard.
+ */
+function containsDir(dir: string, target: string): boolean {
+  if (!fs.existsSync(dir)) return false; // nothing there to delete
+  const norm = (p: string): string => {
+    let real = p;
+    try {
+      real = fs.realpathSync.native(p);
+    } catch {
+      // keep the resolved path
+    }
+    return process.platform === 'darwin' || process.platform === 'win32' ? real.toLowerCase() : real;
+  };
+  const rel = path.relative(norm(dir), norm(target));
+  return rel === '' || (rel.split(path.sep)[0] !== '..' && !path.isAbsolute(rel));
 }
 
 function restoreTest(t: SerializedTest, blobDir: string): TestResult {
@@ -226,3 +527,4 @@ function deserializeSuite(
     suites: s.suites.map((child) => deserializeSuite(child, blobDir)),
   };
 }
+
