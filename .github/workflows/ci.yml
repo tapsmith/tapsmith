@@ -55,14 +55,17 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Before the unit tests: cjs-project.test.ts drives the built package
+      # through a scratch CommonJS project, and fails (not skips) under CI
+      # when dist/ is missing.
+      - name: Build
+        run: npm run build
+
       - name: Unit tests
         run: npx vitest run
 
       - name: Unused code check (knip)
         run: npm run knip
-
-      - name: Build
-        run: npm run build
 
       # The E2E helper scripts (trace-archive content checks, xctestrun
       # discovery) are plain Node with their own node:test suites and need no
