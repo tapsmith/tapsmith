@@ -55,6 +55,13 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # cjs-project.test.ts and module-format-guard.test.ts drive the built SDK
+      # (and fail, not skip, under CI when it is missing). Only the tsc output
+      # is needed; the full build stays below so a broken web-app build does
+      # not hide the unit-test results.
+      - name: Build SDK for the unit tests
+        run: npx tsc
+
       - name: Unit tests
         run: npx vitest run
 
