@@ -715,10 +715,11 @@ export function validateRecordingModes(
   const modes: readonly string[] = RECORDING_MODES;
   for (const key of ['trace', 'video'] as const) {
     const value: unknown = options[key];
-    // false and null have always meant off in untyped configs (`CI ? 'on' : false`).
-    if (value == null || value === false) continue;
+    // false, null and '' have always meant off in untyped configs
+    // (`CI ? 'on' : false`, `process.env.TRACE ?? 'off'` with an empty variable).
+    if (value == null || value === false || value === '') continue;
     const mode: unknown = typeof value === 'object' ? (value as { mode?: unknown }).mode : value;
-    if (mode == null && typeof value === 'object') continue;
+    if (typeof value === 'object' && (mode == null || mode === false || mode === '')) continue;
     if (typeof mode !== 'string' || !modes.includes(mode)) {
       throw new Error(
         `${source}: ${key} must be one of ${modes.map((m) => `'${m}'`).join(', ')} (got ${JSON.stringify(mode)})`,

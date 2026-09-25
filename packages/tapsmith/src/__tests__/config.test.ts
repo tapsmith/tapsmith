@@ -638,6 +638,11 @@ describe('defineConfig()', () => {
     expect(() => defineConfig({ [key]: false as any })).not.toThrow();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say false / null
     expect(() => defineConfig({ [key]: { mode: null } as any })).not.toThrow();
+    // `process.env.TRACE ?? 'off'` with the variable set but empty: nothing recorded, as before.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say '' / false
+    expect(() => defineConfig({ [key]: '' as any })).not.toThrow();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say '' / false
+    expect(() => defineConfig({ [key]: { mode: false } as any })).not.toThrow();
     expect(() => defineConfig({ [key]: undefined })).not.toThrow();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say null
     expect(() => defineConfig({ [key]: null as any })).not.toThrow();

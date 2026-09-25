@@ -559,12 +559,15 @@ function prepareCommandArgs(cmd: Command, args: string[]): string[] {
       out.push('--', ...operands.filter((t) => t !== TSX_REEXEC_FLAG));
       break;
     }
-    // `-j=4`, or a bundle ending in a value flag, `-wd=serial`.
+    // `-j=4`, or a bundle of boolean flags ending in a value flag, `-wd=serial`.
+    // A value flag earlier in the bundle takes the rest of it (`-dj=4` is the
+    // device "j=4"), so that is left to commander.
     const shortEquals = /^-([a-zA-Z]+)=(.*)$/s.exec(token);
     if (shortEquals) {
       const letters = shortEquals[1]!;
       const option = byFlag.get(`-${letters[letters.length - 1]}`);
-      if (option?.long) {
+      const earlierValueFlag = [...letters.slice(0, -1)].some((l) => byFlag.has(`-${l}`));
+      if (option?.long && !earlierValueFlag) {
         if (letters.length > 1) out.push(`-${letters.slice(0, -1)}`);
         out.push(`${option.long}=${shortEquals[2]}`);
         continue;

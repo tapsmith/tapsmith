@@ -405,6 +405,13 @@ describe('commands', () => {
     expect(await testArgs(['-wd=emulator-5554'])).toMatchObject({ watch: true, device: 'emulator-5554' });
   });
 
+  it('a value flag early in a bundle takes the rest of it, never a rewritten long flag', async () => {
+    // Standard short-option reading (`-dserial`): the device is "j=4". It must not become "--workers=4".
+    const args = await testArgs(['-dj=4']);
+    expect(args.device).toBe('j=4');
+    expect(args.workers).toBeUndefined();
+  });
+
   it.each(['configure-ios-network', 'refresh-ios-network', 'verify-ios-network'])('%s refuses an empty UDID', async (command) => {
     expect((await usageError([command, ''])).err).toMatch(/UDID/);
   });

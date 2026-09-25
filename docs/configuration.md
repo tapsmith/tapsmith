@@ -125,7 +125,7 @@ type TraceMode = "off" | "on" | "on-first-retry" | "on-all-retries" | "retain-on
 
 The retry-only modes (`"on-first-retry"`, `"on-all-retries"`) require `retries >= 1` to ever produce a trace; the runner warns at startup if `retries` is 0.
 
-Any other value — in the string form or as `mode` in the object form, at the root, in a project's `use`, or in `test.use()` — fails config loading with `trace must be one of 'off', 'on', … (got "…")`, so a typo in an untyped `.js`/`.mjs` config cannot silently turn recording off. `false` and `null` mean `"off"` (so `trace: process.env.CI ? 'on' : false` works). `video` is checked the same way.
+Any other value — in the string form or as `mode` in the object form, at the root, in a project's `use`, or in `test.use()` — fails config loading with `trace must be one of 'off', 'on', … (got "…")`, so a typo in an untyped `.js`/`.mjs` config cannot silently turn recording off. `false`, `null` and `''` mean `"off"` (so `trace: process.env.CI ? 'on' : false` works). `video` is checked the same way.
 
 ### `TraceConfig`
 
