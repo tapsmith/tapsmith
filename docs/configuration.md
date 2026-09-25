@@ -624,6 +624,9 @@ Tapsmith searches for configuration files in this order:
 2. `tapsmith.config.js`
 3. `tapsmith.config.mjs`
 
-If no config file is found, Tapsmith uses the default values for all options.
+Tapsmith loads the first file that exists. If that file cannot be loaded, the command stops with
+the error; it does not try the next candidate. Tapsmith uses the default values for all options
+only when no config file exists.
 
-For `.ts` config files, Tapsmith relies on `tsx` or `ts-node` being available in your environment. If you installed Tapsmith via npm, this should work out of the box.
+`.ts` config files need no TypeScript loader in your environment: Tapsmith imports them natively
+when Node can, and otherwise through its bundled `tsx`.
