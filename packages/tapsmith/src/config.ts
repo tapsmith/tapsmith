@@ -494,6 +494,7 @@ function applyConfigDefaults(
     config.launchEmulators = true;
   }
   validateAppResetOptions(raw);
+  validateRecordingModes(raw);
   validateUiOptions(raw);
   validateDevicesOption(raw);
   return config;
@@ -678,6 +679,50 @@ function validateUiOptions(raw: Partial<TapsmithConfig>): void {
   if (raw.ui.prepareDelayMs !== undefined
     && (!Number.isInteger(raw.ui.prepareDelayMs) || raw.ui.prepareDelayMs < 0)) {
     throw new Error(`config: ui.prepareDelayMs must be a non-negative integer (got ${JSON.stringify(raw.ui.prepareDelayMs)})`);
+  }
+}
+
+/**
+ * Reject an unknown `trace` / `video` mode, in its string or `{ mode }` form.
+ * An unknown mode used to record nothing without a word (PILOT-254): a CI
+ * pipeline with a typo looked healthy until someone needed a failure trace.
+ * Shared by config loading, project `use`, and `test.use()`.
+ */
+// The trace/video modes, mirrored from TRACE_MODES / VIDEO_MODES rather than
+// imported: config.ts keeps its local imports type-only so it loads under
+// plain Node type stripping (config.test.ts runs it that way). The checks
+// below stop compiling if this list and either type drift apart.
+const RECORDING_MODES = [
+  'off',
+  'on',
+  'on-first-retry',
+  'on-all-retries',
+  'retain-on-failure',
+  'retain-on-first-failure',
+  'retain-on-failure-and-retries',
+] as const;
+type RecordingMode = (typeof RECORDING_MODES)[number];
+type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+const _traceModesMatch: SameUnion<TraceMode, RecordingMode> = true;
+const _videoModesMatch: SameUnion<VideoMode, RecordingMode> = true;
+void _traceModesMatch;
+void _videoModesMatch;
+
+export function validateRecordingModes(
+  options: Pick<Partial<TapsmithConfig>, 'trace' | 'video'>,
+  source = 'config',
+): void {
+  const modes: readonly string[] = RECORDING_MODES;
+  for (const key of ['trace', 'video'] as const) {
+    const value: unknown = options[key];
+    if (value == null) continue;
+    const mode: unknown = typeof value === 'object' ? (value as { mode?: unknown }).mode : value;
+    if (mode === undefined && typeof value === 'object') continue;
+    if (typeof mode !== 'string' || !modes.includes(mode)) {
+      throw new Error(
+        `${source}: ${key} must be one of ${modes.map((m) => `'${m}'`).join(', ')} (got ${JSON.stringify(mode)})`,
+      );
+    }
   }
 }
 

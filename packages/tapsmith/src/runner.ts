@@ -46,7 +46,7 @@ import {
   type ResetCapabilities,
 } from './app-reset.js';
 import { executeAppReset, type ExecuteAppResetOptions, type SessionPreflightContext } from './session-preflight.js';
-import { deviceGroupSize, resolveDeviceGroup, validateAppResetOptions, validateDevicesOption } from './config.js';
+import { deviceGroupSize, resolveDeviceGroup, validateAppResetOptions, validateDevicesOption, validateRecordingModes } from './config.js';
 import { onActionProgress } from './action-progress.js';
 import { runInAttemptContext, type AttemptToken } from './attempt-fence.js';
 import { matchesTestFilter } from './test-filter.js';
@@ -552,6 +552,7 @@ function createTestFn<F extends object = TestFixtures>(registry: FixtureRegistry
           throw new Error('test.use() retries must be a non-negative number');
         }
         validateAppResetOptions(options, 'test.use()');
+        validateRecordingModes(options, 'test.use()');
         if (options.devices !== undefined) {
           // Every other device-shaping key is silently ignored here (the worker
           // is bound before the file is imported); a group declared this way
