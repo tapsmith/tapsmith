@@ -32,11 +32,15 @@ Or from the CLI:
 npx tapsmith test --trace on
 ```
 
-The `--trace on` flag enables tracing with all defaults, including `network: true`. To disable network capture while keeping other trace features, use `--no-network`:
+The `--trace on` flag enables tracing with all defaults, including `network: true`. To disable network capture while keeping other trace features, set `network: false` in the config's object form:
 
-```bash
-npx tapsmith test --trace on --no-network
+```typescript
+export default defineConfig({
+  trace: { mode: 'on', network: false },
+})
 ```
+
+A `--trace <mode>` flag replaces the config's whole `trace` value, `network` included, so keep the mode in the config for this.
 
 When network capture is off, `device.route()` silently registers the handler but it will never fire because no traffic passes through the proxy.
 

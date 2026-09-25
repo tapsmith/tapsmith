@@ -2351,6 +2351,23 @@ Summary: 12 passed | 45.2s (setup 30.1s, tests 15.1s)
 
 ## CLI
 
+Every command takes only its own flags, and answers `--help` (or `-h`) by printing them without running:
+`tapsmith test --help`, `tapsmith help test`. `tapsmith --help` lists the commands. A flag that belongs
+to another command is refused (`tapsmith show-trace t.zip --force-install` is an error).
+
+Value flags take their value either way — `--workers 4` or `--workers=4`, `-j 4` or `-j4` or `-j=4`. A value
+flag followed by another flag is an error, not a value: `tapsmith test --device --workers 2` fails with
+`option '-d, --device <serial>' argument missing`, instead of targeting a device called `--workers`. For a
+value that really starts with `-`, use the `=` form: `--grep=-slow`.
+
+A usage error (unknown command or flag, missing or invalid value) prints one line naming the problem and the
+command's `--help`, and exits with code 1. An unknown command suggests the nearest one
+(`unknown command 'tset'` / `Did you mean test?`), even when `--help` is also given. Commands with a `--json`
+mode (`init`, `verify`, `doctor`, `list-devices`, `telemetry`) report usage errors under `--json` as JSON on
+stdout — `{ "error": { "code", "message", "fix" } }`, with `code` `BAD_ARGS`, or for `init` `UNKNOWN_FLAG` /
+`MISSING_FLAG_VALUE` like its other errors. `mcp-server` keeps stdout for the protocol and reports usage errors
+on stderr.
+
 ### `tapsmith test [files...]`
 
 Run test files. If no files are specified, discovers tests using the `testMatch` patterns from your config.
@@ -2398,7 +2415,7 @@ npx tapsmith test -j 2
 
 Overrides the `workers` config option. Requires enough connected devices or `launchEmulators: true` with an `avd` configured. In parallel mode, each test result includes a `workerIndex` field and console reporters show `[worker N]` tags.
 
-### `tapsmith test --shard=x/y`
+### `tapsmith test --shard=x/y` / `tapsmith test --shard x/y`
 
 Split the test suite deterministically across `y` machines, running only shard `x`. Shards are assigned by file index (`file_index % total === current - 1`).
 
@@ -2527,6 +2544,7 @@ Run the interactive setup wizard. Detects your environment (ADB, Xcode, simulato
 
 ```bash
 npx tapsmith init
+npx tapsmith init --yes --platform android   # non-interactive; see init --help for every flag
 ```
 
 ### `tapsmith doctor`
@@ -2535,6 +2553,7 @@ Run a non-interactive system health check. Verifies all prerequisites: Node.js v
 
 ```bash
 npx tapsmith doctor
+npx tapsmith doctor --json -c tapsmith.config.ci.mjs   # machine-readable, against a specific config
 ```
 
 ### `tapsmith telemetry [status|enable|disable] [--json]`
@@ -2586,20 +2605,30 @@ The trace viewer shows:
 - **Detail tabs** — Call info, Console output, Source code, View hierarchy, Network requests, Errors
 - **Keyboard navigation** — Arrow keys or j/k to move between actions
 
-### `tapsmith test --trace <mode>`
+### `tapsmith test --trace [mode]`
 
-Record traces during test execution. Overrides the `trace` config option.
+Record traces during test execution. Overrides the `trace` config option. `mode` is one of the
+[`TraceMode`](configuration.md#tracemode) values: `off`, `on`, `on-first-retry`, `on-all-retries`,
+`retain-on-failure`, `retain-on-first-failure`, `retain-on-failure-and-retries`. A bare `--trace` means `on`.
+Any other value is an error that lists the valid modes, so a typo such as `--trace retain-on-falure` fails
+the run instead of silently recording nothing. The same check applies to `trace` in the config file, in a
+project's `use`, and in `test.use()`.
 
 ```bash
 npx tapsmith test --trace on                    # Record all tests
 npx tapsmith test --trace retain-on-failure     # Only keep traces for failures
 ```
 
-### `tapsmith test --video <mode>`
+A bare `--trace` directly followed by a test file reads the file as the mode (and fails): write
+`--trace on login.test.ts`, or put the file first.
+
+### `tapsmith test --video [mode]`
 
 Record an MP4 of the device screen for the lifetime of each test. Mirrors
 Playwright's `video` flag and overrides the `video` config option. Accepts
-the same mode set as `--trace`. See [Video recording](#video-recording).
+the same mode set as `--trace`, validated the same way (a bare `--video`
+means `on`; an unknown mode, here or in the config, is an error). See
+[Video recording](#video-recording).
 
 ```bash
 npx tapsmith test --video on                    # Record every test
@@ -2676,14 +2705,6 @@ to be recorded. See [ios-physical-devices.md](./ios-physical-devices.md).
 `screenrecord --size WxH`). On iOS the daemon emits a one-time warning and
 records at native resolution.
 
-### `tapsmith test --network` / `tapsmith test --no-network`
-
-Enable or disable network capture when tracing. By default, network capture is enabled whenever tracing is active. Use `--no-network` to disable it.
-
-```bash
-npx tapsmith test --trace on --no-network      # Trace without network capture
-```
-
 ### `tapsmith merge-reports [dir]`
 
 Merge blob reports from sharded CI runs into a single HTML report.
@@ -2738,32 +2759,35 @@ iOS simulators (simctl), and iOS physical (devicectl) — with a one-line
 status (`Ready` or an imperative fix). `--json` emits the row model for
 scripting.
 
-#### `tapsmith setup-ios-device [udid]`
+#### `tapsmith setup-ios-device`
 
-Run the per-device preflight checklist for a physical iOS device: pairing,
+Run the preflight checklist for physical iOS devices: pairing,
 Developer Mode, Developer Disk Image, USB transport, built agent cache,
 firewall stealth mode, and the Xcode 26 CoreDevice sudo prompt probe.
-Prints per-check `ok`/`fix` output and exits non-zero if anything blocks
-`tapsmith test`. With no UDID, auto-selects the single attached device.
+Checks every attached device, prints per-check `ok`/`fix` output and exits
+non-zero if anything blocks `tapsmith test`.
 
-#### `tapsmith build-ios-agent [--team <id>] [--device|--simulator]`
+#### `tapsmith build-ios-agent [--team-id <id>] [--cwd <path>] [--derived-data-path <path>] [-v]`
 
 Build the signed `TapsmithAgent` XCUITest bundle for the current device /
 provisioning profile. Auto-detects the Apple Developer team ID from Xcode's
-preferences (or keychain) if `--team` is omitted. The resulting
+preferences (or keychain) if `--team-id` is omitted. `-v` / `--verbose`
+streams the raw `xcodebuild` output. The resulting
 `.xctestrun` is cached under `~/.tapsmith/` and picked up automatically by
 `tapsmith test`.
 
-#### `tapsmith configure-ios-network <udid> [--ssid <name>] [--device-name <name>]`
+#### `tapsmith configure-ios-network <udid> [--ssid <name>] [--device-name <name>] [--fix-firewall]`
 
 Generate a `.mobileconfig` profile that routes the physical device's Wi-Fi
 traffic through Tapsmith's MITM proxy, and reveal it in Finder so you can
 AirDrop it to the device. Decrypted capture is available for clients that trust
 the Tapsmith CA; pinned or embedded-root clients may need passthrough.
 `--ssid` targets a specific Wi-Fi network (defaults to the host's current SSID);
-`--device-name` sets the profile's `PayloadDisplayName`.
+`--device-name` sets the profile's `PayloadDisplayName`; `--fix-firewall`
+turns off macOS Application Firewall stealth mode (via sudo), which otherwise
+drops the device's connections to the proxy.
 
-#### `tapsmith refresh-ios-network <udid>`
+#### `tapsmith refresh-ios-network <udid> [--ssid <name>] [--device-name <name>] [--fix-firewall]`
 
 Regenerate the profile for a device whose host IP or Wi-Fi SSID has
 changed since the last run. Same shape as `configure-ios-network` — the
@@ -2781,9 +2805,10 @@ non-zero on failure with fix-it hints for each failure mode.
 
 Print the Tapsmith version.
 
-### `tapsmith --help` / `tapsmith -h`
+### `tapsmith --help` / `tapsmith -h` / `tapsmith help [command]`
 
-Show help text with available commands and options.
+Show the available commands, or one command's options (`tapsmith help test`, same as `tapsmith test --help`).
+Help never runs the command: `tapsmith --help init` prints the command list rather than starting the wizard.
 
 ---
 

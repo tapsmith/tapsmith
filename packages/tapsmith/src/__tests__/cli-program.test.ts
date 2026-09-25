@@ -187,6 +187,8 @@ describe('tapsmith test', () => {
   });
 
   it('rejects an unknown option', async () => {
+    // --retries included: documented once, never implemented (a follow-up adds it Playwright-style).
+    expect((await usageError(['test', '--retries', '2'])).err).toMatch(/unknown option '--retries'/);
     const h = await usageError(['test', '--bogus']);
     expect(h.err).toMatch(/unknown option '--bogus'/);
     expect(h.out).toBe('');

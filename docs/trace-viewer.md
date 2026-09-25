@@ -20,7 +20,8 @@ export default defineConfig({
 
 ### Via CLI
 
-Override the config with the `--trace` flag:
+Override the config with the `--trace` flag (a bare `--trace` means `on`; an unknown mode is an error that
+lists the valid ones):
 
 ```bash
 npx tapsmith test --trace on
