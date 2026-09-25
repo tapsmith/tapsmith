@@ -17,6 +17,7 @@
 		8EAA355DA951C199AF253DB7 /* ElementInfo.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19310EAA5EA86B6E6776B6F8 /* ElementInfo.swift */; };
 		9A7AA0FD964CB0917BA73A34 /* ElementFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 120AEFF331CC195D7A1592FC /* ElementFinder.swift */; };
 		A36314E56A12B9911A8E07F5 /* SelectorParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17FE6EF9A57433664F043E7 /* SelectorParser.swift */; };
+		5A1C0E7D2B9F4E3A8C6D1F02 /* KeyboardDismissPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A1C0E7D2B9F4E3A8C6D1F01 /* KeyboardDismissPlanner.swift */; };
 		A4B1C63E6075AF48ADFC2123 /* OcclusionAnalyzer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EEB85E18A5531D03A65BDA55 /* OcclusionAnalyzer.swift */; };
 		A4DD313B0DC87ACC0AC5EC36 /* TapsmithAgentRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 46F2F23AB376461F1E086465 /* TapsmithAgentRunner.swift */; };
 		AF850BF1649CFB7D3D5FEDAB /* OneShotLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = E2D8F09D7C424D6639D7D0AD /* OneShotLogger.swift */; };
@@ -51,6 +52,7 @@
 		D53CA4D47911BC911C8430EF /* ActionExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionExecutor.swift; sourceTree = "<group>"; };
 		E2D8F09D7C424D6639D7D0AD /* OneShotLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OneShotLogger.swift; sourceTree = "<group>"; };
 		EDF3E8F423ADAE29CD2EFB48 /* AgentError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentError.swift; sourceTree = "<group>"; };
+		5A1C0E7D2B9F4E3A8C6D1F01 /* KeyboardDismissPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeyboardDismissPlanner.swift; sourceTree = "<group>"; };
 		EEB85E18A5531D03A65BDA55 /* OcclusionAnalyzer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OcclusionAnalyzer.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -64,6 +66,7 @@
 				09C5E3AFD1299FFFF4B31AB6 /* HierarchyDumper.swift */,
 				7CD67663681CC3C8C65959F0 /* ObjCExceptionCatcher.h */,
 				4F73B6388FA79243297885B0 /* ObjCExceptionCatcher.m */,
+				5A1C0E7D2B9F4E3A8C6D1F01 /* KeyboardDismissPlanner.swift */,
 				EEB85E18A5531D03A65BDA55 /* OcclusionAnalyzer.swift */,
 				45FCCCE646EA2B85354B30F7 /* QuiescenceDisabler.swift */,
 				B4047824F41AA54563A432DC /* RoleMapping.swift */,
@@ -170,6 +173,7 @@
 				8EAA355DA951C199AF253DB7 /* ElementInfo.swift in Sources */,
 				B5ED1D32F5D4721948E90845 /* HierarchyDumper.swift in Sources */,
 				8343FFC928BF3DED3CE9B54D /* ObjCExceptionCatcher.m in Sources */,
+				5A1C0E7D2B9F4E3A8C6D1F02 /* KeyboardDismissPlanner.swift in Sources */,
 				A4B1C63E6075AF48ADFC2123 /* OcclusionAnalyzer.swift in Sources */,
 				AF850BF1649CFB7D3D5FEDAB /* OneShotLogger.swift in Sources */,
 				C3FB8341E6CADE143C84D0C0 /* QuiescenceDisabler.swift in Sources */,
