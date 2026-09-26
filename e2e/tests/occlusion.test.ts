@@ -90,7 +90,7 @@ describe("Occlusion", () => {
       // The focusing tap never reached the keyboard: no stray key in the
       // focused field, and nothing typed anywhere.
       await expect(occlusionScreen.input).toHaveValue("x")
-      await occlusionScreen.submitInput()
+      await device.hideKeyboard()
       await expect.poll(() => device.isKeyboardShown()).toBe(false)
       await expect(occlusionScreen.bottomInput).toHaveValue("")
     })
@@ -105,7 +105,7 @@ describe("Occlusion", () => {
       expect(await failureOf(occlusionScreen.bottomInput.focus())).toMatch(behindKeyboardFailure(platform))
 
       await expect(occlusionScreen.input).toHaveValue("x")
-      await occlusionScreen.submitInput()
+      await device.hideKeyboard()
       await expect.poll(() => device.isKeyboardShown()).toBe(false)
       await expect(occlusionScreen.bottomInput).toHaveValue("abc")
     })
@@ -233,9 +233,9 @@ describe("Occlusion", () => {
     await expect(occlusionScreen.counts).toHaveText(counts({ link: 1 }))
   })
 
-  test("tap() on a button behind the keyboard works once the keyboard is gone", async ({ device, occlusionScreen }) => {
+  test("tap() on a button behind the keyboard works once hideKeyboard() has put it away", async ({ device, occlusionScreen }) => {
     await occlusionScreen.openKeyboard()
-    await occlusionScreen.submitInput()
+    await device.hideKeyboard()
     await expect.poll(() => device.isKeyboardShown()).toBe(false)
 
     await occlusionScreen.bottomAction.tap()

@@ -2106,48 +2106,49 @@ class CommandHandler {
 
         case "hideKeyboard":
             // Check if keyboard is actually shown before attempting dismissal.
-            // Without this, app.windows.firstMatch.frame.size below triggers a
-            // quiescence wait (~30s hang) when no keyboard is present.
-            let kbSnapshot = try? app.snapshot()
-            let kbDict = kbSnapshot.map { $0.dictionaryRepresentation } ?? [:]
-            guard hasKeyboardInSnapshot(kbDict) else {
+            // A tree that cannot be read is no evidence either way: refuse
+            // rather than report a keyboard gone that may still be up —
+            // unless the app is not in front (a defensive call after another
+            // app came to the front), which has no keyboard of its own up.
+            // `app.state` is only consulted once the tree has failed: it is
+            // unreliable for an externally launched app until XCUITest
+            // attaches (see `dismissOpenURLDialogAndWaitForContent`).
+            guard let kbSnapshot = try? snapshotFinder.takeSnapshot() else {
+                let appState = safeAppState(app)
+                if appState == .notRunning || appState == .runningBackground
+                    || appState == .runningBackgroundSuspended {
+                    snapshotFinder.clearFocusedTextInputHint()
+                    return ["success": true]
+                }
+                throw AgentError.actionFailed("hideKeyboard could not read the screen to check for the keyboard")
+            }
+            guard hasKeyboardInSnapshot(kbSnapshot.dictionaryRepresentation) else {
                 snapshotFinder.clearFocusedTextInputHint()
                 return ["success": true]
             }
 
-            // Dismiss the keyboard using a tiny swipe gesture (Maestro's approach).
-            // A small vertical swipe triggers keyboard dismissal via the scroll
-            // interaction, bypassing keyboardShouldPersistTaps.
-            Thread.sleep(forTimeInterval: 0.3) // Let keyboard fully appear/settle
-            // Use cached screen size to avoid app.windows.firstMatch.frame.size
-            // which triggers quiescence on Xcode 26.
-            let kbScreenSize = snapshotFinder.screenSize
-            let midX = CGFloat(kbScreenSize.width / 2)
-            let midY = CGFloat(kbScreenSize.height / 2)
-            // Try vertical swipe first
-            if !EventSynthesizer.swipe(
-                from: CGPoint(x: midX, y: midY),
-                to: CGPoint(x: midX, y: midY - kbScreenSize.height * 0.03),
-                duration: 0.05
-            ) {
-                // Fallback: tap above keyboard area
-                actionExecutor.tapCoordinates(x: Int(midX), y: 15)
+            // Let the keyboard finish appearing before planning around it. A
+            // keyboard element with no on-screen area yet may still be sliding
+            // in (hideKeyboard right after a focusing tap on a slow runner):
+            // wait for it rather than call it "nothing to dismiss".
+            let appearDeadline = Date(timeIntervalSinceNow: 1.5)
+            while keyboardPresence() == .offScreen, Date() < appearDeadline {
+                Thread.sleep(forTimeInterval: 0.15)
             }
-            // VERIFY the keyboard actually left the hierarchy instead of
-            // sleeping a fixed interval: returning while dismissal is still
-            // in flight makes the very next action race the app's keyboard
-            // relayout (e.g. KeyboardAvoidingView) — observed as a Sign-in
-            // tap landing on a moving layout and silently missing.
-            if !waitForKeyboardDismissed(timeout: 3.0) {
-                // Genuinely still showing — try a horizontal swipe. (This
-                // fallback used to fire unconditionally, landing on app
-                // content whenever the first swipe had already worked.)
-                _ = EventSynthesizer.swipe(
-                    from: CGPoint(x: midX, y: midY),
-                    to: CGPoint(x: midX - kbScreenSize.width * 0.03, y: midY),
-                    duration: 0.05
-                )
-                _ = waitForKeyboardDismissed(timeout: 2.0)
+            Thread.sleep(forTimeInterval: 0.3)
+            do {
+                try dismissKeyboard()
+            } catch {
+                if touchedScreen { snapshotFinder.clearFocusedTextInputHint() }
+                throw error
+            }
+            // Off screen first, out of the tree a moment later: give it that
+            // moment on every success path, so isKeyboardShown() (any keyboard
+            // element) agrees straight after. Best effort — it is already
+            // off the screen.
+            let treeDeadline = Date(timeIntervalSinceNow: 1.0)
+            while keyboardPresence() == .offScreen, Date() < treeDeadline {
+                Thread.sleep(forTimeInterval: 0.1)
             }
             // The keyboard leaving the hierarchy precedes the app's own
             // animated relayout completing — give that a beat to settle.
@@ -2236,16 +2237,149 @@ class CommandHandler {
         return String(data: data, encoding: .utf8)
     }
 
+    /// Put the software keyboard away the ways a user would, trying each in
+    /// turn until it is gone (PILOT-363; see `KeyboardDismissPlanner` for
+    /// what each one may touch), or throw naming what was tried. Every
+    /// strategy is planned on a fresh snapshot, so a keyboard that finished
+    /// leaving during the previous one's wait ends it without another touch.
+    private func dismissKeyboard() throws {
+        // Whether a strategy touched the app (it may have moved focus: the
+        // return key's submit handler focusing the next field). The caller
+        // clears the focused-field hint then, even when this throws.
+        touchedScreen = false
+        var attempts: [(KeyboardDismissPlanner.Strategy, KeyboardDismissPlanner.Outcome)] = []
+        for strategy in KeyboardDismissPlanner.Strategy.allCases {
+            guard let snapshot = try? snapshotFinder.takeSnapshot() else {
+                throw AgentError.actionFailed("hideKeyboard could not read the screen to dismiss the keyboard")
+            }
+            guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
+            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+            // A keyboard element with nothing on screen (zero-sized, off
+            // screen, after the appearance wait above) covers nothing: there is
+            // nothing to put away, and no reason to touch the app or submit the
+            // field. The dismissal checks below use the same notion.
+            guard planner.keyboardRegion != nil else {
+                NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area; nothing to dismiss")
+                return
+            }
+            let outcome = runDismissStrategy(strategy, planner: planner)
+            if outcome == .keyboardStayed { touchedScreen = true }
+            if outcome == .keyboardStayed, waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) {
+                NSLog("[TapsmithCommand] hideKeyboard: dismissed by \(strategy.summary)")
+                return
+            }
+            attempts.append((strategy, outcome))
+        }
+        // The last wait can end just before the keyboard leaves.
+        if keyboardGoneNow() == true { return }
+        throw AgentError.actionFailed(KeyboardDismissPlanner.failureMessage(attempts))
+    }
+
+    /// Set by `dismissKeyboard`: whether any strategy touched the screen.
+    private var touchedScreen = false
+
+    /// How long to wait for the keyboard to leave after a strategy ran.
+    private func dismissWait(for strategy: KeyboardDismissPlanner.Strategy) -> TimeInterval {
+        // The drag strategy waits after each of its drags itself.
+        strategy == .scrollSwipe ? 0 : 1.5
+    }
+
+    /// How long to wait for the keyboard to leave after one dismiss drag.
+    private static let dragWait: TimeInterval = 2.0
+
+    /// Run one dismiss strategy. `.keyboardStayed` means it touched the screen
+    /// (the caller waits to see whether the keyboard left); `.notPossible`
+    /// means nothing was touched.
+    private func runDismissStrategy(
+        _ strategy: KeyboardDismissPlanner.Strategy,
+        planner: KeyboardDismissPlanner
+    ) -> KeyboardDismissPlanner.Outcome {
+        let screen = snapshotFinder.screenSize
+        switch strategy {
+        case .scrollSwipe:
+            let focusedFrame = snapshotFinder.liveFocusedTextInput()?.frame
+            guard let start = planner.scrollSwipeStart(focusedFrame: focusedFrame) else {
+                return .notPossible("the field is not in a scroll view with room clear of its controls above the keyboard")
+            }
+            let dy = CGFloat(screen.height) * KeyboardDismissPlanner.swipeFraction
+            let dx = CGFloat(screen.width) * KeyboardDismissPlanner.swipeFraction
+            guard EventSynthesizer.swipe(
+                from: start, to: CGPoint(x: start.x, y: start.y - dy), duration: 0.05
+            ) else { return .notPossible("the drag could not be synthesized") }
+            // Gone already: the caller's wait after this return sees that at once.
+            if waitForKeyboardDismissed(timeout: Self.dragWait) { return .keyboardStayed }
+            // A horizontal scroll view drags sideways — planned again, since the
+            // first drag may have scrolled a control under the old point.
+            guard let snapshot = try? snapshotFinder.takeSnapshot(),
+                  hasKeyboardInSnapshot(snapshot.dictionaryRepresentation),
+                  let again = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screen)
+                      .scrollSwipeStart(focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame)
+            else { return .keyboardStayed }
+            _ = EventSynthesizer.swipe(
+                from: again, to: CGPoint(x: again.x - dx, y: again.y), duration: 0.05
+            )
+            _ = waitForKeyboardDismissed(timeout: Self.dragWait)
+            return .keyboardStayed
+        case .dismissKey:
+            guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
+            guard EventSynthesizer.tap(at: key) else { return .notPossible("the tap could not be synthesized") }
+            return .keyboardStayed
+        case .blankTap:
+            guard let field = snapshotFinder.liveFocusedTextInput() else {
+                return .notPossible("no focused text field to tap beside")
+            }
+            guard let point = planner.blankPoint(focusedFrame: field.frame) else {
+                return .notPossible("no blank spot beside the field above the keyboard")
+            }
+            guard EventSynthesizer.tap(at: point) else { return .notPossible("the tap could not be synthesized") }
+            return .keyboardStayed
+        case .returnKey:
+            switch planner.returnKey(focusedInput: snapshotFinder.liveFocusedTextInput()?.elementType) {
+            case .notPossible(let why):
+                return .notPossible(why)
+            case .press:
+                // Typed rather than tapped: a key tap aimed at a keyboard that
+                // starts leaving would land on the app behind it.
+                guard actionExecutor.typeTextWithoutFocus("\n") else {
+                    return .notPossible("the key press could not be synthesized")
+                }
+                return .keyboardStayed
+            }
+        }
+    }
+
     /// Poll the snapshot tree until the keyboard disappears or the deadline
     /// passes. Returns true once the keyboard is gone.
+    /// Always checks at least once, so a zero timeout is a single check.
     private func waitForKeyboardDismissed(timeout: TimeInterval) -> Bool {
         let deadline = Date(timeIntervalSinceNow: timeout)
-        while Date() < deadline {
-            let dict = (try? app.snapshot())?.dictionaryRepresentation ?? [:]
-            if !hasKeyboardInSnapshot(dict) { return true }
+        while true {
+            if keyboardGoneNow() == true { return true }
+            if Date() >= deadline { return false }
             Thread.sleep(forTimeInterval: 0.15)
         }
-        return false
+    }
+
+    /// Whether one snapshot shows no keyboard on screen (none in the tree, or
+    /// one left with no on-screen area — the same test the dismiss loop
+    /// starts each strategy with): nil when the tree could not be read or
+    /// came back empty (mid-transition, a slow runner), which is no evidence
+    /// the keyboard left.
+    private func keyboardGoneNow() -> Bool? {
+        keyboardPresence().map { $0 != .onScreen }
+    }
+
+    private enum KeyboardPresence { case absent, offScreen, onScreen }
+
+    /// What one snapshot shows of the keyboard: none in the tree, an element
+    /// with no on-screen area, or a keyboard on screen. nil when the tree
+    /// could not be read or came back empty.
+    private func keyboardPresence() -> KeyboardPresence? {
+        guard let snapshot = try? app.snapshot(),
+              !snapshot.dictionaryRepresentation.isEmpty else { return nil }
+        guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return .absent }
+        let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+        return planner.keyboardRegion == nil ? .offScreen : .onScreen
     }
 
     /// Check if a keyboard is visible in the snapshot tree by looking for

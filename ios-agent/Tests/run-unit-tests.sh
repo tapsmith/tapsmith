@@ -37,6 +37,16 @@ for _ in 1 2 3 4 5; do
 done
 cat "$OUT/role-mapping.log"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/KeyboardDismissPlannerTests/main.swift \
+  TapsmithAgent/KeyboardDismissPlanner.swift \
+  TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/keyboard-dismiss-planner-tests"
+"$OUT/keyboard-dismiss-planner-tests"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/TouchPlanClockTests/main.swift \
   TapsmithAgent/TouchPlanClock.swift \

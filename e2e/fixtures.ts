@@ -5,6 +5,7 @@ import { ApiCallsScreen } from "./screens/api-calls.screen.js"
 import { DialogsScreen } from "./screens/dialogs.screen.js"
 import { GesturesScreen } from "./screens/gestures.screen.js"
 import { HomeScreen } from "./screens/home.screen.js"
+import { KeyboardScreen } from "./screens/keyboard.screen.js"
 import { ListScreen } from "./screens/list.screen.js"
 import { LoginScreen } from "./screens/login.screen.js"
 import { OcclusionScreen } from "./screens/occlusion.screen.js"
@@ -21,6 +22,7 @@ type ScreenFixtures = {
   dialogsScreen: DialogsScreen
   gesturesScreen: GesturesScreen
   homeScreen: HomeScreen
+  keyboardScreen: KeyboardScreen
   listScreen: ListScreen
   loginScreen: LoginScreen
   occlusionScreen: OcclusionScreen
@@ -49,6 +51,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   homeScreen: async ({ device }, use) => {
     await use(new HomeScreen(device))
+  },
+  keyboardScreen: async ({ device }, use) => {
+    await use(new KeyboardScreen(device))
   },
   listScreen: async ({ device }, use) => {
     await use(new ListScreen(device))

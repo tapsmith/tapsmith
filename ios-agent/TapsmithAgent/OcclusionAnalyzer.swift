@@ -325,7 +325,7 @@ struct OcclusionAnalyzer {
         return frame
     }
 
-    private func ancestors(of i: Int) -> [Int] {
+    func ancestors(of i: Int) -> [Int] {
         var result: [Int] = []
         var p = nodes[i].parent
         while let a = p {
@@ -341,7 +341,7 @@ struct OcclusionAnalyzer {
     /// in the hierarchy and takes no touches — but on Xcode 26.6 it makes
     /// XCUITest call every element under it unhittable, and as a labeled text
     /// over every point it would otherwise be named the cover of all of them.
-    private func isTapsmithHooksMarker(_ node: Node) -> Bool {
+    func isTapsmithHooksMarker(_ node: Node) -> Bool {
         node.elementType == .staticText
             && (node.identifier == "tapsmith-hooks" || node.label.hasPrefix("tapsmith-hooks:"))
     }

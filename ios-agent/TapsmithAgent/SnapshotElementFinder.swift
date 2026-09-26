@@ -531,14 +531,22 @@ class SnapshotElementFinder {
     /// `findLiveFocusedTextInput` uses) matches nothing even while a field is
     /// first responder, measured 23 Sep 2026.
     func liveFocusedTextInputFrame() -> CGRect? {
+        liveFocusedTextInput()?.frame
+    }
+
+    /// Type and frame of the text input that has keyboard focus right now,
+    /// from the same live query as `liveFocusedTextInputFrame`.
+    func liveFocusedTextInput() -> (elementType: XCUIElement.ElementType, frame: CGRect)? {
         let textInputTypes: Set<XCUIElement.ElementType> = [
             .textField, .secureTextField, .textView, .searchField,
         ]
         let element = app.descendants(matching: .any)
             .matching(NSPredicate(format: "hasKeyboardFocus == true"))
             .firstMatch
-        guard element.exists, textInputTypes.contains(element.elementType) else { return nil }
-        return element.frame
+        guard element.exists else { return nil }
+        let type = element.elementType
+        guard textInputTypes.contains(type) else { return nil }
+        return (type, element.frame)
     }
 
     private func findLiveFocusedTextInput() -> LiveFocusedTextInput? {
