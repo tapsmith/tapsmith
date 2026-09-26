@@ -376,6 +376,22 @@ do {
 }
 
 do {
+    // A form scrolled down under a navigation bar: the scroll content's
+    // frame (unclipped) covers the whole screen, but the field's screen is
+    // the 87% below the bar. The blank spot is still found beside the field.
+    let field = R(16, 300, 370, 44)
+    let rows: [Row] = appHead + [
+        (4, .scrollView, "", "", R(0, 116, 402, 758)),
+        (5, .other, "", "", R(0, -400, 402, 1600)),
+        (6, .other, "", "", R(16, 300, 370, 44)),
+        (7, .textField, "Field", "", field),
+        (6, .button, "Below", "", R(16, 360, 370, 44)),
+    ] + keyboardWindows()
+    checkTrue("scrolled-down form under a nav bar: blank spot found",
+              planner(rows).blankPoint(focusedFrame: field) != nil)
+}
+
+do {
     // A stale off-screen keyboard holding a "return" key before the real one
     // with a "send" key: the stale key is not judged or pressed.
     var rows = keyboardWindows(returnLabel: "send", returnId: "Send")
@@ -447,8 +463,10 @@ do {
     // still counts.
     var rows = keyboardWindows()
     rows.insert((2, .keyboard, "", "", R(0, 900, 402, 243)), at: 1)
+    // The same region as without the stale element: the input view above the
+    // keys (529–573 in the recorded tree) belongs to the keyboard.
     checkTrue("stale off-screen keyboard before the real one: region from the real one",
-              planner(appHead + rows).keyboardRegion.map { $0.minY < 874 && $0.minY >= 529 } ?? false,
+              planner(appHead + rows).keyboardRegion.map { $0.minY == 529 } ?? false,
               "\(String(describing: planner(appHead + rows).keyboardRegion))")
 }
 

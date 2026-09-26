@@ -122,12 +122,25 @@ struct KeyboardDismissPlanner {
         }
         // The analyzer reads the first sized keyboard element; a stale one
         // left off screen (a keyboard-type switch) can come before the real
-        // one. Any keyboard element on screen still covers its own frame.
+        // one. The real one covers its own frame plus, like the analyzer's
+        // region, whatever of its windows sits on top of it (the input view
+        // and bars above the keys).
+        let windows = keyboardWindows
         for node in nodes where node.elementType == .keyboard {
-            let onScreen = node.frame.intersection(screen)
-            if !onScreen.isNull, onScreen.width > 0, onScreen.height > 0 {
-                return CGRect(x: screen.minX, y: onScreen.minY, width: screen.width, height: screen.maxY - onScreen.minY)
+            let keys = node.frame.intersection(screen)
+            guard !keys.isNull, keys.width > 0, keys.height > 0 else { continue }
+            var top = keys.minY
+            for other in nodes {
+                guard let w = other.window, windows.contains(w) else { continue }
+                let f = other.frame
+                guard f.width > 0, f.height > 0,
+                      f.minY >= screen.minY, f.maxY <= screen.maxY + 1,
+                      f.height <= screen.height * 0.75,
+                      f.maxX > keys.minX, f.minX < keys.maxX,
+                      f.maxY >= keys.minY else { continue }
+                top = min(top, f.minY)
             }
+            return CGRect(x: screen.minX, y: top, width: screen.width, height: screen.maxY - top)
         }
         return nil
     }
@@ -177,7 +190,10 @@ struct KeyboardDismissPlanner {
     private func scopeAncestors(of field: Int) -> [Int] {
         var result: [Int] = []
         for a in analyzer.ancestors(of: field) {
-            let f = nodes[a].frame.intersection(screen)
+            // What is drawn of it: a scrolled content container reports its
+            // full frame, which can cover the screen though it is inside an
+            // 87% scroll view.
+            let f = clippedToScrollers(nodes[a].frame.intersection(screen), around: a)
             if nodes[a].elementType == .window || nodes[a].elementType == .application { break }
             if !f.isNull, f.width * f.height >= screen.width * screen.height * Self.fullScreenFraction { break }
             result.append(a)
