@@ -331,14 +331,22 @@ export interface TraceConfigSnapshot {
 
 // ─── Trace Configuration ───
 
-export type TraceMode =
-  | 'off'
-  | 'on'
-  | 'on-first-retry'
-  | 'on-all-retries'
-  | 'retain-on-failure'
-  | 'retain-on-first-failure'
-  | 'retain-on-failure-and-retries'
+/**
+ * Every trace recording mode, in the order help text and errors list them.
+ * The `TraceMode` type is derived from it, so the CLI's `--trace` choices and
+ * config validation can never drift from the type.
+ */
+export const TRACE_MODES = [
+  'off',
+  'on',
+  'on-first-retry',
+  'on-all-retries',
+  'retain-on-failure',
+  'retain-on-first-failure',
+  'retain-on-failure-and-retries',
+] as const;
+
+export type TraceMode = (typeof TRACE_MODES)[number]
 
 export interface TraceConfig {
   /** Trace recording mode. */
@@ -467,13 +475,16 @@ export function resolveTraceConfig(
   // == null also catches explicit `trace: null` from untyped .mjs configs.
   if (input == null) return defaults;
 
+  // `|| 'off'`, not `?? 'off'`: an untyped config's '' or `{ mode: false }`
+  // (validateRecordingModes lets both through as off) must resolve to exactly
+  // 'off', since consumers test `mode !== 'off'` to arm network capture.
   if (typeof input === 'string') {
-    return { ...defaults, mode: input };
+    return { ...defaults, mode: input || 'off' };
   }
 
-  // input.mode ?? 'off' so an explicit-undefined mode in object form can't
-  // clobber the default (mirrors resolveVideoConfig).
-  return { ...defaults, ...input, mode: input.mode ?? 'off' };
+  // Also keeps an explicit-undefined mode in object form from clobbering the
+  // default (mirrors resolveVideoConfig).
+  return { ...defaults, ...input, mode: input.mode || 'off' };
 }
 
 /**

@@ -637,6 +637,14 @@ describe('runner app reset (declared isolation)', () => {
     expect(collectResults(result).map((t) => t.status)).toEqual(['failed']);
   });
 
+  it('test.use() rejects unknown trace and video modes', () => {
+    pushContext();
+    expect(() => tapsmithTest.use({ trace: 'onn' as never })).toThrow(/test\.use\(\): trace must be one of .*\(got "onn"\)/);
+    expect(() => tapsmithTest.use({ video: { mode: 'always' as never } })).toThrow(/test\.use\(\): video must be one of/);
+    expect(() => tapsmithTest.use({ trace: 'retain-on-failure', video: 'on' })).not.toThrow();
+    popContext();
+  });
+
   it('test.use() rejects unknown appReset values', () => {
     pushContext();
     expect(() => tapsmithTest.use({ appReset: 'bogus' as never })).toThrow(/appReset must be one of/);

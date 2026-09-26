@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { createMcpServer } from '../mcp/index.js';
+import { stdioTestArgs } from '../mcp/tools/run-tests.js';
+import { runCli, type CliHandlers, type TestCommandArgs } from '../cli-program.js';
 import type { TestDispatcher, TestRunResult, TestTreeEntry } from '../mcp/test-dispatcher.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
@@ -112,5 +114,36 @@ describe('tapsmith_run_tests result handling', () => {
     const res = await callRunTests(makeDispatcher({ runFiles: async () => result }), { files: [FILE], test: 'x' });
     expect(res.isError).toBeFalsy();
     expect(text(res)).toContain('Run stopped by user');
+  });
+});
+
+// The dispatcher-less fallback spawns `tapsmith test`: its argv has to be one
+// the CLI accepts. It used to pass `--test <filter>`, a flag the CLI never had,
+// so every filtered run in that mode failed at argument parsing.
+describe('stdioTestArgs()', () => {
+  it('builds a plain run', () => {
+    expect(stdioTestArgs({ files: [FILE] })).toEqual(['test', FILE, '--trace', 'on']);
+  });
+
+  it('passes project and device', () => {
+    expect(stdioTestArgs({ files: [FILE], project: 'android', device: 'emulator-5554' }))
+      .toEqual(['test', FILE, '--trace', 'on', '--project=android', '--device=emulator-5554']);
+  });
+
+  it('turns the test filter into a case-insensitive literal --grep', async () => {
+    const args = stdioTestArgs({ files: [FILE], testFilter: '-Checkout (v2)?' });
+    const h: string[] = [];
+    let seen: TestCommandArgs | undefined;
+    const code = await runCli(args, {
+      handlers: { test: async (a: TestCommandArgs) => { seen = a; } } as Partial<CliHandlers> as CliHandlers,
+      version: '0',
+      io: { out: (t) => h.push(t), err: (t) => h.push(t) },
+    });
+    expect(h.join('')).toBe('');
+    expect(code).toBe(0);
+    expect(seen?.files).toEqual([FILE]);
+    // Same semantics as the dispatcher's `test` filter: a case-insensitive substring.
+    expect(seen?.grep?.test('cart > -checkout (V2)? works')).toBe(true);
+    expect(seen?.grep?.test('cart > checkout v2 works')).toBe(false);
   });
 });

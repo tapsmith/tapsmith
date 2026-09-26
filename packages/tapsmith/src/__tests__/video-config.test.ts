@@ -40,3 +40,9 @@ describe('resolveVideoConfig (PILOT-114)', () => {
     expect(c.size).toEqual({ width: 800, height: 600 });
   });
 });
+
+describe('resolveVideoConfig falsy modes', () => {
+  it.each([[''], [{ mode: '' }], [{ mode: false }], [false]])('%j resolves to off', (input) => {
+    expect(resolveVideoConfig(input as never).mode).toBe('off');
+  });
+});

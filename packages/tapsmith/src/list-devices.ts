@@ -305,8 +305,8 @@ async function listDevicesFromDaemon(): Promise<DeviceInfoProto[]> {
 
 // ─── CLI entry point ────────────────────────────────────────────────────
 
-export async function runListDevices(argv: string[] = []): Promise<void> {
-  const jsonOutput = argv.includes('--json');
+export async function runListDevices(opts: { json: boolean }): Promise<void> {
+  const jsonOutput = opts.json;
 
   let daemonDevices: DeviceInfoProto[];
   try {

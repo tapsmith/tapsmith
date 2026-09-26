@@ -57,6 +57,7 @@
     "bplist-creator": "^0.1.1",
     "bplist-parser": "^0.3.2",
     "chokidar": "^4.0.3",
+    "commander": "^14.0.3",
     "enquirer": "^2.4.1",
     "fflate": "^0.8.2",
     "figlet": "^1.11.0",
@@ -85,13 +86,13 @@
     "vitest": "^3.0.0"
   },
   "optionalDependencies": {
+    "@tapsmith/agent-android": "*",
+    "@tapsmith/agent-ios-simulator-arm64": "*",
+    "@tapsmith/agent-ios-simulator-x64": "*",
     "@tapsmith/core-darwin-arm64": "*",
     "@tapsmith/core-darwin-x64": "*",
     "@tapsmith/core-linux-arm64": "*",
-    "@tapsmith/core-linux-x64": "*",
-    "@tapsmith/agent-android": "*",
-    "@tapsmith/agent-ios-simulator-arm64": "*",
-    "@tapsmith/agent-ios-simulator-x64": "*"
+    "@tapsmith/core-linux-x64": "*"
   },
   "engines": {
     "node": ">=22"

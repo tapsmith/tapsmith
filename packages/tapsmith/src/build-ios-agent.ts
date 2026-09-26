@@ -631,76 +631,10 @@ async function runXcodebuild(
 
 // ─── CLI entry point ─────────────────────────────────────────────────────
 
-/**
- * Argument parser for `tapsmith build-ios-agent`. Kept deliberately small —
- * the command only has three flags and we want consistency with the
- * existing hand-rolled argument parsing in cli.ts rather than pulling in
- * yargs/commander.
- */
-export function parseBuildIosAgentArgs(argv: string[]): BuildIosAgentOptions & { help: boolean } {
-  const opts: BuildIosAgentOptions & { help: boolean } = { help: false };
-  let i = 0;
-  while (i < argv.length) {
-    const arg = argv[i]!;
-    if (arg === '--help' || arg === '-h') {
-      opts.help = true;
-      i += 1;
-    } else if (arg === '--verbose' || arg === '-v') {
-      opts.verbose = true;
-      i += 1;
-    } else if (arg === '--team-id') {
-      opts.teamId = argv[i + 1];
-      i += 2;
-    } else if (arg.startsWith('--team-id=')) {
-      opts.teamId = arg.slice('--team-id='.length);
-      i += 1;
-    } else if (arg === '--cwd') {
-      opts.cwd = argv[i + 1];
-      i += 2;
-    } else if (arg === '--derived-data-path') {
-      opts.derivedDataPath = argv[i + 1];
-      i += 2;
-    } else {
-      throw new Error(`Unknown flag: ${arg}`);
-    }
-  }
-  return opts;
-}
-
-function printHelp(): void {
-  console.log(`
-${bold('tapsmith build-ios-agent')} — Build the signed TapsmithAgent XCUITest runner for physical iOS devices.
-
-${bold('Usage:')}
-  tapsmith build-ios-agent [options]
-
-${bold('Options:')}
-  --team-id <TEAMID>     Apple Developer team ID (auto-detected if omitted)
-  --cwd <path>           Path to Tapsmith repo root (default: cwd)
-  --derived-data-path <path>
-                         Where to write build products (default: ios-agent/.build-device)
-  --verbose, -v          Stream raw xcodebuild output
-  --help, -h             Show this help
-`);
-}
-
-export async function runBuildIosAgent(argv: string[]): Promise<void> {
+export async function runBuildIosAgent(opts: BuildIosAgentOptions): Promise<void> {
   if (process.platform !== 'darwin') {
     console.error(red('tapsmith build-ios-agent is only supported on macOS.'));
     process.exit(1);
-  }
-
-  let opts: ReturnType<typeof parseBuildIosAgentArgs>;
-  try {
-    opts = parseBuildIosAgentArgs(argv);
-  } catch (err) {
-    console.error(red(err instanceof Error ? err.message : String(err)));
-    printHelp();
-    process.exit(1);
-  }
-  if (opts.help) {
-    printHelp();
-    return;
   }
 
   try {

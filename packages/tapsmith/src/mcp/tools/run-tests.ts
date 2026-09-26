@@ -20,6 +20,23 @@ const PROGRESS_INTERVAL_MS = 10_000;
 
 let _running = false;
 
+/**
+ * The `tapsmith test` argv for a run without a dispatcher (only a
+ * `createMcpServer` built without one; both real transports pass one). The
+ * CLI has no substring filter, so the `test` filter becomes a
+ * case-insensitive `--grep` of the escaped literal: the same match as
+ * `matchesTestFilter`, though as a CLI `--grep` it replaces a config `grep`
+ * rather than narrowing it. Values go in `=` form: a filter, project or
+ * serial may start with `-`.
+ */
+export function stdioTestArgs(opts: { files: string[]; testFilter?: string; project?: string; device?: string }): string[] {
+  const args = ['test', ...opts.files, '--trace', 'on'];
+  if (opts.testFilter) args.push(`--grep=/${opts.testFilter.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}/i`);
+  if (opts.project) args.push(`--project=${opts.project}`);
+  if (opts.device) args.push(`--device=${opts.device}`);
+  return args;
+}
+
 export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_run_tests',
@@ -187,10 +204,7 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
 
       _running = true;
       try {
-        const args = ['test', ...files, '--trace', 'on'];
-        if (testFilter) args.push('--test', testFilter);
-        if (project) args.push('--project', project);
-        if (device) args.push('--device', device);
+        const args = stdioTestArgs({ files, testFilter, project, device });
 
         sendProgress(`Started test run: ${files.length} file(s)`);
         const startedAt = Date.now();

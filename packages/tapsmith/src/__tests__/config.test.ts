@@ -585,6 +585,7 @@ describe('loadConfig rootDir anchoring', () => {
 });
 import {
   defineConfig,
+  effectiveConfigForProject,
   resolveDeviceStrategy,
   isExplicitWorkers,
   loadConfig,
@@ -610,6 +611,50 @@ describe('defineConfig()', () => {
     // A string 'false' would silently read as opted IN — refuse it instead.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the runtime guard against untyped config files
     expect(() => defineConfig({ telemetry: 'false' as any })).toThrow(/telemetry must be a boolean/);
+  });
+
+  // A typo in an untyped .js/.mjs config used to fall through to "record
+  // nothing" with no error (PILOT-254): refuse it, naming the valid modes.
+  it.each(['trace', 'video'] as const)('rejects an unknown %s mode, in string and object form', (key) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the runtime guard against untyped config files
+    const bad = 'retain-on-falure' as any;
+    for (const value of [bad, { mode: bad }]) {
+      expect(() => defineConfig({ [key]: value })).toThrow(
+        new RegExp(`config: ${key} must be one of 'off', 'on', .*'retain-on-failure-and-retries' \\(got "retain-on-falure"\\)`),
+      );
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the runtime guard against untyped config files
+    expect(() => defineConfig({ [key]: true as any })).toThrow(new RegExp(`${key} must be one of .*\\(got true\\)`));
+    // An array has no `mode` and used to resolve to off without a word.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the runtime guard against untyped config files
+    expect(() => defineConfig({ [key]: ['on'] as any })).toThrow(new RegExp(`${key} must be one of .*\\(got \\["on"\\]\\)`));
+  });
+
+  it.each(['trace', 'video'] as const)('accepts every valid %s mode and the unset forms', (key) => {
+    for (const mode of ['off', 'on', 'on-first-retry', 'on-all-retries', 'retain-on-failure', 'retain-on-first-failure', 'retain-on-failure-and-retries'] as const) {
+      expect(() => defineConfig({ [key]: mode })).not.toThrow();
+      expect(() => defineConfig({ [key]: { mode } })).not.toThrow();
+    }
+    expect(() => defineConfig({ [key]: {} })).not.toThrow();
+    // `cond ? 'on' : false` / `{ mode: null }` in an untyped config has always meant off.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say false / null
+    expect(() => defineConfig({ [key]: false as any })).not.toThrow();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say false / null
+    expect(() => defineConfig({ [key]: { mode: null } as any })).not.toThrow();
+    // `process.env.TRACE ?? 'off'` with the variable set but empty: nothing recorded, as before.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say '' / false
+    expect(() => defineConfig({ [key]: '' as any })).not.toThrow();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say '' / false
+    expect(() => defineConfig({ [key]: { mode: false } as any })).not.toThrow();
+    expect(() => defineConfig({ [key]: undefined })).not.toThrow();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped configs can say null
+    expect(() => defineConfig({ [key]: null as any })).not.toThrow();
+  });
+
+  it('rejects an unknown trace mode in a project\'s use block', () => {
+    const root = defineConfig();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exercising the runtime guard against untyped config files
+    expect(() => effectiveConfigForProject(root, { use: { trace: 'onn' as any } })).toThrow(/trace must be one of .*\(got "onn"\)/);
   });
 
   it('returns defaults when called with no arguments', () => {
@@ -830,6 +875,12 @@ describe('isExplicitWorkers() / loadConfig()', () => {
       expect(config.timeout).toBe(30_000);
       expect(config.workers).toBe(1);
       expect(isExplicitWorkers(config)).toBe(false);
+    });
+  });
+
+  it('loadConfig rejects an unknown trace mode in a .mjs config (PILOT-254)', async () => {
+    await withTempConfig('export default { trace: "retain-on-falure" };\n', 'tapsmith.config.mjs', async (dir) => {
+      await expect(loadConfig(dir)).rejects.toThrow(/trace must be one of .*\(got "retain-on-falure"\)/);
     });
   });
 

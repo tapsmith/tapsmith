@@ -21,6 +21,7 @@ import * as readline from 'node:readline';
 import { findDaemonBin } from './daemon-bin.js';
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { pickFreePort } from './port-utils.js';
+import type { IosNetworkCommandOptions } from './cli-program.js';
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
@@ -252,92 +253,20 @@ function revealInFinder(filePath: string): void {
   }
 }
 
-// ─── Argument parsing ───────────────────────────────────────────────────
-
-function parseArgs(argv: string[], mode: 'configure' | 'refresh'): Options & { help: boolean } {
-  let help = false;
-  let udid: string | undefined;
-  let ssid: string | undefined;
-  let deviceName: string | undefined;
-  let fixFirewall = false;
-  let i = 0;
-  while (i < argv.length) {
-    const arg = argv[i]!;
-    if (arg === '--help' || arg === '-h') {
-      help = true;
-      i += 1;
-    } else if (arg === '--ssid') {
-      ssid = argv[i + 1];
-      i += 2;
-    } else if (arg.startsWith('--ssid=')) {
-      ssid = arg.slice('--ssid='.length);
-      i += 1;
-    } else if (arg === '--device-name') {
-      deviceName = argv[i + 1];
-      i += 2;
-    } else if (arg.startsWith('--device-name=')) {
-      deviceName = arg.slice('--device-name='.length);
-      i += 1;
-    } else if (arg === '--fix-firewall') {
-      fixFirewall = true;
-      i += 1;
-    } else if (!arg.startsWith('-') && !udid) {
-      udid = arg;
-      i += 1;
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
-  return { udid: udid ?? '', ssid, deviceName, mode, fixFirewall, help };
-}
-
-function printHelp(mode: 'configure' | 'refresh'): void {
-  const command = mode === 'refresh' ? 'refresh-ios-network' : 'configure-ios-network';
-  console.log(`
-${bold(`tapsmith ${command}`)} — ${mode === 'refresh' ? 'Regenerate' : 'Generate'} a network capture profile for a physical iOS device.
-
-${bold('Usage:')}
-  tapsmith ${command} <udid> [options]
-
-${bold('Options:')}
-  --ssid <name>         Wi-Fi SSID the profile targets (defaults to the host's current network)
-  --device-name <name>  Friendly name for the PayloadDisplayName (defaults to the device's name)
-  --fix-firewall        Disable macOS Application Firewall stealth mode via sudo (prompts once)
-  --help, -h            Show this help
-`);
-}
-
 // ─── Entry points ───────────────────────────────────────────────────────
 
-export async function runConfigureIosNetwork(argv: string[]): Promise<void> {
-  await run(argv, 'configure');
+export async function runConfigureIosNetwork(args: IosNetworkCommandOptions): Promise<void> {
+  await run({ ...args, mode: 'configure' });
 }
 
-export async function runRefreshIosNetwork(argv: string[]): Promise<void> {
-  await run(argv, 'refresh');
+export async function runRefreshIosNetwork(args: IosNetworkCommandOptions): Promise<void> {
+  await run({ ...args, mode: 'refresh' });
 }
 
-async function run(argv: string[], mode: 'configure' | 'refresh'): Promise<void> {
+async function run(opts: Options): Promise<void> {
+  const { mode } = opts;
   if (process.platform !== 'darwin') {
     console.error(red(`tapsmith ${mode}-ios-network is only supported on macOS.`));
-    process.exit(1);
-  }
-
-  let opts: ReturnType<typeof parseArgs>;
-  try {
-    opts = parseArgs(argv, mode);
-  } catch (err) {
-    console.error(red(err instanceof Error ? err.message : String(err)));
-    printHelp(mode);
-    process.exit(1);
-  }
-  if (opts.help) {
-    printHelp(mode);
-    return;
-  }
-  if (!opts.udid) {
-    console.error(red('UDID is required. Run `tapsmith setup-ios-device` to see connected devices.'));
-    printHelp(mode);
     process.exit(1);
   }
 

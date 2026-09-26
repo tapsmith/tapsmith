@@ -159,12 +159,6 @@ describe("flaky network screen", () => {
 })
 ```
 
-Or via the CLI:
-
-```bash
-npx tapsmith test --retries 2
-```
-
 ### How retry attempts work
 
 When a test fails and retries are configured, Tapsmith re-runs the entire test from scratch -- including `beforeEach` hooks. Each attempt is independent:

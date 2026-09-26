@@ -244,46 +244,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function parseMcpServerArgs(argv: string[]): RunMcpServerOptions & { help?: boolean } {
-  const options: RunMcpServerOptions & { help?: boolean } = {};
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--help' || arg === '-h') {
-      options.help = true;
-    } else if (arg === '--config' || arg === '-c') {
-      const value = argv[++i];
-      if (!value) throw new Error(`${arg} requires a config file path`);
-      options.configFile = value;
-    } else if (arg.startsWith('--config=')) {
-      options.configFile = arg.slice('--config='.length);
-    } else {
-      throw new Error(`Unknown mcp-server argument: ${arg}`);
-    }
-  }
-  return options;
-}
-
-function printMcpServerHelp(): void {
-  process.stdout.write(`Usage: tapsmith mcp-server [options]\n\n`);
-  process.stdout.write(`Run the Tapsmith MCP server on stdio transport.\n\n`);
-  process.stdout.write(`Options:\n`);
-  process.stdout.write(`  -c, --config <file>  Tapsmith config file to load\n`);
-  process.stdout.write(`  -h, --help           Show this help\n\n`);
-  process.stdout.write(`Examples:\n`);
-  process.stdout.write(`  codex mcp add tapsmith -- npx tapsmith mcp-server\n`);
-  process.stdout.write(`  claude mcp add tapsmith -- npx tapsmith mcp-server\n`);
-  process.stdout.write(`  npx tapsmith mcp-server --config tapsmith.config.ios.mjs\n`);
-}
-
 export async function runMcpServer(
-  argv: string[] = [],
+  options: RunMcpServerOptions = {},
   runtimeOptions: RunMcpServerRuntimeOptions = {},
 ): Promise<void> {
-  const options = parseMcpServerArgs(argv);
-  if (options.help) {
-    printMcpServerHelp();
-    return;
-  }
 
   // Discover UI server for event reporting
   const uiPort = discoverUiServerPort();

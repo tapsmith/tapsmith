@@ -3,8 +3,19 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Telemetry, TELEMETRY_DOCS_URL } from '../telemetry.js';
-import { runTelemetryCommand } from '../telemetry-cli.js';
+import { runTelemetryCommand, type TelemetryCommandDeps } from '../telemetry-cli.js';
+import { runCli, type CliHandlers } from '../cli-program.js';
 import { defineConfig, type TapsmithConfig } from '../config.js';
+
+/** `tapsmith telemetry <argv>` through the real command tree, with the command's output captured. */
+function runTelemetry(argv: string[], deps: TelemetryCommandDeps): Promise<number> {
+  const handlers = { telemetry: (args) => runTelemetryCommand(args, deps) } as Partial<CliHandlers> as CliHandlers;
+  return runCli(['telemetry', ...argv], {
+    handlers,
+    version: '0.0.0',
+    io: { out: (t) => deps.stdout?.(t), err: (t) => deps.stderr?.(t) },
+  });
+}
 
 let tempDir: string;
 let stateFile: string;
@@ -20,7 +31,7 @@ function harness(opts: { env?: NodeJS.ProcessEnv; config?: TapsmithConfig | Erro
     sdkVersion: '9.9.9',
     writeNotice: () => undefined,
   });
-  const run = (argv: string[]) => runTelemetryCommand(argv, {
+  const run = (argv: string[]) => runTelemetry(argv, {
     telemetry,
     stdout: (t) => out.push(t),
     stderr: (t) => err.push(t),
@@ -187,31 +198,33 @@ describe('tapsmith telemetry enable / disable', () => {
 });
 
 describe('argument handling', () => {
-  it('rejects unknown arguments with usage and exit 1', async () => {
+  it('rejects unknown arguments with a pointer to usage and exit 1', async () => {
     const h = harness();
     expect(await h.run(['nuke'])).toBe(1);
-    expect(h.errText()).toContain('Unknown argument: nuke');
-    expect(h.errText()).toContain('Usage: tapsmith telemetry');
+    expect(h.errText()).toContain("value 'nuke' is invalid");
+    expect(h.errText()).toContain('status, enable, disable');
+    expect(h.errText()).toContain('tapsmith telemetry --help');
     expect(h.text()).toBe('');
   });
 
   it('rejects two subcommands', async () => {
     const h = harness();
     expect(await h.run(['enable', 'disable'])).toBe(1);
-    expect(h.errText()).toContain('Unexpected argument: disable');
+    expect(h.errText()).toContain('too many arguments');
     expect(fs.existsSync(stateFile)).toBe(false);
   });
 
   it('prints usage on --help', async () => {
     const h = harness();
     expect(await h.run(['--help'])).toBe(0);
-    expect(h.text()).toContain('Usage: tapsmith telemetry [status|enable|disable]');
+    expect(h.text()).toContain('Usage: tapsmith telemetry [options] [action]');
+    expect(h.text()).toContain(TELEMETRY_DOCS_URL);
   });
 
   it('accepts -c / --config for status', async () => {
     const seen: Array<string | undefined> = [];
     const h = harness();
-    const run = (argv: string[]) => runTelemetryCommand(argv, {
+    const run = (argv: string[]) => runTelemetry(argv, {
       telemetry: h.telemetry,
       stdout: () => undefined,
       stderr: () => undefined,

@@ -17,21 +17,7 @@ import * as path from 'node:path';
 
 export interface VerifyArgs {
   json: boolean;
-  config: string | undefined;
-  help: boolean;
-}
-
-export function parseVerifyArgs(argv: string[]): VerifyArgs {
-  const args: VerifyArgs = { json: false, config: undefined, help: false };
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (arg === '--json') args.json = true;
-    else if (arg === '--config' || arg === '-c') args.config = argv[++i];
-    else if (arg.startsWith('--config=')) args.config = arg.slice('--config='.length);
-    else if (arg === '--help' || arg === '-h') args.help = true;
-    else throw new Error(`Unknown verify flag: ${arg} (usage: tapsmith verify [--json] [--config <file>])`);
-  }
-  return args;
+  config?: string;
 }
 
 export function pickVerifyTarget(testFiles: string[]): string | undefined {
@@ -111,18 +97,6 @@ export function cleanupVerifySmokeTest(scaffolded: ScaffoldedVerifyTest | undefi
 
 // ─── Command entry ───
 
-const VERIFY_USAGE = `Usage: tapsmith verify [--json] [--config <file>]
-
-Runs one test end-to-end (device boot, app install, real runner) to prove
-the configured setup works. Scaffolds a throwaway smoke test if the project
-has no tests yet.
-
-Options:
-  --json             Machine-readable output (also on errors)
-  -c, --config <p>   Path to config file
-  -h, --help         Show this help
-`;
-
 function emitError(json: boolean, code: string, message: string, fix?: string): void {
   if (json) {
     console.log(JSON.stringify({ error: { code, message, fix } }, null, 2));
@@ -133,20 +107,7 @@ function emitError(json: boolean, code: string, message: string, fix?: string): 
   process.exitCode = 1;
 }
 
-export async function runVerify(argv: string[]): Promise<void> {
-  let args: VerifyArgs;
-  try {
-    args = parseVerifyArgs(argv);
-  } catch (err) {
-    emitError(argv.includes('--json'), 'BAD_ARGS', err instanceof Error ? err.message : String(err));
-    return;
-  }
-
-  if (args.help) {
-    process.stdout.write(VERIFY_USAGE);
-    return;
-  }
-
+export async function runVerify(args: VerifyArgs): Promise<void> {
   try {
     // Fast-fail when no config file exists and no explicit --config was provided.
     // loadConfig falls back to defaults, so without this guard verify would launch
@@ -214,7 +175,8 @@ export async function runVerify(argv: string[]): Promise<void> {
 
       const child = spawnSync(process.execPath, [
         process.argv[1], 'test', target, '--reporter', 'json',
-        ...(args.config ? ['--config', args.config] : []),
+        // = form: a path that starts with "-" would read as a flag.
+        ...(args.config ? [`--config=${args.config}`] : []),
       ], {
         stdio: args.json ? ['ignore', 'ignore', 'pipe'] : 'inherit',
         maxBuffer: 64 * 1024 * 1024,

@@ -113,3 +113,14 @@ describe('recordsOnlyOnRetry', () => {
     expect(recordsOnlyOnRetry('retain-on-failure-and-retries')).toBe(false);
   });
 });
+
+// Config validation lets '' and a false/'' mode through as "off" (untyped
+// configs: `process.env.TRACE ?? 'off'` with an empty variable). Every
+// consumer tests `mode !== 'off'`, so they must resolve to exactly 'off' or
+// network capture (adb root, the MITM proxy) switches on for a config that
+// records nothing.
+describe('resolveTraceConfig falsy modes', () => {
+  it.each([[''], [{ mode: '' }], [{ mode: false }], [{ mode: null }], [false]])('%j resolves to off', (input) => {
+    expect(resolveTraceConfig(input as never).mode).toBe('off');
+  });
+});

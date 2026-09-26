@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   matchKnownErrorHint,
-  parseBuildIosAgentArgs,
   parseCodesignIdentities,
   parseXcodeTeams,
 } from '../build-ios-agent.js';
@@ -152,39 +151,3 @@ describe('matchKnownErrorHint', () => {
   });
 });
 
-describe('parseBuildIosAgentArgs', () => {
-  it('defaults to help=false with no args', () => {
-    const opts = parseBuildIosAgentArgs([]);
-    expect(opts.help).toBe(false);
-    expect(opts.verbose).toBeUndefined();
-    expect(opts.teamId).toBeUndefined();
-  });
-
-  it('recognizes --help and -h', () => {
-    expect(parseBuildIosAgentArgs(['--help']).help).toBe(true);
-    expect(parseBuildIosAgentArgs(['-h']).help).toBe(true);
-  });
-
-  it('parses --team-id <value>', () => {
-    expect(parseBuildIosAgentArgs(['--team-id', 'XXXXXXXXXX']).teamId).toBe('XXXXXXXXXX');
-  });
-
-  it('parses --team-id=value', () => {
-    expect(parseBuildIosAgentArgs(['--team-id=YYY']).teamId).toBe('YYY');
-  });
-
-  it('recognizes --verbose / -v', () => {
-    expect(parseBuildIosAgentArgs(['--verbose']).verbose).toBe(true);
-    expect(parseBuildIosAgentArgs(['-v']).verbose).toBe(true);
-  });
-
-  it('parses --cwd and --derived-data-path', () => {
-    const opts = parseBuildIosAgentArgs(['--cwd', '/tmp/x', '--derived-data-path', '/tmp/y']);
-    expect(opts.cwd).toBe('/tmp/x');
-    expect(opts.derivedDataPath).toBe('/tmp/y');
-  });
-
-  it('throws on unknown flags', () => {
-    expect(() => parseBuildIosAgentArgs(['--nonsense'])).toThrow(/Unknown flag/);
-  });
-});

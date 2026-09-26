@@ -9,7 +9,6 @@ import {
   isSupportedNodeVersion,
   parseAvdImageTag,
   parseAvdApiLevel,
-  parseDoctorConfigFlag,
   parseNetworksetupProxy,
   scanAvdImageTags,
   stripAnsi,
@@ -229,21 +228,6 @@ describe('summarizeAvdImages()', () => {
       expect(summary?.status).toBe('pass');
       expect(stripAnsi(summary!.label)).toContain('could not read: Broken');
     });
-  });
-});
-
-describe('parseDoctorConfigFlag()', () => {
-  it('parses -c, --config, and --config= forms', () => {
-    expect(parseDoctorConfigFlag(['-c', 'a.mjs'])).toBe('a.mjs');
-    expect(parseDoctorConfigFlag(['--config', 'b.mjs'])).toBe('b.mjs');
-    expect(parseDoctorConfigFlag(['--config=c.mjs'])).toBe('c.mjs');
-    expect(parseDoctorConfigFlag(['--json'])).toBeUndefined();
-  });
-
-  it('rejects missing or option-like values', () => {
-    expect(() => parseDoctorConfigFlag(['-c'])).toThrow(/Missing value for -c/);
-    expect(() => parseDoctorConfigFlag(['-c', '--json'])).toThrow(/Missing value for -c/);
-    expect(() => parseDoctorConfigFlag(['--config='])).toThrow(/Missing value for --config/);
   });
 });
 

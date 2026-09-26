@@ -49,7 +49,6 @@ const PROBE_URL = 'https://example.com/';
 
 interface VerifyOptions {
   udid: string
-  help: boolean
 }
 
 // ─── Daemon lifecycle ───────────────────────────────────────────────────
@@ -321,55 +320,7 @@ function reportOutcome(outcome: VerificationOutcome): boolean {
 
 // ─── CLI entry point ────────────────────────────────────────────────────
 
-function parseArgs(argv: string[]): VerifyOptions {
-  let help = false;
-  let udid: string | undefined;
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    if (arg === '--help' || arg === '-h') {
-      help = true;
-    } else if (!arg.startsWith('-') && !udid) {
-      udid = arg;
-    } else {
-      throw new Error(`Unknown argument: ${arg}`);
-    }
-  }
-  return { udid: udid ?? '', help };
-}
-
-function printHelp(): void {
-  console.log(`
-${bold('tapsmith verify-ios-network')} — Sanity-check that a physical iOS device is correctly routed through Tapsmith's MITM proxy.
-
-${bold('Usage:')}
-  tapsmith verify-ios-network <udid>
-
-${bold('What it does:')}
-  Starts the Tapsmith proxy, asks you to load an HTTPS page in Safari on
-  the device, then reports whether Tapsmith saw the request and was able
-  to decrypt it. Use this after running ${bold('tapsmith configure-ios-network')}
-  to confirm both the proxy profile and the CA trust are in place
-  before running tests.
-
-${bold('Options:')}
-  --help, -h    Show this help
-`);
-}
-
-export async function runVerifyIosNetwork(argv: string[]): Promise<void> {
-  let opts: VerifyOptions;
-  try {
-    opts = parseArgs(argv);
-  } catch (err) {
-    console.error(red(err instanceof Error ? err.message : String(err)));
-    printHelp();
-    process.exit(1);
-  }
-  if (opts.help) { printHelp(); return; }
-  if (!opts.udid) {
-    console.error(red('Usage: tapsmith verify-ios-network <udid>'));
-    process.exit(1);
-  }
+export async function runVerifyIosNetwork(opts: VerifyOptions): Promise<void> {
 
   try {
     const outcome = await runVerification(opts.udid);

@@ -1,16 +1,14 @@
 #!/usr/bin/env -S node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON
 
 /**
- * CLI entry point for `npx tapsmith`.
- *
- * Commands:
- *   tapsmith test [files...]           Run tests
- *   tapsmith test --device <serial>    Target specific device
- *   tapsmith --version                 Print version
+ * CLI entry point for `npx tapsmith`. The command tree, flags and help live
+ * in `cli-program.ts`; this file holds what the commands do, above all the
+ * `tapsmith test` run body.
  */
 
 import * as path from 'node:path';
 import * as fs from 'node:fs';
+import { printsBanner, runCli, type CliHandlers, type TestCommandArgs } from './cli-program.js';
 import { loadConfig, configPathOf, normalizeGrep, resolveDeviceStrategy, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
 import figlet from 'figlet';
 import { TapsmithGrpcClient } from './grpc-client.js';
@@ -101,61 +99,6 @@ function printTapsmithBanner(): void {
   console.log(banner.split('\n').map((line) => `${GREEN}${line}${RESET}`).join('\n'));
   console.log(dim(`v${getVersion()}`));
   console.log();
-}
-
-function argsAfterCommand(command: string): string[] {
-  const idx = process.argv.indexOf(command);
-  return idx >= 0 ? process.argv.slice(idx + 1) : [];
-}
-
-function commandArgsInclude(command: string, ...flags: string[]): boolean {
-  const wanted = new Set(flags);
-  return argsAfterCommand(command).some((arg) => wanted.has(arg));
-}
-
-/** Argv to forward to a subcommand's own parser, minus the tsx re-exec marker. */
-function forwardedArgs(command: string): string[] {
-  return argsAfterCommand(command).filter((a) => a !== '--__tsx-reexec');
-}
-
-function shouldPrintBannerForCommand(args: CliArgs): boolean {
-  if (!args.command || args.version || args.help) return false;
-
-  // Keep protocol and machine-readable surfaces byte-clean.
-  if (args.command === 'mcp-server') return false;
-  // A settings switch, not a run: no banner, like `--version`.
-  if (args.command === 'telemetry') return false;
-  if (args.command === 'list-devices' && commandArgsInclude(args.command, '--json')) return false;
-  if (args.command === 'doctor' && commandArgsInclude(args.command, '--json')) return false;
-  if (args.command === 'verify' && commandArgsInclude(args.command, '--json')) return false;
-
-  // These commands render command-specific help after the top-level parser
-  // stops, so suppress the decorative banner when the user only asked for help.
-  if (commandArgsInclude(args.command, '--help', '-h')) return false;
-
-  // `init` already owns its banner because the wizard can be called directly
-  // from tests and package consumers.
-  if (args.command === 'init') return false;
-
-  // Test mode prints its banner after TypeScript re-exec and test discovery,
-  // immediately before the launch output.
-  if (args.command === 'test') return false;
-
-  return new Set([
-    'show-trace',
-    'show-report',
-    'merge-reports',
-    'list-devices',
-    'setup-ios',
-    'setup-ios-device',
-    'build-ios-agent',
-    'create-avd',
-    'configure-ios-network',
-    'refresh-ios-network',
-    'verify-ios-network',
-    'verify',
-    'doctor',
-  ]).has(args.command);
 }
 
 function warnSequentialUnhealthyDevices(devices: DeviceHealthResult[], progress?: LaunchProgressSink): void {
@@ -1155,204 +1098,6 @@ async function ensureSequentialTargetDevice(
   };
 }
 
-// ─── Argument parsing ───
-
-interface CliArgs {
-  command: string;
-  files: string[];
-  device?: string;
-  workers?: number;
-  shard?: { current: number; total: number };
-  trace?: string;
-  /** `--video <mode>` override. See `VideoMode` in config for accepted values. */
-  video?: string;
-  watch: boolean;
-  ui: boolean;
-  uiPort?: number;
-  uiDevUrl?: string;
-  config?: string;
-  forceInstall: boolean;
-  version: boolean;
-  help: boolean;
-  tsxReexec: boolean;
-  /** Pattern from `--grep` / `-g`. Compiled to a RegExp later. */
-  grep?: string;
-  /** Pattern from `--grep-invert`. Compiled to a RegExp later. */
-  grepInvert?: string;
-  /** Reporter override from `--reporter`. */
-  reporter?: string;
-  /** Project name(s) from `--project` (repeatable). Filters which configured projects run. */
-  project?: string[];
-}
-
-function compileGrepPattern(pattern: string, flag: string): RegExp {
-  try {
-    const match = pattern.match(/^\/(.*)\/([gimusy]*)$/);
-    if (match) return new RegExp(match[1], match[2]);
-    return new RegExp(pattern);
-  } catch (err) {
-    console.error(red(`${flag} is not a valid regular expression: ${(err as Error).message}`));
-    process.exit(1);
-  }
-}
-
-function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = {
-    command: '',
-    files: [],
-    watch: false,
-    ui: false,
-    version: false,
-    help: false,
-    forceInstall: false,
-    tsxReexec: false,
-  };
-
-  const rest = argv.slice(2);
-  let i = 0;
-
-  while (i < rest.length) {
-    const arg = rest[i];
-
-    if (arg === '--version' || arg === '-v') {
-      args.version = true;
-    } else if (arg === '--help' || arg === '-h') {
-      args.help = true;
-    } else if (arg === '--device' || arg === '-d') {
-      args.device = rest[++i];
-    } else if (arg?.startsWith('--device=')) {
-      args.device = arg.slice('--device='.length);
-    } else if (arg === '--workers' || arg === '-j') {
-      const val = parseInt(rest[++i], 10);
-      if (isNaN(val) || val < 1) {
-        console.error(red('--workers must be a positive integer'));
-        process.exit(1);
-      }
-      args.workers = val;
-    } else if (arg?.startsWith('--workers=') || arg?.startsWith('-j=')) {
-      const raw = arg.startsWith('--workers=')
-        ? arg.slice('--workers='.length)
-        : arg.slice('-j='.length);
-      const val = parseInt(raw, 10);
-      if (isNaN(val) || val < 1) {
-        console.error(red('--workers must be a positive integer'));
-        process.exit(1);
-      }
-      args.workers = val;
-    } else if (arg?.startsWith('--shard=')) {
-      const shardStr = arg.slice('--shard='.length);
-      const match = shardStr.match(/^(\d+)\/(\d+)$/);
-      if (!match) {
-        console.error(red('--shard must be in the format x/y (e.g. --shard=1/4)'));
-        process.exit(1);
-      }
-      const current = parseInt(match[1], 10);
-      const total = parseInt(match[2], 10);
-      if (current < 1 || current > total) {
-        console.error(red(`Invalid shard: ${current}/${total}. Current must be between 1 and total.`));
-        process.exit(1);
-      }
-      args.shard = { current, total };
-    } else if (arg === '--trace') {
-      args.trace = rest[++i] ?? 'on';
-    } else if (arg?.startsWith('--trace=')) {
-      args.trace = arg.slice('--trace='.length);
-    } else if (arg === '--video') {
-      args.video = rest[++i] ?? 'on';
-    } else if (arg?.startsWith('--video=')) {
-      args.video = arg.slice('--video='.length);
-    } else if (arg === '--watch' || arg === '-w') {
-      args.watch = true;
-    } else if (arg === '--ui') {
-      args.ui = true;
-    } else if (arg === '--ui-port') {
-      const val = parseInt(rest[++i], 10);
-      if (isNaN(val) || val < 0) {
-        console.error(red('--ui-port must be a non-negative integer'));
-        process.exit(1);
-      }
-      args.uiPort = val;
-    } else if (arg?.startsWith('--ui-port=')) {
-      const val = parseInt(arg.slice('--ui-port='.length), 10);
-      if (isNaN(val) || val < 0) {
-        console.error(red('--ui-port must be a non-negative integer'));
-        process.exit(1);
-      }
-      args.uiPort = val;
-    } else if (arg === '--ui-dev-url') {
-      args.uiDevUrl = rest[++i];
-    } else if (arg?.startsWith('--ui-dev-url=')) {
-      args.uiDevUrl = arg.slice('--ui-dev-url='.length);
-    } else if (arg === '--config' || arg === '-c') {
-      args.config = rest[++i];
-    } else if (arg?.startsWith('--config=')) {
-      args.config = arg.slice('--config='.length);
-    } else if (arg === '--reporter') {
-      args.reporter = rest[++i];
-    } else if (arg?.startsWith('--reporter=')) {
-      args.reporter = arg.slice('--reporter='.length);
-    } else if (arg === '--project') {
-      const val = rest[++i];
-      if (!val) {
-        console.error(red('--project requires a project name'));
-        process.exit(1);
-      }
-      (args.project ??= []).push(val);
-    } else if (arg?.startsWith('--project=')) {
-      const val = arg.slice('--project='.length);
-      if (!val) {
-        console.error(red('--project requires a project name'));
-        process.exit(1);
-      }
-      (args.project ??= []).push(val);
-    } else if (arg === '--grep' || arg === '-g') {
-      args.grep = rest[++i];
-    } else if (arg?.startsWith('--grep=')) {
-      args.grep = arg.slice('--grep='.length);
-    } else if (arg?.startsWith('-g=')) {
-      args.grep = arg.slice('-g='.length);
-    } else if (arg === '--grep-invert') {
-      args.grepInvert = rest[++i];
-    } else if (arg?.startsWith('--grep-invert=')) {
-      args.grepInvert = arg.slice('--grep-invert='.length);
-    } else if (arg === '--force-install') {
-      args.forceInstall = true;
-    } else if (arg === '--__tsx-reexec') {
-      args.tsxReexec = true;
-    } else if (!arg.startsWith('-') && !args.command) {
-      args.command = arg;
-      // Subcommands with their own argument parsers: stop consuming here
-      // so downstream flags (e.g. `build-ios-agent --verbose --team-id X`)
-      // aren't rejected by the top-level parser. The subcommand handler
-      // re-parses from process.argv after the command name.
-      if (
-        arg === 'build-ios-agent'
-        || arg === 'create-avd'
-        || arg === 'configure-ios-network'
-        || arg === 'refresh-ios-network'
-        || arg === 'verify-ios-network'
-        || arg === 'verify'
-        || arg === 'list-devices'
-        || arg === 'mcp-server'
-        || arg === 'doctor'
-        || arg === 'init'
-        || arg === 'telemetry'
-      ) {
-        break;
-      }
-    } else if (!arg.startsWith('-')) {
-      args.files.push(arg);
-    } else {
-      console.error(red(`Unknown argument: ${arg}`));
-      process.exit(1);
-    }
-
-    i++;
-  }
-
-  return args;
-}
-
 /**
  * Provision additional device serials for multi-worker iOS/Android modes.
  * Returns the full list of device serials (including the primary), or
@@ -1790,107 +1535,14 @@ async function provisionPerProjectDevices(
   return result;
 }
 
-function printHelp(): void {
-  printTapsmithBanner();
-  console.log(`${bold('Mobile app testing framework')}
-
-${bold('Usage:')}
-  tapsmith test [files...]           Run test files
-  tapsmith test --watch              Watch test files and re-run on change
-  tapsmith test --ui                 Open interactive UI mode
-  tapsmith test --ui --ui-port 8080  UI mode on specific port
-  tapsmith test --device <serial>    Target specific device/simulator
-  tapsmith test --workers <n>        Run tests in parallel across n devices
-  tapsmith test --shard=x/y          Run shard x of y (for CI)
-  tapsmith test --trace <mode>       Record traces (on, retain-on-failure, etc.)
-  tapsmith test --video <mode>       Record videos (on, retain-on-failure, etc.)
-  tapsmith show-trace <file.zip>     Open trace viewer in browser
-  tapsmith show-report [dir]         Open HTML test report
-  tapsmith merge-reports [dir]       Merge blob reports from sharded runs
-  tapsmith list-devices              List connected devices (Android, iOS sim, iOS physical)
-  tapsmith list-devices --json       Same, as JSON for scripting
-  tapsmith setup-ios                 First-run setup for iOS network capture (macOS only)
-  tapsmith setup-ios-device          Preflight checklist for physical iOS device testing
-  tapsmith build-ios-agent           Build the signed TapsmithAgent runner for physical iOS devices
-  tapsmith create-avd                Create an Android AVD that supports HTTPS network capture
-  tapsmith configure-ios-network <udid>   Generate a network capture profile (.mobileconfig) for a physical iOS device
-  tapsmith refresh-ios-network <udid>     Regenerate the network capture profile after a host Wi-Fi change
-  tapsmith verify-ios-network <udid>      Verify HTTPS capture for a normal system-trust client on a physical iOS device
-  tapsmith init                      Initialize a new Tapsmith project (interactive wizard)
-  tapsmith init --yes [--json]       Non-interactive init for scripts/AI agents (see init --help)
-  tapsmith verify [--json]           Run one test end-to-end to prove the setup works
-  tapsmith doctor [--json] [-c file] Check system health (--json includes fixes + device inventory)
-  tapsmith mcp-server [--config file] Run MCP server for LLM/agent integration (stdio transport)
-  tapsmith telemetry [status|enable|disable]  Show or switch anonymous usage telemetry for this machine
-  tapsmith --version                 Print version
-  tapsmith --help                    Show this help
-
-${bold('Options:')}
-  -w, --watch              Watch test files and re-run on change
-  -d, --device <serial>    Target a specific device or simulator by serial/UDID
-  -j, --workers <n>        Number of parallel workers (default: 1)
-  --shard=x/y              Split tests across CI machines (e.g. --shard=1/4)
-  --trace <mode>           Trace mode: off, on, on-first-retry, on-all-retries,
-                           retain-on-failure, retain-on-first-failure,
-                           retain-on-failure-and-retries
-  --video <mode>           Video mode (same set as --trace). Records the
-                           device screen for the lifetime of each test.
-  -c, --config <path>      Path to config file (default: tapsmith.config.ts)
-  -g, --grep <pattern>     Run only tests whose fullName matches this regex
-  --grep-invert <pattern>  Skip tests whose fullName matches this regex
-  --reporter <name>        Override the reporter (list, line, dot, json, junit, html, github)
-  --project <name>         Only run the named project from your config (repeatable;
-                           dependencies run automatically)
-  --force-install          Reinstall the app even if already installed
-  -v, --version            Print version
-  -h, --help               Show this help
-`);
-}
-
 // ─── Main ───
 
-async function main(): Promise<void> {
-  const args = parseArgs(process.argv);
+/** What each command does. Heavy modules load only when their command runs. */
+const cliHandlers: CliHandlers = {
+  test: (args) => runTestCommand(args),
 
-  if (args.version) {
-    console.log(getVersion());
-    return;
-  }
-
-  // Stamp one telemetry session id into the environment before any child is
-  // forked (the tsx re-exec, workers, watch/MCP run children all inherit it),
-  // so every per-file event of this invocation shares one session (PILOT-330).
-  ensureSessionEnv();
-
-  // Subcommands that print their own command-specific help on --help.
-  // Other commands (e.g. `tapsmith test --help`) fall back to the top-level
-  // help below.
-  const subcommandsWithOwnHelp = new Set<string>([
-    'build-ios-agent',
-    'create-avd',
-    'configure-ios-network',
-    'refresh-ios-network',
-    'verify-ios-network',
-    'init',
-    'verify',
-  ]);
-
-  if (args.help && !(args.command && subcommandsWithOwnHelp.has(args.command))) {
-    printHelp();
-    return;
-  }
-  if (!args.command) {
-    printHelp();
-    return;
-  }
-
-  if (shouldPrintBannerForCommand(args)) {
-    printTapsmithBanner();
-  }
-
-  if (args.command === 'show-report') {
-    const reportDir = args.files[0] ?? 'tapsmith-report';
-    const reportPath = path.resolve(process.cwd(), reportDir, 'index.html');
+  showReport: async ({ dir }) => {
+    const reportPath = path.resolve(process.cwd(), dir ?? 'tapsmith-report', 'index.html');
     if (!fs.existsSync(reportPath)) {
       console.error(red(`No report found at ${reportPath}`));
       process.exit(1);
@@ -1905,20 +1557,14 @@ async function main(): Promise<void> {
       console.error(red(`Failed to open report: ${err instanceof Error ? err.message : String(err)}`));
       process.exit(1);
     }
-    return;
-  }
+  },
 
-  if (args.command === 'show-trace') {
-    const traceFile = args.files[0];
-    if (!traceFile) {
-      console.error(red('Usage: tapsmith show-trace <trace.zip>'));
-      process.exit(1);
-    }
+  showTrace: async ({ file }) => {
     const { showTrace } = await import('./trace/show-trace-server.js');
     try {
       console.log(bold('Opening trace viewer'));
-      console.log(dim(path.resolve(traceFile)));
-      const server = await showTrace({ tracePath: traceFile });
+      console.log(dim(path.resolve(file)));
+      const server = await showTrace({ tracePath: file });
       console.log(green('✓ trace viewer ready'));
       console.log(dim(`Trace viewer running at http://127.0.0.1:${server.port}/`));
       console.log(dim('Press Ctrl+C to stop.'));
@@ -1933,112 +1579,48 @@ async function main(): Promise<void> {
       console.error(red(`${err instanceof Error ? err.message : String(err)}`));
       process.exit(1);
     }
-    return;
-  }
+  },
 
-  if (args.command === 'merge-reports') {
+  mergeReports: async ({ dir, config: configFile }) => {
     const { runMergeReports } = await import('./merge-reports.js');
-    const config = await loadConfig(undefined, args.config);
-    const code = await runMergeReports(args.files[0] ?? 'blob-report', config);
+    const config = await loadConfig(undefined, configFile);
+    const code = await runMergeReports(dir ?? 'blob-report', config);
     if (code !== 0) process.exit(code);
-    return;
-  }
+  },
 
-  if (args.command === 'list-devices') {
-    const { runListDevices } = await import('./list-devices.js');
-    const forwardedArgv = forwardedArgs('list-devices');
-    await runListDevices(forwardedArgv);
-    return;
-  }
+  listDevices: async (opts) => (await import('./list-devices.js')).runListDevices(opts),
+  setupIos: async () => (await import('./setup-ios.js')).runSetupIos(),
+  setupIosDevice: async () => (await import('./setup-ios-device.js')).runSetupIosDevice(),
+  configureIosNetwork: async (opts) => (await import('./configure-ios-network.js')).runConfigureIosNetwork(opts),
+  refreshIosNetwork: async (opts) => (await import('./configure-ios-network.js')).runRefreshIosNetwork(opts),
+  verifyIosNetwork: async (opts) => (await import('./verify-ios-network.js')).runVerifyIosNetwork(opts),
+  buildIosAgent: async (opts) => (await import('./build-ios-agent.js')).runBuildIosAgent(opts),
+  createAvd: async (opts) => (await import('./create-avd.js')).runCreateAvd(opts),
+  init: async (opts) => (await import('./init.js')).runInit(opts),
+  verify: async (opts) => (await import('./verify.js')).runVerify(opts),
+  doctor: async (opts) => (await import('./doctor.js')).runDoctor(opts),
+  mcpServer: async ({ config }) => (await import('./mcp/index.js')).runMcpServer({ configFile: config }),
+  telemetry: async (opts) => (await import('./telemetry-cli.js')).runTelemetryCommand(opts),
+};
 
-  if (args.command === 'setup-ios') {
-    const { runSetupIos } = await import('./setup-ios.js');
-    await runSetupIos();
-    return;
-  }
+async function main(): Promise<void> {
+  // Stamp one telemetry session id into the environment before any child is
+  // forked (the tsx re-exec, workers, watch/MCP run children all inherit it),
+  // so every per-file event of this invocation shares one session (PILOT-330).
+  ensureSessionEnv();
 
-  if (args.command === 'setup-ios-device') {
-    const { runSetupIosDevice } = await import('./setup-ios-device.js');
-    await runSetupIosDevice();
-    return;
-  }
+  const code = await runCli(process.argv.slice(2), {
+    handlers: cliHandlers,
+    version: getVersion(),
+    beforeAction: (command, opts) => {
+      if (printsBanner(command, opts)) printTapsmithBanner();
+    },
+  });
+  // A handler that set process.exitCode itself returns nothing: keep its code.
+  if (code !== 0) process.exitCode = code;
+}
 
-  if (args.command === 'configure-ios-network') {
-    const { runConfigureIosNetwork } = await import('./configure-ios-network.js');
-    const forwardedArgv = forwardedArgs('configure-ios-network');
-    await runConfigureIosNetwork(forwardedArgv);
-    return;
-  }
-
-  if (args.command === 'refresh-ios-network') {
-    const { runRefreshIosNetwork } = await import('./configure-ios-network.js');
-    const forwardedArgv = forwardedArgs('refresh-ios-network');
-    await runRefreshIosNetwork(forwardedArgv);
-    return;
-  }
-
-  if (args.command === 'verify-ios-network') {
-    const { runVerifyIosNetwork } = await import('./verify-ios-network.js');
-    const forwardedArgv = forwardedArgs('verify-ios-network');
-    await runVerifyIosNetwork(forwardedArgv);
-    return;
-  }
-
-  if (args.command === 'build-ios-agent') {
-    const { runBuildIosAgent } = await import('./build-ios-agent.js');
-    // Everything after the subcommand name is forwarded; drop the verb.
-    const forwardedArgv = forwardedArgs('build-ios-agent');
-    await runBuildIosAgent(forwardedArgv);
-    return;
-  }
-
-  if (args.command === 'init') {
-    const { runInit } = await import('./init.js');
-    const forwardedArgv = forwardedArgs('init');
-    await runInit(forwardedArgv);
-    return;
-  }
-
-  if (args.command === 'create-avd') {
-    const { runCreateAvd } = await import('./create-avd.js');
-    const forwardedArgv = forwardedArgs('create-avd');
-    await runCreateAvd(forwardedArgv);
-    return;
-  }
-
-  if (args.command === 'doctor') {
-    const { runDoctor } = await import('./doctor.js');
-    const forwardedArgv = forwardedArgs('doctor');
-    await runDoctor(forwardedArgv);
-    return;
-  }
-
-  if (args.command === 'telemetry') {
-    const { runTelemetryCommand } = await import('./telemetry-cli.js');
-    process.exitCode = await runTelemetryCommand(forwardedArgs('telemetry'));
-    return;
-  }
-
-  if (args.command === 'mcp-server') {
-    const { runMcpServer } = await import('./mcp/index.js');
-    const forwardedArgv = forwardedArgs('mcp-server');
-    await runMcpServer(forwardedArgv);
-    return;
-  }
-
-  if (args.command === 'verify') {
-    const { runVerify } = await import('./verify.js');
-    const forwardedArgv = forwardedArgs('verify');
-    await runVerify(forwardedArgv);
-    return;
-  }
-
-  if (args.command !== 'test') {
-    console.error(red(`Unknown command: ${args.command}`));
-    printHelp();
-    process.exit(1);
-  }
-
+async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // Load config
   const config = await loadConfig(undefined, args.config);
   const configPath = configPathOf(config);
@@ -2058,16 +1640,16 @@ async function main(): Promise<void> {
     config.shard = args.shard;
   }
   if (args.trace) {
-    config.trace = args.trace as TapsmithConfig['trace'];
+    config.trace = args.trace;
   }
   if (args.video) {
-    config.video = args.video as TapsmithConfig['video'];
+    config.video = args.video;
   }
   if (args.grep !== undefined) {
-    config.grep = compileGrepPattern(args.grep, '--grep');
+    config.grep = args.grep;
   }
   if (args.grepInvert !== undefined) {
-    config.grepInvert = compileGrepPattern(args.grepInvert, '--grep-invert');
+    config.grepInvert = args.grepInvert;
   }
   if (args.reporter) {
     config.reporter = args.reporter;

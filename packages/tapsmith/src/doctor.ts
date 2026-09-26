@@ -674,30 +674,6 @@ function checkSystemProxy(report: Reporter): void {
 // ─── Main entry point ───
 
 /**
- * Extract a `-c <path>` / `--config <path>` / `--config=<path>` flag.
- * Throws when the flag is present without a usable value (`-c` at the end,
- * `-c --json`, `--config=`).
- */
-export function parseDoctorConfigFlag(argv: string[]): string | undefined {
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i]!;
-    let value: string | undefined;
-    if (arg === '-c' || arg === '--config') {
-      value = argv[i + 1];
-    } else if (arg.startsWith('--config=')) {
-      value = arg.slice('--config='.length);
-    } else {
-      continue;
-    }
-    if (!value || value.startsWith('-')) {
-      throw new Error(`Missing value for ${arg.startsWith('--config=') ? '--config' : arg}`);
-    }
-    return value;
-  }
-  return undefined;
-}
-
-/**
  * How doctor reports a config that `loadConfig` rejected.
  *
  * Always a failure: `tapsmith test` exits on the same error. There is no
@@ -717,18 +693,10 @@ export function configLoadFailure(message: string): { message: string; hint: str
   };
 }
 
-export async function runDoctor(argv: string[] = []): Promise<void> {
-  const jsonMode = argv.includes('--json');
+export async function runDoctor(opts: { json: boolean; config?: string }): Promise<void> {
+  const jsonMode = opts.json;
   const printing = !jsonMode;
-  let configFile: string | undefined;
-  try {
-    configFile = parseDoctorConfigFlag(argv);
-  } catch (err) {
-    console.error(red(err instanceof Error ? err.message : String(err)));
-    console.error('Usage: tapsmith doctor [--json] [-c <config-file>]');
-    process.exitCode = 1;
-    return;
-  }
+  const configFile = opts.config;
 
   const checks: CheckList = [];
   const report: Reporter = { checks, print: printing };
