@@ -52,6 +52,7 @@ export default function RootLayout() {
           <Stack.Screen name="text-matching" options={{ title: "Text Matching" }} />
           <Stack.Screen name="webview" options={{ title: "WebView" }} />
           <Stack.Screen name="tabs" options={{ title: "Tabs" }} />
+          <Stack.Screen name="native-tabs" options={{ title: "Native Tabs" }} />
           <Stack.Screen name="roles" options={{ title: "Roles" }} />
         </Stack>
         <TapsmithHooks />
