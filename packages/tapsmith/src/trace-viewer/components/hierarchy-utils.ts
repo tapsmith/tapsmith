@@ -89,6 +89,8 @@ export function parseBounds(boundsStr: string): Bounds | null {
 export const ANDROID_CLASS_TO_ROLE: Record<string, string> = {
   'android.widget.Button': 'button',
   'android.widget.ImageButton': 'button',
+  // Also React Native's accessibilityRole="togglebutton" (PILOT-664).
+  'android.widget.ToggleButton': 'button',
   'com.google.android.material.button.MaterialButton': 'button',
   'androidx.appcompat.widget.AppCompatButton': 'button',
   'android.widget.EditText': 'textfield',

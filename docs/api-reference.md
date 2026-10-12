@@ -69,10 +69,10 @@ device.getByRole("button", { name: "Details", expanded: true })
 | `selected` | `boolean` | Filter by selected state (tab, option) |
 | `expanded` | `boolean` | Filter by expanded state (accordion, dropdown) |
 
-`role` is one of the [supported roles](locators.md#getbyrolerole--name-) (case-insensitive; `header`, `slider` and `search` are aliases for `heading`, `seekbar` and `searchfield`). Any other role throws when the locator is built, listing the supported roles:
+`role` is one of the [supported roles](locators.md#getbyrolerole--name-) (case-insensitive; `header`, `slider`, `search` and `radio` are aliases for `heading`, `seekbar`, `searchfield` and `radiobutton`). Any other role throws when the locator is built, listing the supported roles:
 
 ```
-Unknown role "row". Supported: alert, button, checkbox, combobox, heading, image, link, list, listitem, progressbar, radiobutton, scrollview, searchfield, seekbar, spinner, switch, tab, text, textfield, toolbar (aliases: header → heading, slider → seekbar, search → searchfield). For an element with no supported role, use getByText(), getByTestId() or getByDescription().
+Unknown role "row". Supported: alert, button, checkbox, combobox, heading, image, link, list, listitem, menu, menubar, menuitem, progressbar, radiobutton, radiogroup, scrollbar, scrollview, searchfield, seekbar, spinbutton, spinner, summary, switch, tab, tablist, text, textfield, timer, toolbar (aliases: header → heading, slider → seekbar, search → searchfield, radio → radiobutton). For an element with no supported role, use getByText(), getByTestId() or getByDescription().
 ```
 
 The accessible name is the element's content description / accessibility label, its text, or — on Android — the joined text of its descendants. Because the default is a case-insensitive substring match, a name can match more than one element (`{ name: "Show overlay" }` also matches *Show overlay briefly*); acting on such a locator throws a [strict mode](#strict-mode) violation — add `exact: true`. The case-insensitive default also covers platform casing differences, such as React Native's `<Button title="Sign In">`, which Android renders as `SIGN IN`.

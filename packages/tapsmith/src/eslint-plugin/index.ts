@@ -115,6 +115,7 @@ const STANDARD_WIDGET_MAP: Record<string, string> = {
   'android.widget.Spinner': 'spinner',
   'android.widget.Switch': 'switch',
   'android.widget.TextView': 'text',
+  'android.widget.ToggleButton': 'button',
 };
 
 // ─── prefer-role ───

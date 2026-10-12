@@ -170,6 +170,33 @@ check("a named alert query skips a heading",
 check("a named alert query skips a described checkbox",
       matches("alert", .other, value: "checkbox, checked", named: true), false)
 
+// ─── React Native's other generic-view roles (PILOT-664) ───
+
+let rnGenericRoles = ["menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer"]
+for role in rnGenericRoles {
+    check("getByRole(\"\(role)\") is a known role", (try? RoleMapping.elementTypes(for: role)) ?? [], [.other])
+    check("an unnamed \(role) query doesn't match a generic view", matches(role, .other), false)
+    check("a named \(role) query finds an undescribed generic view", matches(role, .other, named: true), true)
+    check("a named \(role) query skips a button-trait view", matches(role, .other, traits: buttonTrait, named: true), false)
+    check("a named \(role) query skips a described checkbox",
+          matches(role, .other, value: "checkbox, checked", named: true), false)
+    check("a \(role) query doesn't match a native button", matches(role, .button, named: true), false)
+}
+// RN's old architecture leads the value with the role's description.
+check("a \"menu item\"-described view is a menuitem", matches("menuitem", .other, value: "menu item"), true)
+check("a \"tab list\"-described view is a tablist", matches("tablist", .other, value: "tab list"), true)
+check("a \"timer\"-described view is a timer", matches("timer", .other, value: "timer, 00:42"), true)
+check("a \"menu item\"-described view is not a menu", matches("menu", .other, value: "menu item", named: true), false)
+check("a \"menu item\"-described view is not a checkbox",
+      matches("checkbox", .other, value: "menu item", named: true), false)
+check("a described view is not a summary, even by name",
+      matches("summary", .other, value: "menu item", named: true), false)
+// "radio" is React Native's and ARIA's spelling of radiobutton.
+check("the \"radio\" alias matches an RN radio", matches("radio", .other, value: "radio button, checked"), true)
+check("the \"radio\" alias matches a native radio button", matches("Radio", .radioButton), true)
+check("the \"radio\" alias queries radio button types",
+      (try? RoleMapping.elementTypes(for: "radio")) ?? [], [.radioButton, .other])
+
 // Roles matched by type or trait alone are unchanged.
 check("a button is a button", matches("button", .button), true)
 check("a button-trait view is a button", matches("button", .other, traits: buttonTrait), true)
@@ -180,7 +207,7 @@ check("an unknown role matches nothing", matches("row", .other, named: true), fa
 
 // Role-only live re-resolution goes by the matched node's label for the roles
 // a type query can't express.
-for role in ["heading", "header", "checkbox", "radiobutton", "alert", "combobox"] {
+for role in ["heading", "header", "checkbox", "radiobutton", "radio", "alert", "combobox"] + rnGenericRoles {
     check("role-only \(role) re-resolves by label", RoleMapping.needsLabelReResolution(role: role), true)
 }
 for role in ["button", "text", "switch", "textfield"] {
