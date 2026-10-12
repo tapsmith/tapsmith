@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
+import path from 'node:path';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
+import { ANDROID_LABEL_FIELD_ROLES, IOS_LABEL_FIELD_TYPES } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
 import { escapeJsString } from '../js-string-escape.js';
 import { translateRegex } from '../text-regex.js';
@@ -18,7 +20,8 @@ import { translateRegex } from '../text-regex.js';
  * case with `UPDATE_LABEL_FIXTURE=1 npx vitest run src/__tests__/label-conformance.test.ts`.
  *
  * The Android agent's rule (an input class, named by its content-desc) is
- * replayed here only; its class list is pinned to the agent by roles.test.ts.
+ * replayed here only. The field lists themselves are pinned to both agents'
+ * sources below; the Android classes of each role, by roles.test.ts.
  */
 
 interface Case {
@@ -130,5 +133,31 @@ describe('getByLabel conformance (PILOT-666)', () => {
     if (process.env.UPDATE_LABEL_FIXTURE) writeFileSync(FIXTURE, JSON.stringify(fresh, null, 2) + '\n');
     const committed = JSON.parse(readFileSync(FIXTURE, 'utf8')) as unknown;
     expect(committed).toEqual(fresh);
+  });
+});
+
+describe('getByLabel fields match the agents\' sources (PILOT-666)', () => {
+  const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
+  const read = (rel: string): string => readFileSync(path.join(repoRoot, rel), 'utf8');
+  const between = (source: string, start: string, end: string): string => {
+    const from = source.indexOf(start);
+    expect(from, `${start} not found`).toBeGreaterThanOrEqual(0);
+    return source.slice(from, source.indexOf(end, from + start.length));
+  };
+
+  it('Android: the roles whose classes labelInputClassPattern walks', () => {
+    const block = between(read('agent/app/src/main/kotlin/dev/tapsmith/agent/ElementFinder.kt'),
+      'private val labelInputClassPattern', 'Pattern.compile');
+    const roles = [...block.matchAll(/roleClassMap\["(\w+)"\]/g)].map((m) => m[1]);
+    expect(roles.length).toBeGreaterThan(0);
+    expect([...roles].sort()).toEqual([...ANDROID_LABEL_FIELD_ROLES].sort());
+  });
+
+  it('iOS: LabelMatch.inputTypes', () => {
+    const block = between(between(read('ios-agent/TapsmithAgent/LabelMatch.swift'), 'static let inputTypes', ']'), '= [', ']');
+    const types = [...block.matchAll(/\.(\w+)/g)]
+      .map((m) => `XCUIElementType${m[1][0].toUpperCase()}${m[1].slice(1)}`);
+    expect(types.length).toBeGreaterThan(0);
+    expect([...types].sort()).toEqual([...IOS_LABEL_FIELD_TYPES].sort());
   });
 });

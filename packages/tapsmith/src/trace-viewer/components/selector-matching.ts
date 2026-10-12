@@ -673,27 +673,30 @@ function matchCssSelector(css: string, tag: string, id: string, cssClass: string
   // Supports: #id, [id="…"], .class, tag, tag.class, tag#id
   const trimmed = css.trim();
 
-  // `#` takes a plain identifier only: the runtime's querySelectorAll throws
-  // on `#1st`, and reads `#order.total` as an id and a class (PILOT-666).
+  // `#` and `.` take a plain identifier only: the runtime's querySelectorAll
+  // throws on `#1st`, and reads `#order.total` as an id and a class (PILOT-666).
+  const classes = cssClass.split(/\s+/);
   if (trimmed.startsWith('#')) {
-    return isCssIdentifier(trimmed.slice(1)) && id === trimmed.slice(1);
+    const name = trimmed.slice(1);
+    return isCssIdentifier(name) && id === name;
   }
   const attributeId = idOfAttributeSelector(trimmed);
   if (attributeId !== null) return id === attributeId;
   if (trimmed.startsWith('.')) {
-    return cssClass.split(/\s+/).includes(trimmed.slice(1));
+    const name = trimmed.slice(1);
+    return isCssIdentifier(name) && classes.includes(name);
   }
 
   // tag#id
   const tagIdMatch = trimmed.match(/^(\w+)#(\S+)$/);
   if (tagIdMatch) {
-    return tag === tagIdMatch[1] && id === tagIdMatch[2];
+    return isCssIdentifier(tagIdMatch[2]) && tag === tagIdMatch[1] && id === tagIdMatch[2];
   }
 
   // tag.class
   const tagClassMatch = trimmed.match(/^(\w+)\.(\S+)$/);
   if (tagClassMatch) {
-    return tag === tagClassMatch[1] && cssClass.split(/\s+/).includes(tagClassMatch[2]);
+    return isCssIdentifier(tagClassMatch[2]) && tag === tagClassMatch[1] && classes.includes(tagClassMatch[2]);
   }
 
   // tag only

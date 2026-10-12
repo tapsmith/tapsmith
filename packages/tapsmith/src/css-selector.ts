@@ -5,7 +5,11 @@
  * selects something else. Any other id is suggested as an attribute selector.
  */
 
-const CSS_IDENTIFIER = /^-?[A-Za-z_][\w-]*$/;
+/**
+ * A CSS identifier with no escapes: a letter, `_` or non-ASCII character
+ * (after an optional `-`), or `--`, then those, digits and `-`.
+ */
+const CSS_IDENTIFIER = /^(?:--|-?[A-Za-z_\u{80}-\u{10FFFF}])[\w\u{80}-\u{10FFFF}-]*$/u;
 
 /** Whether `name` can follow `#` or `.` in a selector unescaped. */
 export function isCssIdentifier(name: string): boolean {

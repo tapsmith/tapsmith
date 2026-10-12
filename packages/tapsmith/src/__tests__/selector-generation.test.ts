@@ -214,6 +214,20 @@ describe('generateWebViewSelectors priority order', () => {
     }
   });
 
+  it('the playground matches #id, .class and their tag forms only where the runtime does (PILOT-666)', () => {
+    const node = makeNode('node', { webview: 'true', 'webview-tag': 'div', 'webview-id': 'café', 'webview-class': 'md:flex card' });
+    const other = makeNode('node', { webview: 'true', 'webview-tag': 'div', 'webview-id': 'order.total' });
+    const root = makeNode('node', {}, [node, other]);
+    const count = (css: string) => findMatchingNodes([root], parseSelectorString(`webview.locator("${css}")`)!).length;
+    expect(count('#café')).toBe(1);
+    expect(count('div#café')).toBe(1);
+    expect(count('.card')).toBe(1);
+    expect(count('div.card')).toBe(1);
+    expect(count('.md:flex')).toBe(0);
+    expect(count('div.md:flex')).toBe(0);
+    expect(count('div#order.total')).toBe(0);
+  });
+
   it('suggests tag.class only for a class that is a CSS identifier (PILOT-666)', () => {
     const node = makeNode('node', { webview: 'true', 'webview-tag': 'div', 'webview-class': 'md:flex card' });
     expect(generateSelectors(node).some((s) => s.label === 'CSS tag.class')).toBe(false);

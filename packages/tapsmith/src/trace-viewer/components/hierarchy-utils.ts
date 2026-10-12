@@ -176,7 +176,7 @@ export function getNodeRole(node: HierarchyNode): string {
  * reported role — a text field keeps its type whatever trait role it reports,
  * and a search field is not one of them (PILOT-666).
  */
-const IOS_LABEL_FIELD_TYPES: ReadonlySet<string> = new Set([
+export const IOS_LABEL_FIELD_TYPES: ReadonlySet<string> = new Set([
   'XCUIElementTypeTextField',
   'XCUIElementTypeSecureTextField',
   'XCUIElementTypeTextView',
@@ -191,12 +191,13 @@ const IOS_LABEL_FIELD_TYPES: ReadonlySet<string> = new Set([
 /**
  * The classes the Android agent's getByLabel walks (its `labelInputClassPattern`):
  * the classes of these roles in its role map, which roles.test.ts pins to
- * ANDROID_ROLE_CLASSES. A view that only reports one of the roles (an RN
+ * ANDROID_ROLE_CLASSES (the roles themselves are pinned by
+ * label-conformance.test.ts). A view that only reports one of the roles (an RN
  * `accessibilityRole="checkbox"` ViewGroup) is not walked.
  */
+export const ANDROID_LABEL_FIELD_ROLES: readonly string[] = ['textfield', 'checkbox', 'switch', 'radiobutton', 'seekbar', 'spinner'];
 const ANDROID_LABEL_FIELD_CLASSES: ReadonlySet<string> = new Set(
-  ['textfield', 'checkbox', 'switch', 'radiobutton', 'seekbar', 'spinner']
-    .flatMap((role) => ANDROID_ROLE_CLASSES[role] ?? []),
+  ANDROID_LABEL_FIELD_ROLES.flatMap((role) => ANDROID_ROLE_CLASSES[role] ?? []),
 );
 
 /** Whether the runtime's getByLabel can find this node: a native input of a type or class the agent looks at. */

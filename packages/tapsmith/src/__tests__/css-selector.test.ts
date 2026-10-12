@@ -9,6 +9,8 @@ describe('cssIdSelector', () => {
     expect(cssIdSelector('email')).toBe('#email');
     expect(cssIdSelector('save-2_b')).toBe('#save-2_b');
     expect(cssIdSelector('-x')).toBe('#-x');
+    expect(cssIdSelector('--main')).toBe('#--main');
+    expect(cssIdSelector('café')).toBe('#café');
   });
 
   it('uses an attribute selector for any other id', () => {
@@ -32,9 +34,15 @@ describe('cssIdSelector', () => {
 
 describe('isCssIdentifier', () => {
   it('rejects names that start with a digit or hold selector syntax', () => {
-    for (const name of ['1st', ':r1:', 'a.b', 'a b', 'md:flex', 'w-1/2', '--x', '']) {
+    for (const name of ['1st', ':r1:', 'a.b', 'a b', 'md:flex', 'w-1/2', '-1', '-', '']) {
       expect(isCssIdentifier(name)).toBe(false);
     }
+  });
+});
+
+describe('isCssIdentifier: names a selector takes unescaped', () => {
+  it('accepts non-ASCII and custom-property-style names, as querySelectorAll does', () => {
+    for (const name of ['café', 'über-nav', '--main', '_x', 'a1-b_2']) expect(isCssIdentifier(name)).toBe(true);
   });
 });
 
