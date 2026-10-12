@@ -265,11 +265,24 @@ Element {"text":"Submit"} was not found after waiting 30000ms
   await device.getByText("Submit", { exact: true }).tap()
   ```
 - **The locator is wrong** -- the text does not match exactly, or the element uses a different role. Use the trace viewer's Hierarchy tab or the `tapsmith_snapshot` MCP tool to inspect what is actually on screen.
-- **The element is off-screen** -- it exists in the hierarchy but is not scrolled into view. Use `scrollIntoView()`:
+- **The element is off-screen** -- Android's accessibility tree contains only on-screen elements, and a virtualised list has not rendered rows far from the visible ones, so an off-screen row is not found at all. (An off-screen element that *is* in the tree, which happens on iOS, is scrolled into view by the tap itself.) The error then ends with a hint to scroll first. Use `scrollIntoView()`:
   ```typescript
   await device.getByText("Submit", { exact: true }).scrollIntoView()
   await device.getByText("Submit", { exact: true }).tap()
   ```
+
+### Element is off-screen and could not be scrolled into view
+
+```
+Element getByText("Item 1", { exact: true }) is off-screen and tap() could not scroll it into view: a "down" screen swipe did not move it — … Scroll it into view first, e.g. await locator.scrollIntoView({ direction: "down" }).
+```
+
+**What happened:** the element is in the hierarchy but entirely off-screen (iOS), so the tap tried to scroll it into view with screen swipes and could not: the swipe did not move it, it left the hierarchy while scrolling, or it was still off-screen after 8 swipes.
+
+**Common causes and fixes:**
+
+- **The element is in a horizontal carousel, or the screen swipe starts outside its list** (for example on a header above the list) -- scroll to it yourself with `scrollIntoView()` in the right direction, or scroll the list container with `scroll()`.
+- **The list is virtualised** and unmounted the row while scrolling -- scroll to it with `scrollIntoView()` first, then tap.
 
 ### Timeout: assertion did not pass
 

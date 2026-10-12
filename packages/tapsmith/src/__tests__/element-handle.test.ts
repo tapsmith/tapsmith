@@ -808,7 +808,7 @@ describe('tap()', () => {
       ++calls === 1 ? makeFindElementsResponse([makeElementInfo({ enabled: false })]) : makeFindElementsResponse([]));
     const client = makeMockClient({ findElements });
     const err = await withFakeClock(5000, () => new ElementHandle(client, _text('Save'), 2000).tap()).catch((e) => e);
-    expect(err.message).toMatch(/was not found after waiting 2000ms$/);
+    expect(err.message).toMatch(/was not found after waiting 2000ms\. If it is off-screen in a scrollable list/);
     expect(err.message).not.toMatch(/disabled/);
   });
 
@@ -2175,7 +2175,7 @@ describe('nth()', () => {
       tap: vi.fn(async () => successResponse()),
     });
     const err = await withFakeClock(5000, () => new ElementHandle(client, _role('listitem'), 600).nth(5).tap()).catch((e) => e);
-    expect(err.message).toMatch(/was not found after waiting 600ms \(nth\(5\): expected at least 6 element\(s\), but found 0\)$/);
+    expect(err.message).toMatch(/was not found after waiting 600ms \(nth\(5\): expected at least 6 element\(s\), but found 0\)\. If it is off-screen in a scrollable list/);
   });
 
   it('first().tap() with nothing matching carries no positional detail — the index was never the user\'s (review follow-up)', async () => {
@@ -2184,7 +2184,7 @@ describe('nth()', () => {
       tap: vi.fn(async () => successResponse()),
     });
     const err = await withFakeClock(5000, () => new ElementHandle(client, _role('button'), 600).first().tap()).catch((e) => e);
-    expect(err.message).toMatch(/was not found after waiting 600ms$/);
+    expect(err.message).toMatch(/was not found after waiting 600ms\. If it is off-screen in a scrollable list/);
   });
 
   it('tap() on an out-of-range nth handle names the index and the count in the deadline error, like find() (review follow-up)', async () => {
@@ -2839,7 +2839,7 @@ describe('modifiers after a positional index compose in call order (Playwright)'
     const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse(threeItems)) });
     const handle = new ElementHandle(client, _role('listitem'), 1000);
     await expect(withFakeClock(5000, () => handle.first().nth(5).tap()))
-      .rejects.toThrow(/getByRole\("listitem"\)\.first\(\)\.nth\(5\) was not found after waiting 1000ms \(nth\(5\): expected at least 6 element\(s\), but found 1\)$/);
+      .rejects.toThrow(/getByRole\("listitem"\)\.first\(\)\.nth\(5\) was not found after waiting 1000ms \(nth\(5\): expected at least 6 element\(s\), but found 1\)\. If it is off-screen in a scrollable list/);
     await expect(withFakeClock(5000, () => handle.nth(1).filter({ hasText: 'Banana' }).nth(-2).find()))
       .rejects.toThrow(/\(nth\(-2\): expected at least 2 element\(s\), but found 1\)$/);
     // The leading index keeps its own message, unchanged.

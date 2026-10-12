@@ -606,6 +606,63 @@ type ActionTarget = { selector: Selector } | { elementId: string };
  * StaleObjectException where the cached object's view re-rendered ("Element is
  * stale (UI changed): …", Android).
  */
+// ─── Tap-family auto-scroll (PILOT-716) ───
+
+/** The actions that wait for an enabled target and scroll it into view. */
+type TapFamilyAction = 'tap' | 'doubleTap' | 'longPress' | 'setChecked';
+
+/** Swipes the tap-family auto-scroll may spend before giving up. */
+const AUTO_SCROLL_MAX_SWIPES = 8;
+/**
+ * Swipe length as a fraction of the screen. Halved each time the target
+ * overshoots to the other side, so a fling past it converges.
+ */
+const AUTO_SCROLL_DISTANCE = 0.5;
+/**
+ * A slow drag (the agents map ≤1000 px/s to their longest swipe), so the
+ * content travels about the swipe distance instead of flinging past the target.
+ */
+const AUTO_SCROLL_SPEED = 1000;
+/** Unreadable re-reads (miss, stale, fault) tolerated after one swipe. */
+const AUTO_SCROLL_MAX_UNREADABLE_READS = 4;
+
+type Bounds = NonNullable<ElementInfo['bounds']>;
+
+/**
+ * Whether the platform reports `el` in the tree with no part of it on screen
+ * (iOS: viewport ratio 0). An element without bounds or with a zero-size frame
+ * is invisible for another reason, and scrolling would not bring it on screen.
+ */
+function isOffScreen(el: ElementInfo): el is ElementInfo & { bounds: Bounds } {
+  const b = el.bounds;
+  return !el.visible && !!b && b.right > b.left && b.bottom > b.top;
+}
+
+/**
+ * The screen swipe that brings an off-screen element towards the viewport.
+ * Without the screen size an element right of the screen cannot be told from
+ * one below it; below is far more common (vertical lists), so it wins.
+ */
+function offScreenSwipeDirection(b: Bounds): 'up' | 'down' | 'left' | 'right' {
+  if (b.bottom <= 0) return 'down';
+  if (b.right <= 0) return 'right';
+  return 'up';
+}
+
+function sameBounds(a: Bounds | undefined, b: Bounds | undefined): boolean {
+  return !!a && !!b && a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+}
+
+/**
+ * The one hint both platforms give when a tap-family action cannot reach an
+ * element that may be off-screen in a scrollable list.
+ */
+function offScreenHint(action: TapFamilyAction): string {
+  return `If it is off-screen in a scrollable list, scroll to it first with scrollIntoView() before ${action}(): ` +
+    'off-screen rows are not in the accessibility tree on Android (nor unrendered rows of a virtualized list), ' +
+    `so ${action}() cannot scroll to them itself.`;
+}
+
 /**
  * The least an action dispatch is given: an element that became enabled right
  * at the deadline, or a stale retry late in the budget, still gets time to act.
@@ -1503,7 +1560,10 @@ export class ElementHandle {
    *
    * Throws if the element is not found or still disabled after the timeout.
    */
-  private async _waitForEnabled(): Promise<{ remainingMs: number; element?: ElementInfo }> {
+  private async _waitForEnabled(
+    action: TapFamilyAction,
+    options?: { needsNoScroll?: (el: ElementInfo) => boolean },
+  ): Promise<{ remainingMs: number; element?: ElementInfo }> {
     const timeoutMs = this._timeoutMs;
     // timeoutMs === 0 means "no polling": behave like the pre-auto-wait code
     // and hand the full zero budget straight to the action.
@@ -1544,10 +1604,18 @@ export class ElementHandle {
           lastPositionalMiss = undefined;
           lastSeenDisabled = !tick.element.enabled;
           if (tick.element.enabled) {
+            let element = tick.element;
+            // Playwright's actionability checks scroll the target into view
+            // before acting (PILOT-716). Only a platform that reports
+            // off-screen nodes reaches this (iOS); Android exposes on-screen
+            // nodes only, so its off-screen rows end in the not-found hint.
+            if (isOffScreen(element) && !options?.needsNoScroll?.(element)) {
+              element = await this._scrollOffScreenIntoView(element, deadline, action);
+            }
             const remaining = Math.max(0, deadline - Date.now());
             return {
               remainingMs: Math.min(timeoutMs, Math.max(remaining, MIN_ACTION_BUDGET_MS)),
-              element: tick.element,
+              element,
             };
           }
         }
@@ -1558,7 +1626,8 @@ export class ElementHandle {
         throw new Error(
           lastSeenDisabled
             ? `Element ${desc} is disabled after waiting ${timeoutMs}ms`
-            : `Element ${desc} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}`,
+            : `Element ${desc} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}. ` +
+              offScreenHint(action),
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -2205,7 +2274,7 @@ export class ElementHandle {
 
   async tap(): Promise<void> {
     const { target, remainingMs } = await this._tracedResolve('tap', 'tap', async () => {
-      const { remainingMs, element } = await this._waitForEnabled();
+      const { remainingMs, element } = await this._waitForEnabled('tap');
       return { target: await this._actionTarget(element), remainingMs };
     });
     const budget = actionBudget(remainingMs);
@@ -2218,7 +2287,7 @@ export class ElementHandle {
 
   async longPress(durationMs?: number): Promise<void> {
     const { target, remainingMs } = await this._tracedResolve('longPress', 'tap', async () => {
-      const { remainingMs, element } = await this._waitForEnabled();
+      const { remainingMs, element } = await this._waitForEnabled('longPress');
       return { target: await this._actionTarget(element), remainingMs };
     });
     const budget = actionBudget(remainingMs);
@@ -2286,7 +2355,7 @@ export class ElementHandle {
 
   async doubleTap(options?: { intervalMs?: number }): Promise<void> {
     const { target, remainingMs } = await this._tracedResolve('doubleTap', 'tap', async () => {
-      const { remainingMs, element } = await this._waitForEnabled();
+      const { remainingMs, element } = await this._waitForEnabled('doubleTap');
       return { target: await this._actionTarget(element), remainingMs };
     });
     // 0 on the wire = "use agent default (100ms)". User-supplied values
@@ -2340,7 +2409,11 @@ export class ElementHandle {
     const deadline = Date.now() + timeoutMs;
 
     const { target, remainingMs, alreadySet } = await this._tracedResolve('setChecked', 'tap', async () => {
-      const { remainingMs, element } = await this._waitForEnabled();
+      // An element already in the requested state is not touched, so it
+      // needs no scrolling either (Playwright's check() returns early too).
+      const { remainingMs, element } = await this._waitForEnabled('setChecked', {
+        needsNoScroll: (el) => el.checked === checked,
+      });
       // The timeout-0 path skips the wait and returns no element; resolve here.
       const el = element ?? await this._resolveOne();
       return { target: await this._actionTarget(el), remainingMs, alreadySet: el.checked === checked };
@@ -2857,6 +2930,169 @@ export class ElementHandle {
   // ── Scrolling ──
 
   /**
+   * @internal — Scroll an element the platform reports in the tree but
+   * entirely off-screen into view before a tap-family action touches it,
+   * as Playwright's actionability checks do (PILOT-716). Without this, iOS
+   * refused the tap at once ("not hittable") while Android, which never
+   * exposes off-screen nodes, waited out the timeout.
+   *
+   * Each step swipes the screen towards the element (a slow drag, so the list
+   * does not fling past it), waits out the settle time and re-reads the
+   * element through the same modifier-aware read as the auto-wait. A target
+   * that overshot to the other side reverses with half the distance. It stops
+   * when the element is on screen (returning its settled read, so the action
+   * addresses where it came to rest), and fails with the scrollIntoView() hint
+   * when a swipe does not move it, it leaves the tree, the swipe cap is spent
+   * or the action's deadline passes. A user stop and strict-mode violations
+   * propagate from the reads and sleeps.
+   */
+  private async _scrollOffScreenIntoView(
+    element: ElementInfo & { bounds: Bounds },
+    deadline: number,
+    action: TapFamilyAction,
+  ): Promise<ElementInfo> {
+    let bounds: Bounds = element.bounds;
+    let distance = AUTO_SCROLL_DISTANCE;
+    let lastDirection: string | undefined;
+    let swipes = 0;
+    const fail = (why: string): Error => new Error(
+      `Element ${this._describe()} is off-screen and ${action}() could not scroll it into view: ${why}. ` +
+        `Scroll it into view first, e.g. await locator.scrollIntoView({ direction: "${offScreenSwipeDirection(bounds)}" }).`,
+    );
+    for (;;) {
+      if (swipes >= AUTO_SCROLL_MAX_SWIPES) throw fail(`still off-screen after ${swipes} scroll(s)`);
+      if (Date.now() >= deadline) throw fail(`the action timed out after ${swipes} scroll(s)`);
+      const direction = offScreenSwipeDirection(bounds);
+      if (lastDirection !== undefined && direction !== lastDirection) distance /= 2;
+      const res = await this._client.swipe(direction, { speed: AUTO_SCROLL_SPEED, distance });
+      if (!res.success) {
+        throw new Error(
+          `Swipe failed while scrolling ${this._describe()} into view for ${action}(): ${res.errorMessage || 'unknown error'}`,
+        );
+      }
+      swipes++;
+      lastDirection = direction;
+      await sleep(SCROLL_SETTLE_MS, this._client._getAbortSignal?.());
+
+      // Re-read; a miss, stale snapshot or agent blip right after a swipe is
+      // re-read a few times (a recycled cell can drop out for a frame).
+      let next: ElementInfo | undefined;
+      let lastFault: Error | undefined;
+      for (let reads = 1; ; reads++) {
+        const tick = await this._resolveTick(tickBudget(deadline));
+        if (tick.kind === 'found') {
+          next = tick.element;
+          break;
+        }
+        lastFault = tick.kind === 'fault' ? tick.error : undefined;
+        if (reads >= AUTO_SCROLL_MAX_UNREADABLE_READS || Date.now() >= deadline) break;
+        await sleep(POLL_INTERVAL_MS, this._client._getAbortSignal?.());
+      }
+      if (!next) {
+        // An agent that stopped answering is an infra error, not a scroll one.
+        if (lastFault) throw lastFault;
+        throw fail('it left the accessibility tree while scrolling (a virtualized list may have unmounted it)');
+      }
+      if (next.visible) {
+        const settled = await this._settleAfterScroll(next);
+        // Momentum carried it back out: keep scrolling from where it rests.
+        if (!isOffScreen(settled)) return settled;
+        bounds = settled.bounds;
+        continue;
+      }
+      if (!isOffScreen(next)) return next; // no frame to scroll towards; let the action report it
+      if (sameBounds(next.bounds, bounds)) {
+        throw fail(
+          `a "${direction}" screen swipe did not move it — it may be in a container a screen swipe does not ` +
+            'scroll (a horizontal carousel, or a list the swipe misses)',
+        );
+      }
+      bounds = next.bounds;
+    }
+  }
+
+  /**
+   * @internal — Wait for a just-scrolled element to stop moving and return its
+   * last clean read. On iOS, momentum deceleration continues after a swipe,
+   * and the first tap during deceleration is consumed by the ScrollView (stops
+   * the scroll) rather than being delivered to the child view. Shared by
+   * `scrollIntoView()` and the tap-family auto-scroll (PILOT-716).
+   */
+  private async _settleAfterScroll(el: ElementInfo): Promise<ElementInfo> {
+    let settled: ElementInfo = el;
+    // Settled = the position has held for two consecutive ticks (three
+    // equal reads, ~200ms of observed stillness on top of
+    // SCROLL_SETTLE_MS). The reads below are single live snapshots, so
+    // one matching pair could be a momentary velocity null or a
+    // stalled frame mid-deceleration; the `findElement` read this
+    // replaced settled agent-side on Android (WaitEngine, three
+    // positional re-checks) before it answered, so a lone match used
+    // to carry that margin already. An unreadable tick (miss, stale,
+    // ambiguous, bounds missing) clears both the count AND the last
+    // position, so the three equal reads are always adjacent — a
+    // post-gap read never counts against a pre-gap one.
+    const trackable = el.bounds?.top !== undefined;
+    let lastY = el.bounds?.top;
+    let stableTicks = 0;
+    for (let s = 0; s < 10; s++) {
+      await sleep(100, this._client._getAbortSignal?.());
+      // The same modifier-aware, live read as the probe, so a filtered
+      // or scoped handle tracks ITS element's position, not the raw
+      // selector's first match. Transport errors and a user abort
+      // propagate. The target was already found visible, so nothing
+      // here may fail the scroll or fall through to another swipe
+      // (which could scroll it back off-screen); the tick just decides
+      // how to keep waiting for the position to settle:
+      // - a slow agent (`fault`: command timeout / momentary fault)
+      //   stops stabilizing — each further read could cost the daemon's
+      //   ~5s headroom, and the old single-probe loop stopped here too;
+      // - a momentary miss, a stale snapshot or an ambiguous read
+      //   (a cell dropping out of the tree or a same-text row passing
+      //   through mid-deceleration) is waited out: the old read let the
+      //   agent wait 500ms for the element, so a one-tick flicker must
+      //   not end stabilization early and hand a moving list to the
+      //   next tap. Bounded by the tick cap above.
+      let stabilityTick: ResolveTick;
+      try {
+        stabilityTick = await this._resolveTick(POLL_INTERVAL_MS);
+      } catch (err) {
+        if (!isStrictModeViolation(err)) throw err;
+        // An ambiguous read is an unreadable tick like any other.
+        stableTicks = 0;
+        lastY = undefined;
+        continue;
+      }
+      if (stabilityTick.kind === 'fault') break;
+      if (stabilityTick.kind !== 'found') {
+        stableTicks = 0;
+        lastY = undefined;
+        continue;
+      }
+      const curY = stabilityTick.element.bounds?.top;
+      if (curY === undefined) {
+        // An element the probe already saw without bounds has no
+        // position to track — nothing to stabilize, and waiting out
+        // all 10 ticks would only add dead time (a full chain read
+        // each) after a successful scroll. Bounds that were there at
+        // the probe and are missing THIS tick are a momentary gap
+        // (a cell mid-recycle): an unreadable tick, like a miss.
+        if (!trackable) break;
+        stableTicks = 0;
+        lastY = undefined;
+        continue;
+      }
+      settled = stabilityTick.element;
+      if (curY === lastY) {
+        if (++stableTicks >= 2) break;
+      } else {
+        stableTicks = 0;
+        lastY = curY;
+      }
+    }
+    return settled;
+  }
+
+  /**
    * Scroll the viewport until this element is visible on screen.
    *
    * Repeatedly swipes in the given direction, checking visibility between
@@ -2969,78 +3205,7 @@ export class ElementHandle {
           // element's position is stable for two consecutive checks.
           // The last clean read of the settle loop, so the trace shows where
           // the row ended up rather than where the probe saw it mid-motion.
-          let settled: ElementInfo = el;
-          if (swipes > 0) {
-            // Settled = the position has held for two consecutive ticks (three
-            // equal reads, ~200ms of observed stillness on top of
-            // SCROLL_SETTLE_MS). The reads below are single live snapshots, so
-            // one matching pair could be a momentary velocity null or a
-            // stalled frame mid-deceleration; the `findElement` read this
-            // replaced settled agent-side on Android (WaitEngine, three
-            // positional re-checks) before it answered, so a lone match used
-            // to carry that margin already. An unreadable tick (miss, stale,
-            // ambiguous, bounds missing) clears both the count AND the last
-            // position, so the three equal reads are always adjacent — a
-            // post-gap read never counts against a pre-gap one.
-            const trackable = el.bounds?.top !== undefined;
-            let lastY = el.bounds?.top;
-            let stableTicks = 0;
-            for (let s = 0; s < 10; s++) {
-              await sleep(100, this._client._getAbortSignal?.());
-              // The same modifier-aware, live read as the probe, so a filtered
-              // or scoped handle tracks ITS element's position, not the raw
-              // selector's first match. Transport errors and a user abort
-              // propagate. The target was already found visible, so nothing
-              // here may fail the scroll or fall through to another swipe
-              // (which could scroll it back off-screen); the tick just decides
-              // how to keep waiting for the position to settle:
-              // - a slow agent (`fault`: command timeout / momentary fault)
-              //   stops stabilizing — each further read could cost the daemon's
-              //   ~5s headroom, and the old single-probe loop stopped here too;
-              // - a momentary miss, a stale snapshot or an ambiguous read
-              //   (a cell dropping out of the tree or a same-text row passing
-              //   through mid-deceleration) is waited out: the old read let the
-              //   agent wait 500ms for the element, so a one-tick flicker must
-              //   not end stabilization early and hand a moving list to the
-              //   next tap. Bounded by the tick cap above.
-              let stabilityTick: ResolveTick;
-              try {
-                stabilityTick = await this._resolveTick(POLL_INTERVAL_MS);
-              } catch (err) {
-                if (!isStrictModeViolation(err)) throw err;
-                // An ambiguous read is an unreadable tick like any other.
-                stableTicks = 0;
-                lastY = undefined;
-                continue;
-              }
-              if (stabilityTick.kind === 'fault') break;
-              if (stabilityTick.kind !== 'found') {
-                stableTicks = 0;
-                lastY = undefined;
-                continue;
-              }
-              const curY = stabilityTick.element.bounds?.top;
-              if (curY === undefined) {
-                // An element the probe already saw without bounds has no
-                // position to track — nothing to stabilize, and waiting out
-                // all 10 ticks would only add dead time (a full chain read
-                // each) after a successful scroll. Bounds that were there at
-                // the probe and are missing THIS tick are a momentary gap
-                // (a cell mid-recycle): an unreadable tick, like a miss.
-                if (!trackable) break;
-                stableTicks = 0;
-                lastY = undefined;
-                continue;
-              }
-              settled = stabilityTick.element;
-              if (curY === lastY) {
-                if (++stableTicks >= 2) break;
-              } else {
-                stableTicks = 0;
-                lastY = curY;
-              }
-            }
-          }
+          const settled = swipes > 0 ? await this._settleAfterScroll(el) : el;
           await this._traceQuery(
             'scrollIntoView',
             `Visible after ${swipes} scroll(s)`,

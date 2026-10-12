@@ -1099,6 +1099,16 @@ await device.getByRole("button", { name: "Submit" }).tap();
 
 **Covered elements.** Like a Playwright click, a tap auto-waits for the element to be enabled and then for nothing to be drawn over it. If something covers the point it would tap, the tap waits for the cover to go away. Covers include the software keyboard, a bar or window drawn over the element, and another control painted on top of it (a button, link, text input, list cell, alert, sheet…). If the cover clears within the action timeout, the tap goes ahead. If it is still there at the timeout, the tap fails instead of tapping the cover: `Element is covered by the keyboard …` or `Element is covered by button "Overlay" …`. When the keyboard or a bar covers only part of the element, the tap lands on the visible part. `doubleTap()`, `longPress()`, and the tap that `type()`, `clear()` and `focus()` use to focus a field follow the same rules. A field that already has focus is not tapped at all when the keyboard, or a control on the same screen, covers it (typically its own keyboard): typing reaches it anyway. A dialog or other window over the field is waited out like any other cover, since it takes the input. If the element goes away, or turns into a different element, while its cover is being waited out, the action does not tap whatever replaced it: it looks the locator up again and fails as not found if nothing matches. If the keyboard is in the way, dismiss it first (`device.hideKeyboard()`, or submit the field). A plain view that is not a control (for example an unlabeled backdrop) is not detected as a cover yet (PILOT-364).
 
+**Off-screen elements.** Like a Playwright click, a tap scrolls its element into view first when the element is in the accessibility tree but entirely off-screen — for example a list row you have scrolled past. It swipes the screen towards the element (a slow drag, half a screen at a time, reversing at half the distance if it overshoots), waits for the list to come to rest, and then taps where the element ended up. The swipes count against the action timeout. If the element cannot be brought on screen — a swipe does not move it (it is in a horizontal carousel or a container the screen swipe misses), it leaves the tree while scrolling, or it is still off-screen after 8 swipes — the tap fails without touching anything: `Element … is off-screen and tap() could not scroll it into view: … Scroll it into view first, e.g. await locator.scrollIntoView({ direction: "down" })`. An element off to the side of the screen is scrolled towards as if it were below, so call `scrollIntoView({ direction: "left" })` yourself for those. `doubleTap()`, `longPress()` and `setChecked()` scroll the same way (`setChecked()` only when it has to tap).
+
+Only iOS reports off-screen elements. Android's accessibility tree contains on-screen elements only, so an off-screen row is simply not found, and neither platform has the rows a virtualised list has not rendered. The tap then cannot know where to scroll, so it waits out the timeout and fails as not found, with a hint to scroll to the element first with [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid):
+
+```typescript
+const row = device.getByText("Item 40", { exact: true });
+await row.scrollIntoView();
+await row.tap();
+```
+
 On Android, an element that is *entirely* behind the keyboard is hidden from the accessibility tree. An action on it fails as not found (after waiting out the timeout) rather than as covered, and assertions such as `toBeVisible()` and `toHaveValue()` cannot see it until the keyboard is gone.
 
 #### `elementHandle.doubleTap(options?: { intervalMs?: number }): Promise<void>`
@@ -1182,7 +1192,7 @@ The device agents don't apply `distance` yet: each call scrolls by a fixed step 
 
 Scroll the viewport until this element is visible on screen. Useful for reaching elements that are below the fold in a scrollable container.
 
-Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts.
+Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Tap actions already scroll an element that the platform reports off-screen (iOS) into view themselves (see [Off-screen elements](#elementhandletap-promisevoid)); call `scrollIntoView()` for an element that is not in the accessibility tree until it is scrolled to — every off-screen element on Android, and unrendered rows of a virtualised list on both platforms.
 
 If the element is already visible, this is a no-op — it returns without scrolling, so calling `scrollIntoView()` before every `tap()` is safe even when the target is on screen (an unnecessary swipe could otherwise shift it under a pinned app bar). When the element isn't found on the first check, Tapsmith waits for the UI to settle and re-checks before the first swipe, so a briefly stale accessibility tree (e.g. right after navigation) doesn't trigger a spurious scroll. A handle from `all()` is a live `.nth(i)` locator, so on a virtualised list the scroll stops on whatever row is at index `i` in the scrolled window — see the [`all()`](#elementhandleall-promiseelementhandle) section.
 
@@ -1215,7 +1225,7 @@ await source.dragTo(target);
 
 #### `elementHandle.setChecked(checked: boolean): Promise<void>`
 
-Ensure a checkbox, switch, or radio button is in the desired state. Idempotent -- only taps if the current state differs from the desired state, and verifies the state changed after tapping.
+Ensure a checkbox, switch, or radio button is in the desired state. Idempotent -- only taps if the current state differs from the desired state, and verifies the state changed after tapping. Like `tap()`, it scrolls an off-screen element into view before tapping it (see [Off-screen elements](#elementhandletap-promisevoid)).
 
 ```typescript
 await device.getByRole("switch", { name: "Dark Mode" }).setChecked(true);
