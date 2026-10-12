@@ -29,16 +29,25 @@ export const NATIVE_ROLES: readonly string[] = [
   'link',
   'list',
   'listitem',
+  'menu',
+  'menubar',
+  'menuitem',
   'progressbar',
   'radiobutton',
+  'radiogroup',
+  'scrollbar',
   'scrollview',
   'searchfield',
   'seekbar',
+  'spinbutton',
   'spinner',
+  'summary',
   'switch',
   'tab',
+  'tablist',
   'text',
   'textfield',
+  'timer',
   'toolbar',
 ];
 
@@ -49,31 +58,38 @@ export const NATIVE_ROLES: readonly string[] = [
 export const ROLE_ALIASES: Readonly<Record<string, string>> = {
   header: 'heading',
   slider: 'seekbar',
-  // RN's accessibilityRole="search" surfaces as a role description of
-  // "search"; the canonical role is "searchfield".
+  // React Native's spelling of the search field role. On Android RN
+  // publishes nothing for it (the field is a plain EditText, so a
+  // "textfield"); on iOS it is the search-field trait.
   search: 'searchfield',
+  // React Native's and ARIA's spelling of a radio button (PILOT-664).
+  radio: 'radiobutton',
 };
 
 /**
- * Playwright ARIA role names whose native counterpart has another name, so
- * a test ported from Playwright gets pointed at the right one.
+ * Playwright ARIA (and React Native) role names whose native counterpart has
+ * another name, so a test ported from Playwright gets pointed at the right one.
  */
 const ARIA_ROLE_HINTS: Readonly<Record<string, string>> = {
   textbox: 'textfield',
   img: 'image',
-  radio: 'radiobutton',
   searchbox: 'searchfield',
+  // React Native's togglebutton is a button on both platforms, as an ARIA
+  // toggle button is (PILOT-664).
+  togglebutton: 'button',
 };
 
 /**
  * Android class names per role — the agent's `roleClassMap`
  * (`agent/.../ElementFinder.kt`), which `roles.test.ts` pins. Roles the agent
- * resolves only from an RN role description (`alert`, `combobox`) have none.
+ * resolves only from an RN role description (`ANDROID_TRAIT_ONLY_ROLES`) have
+ * none.
  */
 export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> = {
   button: [
     'android.widget.Button',
     'android.widget.ImageButton',
+    'android.widget.ToggleButton',
     'com.google.android.material.button.MaterialButton',
     'androidx.appcompat.widget.AppCompatButton',
   ],
@@ -166,9 +182,14 @@ export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
 
 /**
  * Android roles the agent resolves only from a role description (no class) —
- * the agent's `TRAIT_ONLY_ROLES`, which `roles.test.ts` pins.
+ * the agent's `TRAIT_ONLY_ROLES`, which `roles.test.ts` pins. React Native
+ * renders each as a generic android.view.View whose role description names
+ * it ("Menu Item", "Timer"); PILOT-664 added the menu, radiogroup, scrollbar,
+ * spinbutton, summary, tablist and timer families.
  */
-export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set(['alert', 'combobox']);
+export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
+  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer',
+]);
 
 /**
  * iOS element types per role — the agent's `RoleMapping.roleToElementTypes`
@@ -195,6 +216,28 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   tab: ['XCUIElementTypeTab', 'XCUIElementTypeTabBar'],
   searchfield: ['XCUIElementTypeSearchField'],
 };
+
+/**
+ * The role descriptions React Native leads an iOS generic view's
+ * accessibility value with ("checkbox, unchecked") — the agent's
+ * `RoleMapping.otherRoleDescriptions`, which `roles.test.ts` pins. Each marks
+ * the view as its role and as no other generic-view role.
+ */
+export const IOS_OTHER_ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  checkbox: 'checkbox',
+  radiobutton: 'radio button',
+  alert: 'alert',
+  combobox: 'combo box',
+};
+
+/**
+ * React Native's other iOS generic-view roles, which only a named query finds
+ * — the agent's `RoleMapping.undescribedOtherRoles` (PILOT-664). RN's new
+ * architecture publishes no description for them.
+ */
+export const IOS_UNDESCRIBED_OTHER_ROLES: ReadonlySet<string> = new Set([
+  'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer',
+]);
 
 const KNOWN = new Set(NATIVE_ROLES);
 
@@ -230,4 +273,23 @@ export function assertKnownRole(role: unknown, what: string): asserts role is st
   }
   const message = unknownRoleMessage(role);
   if (message) throw new Error(message);
+}
+
+/**
+ * Whether an iOS generic view (`XCUIElementTypeOther`) is `role` (canonical)
+ * the way the agent's `RoleMapping.matches` decides it, or `undefined` for a
+ * role it doesn't match this way. `value` is the view's accessibility value,
+ * `traitRole` the role its traits give it (the dump's `tapsmith-role`), and
+ * `named` whether the query has a name: a generic view no description marks
+ * is then identified by that name (PILOT-608, PILOT-664).
+ */
+export function iosGenericViewHasRole(
+  role: string,
+  view: { value: string | undefined; traitRole: string; named: boolean },
+): boolean | undefined {
+  const own = IOS_OTHER_ROLE_DESCRIPTIONS[role];
+  if (own === undefined && !IOS_UNDESCRIBED_OTHER_ROLES.has(role)) return undefined;
+  const lead = view.value === undefined ? undefined : view.value.split(',')[0]!.trim().toLowerCase();
+  if (lead !== undefined && Object.values(IOS_OTHER_ROLE_DESCRIPTIONS).includes(lead)) return lead === own;
+  return view.named && view.traitRole === '';
 }

@@ -9,6 +9,7 @@ import { KeyboardScreen } from "./screens/keyboard.screen.js"
 import { ListScreen } from "./screens/list.screen.js"
 import { LoginScreen } from "./screens/login.screen.js"
 import { OcclusionScreen } from "./screens/occlusion.screen.js"
+import { RolesScreen } from "./screens/roles.screen.js"
 import { ScrollScreen } from "./screens/scroll.screen.js"
 import { SlowLoadScreen } from "./screens/slow-load.screen.js"
 import { SpinnerScreen } from "./screens/spinner.screen.js"
@@ -26,6 +27,7 @@ type ScreenFixtures = {
   listScreen: ListScreen
   loginScreen: LoginScreen
   occlusionScreen: OcclusionScreen
+  rolesScreen: RolesScreen
   scrollScreen: ScrollScreen
   slowLoadScreen: SlowLoadScreen
   spinnerScreen: SpinnerScreen
@@ -63,6 +65,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   occlusionScreen: async ({ device }, use) => {
     await use(new OcclusionScreen(device))
+  },
+  rolesScreen: async ({ device }, use) => {
+    await use(new RolesScreen(device))
   },
   scrollScreen: async ({ device }, use) => {
     await use(new ScrollScreen(device))

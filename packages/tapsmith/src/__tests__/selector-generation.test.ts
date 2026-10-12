@@ -647,8 +647,9 @@ describe('applyPositionalIndex (shared positional-chain util)', () => {
 describe('role names in the playground match the runtime', () => {
   const heading = makeNode('node', { class: 'android.view.ViewGroup', 'tapsmith-role': 'heading', text: 'Settings', bounds: '[0,0][100,50]' });
   const button = makeNode('node', { class: 'android.widget.Button', text: 'OK', bounds: '[0,60][100,110]' });
-  const menuItem = makeNode('node', { class: 'android.view.ViewGroup', 'tapsmith-role': 'menuitem', text: 'Open', bounds: '[0,120][100,170]' });
-  const roots = [makeNode('hierarchy', {}, [heading, button, menuItem])];
+  // An app's own role description, which no getByRole role names.
+  const carousel = makeNode('node', { class: 'android.view.ViewGroup', 'tapsmith-role': 'carousel', text: 'Open', bounds: '[0,120][100,170]' });
+  const roots = [makeNode('hierarchy', {}, [heading, button, carousel])];
   const match = (selector: string) => findMatchingNodes(roots, parseSelectorString(selector)!);
 
   it('resolves aliases and ignores case, like getByRole', () => {
@@ -687,9 +688,9 @@ describe('role names in the playground match the runtime', () => {
   });
 
   it('matches nothing for a role getByRole rejects, and says why', () => {
-    expect(match('device.getByRole("menuitem")')).toEqual([]);
-    expect(parsedSelectorError(parseSelectorString('device.getByRole("menuitem")')!))
-      .toMatch(/^Unknown role "menuitem"\. Supported: /);
+    expect(match('device.getByRole("carousel")')).toEqual([]);
+    expect(parsedSelectorError(parseSelectorString('device.getByRole("carousel")')!))
+      .toMatch(/^Unknown role "carousel"\. Supported: /);
     expect(parsedSelectorError(parseSelectorString('device.getByRole("button")')!)).toBeNull();
     expect(parsedSelectorError(parseSelectorString('device.getByText("OK")')!)).toBeNull();
   });
@@ -699,7 +700,7 @@ describe('role names in the playground match the runtime', () => {
   });
 
   it('suggests no getByRole for a role getByRole rejects', () => {
-    const codes = generateSelectors(menuItem).map((s) => s.code);
+    const codes = generateSelectors(carousel).map((s) => s.code);
     expect(codes.some((c) => c.includes('getByRole'))).toBe(false);
     expect(codes).toContain('device.getByText("Open")');
   });

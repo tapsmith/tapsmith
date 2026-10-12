@@ -280,16 +280,35 @@ class ElementFinder(
             mapOf(
                 "header" to "heading",
                 "slider" to "seekbar",
-                // RN's accessibilityRole="search" surfaces as a role
-                // description of "search"; normalize to the canonical
-                // "searchfield" so toHaveRole("searchfield") matches.
+                // React Native's spelling of the role. RN publishes no role
+                // description for accessibilityRole="search" on Android (the
+                // field is a plain EditText), so only a native SearchView or
+                // an app's own "search" description is a searchfield here.
                 "search" to "searchfield",
+                // React Native's and ARIA's spelling (PILOT-664).
+                "radio" to "radiobutton",
             )
 
         // Roles resolved exclusively via extractRoleDescription(). No
-        // entry in roleClassMap — React Native surfaces these through
-        // AccessibilityNodeInfoCompat.setRoleDescription().
-        val TRAIT_ONLY_ROLES: Set<String> = setOf("alert", "combobox")
+        // entry in roleClassMap — React Native renders these as a generic
+        // android.view.View and names the role only through
+        // AccessibilityNodeInfoCompat.setRoleDescription() (PILOT-664 added
+        // all but alert and combobox). The SDK's ANDROID_TRAIT_ONLY_ROLES
+        // (roles.ts) is pinned to this list.
+        val TRAIT_ONLY_ROLES: Set<String> =
+            setOf(
+                "alert",
+                "combobox",
+                "menu",
+                "menubar",
+                "menuitem",
+                "radiogroup",
+                "scrollbar",
+                "spinbutton",
+                "summary",
+                "tablist",
+                "timer",
+            )
 
         // Roles that CAN be resolved by class (they have roleClassMap
         // entries) but also have trait-based variants via RN
@@ -311,10 +330,13 @@ class ElementFinder(
      */
     private val roleClassMap =
         mapOf(
+            // ToggleButton is also React Native's togglebutton role, which
+            // iOS reports as a button too, as ARIA does (PILOT-664).
             "button" to
                 listOf(
                     "android.widget.Button",
                     "android.widget.ImageButton",
+                    "android.widget.ToggleButton",
                     "com.google.android.material.button.MaterialButton",
                     "androidx.appcompat.widget.AppCompatButton",
                 ),
@@ -408,11 +430,11 @@ class ElementFinder(
                     "com.google.android.material.tabs.TabLayout",
                 ),
             // Mirrors iOS RoleMapping ("searchfield" -> .searchField).
-            // Native SearchView only — RN renders accessibilityRole="search"
-            // as an EditText with a roleDescription; that path is handled
-            // through extractRoleDescription + the "search" → "searchfield"
-            // alias rather than the class map, so the reverse map
-            // (className → role) doesn't fight with "textfield".
+            // Native SearchView only. RN renders accessibilityRole="search"
+            // as a plain EditText with no role description (RN 0.83), so
+            // it is a "textfield" here; an app that publishes its own
+            // "search" description still matches through the dual-path
+            // filter and the "search" → "searchfield" alias.
             "searchfield" to
                 listOf(
                     "android.widget.SearchView",
@@ -462,7 +484,7 @@ class ElementFinder(
     /**
      * For a normalized role, return the set of raw roleDescription values
      * that should match. Bridges the ROLE_ALIASES gap: e.g., for
-     * "searchfield", returns {"searchfield", "search"} so RN's
+     * "searchfield", returns {"searchfield", "search"} so an app's own
      * roleDescription="search" is accepted.
      */
     private fun acceptableRoleDescriptions(normalizedRole: String): Set<String> {

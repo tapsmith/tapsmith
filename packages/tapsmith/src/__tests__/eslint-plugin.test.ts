@@ -126,6 +126,7 @@ describe('prefer-role rule', () => {
       { className: 'android.widget.TextView', role: 'text' },
       { className: 'android.widget.ProgressBar', role: 'progressbar' },
       { className: 'android.widget.ImageButton', role: 'button' },
+      { className: 'android.widget.ToggleButton', role: 'button' },
     ];
 
     for (const { className, role } of standardWidgets) {
@@ -149,7 +150,7 @@ describe('prefer-role rule', () => {
     const reports: ReportDescriptor[] = [];
     const visitor = rule.create(makeContext(reports));
     visitor.CallExpression(
-      makeMethodCall('locator', objectExpr([{ key: 'className', value: 'android.widget.ToggleButton' }])),
+      makeMethodCall('locator', objectExpr([{ key: 'className', value: 'android.widget.Chronometer' }])),
     );
     expect(reports).toHaveLength(0);
   });

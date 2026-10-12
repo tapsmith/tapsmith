@@ -93,6 +93,31 @@ class FindRulesTest {
         assertFalse(FindRules.matchesTraitRole("tablist", "android.view.View", setOf("tab"), tabClasses, false))
     }
 
+    @Test
+    fun `RN's description-only roles resolve through the description alone`() {
+        // PILOT-664: RN publishes these only as a role description on a
+        // generic View ("Menu Item", "Timer"), so they have no class at all.
+        val roles = listOf("menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer")
+        for (role in roles) {
+            assertTrue("$role is description-only", role in ElementFinder.TRAIT_ONLY_ROLES)
+        }
+        assertEquals("menu", FindRules.canonicalRoleDescription("Menu"))
+        assertEquals("timer", FindRules.canonicalRoleDescription("Timer"))
+        assertEquals("summary", FindRules.canonicalRoleDescription("Summary"))
+        val menuItem = FindRules.canonicalRoleDescription("Menu Item")
+        assertTrue(FindRules.matchesTraitRole(menuItem, "android.view.View", setOf("menuitem"), emptySet(), false))
+        // A menu item is not the menu, and an undescribed View is neither.
+        assertFalse(FindRules.matchesTraitRole(menuItem, "android.view.View", setOf("menu"), emptySet(), false))
+        assertFalse(FindRules.matchesTraitRole(null, "android.view.View", setOf("menuitem"), emptySet(), false))
+        // RN's spin button names a class no widget has; the description decides.
+        assertTrue(FindRules.matchesTraitRole("spinbutton", "android.widget.SpinButton", setOf("spinbutton"), emptySet(), false))
+    }
+
+    @Test
+    fun `radio is an alias of radiobutton`() {
+        assertEquals("radiobutton", ElementFinder.ROLE_ALIASES["radio"])
+    }
+
     // ─── Effective text ───
 
     @Test

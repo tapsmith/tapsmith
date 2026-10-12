@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, ANDROID_TRAIT_ONLY_ROLES, IOS_ROLE_TYPES, NATIVE_ROLES, ROLE_ALIASES, assertKnownRole, normalizeRole, unknownRoleMessage } from '../roles.js';
+import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, ANDROID_TRAIT_ONLY_ROLES, IOS_OTHER_ROLE_DESCRIPTIONS, IOS_ROLE_TYPES, IOS_UNDESCRIBED_OTHER_ROLES, NATIVE_ROLES, ROLE_ALIASES, assertKnownRole, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../roles.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const read = (rel: string): string => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
@@ -28,7 +28,13 @@ describe('unknownRoleMessage()', () => {
   });
 
   it('accepts the cross-platform aliases', () => {
-    for (const alias of ['header', 'slider', 'search']) expect(unknownRoleMessage(alias)).toBeNull();
+    for (const alias of ['header', 'slider', 'search', 'radio']) expect(unknownRoleMessage(alias)).toBeNull();
+  });
+
+  it('accepts the roles React Native publishes only as an Android role description (PILOT-664)', () => {
+    for (const role of ['menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer']) {
+      expect(unknownRoleMessage(role), role).toBeNull();
+    }
   });
 
   it('matches case-insensitively, like the agents', () => {
@@ -41,15 +47,18 @@ describe('unknownRoleMessage()', () => {
     const message = unknownRoleMessage('lst');
     expect(message).toMatch(/^Unknown role "lst"\. Supported: alert, button, checkbox, /);
     for (const role of NATIVE_ROLES) expect(message).toContain(role);
-    expect(message).toContain('aliases: header → heading, slider → seekbar, search → searchfield');
+    expect(message).toContain('aliases: header → heading, slider → seekbar, search → searchfield, radio → radiobutton');
   });
 
   it('suggests the native role for a Playwright ARIA role name', () => {
     expect(unknownRoleMessage('textbox')).toContain('Did you mean "textfield"?');
     expect(unknownRoleMessage('img')).toContain('Did you mean "image"?');
-    expect(unknownRoleMessage('radio')).toContain('Did you mean "radiobutton"?');
     expect(unknownRoleMessage('searchbox')).toContain('Did you mean "searchfield"?');
     expect(unknownRoleMessage('dialog')).not.toContain('Did you mean');
+  });
+
+  it('points React Native\'s togglebutton at button, the role it reports (PILOT-664)', () => {
+    expect(unknownRoleMessage('togglebutton')).toContain('Did you mean "button"?');
   });
 
   it('rejects an empty or whitespace-padded role', () => {
@@ -79,6 +88,7 @@ describe('normalizeRole()', () => {
     expect(normalizeRole('Header')).toBe('heading');
     expect(normalizeRole('slider')).toBe('seekbar');
     expect(normalizeRole('search')).toBe('searchfield');
+    expect(normalizeRole('Radio')).toBe('radiobutton');
     expect(normalizeRole('Button')).toBe('button');
   });
 });
@@ -95,7 +105,7 @@ describe('role set parity with the agents', () => {
     const source = read('agent/app/src/main/kotlin/dev/tapsmith/agent/ElementFinder.kt');
     const classMap = block(source, 'private val roleClassMap =', 'private val classToRoleMap');
     const classRoles = [...classMap.matchAll(/"([a-z]+)" to\s*\n\s*listOf\(/g)].map((m) => m[1]!);
-    const traitOnly = block(source, 'val TRAIT_ONLY_ROLES', '\n');
+    const traitOnly = block(source, 'val TRAIT_ONLY_ROLES', ')\n');
     const traitRoles = [...traitOnly.matchAll(/"([a-z]+)"/g)].map((m) => m[1]!);
     expect(classRoles.length).toBeGreaterThan(10);
     expect([...classRoles, ...traitRoles].sort()).toEqual([...NATIVE_ROLES]);
@@ -133,6 +143,14 @@ describe('role set parity with the agents', () => {
     expect([...ANDROID_TRAIT_ONLY_ROLES].sort()).toEqual(roles('val TRAIT_ONLY_ROLES'));
     // React Native publishes these only as a role description on a generic view.
     for (const role of ['tab', 'progressbar', 'toolbar']) expect(ANDROID_DUAL_PATH_ROLES).toContain(role);
+    // …and these only as a description, on a generic View (PILOT-664).
+    for (const role of ['menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer']) {
+      expect(ANDROID_TRAIT_ONLY_ROLES).toContain(role);
+    }
+  });
+
+  it('reads React Native\'s togglebutton (an android.widget.ToggleButton) as a button (PILOT-664)', () => {
+    expect(ANDROID_ROLE_CLASSES.button).toContain('android.widget.ToggleButton');
   });
 
   it('has the iOS agent\'s element types per role, without .other', () => {
@@ -145,7 +163,51 @@ describe('role set parity with the agents', () => {
     expect(IOS_ROLE_TYPES).toEqual(swift);
   });
 
+  it('has the iOS agent\'s generic-view role descriptions (PILOT-608, PILOT-664)', () => {
+    const source = read('ios-agent/TapsmithAgent/RoleMapping.swift');
+    const table = (start: string) => Object.fromEntries(
+      [...block(source, start, ']\n').matchAll(/"([a-z]+)": "([a-z ]+)"/g)].map((m) => [m[1]!, m[2]!]),
+    );
+    expect(IOS_OTHER_ROLE_DESCRIPTIONS).toEqual(table('static let otherRoleDescriptions'));
+    const undescribed = [...block(source, 'static let undescribedOtherRoles', ']\n').matchAll(/"([a-z]+)"/g)].map((m) => m[1]!);
+    expect([...IOS_UNDESCRIBED_OTHER_ROLES].sort()).toEqual(undescribed.sort());
+  });
+
   it('lists NATIVE_ROLES sorted, so the error message reads alphabetically', () => {
     expect([...NATIVE_ROLES]).toEqual([...NATIVE_ROLES].sort());
+  });
+});
+
+// ─── iOS generic views (mirrors RoleMapping.matches) ───
+
+describe('iosGenericViewHasRole()', () => {
+  const view = (value: string | undefined, opts: { traitRole?: string; named?: boolean } = {}) =>
+    ({ value, traitRole: opts.traitRole ?? '', named: opts.named ?? false });
+
+  it('leaves roles matched by type or trait to the caller', () => {
+    expect(iosGenericViewHasRole('button', view(undefined, { named: true }))).toBeUndefined();
+    expect(iosGenericViewHasRole('heading', view(undefined, { named: true }))).toBeUndefined();
+  });
+
+  it('matches RN\'s described checkbox and radio, and nothing else by that description', () => {
+    expect(iosGenericViewHasRole('checkbox', view('checkbox, unchecked'))).toBe(true);
+    expect(iosGenericViewHasRole('radiobutton', view('Radio button, checked'))).toBe(true);
+    expect(iosGenericViewHasRole('checkbox', view('radio button, checked', { named: true }))).toBe(false);
+    expect(iosGenericViewHasRole('menuitem', view('checkbox, checked', { named: true }))).toBe(false);
+  });
+
+  it('finds an undescribed, untraited generic view only by a named query', () => {
+    for (const role of ['alert', 'menuitem', 'timer', 'summary']) {
+      expect(iosGenericViewHasRole(role, view(undefined)), role).toBe(false);
+      expect(iosGenericViewHasRole(role, view(undefined, { named: true })), role).toBe(true);
+      expect(iosGenericViewHasRole(role, view(undefined, { named: true, traitRole: 'button' })), role).toBe(false);
+    }
+  });
+
+  it('treats a value leading with a new role\'s word as the app\'s own text', () => {
+    // RN's new architecture publishes no description for these roles.
+    expect(iosGenericViewHasRole('timer', view('Timer'))).toBe(false);
+    expect(iosGenericViewHasRole('combobox', view('Timer', { named: true }))).toBe(true);
+    expect(iosGenericViewHasRole('menu', view('Menu', { named: true, traitRole: 'button' }))).toBe(false);
   });
 });

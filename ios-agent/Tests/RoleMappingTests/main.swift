@@ -170,6 +170,44 @@ check("a named alert query skips a heading",
 check("a named alert query skips a described checkbox",
       matches("alert", .other, value: "checkbox, checked", named: true), false)
 
+// ─── React Native's other generic-view roles (PILOT-664) ───
+
+let rnGenericRoles = ["menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer"]
+for role in rnGenericRoles {
+    check("getByRole(\"\(role)\") is a known role", (try? RoleMapping.elementTypes(for: role)) ?? [], [.other])
+    check("an unnamed \(role) query doesn't match a generic view", matches(role, .other), false)
+    check("a named \(role) query finds an undescribed generic view", matches(role, .other, named: true), true)
+    check("a named \(role) query skips a button-trait view", matches(role, .other, traits: buttonTrait, named: true), false)
+    check("a named \(role) query skips a described checkbox",
+          matches(role, .other, value: "checkbox, checked", named: true), false)
+    check("a \(role) query doesn't match a native button", matches(role, .button, named: true), false)
+}
+// The new architecture publishes no description for them, so a value that
+// leads with the role's word is the app's own text and proves nothing.
+check("an unnamed timer query doesn't match a view valued \"Timer\"", matches("timer", .other, value: "Timer"), false)
+check("an unnamed menu query doesn't match a view valued \"Menu\"", matches("menu", .other, value: "Menu"), false)
+check("a described checkbox is not a menu item, even by name",
+      matches("menuitem", .other, value: "checkbox, checked", named: true), false)
+// On the new architecture those words are the app's own value text, so they
+// never rule a view out of another role's named query.
+check("a named combobox query finds a generic view valued \"Timer\"",
+      matches("combobox", .other, value: "Timer", named: true), true)
+check("a named menuitem query finds a generic view valued \"Menu\"",
+      matches("menuitem", .other, value: "Menu", named: true), true)
+check("…but an unnamed checkbox query doesn't", matches("checkbox", .other, value: "Timer"), false)
+// A trait still decides for the described existing roles as on main.
+check("a described checkbox with a button trait is still a checkbox",
+      matches("checkbox", .other, traits: buttonTrait, value: "checkbox, checked"), true)
+// A trait marks another role even when the value leads with a description:
+// a button whose own value text is "Menu" is not a menu.
+check("a button-trait view valued \"Menu\" is not a menu", matches("menu", .other, traits: buttonTrait, value: "Menu"), false)
+check("a link-trait view valued \"Timer\" is not a timer", matches("timer", .other, traits: linkTrait, value: "Timer", named: true), false)
+// "radio" is React Native's and ARIA's spelling of radiobutton.
+check("the \"radio\" alias matches an RN radio", matches("radio", .other, value: "radio button, checked"), true)
+check("the \"radio\" alias matches a native radio button", matches("Radio", .radioButton), true)
+check("the \"radio\" alias queries radio button types",
+      (try? RoleMapping.elementTypes(for: "radio")) ?? [], [.radioButton, .other])
+
 // Roles matched by type or trait alone are unchanged.
 check("a button is a button", matches("button", .button), true)
 check("a button-trait view is a button", matches("button", .other, traits: buttonTrait), true)
@@ -180,7 +218,7 @@ check("an unknown role matches nothing", matches("row", .other, named: true), fa
 
 // Role-only live re-resolution goes by the matched node's label for the roles
 // a type query can't express.
-for role in ["heading", "header", "checkbox", "radiobutton", "alert", "combobox"] {
+for role in ["heading", "header", "checkbox", "radiobutton", "radio", "alert", "combobox"] + rnGenericRoles {
     check("role-only \(role) re-resolves by label", RoleMapping.needsLabelReResolution(role: role), true)
 }
 for role in ["button", "text", "switch", "textfield"] {

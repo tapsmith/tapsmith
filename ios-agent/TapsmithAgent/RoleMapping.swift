@@ -49,6 +49,18 @@ enum RoleMapping {
         // won't report these roles back, so toHaveRole won't match.
         "alert": [.other],
         "combobox": [.other],
+        // React Native's other description-only roles (PILOT-664): the
+        // Android agent reads them from the role description; here they are
+        // generic views a named query finds (`undescribedOtherRoles`).
+        "menu": [.other],
+        "menubar": [.other],
+        "menuitem": [.other],
+        "radiogroup": [.other],
+        "scrollbar": [.other],
+        "spinbutton": [.other],
+        "summary": [.other],
+        "tablist": [.other],
+        "timer": [.other],
     ]
 
     /// The role reported for an element type that more than one role lists in
@@ -61,7 +73,7 @@ enum RoleMapping {
 
     /// Reverse mapping: XCUIElement.ElementType → role name.
     /// `.other` is excluded: multiple roles include it in their forward mapping
-    /// (checkbox, radiobutton, alert, combobox) so getByRole can match generic
+    /// (checkbox, radiobutton, alert, combobox, …) so getByRole can match generic
     /// Views by name, but the reverse can't pick one.
     static let elementTypeToRole = buildReverseMap(Array(roleToElementTypes), pins: reverseRolePins)
 
@@ -148,6 +160,7 @@ enum RoleMapping {
         "header": "heading",
         "slider": "seekbar",
         "search": "searchfield",
+        "radio": "radiobutton",
     ]
 
     /// Check if a UIAccessibilityTraits bitmask matches a role.
@@ -182,6 +195,22 @@ enum RoleMapping {
         "combobox": "combo box",
     ]
 
+    /// React Native's other generic-view roles (PILOT-664). The new
+    /// architecture — the only one from RN 0.82 — publishes no description
+    /// for them (summary sets a trait `resolveRole` doesn't read), so only a
+    /// named query finds one. The old architecture's descriptions ("menu
+    /// item") aren't read: on the new one the same words are the app's own
+    /// value text.
+    static let undescribedOtherRoles: Set<String> = [
+        "menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer",
+    ]
+
+    /// Whether `role` (canonical) is matched on a generic view by its React
+    /// Native description or, failing that, by a named query.
+    private static func isGenericViewRole(_ canonical: String) -> Bool {
+        otherRoleDescriptions[canonical] != nil || undescribedOtherRoles.contains(canonical)
+    }
+
     /// The role names a selector may use for the same role, normalized to
     /// the canonical key of `roleToElementTypes`.
     static func normalize(_ role: String) -> String {
@@ -200,6 +229,9 @@ enum RoleMapping {
     ///   only when nothing marks it as another role (another of these
     ///   descriptions, or a trait `resolveRole` reads). RN's new architecture publishes nothing
     ///   for alert and combobox, so a name is the only way to find those.
+    /// - RN's other generic-view roles (menuitem, tablist, timer, …): their
+    ///   native type, if any, or — having no description — a named query
+    ///   on a generic view, on the same terms (`undescribedOtherRoles`).
     /// - every other role: its element types, or its trait.
     static func matches(
         role: String,
@@ -213,9 +245,9 @@ enum RoleMapping {
             return traits & AccessibilityTrait.header != 0
         }
         guard let types = roleToElementTypes[canonical] else { return false }
-        if let description = otherRoleDescriptions[canonical] {
+        if isGenericViewRole(canonical) {
             if elementType != .other { return types.contains(elementType) }
-            if let described = describedRole(in: value) { return described == description }
+            if let described = describedRole(in: value) { return described == otherRoleDescriptions[canonical] }
             return hasNameFilter && resolveRole(for: .other, traits: traits).isEmpty
         }
         return types.contains(elementType) || matchesTrait(role: canonical, traits: traits)
@@ -238,7 +270,7 @@ enum RoleMapping {
     /// type an RN app never has (checkbox).
     static func needsLabelReResolution(role: String) -> Bool {
         let canonical = normalize(role)
-        return canonical == "heading" || otherRoleDescriptions[canonical] != nil
+        return canonical == "heading" || isGenericViewRole(canonical)
     }
 
     /// Convert an XCUIElement.ElementType to a string name for the className field.

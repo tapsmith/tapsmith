@@ -311,6 +311,70 @@ describe('Android description-resolved roles in the playground (PILOT-656)', () 
   });
 });
 
+describe('React Native generic-view roles in the playground (PILOT-664)', () => {
+  // RN's accessibilityRole="menu"/"menuitem"/"timer" on Android: generic Views
+  // whose only role signal is the role description the dump reports.
+  function menu() {
+    const item = (label: string, top: number) => makeNode('android.view.View', {
+      class: 'android.view.View', 'tapsmith-role': 'menuitem', clickable: 'true', 'content-desc': label, bounds: `[0,${top}][200,${top + 50}]`,
+    });
+    const copy = item('Copy', 100);
+    const paste = item('Paste', 150);
+    const menuNode = makeNode('android.view.View', { class: 'android.view.View', 'tapsmith-role': 'menu', bounds: '[0,100][200,200]' }, [copy, paste]);
+    const timer = makeNode('android.view.View', { class: 'android.view.View', 'tapsmith-role': 'timer', 'content-desc': 'Elapsed time', bounds: '[0,300][200,350]' });
+    const roots = [makeNode('android.widget.FrameLayout', { class: 'android.widget.FrameLayout' }, [menuNode, timer])];
+    return { roots, menuNode, copy, paste, timer };
+  }
+
+  it('matches menu items, the menu and a timer by role, like the agent', () => {
+    const { roots, menuNode, copy, paste, timer } = menu();
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("menuitem")')!)).toEqual([copy, paste]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("menuitem", { name: "Paste" })')!)).toEqual([paste]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("menu")')!)).toEqual([menuNode]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("timer")')!)).toEqual([timer]);
+  });
+
+  it('suggests getByRole for a menu item instead of dropping the unknown role', () => {
+    const { copy } = menu();
+    const codes = generateSelectors(copy).map((s) => s.code);
+    expect(codes).toContain('device.getByRole("menuitem", { name: "Copy" })');
+  });
+
+  it('reads a ToggleButton (RN togglebutton) as a button, and "radio" as radiobutton', () => {
+    const toggle = makeNode('android.widget.ToggleButton', { class: 'android.widget.ToggleButton', 'content-desc': 'Bold', checkable: 'true', bounds: '[0,0][100,50]' });
+    const radio = makeNode('android.widget.RadioButton', { class: 'android.widget.RadioButton', text: 'Small', bounds: '[0,60][100,110]' });
+    const roots = [makeNode('android.widget.FrameLayout', { class: 'android.widget.FrameLayout' }, [toggle, radio])];
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("button", { name: "Bold" })')!)).toEqual([toggle]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("radio")')!)).toEqual([radio]);
+    expect(generateSelectors(toggle).map((s) => s.code)).toContain('device.getByRole("button", { name: "Bold" })');
+  });
+});
+
+describe('iOS generic-view roles in the playground, like the agent (PILOT-664)', () => {
+  // RN's new architecture publishes nothing for a menuitem or timer on iOS:
+  // the device finds the generic view by a named query.
+  const other = (label: string, y: number, extra: Record<string, string> = {}) => makeNode('XCUIElementTypeOther', {
+    type: 'XCUIElementTypeOther', label, x: '0', y: String(y), width: '200', height: '40', ...extra,
+  });
+  const copy = other('Copy', 100);
+  const paste = other('Paste', 140);
+  const bold = other('Bold', 200, { 'tapsmith-role': 'button' });
+  const radio = other('Small', 260, { value: 'radio button, unchecked' });
+  const roots = [makeNode('XCUIElementTypeApplication', { type: 'XCUIElementTypeApplication' }, [copy, paste, bold, radio])];
+  const on = (selector: string) => findMatchingNodes(roots, parseSelectorString(selector)!);
+
+  it('matches a named query on an undescribed generic view, and no unnamed one', () => {
+    expect(on('device.getByRole("menuitem", { name: "Paste" })')).toEqual([paste]);
+    expect(on('device.getByRole("menuitem")')).toEqual([]);
+  });
+
+  it('does not match a view a trait or another description marks as another role', () => {
+    expect(on('device.getByRole("menuitem", { name: "Bold" })')).toEqual([]);
+    expect(on('device.getByRole("menuitem", { name: "Small" })')).toEqual([]);
+    expect(on('device.getByRole("radio")')).toEqual([radio]);
+  });
+});
+
 describe('icon-glyph accessible names (PILOT-659)', () => {
   // React Navigation bottom tabs with an icon-font icon (MaterialIcons via
   // IconSymbol): RN names the tab "<glyph>, <label>", and the glyph is a

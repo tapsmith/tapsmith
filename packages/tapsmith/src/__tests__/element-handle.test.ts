@@ -901,14 +901,22 @@ describe('tap()', () => {
   });
 
   it('never suggests getByRole for a role getByRole rejects (PILOT-556)', () => {
-    // Android reports an RN roleDescription ("menuitem") as the element's
-    // role, but getByRole only takes the native role names.
+    // Android reports an app's own role description ("carousel") as the
+    // element's role, but getByRole only takes the native role names.
+    const err = buildStrictModeViolationError('getByText("Open")', [
+      makeElementInfo({ role: 'carousel', text: 'Open' }),
+      makeElementInfo({ role: 'carousel', text: 'Open recent' }),
+    ]);
+    expect(err.message).not.toContain('getByRole("carousel"');
+    expect(err.message).toContain('aka device.getByText("Open", { exact: true })');
+  });
+
+  it('suggests getByRole for React Native\'s description-only roles (PILOT-664)', () => {
     const err = buildStrictModeViolationError('getByText("Open")', [
       makeElementInfo({ role: 'menuitem', text: 'Open' }),
       makeElementInfo({ role: 'menuitem', text: 'Open recent' }),
     ]);
-    expect(err.message).not.toContain('getByRole("menuitem"');
-    expect(err.message).toContain('aka device.getByText("Open", { exact: true })');
+    expect(err.message).toContain('getByRole("menuitem"');
   });
 
   it('.first() disambiguates an ambiguous selector', async () => {
