@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { EXAMPLE_TEST_PATH, GENERATED_TEST_MATCH, androidEmulatorCaptureLine, avdPickerChoices, normalizeTypedPath, typedBuildPath, validateBuildPath, generateConfig, generatedProjects, generateExampleTest, runInit, wizardNextSteps } from '../init.js';
+import { EXAMPLE_TEST_PATH, GENERATED_TEST_MATCH, androidEmulatorCaptureLine, avdPickerChoices, normalizeTypedPath, typedBuildPath, validateBuildPath, generateConfig, generatedProjects, generateExampleTest, networkCaptureDefault, runInit, wizardNextSteps } from '../init.js';
 import type { AndroidConfig, IosConfig, Platform } from '../init.js';
 import { platformlessIosFields } from '../doctor.js';
 import { _internal } from '../runner.js';
@@ -370,6 +370,31 @@ describe('androidEmulatorCaptureLine()', () => {
   });
 });
 
+describe('networkCaptureDefault() (PILOT-711)', () => {
+  const android = (avd: string | undefined, over: Partial<{ useEmulators: boolean }> = {}) => ({
+    apkPath: './app.apk', packageName: 'com.example', useEmulators: true, usePhysicalDevices: false, avd, ...over,
+  });
+
+  it('defaults to yes on a capture-capable AVD', () => {
+    expect(networkCaptureDefault(['android'], android('Tapsmith_Phone_API_36'), studioAvds)).toEqual({ initial: true });
+  });
+
+  it('defaults to no on a Play-image AVD, saying why', () => {
+    const d = networkCaptureDefault(['android'], android('Medium_Phone_API_36'), studioAvds);
+    expect(d.initial).toBe(false);
+    expect(d.reason).toBe("AVD Medium_Phone_API_36 can't capture HTTPS: it uses a Google Play system image");
+  });
+
+  it('keeps yes when iOS is also set up, where capture works', () => {
+    expect(networkCaptureDefault(['android', 'ios'], android('Medium_Phone_API_36'), studioAvds).initial).toBe(true);
+  });
+
+  it('keeps yes for physical-only Android and for an AVD whose image could not be read', () => {
+    expect(networkCaptureDefault(['android'], android('Medium_Phone_API_36', { useEmulators: false }), studioAvds).initial).toBe(true);
+    expect(networkCaptureDefault(['android'], android('Mystery'), [{ name: 'Mystery' }]).initial).toBe(true);
+  });
+});
+
 describe('validateBuildPath() (PILOT-513)', () => {
   let tmp: string;
   beforeEach(() => {
@@ -625,5 +650,12 @@ describe('wizardNextSteps() (PILOT-562)', () => {
     const steps = wizardNextSteps('npm i -D tapsmith');
     expect(steps[0]).toEqual(['Install Tapsmith', 'npm i -D tapsmith']);
     expect(steps[1][1]).toBe('npx tapsmith verify');
+  });
+
+  it('points a Play-image AVD at HTTPS-capable one before verify (PILOT-711)', () => {
+    const steps = wizardNextSteps('npm i -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd' });
+    expect(steps[0][0]).toBe('Install Tapsmith');
+    expect(steps[1]).toEqual(['Capture HTTPS', 'npx tapsmith create-avd']);
+    expect(steps[2][1]).toBe('npx tapsmith verify');
   });
 });

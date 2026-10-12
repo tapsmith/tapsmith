@@ -626,6 +626,22 @@ describe('resolveInitPlan() AVD choice with network capture', () => {
     expect(plan.warnings).toEqual([]);
   });
 
+  it('points a Play-image AVD at create-avd in the next steps, whether or not capture is on (PILOT-711)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-exec-'));
+    try {
+      for (const networkCapture of [false, true]) {
+        const args = android({ networkCapture, exampleTest: false, agentsMd: false, force: true });
+        const result = executeInitPlan(resolveInitPlan(args, playOnlyEnv, detectStubs, tmp), args, tmp);
+        expect(result.nextSteps).toContain("Capture HTTPS: npx tapsmith create-avd, then set avd: 'Tapsmith_Phone_API_36' in tapsmith.config.ts");
+      }
+      const args = android({ networkCapture: true, exampleTest: false, agentsMd: false, force: true });
+      const capable = executeInitPlan(resolveInitPlan(args, studioEnv, detectStubs, tmp), args, tmp);
+      expect(capable.nextSteps.some((s) => s.startsWith('Capture HTTPS'))).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('puts the warning in the --json result', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-exec-'));
     try {

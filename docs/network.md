@@ -942,14 +942,24 @@ iOS simulators are already per-PID filtered by the macOS Network Extension, so s
 
 ### Android emulator image requirements
 
-HTTPS decryption on Android emulators requires `adb root`, which only works on **Google APIs** (`google_apis`) and AOSP system images. **Google Play** images (`google_apis_playstore`) are production builds on which `adbd` cannot restart as root, so Tapsmith cannot install its CA certificate into the system trust store or set up the `iptables` redirect. On a Play image, tests still run and plain-HTTP traffic is still captured through the global proxy fallback, but HTTPS traffic is not decrypted and Tapsmith prints this at startup:
+HTTPS decryption on Android emulators requires `adb root`, which only works on **Google APIs** (`google_apis`) and AOSP system images. **Google Play** images (`google_apis_playstore`) are production builds on which `adbd` cannot restart as root, so Tapsmith cannot install its CA certificate into the system trust store or set up the `iptables` redirect. Nothing on the emulator would trust Tapsmith's certificate, so on a Play image Tapsmith passes HTTPS through to the real servers instead of decrypting it:
+
+- tests still run, and the app's HTTPS requests still work;
+- each HTTPS connection appears in the trace only as a `passthrough` entry naming the host, with no request or response detail;
+- `device.route()`, `waitForRequest()` and `waitForResponse()` cannot see HTTPS requests;
+- plain-HTTP traffic is still captured, through the global proxy fallback.
+
+Tapsmith prints this at startup:
 
 ```
-Network capture warning: Failed to install CA cert on device: Device does not support
-adb root — this emulator runs a Google Play (google_apis_playstore) system image,
-which blocks root. Recreate the AVD with a Google APIs image (`npx tapsmith create-avd`)
-to enable HTTPS capture — HTTPS traffic will not be captured
-iptables redirect unavailable; using Android system HTTP proxy fallback
+Network capture warning: Could not install Tapsmith's CA certificate on the emulator:
+Device does not support adb root — this emulator runs a Google Play (google_apis_playstore)
+system image, which blocks root. Recreate the AVD with a Google APIs image
+(`npx tapsmith create-avd`) to enable HTTPS capture. HTTPS is passed through to its
+servers uncaptured, so the app's HTTPS requests still work, but they appear in the trace
+only as passthrough entries, and device.route(), waitForRequest() and waitForResponse()
+cannot see them; plain HTTP is still captured
+Network capture warning: iptables redirect unavailable; using Android system HTTP proxy fallback
 ```
 
 Android Studio's Device Manager preselects Google Play images for most phone profiles (marked with a Play Store icon next to the system image). When creating an AVD for Tapsmith, pick an image from the **Google APIs** tab instead — or let Tapsmith do it:
@@ -966,7 +976,7 @@ avdmanager create avd -n Tapsmith_Phone_API_36 \
   -k "system-images;android-36;google_apis;arm64-v8a" -d medium_phone
 ```
 
-`npx tapsmith doctor` flags any existing AVD that uses a Google Play image, and suggests a capture-capable AVD you already have or a new one to create. It never suggests overwriting yours. With network capture on, `npx tapsmith init` picks a capture-capable AVD when there is one, marks Play images "no HTTPS capture" in the wizard, and warns when it can only pick a Play image.
+`npx tapsmith doctor` flags any existing AVD that uses a Google Play image, and suggests a capture-capable AVD you already have or a new one to create. It never suggests overwriting yours. With network capture on, `npx tapsmith init` picks a capture-capable AVD when there is one, marks Play images "no HTTPS capture" in the wizard, and warns when it can only pick a Play image. When the AVD it sets up is a Play image, the wizard's network-capture question defaults to no (unless iOS is set up too), and its next steps name the capture-capable AVD to switch to, or the `create-avd` command for one.
 
 To check an existing AVD, look at `tag.id` in `~/.android/avd/<name>.avd/config.ini`: `google_apis` (or `default`/`aosp_atd`) supports HTTPS capture; `google_apis_playstore` does not.
 

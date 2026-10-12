@@ -11,7 +11,7 @@ import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { EXAMPLE_TEST_PATH, generateConfig, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
 import { ignoreTestResultsOrWarn } from './init-gitignore.js';
-import { avdCaptureSupport, avdCaptureWarning, noAvdsListedMessage } from './avd-images.js';
+import { avdCaptureSupport, avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage } from './avd-images.js';
 import * as detectDefaults from './init-detect.js';
 import type { InitCommandOptions } from './cli-program.js';
 import type { InstallCommand } from './config.js';
@@ -58,6 +58,8 @@ export interface InitPlan {
   ios?: IosConfig;
   networkCapture: boolean;
   warnings: string[];
+  /** Next steps entry for a Play-image AVD (PILOT-711), from `captureAvdNextStep`. */
+  captureAvdStep?: { label: string; action: string };
 }
 
 export interface InitResult {
@@ -303,7 +305,8 @@ export function resolveInitPlan(
     ios = { appPath, bundleId, simulator, usePhysicalDevice: false };
   }
 
-  return { platforms, android, ios, networkCapture: args.networkCapture, warnings };
+  const captureAvdStep = android?.useEmulators ? captureAvdNextStep(android.avd, env.avdImages) : undefined;
+  return { platforms, android, ios, networkCapture: args.networkCapture, warnings, captureAvdStep };
 }
 
 /**
@@ -553,8 +556,11 @@ export function executeInitPlan(
     warnings.push(`Tapsmith isn't installed in this project, and the files init wrote import it: run ${missingTapsmith.display} before anything else${missingTapsmith.note ? `. ${missingTapsmith.note}` : ''}`);
   }
 
+  const captureStep = plan.captureAvdStep;
   const nextSteps = [
     ...(missingTapsmith ? [`Install Tapsmith in this project: ${missingTapsmith.display}`] : []),
+    // A Play-image AVD: the AVD to switch to before the first run (PILOT-711).
+    ...(captureStep ? [`${captureStep.label}: ${captureStep.action}`] : []),
     // --json is for agents: a person reading the plain output gets the plain command (PILOT-562).
     `Verify the setup end-to-end: npx tapsmith verify${args.json ? ' --json' : ''}`,
     'Run tests: npx tapsmith test',
