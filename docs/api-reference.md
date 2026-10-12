@@ -1802,7 +1802,7 @@ describe("custom config", () => {
 | ------------ | ------------------------------------------- | -------------------------------------------- |
 | `timeout`    | `number`                                    | Action/assertion timeout (ms)                |
 | `screenshot` | `'always' \| 'only-on-failure' \| 'never'` | Screenshot capture mode                      |
-| `retries`    | `number`                                    | Retry count for failed tests                 |
+| `retries`    | `number`                                    | Retry count for failed tests. A retry starts from a reset app ([details](writing-tests.md#retries-start-from-a-fresh-app)) |
 | `trace`      | `TraceMode \| Partial<TraceConfig>`         | Trace recording configuration. See [configuration.md](./configuration.md#traceconfig) for the full `TraceConfig` shape (includes `network`, `networkHttpPorts`, `networkHosts`, `networkIgnoreHosts`, `networkPassthroughHosts`, `screenshots`, etc.). |
 | `video`      | `VideoMode \| Partial<VideoConfig>`         | Video recording configuration. See the [Video recording](#video-recording) section below. |
 | `appState`   | `string`                                    | Path to saved app state archive to restore; `""` means clear |
@@ -1970,7 +1970,7 @@ test.describe.serial("checkout", () => {
 });
 ```
 
-A test that passes on a retry does not stop the group. Unlike Playwright, retries apply to each test where it failed rather than re-running the whole group from its first test. Tests that sit directly in a describe run before its nested describes, so in a serial group a failure in a direct test also skips the nested describes declared above it.
+A test that passes on a retry does not stop the group. Unlike Playwright, retries apply to each test where it failed rather than re-running the whole group from its first test, and a retry inside a serial group does not reset the app first, since that would wipe the state the group's earlier tests built (outside a serial group, a retry starts from a reset app; see [Retries start from a fresh app](writing-tests.md#retries-start-from-a-fresh-app)). Tests that sit directly in a describe run before its nested describes, so in a serial group a failure in a direct test also skips the nested describes declared above it.
 
 ### `test.describe.configure(options: DescribeConfigureOptions): void`
 

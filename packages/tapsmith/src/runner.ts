@@ -1525,6 +1525,111 @@ interface InheritedScopeSetup {
    * included (Playwright semantics).
    */
   serialGroup?: { failed: boolean };
+  /**
+   * The setup each enclosing scope ran, outermost first — what a retry has
+   * to run again to start where the first attempt started (PILOT-715).
+   */
+  retrySetup?: ScopeRetryStep[];
+}
+
+/**
+ * One scope's setup as a retry re-runs it: Playwright retries a failed test
+ * in a fresh worker, which tears the old one down (afterAll hooks) and sets
+ * every enclosing scope up again (beforeAll hooks). The app reset a scope ran
+ * on entry is the device-side half of that fresh start.
+ */
+interface ScopeRetryStep {
+  /** The policy of the reset this scope ran on entry, if it ran one. */
+  resetPolicy?: AppResetPolicy;
+  beforeAll: HookEntry[];
+  afterAll: HookEntry[];
+  suiteFixtures: Record<string, unknown>;
+  suiteRegistry: FixtureRegistry;
+  routeScope: RouteScope;
+  hookTimeoutMs: number;
+}
+
+/**
+ * Whether a retry of a test in this scope re-runs the file's setup: the test
+ * runs under a per-file policy that actually resets (a per-test policy
+ * already resets before every attempt; `appReset: 'none'` opts out of
+ * isolation altogether), and it is not in a serial group, whose later tests
+ * depend on state the earlier ones built (PILOT-590).
+ */
+function retryReplaysSetup(
+  policy: AppResetPolicy,
+  chain: readonly ScopeRetryStep[],
+  serialGroup: { failed: boolean } | undefined,
+): boolean {
+  return policy.scope === 'file' && !serialGroup
+    && chain.some((s) => s.resetPolicy !== undefined && appResetAction(s.resetPolicy).kind !== 'none');
+}
+
+/**
+ * Bring the app back to where the test's first attempt started, the way
+ * Playwright's fresh worker does for a retry: the enclosing scopes' afterAll
+ * hooks (innermost first), then each scope's entry reset — delivered cold,
+ * never satisfied by an earlier preparation — and beforeAll hooks, outermost
+ * first. Everything records live into the attempt's trace, so its APP RESET
+ * row describes this reset rather than the one that preceded attempt 1.
+ * A failing reset or beforeAll fails the attempt; a failing afterAll is
+ * logged, as at the end of a scope.
+ */
+async function runRetrySetup(
+  chain: readonly ScopeRetryStep[],
+  collector: TraceCollector | null,
+  opts: RunOptions,
+  fullName: string,
+): Promise<void> {
+  const teardown = [...chain].reverse();
+  if (teardown.some((s) => s.afterAll.length > 0)) {
+    collector?.startGroup('afterAll Hooks');
+    try {
+      for (const step of teardown) {
+        for (const hook of step.afterAll) {
+          try {
+            await invokeHookWithTestScope(hook, step.suiteFixtures, step.suiteRegistry, step.routeScope, {
+              kind: 'afterAll', timeoutMs: step.hookTimeoutMs, traceCollector: collector, abortSignal: opts.abortSignal,
+            });
+          } catch (err) {
+            if (isAbortError(err) || opts.abortSignal?.aborted) throw err;
+            process.stderr.write(`[tapsmith] afterAll hook error: ${err instanceof Error ? err.message : String(err)}\n`);
+          }
+        }
+      }
+    } finally {
+      collector?.endGroup();
+    }
+  }
+  // The old setup's routes go with it; the beforeAll hooks below register
+  // theirs again.
+  await forEachDeviceBestEffort(opts, async (d) => {
+    if (!d._routeManager?.hasRoutes) return;
+    for (const step of chain) await d._routeManager.removeScopeRoutes(step.routeScope);
+  });
+  for (const step of chain) {
+    if (step.resetPolicy) {
+      // Nothing prepared survives a failed attempt.
+      opts._prepared?.clear();
+      await runTracedAppReset(collector, opts, step.resetPolicy, {
+        phase: `retry of ${fullName}`,
+        forceCold: true,
+      });
+      if (opts._applied) opts._applied.current = step.resetPolicy;
+    }
+    if (step.beforeAll.length === 0) continue;
+    opts._prepared?.clear();
+    collector?.startGroup('beforeAll Hooks');
+    try {
+      for (const hook of step.beforeAll) {
+        await invokeHookWithTestScope(hook, step.suiteFixtures, step.suiteRegistry, step.routeScope, {
+          kind: 'beforeAll', timeoutMs: step.hookTimeoutMs, traceCollector: collector, abortSignal: opts.abortSignal,
+        });
+      }
+    } finally {
+      collector?.endGroup();
+    }
+  }
 }
 
 function replayBeforeAllEvents(
@@ -1983,6 +2088,22 @@ async function runSuiteContext(
     }
   }
 
+  // What a retry of a test in this scope (or below it) re-runs to start
+  // where its first attempt started.
+  const retryChain: ScopeRetryStep[] = [...(inherited.retrySetup ?? [])];
+  if (needsScopeReset || ctx.beforeAll.length > 0 || ctx.afterAll.length > 0) {
+    retryChain.push({
+      ...(needsScopeReset ? { resetPolicy: policy } : {}),
+      beforeAll: ctx.beforeAll,
+      afterAll: ctx.afterAll,
+      suiteFixtures,
+      suiteRegistry,
+      routeScope,
+      hookTimeoutMs: testTimeoutMs,
+    });
+  }
+  const replaySetupOnRetry = canReset && retryReplaysSetup(policy, retryChain, serialGroup);
+
   // Scope setup time (app reset + beforeAll) is attributed to the first test
   // that runs in this scope, the way Playwright counts fixture setup.
   const setupHolder = inherited.setup ?? { pendingMs: 0 };
@@ -2323,7 +2444,11 @@ async function runSuiteContext(
           // events (recording them here is still needed — during beforeAll
           // the active collector was the standalone beforeAll collector, so
           // no test's own collector has these events).
-          if (traceCollector) {
+          // A retry that re-runs the file's setup records it live below;
+          // replaying the original setup would show a reset that ran before
+          // attempt 1 as if it preceded this one.
+          const retrySetupRuns = attempt > 0 && replaySetupOnRetry;
+          if (traceCollector && !retrySetupRuns) {
             if (!beforeAllCollector) {
               for (const rec of inherited.recordings) {
                 replayBeforeAllEvents(
@@ -2355,6 +2480,9 @@ async function runSuiteContext(
           // ends with a session readiness check, so it needs no prior
           // beforeEachTest recovery — a dead app just takes the ladder's
           // restart rung, and the trace says so.
+          if (retrySetupRuns) {
+            await runRetrySetup(retryChain, traceCollector, opts, fullName);
+          }
           if (policy.scope === 'test' && canReset) {
             await runTracedAppReset(traceCollector, opts, policy, {
               phase: `before test ${fullName}`,
@@ -2969,6 +3097,7 @@ async function runSuiteContext(
           }]
         : inherited.recordings,
       serialGroup,
+      retrySetup: retryChain,
     };
     const childResult = await runSuiteContext(
       childCtx, prefix, allBeforeEach, allAfterEach, opts, policy, childInherited,

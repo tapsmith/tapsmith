@@ -8,6 +8,7 @@ import {
   describe as tapsmithDescribe,
   beforeAll as tapsmithBeforeAll,
   beforeEach as tapsmithBeforeEach,
+  afterAll as tapsmithAfterAll,
   collectResults,
   _internal,
   type RunOptions,
@@ -180,6 +181,176 @@ describe('runner app reset (declared isolation)', () => {
     expect(d.device._setForceColdDeepLinks).toHaveBeenCalledWith(true);
     // The retry attempt asks for a cold delivery explicitly.
     expect(d.device._resetApp.mock.calls.map((c) => c[1].forceCold)).toEqual([false, true, false]);
+  });
+
+  describe('retries under a file-scoped policy (PILOT-715)', () => {
+    /** Reset mock that logs into `order` as well as `d.calls`. */
+    function logResets(d: ReturnType<typeof makeDevice>, order: string[]): void {
+      d.device._resetApp.mockImplementation(async (_pkg, opts) => {
+        const mode = opts.mode ?? 'warm';
+        order.push(`reset:${mode}${opts.forceCold ? ':cold' : ''}`);
+        d.calls.push(`resetApp:${mode}`);
+        recordAction('resetApp');
+        return { modeRequested: mode, modeUsed: mode, fellBack: false, coldLaunch: mode !== 'warm', durationMs: 5, hooksDetected: false, steps: [] };
+      });
+    }
+
+    it('re-runs the file setup before a retry: afterAll, a cold reset, then beforeAll, as a fresh worker would', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      let attempts = 0;
+      pushContext();
+      tapsmithBeforeAll(async () => { order.push('beforeAll'); });
+      tapsmithAfterAll(async () => { order.push('afterAll'); });
+      tapsmithTest('flaky', async () => { attempts++; order.push(`flaky#${attempts}`); if (attempts === 1) throw new Error('first attempt fails'); });
+      tapsmithTest('stable', async () => { order.push('stable'); });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['passed', 'passed']);
+      expect(order).toEqual([
+        'reset:clear', 'beforeAll', 'flaky#1',
+        'afterAll', 'reset:clear:cold', 'beforeAll', 'flaky#2',
+        'stable', 'afterAll',
+      ]);
+    });
+
+    it('replays every enclosing scope\'s setup in order, including a nested describe\'s own reset', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      let attempts = 0;
+      pushContext();
+      tapsmithBeforeAll(async () => { order.push('root beforeAll'); });
+      tapsmithDescribe('warm scope', () => {
+        tapsmithTest.use({ appReset: 'restart' });
+        tapsmithBeforeAll(async () => { order.push('inner beforeAll'); });
+        tapsmithAfterAll(async () => { order.push('inner afterAll'); });
+        tapsmithTest('flaky', async () => { attempts++; order.push(`flaky#${attempts}`); if (attempts === 1) throw new Error('boom'); });
+      });
+      tapsmithAfterAll(async () => { order.push('root afterAll'); });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['passed']);
+      expect(order).toEqual([
+        'reset:clear', 'root beforeAll', 'reset:restart', 'inner beforeAll', 'flaky#1',
+        // teardown innermost first, then setup outermost first
+        'inner afterAll', 'root afterAll',
+        'reset:clear:cold', 'root beforeAll', 'reset:restart:cold', 'inner beforeAll', 'flaky#2',
+        'inner afterAll', 'root afterAll',
+      ]);
+    });
+
+    it('the retry\'s trace shows the reset that ran before it, not the startup launch that satisfied attempt 1', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-retry-reset-'));
+      const d = makeDevice();
+      logResets(d, []);
+      let attempts = 0;
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        // Fails both attempts, so the result links the retry's own trace (a
+        // flaky result links the failed first attempt's).
+        tapsmithTest('broken', async () => { attempts++; throw new Error(`boom ${attempts}`); });
+        const ctx = popContext();
+        const holder = new Map([['device-1', { policy: { mode: 'clear' as const, scope: 'file' as const }, preparedAt: Date.now(), durationMs: 9_800, source: 'startup launch' }]]);
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({
+          rootDir: tempRoot, retries: 1,
+          trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+        }), { _prepared: holder }));
+
+        const [t] = collectResults(result);
+        expect(t.status).toBe('failed');
+        expect(t.error?.message).toBe('boom 2');
+        const zip = unzipSync(fs.readFileSync(t.tracePath!));
+        const events = new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+        const ordered = events.filter((e) => e.type === 'action' || e.type === 'group-start' || e.type === 'group-end')
+          .map((e) => e.type === 'action' ? `action:${e.action}` : `${e.type}:${e.name}`);
+        expect(ordered.slice(0, 6)).toEqual([
+          'group-start:App reset', 'action:resetApp', 'group-end:App reset',
+          'group-start:beforeAll Hooks', 'action:openDeepLink', 'group-end:beforeAll Hooks',
+        ]);
+        // Attempt 1 was satisfied by the startup launch; the retry was not.
+        expect(events.some((e) => e.type === 'action' && e.action === 'appReset')).toBe(false);
+        expect(ordered.filter((e) => e === 'action:resetApp')).toHaveLength(1);
+        expect(d.device._resetApp.mock.calls.map((c) => c[1].forceCold)).toEqual([true]);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('a beforeAll that throws while re-establishing state fails that attempt with its error', async () => {
+      const d = makeDevice();
+      let runs = 0;
+      pushContext();
+      tapsmithBeforeAll(async () => { runs++; if (runs === 2) throw new Error('login failed on retry'); });
+      tapsmithTest('always fails', async () => { throw new Error('body failure'); });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      const [t] = collectResults(result);
+      expect(t.status).toBe('failed');
+      expect(t.error?.message).toMatch(/login failed on retry/);
+    });
+
+    it('an afterAll that throws during retry teardown is logged and the retry still runs', async () => {
+      const d = makeDevice();
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      let attempts = 0;
+      let afterAllRuns = 0;
+      try {
+        pushContext();
+        tapsmithAfterAll(async () => { afterAllRuns++; if (afterAllRuns === 1) throw new Error('cleanup failed'); });
+        tapsmithTest('flaky', async () => { attempts++; if (attempts === 1) throw new Error('boom'); });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+        expect(collectResults(result).map((t) => t.status)).toEqual(['passed']);
+        expect(afterAllRuns).toBe(2);
+        expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toMatch(/afterAll hook error: cleanup failed/);
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it('a serial group still retries in place (its later tests depend on earlier ones; PILOT-590)', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      let attempts = 0;
+      pushContext();
+      tapsmithTest.describe.serial('flow', () => {
+        tapsmithBeforeAll(async () => { order.push('beforeAll'); });
+        tapsmithTest('flaky', async () => { attempts++; order.push(`flaky#${attempts}`); if (attempts === 1) throw new Error('boom'); });
+      });
+      const ctx = popContext();
+
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(order).toEqual(['reset:clear', 'beforeAll', 'flaky#1', 'flaky#2']);
+    });
+
+    it('appReset: none opts out of isolation, so a retry re-runs no setup', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      let attempts = 0;
+      pushContext();
+      tapsmithBeforeAll(async () => { order.push('beforeAll'); });
+      tapsmithTest('flaky', async () => { attempts++; order.push(`flaky#${attempts}`); if (attempts === 1) throw new Error('boom'); });
+      const ctx = popContext();
+
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none', retries: 1 })));
+
+      expect(order).toEqual(['beforeAll', 'flaky#1', 'flaky#2']);
+      expect(resetCalls(d)).toEqual([]);
+    });
   });
 
   it('per-test resets record in an APP RESET group ahead of BEFORE EACH', async () => {
