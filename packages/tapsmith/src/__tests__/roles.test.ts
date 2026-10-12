@@ -142,9 +142,10 @@ describe('role set parity with the agents', () => {
     expect([...ANDROID_DUAL_PATH_ROLES].sort()).toEqual(roles('val DUAL_PATH_ROLES'));
     expect([...ANDROID_TRAIT_ONLY_ROLES].sort()).toEqual(roles('val TRAIT_ONLY_ROLES'));
     // React Native publishes these only as a role description on a generic view.
-    for (const role of ['tab', 'progressbar', 'toolbar']) expect(ANDROID_DUAL_PATH_ROLES).toContain(role);
-    // …and these only as a description, on a generic View (PILOT-664).
-    for (const role of ['menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer']) {
+    for (const role of ['progressbar', 'toolbar', 'tablist']) expect(ANDROID_DUAL_PATH_ROLES).toContain(role);
+    // …and these only as a description, on a generic View (PILOT-664). A tab
+    // item has no class of its own on any toolkit (PILOT-514).
+    for (const role of ['menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tab', 'timer']) {
       expect(ANDROID_TRAIT_ONLY_ROLES).toContain(role);
     }
   });

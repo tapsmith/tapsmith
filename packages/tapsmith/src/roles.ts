@@ -158,7 +158,9 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
     'androidx.appcompat.widget.Toolbar',
     'com.google.android.material.appbar.MaterialToolbar',
   ],
-  tab: [
+  // The tab containers; a tab item is known only by its description
+  // (PILOT-514).
+  tablist: [
     'android.widget.TabWidget',
     'com.google.android.material.tabs.TabLayout',
   ],
@@ -173,11 +175,11 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
  * (React Native's `accessibilityRole`, Compose's `Role`) — the agent's
  * `DUAL_PATH_ROLES`, which `roles.test.ts` pins. A node with a description
  * matches only through it; one without falls back to the role's classes.
- * RN renders tab, progressbar and toolbar as a generic View with only a
- * description (PILOT-656).
+ * RN renders progressbar, toolbar and tablist as a generic View with only a
+ * description (PILOT-656, PILOT-514).
  */
 export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
-  'heading', 'link', 'image', 'searchfield', 'tab', 'progressbar', 'toolbar',
+  'heading', 'link', 'image', 'searchfield', 'progressbar', 'toolbar', 'tablist',
 ]);
 
 /**
@@ -185,16 +187,19 @@ export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
  * the agent's `TRAIT_ONLY_ROLES`, which `roles.test.ts` pins. React Native
  * renders each as a generic android.view.View whose role description names
  * it ("Menu Item", "Timer"); PILOT-664 added the menu, radiogroup, scrollbar,
- * spinbutton, summary, tablist and timer families.
+ * spinbutton, summary and timer families. A tab item is one too: RN, Material
+ * and Compose all publish "Tab" on a generic layout (PILOT-514).
  */
 export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
-  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer',
+  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tab', 'timer',
 ]);
 
 /**
  * iOS element types per role — the agent's `RoleMapping.roleToElementTypes`
  * without `.other` (a generic view, which the agent narrows by trait or name),
  * as the `XCUIElementType…` names hierarchy dumps use. `roles.test.ts` pins it.
+ * A tab bar's items are buttons the agent reports as "tab" (`tapsmith-role`)
+ * from their tab-bar ancestor, which no type can say (PILOT-514).
  */
 export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   button: ['XCUIElementTypeButton'],
@@ -213,8 +218,9 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   radiobutton: ['XCUIElementTypeRadioButton'],
   spinner: ['XCUIElementTypePicker', 'XCUIElementTypeActivityIndicator'],
   toolbar: ['XCUIElementTypeToolbar'],
-  tab: ['XCUIElementTypeTab', 'XCUIElementTypeTabBar'],
+  tab: ['XCUIElementTypeTab'],
   searchfield: ['XCUIElementTypeSearchField'],
+  tablist: ['XCUIElementTypeTabBar'],
 };
 
 /**
