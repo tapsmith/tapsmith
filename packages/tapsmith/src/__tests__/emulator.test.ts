@@ -1072,6 +1072,29 @@ describe('emulator utilities', () => {
         expect(h.sleep).toHaveBeenCalledTimes(2);
       });
 
+      it('never kills an emulator one answer showed online and the next did not', () => {
+        // emulator-5556 is really gone; emulator-5554 is another session's,
+        // and adb restarts between the looks.
+        const query = answers(
+          [{ serial: 'emulator-5554', state: 'device' }],
+          [],
+        );
+        const h = harness({
+          entries: [entry(), entry({ serial: 'emulator-5556', port: 5556, pid: 4343 })],
+          query,
+          alive: [4242, 4343],
+          argv: { 4242: tapsmithArgv(), 4343: tapsmithArgv('Pixel_API_36', 5556) },
+          listener: { 'emulator-5554': 4242 },
+        });
+        const result = reclaimOrphanedEmulators(h.deps);
+        expect(result.killed).toEqual(['emulator-5556']);
+        expect(result.undetermined).toEqual(['emulator-5554']);
+        expect(h.killProcess).not.toHaveBeenCalledWith(4242);
+        expect(h.killEmulator).not.toHaveBeenCalledWith('emulator-5554');
+        const output = vi.mocked(process.stderr.write).mock.calls.map((call) => String(call[0])).join('');
+        expect(output).toContain('adb listed emulator-5554 online and then not');
+      });
+
       it('kills an emulator adb positively left out twice, after one settle delay', () => {
         const query = answers([], []);
         const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() } });
