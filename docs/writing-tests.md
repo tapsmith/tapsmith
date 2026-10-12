@@ -643,11 +643,11 @@ All hooks receive the same `{ device }` fixture that tests do. `beforeAll` and `
 
 ```typescript
 beforeAll(async ({ device }) => {
-  await device.getByDescription("Login Form").tap()
+  await device.setOrientation("portrait")  // device-level, so it lasts
 })
 
 beforeEach(async ({ device }) => {
-  await expect(device.getByText("Sign In")).toBeVisible()
+  await device.openDeepLink("myapp://login")  // each test's starting screen
 })
 ```
 
