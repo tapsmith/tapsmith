@@ -66,7 +66,7 @@ function codeSpansIn(file: string, source: string): Sample[] {
       const pattern = (token.text as string).trim().split(/\s+/)
         .map((word) => word.replace(/[.*+?^${}()[\]\\]/g, '\\$&').replace(/\|/g, '\\\\?\\|'))
         .join('[\\s>]+');
-      const re = new RegExp(pattern, 'g');
+      const re = new RegExp(`\`+[\\s>]*${pattern}`, 'g');
       re.lastIndex = searchFrom;
       const found = re.exec(source);
       const at = found ? found.index : -1;
@@ -229,11 +229,14 @@ const API_MISMATCH = new Map<number, string>([
  */
 const RUNNER_NAMES = ['test', 'describe', 'expect', 'beforeAll', 'beforeEach', 'afterAll', 'afterEach', 'defineConfig'];
 
+/** Public types a sample may annotate with but not import. */
+const TYPE_NAMES = ['Device', 'ElementHandle', 'WebViewHandle', 'APIRequestContext'];
+
 /** Whether the sample binds `name` itself: an import, or a top-level-ish declaration. */
 function bindsName(code: string, name: string): boolean {
   const imported = [...code.matchAll(/\bimport\s*(?:type\s*)?\{([^}]*)\}/g)]
     .some((m) => m[1]!.split(',').some((part) => part.trim().split(/\s+as\s+/).pop()!.trim() === name));
-  return imported || new RegExp(`\\b(?:const|let|var|function|class)\\s+${name}\\b`).test(code);
+  return imported || new RegExp(`\\b(?:const|let|var|function|class|type|interface)\\s+${name}\\b`).test(code);
 }
 
 /**
@@ -277,6 +280,8 @@ function wrap(sample: Sample): Wrapped {
   const header = [
     "import type { Device as __Device, WebViewHandle as __WebViewHandle, APIRequestContext as __APIRequestContext } from 'tapsmith';",
     runnerNames.length ? `import { ${runnerNames.join(', ')} } from 'tapsmith';` : '',
+    // Type names a helper or screen object annotates with (`device: Device`).
+    ...TYPE_NAMES.filter((name) => !bindsName(sample.code, name)).map((name) => `type ${name} = import('tapsmith').${name};`),
     'declare const device: __Device;',
     // WebView guides use `webview` from an earlier `await device.webview()`.
     bindsName(sample.code, 'webview') ? '' : 'declare const webview: __WebViewHandle;',
@@ -373,9 +378,6 @@ function typeCheck(samples: Sample[]): Mismatch[] {
     for (const d of program.getSemanticDiagnostics(sourceFile)) {
       if (!API_MISMATCH.has(d.code) || d.start === undefined) continue;
       if (fromUnresolvedValue(checker, sourceFile, d.start)) continue;
-      // A fragment of something else shaped like config — a project's `use: {…}`,
-      // a fixture definition — is not a root config key: only what is inside it
-      // could be checked against the root, so drop the unknown-key error on it.
       // TSX samples are React Native components, checked without React's
       // types: their JSX props and children are not assignable to anything.
       if (v.sample.tsx && (d.code === 2322 || d.code === 2820)) continue;
@@ -446,7 +448,10 @@ describe('docs TypeScript samples match the SDK API', () => {
 
   it('reports a wrong value for a real option', () => {
     const md = '```ts\ntest.use({ appResetScope: "tests" })\ntest.use({ appReset: "wipe" })\n```\n';
-    expect(typeCheck(samplesIn('t.md', md)).map((m) => m.code)).toEqual([2820, 2322]);
+    // TypeScript picks 2820 (did you mean) or 2322 by a similarity heuristic.
+    const codes = typeCheck(samplesIn('t.md', md)).map((m) => m.code);
+    expect(codes).toHaveLength(2);
+    expect(codes.every((code) => code === 2322 || code === 2820)).toBe(true);
   }, 120_000);
 
   it('reads inline code inside tables', () => {
@@ -457,6 +462,11 @@ describe('docs TypeScript samples match the SDK API', () => {
   it('reports a call no overload of an overloaded method accepts', () => {
     const found = typeCheck(samplesIn('t.md', '```ts\nawait device.restartApp(123)\n```\n'));
     expect(found.map((m) => m.code)).toEqual([2769]);
+  }, 120_000);
+
+  it('types Device annotations in samples that import nothing', () => {
+    const md = '```ts\nasync function signIn(device: Device) {\n  await device.frobnicate()\n}\n```\n';
+    expect(typeCheck(samplesIn('t.md', md)).map((m) => [m.line, m.code])).toEqual([[3, 2339]]);
   }, 120_000);
 
   it('types the `request` fixture in fragments', () => {
