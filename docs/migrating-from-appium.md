@@ -235,7 +235,9 @@ For CI, the [CI setup guide](ci-setup.md) has complete GitHub Actions workflows 
 
 **Locators.** XPath is the most common source of slow, brittle Appium tests, and Tapsmith steers away from it: role, text and label locators come first, `getByTestId` is the escape hatch, and `locator({ xpath })` is Android-only and discouraged ([Locators](locators.md)). Locators are also **strict**: if one matches several elements, an action throws and lists every match rather than using the first, so use `.first()`, `.nth()` or a narrower locator where you relied on `$` returning the first match.
 
-**Counting list rows.** A locator counts what the platform's accessibility tree holds. On Android that is only the rows on screen; on iOS it can also include rows the list has already rendered off screen. So `count()` and `toHaveCount()` on a long, scrolling list can give a different number on each platform. Assert on the rows you care about instead (bring one into view with `scrollIntoView()`), or count a list that fits on screen.
+**Grouping steps.** Tapsmith's test API follows Playwright's, but Playwright's `test.step()` isn't there yet. To group actions under a name in the trace, use `device.tracing.group(name)` and `device.tracing.groupEnd()` ([other Playwright APIs not supported yet](api-reference.md#playwright-apis-not-supported-yet)).
+
+**Counting list rows.** A locator counts what the platform's accessibility tree holds, and for a long, scrolling list the platforms differ: on Android the tree usually holds just the rows on screen, while on iOS it can also hold rows the list has already rendered off screen. So `count()` and `toHaveCount()` on such a list can give a different number on each platform. Assert on the rows you care about instead (bring one into view with `scrollIntoView()`), or count a list that fits on screen.
 
 **WebViews.** The model is close to Appium's contexts: `const webview = await device.webview()` connects to the app's WebView, and `await device.native()` switches back. The difference is what you get in between: a handle with Playwright-style web locators and assertions (`webview.getByRole()`, `webview.locator(css)`, `expect(webview.getByText("Paid")).toBeVisible()`) instead of a WebDriver session pointed at a browser, and no Chromedriver version to match to the device's WebView. The app must have WebView debugging enabled, as it must for Appium ([WebView testing](webview.md)).
 
@@ -252,7 +254,6 @@ Appium covers more platforms and device features than Tapsmith does today:
 - **Some iOS permissions:** on an iOS simulator, `grantPermission()` and `revokePermission()` cover the services `xcrun simctl privacy` supports (photos, location, contacts, calendar, microphone, camera, …), which leaves out notifications, among others. On physical iOS devices they are not supported at all.
 - **Mobile browsers:** testing a website in Chrome or Safari on the device. Tapsmith tests apps (and the WebViews inside them).
 - **Arbitrary shell commands:** there is no counterpart to `mobile: shell`.
-- **Playwright's `test.step()`:** Tapsmith's test API follows Playwright's, but `test.step()` isn't there yet. Group actions in the trace with `device.tracing.group(name)` and `device.tracing.groupEnd()` instead ([other Playwright APIs not supported yet](api-reference.md#playwright-apis-not-supported-yet)).
 
 ## Migrating incrementally
 

@@ -61,11 +61,11 @@ function codeSpansIn(file: string, source: string): Sample[] {
   const visit = (token: Token): void => {
     if (token.type === 'codespan') {
       // In a table cell marked unescapes `\|` in `raw`, and a span that wraps
-      // onto the next line loses the line's indent: match its text with any
-      // whitespace and an optional `\` before each `|`.
+      // onto the next line loses the line's indent (and `> ` in a quote): match
+      // its text across whitespace and `>`, with an optional `\` before each `|`.
       const pattern = (token.text as string).trim().split(/\s+/)
         .map((word) => word.replace(/[.*+?^${}()[\]\\]/g, '\\$&').replace(/\|/g, '\\\\?\\|'))
-        .join('\\s+');
+        .join('[\\s>]+');
       const re = new RegExp(pattern, 'g');
       re.lastIndex = searchFrom;
       const found = re.exec(source);
@@ -486,8 +486,8 @@ describe('docs TypeScript samples match the SDK API', () => {
   }, 120_000);
 
   it('gives every inline code span a line, including in tables', () => {
-    const md = 'x\n\n| A | B |\n|---|---|\n| `a \\| b` | `getByText()` |\n';
-    expect(codeSpansIn('t.md', md).map((s) => s.line)).toEqual([5, 5]);
+    const md = 'x\n\n| A | B |\n|---|---|\n| `a \\| b` | `getByText()` |\n\n> Use `device.getByText(\n> "x")` here\n';
+    expect(codeSpansIn('t.md', md).map((s) => s.line)).toEqual([5, 5, 7]);
     const all = docFiles().flatMap((rel) => codeSpansIn(rel, fs.readFileSync(path.join(REPO, rel), 'utf8')));
     expect(all.filter((s) => s.line === 0).map((s) => `${s.file}: ${s.code}`)).toEqual([]);
   });
