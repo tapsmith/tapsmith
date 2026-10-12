@@ -974,15 +974,15 @@ Manually installing `~/.tapsmith/ca.pem` as a *user* CA on a Play image is possi
 
 ### When the app rejects Tapsmith's certificate
 
-Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time you capture. On rootable Android emulators it installs that CA into the device's system trust store at every capture start. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
+Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time you capture. On rootable Android emulators it installs that CA into the device's system trust store when it first sets up capture on the device in a test session. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
 
-When an app still refuses Tapsmith's certificate, those requests do not appear in the trace and `device.route()` cannot intercept them. Tapsmith then names the hosts in the run output, once per run, and adds the same warning to each affected test's trace as a daemon console message. Hosts excluded by `networkHosts` or `networkIgnoreHosts` are left out, and there is no warning on the iOS simulator's macOS system-proxy fallback, where other Mac processes' traffic reaches the proxy too:
+When an HTTPS client on the device still refuses Tapsmith's certificate, those requests do not appear in the trace and `device.route()` cannot intercept them. Tapsmith then names the hosts in the run output, once per run, and adds the same warning to each affected test's trace as a daemon console message. Hosts excluded by `networkHosts` or `networkIgnoreHosts` are left out, and there is no warning on the iOS simulator's macOS system-proxy fallback, where other Mac processes' traffic reaches the proxy too:
 
 ```
-[tapsmith] Network capture warning: the app rejected Tapsmith's HTTPS certificate for api.example.com, so those requests were not captured and device.route() could not intercept them. …
+[tapsmith] Network capture warning: an HTTPS client on the device rejected Tapsmith's certificate for api.example.com, so those requests were not captured and device.route() could not intercept them. …
 ```
 
-If every HTTPS host is rejected, the device or app does not trust the current CA. For example, the CA could only be installed in Android's user store, which apps ignore unless their `network_security_config.xml` opts in. If only some hosts are rejected, the app probably pins their certificates: list them in `trace.networkPassthroughHosts` so they are tunnelled without capture instead of failing.
+If every host your app uses is rejected, the device or app does not trust the current CA. For example, the CA could only be installed in Android's user store, which apps ignore unless their `network_security_config.xml` opts in. If only some hosts are rejected, those clients probably pin their certificates. List your app's pinned hosts in `trace.networkPassthroughHosts` so they are tunnelled without capture instead of failing. On system-wide capture routes the hosts can also belong to background services, which you can drop with `trace.networkIgnoreHosts`.
 
 ---
 

@@ -8,6 +8,8 @@ describe('tlsRejectWarning()', () => {
     expect(msg).toContain('~/.tapsmith/ca.pem');
     expect(msg).toContain('device.route()');
     expect(msg).toContain('trace.networkPassthroughHosts');
+    expect(msg).toContain('trace.networkIgnoreHosts');
+    expect(msg).not.toMatch(/the app rejected/);
   });
 
   it('summarises a long host list', () => {

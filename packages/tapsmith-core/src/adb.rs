@@ -1838,9 +1838,17 @@ mod apex_script_tests {
         let cert = root.join("tapsmith-ca.pem");
         fs::write(&cert, NEW_CA).unwrap();
 
-        // `nsenter -t PID -m -- cmd…` → run cmd in this (only) namespace.
-        write_exec(&bin.join("nsenter"), "#!/bin/sh\nshift 4\nexec \"$@\"\n");
-        // No zygotes: only PID 1 is patched.
+        // `nsenter -t PID -m -- cmd…`: PID 1's namespace sees the real `src`
+        // dir; any other PID's namespace sees its own `src-<PID>` dir, so a
+        // test can give init and a zygote different stores.
+        write_exec(
+            &bin.join("nsenter"),
+            &format!(
+                "#!/bin/sh\npid=\"$2\"\nshift 4\n[ \"$pid\" = 1 ] && exec \"$@\"\nfor a do shift; set -- \"$@\" \"$(printf '%s' \"$a\" | sed \"s#{src}#{src}-$pid#g\")\"; done\nexec \"$@\"\n",
+                src = src.display()
+            ),
+        );
+        // No zygotes unless a test adds one (`with_zygote`).
         write_exec(&bin.join("pidof"), "#!/bin/sh\nexit 1\n");
         // A fresh tmpfs hides whatever was there: empty the dir and make it
         // writable, then record the mount.
@@ -1872,6 +1880,21 @@ mod apex_script_tests {
             bin,
             mount_log,
         }
+    }
+
+    /// Add a zygote64 (PID 100) whose namespace has its own copy of the stock
+    /// store, at `src-100`. Returns that dir.
+    fn with_zygote(f: &Fixture) -> PathBuf {
+        write_exec(
+            &f.bin.join("pidof"),
+            "#!/bin/sh\n[ \"$1\" = zygote64 ] && echo 100 && exit 0\nexit 1\n",
+        );
+        let zygote_src = PathBuf::from(format!("{}-100", f.src.display()));
+        fs::create_dir_all(&zygote_src).unwrap();
+        for name in ["aaaaaaaa.0", "bbbbbbbb.0"] {
+            fs::copy(f.src.join(name), zygote_src.join(name)).unwrap();
+        }
+        zygote_src
     }
 
     fn run(f: &Fixture) -> String {
@@ -2003,6 +2026,45 @@ mod apex_script_tests {
         assert_eq!(mounts(&f), 1);
         assert_eq!(installed(&f), NEW_CA);
         assert!(f.src.join("bbbbbbbb.0").exists());
+    }
+
+    #[test]
+    fn namespaces_are_checked_independently() {
+        // init already trusts the current CA; the zygote still holds a stale one.
+        let f = fixture();
+        let zygote_src = with_zygote(&f);
+        fs::write(f.src.join(CERT), NEW_CA).unwrap();
+        fs::write(zygote_src.join(CERT), STALE_CA).unwrap();
+        let out = run(&f);
+        assert_eq!(
+            parse_apex_outcome(&out),
+            ApexInstallOutcome::Replaced,
+            "{out}"
+        );
+        assert_eq!(fs::read_to_string(zygote_src.join(CERT)).unwrap(), NEW_CA);
+        assert_eq!(installed(&f), NEW_CA);
+        assert_eq!(mounts(&f), 0);
+    }
+
+    #[test]
+    fn a_missing_zygote_overlay_is_mounted_while_init_is_replaced() {
+        let f = fixture();
+        let zygote_src = with_zygote(&f);
+        fs::write(f.src.join(CERT), STALE_CA).unwrap();
+        let out = run(&f);
+        assert_eq!(
+            parse_apex_outcome(&out),
+            ApexInstallOutcome::Replaced,
+            "{out}"
+        );
+        assert_eq!(installed(&f), NEW_CA);
+        assert_eq!(fs::read_to_string(zygote_src.join(CERT)).unwrap(), NEW_CA);
+        assert!(zygote_src.join("aaaaaaaa.0").exists());
+        let log = fs::read_to_string(&f.mount_log).unwrap_or_default();
+        assert_eq!(
+            log.lines().collect::<Vec<_>>(),
+            vec![zygote_src.display().to_string()]
+        );
     }
 
     #[test]
