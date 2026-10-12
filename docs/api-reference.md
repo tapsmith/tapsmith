@@ -1107,8 +1107,12 @@ Only iOS reports off-screen elements. Android's accessibility tree contains on-s
 
 ```typescript
 const row = device.getByText("Item 40", { exact: true });
-await row.scrollIntoView();
+await row.scrollIntoView(); // a row below the screen
 await row.tap();
+
+const first = device.getByText("Item 1", { exact: true });
+await first.scrollIntoView({ direction: "down" }); // a row the list was scrolled past
+await first.tap();
 ```
 
 On Android, an element that is *entirely* behind the keyboard is hidden from the accessibility tree. An action on it fails as not found (after waiting out the timeout) rather than as covered, and assertions such as `toBeVisible()` and `toHaveValue()` cannot see it until the keyboard is gone.

@@ -270,6 +270,7 @@ Element {"text":"Submit"} was not found after waiting 30000ms
   await device.getByText("Submit", { exact: true }).scrollIntoView()
   await device.getByText("Submit", { exact: true }).tap()
   ```
+  `scrollIntoView()` swipes up by default, which reveals rows below the screen. For a row above the screen, such as one the list was scrolled past, pass `{ direction: "down" }`.
 
 ### Element is off-screen and could not be scrolled into view
 

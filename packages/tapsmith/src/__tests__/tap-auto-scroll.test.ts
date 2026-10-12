@@ -52,6 +52,8 @@ function simulatedScreen(opts: {
   /** Bounds the row reports on successive reads before the first swipe (animating in). */
   animation?: number[];
   hierarchyFails?: boolean;
+  /** The row's height (default ROW_H). */
+  rowH?: number;
   /** Reads after each swipe during which the list keeps drifting (momentum), 30pt per read. */
   momentumReads?: number;
 }) {
@@ -63,7 +65,7 @@ function simulatedScreen(opts: {
     staleSwipes: opts.staleAfterSwipes ?? 0, staleNext: false,
   };
   const row = (): ElementInfo => {
-    const bounds = { left: state.left, top: state.top, right: state.left + ROW_W, bottom: state.top + ROW_H };
+    const bounds = { left: state.left, top: state.top, right: state.left + ROW_W, bottom: state.top + (opts.rowH ?? ROW_H) };
     const onScreen = bounds.bottom > 0 && bounds.top < SCREEN_H && bounds.right > 0 && bounds.left < SCREEN_W;
     let enabled = true;
     if (state.swiped && state.disabled > 0) {
@@ -223,6 +225,24 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     }
   });
 
+  it('scrolls a carousel cell below the screen level with it, then reports it off to the side — no jiggling (review R4-F3)', async () => {
+    const { client, swipe, tap } = simulatedScreen({ top: 1500, left: 500 });
+    const err = await rejectionOf(20_000, () => new ElementHandle(client, _text('Item 1'), 8000).tap());
+    expect(swipe.mock.calls.every(([dir]) => dir === 'up')).toBe(true);
+    expect(swipe.mock.calls.length).toBeLessThanOrEqual(3);
+    expect(tap).not.toHaveBeenCalled();
+    expect(err.message).toMatch(/it is off-screen to the right/);
+    expect(err.message).toContain('scrollIntoView({ direction: "left" })');
+  });
+
+  it('brings an element taller than half the screen across the middle, not just a strip at the edge (review R4-F1)', async () => {
+    const { client, tap, state } = simulatedScreen({ top: 1500, rowH: 480 });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Hero'), 30_000).tap());
+    expect(state.top).toBeLessThanOrEqual(SCREEN_H / 2);
+    expect(state.top + 480).toBeGreaterThanOrEqual(SCREEN_H / 2);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
   it('falls back to half-screen steps until it is on screen when the screen size cannot be read', async () => {
     const { client, swipe, tap, state } = simulatedScreen({ top: 1500, hierarchyFails: true });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
@@ -357,6 +377,15 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     expect(already.swipe).not.toHaveBeenCalled();
     expect(already.tap).not.toHaveBeenCalled();
   });
+
+  it('setChecked() still confirms a toggle made right at its deadline after a long scroll (review R4-F4)', async () => {
+    // The scroll ends past the 2 s timeout; the tap gets the action floor,
+    // and so must the read that confirms it.
+    const sim = simulatedScreen({ top: 1500, checked: false });
+    await withFakeClock(30_000, () => new ElementHandle(sim.client, _text('Item 1'), 2000).setChecked(true));
+    expect(sim.tap).toHaveBeenCalledTimes(1);
+    expect(sim.state.checked).toBe(true);
+  });
 });
 
 describe('not-found hint for tap-family actions (PILOT-716)', () => {
@@ -374,5 +403,13 @@ describe('not-found hint for tap-family actions (PILOT-716)', () => {
     } as unknown as TapsmithGrpcClient;
     const err = await rejectionOf(5000, () => new ElementHandle(client, _text('Item 1'), 2000).longPress());
     expect(err.message).toContain('before longPress()');
+  });
+
+  it('tells the user which way to scroll for a row above the screen (review R4-F8)', async () => {
+    const client = {
+      findElements: vi.fn(async () => ({ requestId: '1', elements: [], errorMessage: '' })),
+    } as unknown as TapsmithGrpcClient;
+    const err = await rejectionOf(5000, () => new ElementHandle(client, _text('Item 1'), 2000).tap());
+    expect(err.message).toContain('scrollIntoView({ direction: "down" }) for a row above the screen');
   });
 });

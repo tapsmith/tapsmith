@@ -667,7 +667,8 @@ class OffScreenError extends Error {
  * element that may be off-screen in a scrollable list.
  */
 function offScreenHint(action: TapFamilyAction): string {
-  return `If it is off-screen in a scrollable list, scroll to it first with scrollIntoView() before ${action}(): ` +
+  return `If it is off-screen in a scrollable list, scroll to it first with scrollIntoView() before ${action}() ` +
+    '(scrollIntoView({ direction: "down" }) for a row above the screen, such as one the list was scrolled past): ' +
     'off-screen rows are not in the accessibility tree on Android (nor unrendered rows of a virtualized list), ' +
     `so ${action}() cannot scroll to them itself.`;
 }
@@ -2526,7 +2527,11 @@ export class ElementHandle {
       let retaps = 0;
       let lastTapAt = Date.now();
       let lastTransientErr: Error | undefined;
-      while (Date.now() < deadline) {
+      // A tap made at or past the deadline (an auto-scroll can end there,
+      // PILOT-716) still gets the action floor to see its change land, so a
+      // toggle that worked is not reported as unchanged without a read.
+      const verifyUntil = Math.max(deadline, lastTapAt + MIN_ACTION_BUDGET_MS);
+      while (Date.now() < verifyUntil) {
         await sleep(POLL_INTERVAL_MS, this._client._getAbortSignal?.());
         try {
           const after = await this._resolveOne();
@@ -3056,15 +3061,15 @@ export class ElementHandle {
   ): Promise<boolean> {
     const screen = await this._screenSize(deadline);
     let bounds: Bounds = element.bounds;
-    if (screen && bounds.bottom > 0 && bounds.top < screen.height) {
-      throw this._offScreenError(
-        action,
-        `it is off-screen to the ${bounds.right <= 0 ? 'left' : 'right'}, and ${action}() scrolls only vertically ` +
-          '(a sideways swipe from the middle of the screen could drag other content, such as a swipeable row)',
-        bounds,
-        bounds.right <= 0 ? 'right' : 'left',
-      );
-    }
+    // In line with the screen vertically yet off-screen: off to the side.
+    const sideError = (b: Bounds): OffScreenError => this._offScreenError(
+      action,
+      `it is off-screen to the ${b.right <= 0 ? 'left' : 'right'}, and ${action}() scrolls only vertically ` +
+        '(a sideways swipe from the middle of the screen could drag other content, such as a swipeable row)',
+      b,
+      b.right <= 0 ? 'right' : 'left',
+    );
+    if (screen && bounds.bottom > 0 && bounds.top < screen.height) throw sideError(bounds);
     const extent = screen?.height;
     const mid = (b: Bounds): number => (b.top + b.bottom) / 2;
     let best = Infinity;
@@ -3108,10 +3113,16 @@ export class ElementHandle {
       bounds = nb;
       if (!next.visible) {
         if (extent === undefined) continue;
+        // Scrolled level with the screen and still not on it: a cell of a
+        // carousel row further down, off to the side.
+        if (nb.bottom > 0 && nb.top < extent) throw sideError(nb);
       } else {
         if (extent === undefined) return true;
         const inSafeRegion = nb.top >= extent * AUTO_SCROLL_SAFE_TOP && nb.bottom <= extent * AUTO_SCROLL_SAFE_BOTTOM;
-        if (inSafeRegion || nb.bottom - nb.top >= extent / 2) return true;
+        // An element too tall for the safe region is in view once it spans
+        // the middle of the screen, not at the first strip at an edge.
+        const spansMiddle = nb.top <= extent / 2 && nb.bottom >= extent / 2;
+        if (inSafeRegion || (nb.bottom - nb.top >= extent / 2 && spansMiddle)) return true;
         // Under-travel: the list hit its end during this swipe.
         if (moved < (distance * extent) / 2) return true;
       }
