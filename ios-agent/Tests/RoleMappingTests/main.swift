@@ -186,11 +186,19 @@ for role in rnGenericRoles {
 check("a \"menu item\"-described view is a menuitem", matches("menuitem", .other, value: "menu item"), true)
 check("a \"tab list\"-described view is a tablist", matches("tablist", .other, value: "tab list"), true)
 check("a \"timer\"-described view is a timer", matches("timer", .other, value: "timer, 00:42"), true)
-check("a \"menu item\"-described view is not a menu", matches("menu", .other, value: "menu item", named: true), false)
-check("a \"menu item\"-described view is not a checkbox",
-      matches("checkbox", .other, value: "menu item", named: true), false)
-check("a described view is not a summary, even by name",
-      matches("summary", .other, value: "menu item", named: true), false)
+check("a \"menu item\"-described view is not a menu", matches("menu", .other, value: "menu item"), false)
+check("a described checkbox is not a menu item, even by name",
+      matches("menuitem", .other, value: "checkbox, checked", named: true), false)
+// On the new architecture those words are the app's own value text, so they
+// never rule a view out of another role's named query.
+check("a named combobox query finds a generic view valued \"Timer\"",
+      matches("combobox", .other, value: "Timer", named: true), true)
+check("a named menuitem query finds a generic view valued \"Menu\"",
+      matches("menuitem", .other, value: "Menu", named: true), true)
+check("…but an unnamed checkbox query doesn't", matches("checkbox", .other, value: "Timer"), false)
+// A trait still decides for the described existing roles as on main.
+check("a described checkbox with a button trait is still a checkbox",
+      matches("checkbox", .other, traits: buttonTrait, value: "checkbox, checked"), true)
 // A trait marks another role even when the value leads with a description:
 // a button whose own value text is "Menu" is not a menu.
 check("a button-trait view valued \"Menu\" is not a menu", matches("menu", .other, traits: buttonTrait, value: "Menu"), false)

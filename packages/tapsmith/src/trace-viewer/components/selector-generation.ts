@@ -11,8 +11,9 @@ function isWebViewNode(node: HierarchyNode): boolean {
 
 function getRole(node: HierarchyNode): string | null {
   const role = getNodeRole(node);
-  // Never suggest a role getByRole rejects: Android reports an RN
-  // roleDescription ("menuitem", "tablist", …) as tapsmith-role (PILOT-556).
+  // Never suggest a role getByRole rejects: Android reports any role
+  // description an app publishes (a custom "carousel", a localized one) as
+  // tapsmith-role (PILOT-556).
   return role && unknownRoleMessage(role) === null ? role : null;
 }
 

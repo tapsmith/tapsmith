@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, ANDROID_TRAIT_ONLY_ROLES, IOS_ROLE_TYPES, NATIVE_ROLES, ROLE_ALIASES, assertKnownRole, normalizeRole, unknownRoleMessage } from '../roles.js';
+import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, ANDROID_TRAIT_ONLY_ROLES, IOS_LEGACY_ROLE_DESCRIPTIONS, IOS_OTHER_ROLE_DESCRIPTIONS, IOS_ROLE_TYPES, IOS_UNDESCRIBED_OTHER_ROLES, NATIVE_ROLES, ROLE_ALIASES, assertKnownRole, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../roles.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const read = (rel: string): string => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
@@ -163,7 +163,53 @@ describe('role set parity with the agents', () => {
     expect(IOS_ROLE_TYPES).toEqual(swift);
   });
 
+  it('has the iOS agent\'s generic-view role descriptions (PILOT-608, PILOT-664)', () => {
+    const source = read('ios-agent/TapsmithAgent/RoleMapping.swift');
+    const table = (start: string) => Object.fromEntries(
+      [...block(source, start, ']\n').matchAll(/"([a-z]+)": "([a-z ]+)"/g)].map((m) => [m[1]!, m[2]!]),
+    );
+    expect(IOS_OTHER_ROLE_DESCRIPTIONS).toEqual(table('static let otherRoleDescriptions'));
+    expect(IOS_LEGACY_ROLE_DESCRIPTIONS).toEqual(table('static let legacyRoleDescriptions'));
+    const undescribed = [...block(source, 'static let undescribedOtherRoles', ']\n').matchAll(/"([a-z]+)"/g)].map((m) => m[1]!);
+    expect([...IOS_UNDESCRIBED_OTHER_ROLES].sort()).toEqual(undescribed.sort());
+  });
+
   it('lists NATIVE_ROLES sorted, so the error message reads alphabetically', () => {
     expect([...NATIVE_ROLES]).toEqual([...NATIVE_ROLES].sort());
+  });
+});
+
+// ─── iOS generic views (mirrors RoleMapping.matches) ───
+
+describe('iosGenericViewHasRole()', () => {
+  const view = (value: string | undefined, opts: { traitRole?: string; named?: boolean } = {}) =>
+    ({ value, traitRole: opts.traitRole ?? '', named: opts.named ?? false });
+
+  it('leaves roles matched by type or trait to the caller', () => {
+    expect(iosGenericViewHasRole('button', view(undefined, { named: true }))).toBeUndefined();
+    expect(iosGenericViewHasRole('heading', view(undefined, { named: true }))).toBeUndefined();
+  });
+
+  it('matches RN\'s described checkbox and radio, and nothing else by that description', () => {
+    expect(iosGenericViewHasRole('checkbox', view('checkbox, unchecked'))).toBe(true);
+    expect(iosGenericViewHasRole('radiobutton', view('Radio button, checked'))).toBe(true);
+    expect(iosGenericViewHasRole('checkbox', view('radio button, checked', { named: true }))).toBe(false);
+    expect(iosGenericViewHasRole('menuitem', view('checkbox, checked', { named: true }))).toBe(false);
+  });
+
+  it('finds an undescribed, untraited generic view only by a named query', () => {
+    for (const role of ['alert', 'menuitem', 'timer', 'summary']) {
+      expect(iosGenericViewHasRole(role, view(undefined)), role).toBe(false);
+      expect(iosGenericViewHasRole(role, view(undefined, { named: true })), role).toBe(true);
+      expect(iosGenericViewHasRole(role, view(undefined, { named: true, traitRole: 'button' })), role).toBe(false);
+    }
+  });
+
+  it('reads an old-architecture description as its own role only', () => {
+    expect(iosGenericViewHasRole('menuitem', view('menu item'))).toBe(true);
+    expect(iosGenericViewHasRole('menu', view('menu item'))).toBe(false);
+    // On the new architecture "Timer" is the app's own value text.
+    expect(iosGenericViewHasRole('combobox', view('Timer', { named: true }))).toBe(true);
+    expect(iosGenericViewHasRole('menu', view('Menu', { traitRole: 'button' }))).toBe(false);
   });
 });

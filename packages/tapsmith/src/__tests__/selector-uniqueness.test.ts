@@ -350,6 +350,31 @@ describe('React Native generic-view roles in the playground (PILOT-664)', () => 
   });
 });
 
+describe('iOS generic-view roles in the playground, like the agent (PILOT-664)', () => {
+  // RN's new architecture publishes nothing for a menuitem or timer on iOS:
+  // the device finds the generic view by a named query.
+  const other = (label: string, y: number, extra: Record<string, string> = {}) => makeNode('XCUIElementTypeOther', {
+    type: 'XCUIElementTypeOther', label, x: '0', y: String(y), width: '200', height: '40', ...extra,
+  });
+  const copy = other('Copy', 100);
+  const paste = other('Paste', 140);
+  const bold = other('Bold', 200, { 'tapsmith-role': 'button' });
+  const radio = other('Small', 260, { value: 'radio button, unchecked' });
+  const roots = [makeNode('XCUIElementTypeApplication', { type: 'XCUIElementTypeApplication' }, [copy, paste, bold, radio])];
+  const on = (selector: string) => findMatchingNodes(roots, parseSelectorString(selector)!);
+
+  it('matches a named query on an undescribed generic view, and no unnamed one', () => {
+    expect(on('device.getByRole("menuitem", { name: "Paste" })')).toEqual([paste]);
+    expect(on('device.getByRole("menuitem")')).toEqual([]);
+  });
+
+  it('does not match a view a trait or another description marks as another role', () => {
+    expect(on('device.getByRole("menuitem", { name: "Bold" })')).toEqual([]);
+    expect(on('device.getByRole("menuitem", { name: "Small" })')).toEqual([]);
+    expect(on('device.getByRole("radio")')).toEqual([radio]);
+  });
+});
+
 describe('icon-glyph accessible names (PILOT-659)', () => {
   // React Navigation bottom tabs with an icon-font icon (MaterialIcons via
   // IconSymbol): RN names the tab "<glyph>, <label>", and the glyph is a

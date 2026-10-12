@@ -193,7 +193,15 @@ enum RoleMapping {
         "radiobutton": "radio button",
         "alert": "alert",
         "combobox": "combo box",
-        // Old architecture only (PILOT-664).
+    ]
+
+    /// The descriptions RN's old architecture leads a generic view's value
+    /// with for its other trait-less roles (PILOT-664). Unlike
+    /// `otherRoleDescriptions` they only confirm their own role: the new
+    /// architecture publishes none of them, so there "Menu" or "Timer" is the
+    /// app's own value text and must not stop a named query for another role
+    /// from finding the view.
+    static let legacyRoleDescriptions: [String: String] = [
         "menu": "menu",
         "menubar": "menu bar",
         "menuitem": "menu item",
@@ -212,7 +220,9 @@ enum RoleMapping {
     /// Whether `role` (canonical) is matched on a generic view by its React
     /// Native description or, failing that, by a named query.
     private static func isGenericViewRole(_ canonical: String) -> Bool {
-        otherRoleDescriptions[canonical] != nil || undescribedOtherRoles.contains(canonical)
+        otherRoleDescriptions[canonical] != nil
+            || legacyRoleDescriptions[canonical] != nil
+            || undescribedOtherRoles.contains(canonical)
     }
 
     /// The role names a selector may use for the same role, normalized to
@@ -233,6 +243,9 @@ enum RoleMapping {
     ///   only when nothing marks it as another role (another of these
     ///   descriptions, or a trait `resolveRole` reads). RN's new architecture publishes nothing
     ///   for alert and combobox, so a name is the only way to find those.
+    /// - RN's other generic-view roles (menuitem, tablist, timer, …): the same,
+    ///   except their old-architecture description (`legacyRoleDescriptions`)
+    ///   only confirms its own role, and only on a view with no such trait.
     /// - every other role: its element types, or its trait.
     static func matches(
         role: String,
@@ -248,12 +261,13 @@ enum RoleMapping {
         guard let types = roleToElementTypes[canonical] else { return false }
         if isGenericViewRole(canonical) {
             if elementType != .other { return types.contains(elementType) }
-            // A trait marks another role even when the value leads with a
-            // description: React Native gives none of these roles a trait,
-            // so a button valued "Menu" is the app's text, not a menu.
+            if let described = describedRole(in: value) { return described == otherRoleDescriptions[canonical] }
             let untraited = resolveRole(for: .other, traits: traits).isEmpty
-            if let described = describedRole(in: value) {
-                return untraited && described == otherRoleDescriptions[canonical]
+            // An old-architecture description confirms its own role — unless
+            // a trait marks another one: RN gives these roles no trait, so a
+            // button valued "Menu" is the app's text, not a menu.
+            if let legacy = legacyRoleDescriptions[canonical], leadingValuePart(value) == legacy {
+                return untraited
             }
             return hasNameFilter && untraited
         }
@@ -265,9 +279,15 @@ enum RoleMapping {
     /// Only the first part counts: the states and the app's own value text
     /// follow it, and a value text of "Alert" doesn't make a radio an alert.
     private static func describedRole(in value: String?) -> String? {
-        guard let first = value?.split(separator: ",", omittingEmptySubsequences: false).first else { return nil }
-        let part = first.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let part = leadingValuePart(value) else { return nil }
         return otherRoleDescriptions.values.contains(part) ? part : nil
+    }
+
+    /// The first comma-separated part of an accessibility value, trimmed and
+    /// lowercased — where React Native puts a role description — or nil.
+    private static func leadingValuePart(_ value: String?) -> String? {
+        guard let first = value?.split(separator: ",", omittingEmptySubsequences: false).first else { return nil }
+        return first.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
     }
 
     /// Whether a role-only match must be found again as a live element by its

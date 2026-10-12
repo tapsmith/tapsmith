@@ -443,8 +443,8 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
   }
   const name = el.contentDescription || el.text;
   // Static text elements read better as getByText; real widgets as getByRole.
-  // Only a role getByRole accepts: Android reports an RN roleDescription
-  // ("menuitem", "tablist", …) as the role, which getByRole rejects (PILOT-556).
+  // Only a role getByRole accepts: Android reports any role description an
+  // app publishes (a custom "carousel", a localized one) as the role (PILOT-556).
   if (el.role && el.role !== 'text' && name && unknownRoleMessage(el.role) === null) {
     // Role names match by substring unless exact (PILOT-549): pin a short
     // name whole; a long one is suggested as its leading part (no ellipsis,

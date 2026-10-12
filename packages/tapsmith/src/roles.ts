@@ -217,6 +217,39 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   searchfield: ['XCUIElementTypeSearchField'],
 };
 
+/**
+ * The role descriptions React Native leads an iOS generic view's
+ * accessibility value with ("checkbox, unchecked") — the agent's
+ * `RoleMapping.otherRoleDescriptions`, which `roles.test.ts` pins. Each marks
+ * the view as its role and as no other generic-view role.
+ */
+export const IOS_OTHER_ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  checkbox: 'checkbox',
+  radiobutton: 'radio button',
+  alert: 'alert',
+  combobox: 'combo box',
+};
+
+/**
+ * RN's old-architecture descriptions for its other trait-less iOS roles —
+ * the agent's `RoleMapping.legacyRoleDescriptions` (PILOT-664). They only
+ * confirm their own role: on the new architecture the same words are the
+ * app's own value text.
+ */
+export const IOS_LEGACY_ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  menu: 'menu',
+  menubar: 'menu bar',
+  menuitem: 'menu item',
+  radiogroup: 'radio group',
+  scrollbar: 'scroll bar',
+  spinbutton: 'spin button',
+  tablist: 'tab list',
+  timer: 'timer',
+};
+
+/** iOS generic-view roles with no RN description at all — `RoleMapping.undescribedOtherRoles`. */
+export const IOS_UNDESCRIBED_OTHER_ROLES: ReadonlySet<string> = new Set(['summary']);
+
 const KNOWN = new Set(NATIVE_ROLES);
 
 // ─── Helpers ───
@@ -251,4 +284,26 @@ export function assertKnownRole(role: unknown, what: string): asserts role is st
   }
   const message = unknownRoleMessage(role);
   if (message) throw new Error(message);
+}
+
+/**
+ * Whether an iOS generic view (`XCUIElementTypeOther`) is `role` (canonical)
+ * the way the agent's `RoleMapping.matches` decides it, or `undefined` for a
+ * role it doesn't match this way. `value` is the view's accessibility value,
+ * `traitRole` the role its traits give it (the dump's `tapsmith-role`), and
+ * `named` whether the query has a name: a generic view no description marks
+ * is then identified by that name (PILOT-608, PILOT-664).
+ */
+export function iosGenericViewHasRole(
+  role: string,
+  view: { value: string | undefined; traitRole: string; named: boolean },
+): boolean | undefined {
+  const own = IOS_OTHER_ROLE_DESCRIPTIONS[role];
+  const legacy = IOS_LEGACY_ROLE_DESCRIPTIONS[role];
+  if (own === undefined && legacy === undefined && !IOS_UNDESCRIBED_OTHER_ROLES.has(role)) return undefined;
+  const lead = view.value === undefined ? undefined : view.value.split(',')[0]!.trim().toLowerCase();
+  if (lead !== undefined && Object.values(IOS_OTHER_ROLE_DESCRIPTIONS).includes(lead)) return lead === own;
+  const untraited = view.traitRole === '';
+  if (legacy !== undefined && lead === legacy) return untraited;
+  return view.named && untraited;
 }

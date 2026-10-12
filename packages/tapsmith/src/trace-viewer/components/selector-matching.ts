@@ -3,7 +3,7 @@ import { parseBounds, getNodeRole } from './hierarchy-utils.js';
 import { FORM_FIELD_ROLES } from './selector-generation.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
-import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, normalizeRole, unknownRoleMessage } from '../../roles.js';
+import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../../roles.js';
 
 // ─── Selector Parsing ───
 
@@ -515,7 +515,8 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector): boo
       // Like getByRole at runtime (PILOT-556): case-insensitive, aliases
       // resolved, and a role it rejects matches nothing.
       if (unknownRoleMessage(selector.value) !== null) return false;
-      if (!nodeHasRole(node, normalizeRole(selector.value))) return false;
+      const named = selector.name !== undefined || selector.nameRegex !== undefined;
+      if (!nodeHasRole(node, normalizeRole(selector.value), named)) return false;
       if (!nodeMatchesRoleStates(node, selector)) return false;
       if (selector.nameRegex) return roleNameMatchesRegex(node, toJsRegExp(selector.nameRegex));
       if (selector.name) return roleNameMatches(node, selector.name, selector.exact === true);
@@ -697,8 +698,10 @@ const ANDROID_DESCRIPTION_ONLY_ROLES = new Set(['heading', 'link']);
  *
  * iOS heading is header-trait only (its reported role), like the agent since
  * PILOT-608: static text is a heading's candidate type, not proof of one.
+ * `named` is whether the query has a name, which identifies an iOS generic
+ * view no role description marks.
  */
-function nodeHasRole(node: HierarchyNode, role: string): boolean {
+function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean {
   const reported = getNodeRole(node);
   if (reported && normalizeRole(reported) === role) return true;
   const className = node.attributes.get('class');
@@ -711,6 +714,12 @@ function nodeHasRole(node: HierarchyNode, role: string): boolean {
     return ANDROID_ROLE_CLASSES[role]?.includes(className) ?? false;
   }
   const type = node.attributes.get('type') ?? node.tagName;
+  if (type === 'XCUIElementTypeOther') {
+    // RN's checkbox, alert, menuitem, …: a description or a name decides,
+    // like the agent (PILOT-608, PILOT-664).
+    const generic = iosGenericViewHasRole(role, { value: node.attributes.get('value'), traitRole: reported, named });
+    if (generic !== undefined) return generic;
+  }
   return role !== 'heading' && (IOS_ROLE_TYPES[role]?.includes(type) ?? false);
 }
 
