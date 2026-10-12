@@ -240,8 +240,8 @@ function configFragmentKeyLine(code: string): number | undefined {
 interface Wrapped {
   text: string;
   headerLines: number;
-  /** For a config fragment, the 0-based line (in `text`) of its first key. */
-  fragmentKeyLine?: number;
+  /** For a config fragment, the offset (in `text`) of its first key. */
+  fragmentKeyStart?: number;
 }
 
 /** The header every sample gets: its own imports stay, `device` is a `Device`, runner names are typed. */
@@ -260,10 +260,14 @@ function wrap(sample: Sample): Wrapped {
   // A config fragment is checked as the inside of `defineConfig({ … })`.
   const keyLine = configFragmentKeyLine(sample.code);
   if (keyLine !== undefined) header.push('defineConfig({');
+  const prefix = `${header.join('\n')}\n`;
+  const lines = sample.code.split('\n');
   return {
-    text: `${header.join('\n')}\n${sample.code}\n${keyLine !== undefined ? '})\n' : ''}`,
+    text: `${prefix}${sample.code}\n${keyLine !== undefined ? '})\n' : ''}`,
     headerLines: header.length,
-    fragmentKeyLine: keyLine === undefined ? undefined : header.length + keyLine,
+    fragmentKeyStart: keyLine === undefined
+      ? undefined
+      : prefix.length + lines.slice(0, keyLine).join('\n').length + (keyLine > 0 ? 1 : 0) + /^\s*/.exec(lines[keyLine]!)![0].length,
   };
 }
 
@@ -317,7 +321,9 @@ function typeCheck(samples: Sample[]): Mismatch[] {
     target: ts.ScriptTarget.ES2022,
     module: ts.ModuleKind.ESNext,
     moduleResolution: ts.ModuleResolutionKind.Bundler,
-    lib: ['lib.es2022.d.ts', 'lib.dom.d.ts'],
+    // No DOM: its globals (`name`, `screen`, `status`, …) would type the
+    // undeclared names fragments use, and turn them into false mismatches.
+    lib: ['lib.es2022.d.ts'],
     jsx: ts.JsxEmit.ReactJSX,
     strict: false,
     noImplicitAny: false,
@@ -351,8 +357,7 @@ function typeCheck(samples: Sample[]): Mismatch[] {
       // A fragment of something else shaped like config — a project's `use: {…}`,
       // a fixture definition — is not a root config key: only what is inside it
       // could be checked against the root, so drop the unknown-key error on it.
-      const { line: diagnosticLine } = sourceFile.getLineAndCharacterOfPosition(d.start);
-      if (diagnosticLine === v.fragmentKeyLine && (d.code === 2353 || d.code === 2561)) continue;
+      if (d.start === v.fragmentKeyStart && (d.code === 2353 || d.code === 2561)) continue;
       // TSX samples are React Native components, checked without React's
       // types: their JSX props and children are not assignable to anything.
       if (v.sample.tsx && (d.code === 2322 || d.code === 2820)) continue;
@@ -449,6 +454,17 @@ describe('docs TypeScript samples match the SDK API', () => {
   it('checks a config fragment as the inside of defineConfig', () => {
     const md = '```ts\n// tapsmith.config.ts\ntrace: {\n  mode: "on",\n  networkHost: ["*.myapp.com"],\n},\n```\n';
     expect(typeCheck(samplesIn('t.md', md)).map((m) => [m.line, m.code])).toEqual([[5, 2561]]);
+  }, 120_000);
+
+  it('reports a nested typo on a one-line config fragment, but not a non-root first key', () => {
+    const one = '```ts\ntrace: { mode: "on", networkHost: ["x"] },\n```\n';
+    expect(typeCheck(samplesIn('t.md', one)).map((m) => m.code)).toEqual([2561]);
+    const use = '```ts\nuse: { platform: "ios" },\n```\n';
+    expect(typeCheck(samplesIn('t.md', use))).toEqual([]);
+  }, 120_000);
+
+  it('does not type undeclared fragment names as DOM globals', () => {
+    expect(typeCheck(samplesIn('t.md', '```ts\nawait device.getByText(name).tap()\nawait screen.getByText("x")\n```\n'))).toEqual([]);
   }, 120_000);
 
   it('reports a property or getter called as a method', () => {

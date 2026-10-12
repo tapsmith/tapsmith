@@ -595,18 +595,19 @@ Each hook gets a time budget equal to the test timeout. A hook that never finish
 
 ### `beforeEach` / `afterEach`
 
-Run before and after every test in the enclosing `describe`. Use these for per-test setup like resetting app state:
+Run before and after every test in the enclosing `describe`. Use these to bring each test to its starting screen, or to undo what a test changed outside the app. Resetting the app itself is the `appResetScope` option's job ([Test isolation](#test-isolation)), not a hook's:
 
 ```typescript
 describe("Checkout", () => {
+  test.use({ appResetScope: "test" })  // a fresh app before every test
+
   beforeEach(async ({ device }) => {
-    await device.restartApp()
     await device.getByDescription("Cart").tap()
   })
 
   afterEach(async ({ device }) => {
-    // Clean up test data if needed
-    await device.clearAppData("com.example.myapp")
+    // Device settings outlive an app reset: put back what a test changed
+    await device.setOrientation("portrait")
   })
 
   test("shows empty cart message", async ({ device }) => {
@@ -646,7 +647,7 @@ beforeAll(async ({ device }) => {
 })
 
 beforeEach(async ({ device }) => {
-  await device.restartApp()
+  await device.getByDescription("Home").tap()
 })
 ```
 
@@ -665,7 +666,7 @@ Hooks cascade through nested `describe` blocks. Inner hooks run after outer hook
 ```typescript
 describe("App", () => {
   beforeEach(async ({ device }) => {
-    await device.restartApp()             // runs first
+    await device.getByDescription("Home").tap()  // runs first
   })
 
   describe("Login", () => {
@@ -674,7 +675,7 @@ describe("App", () => {
     })
 
     test("shows sign in form", async ({ device }) => {
-      // restartApp() has run, then navigated to login
+      // Home was tapped first, then Login Form
       await expect(device.getByText("Sign In")).toBeVisible()
     })
   })
@@ -687,7 +688,7 @@ describe("App", () => {
 |---|---|---|
 | `beforeAll` | Once per `describe` | Navigating to a screen, one-time setup |
 | `afterAll` | Once per `describe` | Cleaning up shared resources |
-| `beforeEach` | Before every test | Resetting app state, ensuring a clean starting point |
+| `beforeEach` | Before every test | Navigating to the test's starting screen (reset the app with `appResetScope: "test"` instead) |
 | `afterEach` | After every test | Cleaning up test-specific side effects |
 
 **Caution:** `beforeAll` runs once, so all tests in that block share whatever state it creates. If one test modifies the screen, subsequent tests see that modification. When in doubt, use `beforeEach`.
