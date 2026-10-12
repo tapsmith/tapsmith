@@ -976,11 +976,11 @@ avdmanager create avd -n Tapsmith_Phone_API_36 \
   -k "system-images;android-36;google_apis;arm64-v8a" -d medium_phone
 ```
 
-`npx tapsmith doctor` flags any existing AVD that uses a Google Play image, and suggests a capture-capable AVD you already have or a new one to create. It never suggests overwriting yours. With network capture on, `npx tapsmith init` picks a capture-capable AVD when there is one, marks Play images "no HTTPS capture" in the wizard, and warns when it can only pick a Play image. When the AVD it sets up is a Play image, the wizard's network-capture question defaults to no (unless iOS is set up too), and its next steps name the capture-capable AVD to switch to, or the `create-avd` command for one.
+`npx tapsmith doctor` flags any existing AVD that uses a Google Play image, and suggests a capture-capable AVD you already have or a new one to create. It never suggests overwriting yours. With network capture on, `npx tapsmith init` picks a capture-capable AVD when there is one, marks Play images "no HTTPS capture" in the wizard, and warns when it can only pick a Play image. When the AVD it sets up is a Play image, the wizard's network-capture question defaults to no (unless iOS is set up too), and its next steps name the capture-capable AVD to switch to, or the `create-avd` command for one (and, if you declined capture, the `trace` setting that turns it on).
 
 To check an existing AVD, look at `tag.id` in `~/.android/avd/<name>.avd/config.ini`: `google_apis` (or `default`/`aosp_atd`) supports HTTPS capture; `google_apis_playstore` does not.
 
-Manually installing `~/.tapsmith/ca.pem` as a *user* CA on a Play image is possible but rarely sufficient: apps targeting API 24+ do not trust user-installed CAs unless they opt in via `network_security_config.xml`. Unless your test build has that opt-in, use a Google APIs image instead.
+Manually installing `~/.tapsmith/ca.pem` as a *user* CA does not help on a Play-image emulator: Tapsmith cannot see a user-installed CA, so it passes HTTPS through uncaptured there either way. Use a Google APIs image instead. (On a physical Android device, where there is no `adb root` either, Tapsmith keeps decrypting HTTPS, so a user-installed CA that your test build opts into via `network_security_config.xml` does work.)
 
 ### When the app rejects Tapsmith's certificate
 

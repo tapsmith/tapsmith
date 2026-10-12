@@ -5736,11 +5736,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                         *self.proxy_ca_cert_path.write().await = Some(installed_path);
                     }
                     Err(e) => {
-                        let is_emulator = {
-                            let dm = self.device_manager.read().await;
-                            matches!(dm.active_device(), Some(d) if d.is_emulator)
-                        };
-                        let (tunnel, msg) = android_ca_install_failure(&e.to_string(), is_emulator);
+                        let (tunnel, msg) = android_ca_install_failure(&e);
                         tunnel_all_tls = tunnel;
                         error!("{msg}");
                         warnings.push(msg);
@@ -8940,16 +8936,20 @@ fn system_proxy_fallback_warning(serial: &str) -> String {
 /// What capture does when the Tapsmith CA could not be installed on an
 /// Android device, and the warning that says so: `(tunnel_all_tls, warning)`.
 ///
-/// On an emulator nothing on the device can trust the CA (the install fails
-/// for want of `adb root`, i.e. a Google Play image), so MITM would make every
-/// HTTPS request the app makes fail: tunnel TLS instead and lose only its
-/// capture (PILOT-711). A physical device keeps MITM, because there the
-/// documented setup is a CA the user installs by hand and the app trusts
-/// through its `network_security_config.xml` — which `adb` cannot detect.
-fn android_ca_install_failure(install_error: &str, is_emulator: bool) -> (bool, String) {
-    let cause = install_error.trim().trim_end_matches('.');
-    if is_emulator {
-        (
+/// Only a device without `adb root` changes how capture works, because there
+/// nothing can ever install the CA. On such an emulator (a Google Play image)
+/// MITM would make every HTTPS request the app makes fail, so TLS is tunneled
+/// instead and only its capture is lost (PILOT-711). A physical device keeps
+/// MITM: its documented setup is a CA the user installs by hand and the app
+/// trusts through its `network_security_config.xml`, which `adb` cannot see.
+/// Any other failure (a transient adb error) keeps MITM too — the device may
+/// already trust the CA from an earlier install, and the next capture start
+/// retries.
+fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
+    let cause = err.to_string();
+    let cause = cause.trim().trim_end_matches('.');
+    match err.downcast_ref::<adb::AdbRootUnavailable>() {
+        Some(root) if root.is_emulator => (
             true,
             format!(
                 "Could not install Tapsmith's CA certificate on the emulator: {cause}. \
@@ -8958,15 +8958,22 @@ fn android_ca_install_failure(install_error: &str, is_emulator: bool) -> (bool, 
                  device.route(), waitForRequest() and waitForResponse() cannot see them; \
                  plain HTTP is still captured"
             ),
-        )
-    } else {
-        (
+        ),
+        Some(_) => (
             false,
             format!(
                 "Could not install Tapsmith's CA certificate on the device: {cause}. \
                  Unless the app trusts that CA, its HTTPS requests fail while network capture is on"
             ),
-        )
+        ),
+        None => (
+            false,
+            format!(
+                "Could not install Tapsmith's CA certificate on the device: {cause}. \
+                 HTTPS is still intercepted, so if the device does not already trust the CA, \
+                 the app's HTTPS requests fail"
+            ),
+        ),
     }
 }
 
@@ -9025,16 +9032,20 @@ mod tests {
         assert!(!p.is_emulator);
     }
 
+    fn root_unavailable(is_emulator: bool) -> anyhow::Error {
+        adb::AdbRootUnavailable::for_test(is_emulator, "hint").into()
+    }
+
     // PILOT-711: a Play-image emulator cannot trust the CA, so HTTPS is
     // tunneled and the warning says what that costs — not that traffic
     // "will not be captured" while the app's requests actually fail.
     #[test]
     fn untrusted_ca_on_an_emulator_tunnels_https_and_says_so() {
-        let (tunnel, msg) = android_ca_install_failure("Device does not support adb root", true);
+        let (tunnel, msg) = android_ca_install_failure(&root_unavailable(true));
         assert!(tunnel);
         assert!(msg.starts_with(
-            "Could not install Tapsmith's CA certificate on the emulator: Device does not support adb root."
-        ));
+            "Could not install Tapsmith's CA certificate on the emulator: Device does not support adb root — hint."
+        ), "{msg}");
         assert!(msg.contains("HTTPS requests still work"), "{msg}");
         assert!(msg.contains("passthrough"), "{msg}");
         assert!(msg.contains("device.route()"), "{msg}");
@@ -9045,13 +9056,24 @@ mod tests {
     // installs by hand, which the app trusts via network_security_config.xml.
     #[test]
     fn untrusted_ca_on_a_physical_device_keeps_mitm_and_warns_requests_fail() {
-        let (tunnel, msg) = android_ca_install_failure("Device does not support adb root", false);
+        let (tunnel, msg) = android_ca_install_failure(&root_unavailable(false));
         assert!(!tunnel);
         assert!(
-            msg.contains("on the device: Device does not support adb root."),
+            msg.contains("on the device: Device does not support adb root"),
             "{msg}"
         );
         assert!(msg.contains("HTTPS requests fail"), "{msg}");
+    }
+
+    // A transient adb failure says nothing permanent about the device (it may
+    // already trust the CA from the setup-time install), so it never tunnels.
+    #[test]
+    fn transient_ca_install_failure_keeps_mitm_even_on_an_emulator() {
+        let err = anyhow::anyhow!("adb push failed: device offline");
+        let (tunnel, msg) = android_ca_install_failure(&err);
+        assert!(!tunnel);
+        assert!(msg.contains("adb push failed: device offline."), "{msg}");
+        assert!(msg.contains("HTTPS is still intercepted"), "{msg}");
     }
 
     #[test]

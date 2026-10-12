@@ -305,7 +305,7 @@ export function resolveInitPlan(
     ios = { appPath, bundleId, simulator, usePhysicalDevice: false };
   }
 
-  const captureAvdStep = android?.useEmulators ? captureAvdNextStep(android.avd, env.avdImages) : undefined;
+  const captureAvdStep = android?.useEmulators ? captureAvdNextStep(android.avd, env.avdImages, args.networkCapture) : undefined;
   return { platforms, android, ios, networkCapture: args.networkCapture, warnings, captureAvdStep };
 }
 

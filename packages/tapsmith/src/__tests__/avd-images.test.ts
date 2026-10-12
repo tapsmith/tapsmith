@@ -167,23 +167,28 @@ describe('avdCaptureWarning()', () => {
 
 describe('captureAvdNextStep() (PILOT-711)', () => {
   it('is undefined for a capture-capable AVD, an unreadable image, or no AVD', () => {
-    expect(captureAvdNextStep('Tapsmith_Phone_API_36', [good, play])).toBeUndefined();
-    expect(captureAvdNextStep('Broken', [broken])).toBeUndefined();
-    expect(captureAvdNextStep(undefined, [play])).toBeUndefined();
+    expect(captureAvdNextStep('Tapsmith_Phone_API_36', [good, play], true)).toBeUndefined();
+    expect(captureAvdNextStep('Broken', [broken], true)).toBeUndefined();
+    expect(captureAvdNextStep(undefined, [play], true)).toBeUndefined();
   });
 
   it('points a Play-image AVD at the capable AVD the machine already has', () => {
-    expect(captureAvdNextStep('Medium_Phone_API_36', [play, good])).toEqual({
+    expect(captureAvdNextStep('Medium_Phone_API_36', [play, good], true)).toEqual({
       label: 'Capture HTTPS',
       action: "set avd: 'Tapsmith_Phone_API_36' in tapsmith.config.ts",
     });
   });
 
   it('otherwise suggests create-avd, then the avd to set', () => {
-    expect(captureAvdNextStep('Medium_Phone_API_36', [play])).toEqual({
+    expect(captureAvdNextStep('Medium_Phone_API_36', [play], true)).toEqual({
       label: 'Capture HTTPS',
       action: "npx tapsmith create-avd, then set avd: 'Tapsmith_Phone_API_36' in tapsmith.config.ts",
     });
+  });
+
+  it('also says to turn capture on when the config was written without it', () => {
+    expect(captureAvdNextStep('Medium_Phone_API_36', [play, good], false)?.action)
+      .toBe("set avd: 'Tapsmith_Phone_API_36' and trace: { mode: 'retain-on-failure' } in tapsmith.config.ts");
   });
 });
 

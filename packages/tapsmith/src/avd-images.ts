@@ -188,14 +188,20 @@ function pickCaptureAvd(avds: AvdImageInfo[], apiLevel?: number, reserved?: stri
 
 /**
  * init's Next steps entry for an AVD on a Google Play image (PILOT-711): the
- * capture-capable AVD to switch to, or the `create-avd` command for one.
- * `undefined` unless `avd` is known to be a Play image.
+ * capture-capable AVD to switch to, or the `create-avd` command for one, and
+ * — when the config was written without capture — the trace setting that
+ * turns it on. `undefined` unless `avd` is known to be a Play image.
  */
-export function captureAvdNextStep(avd: string | undefined, avds: AvdImageInfo[]): { label: string; action: string } | undefined {
+export function captureAvdNextStep(
+  avd: string | undefined,
+  avds: AvdImageInfo[],
+  captureEnabled: boolean,
+): { label: string; action: string } | undefined {
   const info = avd === undefined ? undefined : avds.find((a) => a.name === avd);
   if (avdCaptureSupport(info) !== 'play-image') return undefined;
   const pick = pickCaptureAvd(avds, info?.apiLevel);
-  const setAvd = `set avd: '${pick.name}' in tapsmith.config.ts`;
+  const trace = captureEnabled ? '' : " and trace: { mode: 'retain-on-failure' }";
+  const setAvd = `set avd: '${pick.name}'${trace} in tapsmith.config.ts`;
   return { label: 'Capture HTTPS', action: pick.command ? `${pick.command}, then ${setAvd}` : setAvd };
 }
 

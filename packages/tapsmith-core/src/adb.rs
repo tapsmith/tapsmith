@@ -692,9 +692,9 @@ pub async fn install_ca_cert(
             Ok(output) => {
                 let msg = String::from_utf8_lossy(&output);
                 if msg.contains("cannot run as root") || msg.contains("adbd cannot run as root") {
-                    let hint = adb_root_unavailable_hint(serial).await;
-                    tracing::warn!(%serial, "Device does not support adb root — {hint}");
-                    return Err(anyhow::anyhow!("Device does not support adb root — {hint}"));
+                    let err = adb_root_unavailable(serial).await;
+                    tracing::warn!(%serial, "{err}");
+                    return Err(err.into());
                 }
                 debug!(%serial, "adb root succeeded, waiting for device");
             }
@@ -771,7 +771,37 @@ pub async fn install_ca_cert(
 /// and AOSP emulator images are rootable `userdebug` builds. Recreating the
 /// AVD is the real fix there; a manual user-store CA install only helps apps
 /// that opt in via `network_security_config.xml`.
-async fn adb_root_unavailable_hint(serial: &str) -> String {
+/// `install_ca_cert` failed because adbd cannot run as root — a production
+/// build (a Google Play emulator image, or a physical device) — so nothing can
+/// put the CA in the system trust store, on this or any later attempt. Unlike
+/// a transient adb failure, it says something permanent about the device, and
+/// `is_emulator` (serial prefix, else the qemu properties) decides how network
+/// capture copes with it (PILOT-711).
+#[derive(Debug)]
+pub struct AdbRootUnavailable {
+    pub is_emulator: bool,
+    hint: String,
+}
+
+impl std::fmt::Display for AdbRootUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Device does not support adb root — {}", self.hint)
+    }
+}
+
+impl std::error::Error for AdbRootUnavailable {}
+
+#[cfg(test)]
+impl AdbRootUnavailable {
+    pub fn for_test(is_emulator: bool, hint: &str) -> Self {
+        Self {
+            is_emulator,
+            hint: hint.to_string(),
+        }
+    }
+}
+
+async fn adb_root_unavailable(serial: &str) -> AdbRootUnavailable {
     // Serial prefix identifies locally-launched emulators without any adb
     // roundtrips; the getprop probe stays as a fallback for emulators
     // reached over TCP (e.g. CI port-forwards with an opaque serial).
@@ -791,7 +821,10 @@ async fn adb_root_unavailable_hint(serial: &str) -> String {
     let product_name = shell_lenient(serial, "getprop ro.product.name")
         .await
         .unwrap_or_default();
-    root_unavailable_hint(is_emulator, product_name.trim())
+    AdbRootUnavailable {
+        is_emulator,
+        hint: root_unavailable_hint(is_emulator, product_name.trim()),
+    }
 }
 
 fn root_unavailable_hint(is_emulator: bool, product_name: &str) -> String {
