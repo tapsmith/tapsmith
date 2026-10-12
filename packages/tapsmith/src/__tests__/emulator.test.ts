@@ -1092,7 +1092,38 @@ describe('emulator utilities', () => {
         expect(h.killProcess).not.toHaveBeenCalledWith(4242);
         expect(h.killEmulator).not.toHaveBeenCalledWith('emulator-5554');
         const output = vi.mocked(process.stderr.write).mock.calls.map((call) => String(call[0])).join('');
-        expect(output).toContain('adb listed emulator-5554 online and then not');
+        expect(output).toContain("adb's state for emulator-5554 changed while Tapsmith checked it");
+      });
+
+      it('never kills an emulator whose state differs between the two answers', () => {
+        // adb restarting: fails, then lists nothing yet, then the emulator reconnecting.
+        const query = answers({ error: 'adb exited with code 1' }, [], [{ serial: 'emulator-5554', state: 'offline' }]);
+        const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
+        expect(reclaimOrphanedEmulators(h.deps)).toEqual({ reusable: [], killed: [], undetermined: ['emulator-5554'], booting: [] });
+        expect(h.killProcess).not.toHaveBeenCalled();
+      });
+
+      it('judges on the two answers around a failed look', () => {
+        const gone = harness({ entries: [entry()], query: answers([], { error: 'x' }, []), alive: [4242], argv: { 4242: tapsmithArgv() } });
+        expect(reclaimOrphanedEmulators(gone.deps).killed).toEqual(['emulator-5554']);
+        const back = harness({
+          entries: [entry()],
+          query: answers({ error: 'x' }, [], [{ serial: 'emulator-5554', state: 'device' }]),
+          alive: [4242],
+          argv: { 4242: tapsmithArgv() },
+          listener: { 'emulator-5554': 4242 },
+        });
+        expect(reclaimOrphanedEmulators(back.deps).reusable).toEqual(['emulator-5554']);
+        expect(back.killProcess).not.toHaveBeenCalled();
+      });
+
+      it("keeps a record another run wrote while it was checking adb", () => {
+        const mine = entry();
+        const theirs = entry({ serial: 'emulator-5560', port: 5560, pid: 5151, booting: true, ownerPid: 6161 });
+        let reads = 0;
+        const h = harness({ entries: [mine], query: answers([], []), alive: [4242], argv: { 4242: tapsmithArgv() } });
+        reclaimOrphanedEmulators({ ...h.deps, readManifest: () => (reads++ === 0 ? [mine] : [mine, theirs]) });
+        expect(h.written).toEqual([[theirs]]);
       });
 
       it('kills an emulator adb positively left out twice, after one settle delay', () => {

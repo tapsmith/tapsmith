@@ -263,7 +263,7 @@ export function reclaimOrphanedEmulators(
   const undetermined: string[] = [];
   const booting: string[] = [];
   const surviving: EmulatorManifestEntry[] = [];
-  const { devices: adbDevices, seenOnline } = queryAdbDevicesSettled(d, [...uniqueBySerial.values()]);
+  const { devices: adbDevices, unsettled } = queryAdbDevicesSettled(d, [...uniqueBySerial.values()]);
   const adbFailure = isAdbQueryFailure(adbDevices) ? adbDevices : undefined;
   const adbDeviceMap = new Map((isAdbQueryFailure(adbDevices) ? [] : adbDevices).map((device) => [device.serial, device]));
   const leftUnqueried: string[] = [];
@@ -303,10 +303,10 @@ export function reclaimOrphanedEmulators(
       continue;
     }
 
-    // Online in one adb answer, gone from the last: adb changed its mind
-    // between looks (a server restart mid-check), which proves nothing about
-    // the emulator. Same as unqueried: left running, judged next run.
-    if (owned && inAdb?.state !== 'device' && seenOnline.has(entry.serial)) {
+    // adb's two answers disagreed about it (online, then gone; gone, then
+    // offline — a server restart mid-check): it is in flux, which proves
+    // nothing about the emulator. Like unqueried: left running, judged next run.
+    if (owned && inAdb?.state !== 'device' && unsettled.has(entry.serial)) {
       surviving.push(entry);
       undetermined.push(entry.serial);
       leftFlapping.push(entry.serial);
@@ -401,13 +401,17 @@ export function reclaimOrphanedEmulators(
 
   if (leftFlapping.length > 0) {
     process.stderr.write(
-      `${YELLOW}adb listed ${leftFlapping.join(', ')} online and then not while Tapsmith checked it, so Tapsmith can't tell `
+      `${YELLOW}adb's state for ${leftFlapping.join(', ')} changed while Tapsmith checked it, so Tapsmith can't tell `
       + `whether it is healthy: leaving it running.${RESET}\n`,
     );
   }
 
-  // Write back only the surviving healthy entries
-  d.writeManifest(surviving);
+  // Write back only the surviving healthy entries, plus any another run
+  // recorded since the read above — the adb and health checks in between can
+  // take seconds, and the file has no lock.
+  const read = new Set(entries.map((entry) => `${entry.serial}:${entry.pid}`));
+  const recordedSince = d.readManifest().filter((entry) => !read.has(`${entry.serial}:${entry.pid}`));
+  d.writeManifest([...surviving, ...recordedSince]);
   return { reusable, killed, undetermined, booting };
 }
 
@@ -420,39 +424,44 @@ const ADB_RECHECK_DELAY_MS = 3_000;
  * lists a live emulator absent or not online — it looks again after a settle
  * delay, because a restarting adb server fails, then answers before its
  * emulators have reconnected, and a loaded host can time out once
- * (PILOT-710). It returns an answer only once adb has answered twice: that
- * answer may condemn an emulator — except one `seenOnline` in an earlier
- * answer. Two failed looks (or no second answer within three looks) return
- * the failure, which condemns nothing.
+ * (PILOT-710). It returns an answer only once adb has answered twice, and
+ * that answer condemns only emulators both answers agree about: those whose
+ * state differs between them are `unsettled`. Two failed looks return the
+ * failure, which condemns nothing. Either count reaches two within three looks.
  */
 function queryAdbDevicesSettled(
   d: ReclaimDeps,
   entries: readonly EmulatorManifestEntry[],
-): { devices: AdbDeviceQuery, seenOnline: Set<string> } {
-  const seenOnline = new Set<string>();
+): { devices: AdbDeviceQuery, unsettled: Set<string> } {
+  const unsettled = new Set<string>();
   const live = entries.filter((entry) =>
     !(entry.booting && entry.ownerPid !== undefined && d.isProcessAlive(entry.ownerPid))
     && entry.pid > 0 && d.isProcessAlive(entry.pid));
   const condemnsNone = (devices: AdbDeviceEntry[]) => live.every((entry) =>
     devices.some((device) => device.serial === entry.serial && device.state === 'device'));
   // Nothing alive to protect or condemn: one look, whatever it says.
-  if (live.length === 0) return { devices: d.queryAdbDevices(), seenOnline };
+  if (live.length === 0) return { devices: d.queryAdbDevices(), unsettled };
 
-  let answers = 0;
-  let lastFailure: AdbQueryFailure | undefined;
-  for (let look = 1; ; look++) {
+  const stateOf = (devices: AdbDeviceEntry[], serial: string) =>
+    devices.find((device) => device.serial === serial)?.state ?? 'absent';
+  let firstAnswer: AdbDeviceEntry[] | undefined;
+  let failed = false;
+  for (;;) {
     const result = d.queryAdbDevices();
     if (isAdbQueryFailure(result)) {
       // Two failures: adb is not coming back in time; judge nothing.
-      if (lastFailure) return { devices: result, seenOnline };
-      lastFailure = result;
+      if (failed) return { devices: result, unsettled };
+      failed = true;
     } else {
-      if (condemnsNone(result)) return { devices: result, seenOnline };
-      answers += 1;
-      if (answers === 2) return { devices: result, seenOnline };
-      for (const device of result) if (device.state === 'device') seenOnline.add(device.serial);
+      if (condemnsNone(result)) return { devices: result, unsettled };
+      if (firstAnswer) {
+        for (const entry of live) {
+          if (stateOf(firstAnswer, entry.serial) !== stateOf(result, entry.serial)) unsettled.add(entry.serial);
+        }
+        return { devices: result, unsettled };
+      }
+      firstAnswer = result;
     }
-    if (look === 3) return { devices: lastFailure ?? result, seenOnline };
     d.sleep(ADB_RECHECK_DELAY_MS);
   }
 }
