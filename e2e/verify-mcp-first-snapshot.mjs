@@ -38,7 +38,13 @@ import { spawn, spawnSync } from "node:child_process"
 import * as fs from "node:fs"
 import * as path from "node:path"
 import { fileURLToPath } from "node:url"
-import { checkSnapshotResponse, resultText, splitJsonRpcLines } from "./utils/mcp-first-snapshot-checks.mjs"
+import {
+  checkSnapshotResponse,
+  describeHandshake,
+  resultText,
+  splitJsonRpcLines,
+  summarizeHostLoad,
+} from "./utils/mcp-first-snapshot-checks.mjs"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLI = path.join(HERE, "node_modules", "tapsmith", "dist", "cli.js")
@@ -46,6 +52,18 @@ const CLI = path.join(HERE, "node_modules", "tapsmith", "dist", "cli.js")
 const EXPECT_TEXT = "Tapsmith Test App"
 /** Generous: the call includes a cold agent start on a just-booted simulator. */
 const CALL_TIMEOUT_MS = 240_000
+/**
+ * How long the `initialize` handshake may take. On a warm host the server
+ * answers in a few seconds (well under 1 s on a developer Mac). Straight after
+ * a simulator reboot the CI runner is so busy that the same handshake has
+ * taken 3–28 s in passing runs, and past 30 s in the runs that failed
+ * (PILOT-580): the server was still starting when the old 30 s budget ran
+ * out, and answered a few seconds later. The reboot is this script's own
+ * doing, so those sessions get the larger budget; session 1 keeps the strict
+ * one, so a server that has really become slow to answer still fails here.
+ */
+const HANDSHAKE_TIMEOUT_MS = 30_000
+const POST_REBOOT_HANDSHAKE_TIMEOUT_MS = 120_000
 
 function parseArgs(argv) {
   const opts = { config: null, udid: process.env.TAPSMITH_IOS_UDID ?? null, app: null, bundleId: "dev.tapsmith.testapp" }
@@ -76,6 +94,25 @@ function simctl(...args) {
   return res.stdout
 }
 
+/**
+ * How busy the host is right now, as one log line: a bare node start (what
+ * the MCP server pays first), the load averages, the busiest processes.
+ */
+function sampleHostLoad() {
+  const run = (cmd, args) => {
+    const res = spawnSync(cmd, args, { encoding: "utf8", timeout: 30_000 })
+    return res.status === 0 ? res.stdout : null
+  }
+  const started = Date.now()
+  const node = spawnSync(process.execPath, ["-e", "0"], { timeout: 30_000 })
+  const nodeBootMs = node.status === 0 ? Date.now() - started : null
+  return summarizeHostLoad({
+    nodeBootMs,
+    loadavg: run("sysctl", ["-n", "vm.loadavg"]),
+    ps: run("ps", ["-Ao", "pcpu=,comm=", "-r"]),
+  })
+}
+
 function reboot(udid) {
   log(`rebooting simulator ${udid}`)
   const started = Date.now()
@@ -85,8 +122,15 @@ function reboot(udid) {
   log(`  booted in ${((Date.now() - started) / 1000).toFixed(1)}s`)
 }
 
-/** One MCP stdio session: run `calls` in order, then close stdin and wait for the server to exit. */
-async function mcpSession(config, calls) {
+/**
+ * One MCP stdio session: run `calls` in order, then close stdin and wait for
+ * the server to exit. Logs how busy the host was at the start and how long
+ * the handshake took, so a slow session's log says where its time went.
+ */
+async function mcpSession(config, calls, { handshakeTimeoutMs = HANDSHAKE_TIMEOUT_MS } = {}) {
+  log(`  host: ${sampleHostLoad()}`)
+  const spawnedAt = Date.now()
+  let firstOutputAt = null
   const child = spawn(process.execPath, [CLI, "mcp-server", "--config", config], {
     cwd: HERE,
     stdio: ["pipe", "pipe", "pipe"],
@@ -95,7 +139,10 @@ async function mcpSession(config, calls) {
   const stderr = []
   child.stdout.setEncoding("utf8")
   child.stderr.setEncoding("utf8")
-  child.stderr.on("data", (d) => stderr.push(d))
+  child.stderr.on("data", (d) => {
+    firstOutputAt ??= Date.now()
+    stderr.push(d)
+  })
   // Writing to a server that already died must fail the call, not crash the script.
   child.stdin.on("error", () => {})
 
@@ -146,12 +193,29 @@ async function mcpSession(config, calls) {
 
   const results = []
   let error = null
-  try {
-    await request("initialize", {
-      protocolVersion: "2025-03-26",
-      capabilities: {},
-      clientInfo: { name: "verify-mcp-first-snapshot", version: "1" },
+  const handshake = (answeredAt) =>
+    describeHandshake({
+      firstOutputMs: firstOutputAt == null ? null : firstOutputAt - spawnedAt,
+      answeredMs: answeredAt == null ? null : answeredAt - spawnedAt,
+      elapsedMs: Date.now() - spawnedAt,
     })
+  try {
+    try {
+      await request(
+        "initialize",
+        {
+          protocolVersion: "2025-03-26",
+          capabilities: {},
+          clientInfo: { name: "verify-mcp-first-snapshot", version: "1" },
+        },
+        handshakeTimeoutMs,
+      )
+    } catch (err) {
+      log(`  handshake: ${handshake(null)}`)
+      log(`  host: ${sampleHostLoad()}`)
+      throw err
+    }
+    log(`  handshake: ${handshake(Date.now())}`)
     child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`)
     for (const { name, args } of calls) {
       const started = Date.now()
@@ -212,7 +276,9 @@ async function main() {
   if (failures.length === 0) {
     reboot(opts.udid)
     log("session 2: tapsmith_snapshot after the first reboot")
-    const s2 = await mcpSession(opts.config, [{ name: "tapsmith_snapshot", args: { device: opts.udid } }])
+    const s2 = await mcpSession(opts.config, [{ name: "tapsmith_snapshot", args: { device: opts.udid } }], {
+      handshakeTimeoutMs: POST_REBOOT_HANDSHAKE_TIMEOUT_MS,
+    })
     for (const p of checkSnapshotResponse(s2.results[0]?.response, { expectText: EXPECT_TEXT })) {
       failures.push(`after the first reboot: ${p}`)
     }
@@ -220,7 +286,9 @@ async function main() {
 
     reboot(opts.udid)
     log("session 3: the first call of a new session is tapsmith_snapshot")
-    const s3 = await mcpSession(opts.config, [{ name: "tapsmith_snapshot", args: { device: opts.udid } }])
+    const s3 = await mcpSession(opts.config, [{ name: "tapsmith_snapshot", args: { device: opts.udid } }], {
+      handshakeTimeoutMs: POST_REBOOT_HANDSHAKE_TIMEOUT_MS,
+    })
     const problems = checkSnapshotResponse(s3.results[0]?.response, { expectText: EXPECT_TEXT })
     for (const p of problems) failures.push(`after the second reboot: ${p}`)
     if (problems.length > 0) printServerLog(s3)
