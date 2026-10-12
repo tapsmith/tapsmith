@@ -397,23 +397,40 @@ export function reclaimOrphanedEmulators(
 const ADB_RECHECK_DELAY_MS = 3_000;
 
 /**
- * `adb devices` for the reclaim pass, asked a second time after a settle delay
- * when the first answer would condemn a live recorded emulator: a failed
- * query, or one that lists it absent or not online. A restarting adb server
- * answers before its emulators have reconnected, and a loaded host can time
- * out once (PILOT-710). One look is enough when nothing recorded is alive.
+ * `adb devices` for the reclaim pass. One look is enough when it shows every
+ * live recorded emulator online. Otherwise — a failed query, or one that
+ * lists a live emulator absent or not online — it looks again after a settle
+ * delay, because a restarting adb server fails, then answers before its
+ * emulators have reconnected, and a loaded host can time out once
+ * (PILOT-710). It returns an answer only once adb has answered twice: that
+ * answer may condemn an emulator. Two failed looks (or no second answer
+ * within three looks) return the failure, which condemns nothing.
  */
 function queryAdbDevicesSettled(d: ReclaimDeps, entries: readonly EmulatorManifestEntry[]): AdbDeviceQuery {
-  const first = d.queryAdbDevices();
-  const atStake = entries.some((entry) => {
-    if (entry.booting && entry.ownerPid !== undefined && d.isProcessAlive(entry.ownerPid)) return false;
-    if (!(entry.pid > 0 && d.isProcessAlive(entry.pid))) return false;
-    if (isAdbQueryFailure(first)) return true;
-    return !first.some((device) => device.serial === entry.serial && device.state === 'device');
-  });
-  if (!atStake) return first;
-  d.sleep(ADB_RECHECK_DELAY_MS);
-  return d.queryAdbDevices();
+  const live = entries.filter((entry) =>
+    !(entry.booting && entry.ownerPid !== undefined && d.isProcessAlive(entry.ownerPid))
+    && entry.pid > 0 && d.isProcessAlive(entry.pid));
+  const condemnsNone = (devices: AdbDeviceEntry[]) => live.every((entry) =>
+    devices.some((device) => device.serial === entry.serial && device.state === 'device'));
+  // Nothing alive to protect or condemn: one look, whatever it says.
+  if (live.length === 0) return d.queryAdbDevices();
+
+  let answers = 0;
+  let lastFailure: AdbQueryFailure | undefined;
+  for (let look = 1; ; look++) {
+    const result = d.queryAdbDevices();
+    if (isAdbQueryFailure(result)) {
+      // Two failures: adb is not coming back in time; judge nothing.
+      if (lastFailure) return result;
+      lastFailure = result;
+    } else {
+      if (condemnsNone(result)) return result;
+      answers += 1;
+      if (answers === 2) return result;
+    }
+    if (look === 3) return lastFailure ?? result;
+    d.sleep(ADB_RECHECK_DELAY_MS);
+  }
 }
 
 type ExecFileSyncLike = typeof execFileSync
@@ -530,8 +547,12 @@ export function queryAdbDevices(exec: ExecFileSyncLike = execFileSync): AdbDevic
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
     if (code === 'ENOENT') return { error: 'adb was not found on PATH' };
     if (code === 'ETIMEDOUT') return { error: `\`adb devices\` timed out after ${ADB_DEVICES_TIMEOUT_MS / 1000} s` };
-    const firstLine = (err instanceof Error ? err.message : String(err)).split('\n')[0].trim();
-    return { error: `\`adb devices\` failed: ${firstLine}` };
+    // A non-zero exit's message is just "Command failed: adb devices"; adb's
+    // own reason is the last line it wrote to stderr.
+    const stderr = String((err as { stderr?: unknown } | undefined)?.stderr ?? '');
+    const reason = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).pop()
+      ?? (err instanceof Error ? err.message : String(err)).split('\n')[0].trim();
+    return { error: `\`adb devices\` failed: ${reason}` };
   }
 }
 

@@ -1015,6 +1015,7 @@ describe('emulator utilities', () => {
         expect(output).toContain('emulator-5554, emulator-5556');
         expect(output).toContain('leaving');
         expect(output).not.toContain('Killing');
+        expect(output.split("Couldn't query adb").length - 1).toBe(1);
       });
 
       it('still drops records whose emulator has gone, killing nothing', () => {
@@ -1051,6 +1052,24 @@ describe('emulator utilities', () => {
         const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
         expect(reclaimOrphanedEmulators(h.deps).reusable).toEqual(['emulator-5554']);
         expect(h.killEmulator).not.toHaveBeenCalled();
+      });
+
+      it('does not kill on one answer that follows a failure (adb server restarting)', () => {
+        for (const second of [[], [{ serial: 'emulator-5554', state: 'offline' }]]) {
+          const query = answers({ error: '`adb devices` failed: cannot connect to daemon' }, second, { error: '`adb devices` timed out after 10 s' });
+          const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
+          expect(reclaimOrphanedEmulators(h.deps)).toEqual({ reusable: [], killed: [], undetermined: ['emulator-5554'], booting: [] });
+          expect(h.killProcess).not.toHaveBeenCalled();
+          expect(query).toHaveBeenCalledTimes(3);
+        }
+      });
+
+      it('kills after a failure only once two later answers agree it is gone', () => {
+        const query = answers({ error: 'adb exited with code 1' }, [], []);
+        const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() } });
+        expect(reclaimOrphanedEmulators(h.deps).killed).toEqual(['emulator-5554']);
+        expect(query).toHaveBeenCalledTimes(3);
+        expect(h.sleep).toHaveBeenCalledTimes(2);
       });
 
       it('kills an emulator adb positively left out twice, after one settle delay', () => {
@@ -2370,8 +2389,15 @@ describe('queryAdbDevices', () => {
     expect(result).toEqual({ error: '`adb devices` timed out after 10 s' });
   });
 
-  it('reports any other error with its first line', () => {
-    const result = queryAdbDevices(failing(new Error('Command failed: adb devices\nadb: cannot connect to daemon')));
+  it("reports any other error with adb's own reason from stderr", () => {
+    const err = Object.assign(new Error('Command failed: adb devices\n* daemon not running\nadb: cannot connect to daemon\n'), {
+      stderr: '* daemon not running; starting now at tcp:5037\nadb: cannot connect to daemon\n',
+    });
+    expect(queryAdbDevices(failing(err))).toEqual({ error: '`adb devices` failed: adb: cannot connect to daemon' });
+  });
+
+  it('falls back to the error message when adb wrote nothing to stderr', () => {
+    const result = queryAdbDevices(failing(Object.assign(new Error('Command failed: adb devices'), { stderr: '' })));
     expect(result).toEqual({ error: '`adb devices` failed: Command failed: adb devices' });
   });
 });
