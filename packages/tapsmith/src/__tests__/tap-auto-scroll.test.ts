@@ -51,7 +51,8 @@ function simulatedScreen(opts: {
   disabledReadsAfterSwipe?: number;
   /** Bounds the row reports on successive reads before the first swipe (animating in). */
   animation?: number[];
-  hierarchyFails?: boolean;
+  /** The first N hierarchy reads fail (Infinity: all of them). */
+  hierarchyFailures?: number;
   /** The row's height (default ROW_H). */
   rowH?: number;
   /** Reads after each swipe during which the list keeps drifting (momentum), 30pt per read. */
@@ -63,6 +64,7 @@ function simulatedScreen(opts: {
     animation: [...(opts.animation ?? [])],
     momentum: 0, momentumDir: 0, overscrolls: 0, tappedWhileMoving: false,
     staleSwipes: opts.staleAfterSwipes ?? 0, staleNext: false,
+    hierarchyFailures: opts.hierarchyFailures ?? 0,
   };
   const row = (): ElementInfo => {
     const bounds = { left: state.left, top: state.top, right: state.left + ROW_W, bottom: state.top + (opts.rowH ?? ROW_H) };
@@ -121,7 +123,10 @@ function simulatedScreen(opts: {
     return ok();
   });
   const getUiHierarchy = vi.fn(async () => {
-    if (opts.hierarchyFails) throw new Error('hierarchy dump failed');
+    if (state.hierarchyFailures > 0) {
+      state.hierarchyFailures--;
+      throw new Error('hierarchy dump failed');
+    }
     return { requestId: '1', hierarchyXml: HIERARCHY, errorMessage: '' };
   });
   const client = {
@@ -243,11 +248,20 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
-  it('falls back to half-screen steps until it is on screen when the screen size cannot be read', async () => {
-    const { client, swipe, tap, state } = simulatedScreen({ top: 1500, hierarchyFails: true });
+  it('never swipes blind when the screen size cannot be read; reports it at the deadline (review R5-F2)', async () => {
+    const { client, swipe, tap } = simulatedScreen({ top: 1500, hierarchyFailures: Infinity });
+    const err = await rejectionOf(20_000, () => new ElementHandle(client, _text('Item 1'), 3000).tap());
+    expect(swipe).not.toHaveBeenCalled();
+    expect(tap).not.toHaveBeenCalled();
+    expect(err.message).toMatch(/could not scroll it into view: the screen size could not be read to steer the scroll/);
+  });
+
+  it('retries a failed screen-size read on the next attempt, and reads it only once per action once it succeeds (review R5-F2)', async () => {
+    const { client, swipe, tap, getUiHierarchy, state } = simulatedScreen({ top: 1500, hierarchyFailures: 1 });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
-    expect(swipe.mock.calls).toEqual([['up', { speed: 1000, distance: 0.5 }], ['up', { speed: 1000, distance: 0.5 }]]);
-    expect(state.top).toBe(700);
+    expect(getUiHierarchy).toHaveBeenCalledTimes(2);
+    expect(swipe).toHaveBeenCalled();
+    expect(inSafeRegion(state.top)).toBe(true);
     expect(tap).toHaveBeenCalledTimes(1);
   });
 

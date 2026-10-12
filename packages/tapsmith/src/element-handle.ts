@@ -618,7 +618,7 @@ type TapFamilyAction = 'tap' | 'doubleTap' | 'longPress' | 'setChecked';
 const AUTO_SCROLL_MAX_SWIPES = 25;
 /** Auto-scrolls one action may start (a new one only from a new resting place). */
 const AUTO_SCROLL_MAX_ATTEMPTS = 3;
-/** Swipe length as a fraction of the screen while the screen size is unknown, and the longest swipe. */
+/** The longest swipe, as a fraction of the screen height. */
 const AUTO_SCROLL_MAX_DISTANCE = 0.5;
 /** The shortest swipe, for the last nudge towards the middle of the screen. */
 const AUTO_SCROLL_MIN_DISTANCE = 0.1;
@@ -1597,6 +1597,7 @@ export class ElementHandle {
     let scrollFailure: { error: Error; bounds: Bounds } | undefined;
     let scrollAttempts = 0;
     let unsettledScroll = false;
+    let screenHeight: number | undefined;
     while (true) {
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind === 'fault') {
@@ -1659,7 +1660,15 @@ export class ElementHandle {
                 // judged by this loop as usual. Only a scroll that finished
                 // (in view, or given up) counts as an attempt: one cut short
                 // by a stale read is resumed, bounded by the deadline.
-                unsettledScroll = !(await this._scrollOffScreenIntoView(element, deadline, action));
+                // The screen size steers every swipe; read it once per action.
+                // Without it nothing is swiped: the attempt fails like any
+                // other (its error names no resting place, so the next stable
+                // read may try again, reading the size afresh).
+                screenHeight ??= (await this._screenSize(deadline))?.height;
+                if (screenHeight === undefined) {
+                  throw this._offScreenError(action, 'the screen size could not be read to steer the scroll');
+                }
+                unsettledScroll = !(await this._scrollOffScreenIntoView(element, deadline, action, screenHeight));
                 if (!unsettledScroll) scrollAttempts++;
               } catch (err) {
                 if (!(err instanceof OffScreenError)) throw err;
@@ -3029,16 +3038,15 @@ export class ElementHandle {
    * hittable").
    *
    * Each step is a slow vertical screen drag towards the element, then the
-   * settle loop. Knowing the screen size, every swipe aims the element's
-   * centre at the middle of the screen, and it stops once the element rests
+   * settle loop. Knowing the screen height (`extent`, in the units of the
+   * element's bounds), every swipe aims the element's centre at the middle of
+   * the screen, and it stops once the element rests
    * fully inside the safe region (clear of where headers and tab bars sit), so
    * it does not come to rest as a sliver at an edge; a fling past it is
    * corrected from the other side. A swipe that moves the element less than
    * half as far as it should have means the list has reached its end: it
    * stops there if the element is visible, rather than dragging the list past
-   * its end again (a pull-to-refresh, or a sheet dismissed). Without the
-   * screen size (the hierarchy read failed), it swipes half a screen at a time
-   * until any part of the element is on screen.
+   * its end again (a pull-to-refresh, or a sheet dismissed).
    *
    * An element off to the side (a carousel cell) is not scrolled to: a
    * sideways drag from the middle of the screen could reveal a swipeable
@@ -3058,8 +3066,8 @@ export class ElementHandle {
     element: ElementInfo & { bounds: Bounds },
     deadline: number,
     action: TapFamilyAction,
+    extent: number,
   ): Promise<boolean> {
-    const screen = await this._screenSize(deadline);
     let bounds: Bounds = element.bounds;
     // In line with the screen vertically yet off-screen: off to the side.
     const sideError = (b: Bounds): OffScreenError => this._offScreenError(
@@ -3069,8 +3077,7 @@ export class ElementHandle {
       b,
       b.right <= 0 ? 'right' : 'left',
     );
-    if (screen && bounds.bottom > 0 && bounds.top < screen.height) throw sideError(bounds);
-    const extent = screen?.height;
+    if (bounds.bottom > 0 && bounds.top < extent) throw sideError(bounds);
     const mid = (b: Bounds): number => (b.top + b.bottom) / 2;
     let best = Infinity;
     let stalls = 0;
@@ -3083,10 +3090,8 @@ export class ElementHandle {
       }
       // Positive: the element is below the middle, so the content has to move
       // up (swipe up).
-      const offset = extent === undefined ? (bounds.bottom <= 0 ? -1 : 1) : mid(bounds) - extent / 2;
-      const distance = extent === undefined
-        ? AUTO_SCROLL_MAX_DISTANCE
-        : Math.min(AUTO_SCROLL_MAX_DISTANCE, Math.max(AUTO_SCROLL_MIN_DISTANCE, Math.abs(offset) / extent));
+      const offset = mid(bounds) - extent / 2;
+      const distance = Math.min(AUTO_SCROLL_MAX_DISTANCE, Math.max(AUTO_SCROLL_MIN_DISTANCE, Math.abs(offset) / extent));
       const direction = offset > 0 ? 'up' : 'down';
       const res = await this._client.swipe(direction, { speed: AUTO_SCROLL_SPEED, distance });
       if (!res.success) {
@@ -3112,12 +3117,10 @@ export class ElementHandle {
       }
       bounds = nb;
       if (!next.visible) {
-        if (extent === undefined) continue;
         // Scrolled level with the screen and still not on it: a cell of a
         // carousel row further down, off to the side.
         if (nb.bottom > 0 && nb.top < extent) throw sideError(nb);
       } else {
-        if (extent === undefined) return true;
         const inSafeRegion = nb.top >= extent * AUTO_SCROLL_SAFE_TOP && nb.bottom <= extent * AUTO_SCROLL_SAFE_BOTTOM;
         // An element too tall for the safe region is in view once it spans
         // the middle of the screen, not at the first strip at an edge.
