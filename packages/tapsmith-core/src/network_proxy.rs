@@ -414,9 +414,11 @@ pub(crate) struct ProxyState {
     /// install it). Every client would reject our generated certificate, so
     /// MITM would make all of the app's HTTPS fail; tunneling keeps it
     /// working, records a passthrough marker per connection, and leaves plain
-    /// HTTP captured as usual (PILOT-711). A fact about the device, so
+    /// HTTP captured as usual (PILOT-711). Holds the capture-start warning
+    /// that explains it, so every later capture start that reuses this proxy
+    /// can repeat it. A fact about the device, so
     /// [`NetworkProxy::reset_capture_state`] leaves it alone.
-    tunnel_all_tls: bool,
+    tunnel_all_tls: Option<String>,
 }
 
 /// Cap on [`ProxyState::tls_rejected_hosts`] between drains: enough to name
@@ -539,7 +541,7 @@ impl NetworkProxy {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
-            tunnel_all_tls: false,
+            tunnel_all_tls: None,
         }));
 
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -742,9 +744,15 @@ impl NetworkProxy {
         self.state.lock().await.android_emulator = enabled;
     }
 
-    /// Tunnel all TLS uncaptured — see [`ProxyState::tunnel_all_tls`].
-    pub async fn set_tunnel_all_tls(&self, enabled: bool) {
-        self.state.lock().await.tunnel_all_tls = enabled;
+    /// Tunnel all TLS uncaptured (`Some(warning)` explaining why) or not
+    /// (`None`) — see [`ProxyState::tunnel_all_tls`].
+    pub async fn set_tunnel_all_tls(&self, warning: Option<String>) {
+        self.state.lock().await.tunnel_all_tls = warning;
+    }
+
+    /// The warning explaining why this proxy tunnels all TLS, if it does.
+    pub async fn tunnel_all_tls_warning(&self) -> Option<String> {
+        self.state.lock().await.tunnel_all_tls.clone()
     }
 
     /// Stop the proxy and return all captured entries.
@@ -4140,7 +4148,7 @@ async fn handle_transparent_tls<S>(
                 .chain(state.default_passthrough_hosts.iter())
                 .any(|re| re.is_match(&sni)),
             state.mitm_rejected_hosts.contains(&sni_key),
-            state.tunnel_all_tls,
+            state.tunnel_all_tls.is_some(),
         )
     };
     if untrusted_ca_passthrough {
@@ -5248,7 +5256,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
-            tunnel_all_tls: false,
+            tunnel_all_tls: None,
         }));
 
         let (client_side, server_side) = tokio::io::duplex(65536);
@@ -5909,7 +5917,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
-            tunnel_all_tls: false,
+            tunnel_all_tls: None,
         }))
     }
 
@@ -6189,10 +6197,17 @@ mod tests {
             shutdown_tx: tx,
             capture_session: "test".to_string(),
         };
-        proxy.set_tunnel_all_tls(true).await;
+        proxy
+            .set_tunnel_all_tls(Some("CA not installed".to_string()))
+            .await;
         // A capture start on the kept-alive proxy must not re-enable MITM:
         // whether the device trusts the CA does not change between tests.
+        // It repeats the warning, for a re-run in a fresh process.
         proxy.reset_capture_state().await;
+        assert_eq!(
+            proxy.tunnel_all_tls_warning().await.as_deref(),
+            Some("CA not installed")
+        );
 
         let (client_side, server_side) = tokio::io::duplex(65536);
         let proxy_state = state.clone();
@@ -6369,7 +6384,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
-            tunnel_all_tls: false,
+            tunnel_all_tls: None,
         }));
 
         let (client_side, server_side) = tokio::io::duplex(65536);
@@ -6612,7 +6627,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
-            tunnel_all_tls: false,
+            tunnel_all_tls: None,
         }))
     }
 
@@ -7464,7 +7479,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
-            tunnel_all_tls: false,
+            tunnel_all_tls: None,
         }))
     }
 

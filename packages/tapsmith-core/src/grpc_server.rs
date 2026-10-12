@@ -5564,6 +5564,12 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             };
             existing.set_android_emulator(android_emulator).await;
             existing.reset_capture_state().await;
+            // Still tunneling because the device cannot trust the CA: repeat
+            // why, since a watch or MCP re-run starts in a fresh process that
+            // never saw the first start's warning (the runner dedupes it).
+            if let Some(warning) = existing.tunnel_all_tls_warning().await {
+                warnings.push(warning);
+            }
             // Clone out of the read guard before awaiting — holding a
             // RwLock guard across an await risks starving writers.
             let passthrough_hosts = self.passthrough_hosts.read().await.clone();
@@ -5635,8 +5641,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let platform = self.require_platform().await?;
         let ca_pem_path = mitm_ca.ca_pem_path().to_string_lossy().to_string();
         let mut warnings: Vec<String> = Vec::new();
-        // Set when the device cannot trust the CA — see `android_ca_install_failure`.
-        let mut tunnel_all_tls = false;
+        // The warning, when the device cannot trust the CA and all TLS is
+        // tunneled — see `android_ca_install_failure`.
+        let mut tunnel_all_tls: Option<String> = None;
 
         let is_ios_physical = self.is_active_ios_physical().await;
 
@@ -5737,7 +5744,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     }
                     Err(e) => {
                         let (tunnel, msg) = android_ca_install_failure(&e);
-                        tunnel_all_tls = tunnel;
+                        if tunnel {
+                            tunnel_all_tls = Some(msg.clone());
+                        }
                         error!("{msg}");
                         warnings.push(msg);
                     }
