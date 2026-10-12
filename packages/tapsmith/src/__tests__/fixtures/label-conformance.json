@@ -163,6 +163,22 @@
       "matches": false
     },
     {
+      "why": "an empty query is no label criterion, so it matches nothing",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "",
+      "query": "",
+      "matches": false
+    },
+    {
+      "why": "a whitespace query equals an empty name",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "label": "Email",
+      "query": " ",
+      "matches": true
+    },
+    {
       "why": "RegExp with the i flag",
       "platform": "ios",
       "type": "XCUIElementTypeTextField",
@@ -381,6 +397,14 @@
       "platform": "android",
       "type": "android.widget.EditText",
       "query": "Email",
+      "matches": false
+    },
+    {
+      "why": "an empty query matches nothing",
+      "platform": "android",
+      "type": "android.widget.EditText",
+      "contentDesc": "Email",
+      "query": "",
       "matches": false
     },
     {

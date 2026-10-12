@@ -552,6 +552,9 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector): boo
     case 'hint':
       return getNodeHint(node) === selector.value;
     case 'label': {
+      // An empty string is no label criterion at all: the agents drop it, so
+      // nothing matches (a whitespace-only one is a real, empty, name).
+      if (selector.value === '') return false;
       // Whole and whitespace-normalized, never the field's own text — its
       // typed value or hint (PILOT-659).
       const query = normalizeWhitespace(selector.value);

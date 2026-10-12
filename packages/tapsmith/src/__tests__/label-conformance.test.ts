@@ -62,6 +62,8 @@ const CASES: Case[] = [
   { why: 'a string is compared whole', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'Email address', query: 'Email', matches: false },
   { why: 'a string is case-sensitive', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'Email', query: 'email', matches: false },
   { why: 'no label, no match', platform: 'ios', type: 'XCUIElementTypeTextField', label: '', query: 'Email', matches: false },
+  { why: 'an empty query is no label criterion, so it matches nothing', platform: 'ios', type: 'XCUIElementTypeTextField', label: '', query: '', matches: false },
+  { why: 'a whitespace query equals an empty name', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'Email', query: ' ', matches: true },
   // iOS: a RegExp tests the raw label or title.
   { why: 'RegExp with the i flag', platform: 'ios', type: 'XCUIElementTypeTextField', label: 'E-mail', query: { source: '^e-?mail$', flags: 'i' }, matches: true },
   { why: 'RegExp \\s covers NBSP', platform: 'ios', type: 'XCUIElementTypeTextField', label: `Full${NBSP}name`, query: { source: 'Full\\sname', flags: '' }, matches: true },
@@ -87,6 +89,7 @@ const CASES: Case[] = [
   { why: 'NBSP in the content-desc is a space', platform: 'android', type: 'android.widget.EditText', contentDesc: `Full${NBSP}name`, query: 'Full name', matches: true },
   { why: 'a string is compared whole', platform: 'android', type: 'android.widget.EditText', contentDesc: 'Email address', query: 'Email', matches: false },
   { why: 'no content-desc, no match', platform: 'android', type: 'android.widget.EditText', query: 'Email', matches: false },
+  { why: 'an empty query matches nothing', platform: 'android', type: 'android.widget.EditText', contentDesc: 'Email', query: '', matches: false },
   { why: 'RegExp tests the raw content-desc', platform: 'android', type: 'android.widget.EditText', contentDesc: 'E-mail', query: { source: '^e-?mail$', flags: 'i' }, matches: true },
   { why: 'RegExp on a Button', platform: 'android', type: 'android.widget.Button', contentDesc: 'Save', query: { source: 'Save', flags: '' }, matches: false },
 ];

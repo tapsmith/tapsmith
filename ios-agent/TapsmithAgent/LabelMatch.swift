@@ -14,8 +14,10 @@ enum LabelMatch {
         .checkBox, .radioButton,
     ]
 
+    /// An empty `query` matches nothing: SelectorParser drops an empty label,
+    /// so it never reaches the finders as a criterion.
     static func matches(elementType: XCUIElement.ElementType, label: String, title: String, query: String) -> Bool {
-        inputTypes.contains(elementType)
+        !query.isEmpty && inputTypes.contains(elementType)
             && (TextMatch.equals(label, query) || TextMatch.equals(title, query))
     }
 
