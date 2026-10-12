@@ -1576,7 +1576,8 @@ function retryReplaysSetup(
 /**
  * Bring the app back to where the test's first attempt started, the way
  * Playwright's fresh worker does for a retry: the enclosing scopes' afterAll
- * hooks (innermost first), then each scope's entry reset — delivered cold,
+ * hooks (innermost first), then each scope's entry reset — forced cold where
+ * the platform can deliver cold (iOS),
  * never satisfied by an earlier preparation — and beforeAll hooks, outermost
  * first. Everything records live into the attempt's trace, so its APP RESET
  * row describes this reset rather than the one that preceded attempt 1.
