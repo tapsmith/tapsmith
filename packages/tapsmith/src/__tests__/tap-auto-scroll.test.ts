@@ -45,6 +45,8 @@ function simulatedScreen(opts: {
   goneAfterSwipe?: boolean;
   /** Reads after the first swipe that come back as an agent fault. */
   faultReadsAfterSwipe?: number;
+  /** The read right after each of the first N swipes comes back as a stale snapshot. */
+  staleAfterSwipes?: number;
   /** Reads after the first swipe that see the row disabled. */
   disabledReadsAfterSwipe?: number;
   /** Bounds the row reports on successive reads before the first swipe (animating in). */
@@ -58,6 +60,7 @@ function simulatedScreen(opts: {
     faults: opts.faultReadsAfterSwipe ?? 0, disabled: opts.disabledReadsAfterSwipe ?? 0,
     animation: [...(opts.animation ?? [])],
     momentum: 0, momentumDir: 0, overscrolls: 0, tappedWhileMoving: false,
+    staleSwipes: opts.staleAfterSwipes ?? 0, staleNext: false,
   };
   const row = (): ElementInfo => {
     const bounds = { left: state.left, top: state.top, right: state.left + ROW_W, bottom: state.top + ROW_H };
@@ -74,6 +77,10 @@ function simulatedScreen(opts: {
   };
   const findElements = vi.fn(async () => {
     if (!state.swiped && state.animation.length > 0) state.top = state.animation.shift()!;
+    if (state.staleNext) {
+      state.staleNext = false;
+      return { requestId: '1', elements: [], errorMessage: 'Element snapshot is stale (UI changed)' };
+    }
     if (state.swiped && state.faults > 0) {
       state.faults--;
       return { requestId: '1', elements: [], errorMessage: 'Agent command timed out after 5000ms' };
@@ -86,6 +93,10 @@ function simulatedScreen(opts: {
   });
   const swipe = vi.fn(async (direction: string, o?: { distance?: number; speed?: number }) => {
     state.swiped = true;
+    if (state.staleSwipes > 0) {
+      state.staleSwipes--;
+      state.staleNext = true;
+    }
     if (opts.moves === false) return ok();
     const travel = opts.travel ?? 1;
     const d = o?.distance ?? 0.6;
@@ -293,6 +304,16 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
   it('a fault right after a swipe is retried by the wait like any other read (review R1-F9)', async () => {
     const { client, tap } = simulatedScreen({ top: 1500, faultReadsAfterSwipe: 4 });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('a scroll cut short by stale reads after its swipes resumes — it does not use up the attempts (review R3-F3)', async () => {
+    // Five screens away: every one of the first 5 swipes is followed by a
+    // stale snapshot, which ends that scroll early.
+    const { client, swipe, tap, state } = simulatedScreen({ top: 4500, staleAfterSwipes: 5 });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(swipe.mock.calls.length).toBeGreaterThan(5);
+    expect(inSafeRegion(state.top)).toBe(true);
     expect(tap).toHaveBeenCalledTimes(1);
   });
 

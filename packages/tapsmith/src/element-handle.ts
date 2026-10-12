@@ -1651,15 +1651,18 @@ export class ElementHandle {
             previousOffScreenBounds = element.bounds;
             const movedSinceFailure = !scrollFailure || !sameBounds(scrollFailure.bounds, element.bounds);
             if (stable && movedSinceFailure && scrollAttempts < AUTO_SCROLL_MAX_ATTEMPTS) {
-              scrollAttempts++;
               previousOffScreenBounds = undefined;
               try {
                 // Returns once it is in view or a read is inconclusive; the
                 // next tick re-reads, so enabled, faults and misses are
-                // judged by this loop as usual.
+                // judged by this loop as usual. Only a scroll that finished
+                // (in view, or given up) counts as an attempt: one cut short
+                // by a stale read is resumed, bounded by the deadline.
                 unsettledScroll = !(await this._scrollOffScreenIntoView(element, deadline, action));
+                if (!unsettledScroll) scrollAttempts++;
               } catch (err) {
                 if (!(err instanceof OffScreenError)) throw err;
+                scrollAttempts++;
                 scrollFailure = { error: err, bounds: err.bounds };
               }
               continue;
