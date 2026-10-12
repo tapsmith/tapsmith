@@ -33,6 +33,14 @@ describe("getByRole for React Native's generic-view roles", () => {
     }
   })
 
+  test("the other description-only roles, containers included, are in the tree on Android", async ({ device, platform }) => {
+    test.skip(platform !== "android", "iOS publishes nothing for these roles; a named query finds them there")
+    for (const role of ["menubar", "tablist", "radiogroup", "spinbutton", "scrollbar", "summary"]) {
+      await expect(device.getByRole(role)).toHaveCount(1)
+    }
+    await expect(device.getByRole("spinbutton", { name: "Quantity" })).toHaveRole("spinbutton")
+  })
+
   test("an RN togglebutton is a button", async ({ device }) => {
     const bold = device.getByRole("button", { name: "Bold" })
     await bold.tap()
