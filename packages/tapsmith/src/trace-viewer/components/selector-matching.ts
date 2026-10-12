@@ -1,5 +1,5 @@
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
-import { parseBounds, getNodeRole, isLabelField } from './hierarchy-utils.js';
+import { parseBounds, getNodeRole, isLabelField, webViewAriaLabel } from './hierarchy-utils.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
@@ -656,7 +656,7 @@ function webViewNodeMatchesSelector(node: HierarchyNode, selector: ParsedSelecto
       return true;
     }
     case 'wv-label':
-      return ariaLabel === selector.value;
+      return webViewAriaLabel(node) === selector.value;
     case 'wv-placeholder':
       return placeholder === selector.value;
     case 'wv-testid':

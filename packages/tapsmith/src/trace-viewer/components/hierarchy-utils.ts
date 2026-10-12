@@ -207,3 +207,13 @@ export function isLabelField(node: HierarchyNode): boolean {
   if (className !== undefined) return ANDROID_LABEL_FIELD_CLASSES.has(className);
   return IOS_LABEL_FIELD_TYPES.has(node.attributes.get('type') ?? node.tagName);
 }
+
+/**
+ * The `aria-label` attribute of a WebView node — what `webview.getByLabel`
+ * matches. The node's content-desc is its computed accessible name (also
+ * from aria-labelledby or a `<label>`), which getByLabel does not read
+ * (PILOT-666). A dump that predates the attribute falls back to content-desc.
+ */
+export function webViewAriaLabel(node: HierarchyNode): string {
+  return node.attributes.get('webview-aria-label') ?? node.attributes.get('content-desc') ?? '';
+}

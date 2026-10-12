@@ -233,6 +233,19 @@ describe('generateWebViewSelectors priority order', () => {
     expect(generateSelectors(node).some((s) => s.label === 'CSS tag.class')).toBe(false);
   });
 
+  it('suggests and matches webview.getByLabel by the aria-label attribute only, as the runtime does (PILOT-666)', () => {
+    // <label for="email">Email</label><input id="email">: an accessible name, no aria-label.
+    const labelled = makeNode('node', { webview: 'true', 'webview-tag': 'input', 'content-desc': 'Email', 'webview-aria-label': '' });
+    const ariaLabelled = makeNode('node', { webview: 'true', 'webview-tag': 'input', 'content-desc': 'Search', 'webview-aria-label': 'Search' });
+    expect(generateSelectors(labelled).some((s) => s.label === 'Label')).toBe(false);
+    expect(generateSelectors(ariaLabelled).some((s) => s.code === 'webview.getByLabel("Search")')).toBe(true);
+    const root = makeNode('node', {}, [labelled, ariaLabelled]);
+    expect(findMatchingNodes([root], parseSelectorString('webview.getByLabel("Email")')!)).toEqual([]);
+    expect(findMatchingNodes([root], parseSelectorString('webview.getByLabel("Search")')!)).toEqual([ariaLabelled]);
+    // The role name is still the accessible name.
+    expect(findMatchingNodes([root], parseSelectorString('webview.getByRole("textfield", { name: "Email" })')!)).toEqual([labelled]);
+  });
+
   it('Label comes before Text for webview elements', () => {
     const node = makeNode('node', {
       webview: 'true',

@@ -1,5 +1,5 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
-import { getNodeRole, isLabelField, WEBVIEW_TAG_TO_ROLE, ANDROID_CLASS_TO_ROLE, IOS_TYPE_TO_ROLE } from './hierarchy-utils.js';
+import { getNodeRole, isLabelField, webViewAriaLabel, WEBVIEW_TAG_TO_ROLE, ANDROID_CLASS_TO_ROLE, IOS_TYPE_TO_ROLE } from './hierarchy-utils.js';
 import { unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
@@ -162,10 +162,12 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
     });
   }
 
-  // 3. Label (aria-label) — Testing Library getByLabelText
-  if (ariaLabel) {
+  // 3. Label (aria-label) — Testing Library getByLabelText. webview.getByLabel
+  // matches the aria-label attribute only, not a <label> or aria-labelledby.
+  const ariaLabelAttr = webViewAriaLabel(node);
+  if (ariaLabelAttr) {
     selectors.push({
-      code: `webview.getByLabel("${escapeJsString(ariaLabel)}")`,
+      code: `webview.getByLabel("${escapeJsString(ariaLabelAttr)}")`,
       label: 'Label',
       priority: 3,
     });

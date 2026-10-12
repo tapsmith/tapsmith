@@ -446,3 +446,28 @@ describe('WebView strict mode (PILOT-227)', () => {
     });
   });
 });
+
+describe('WebView hierarchy dump (PILOT-666)', () => {
+  it('writes the aria-label attribute apart from the computed accessible name', async () => {
+    const handle = new WebViewHandle({} as TapsmithGrpcClient, 0, TIMEOUT_MS);
+    handle._platform = 'ios';
+    (handle as unknown as { _webviewNativeBounds: unknown })._webviewNativeBounds = { left: 0, top: 0, right: 100, bottom: 100 };
+    const bounds = { left: 0, top: 0, right: 10, bottom: 10 };
+    const leaf = (over: Record<string, unknown>) => ({
+      tag: 'input', id: '', cls: '', text: '', placeholder: '', role: '', ariaLabel: '', ariaLabelAttr: '',
+      testId: '', type: '', href: '', bounds, children: [], ...over,
+    });
+    vi.spyOn(handle as unknown as { _evaluate: () => Promise<unknown> }, '_evaluate').mockResolvedValue(
+      leaf({
+        tag: 'body',
+        children: [
+          leaf({ id: 'email', ariaLabel: 'Email' }),
+          leaf({ id: 'search', ariaLabel: 'Search', ariaLabelAttr: 'Search' }),
+        ],
+      }),
+    );
+    const xml = (await handle._dumpDomHierarchy())!;
+    expect(xml).toMatch(/webview-id="email"[^>]*content-desc="Email"[^>]*webview-aria-label=""/);
+    expect(xml).toMatch(/webview-id="search"[^>]*content-desc="Search"[^>]*webview-aria-label="Search"/);
+  });
+});

@@ -169,8 +169,10 @@ class HierarchyDumper {
         xml += " identifier=\"\(identifier)\""
         xml += " value=\"\(value)\""
         xml += " placeholderValue=\"\(placeholder)\""
-        if !element.title.isEmpty {
-            xml += " title=\"\(escapeXML(element.title))\""
+        // One read: each XCUIElement attribute is an IPC round-trip.
+        let title = element.title
+        if !title.isEmpty {
+            xml += " title=\"\(escapeXML(title))\""
         }
         xml += " type=\"\(typeName)\""
         if !role.isEmpty {
