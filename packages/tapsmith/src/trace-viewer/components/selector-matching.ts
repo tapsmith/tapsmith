@@ -2,6 +2,7 @@ import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
 import { parseBounds, getNodeRole, isLabelField } from './hierarchy-utils.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
+import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
 import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, normalizeRole, unknownRoleMessage } from '../../roles.js';
 
 // ─── Selector Parsing ───
@@ -669,12 +670,16 @@ function webViewNodeMatchesSelector(node: HierarchyNode, selector: ParsedSelecto
 
 function matchCssSelector(css: string, tag: string, id: string, cssClass: string): boolean {
   // Simple CSS selector matching for the playground
-  // Supports: #id, .class, tag, tag.class, tag#id
+  // Supports: #id, [id="…"], .class, tag, tag.class, tag#id
   const trimmed = css.trim();
 
+  // `#` takes a plain identifier only: the runtime's querySelectorAll throws
+  // on `#1st`, and reads `#order.total` as an id and a class (PILOT-666).
   if (trimmed.startsWith('#')) {
-    return id === trimmed.slice(1);
+    return isCssIdentifier(trimmed.slice(1)) && id === trimmed.slice(1);
   }
+  const attributeId = idOfAttributeSelector(trimmed);
+  if (attributeId !== null) return id === attributeId;
   if (trimmed.startsWith('.')) {
     return cssClass.split(/\s+/).includes(trimmed.slice(1));
   }

@@ -202,6 +202,23 @@ describe('generateWebViewSelectors priority order', () => {
     ]);
   });
 
+  it('suggests an id that is not a CSS identifier as an attribute selector the playground resolves (PILOT-666)', () => {
+    for (const id of [':r1:', '1st', 'order.total']) {
+      const node = makeNode('node', { webview: 'true', 'webview-tag': 'div', 'webview-id': id });
+      const idSelector = generateSelectors(node).find((s) => s.label === 'CSS #id')!;
+      expect(idSelector.code).toBe(`webview.locator("[id=\\"${id}\\"]")`);
+      const root = makeNode('node', {}, [node]);
+      expect(findMatchingNodes([root], parseSelectorString(idSelector.code)!)).toEqual([node]);
+      // The #id form the runtime rejects or misreads matches nothing here either.
+      expect(findMatchingNodes([root], parseSelectorString(`webview.locator("#${id}")`)!)).toEqual([]);
+    }
+  });
+
+  it('suggests tag.class only for a class that is a CSS identifier (PILOT-666)', () => {
+    const node = makeNode('node', { webview: 'true', 'webview-tag': 'div', 'webview-class': 'md:flex card' });
+    expect(generateSelectors(node).some((s) => s.label === 'CSS tag.class')).toBe(false);
+  });
+
   it('Label comes before Text for webview elements', () => {
     const node = makeNode('node', {
       webview: 'true',

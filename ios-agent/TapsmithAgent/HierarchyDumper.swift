@@ -86,6 +86,10 @@ class HierarchyDumper {
         xml += " identifier=\"\(identifier)\""
         xml += " value=\"\(value)\""
         xml += " placeholderValue=\"\(placeholder)\""
+        // The title names an input for getByLabel, like the label (PILOT-666).
+        if !title.isEmpty {
+            xml += " title=\"\(escapeXML(title))\""
+        }
         xml += " type=\"\(typeName)\""
         if !role.isEmpty {
             xml += " tapsmith-role=\"\(escapeXML(role))\""
@@ -165,6 +169,9 @@ class HierarchyDumper {
         xml += " identifier=\"\(identifier)\""
         xml += " value=\"\(value)\""
         xml += " placeholderValue=\"\(placeholder)\""
+        if !element.title.isEmpty {
+            xml += " title=\"\(escapeXML(element.title))\""
+        }
         xml += " type=\"\(typeName)\""
         if !role.isEmpty {
             xml += " tapsmith-role=\"\(escapeXML(role))\""

@@ -2,6 +2,7 @@ import type { HierarchyNode } from './hierarchy-utils.js';
 import { getNodeRole, isLabelField, WEBVIEW_TAG_TO_ROLE, ANDROID_CLASS_TO_ROLE, IOS_TYPE_TO_ROLE } from './hierarchy-utils.js';
 import { unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
+import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
 
 // ─── Attribute Helpers ───
 
@@ -200,7 +201,7 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
   // 7. CSS id selector
   if (id) {
     selectors.push({
-      code: `webview.locator("#${escapeJsString(id)}")`,
+      code: `webview.locator("${escapeJsString(cssIdSelector(id))}")`,
       label: 'CSS #id',
       priority: 7,
     });
@@ -209,7 +210,7 @@ function generateWebViewSelectors(node: HierarchyNode): GeneratedSelector[] {
   // 8. CSS tag selector (fallback)
   if (tag) {
     const cssClass = (node.attributes.get('webview-class') ?? '').split(/\s+/).filter(Boolean)[0];
-    if (cssClass) {
+    if (cssClass && isCssIdentifier(cssClass)) {
       selectors.push({
         code: `webview.locator("${tag}.${escapeJsString(cssClass)}")`,
         label: 'CSS tag.class',

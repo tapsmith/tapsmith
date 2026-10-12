@@ -8,6 +8,7 @@ import {
 } from './element-handle.js';
 import { WebViewLocator } from './webview-locator.js';
 import { escapeJsString } from './js-string-escape.js';
+import { cssIdSelector } from './css-selector.js';
 import type { TraceCollector } from './trace/trace-collector.js';
 import { extractStack } from './trace/trace-collector.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
@@ -65,16 +66,6 @@ export interface WebViewLocatorProbe {
    * caller passed `valueJs` (assertion value ticks). `found: false` when
    * there is no target at the locator's position yet. */
   target?: { found: boolean; value?: unknown }
-}
-
-/**
- * A CSS selector for an element id: `#id` when the id is a plain CSS
- * identifier, else an attribute selector, which takes any id (`#1st` and
- * `#order.total` are not the selectors they look like).
- */
-function cssIdSelector(id: string): string {
-  if (/^-?[A-Za-z_][\w-]*$/.test(id)) return `#${id}`;
-  return `[id="${id.replace(/[\\"]/g, '\\$&').replace(/\n/g, '\\a ')}"]`;
 }
 
 /** Best-effort unambiguous WebView locator suggestion for one DOM match. */
