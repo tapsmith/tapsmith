@@ -140,22 +140,44 @@ function getterOptions(
 }
 
 /**
- * Why a locator string with an options object is refused, naming the option
- * (PILOT-655), or null when its options are fine or it has none. The MCP
- * tools put this in their "Invalid locator" error so a caller knows what to
- * drop, e.g. Playwright's `level` or `includeHidden`.
+ * Why a locator string is refused, or null when it parses or is not a locator
+ * at all (the callers then show the generic "use device.getBy…" message). The
+ * MCP tools put this in their "Invalid locator" error and the Locator
+ * Playground shows it, so a caller knows what to change:
+ *
+ * - an option the getter does not take, e.g. Playwright's `level` or
+ *   `includeHidden` (PILOT-655);
+ * - a call chained after the getter — a scoped getter, `filter()`, `and()`,
+ *   `or()`, an action — which the parser cannot apply and used to drop, so the
+ *   locator matched more than was asked for (PILOT-660).
  */
-export function locatorOptionsError(input: string): string | null {
-  const chain = parseChain(input.trim());
+export function locatorStringError(input: string): string | null {
+  const chain = parseChain(stripStatementEnd(input));
   if (!chain) return null;
-  const device = chain.base.match(DEVICE_RE);
-  const webview = device ? null : chain.base.match(WEBVIEW_GETBY_RE);
-  const match = device ?? webview;
-  // A getter Tapsmith does not have (Playwright's getByAltText, getByTitle)
-  // is the problem, not its options: leave it to the generic message.
-  if (!match || !KNOWN_GETTERS[device ? 'device' : 'webview'].has(match[1])) return null;
-  const options = getterOptions(device ? 'device' : 'webview', match[1], match[6]);
-  return 'error' in options ? options.error : null;
+  const call = matchBaseCall(chain.base);
+  if (!call) return null;
+  if (call.kind === 'device-getby' || call.kind === 'wv-getby') {
+    const receiver = call.kind === 'device-getby' ? 'device' : 'webview';
+    // A getter Tapsmith does not have (Playwright's getByAltText, getByTitle)
+    // is the problem, not its options or what follows it: leave it to the
+    // generic message.
+    if (!KNOWN_GETTERS[receiver].has(call.match[1])) return null;
+    const options = getterOptions(receiver, call.match[1], call.match[6]);
+    if ('error' in options) return options.error;
+  }
+  return call.rest ? trailingTextError(call.rest) : null;
+}
+
+/** The error for text left after the locator's call: the chained call it starts, by name. */
+function trailingTextError(rest: string): string {
+  // Skip positional steps written before the chained call — the call is what
+  // is unsupported, not `.first()`.
+  const unsupported = rest.replace(/^(?:\s*\.(?:first|last)\(\s*\)|\s*\.nth\(\s*-?\d+\s*\))*\s*/, '');
+  const method = unsupported.match(/^\.\s*([A-Za-z_$][\w$]*)\s*\(/);
+  if (method) {
+    return `unsupported chained call .${method[1]}() — a locator string here is one getter, optionally followed by .first(), .last() or .nth(n)`;
+  }
+  return `unexpected text after the locator: ${JSON.stringify(rest)}`;
 }
 
 /** The getBy* methods each receiver has (device.ts / webview-handle.ts). */
@@ -181,6 +203,41 @@ const DEVICE_LOCATOR_RE = /^device\.locator\(\s*\{\s*(className|id)\s*:\s*(?:"((
 // Matches: text("value"), contentDesc("value") — legacy/shorthand format
 // Groups: 1 = type, 2 = dq value, 3 = sq value
 const SHORT_RE = /^(\w+)\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*\)/;
+
+/** The forms a locator string's call can take, in the order they are tried. */
+const BASE_CALLS = [
+  ['wv-locator', WEBVIEW_LOCATOR_RE],
+  ['wv-getby', WEBVIEW_GETBY_RE],
+  ['device-locator', DEVICE_LOCATOR_RE],
+  ['device-getby', DEVICE_RE],
+  ['short', SHORT_RE],
+] as const;
+
+interface BaseCall {
+  kind: typeof BASE_CALLS[number][0]
+  match: RegExpMatchArray
+  /** Whatever follows the call, trimmed — a chained call the parser cannot apply. */
+  rest: string
+}
+
+/**
+ * The call a locator string (without its trailing positional chain) starts
+ * with. The patterns are anchored only at the start, so `rest` carries
+ * anything after the call: the parser must refuse a non-empty one rather than
+ * evaluate the call alone (PILOT-660).
+ */
+function matchBaseCall(base: string): BaseCall | null {
+  for (const [kind, re] of BASE_CALLS) {
+    const match = base.match(re);
+    if (match) return { kind, match, rest: base.slice(match[0].length).trim() };
+  }
+  return null;
+}
+
+/** A locator pasted as a statement: drop its trailing semicolons. */
+function stripStatementEnd(input: string): string {
+  return input.trim().replace(/(?:\s*;)+$/, '');
+}
 
 // Matches trailing .first(), .last(), .nth(N) — N may be negative
 // (the runtime's .nth() counts from the end for negative indices)
@@ -213,74 +270,73 @@ function parseChain(input: string): { base: string; index?: number | 'first' | '
 }
 
 export function parseSelectorString(input: string): ParsedSelector | null {
-  const trimmed = input.trim();
+  const trimmed = stripStatementEnd(input);
   if (!trimmed) return null;
 
   const chain = parseChain(trimmed);
   if (!chain) return null;
   const { base, index } = chain;
 
+  const call = matchBaseCall(base);
+  // A call chained after the getter (`.getByText()`, `.filter()`, …) cannot be
+  // applied here; evaluating the getter alone would match more than the
+  // locator asks for (PILOT-660). locatorStringError names it.
+  if (!call || call.rest) return null;
+  const { match } = call;
+
   // Parsed values are UNESCAPED (raw) — they compare directly against raw
   // node attribute values; emitters re-escape when generating code strings.
   const pick = (dq: string | undefined, sq: string | undefined): string =>
     unescapeJsString(dq !== undefined ? dq : (sq ?? ''));
 
-  // WebView locator: webview.locator("#email")
-  const locatorMatch = base.match(WEBVIEW_LOCATOR_RE);
-  if (locatorMatch) {
-    return { type: 'wv-locator', value: pick(locatorMatch[1], locatorMatch[2]), index };
-  }
+  switch (call.kind) {
+    // WebView locator: webview.locator("#email")
+    case 'wv-locator':
+      return { type: 'wv-locator', value: pick(match[1], match[2]), index };
 
-  // WebView getBy*: webview.getByRole("button", { name: "Login" })
-  const wvMatch = base.match(WEBVIEW_GETBY_RE);
-  if (wvMatch) {
-    const method = wvMatch[1];
-    if (wvMatch[4] !== undefined) return null;
-    const value = pick(wvMatch[2], wvMatch[3]);
-    const options = getterOptions('webview', method, wvMatch[6]);
-    if ('error' in options) return null;
-    const { name, nameRegex, exact } = options;
-    if (nameRegex !== undefined) return null;
-    const sel = mapWebViewMethod(method, value, name, exact);
-    if (sel) sel.index = index;
-    return sel;
-  }
-
-  // Native device.locator({ className/id: "..." })
-  const deviceLocatorMatch = base.match(DEVICE_LOCATOR_RE);
-  if (deviceLocatorMatch) {
-    const prop = deviceLocatorMatch[1];
-    const value = pick(deviceLocatorMatch[2], deviceLocatorMatch[3]);
-    const type = prop === 'className' ? 'className' : 'id';
-    return { type, value, index };
-  }
-
-  // Native device getBy*
-  const deviceMatch = base.match(DEVICE_RE);
-  if (deviceMatch) {
-    const method = deviceMatch[1];
-    const options = getterOptions('device', method, deviceMatch[6]);
-    if ('error' in options) return null;
-    const { name, nameRegex, exact, states } = options;
-    if (nameRegex === null) return null; // a malformed RegExp
-    let sel: ParsedSelector | null;
-    if (deviceMatch[4] !== undefined) {
-      const regex = parseRegex(deviceMatch[4], deviceMatch[5]);
-      sel = regex ? mapDeviceRegexMethod(method, regex) : null;
-    } else {
-      sel = mapDeviceMethod(method, pick(deviceMatch[2], deviceMatch[3]), name, exact, nameRegex);
+    // WebView getBy*: webview.getByRole("button", { name: "Login" })
+    case 'wv-getby': {
+      const method = match[1];
+      if (match[4] !== undefined) return null;
+      const value = pick(match[2], match[3]);
+      const options = getterOptions('webview', method, match[6]);
+      if ('error' in options) return null;
+      const { name, nameRegex, exact } = options;
+      if (nameRegex !== undefined) return null;
+      const sel = mapWebViewMethod(method, value, name, exact);
+      if (sel) sel.index = index;
+      return sel;
     }
-    if (sel?.type === 'role') Object.assign(sel, states);
-    if (sel) sel.index = index;
-    return sel;
-  }
 
-  const shortMatch = base.match(SHORT_RE);
-  if (shortMatch) {
-    return { type: shortMatch[1], value: pick(shortMatch[2], shortMatch[3]), index };
-  }
+    // Native device.locator({ className/id: "..." })
+    case 'device-locator': {
+      const type = match[1] === 'className' ? 'className' : 'id';
+      return { type, value: pick(match[2], match[3]), index };
+    }
 
-  return null;
+    // Native device getBy*
+    case 'device-getby': {
+      const method = match[1];
+      const options = getterOptions('device', method, match[6]);
+      if ('error' in options) return null;
+      const { name, nameRegex, exact, states } = options;
+      if (nameRegex === null) return null; // a malformed RegExp
+      let sel: ParsedSelector | null;
+      if (match[4] !== undefined) {
+        const regex = parseRegex(match[4], match[5]);
+        sel = regex ? mapDeviceRegexMethod(method, regex) : null;
+      } else {
+        sel = mapDeviceMethod(method, pick(match[2], match[3]), name, exact, nameRegex);
+      }
+      if (sel?.type === 'role') Object.assign(sel, states);
+      if (sel) sel.index = index;
+      return sel;
+    }
+
+    // Legacy/shorthand: text("value"), contentDesc("value")
+    case 'short':
+      return { type: match[1], value: pick(match[2], match[3]), index };
+  }
 }
 
 function mapDeviceMethod(

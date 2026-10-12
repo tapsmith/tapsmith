@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceClientFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
 import { parseHierarchyXml } from '../../trace-viewer/components/hierarchy-utils.js';
-import { parseSelectorString, findMatchingNodes, applyPositionalIndex, locatorOptionsError } from '../../trace-viewer/components/selector-matching.js';
+import { parseSelectorString, findMatchingNodes, applyPositionalIndex, locatorStringError } from '../../trace-viewer/components/selector-matching.js';
 import { getNodeRole } from '../../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorToInternal, formatBounds } from '../locator-helper.js';
 import { collapseSameTargetDuplicates } from '../../element-handle.js';
@@ -31,12 +31,12 @@ export function registerTestLocatorTool(server: McpServer, dispatcher?: TestDisp
 
       const parsed = parseSelectorString(locator);
       if (!parsed) {
-        const optionsError = locatorOptionsError(locator);
+        const locatorError = locatorStringError(locator);
         return {
           content: [{
             type: 'text' as const,
-            text: optionsError
-              ? `Invalid locator: "${locator}": ${optionsError}.`
+            text: locatorError
+              ? `Invalid locator: "${locator}": ${locatorError}.`
               : `Invalid locator: "${locator}". Use device.getByRole(), getByText(), getByDescription(), getByPlaceholder(), or getByTestId().`,
           }],
           isError: true,

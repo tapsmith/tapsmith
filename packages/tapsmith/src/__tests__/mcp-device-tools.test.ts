@@ -340,6 +340,16 @@ describe('tapsmith_tap', () => {
     expect(elementId).toBe('el-2');
   });
 
+  it('refuses a chained locator rather than tapping the unscoped getter (PILOT-660)', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Save' })] });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Save").filter({ hasText: "draft" })' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('unsupported chained call .filter()');
+    expect(daemon.findElements).not.toHaveBeenCalled();
+    expect(daemon.tap).not.toHaveBeenCalled();
+  });
+
   it('surfaces a daemon failure rather than reporting OK', async () => {
     hoisted.client = makeDaemon({
       elements: [makeElement({ text: 'Sign in' })],
@@ -706,6 +716,17 @@ describe('tapsmith_test_locator', () => {
     const res = await callTool('tapsmith_test_locator', { locator: 'device.getByRole("heading", { name: "A", level: 2 })' });
     expect(res.isError).toBe(true);
     expect(text(res)).toBe('Invalid locator: "device.getByRole("heading", { name: "A", level: 2 })": unsupported option "level".');
+    expect(daemon.findElements).not.toHaveBeenCalled();
+  });
+
+  it('refuses a chained call instead of counting the unscoped getter (PILOT-660)', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ role: 'list' }), makeElement({ elementId: 'el-2', role: 'list' })] });
+    hoisted.client = daemon.client;
+    const locator = 'device.getByRole("list").getByText("x")';
+    const res = await callTool('tapsmith_test_locator', { locator });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toBe(`Invalid locator: "${locator}": unsupported chained call .getByText() — `
+      + 'a locator string here is one getter, optionally followed by .first(), .last() or .nth(n).');
     expect(daemon.findElements).not.toHaveBeenCalled();
   });
 

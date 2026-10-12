@@ -3,7 +3,7 @@ import { X } from 'lucide-preact';
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
 import { parseHierarchyXml } from './hierarchy-utils.js';
 import { generateSelectors, type GeneratedSelector } from './selector-generation.js';
-import { parseSelectorString, findMatchingNodes, getNodeBounds, parsedSelectorError, locatorOptionsError } from './selector-matching.js';
+import { parseSelectorString, findMatchingNodes, getNodeBounds, parsedSelectorError, locatorStringError } from './selector-matching.js';
 import { disambiguateSelectors } from './selector-uniqueness.js';
 
 // ─── Locator Tab (lives in detail tabs) ───
@@ -116,11 +116,12 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
 
   // A locator the test would throw on when it is built (an unknown getByRole
   // role, PILOT-556), or one with an option the playground cannot apply
-  // (PILOT-655): say why instead of counting matches.
+  // (PILOT-655), or one with a chained call it cannot apply (PILOT-660): say
+  // why instead of counting matches.
   const selectorError = useMemo(() => {
     if (!selector.trim()) return null;
     const parsed = parseSelectorString(selector);
-    return parsed ? parsedSelectorError(parsed) : locatorOptionsError(selector);
+    return parsed ? parsedSelectorError(parsed) : locatorStringError(selector);
   }, [selector]);
 
   const matchCount = useMemo(() => {

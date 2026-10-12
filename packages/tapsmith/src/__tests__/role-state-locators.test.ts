@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
-import { parseSelectorString, findMatchingNodes, locatorOptionsError } from '../trace-viewer/components/selector-matching.js';
+import { parseSelectorString, findMatchingNodes, locatorStringError } from '../trace-viewer/components/selector-matching.js';
 import { parseSelectorToInternal, resolveActionTarget } from '../mcp/locator-helper.js';
 import { selectorToProto } from '../selectors.js';
 import type { Selector } from '../selectors.js';
@@ -108,15 +108,15 @@ describe('parseSelectorToInternal: states reach the runtime selector', () => {
   });
 });
 
-describe('locatorOptionsError: why a locator\'s options are refused', () => {
+describe('locatorStringError: why a locator\'s options are refused', () => {
   it('names an unknown option, a non-boolean value and an option the getter does not take', () => {
-    expect(locatorOptionsError('device.getByRole("button", { includeHidden: true })')).toBe('unsupported option "includeHidden"');
-    expect(locatorOptionsError('device.getByRole("button", { selected: "yes" })')).toBe('option "selected" must be true or false, got "yes"');
-    expect(locatorOptionsError('device.getByText("A", { selected: true }).first()'))
+    expect(locatorStringError('device.getByRole("button", { includeHidden: true })')).toBe('unsupported option "includeHidden"');
+    expect(locatorStringError('device.getByRole("button", { selected: "yes" })')).toBe('option "selected" must be true or false, got "yes"');
+    expect(locatorStringError('device.getByText("A", { selected: true }).first()'))
       .toBe('device.getByText() has no option "selected" (it takes exact)');
-    expect(locatorOptionsError('device.getByLabel("A", { exact: true })'))
+    expect(locatorStringError('device.getByLabel("A", { exact: true })'))
       .toBe('device.getByLabel() has no option "exact" (it takes no options)');
-    expect(locatorOptionsError('webview.getByRole("tab", { name: "A", selected: true })'))
+    expect(locatorStringError('webview.getByRole("tab", { name: "A", selected: true })'))
       .toBe('webview.getByRole() has no option "selected" (it takes name)');
   });
 
@@ -126,17 +126,17 @@ describe('locatorOptionsError: why a locator\'s options are refused', () => {
       'device.getByRole("button", { name: "A", name: "B" })',
       'device.getByRole("button", { name : "A" })',
     ]) {
-      expect(locatorOptionsError(input), input).toBe('cannot read the name option (use one quoted string or a RegExp literal)');
+      expect(locatorStringError(input), input).toBe('cannot read the name option (use one quoted string or a RegExp literal)');
     }
   });
 
   it('is null for valid options and for locators without any', () => {
-    expect(locatorOptionsError('device.getByRole("tab", { name: "A", selected: true })')).toBeNull();
-    expect(locatorOptionsError('device.getByText("A")')).toBeNull();
-    expect(locatorOptionsError('not a locator')).toBeNull();
+    expect(locatorStringError('device.getByRole("tab", { name: "A", selected: true })')).toBeNull();
+    expect(locatorStringError('device.getByText("A")')).toBeNull();
+    expect(locatorStringError('not a locator')).toBeNull();
     // A getter Tapsmith does not have is the problem, not its options.
-    expect(locatorOptionsError('device.getByAltText("Logo", { exact: true })')).toBeNull();
-    expect(locatorOptionsError('webview.getByTitle("Help", { exact: true })')).toBeNull();
+    expect(locatorStringError('device.getByAltText("Logo", { exact: true })')).toBeNull();
+    expect(locatorStringError('webview.getByTitle("Help", { exact: true })')).toBeNull();
   });
 
   it('acts with the state filter, so a tap cannot land on the unselected card', async () => {

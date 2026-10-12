@@ -48,7 +48,7 @@ The pick button (crosshair icon) in the mirror header turns the mirror into an e
 
 - **Hover** highlights the element under the cursor.
 - **Click** selects the element and opens the **Locator** tab with suggested locators (role, text, test ID, ...). Suggestions are checked for uniqueness against the device's current UI, and match highlights draw directly on the mirror.
-- Editing the locator in the Locator tab updates the match highlights live, so you can refine a locator against the real app state without running a test.
+- Editing the locator in the Locator tab updates the match highlights live, so you can refine a locator against the real app state without running a test. The tab takes one getter, optionally followed by `.first()`, `.last()` or `.nth(n)`; a chained call such as `.getByText()` inside another locator, `.filter()`, `.and()` or `.or()` shows an error naming the call instead of a match count.
 
 ![Pick mode in the live device mirror: the picked element is highlighted on the device and the Locator tab lists suggested locators with match counts](images/ui-mode-pick-locator.png)
 
