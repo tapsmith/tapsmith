@@ -231,24 +231,13 @@ export const IOS_OTHER_ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
 };
 
 /**
- * RN's old-architecture descriptions for its other trait-less iOS roles —
- * the agent's `RoleMapping.legacyRoleDescriptions` (PILOT-664). They only
- * confirm their own role: on the new architecture the same words are the
- * app's own value text.
+ * React Native's other iOS generic-view roles, which only a named query finds
+ * — the agent's `RoleMapping.undescribedOtherRoles` (PILOT-664). RN's new
+ * architecture publishes no description for them.
  */
-export const IOS_LEGACY_ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
-  menu: 'menu',
-  menubar: 'menu bar',
-  menuitem: 'menu item',
-  radiogroup: 'radio group',
-  scrollbar: 'scroll bar',
-  spinbutton: 'spin button',
-  tablist: 'tab list',
-  timer: 'timer',
-};
-
-/** iOS generic-view roles with no RN description at all — `RoleMapping.undescribedOtherRoles`. */
-export const IOS_UNDESCRIBED_OTHER_ROLES: ReadonlySet<string> = new Set(['summary']);
+export const IOS_UNDESCRIBED_OTHER_ROLES: ReadonlySet<string> = new Set([
+  'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer',
+]);
 
 const KNOWN = new Set(NATIVE_ROLES);
 
@@ -299,11 +288,8 @@ export function iosGenericViewHasRole(
   view: { value: string | undefined; traitRole: string; named: boolean },
 ): boolean | undefined {
   const own = IOS_OTHER_ROLE_DESCRIPTIONS[role];
-  const legacy = IOS_LEGACY_ROLE_DESCRIPTIONS[role];
-  if (own === undefined && legacy === undefined && !IOS_UNDESCRIBED_OTHER_ROLES.has(role)) return undefined;
+  if (own === undefined && !IOS_UNDESCRIBED_OTHER_ROLES.has(role)) return undefined;
   const lead = view.value === undefined ? undefined : view.value.split(',')[0]!.trim().toLowerCase();
   if (lead !== undefined && Object.values(IOS_OTHER_ROLE_DESCRIPTIONS).includes(lead)) return lead === own;
-  const untraited = view.traitRole === '';
-  if (legacy !== undefined && lead === legacy) return untraited;
-  return view.named && untraited;
+  return view.named && view.traitRole === '';
 }

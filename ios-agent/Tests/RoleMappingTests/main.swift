@@ -182,11 +182,10 @@ for role in rnGenericRoles {
           matches(role, .other, value: "checkbox, checked", named: true), false)
     check("a \(role) query doesn't match a native button", matches(role, .button, named: true), false)
 }
-// RN's old architecture leads the value with the role's description.
-check("a \"menu item\"-described view is a menuitem", matches("menuitem", .other, value: "menu item"), true)
-check("a \"tab list\"-described view is a tablist", matches("tablist", .other, value: "tab list"), true)
-check("a \"timer\"-described view is a timer", matches("timer", .other, value: "timer, 00:42"), true)
-check("a \"menu item\"-described view is not a menu", matches("menu", .other, value: "menu item"), false)
+// The new architecture publishes no description for them, so a value that
+// leads with the role's word is the app's own text and proves nothing.
+check("an unnamed timer query doesn't match a view valued \"Timer\"", matches("timer", .other, value: "Timer"), false)
+check("an unnamed menu query doesn't match a view valued \"Menu\"", matches("menu", .other, value: "Menu"), false)
 check("a described checkbox is not a menu item, even by name",
       matches("menuitem", .other, value: "checkbox, checked", named: true), false)
 // On the new architecture those words are the app's own value text, so they

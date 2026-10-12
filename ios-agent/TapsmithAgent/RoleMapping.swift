@@ -51,7 +51,7 @@ enum RoleMapping {
         "combobox": [.other],
         // React Native's other description-only roles (PILOT-664): the
         // Android agent reads them from the role description; here they are
-        // generic views like alert and combobox.
+        // generic views a named query finds (`undescribedOtherRoles`).
         "menu": [.other],
         "menubar": [.other],
         "menuitem": [.other],
@@ -195,34 +195,20 @@ enum RoleMapping {
         "combobox": "combo box",
     ]
 
-    /// The descriptions RN's old architecture leads a generic view's value
-    /// with for its other trait-less roles (PILOT-664). Unlike
-    /// `otherRoleDescriptions` they only confirm their own role: the new
-    /// architecture publishes none of them, so there "Menu" or "Timer" is the
-    /// app's own value text and must not stop a named query for another role
-    /// from finding the view.
-    static let legacyRoleDescriptions: [String: String] = [
-        "menu": "menu",
-        "menubar": "menu bar",
-        "menuitem": "menu item",
-        "radiogroup": "radio group",
-        "scrollbar": "scroll bar",
-        "spinbutton": "spin button",
-        "tablist": "tab list",
-        "timer": "timer",
+    /// React Native's other generic-view roles (PILOT-664). The new
+    /// architecture — the only one from RN 0.82 — publishes no description
+    /// for them (summary sets a trait `resolveRole` doesn't read), so only a
+    /// named query finds one. The old architecture's descriptions ("menu
+    /// item") aren't read: on the new one the same words are the app's own
+    /// value text.
+    static let undescribedOtherRoles: Set<String> = [
+        "menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer",
     ]
-
-    /// Generic-view roles React Native describes in neither architecture:
-    /// `accessibilityRole="summary"` sets a trait `resolveRole` doesn't read,
-    /// so only a named query finds one (PILOT-664).
-    static let undescribedOtherRoles: Set<String> = ["summary"]
 
     /// Whether `role` (canonical) is matched on a generic view by its React
     /// Native description or, failing that, by a named query.
     private static func isGenericViewRole(_ canonical: String) -> Bool {
-        otherRoleDescriptions[canonical] != nil
-            || legacyRoleDescriptions[canonical] != nil
-            || undescribedOtherRoles.contains(canonical)
+        otherRoleDescriptions[canonical] != nil || undescribedOtherRoles.contains(canonical)
     }
 
     /// The role names a selector may use for the same role, normalized to
@@ -243,9 +229,9 @@ enum RoleMapping {
     ///   only when nothing marks it as another role (another of these
     ///   descriptions, or a trait `resolveRole` reads). RN's new architecture publishes nothing
     ///   for alert and combobox, so a name is the only way to find those.
-    /// - RN's other generic-view roles (menuitem, tablist, timer, …): the same,
-    ///   except their old-architecture description (`legacyRoleDescriptions`)
-    ///   only confirms its own role, and only on a view with no such trait.
+    /// - RN's other generic-view roles (menuitem, tablist, timer, …): their
+    ///   native type, if any, or — having no description — a named query
+    ///   on a generic view, on the same terms (`undescribedOtherRoles`).
     /// - every other role: its element types, or its trait.
     static func matches(
         role: String,
@@ -262,14 +248,7 @@ enum RoleMapping {
         if isGenericViewRole(canonical) {
             if elementType != .other { return types.contains(elementType) }
             if let described = describedRole(in: value) { return described == otherRoleDescriptions[canonical] }
-            let untraited = resolveRole(for: .other, traits: traits).isEmpty
-            // An old-architecture description confirms its own role — unless
-            // a trait marks another one: RN gives these roles no trait, so a
-            // button valued "Menu" is the app's text, not a menu.
-            if let legacy = legacyRoleDescriptions[canonical], leadingValuePart(value) == legacy {
-                return untraited
-            }
-            return hasNameFilter && untraited
+            return hasNameFilter && resolveRole(for: .other, traits: traits).isEmpty
         }
         return types.contains(elementType) || matchesTrait(role: canonical, traits: traits)
     }
@@ -279,15 +258,9 @@ enum RoleMapping {
     /// Only the first part counts: the states and the app's own value text
     /// follow it, and a value text of "Alert" doesn't make a radio an alert.
     private static func describedRole(in value: String?) -> String? {
-        guard let part = leadingValuePart(value) else { return nil }
-        return otherRoleDescriptions.values.contains(part) ? part : nil
-    }
-
-    /// The first comma-separated part of an accessibility value, trimmed and
-    /// lowercased — where React Native puts a role description — or nil.
-    private static func leadingValuePart(_ value: String?) -> String? {
         guard let first = value?.split(separator: ",", omittingEmptySubsequences: false).first else { return nil }
-        return first.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let part = first.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return otherRoleDescriptions.values.contains(part) ? part : nil
     }
 
     /// Whether a role-only match must be found again as a live element by its
