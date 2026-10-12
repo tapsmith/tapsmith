@@ -19,12 +19,12 @@
     "sync-promo": "node scripts/sync-promo.mjs"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.39.2",
+    "@astrojs/starlight": "^0.42.6",
     "@tailwindcss/vite": "^4.3.0",
-    "astro": "^6.3.1",
+    "astro": "^7.3.8",
     "sharp": "^0.35.0",
-    "starlight-image-zoom": "^0.14.2",
-    "starlight-links-validator": "^0.24.0",
+    "starlight-image-zoom": "^0.16.1",
+    "starlight-links-validator": "^0.27.0",
     "tailwindcss": "^4.3.0"
   },
   "overrides": {
@@ -33,7 +33,7 @@
     }
   },
   "devDependencies": {
-    "@astrojs/check": "^0.9.9",
+    "@astrojs/check": "^0.9.10",
     "eslint": "^10.4.0",
     "github-slugger": "^2.0.0",
     "knip": "^6.14.1",
@@ -41,6 +41,6 @@
     "prettier-plugin-astro": "^0.14.1",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.4",
-    "vite": "^7.3.3"
+    "vite": "^8.3.4"
   }
 }

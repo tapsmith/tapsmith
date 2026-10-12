@@ -105,7 +105,7 @@ sign-offs with individual remediation commits. Repository setup is in `.github/d
 
 Dependency updates are handled by **Renovate** (`.github/renovate.json5`, the comment at the top
 explains the policy). It opens grouped PRs on Monday mornings and merges non-major updates itself
-once every check is green. Majors, runtime dependencies of the published SDK, and Expo SDK upgrades
+once every check is green. Majors get one PR per area; dev-only ones (npm devDependencies, website, tools) also merge on green. Majors of shipped code and GitHub Actions, runtime dependencies of the published SDK, and Expo SDK upgrades
 of `test-app` (done by hand with `npx expo install --fix`) wait for a human. The "Dependency
 Dashboard" issue lists everything pending. Dependabot is used only for alerts, which Renovate turns
 into immediate fix PRs; Dependabot security-update PRs are deliberately left off so the two don't
