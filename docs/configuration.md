@@ -415,7 +415,10 @@ Tapsmith's launch arguments (`-avd`, an explicit `-port` and `-read-only`). An
 emulator you start from Android Studio, or from the command line without
 `-read-only`, is left running, even if it is unhealthy or
 sits on a port an earlier Tapsmith emulator used. An unhealthy one is skipped, and
-Tapsmith launches its own emulator on a free port.
+Tapsmith launches its own emulator on a free port. Tapsmith also never stops an
+emulator when it can't ask adb about it (adb isn't on `PATH`, or `adb devices`
+fails or times out): it leaves the emulator running, since another run may be
+using it.
 
 If you want the opposite behavior, set `deviceStrategy: "prefer-connected"` to
 let Tapsmith reuse unrelated healthy connected devices first even when `avd` is
