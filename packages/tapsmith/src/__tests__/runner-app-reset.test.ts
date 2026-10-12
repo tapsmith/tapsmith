@@ -416,6 +416,54 @@ describe('runner app reset (declared isolation)', () => {
       }
     });
 
+    it('restores a describe\'s own appState on retry even when a sibling\'s identical restore made its entry reset unnecessary', async () => {
+      const d = makeDevice();
+      let attempts = 0;
+      pushContext();
+      tapsmithDescribe('first authenticated', () => {
+        tapsmithTest.use({ appState: './auth.tar.gz' });
+        tapsmithTest('a', async () => {});
+      });
+      tapsmithDescribe('second authenticated', () => {
+        tapsmithTest.use({ appState: './auth.tar.gz' });
+        tapsmithTest('flaky', async () => { attempts++; if (attempts === 1) throw new Error('boom'); });
+      });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['passed', 'passed']);
+      expect(resetCalls(d)).toEqual([
+        'resetApp:clear', 'restoreAppState', 'restartApp', // file entry, first describe
+        // the second describe needed no entry reset; its retry starts as a
+        // fresh worker would: the file reset, then its own restore
+        'resetApp:clear', 'restoreAppState', 'restartApp',
+      ]);
+    });
+
+    it('does not reset twice for a describe that declares its parent\'s policy again', async () => {
+      const d = makeDevice();
+      let attempts = 0;
+      pushContext();
+      tapsmithDescribe('authenticated', () => {
+        tapsmithTest.use({ appState: './auth.tar.gz' });
+        tapsmithTest('a', async () => {});
+      });
+      tapsmithDescribe('back to clear', () => {
+        // what the file already resolves to (auto → clear): no policy change
+        tapsmithTest.use({ appReset: 'clear' });
+        tapsmithTest('flaky', async () => { attempts++; if (attempts === 1) throw new Error('boom'); });
+      });
+      const ctx = popContext();
+
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(resetCalls(d)).toEqual([
+        'resetApp:clear', 'restoreAppState', 'restartApp', 'resetApp:clear',
+        'resetApp:clear', // retry: one cold reset, not one per scope
+      ]);
+    });
+
     it('appReset: none opts out of isolation, so a retry re-runs no setup', async () => {
       const d = makeDevice();
       const order: string[] = [];

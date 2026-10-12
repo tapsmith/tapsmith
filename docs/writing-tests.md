@@ -197,7 +197,7 @@ With `retries` set, a failed test is retried from the state its first attempt st
 - **Per-test scope.** The test's own reset runs before every attempt, delivered cold on a retry.
 - **Exceptions.** A test whose own scope has `appReset: "none"`, and a test in a [serial group](api-reference.md#testdescribeserialname-fn--testdescribeserialonlyname-fn), retry in place, without a reset or a replay of the setup in their trace. A serial group's later tests depend on the state its earlier tests built, which a reset would wipe.
 
-The retry's trace shows its own **APP RESET** and **BEFORE ALL** sections, so the reset you see is the one that ran before that attempt. Worker-scoped fixtures are set up once per file and are not set up again for a retry.
+A retry's trace shows only what ran before that attempt: under per-file scope, the **APP RESET** and **BEFORE ALL** sections it just ran; under per-test scope, its own reset. A retry in place shows neither, since nothing ran. Worker-scoped fixtures are set up once per file and are not set up again for a retry.
 
 ### Manual resets inside a test
 

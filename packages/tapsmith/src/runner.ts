@@ -2104,9 +2104,18 @@ async function runSuiteContext(
   // What a retry of a test in this scope (or below it) re-runs to start
   // where its first attempt started.
   const retryChain: ScopeRetryStep[] = [...(inherited.retrySetup ?? [])];
-  if (needsScopeReset || ctx.beforeAll.length > 0 || ctx.afterAll.length > 0) {
+  // A fresh worker resets on entering a scope whose policy differs from its
+  // lexical parent's — not, as `needsScopeReset` does, from whatever an
+  // earlier sibling left on the device: a describe that shares a sibling's
+  // `appState` skipped its own entry reset, but its retry must restore it.
+  const freshWorkerReset = canReset && (
+    policy.scope === 'file'
+      ? (isRoot || !appResetPolicyEquals(policy, parentPolicy))
+      : ctx.beforeAll.length > 0
+  );
+  if (freshWorkerReset || ctx.beforeAll.length > 0 || ctx.afterAll.length > 0) {
     retryChain.push({
-      ...(needsScopeReset ? { resetPolicy: policy } : {}),
+      ...(freshWorkerReset ? { resetPolicy: policy } : {}),
       beforeAll: ctx.beforeAll,
       afterAll: ctx.afterAll,
       suiteFixtures,
