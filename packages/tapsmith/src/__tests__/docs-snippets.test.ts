@@ -237,21 +237,36 @@ function bindsName(code: string, name: string): boolean {
 }
 
 /**
- * A config fragment — `trace: { mode: "on", … }` or `appReset: "restart",` —
- * which on its own parses as a labelled statement and checks nothing. Its
- * first code line is `key:` (no sample uses a JavaScript label).
+ * An object-member fragment — `trace: { mode: "on", … }`, a project's
+ * `use: { … }`, a fixture `myFixture: async ({ device }, use) => { … }` — which
+ * on its own parses as a labelled statement and checks nothing. Its first code
+ * line is `key:` (no sample uses a JavaScript label).
  */
-function configFragmentKeyLine(code: string): number | undefined {
+function memberFragmentKeyLine(code: string): number | undefined {
   const lines = code.split('\n');
   const first = lines.findIndex((line) => line.trim() && !/^\s*\/\//.test(line));
   return first >= 0 && /^\s*[A-Za-z_$][\w$]*\??\s*:/.test(lines[first]!) ? first : undefined;
 }
 
+/**
+ * The object a member fragment is checked inside. A function-valued first
+ * member is a fixture: `test.extend({ … })`. Anything else is config, at the
+ * root, in a project, or in a project's `use` — the union accepts a key valid
+ * in any of them, and still reports one valid in none.
+ */
+function fragmentWrapper(code: string, keyLine: number): [string, string] {
+  const firstLine = code.split('\n')[keyLine]!;
+  if (/^\s*[\w$]+\??\s*:\s*(async\b|function\b|\(|[\w$]+\s*=>)/.test(firstLine)) return ['test.extend({', '})'];
+  return [
+    "const __fragment: Partial<import('tapsmith').TapsmithConfig> | Partial<import('tapsmith').ProjectConfig>"
+      + " | NonNullable<import('tapsmith').ProjectConfig['use']> = {",
+    '}',
+  ];
+}
+
 interface Wrapped {
   text: string;
   headerLines: number;
-  /** For a config fragment, the offset (in `text`) of its first key. */
-  fragmentKeyStart?: number;
 }
 
 /** The header every sample gets: its own imports stay, `device` is a `Device`, runner names are typed. */
@@ -269,18 +284,10 @@ function wrap(sample: Sample): Wrapped {
     bindsName(sample.code, 'request') ? '' : 'declare const request: __APIRequestContext;',
     'export {};',
   ];
-  // A config fragment is checked as the inside of `defineConfig({ … })`.
-  const keyLine = configFragmentKeyLine(sample.code);
-  if (keyLine !== undefined) header.push('defineConfig({');
-  const prefix = `${header.join('\n')}\n`;
-  const lines = sample.code.split('\n');
-  return {
-    text: `${prefix}${sample.code}\n${keyLine !== undefined ? '})\n' : ''}`,
-    headerLines: header.length,
-    fragmentKeyStart: keyLine === undefined
-      ? undefined
-      : prefix.length + lines.slice(0, keyLine).join('\n').length + (keyLine > 0 ? 1 : 0) + /^\s*/.exec(lines[keyLine]!)![0].length,
-  };
+  const keyLine = memberFragmentKeyLine(sample.code);
+  const [open, close] = keyLine === undefined ? ['', ''] : fragmentWrapper(sample.code, keyLine);
+  if (open) header.push(open);
+  return { text: `${header.join('\n')}\n${sample.code}\n${close}\n`, headerLines: header.length };
 }
 
 /**
@@ -369,8 +376,6 @@ function typeCheck(samples: Sample[]): Mismatch[] {
       // A fragment of something else shaped like config — a project's `use: {…}`,
       // a fixture definition — is not a root config key: only what is inside it
       // could be checked against the root, so drop the unknown-key error on it.
-      // A misspelled root key gets TS2561 ("did you mean …") and is reported.
-      if (d.start === v.fragmentKeyStart && d.code === 2353) continue;
       // TSX samples are React Native components, checked without React's
       // types: their JSX props and children are not assignable to anything.
       if (v.sample.tsx && (d.code === 2322 || d.code === 2820)) continue;
@@ -474,15 +479,21 @@ describe('docs TypeScript samples match the SDK API', () => {
     expect(typeCheck(samplesIn('t.md', md)).map((m) => [m.line, m.code])).toEqual([[5, 2561]]);
   }, 120_000);
 
-  it('reports a nested typo on a one-line config fragment, but not a non-root first key', () => {
+  it('checks member fragments: config at any level, and fixtures', () => {
     const one = '```ts\ntrace: { mode: "on", networkHost: ["x"] },\n```\n';
     expect(typeCheck(samplesIn('t.md', one)).map((m) => m.code)).toEqual([2561]);
     const use = '```ts\nuse: { platform: "ios" },\n```\n';
     expect(typeCheck(samplesIn('t.md', use))).toEqual([]);
+    const unknown = '```ts\nwebviewTimeout: 60_000,\n```\n';
+    expect(typeCheck(samplesIn('t.md', unknown)).map((m) => m.code)).toEqual([2353]);
+    const nested = '```ts\nuse: { platfrm: "ios" },\n```\n';
+    expect(typeCheck(samplesIn('t.md', nested)).map((m) => m.code)).toEqual([2561]);
+    const fixture = '```ts\nmyFixture: async ({ device }, use) => {\n  await device.frobnicate()\n  await use(1)\n},\n```\n';
+    expect(typeCheck(samplesIn('t.md', fixture)).map((m) => m.code)).toEqual([2339]);
   }, 120_000);
 
   it('reports a misspelled first root key of a config fragment', () => {
-    expect(typeCheck(samplesIn('t.md', '```ts\nappResetScop: "test",\n```\n')).map((m) => m.code)).toEqual([2561]);
+    expect(typeCheck(samplesIn('t.md', '```ts\nappResetScop: "test",\n```\n')).map((m) => m.code)).toEqual([2353]);
   }, 120_000);
 
   it('gives every inline code span a line, including in tables', () => {
