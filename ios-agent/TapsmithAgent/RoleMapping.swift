@@ -248,8 +248,14 @@ enum RoleMapping {
         guard let types = roleToElementTypes[canonical] else { return false }
         if isGenericViewRole(canonical) {
             if elementType != .other { return types.contains(elementType) }
-            if let described = describedRole(in: value) { return described == otherRoleDescriptions[canonical] }
-            return hasNameFilter && resolveRole(for: .other, traits: traits).isEmpty
+            // A trait marks another role even when the value leads with a
+            // description: React Native gives none of these roles a trait,
+            // so a button valued "Menu" is the app's text, not a menu.
+            let untraited = resolveRole(for: .other, traits: traits).isEmpty
+            if let described = describedRole(in: value) {
+                return untraited && described == otherRoleDescriptions[canonical]
+            }
+            return hasNameFilter && untraited
         }
         return types.contains(elementType) || matchesTrait(role: canonical, traits: traits)
     }

@@ -191,6 +191,10 @@ check("a \"menu item\"-described view is not a checkbox",
       matches("checkbox", .other, value: "menu item", named: true), false)
 check("a described view is not a summary, even by name",
       matches("summary", .other, value: "menu item", named: true), false)
+// A trait marks another role even when the value leads with a description:
+// a button whose own value text is "Menu" is not a menu.
+check("a button-trait view valued \"Menu\" is not a menu", matches("menu", .other, traits: buttonTrait, value: "Menu"), false)
+check("a link-trait view valued \"Timer\" is not a timer", matches("timer", .other, traits: linkTrait, value: "Timer", named: true), false)
 // "radio" is React Native's and ARIA's spelling of radiobutton.
 check("the \"radio\" alias matches an RN radio", matches("radio", .other, value: "radio button, checked"), true)
 check("the \"radio\" alias matches a native radio button", matches("Radio", .radioButton), true)
