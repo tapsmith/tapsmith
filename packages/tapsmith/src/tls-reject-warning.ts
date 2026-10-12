@@ -20,7 +20,8 @@ export function tlsRejectWarning(hosts: readonly string[]): string {
     'rejected, the device or app does not trust the current Tapsmith CA (~/.tapsmith/ca.pem): for example ' +
     'the device trusts a CA from an earlier ~/.tapsmith, or the CA is only in Android\'s user store, which ' +
     'apps ignore unless their network_security_config.xml opts in. If only some hosts are rejected, those ' +
-    'clients probably pin their certificates: list your app\'s pinned hosts in trace.networkPassthroughHosts, ' +
+    'clients probably pin their certificates (or, for a background service, started before Tapsmith installed ' +
+    'its CA): list your app\'s pinned hosts in trace.networkPassthroughHosts, ' +
     'and background services you do not need in trace.networkIgnoreHosts.'
   );
 }

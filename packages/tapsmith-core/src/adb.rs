@@ -1804,9 +1804,9 @@ mod apex_script_tests {
 
     const CERT: &str = "e79c02f7.0";
     const NEW_CA: &str =
-        "-----BEGIN CERTIFICATE-----\nNEW tapsmith CA\n-----END CERTIFICATE-----\n";
+        "-----BEGIN CERTIFICATE-----\ncurrent CA body\n-----END CERTIFICATE-----\n";
     const STALE_CA: &str =
-        "-----BEGIN CERTIFICATE-----\nSTALE tapsmith CA\n-----END CERTIFICATE-----\n";
+        "-----BEGIN CERTIFICATE-----\nstale CA body\n-----END CERTIFICATE-----\n";
 
     struct Fixture {
         _dir: tempfile::TempDir,
