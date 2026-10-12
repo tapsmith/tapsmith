@@ -60,8 +60,17 @@ function codeSpansIn(file: string, source: string): Sample[] {
   let searchFrom = 0;
   const visit = (token: Token): void => {
     if (token.type === 'codespan') {
-      const at = source.indexOf(token.raw, searchFrom);
-      if (at >= 0) searchFrom = at + token.raw.length;
+      // In a table cell marked unescapes `\|` in `raw`, and a span that wraps
+      // onto the next line loses the line's indent: match its text with any
+      // whitespace and an optional `\` before each `|`.
+      const pattern = (token.text as string).trim().split(/\s+/)
+        .map((word) => word.replace(/[.*+?^${}()[\]\\]/g, '\\$&').replace(/\|/g, '\\\\?\\|'))
+        .join('\\s+');
+      const re = new RegExp(pattern, 'g');
+      re.lastIndex = searchFrom;
+      const found = re.exec(source);
+      const at = found ? found.index : -1;
+      if (found) searchFrom = found.index + found[0].length;
       out.push({ file, line: at >= 0 ? source.slice(0, at).split('\n').length : 0, code: token.text as string, tsx: false });
     }
     for (const child of childTokens(token)) visit(child);
@@ -360,7 +369,8 @@ function typeCheck(samples: Sample[]): Mismatch[] {
       // A fragment of something else shaped like config — a project's `use: {…}`,
       // a fixture definition — is not a root config key: only what is inside it
       // could be checked against the root, so drop the unknown-key error on it.
-      if (d.start === v.fragmentKeyStart && (d.code === 2353 || d.code === 2561)) continue;
+      // A misspelled root key gets TS2561 ("did you mean …") and is reported.
+      if (d.start === v.fragmentKeyStart && d.code === 2353) continue;
       // TSX samples are React Native components, checked without React's
       // types: their JSX props and children are not assignable to anything.
       if (v.sample.tsx && (d.code === 2322 || d.code === 2820)) continue;
@@ -470,6 +480,17 @@ describe('docs TypeScript samples match the SDK API', () => {
     const use = '```ts\nuse: { platform: "ios" },\n```\n';
     expect(typeCheck(samplesIn('t.md', use))).toEqual([]);
   }, 120_000);
+
+  it('reports a misspelled first root key of a config fragment', () => {
+    expect(typeCheck(samplesIn('t.md', '```ts\nappResetScop: "test",\n```\n')).map((m) => m.code)).toEqual([2561]);
+  }, 120_000);
+
+  it('gives every inline code span a line, including in tables', () => {
+    const md = 'x\n\n| A | B |\n|---|---|\n| `a \\| b` | `getByText()` |\n';
+    expect(codeSpansIn('t.md', md).map((s) => s.line)).toEqual([5, 5]);
+    const all = docFiles().flatMap((rel) => codeSpansIn(rel, fs.readFileSync(path.join(REPO, rel), 'utf8')));
+    expect(all.filter((s) => s.line === 0).map((s) => `${s.file}: ${s.code}`)).toEqual([]);
+  });
 
   it('does not type undeclared fragment names as DOM globals', () => {
     expect(typeCheck(samplesIn('t.md', '```ts\nawait device.getByText(name).tap()\nawait screen.getByText("x")\n```\n'))).toEqual([]);
