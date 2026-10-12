@@ -1,4 +1,5 @@
 import { decodeXmlEntities } from '../../xml-entities.js';
+import { ANDROID_ROLE_CLASSES } from '../../roles.js';
 
 // ─── Types ───
 
@@ -166,3 +167,41 @@ export function getNodeRole(node: HierarchyNode): string {
   return IOS_TYPE_TO_ROLE[iosType] ?? '';
 }
 
+// ─── getByLabel Fields ───
+
+/**
+ * The element types the iOS agent's getByLabel finds (its
+ * `LabelMatch.inputTypes`, ios-agent LabelMatchTests): by element type, not by
+ * reported role — a text field keeps its type whatever trait role it reports,
+ * and a search field is not one of them (PILOT-666).
+ */
+const IOS_LABEL_FIELD_TYPES: ReadonlySet<string> = new Set([
+  'XCUIElementTypeTextField',
+  'XCUIElementTypeSecureTextField',
+  'XCUIElementTypeTextView',
+  'XCUIElementTypeSwitch',
+  'XCUIElementTypeSlider',
+  'XCUIElementTypeStepper',
+  'XCUIElementTypePicker',
+  'XCUIElementTypeCheckBox',
+  'XCUIElementTypeRadioButton',
+]);
+
+/**
+ * The classes the Android agent's getByLabel walks (its `labelInputClassPattern`):
+ * the classes of these roles in its role map, which roles.test.ts pins to
+ * ANDROID_ROLE_CLASSES. A view that only reports one of the roles (an RN
+ * `accessibilityRole="checkbox"` ViewGroup) is not walked.
+ */
+const ANDROID_LABEL_FIELD_CLASSES: ReadonlySet<string> = new Set(
+  ['textfield', 'checkbox', 'switch', 'radiobutton', 'seekbar', 'spinner']
+    .flatMap((role) => ANDROID_ROLE_CLASSES[role] ?? []),
+);
+
+/** Whether the runtime's getByLabel can find this node: a native input of a type or class the agent looks at. */
+export function isLabelField(node: HierarchyNode): boolean {
+  if (node.attributes.get('webview') === 'true') return false;
+  const className = node.attributes.get('class');
+  if (className !== undefined) return ANDROID_LABEL_FIELD_CLASSES.has(className);
+  return IOS_LABEL_FIELD_TYPES.has(node.attributes.get('type') ?? node.tagName);
+}

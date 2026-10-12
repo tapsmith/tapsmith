@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
-import { getNodeRole } from '../trace-viewer/components/hierarchy-utils.js';
-import { generateSelectors, generateBestSelector, findBetterDescendant, hasGoodSelectors, FORM_FIELD_ROLES } from '../trace-viewer/components/selector-generation.js';
+import { getNodeRole, isLabelField } from '../trace-viewer/components/hierarchy-utils.js';
+import { generateSelectors, generateBestSelector, findBetterDescendant, hasGoodSelectors } from '../trace-viewer/components/selector-generation.js';
 import { parseSelectorString, findMatchingNodes, hitTest, applyPositionalIndex, parsedSelectorError } from '../trace-viewer/components/selector-matching.js';
 
 function makeNode(tagName: string, attrs: Record<string, string>, children: HierarchyNode[] = []): HierarchyNode {
@@ -342,19 +342,41 @@ describe('findMatchingNodes with label selector', () => {
   });
 });
 
-// ─── FORM_FIELD_ROLES ───
+// ─── isLabelField (PILOT-666) ───
 
-describe('FORM_FIELD_ROLES', () => {
-  it('includes expected form field types', () => {
-    for (const role of ['textfield', 'checkbox', 'switch', 'searchfield', 'seekbar', 'radiobutton', 'spinner']) {
-      expect(FORM_FIELD_ROLES.has(role)).toBe(true);
-    }
+describe('isLabelField: the inputs the runtime getByLabel finds', () => {
+  it('goes by iOS element type, not the reported role', () => {
+    expect(isLabelField(makeNode('XCUIElementTypeTextField', { type: 'XCUIElementTypeTextField', 'tapsmith-role': 'combobox' }))).toBe(true);
+    expect(isLabelField(makeNode('XCUIElementTypeStepper', { type: 'XCUIElementTypeStepper' }))).toBe(true);
+    expect(isLabelField(makeNode('XCUIElementTypeSearchField', { type: 'XCUIElementTypeSearchField' }))).toBe(false);
+    expect(isLabelField(makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther', 'tapsmith-role': 'checkbox' }))).toBe(false);
   });
 
-  it('does not include non-form roles', () => {
-    for (const role of ['button', 'text', 'image', 'heading', 'link', 'alert']) {
-      expect(FORM_FIELD_ROLES.has(role)).toBe(false);
-    }
+  it('goes by Android class, not the reported role', () => {
+    expect(isLabelField(makeNode('node', { class: 'android.widget.EditText' }))).toBe(true);
+    expect(isLabelField(makeNode('node', { class: 'android.widget.SearchView' }))).toBe(false);
+    expect(isLabelField(makeNode('node', { class: 'android.view.ViewGroup', 'tapsmith-role': 'checkbox' }))).toBe(false);
+  });
+
+  it('is never a WebView node', () => {
+    expect(isLabelField(makeNode('node', { class: 'android.widget.EditText', webview: 'true' }))).toBe(false);
+  });
+});
+
+describe('getByLabel suggestions follow the runtime fields (PILOT-666)', () => {
+  const hasLabel = (node: HierarchyNode) => generateSelectors(node).some((s) => s.label === 'Label');
+
+  it('no getByLabel for an iOS search field, which getByLabel does not find', () => {
+    expect(hasLabel(makeNode('XCUIElementTypeSearchField', { type: 'XCUIElementTypeSearchField', label: 'Search' }))).toBe(false);
+  });
+
+  it('getByLabel for an iOS text field that reports a trait role', () => {
+    const node = makeNode('XCUIElementTypeTextField', { type: 'XCUIElementTypeTextField', label: 'Country', 'tapsmith-role': 'combobox' });
+    expect(generateSelectors(node).some((s) => s.code === 'device.getByLabel("Country")')).toBe(true);
+  });
+
+  it('no getByLabel for an Android view that only reports a checkbox role', () => {
+    expect(hasLabel(makeNode('node', { class: 'android.view.ViewGroup', 'tapsmith-role': 'checkbox', 'content-desc': 'Agree' }))).toBe(false);
   });
 });
 

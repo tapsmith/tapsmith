@@ -1,6 +1,5 @@
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
-import { parseBounds, getNodeRole } from './hierarchy-utils.js';
-import { FORM_FIELD_ROLES } from './selector-generation.js';
+import { parseBounds, getNodeRole, isLabelField } from './hierarchy-utils.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, normalizeRole, unknownRoleMessage } from '../../roles.js';
@@ -404,10 +403,6 @@ function getNodeContentDesc(node: HierarchyNode): string {
   return node.attributes.get('content-desc') ?? node.attributes.get('label') ?? '';
 }
 
-function getNodeAccessibleName(node: HierarchyNode): string {
-  return node.attributes.get('content-desc') || node.attributes.get('label') || node.attributes.get('text') || '';
-}
-
 function getNodeId(node: HierarchyNode): string {
   return node.attributes.get('resource-id') ?? node.attributes.get('identifier') ?? '';
 }
@@ -511,13 +506,19 @@ function textMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
   return ['label', 'title', 'value'].some((key) => re.test(node.attributes.get(key) ?? ''));
 }
 
-/** getByLabel(RegExp) (PILOT-520): Android's content-desc, iOS's label or title, raw. */
-function labelMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
-  const keys = node.attributes.has('class') ? ['content-desc'] : ['label', 'title'];
-  return keys.some((key) => {
-    const value = node.attributes.get(key);
-    return value !== undefined && value !== '' && re.test(value);
-  });
+/**
+ * Whether a getByLabel field's name passes `test` — the one rule the agents
+ * use for a string and a RegExp alike (PILOT-666): Android's content-desc
+ * (the agent also follows a labelling view, which the dump does not carry),
+ * iOS's label or title. iOS tests an empty label like any other text, as its
+ * agent does; Android has no name without a content-desc.
+ */
+function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean): boolean {
+  if (node.attributes.has('class')) {
+    const contentDesc = node.attributes.get('content-desc');
+    return contentDesc !== undefined && contentDesc !== '' && test(contentDesc);
+  }
+  return test(node.attributes.get('label') ?? '') || test(node.attributes.get('title') ?? '');
 }
 
 function isWebViewNode(node: HierarchyNode): boolean {
@@ -550,17 +551,16 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector): boo
     case 'hint':
       return getNodeHint(node) === selector.value;
     case 'label': {
-      const role = getNodeRole(node);
-      if (!FORM_FIELD_ROLES.has(role)) return false;
-      // Android's agent reads the label from content-desc (or a labelling
-      // view the dump does not carry), never the field's own text — its
+      // Whole and whitespace-normalized, never the field's own text — its
       // typed value or hint (PILOT-659).
-      const name = node.attributes.has('class') ? (node.attributes.get('content-desc') ?? '') : getNodeAccessibleName(node);
-      return name !== '' && normalizeWhitespace(name) === normalizeWhitespace(selector.value);
+      const query = normalizeWhitespace(selector.value);
+      return isLabelField(node) && labelNameMatches(node, (name) => normalizeWhitespace(name) === query);
     }
     case 'labelRegex': {
-      if (!FORM_FIELD_ROLES.has(getNodeRole(node)) || selector.regex === undefined) return false;
-      return labelMatchesRegex(node, toJsRegExp(selector.regex));
+      if (selector.regex === undefined || !isLabelField(node)) return false;
+      // The raw name, like Playwright tests the label's text (PILOT-520).
+      const re = toJsRegExp(selector.regex);
+      return labelNameMatches(node, (name) => re.test(name));
     }
     case 'testId': {
       const rid = getNodeId(node);
