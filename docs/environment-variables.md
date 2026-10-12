@@ -84,7 +84,7 @@ TAPSMITH_DAEMON_BIN=/usr/local/bin/tapsmith-core npx tapsmith test
 ### Verbose SDK debug output
 
 ```bash
-TAPSMITH_DEBUG=1 npx tapsmith test tests/flaky.test.ts
+TAPSMITH_DEBUG=1 npx tapsmith test tests/flaky.tapsmith.ts
 ```
 
 ### Tolerating a slow CI emulator

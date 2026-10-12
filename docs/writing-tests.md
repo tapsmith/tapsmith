@@ -112,9 +112,11 @@ describe("Login screen", () => {
 
 ## Test isolation
 
-Tests must not depend on each other. Each test should start from a known state and leave the device in a state that does not affect subsequent tests.
+Tapsmith resets the app for you, but by default only **once per test file**, not before every test. The tests in a file share the app: the second test starts on whatever screen the first one left, with any state it created, such as a signed-in user. This differs from Playwright, where every test gets a fresh browser context. A file whose tests each need a fresh app opts in with `test.use({ appResetScope: "test" })` ([Declaring the reset policy](#declaring-the-reset-policy) below).
 
-Tapsmith resets the app for you — the mobile equivalent of Playwright giving every test a fresh browser context. The reset is **declared**, not written by hand: it runs as fixture setup, appears in the trace in its own **APP RESET** section just before **BEFORE ALL** (per-file) or **BEFORE EACH** (per-test) — so the hook sections contain only your code — and its time counts toward the test's duration so slow isolation is visible rather than hidden.
+So with the default, a test must either start from where the previous test in its file leaves off or bring the app to a known state itself (a deep link, say). Tests that assume a fresh app without opting in pass on their own and fail when they run after another test, and one failure then cascades through the rest of the file. Each file, though, starts from a reset app.
+
+The reset is **declared**, not written by hand: it runs as fixture setup, appears in the trace in its own **APP RESET** section just before **BEFORE ALL** (per-file) or **BEFORE EACH** (per-test) — so the hook sections contain only your code — and its time counts toward the test's duration so slow isolation is visible rather than hidden.
 
 ### Declaring the reset policy
 

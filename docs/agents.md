@@ -53,12 +53,28 @@ npx tapsmith test --reporter json     # writes tapsmith-results/results.json
 
 For richer agent workflows — inspecting the live accessibility tree, validating
 locators before committing them, running tests, reading traces — register the
-MCP server:
+MCP server. It comes in two forms, registered under two names so an agent can
+have both:
 
-```bash
-claude mcp add tapsmith -- npx tapsmith mcp-server   # Claude Code
-codex mcp add tapsmith -- npx tapsmith mcp-server    # Codex
-```
+- **`tapsmith-ui`**, preferred whenever `npx tapsmith test --ui` is running: the
+  agent works in the UI session you can see, sharing its device, test tree,
+  results and traces. Register the MCP URL the UI shows (`http://localhost:9274/mcp`
+  by default):
+
+  ```bash
+  claude mcp add tapsmith-ui --transport http http://localhost:9274/mcp   # Claude Code
+  codex mcp add tapsmith-ui --url http://localhost:9274/mcp               # Codex
+  ```
+
+- **`tapsmith-headless`**, for when no UI session is running or the agent needs a
+  session of its own. The agent's MCP client starts it as a subprocess:
+
+  ```bash
+  claude mcp add tapsmith-headless -- npx tapsmith mcp-server   # Claude Code
+  codex mcp add tapsmith-headless -- npx tapsmith mcp-server    # Codex
+  ```
+
+The `AGENTS.md` section `tapsmith init` writes tells your agent the same.
 
 Key tools: `tapsmith_snapshot` (accessibility tree with suggested locators),
 `tapsmith_test_locator`, `tapsmith_run_tests`, `tapsmith_read_trace`,

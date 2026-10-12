@@ -2664,9 +2664,9 @@ Run test files. If no files are specified, discovers tests using the `testMatch`
 
 ```bash
 npx tapsmith test
-npx tapsmith test tests/login.test.ts tests/signup.test.ts
+npx tapsmith test tests/login.tapsmith.ts tests/signup.tapsmith.ts
 npx tapsmith test tests/auth                  # every test file under a directory
-npx tapsmith test 'tests/auth/*.test.ts'      # a glob (quote it so the shell leaves it alone)
+npx tapsmith test 'tests/auth/*.tapsmith.ts'  # a glob (quote it so the shell leaves it alone)
 npx tapsmith test login checkout              # files whose path matches "login" or "checkout"
 ```
 
@@ -2796,7 +2796,7 @@ run with the list of available projects. Combine with file arguments to further
 narrow a project to specific test files:
 
 ```bash
-npx tapsmith test --project android tests/login.test.ts
+npx tapsmith test --project android tests/login.tapsmith.ts
 ```
 
 ### `tapsmith test --watch` / `tapsmith test -w`
@@ -2805,7 +2805,7 @@ Watch test files for changes and re-run them automatically. The daemon, device, 
 
 ```bash
 npx tapsmith test --watch
-npx tapsmith test -w tests/login.test.ts   # Watch a specific file
+npx tapsmith test -w tests/login.tapsmith.ts   # Watch a specific file
 ```
 
 See [Watch Mode](watch-mode.md) for details.
@@ -2923,8 +2923,8 @@ npx tapsmith telemetry status --json
 Run the MCP server on stdio, for an AI coding agent to launch as a subprocess. It runs its own headless test session, with its own daemon and device. `-c` / `--config` uses a specific config file. Stdout carries the MCP protocol, so messages and usage errors go to stderr. See the [MCP Server Guide](mcp-server.md) for setup.
 
 ```bash
-claude mcp add tapsmith -- npx tapsmith mcp-server
-codex mcp add tapsmith -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
+claude mcp add tapsmith-headless -- npx tapsmith mcp-server
+codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
 ```
 
 ### `tapsmith create-avd [--api <level>] [--name <name>] [--device <profile>] [--abi <abi>] [--force] [--install-tools]`
@@ -2982,7 +2982,7 @@ npx tapsmith test --trace retain-on-failure     # Only keep traces for failures
 ```
 
 A bare `--trace` directly followed by a test file reads the file as the mode (and fails): write
-`--trace on login.test.ts`, or put the file first.
+`--trace on login.tapsmith.ts`, or put the file first.
 
 ### `tapsmith test --video [mode]`
 

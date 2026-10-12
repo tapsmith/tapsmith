@@ -96,12 +96,12 @@ npx tapsmith verify
 Create `tests/login.tapsmith.ts` (`tapsmith init` sets `testMatch` to `*.tapsmith.ts`, so your Jest or Vitest run leaves Tapsmith tests alone):
 
 ```typescript
-import { test, describe, expect, beforeEach } from "tapsmith";
+import { test, describe, expect } from "tapsmith";
 
 describe("Login", () => {
-  beforeEach(async ({ device }) => {
-    await device.restartApp("com.example.myapp");
-  });
+  // Tapsmith resets the app once per file by default, so tests in a file share
+  // its state. Both tests here need the login screen, so reset before each one.
+  test.use({ appResetScope: "test" });
 
   test("valid credentials", async ({ device }) => {
     await device.getByRole("textfield", { name: "Email" }).type("user@example.com");

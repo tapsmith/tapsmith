@@ -4,7 +4,7 @@ Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that
 
 ## Modes
 
-The MCP server operates in two modes:
+The MCP server operates in two modes. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. When a UI session is running, prefer `tapsmith-ui`: the agent then works in the session you can see.
 
 ### HTTP mode (recommended)
 
@@ -17,13 +17,13 @@ To connect, copy the MCP URL from the MCP panel in the UI into any MCP client th
 Claude Code:
 
 ```bash
-claude mcp add tapsmith --transport http http://localhost:9274/mcp
+claude mcp add tapsmith-ui --transport http http://localhost:9274/mcp
 ```
 
 Codex CLI:
 
 ```bash
-codex mcp add tapsmith --url http://localhost:9274/mcp
+codex mcp add tapsmith-ui --url http://localhost:9274/mcp
 ```
 
 Generic MCP config:
@@ -31,7 +31,7 @@ Generic MCP config:
 ```json
 {
   "mcpServers": {
-    "tapsmith": {
+    "tapsmith-ui": {
       "url": "http://localhost:9274/mcp"
     }
   }
@@ -54,13 +54,13 @@ platform keeps working.
 Codex CLI:
 
 ```bash
-codex mcp add tapsmith -- npx tapsmith mcp-server
+codex mcp add tapsmith-headless -- npx tapsmith mcp-server
 ```
 
 Claude Code:
 
 ```bash
-claude mcp add tapsmith -- npx tapsmith mcp-server
+claude mcp add tapsmith-headless -- npx tapsmith mcp-server
 ```
 
 Generic MCP stdio config:
@@ -68,7 +68,7 @@ Generic MCP stdio config:
 ```json
 {
   "mcpServers": {
-    "tapsmith": {
+    "tapsmith-headless": {
       "command": "npx",
       "args": ["tapsmith", "mcp-server"]
     }
@@ -79,8 +79,8 @@ Generic MCP stdio config:
 To use a non-default Tapsmith config, include the config flag in the command your MCP client launches:
 
 ```bash
-codex mcp add tapsmith-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
-claude mcp add tapsmith-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
+codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
+claude mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
 ```
 
 If a UI server is already running, stdio mode will detect it and suggest connecting via HTTP instead. Use HTTP mode when you want the agent and browser UI to share one visible session; use stdio when you want a standalone agent-owned session.
@@ -387,7 +387,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 
 ### Headless stdio workflow
 
-1. **Add the MCP server config:** `codex mcp add tapsmith -- npx tapsmith mcp-server`
+1. **Add the MCP server config:** `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
 4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device

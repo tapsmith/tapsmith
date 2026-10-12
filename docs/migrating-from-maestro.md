@@ -177,6 +177,8 @@ Name Tapsmith test files `*.tapsmith.ts` (what `tapsmith init` sets up), so that
 - Instead of relational selectors, scope a locator inside another (`device.getByTestId("row-5").getByRole("button", { name: "Delete" })`), or narrow it with `filter()`, `first()`, `nth()`, `and()` and `or()` ([ElementHandle](api-reference.md#elementhandle)). Position on screen (`below`, `leftOf`) has no locator equivalent.
 - Ambiguity is an error. When a locator matches several elements, Tapsmith's strict mode refuses to guess: it reports every match and suggests a unique locator for each.
 
+**Counting list rows.** A locator counts what the platform's accessibility tree holds. On Android that is only the rows on screen; on iOS it can also include rows the list has already rendered off screen. So `count()` and `toHaveCount()` on a long, scrolling list can give a different number on each platform. Assert on the rows you care about instead (bring one into view with `scrollIntoView()`), or count a list that fits on screen.
+
 **Conditional steps.** `runFlow` with `when: visible:` becomes an `if`. Use `isVisible()` or `exists()`, which answer without waiting out the timeout (an absent element costs a second read once the screen settles, usually a second or two):
 
 ```typescript
@@ -198,6 +200,7 @@ Some Maestro commands have no Tapsmith equivalent at the moment. Plan to keep th
 - **AI and visual commands:** `assertWithAI`, `assertNoDefectsWithAI`, `extractTextWithAI` and `assertScreenshot` (screenshot comparison).
 - **Web testing:** Maestro can drive a desktop browser. Tapsmith tests native mobile apps; content inside your app's WebViews is covered by [WebView testing](webview.md).
 - **A hosted device cloud:** Tapsmith runs on emulators, simulators and devices you provide, locally or in your own CI.
+- **Playwright's `test.step()`:** Tapsmith's test API follows Playwright's, but `test.step()` isn't there yet. Group actions in the trace with `device.tracing.group(name)` and `device.tracing.groupEnd()` instead ([other Playwright APIs not supported yet](api-reference.md#playwright-apis-not-supported-yet)).
 
 ## Migrating incrementally
 

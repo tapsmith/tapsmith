@@ -258,6 +258,8 @@ Name Tapsmith test files `*.tapsmith.ts` (what `tapsmith init` sets up), so that
 - React Native apps that mount [`@tapsmith/react-native`](warm-reset.md) get a **warm** reset: the hooks clear the stores you list (AsyncStorage, for example), navigate to a route and confirm the reset finished, in-process, in about a second. Unlike `reloadReactNative()`, it clears persisted state. A release build needs the hooks switched on at build time ([Release builds for e2e](warm-reset.md#release-builds-for-e2e)); without that, every reset is a clear and relaunch.
 - To start tests already signed in, sign in once in a setup project and restore the saved app state ([Authentication patterns](writing-tests.md#authentication-patterns)).
 
+**Counting list rows.** A locator counts what the platform's accessibility tree holds. On Android that is only the rows on screen; on iOS it can also include rows the list has already rendered off screen. So `count()` and `toHaveCount()` on a long, scrolling list can give a different number on each platform. Assert on the rows you care about instead (bring one into view with `scrollIntoView()`), or count a list that fits on screen.
+
 **Mocking.** Detox suites often mock modules at build time (an `.e2e.js` file extension picked up by Metro) or block URLs. Tapsmith doesn't change your bundle. To mock or inspect HTTP traffic, use [`device.route()`](network.md), Playwright's network interception for the device (it needs tracing with network capture turned on). Build-time module mocks still work if you keep building with them; Tapsmith tests whatever build you give it.
 
 **Locators.** Detox's `by.id` and `by.text` keep working as `getByTestId` and `getByText`, so a first port can be mechanical. Over time, prefer `getByRole` with a name: it checks what the element is as well as its label, and pushes the app towards being accessible ([Locators](locators.md)). Two details to watch for: `getByText("Sign in")` without `{ exact: true }` matches any text containing "Sign in", and an ambiguous locator throws rather than acting on the first match.
@@ -273,6 +275,7 @@ Some Detox device APIs have no Tapsmith equivalent at the moment:
 - **Some iOS permissions:** on an iOS simulator, `grantPermission()` and `revokePermission()` cover the services `xcrun simctl privacy` supports (photos, location, contacts, calendar, microphone, camera, …), which leaves out notifications, among others. On physical iOS devices they are not supported at all.
 - **Jest features:** `jest.fn()` mocks, snapshot matchers and Jest's custom matchers aren't part of Tapsmith's `expect`, and Jest's watch mode is replaced by [Tapsmith's](watch-mode.md).
 - **Some actions:** `scroll()` by an offset in points, `scrollTo("bottom")` (scroll to an edge; use `scrollIntoView()` on the element you want, or `scroll()` repeatedly) and setting picker wheel columns (`setColumnToValue`).
+- **Playwright's `test.step()`:** Tapsmith's test API follows Playwright's, but `test.step()` isn't there yet. Group actions in the trace with `device.tracing.group(name)` and `device.tracing.groupEnd()` instead ([other Playwright APIs not supported yet](api-reference.md#playwright-apis-not-supported-yet)).
 
 ## Migrating incrementally
 

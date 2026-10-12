@@ -69,18 +69,12 @@ To interact with web content, switch from the native context to the WebView cont
 const webview = await device.webview()
 ```
 
-This auto-waits for a WebView to appear on screen. If no debuggable WebView is found within the timeout, it throws an error.
+This auto-waits for a WebView to appear on screen. If no debuggable WebView is found within the `timeout` from your config (30 s by default), it throws an error.
 
 If your app has multiple WebViews or you need to target a specific one, pass the package name (Android) or bundle identifier (iOS):
 
 ```typescript
 const webview = await device.webview("com.example.myapp")
-```
-
-You can also pass a custom timeout:
-
-```typescript
-const webview = await device.webview({ timeout: 60_000 })
 ```
 
 ## Switching Back to Native
@@ -370,10 +364,11 @@ test("in-app payment via WebView", async ({ device }) => {
 
 ## Tips and Limitations
 
-**The WebView must be visible and loaded.** `device.webview()` auto-waits for a debuggable WebView to become available, but the WebView needs to be on screen and its content needs to have started loading. If your WebView takes a long time to appear (for example, behind a native loading screen), increase the timeout:
+**The WebView must be visible and loaded.** `device.webview()` auto-waits for a debuggable WebView to become available, but the WebView needs to be on screen and its content needs to have started loading. `device.webview()` takes no timeout option: it waits up to the `timeout` from your config. If your WebView takes a long time to appear (for example, behind a native loading screen), wait for the native screen that hosts it first, with an assertion that takes its own timeout, and connect once it is there:
 
 ```typescript
-const webview = await device.webview({ timeout: 60_000 })
+await expect(device.getByText("Checkout")).toBeVisible({ timeout: 60_000 })
+const webview = await device.webview()
 ```
 
 **Debugging must be enabled in the app.** On Android, `WebView.setWebContentsDebuggingEnabled(true)` must be called before the WebView is created. On iOS (16.4+), the `WKWebView` must have `isInspectable = true`. Without these, Tapsmith cannot connect and `device.webview()` will time out.

@@ -13,7 +13,7 @@ You can combine `--watch` with other flags:
 
 ```bash
 npx tapsmith test --watch --workers 2
-npx tapsmith test -w tests/login.test.ts
+npx tapsmith test -w tests/login.tapsmith.ts
 ```
 
 ## How it works
@@ -22,7 +22,7 @@ Watch mode starts the daemon, connects to a device, installs the agent, and then
 
 1. **Watches test files** using [chokidar](https://github.com/paulmillr/chokidar). The set of watched files is determined by the `testMatch` patterns in your config (default: `**/*.test.ts` and `**/*.spec.ts`).
 2. **On file change**, forks a child process to run just the changed file. Each re-run gets a fresh Node.js ESM module cache, so changes to test files, helper modules, and page objects are all picked up automatically.
-3. **Only re-runs the changed file** -- not the entire suite. If you change `tests/login.test.ts`, only that file runs.
+3. **Only re-runs the changed file** -- not the entire suite. If you change `tests/login.tapsmith.ts`, only that file runs.
 
 The persistent device session is what makes this fast. A normal `npx tapsmith test` run pays the full cost of daemon startup, device detection, agent installation, and app launch on every invocation. Watch mode pays that cost once and then only resets the app before each re-run.
 
