@@ -37,7 +37,10 @@ enum RoleMapping {
         "radiobutton": [.radioButton, .other],
         "spinner": [.picker, .activityIndicator],
         "toolbar": [.toolbar],
-        "tab": [.tab, .tabBar],
+        // A UITabBar's items are buttons inside the bar, not `.tab`
+        // elements: `matches` also accepts those (`isTabBarItem`), and the bar
+        // itself is a "tablist" (PILOT-514).
+        "tab": [.tab],
         // resolveRole(for:traits:) can publish "searchfield" off the
         // UIAccessibilityTraitSearchField bit — keep the reverse mapping
         // here so getByRole("searchfield") is symmetric and doesn't throw
@@ -59,7 +62,7 @@ enum RoleMapping {
         "scrollbar": [.other],
         "spinbutton": [.other],
         "summary": [.other],
-        "tablist": [.other],
+        "tablist": [.tabBar, .other],
         "timer": [.other],
     ]
 
@@ -108,11 +111,21 @@ enum RoleMapping {
         return elementTypeToRole[elementType] ?? ""
     }
 
+    /// Whether an element is an item of a tab bar: a button with a `.tabBar`
+    /// ancestor (`inTabBar`). UIKit and SwiftUI tab bars expose their items
+    /// as buttons, never as `.tab` elements, so this is how getByRole("tab")
+    /// finds them (PILOT-514).
+    static func isTabBarItem(_ elementType: XCUIElement.ElementType, inTabBar: Bool) -> Bool {
+        inTabBar && elementType == .button
+    }
+
     /// Resolve a role name, preferring an accessibility-trait override when
     /// the element carries one. React Native exposes `accessibilityRole` as
     /// a trait bit (e.g. UIAccessibilityTraitHeader for `accessibilityRole="header"`),
     /// and the trait carries semantic intent that the element type doesn't.
-    static func resolveRole(for elementType: XCUIElement.ElementType, traits: UInt64) -> String {
+    /// `inTabBar` is whether the element has a `.tabBar` ancestor: a button
+    /// there is a tab (`isTabBarItem`).
+    static func resolveRole(for elementType: XCUIElement.ElementType, traits: UInt64, inTabBar: Bool) -> String {
         typealias Trait = AccessibilityTrait
 
         // Trait-derived semantic roles take priority — these are the ones an
@@ -121,6 +134,8 @@ enum RoleMapping {
         if traits & Trait.searchField != 0 { return "searchfield" }
         if traits & Trait.adjustable != 0 { return "seekbar" }
         if traits & Trait.link != 0 { return "link" }
+
+        if isTabBarItem(elementType, inTabBar: inTabBar) { return "tab" }
 
         let typeRole = elementTypeToRole[elementType] ?? ""
         if !typeRole.isEmpty { return typeRole }
@@ -141,6 +156,16 @@ enum RoleMapping {
             throw AgentError.invalidSelector("Unknown role: '\(role)'. Known roles: \(known)")
         }
         return types
+    }
+
+    /// The element types a type query must cover to find every element of
+    /// `role`: its `roleToElementTypes` entry plus, for "tab", the buttons a
+    /// tab bar's items are. A coarse query — callers still filter by
+    /// `matches` or by the tab-bar ancestry.
+    /// - Throws: AgentError.invalidSelector if the role is unknown.
+    static func queryTypes(for role: String) throws -> [XCUIElement.ElementType] {
+        let types = try elementTypes(for: role)
+        return normalize(role) == "tab" ? types + [.button] : types
     }
 
     /// Cross-platform role aliases — kept in sync with Android's
@@ -232,23 +257,30 @@ enum RoleMapping {
     /// - RN's other generic-view roles (menuitem, tablist, timer, …): their
     ///   native type, if any, or — having no description — a named query
     ///   on a generic view, on the same terms (`undescribedOtherRoles`).
+    /// - tab: a `.tab` element or a tab bar's item (`isTabBarItem`; `inTabBar`
+    ///   is whether the element has a `.tabBar` ancestor). The bar itself is a
+    ///   tablist (PILOT-514).
     /// - every other role: its element types, or its trait.
     static func matches(
         role: String,
         elementType: XCUIElement.ElementType,
         traits: UInt64,
         value: String?,
-        hasNameFilter: Bool
+        hasNameFilter: Bool,
+        inTabBar: Bool
     ) -> Bool {
         let canonical = normalize(role)
         if canonical == "heading" {
             return traits & AccessibilityTrait.header != 0
         }
+        if canonical == "tab" {
+            return elementType == .tab || isTabBarItem(elementType, inTabBar: inTabBar)
+        }
         guard let types = roleToElementTypes[canonical] else { return false }
         if isGenericViewRole(canonical) {
             if elementType != .other { return types.contains(elementType) }
             if let described = describedRole(in: value) { return described == otherRoleDescriptions[canonical] }
-            return hasNameFilter && resolveRole(for: .other, traits: traits).isEmpty
+            return hasNameFilter && resolveRole(for: .other, traits: traits, inTabBar: false).isEmpty
         }
         return types.contains(elementType) || matchesTrait(role: canonical, traits: traits)
     }
@@ -265,12 +297,13 @@ enum RoleMapping {
 
     /// Whether a role-only match must be found again as a live element by its
     /// own label (QueryIndex) rather than by the role's first element type:
-    /// a type query can't express a trait or a description, so its positional
-    /// index would count every static text (heading) or look for a native
-    /// type an RN app never has (checkbox).
+    /// a type query can't express a trait, a description or an ancestor, so
+    /// its positional index would count every static text (heading), look
+    /// for a native type an RN app never has (checkbox), or miss a tab bar's
+    /// buttons (tab).
     static func needsLabelReResolution(role: String) -> Bool {
         let canonical = normalize(role)
-        return canonical == "heading" || isGenericViewRole(canonical)
+        return canonical == "heading" || canonical == "tab" || isGenericViewRole(canonical)
     }
 
     /// Convert an XCUIElement.ElementType to a string name for the className field.

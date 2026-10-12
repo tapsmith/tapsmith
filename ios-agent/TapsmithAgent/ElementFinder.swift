@@ -10,6 +10,9 @@ class ElementFinder {
     private let app: XCUIApplication
     private var elementCache: [String: XCUIElement] = [:]
     private var cacheOrder: [String] = []
+    /// Cached ids found as a tab bar's item, so a live re-read still reports
+    /// them as tabs (PILOT-514).
+    private var tabBarItemIds = Set<String>()
     private let lock = NSLock()
 
     /// Maximum number of cached elements before eviction. Kept high so a
@@ -22,6 +25,7 @@ class ElementFinder {
         lock.lock()
         elementCache.removeAll()
         cacheOrder.removeAll()
+        tabBarItemIds.removeAll()
         lock.unlock()
     }
 
@@ -31,6 +35,7 @@ class ElementFinder {
         while elementCache.count > maxCacheSize, !cacheOrder.isEmpty {
             let oldest = cacheOrder.removeFirst()
             elementCache.removeValue(forKey: oldest)
+            tabBarItemIds.remove(oldest)
         }
     }
 
@@ -74,10 +79,17 @@ class ElementFinder {
             root = app
         }
 
-        let xcElements = try findXCUIElements(selector, in: root)
+        // Whether each candidate is a tab bar's item (a tab, PILOT-514).
+        let candidates: [(element: XCUIElement, inTabBar: Bool)]
+        if let role = selector.role, RoleMapping.normalize(role) == "tab" {
+            candidates = findTabs(selector, in: root)
+        } else {
+            candidates = try findXCUIElements(selector, in: root).map { ($0, false) }
+        }
 
         // Apply additional attribute filters
-        let filtered = xcElements.filter { elem in
+        let filtered = candidates.filter { candidate in
+            let elem = candidate.element
             if let wantEnabled = selector.enabled, elem.isEnabled != wantEnabled { return false }
             if let wantChecked = selector.checked {
                 let isChecked = checkedState(
@@ -97,7 +109,32 @@ class ElementFinder {
             return true
         }
 
-        return filtered.map { cacheAndConvert($0) }
+        return filtered.map { cacheAndConvert($0.element, inTabBar: $0.inTabBar) }
+    }
+
+    /// getByRole("tab") under `root`: its `.tab` elements and its tab bars'
+    /// buttons (RoleMapping.isTabBarItem) — or, when `root` is itself a tab
+    /// bar (`getByRole("tablist").getByRole("tab")`), its own buttons.
+    private func findTabs(_ selector: ElementSelector, in root: XCUIElement) -> [(element: XCUIElement, inTabBar: Bool)] {
+        let barButtons = root.elementType == .tabBar
+            ? root.descendants(matching: .button)
+            : root.descendants(matching: .tabBar).descendants(matching: .button)
+        let found = allElements(from: root.descendants(matching: .tab)).map { ($0, false) }
+            + allElements(from: barButtons).map { ($0, true) }
+        return found.filter { matchesRoleName($0.0, selector) }
+    }
+
+    /// Whether `elem`'s label or title matches the selector's role name, if
+    /// it has one.
+    private func matchesRoleName(_ elem: XCUIElement, _ selector: ElementSelector) -> Bool {
+        if let name = selector.name {
+            return TextMatch.nameMatches(elem.label, name, exact: selector.nameExact)
+                || TextMatch.nameMatches(elem.title, name, exact: selector.nameExact)
+        }
+        if let nameRegex = selector.nameRegex {
+            return nameRegex.nameMatches(elem.label) || nameRegex.nameMatches(elem.title)
+        }
+        return true
     }
 
     /// Get a cached XCUIElement by its stable ID.
@@ -130,17 +167,7 @@ class ElementFinder {
             }
 
             // Filter by accessible name if provided
-            if let name = selector.name {
-                results = results.filter { elem in
-                    TextMatch.nameMatches(elem.label, name, exact: selector.nameExact)
-                        || TextMatch.nameMatches(elem.title, name, exact: selector.nameExact)
-                }
-            } else if let nameRegex = selector.nameRegex {
-                results = results.filter { elem in
-                    nameRegex.nameMatches(elem.label) || nameRegex.nameMatches(elem.title)
-                }
-            }
-            return results
+            return results.filter { matchesRoleName($0, selector) }
         }
 
         // Text selector — search across all element types
@@ -258,11 +285,12 @@ class ElementFinder {
         return cacheAndConvert(element)
     }
 
-    private func cacheAndConvert(_ element: XCUIElement) -> ElementInfo {
+    private func cacheAndConvert(_ element: XCUIElement, inTabBar: Bool = false) -> ElementInfo {
         let elementId = UUID().uuidString
         lock.lock()
         elementCache[elementId] = element
         cacheOrder.append(elementId)
+        if inTabBar { tabBarItemIds.insert(elementId) }
         pruneCacheLocked()
         lock.unlock()
         return toElementInfo(element, elementId: elementId)
@@ -279,6 +307,9 @@ class ElementFinder {
             bottom: Int(frame.origin.y + frame.size.height)
         )
         let viewportRatio = computeViewportRatio(bounds)
+        lock.lock()
+        let inTabBar = tabBarItemIds.contains(elementId)
+        lock.unlock()
         // Delegated to the shared factory in ElementInfo.swift so this
         // path can't drift from the sibling SnapshotElementFinder
         // implementation. Earlier the two methods diverged on `text`
@@ -289,7 +320,8 @@ class ElementFinder {
             element,
             elementId: elementId,
             bounds: bounds,
-            viewportRatio: viewportRatio
+            viewportRatio: viewportRatio,
+            inTabBar: inTabBar
         )
     }
 
