@@ -99,6 +99,13 @@
       groupName: 'GitHub Actions',
     },
     {
+      description: 'SDK dev-tooling majors get their own PR so they can merge on green without waiting on runtime majors',
+      matchFileNames: ['packages/tapsmith/**'],
+      matchDepTypes: ['devDependencies'],
+      matchUpdateTypes: ['major'],
+      groupName: 'SDK dev tooling',
+    },
+    {
       description: 'One monthly lockfile refresh PR for the whole repo',
       matchUpdateTypes: ['lockFileMaintenance'],
       groupName: 'lockfile maintenance',
