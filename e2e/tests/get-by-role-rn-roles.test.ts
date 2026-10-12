@@ -7,52 +7,54 @@ import { openScreen } from "../utils/app-reset.js"
 // getByRole rejected the names, so the roles the snapshot showed could not be
 // used. iOS's new architecture publishes nothing for them: a named query finds
 // the generic view by its label, as for alert and combobox (PILOT-608).
+//
+// The roles screen's elements come from RolesScreen. Two tests keep a raw
+// getByRole inline because the role name itself is what they test: a loop over
+// every description-only role, and the "radio" alias.
 describe("getByRole for React Native's generic-view roles", () => {
   test.use({ appResetScope: "test" })
 
-  test.beforeEach(async ({ device }) => {
+  test.beforeEach(async ({ device, rolesScreen }) => {
     await openScreen(device, "/roles")
-    await expect(device.getByTestId("roles-status")).toHaveText("Last action: none, bold off")
+    await expect(rolesScreen.status).toHaveText("Last action: none, bold off")
   })
 
-  test("a named menuitem query finds the item and acts on it", async ({ device }) => {
-    await device.getByRole("menuitem", { name: "Paste" }).tap()
-    await expect(device.getByTestId("roles-status")).toHaveText("Last action: Paste, bold off")
-    await expect(device.getByRole("timer", { name: "Elapsed time" })).toBeVisible()
+  test("a named menuitem query finds the item and acts on it", async ({ rolesScreen }) => {
+    await rolesScreen.menuItem("Paste").tap()
+    await expect(rolesScreen.status).toHaveText("Last action: Paste, bold off")
+    await expect(rolesScreen.elapsedTimer).toBeVisible()
     // iOS: RN's summary role sets the summary-element trait, which marks no
     // other role, so a named query still finds it.
-    await expect(device.getByRole("summary", { name: "Order summary" })).toBeVisible()
-    await expect(device.getByRole("spinbutton", { name: "Quantity" })).toBeVisible()
+    await expect(rolesScreen.orderSummary).toBeVisible()
+    await expect(rolesScreen.quantitySpinButton).toBeVisible()
   })
 
-  test("role-only queries find every menu item on Android and none on iOS", async ({ device, platform }) => {
+  test("role-only queries find every menu item on Android and none on iOS", async ({ platform, rolesScreen }) => {
     // Android reads RN's role description; iOS has nothing to read.
-    const expected = platform === "android" ? 2 : 0
-    await expect(device.getByRole("menuitem")).toHaveCount(expected)
+    await expect(rolesScreen.menuItems).toHaveCount(platform === "android" ? 2 : 0)
     if (platform === "android") {
-      await expect(device.getByRole("menuitem").first()).toHaveRole("menuitem")
-      await expect(device.getByRole("timer")).toHaveCount(1)
-      await device.getByRole("menuitem").last().tap()
-      await expect(device.getByTestId("roles-status")).toHaveText("Last action: Paste, bold off")
+      await expect(rolesScreen.menuItems.first()).toHaveRole("menuitem")
+      await rolesScreen.menuItems.last().tap()
+      await expect(rolesScreen.status).toHaveText("Last action: Paste, bold off")
     }
   })
 
-  test("the other description-only roles, containers included, are in the tree on Android", async ({ device, platform }) => {
+  test("every description-only role, containers included, is in the tree on Android", async ({ device, platform, rolesScreen }) => {
     test.skip(platform !== "android", "iOS publishes nothing for these roles; a named query finds them there")
-    for (const role of ["menubar", "tablist", "radiogroup", "spinbutton", "scrollbar", "summary"]) {
+    for (const role of ["menu", "menubar", "tablist", "radiogroup", "spinbutton", "scrollbar", "summary", "timer"]) {
       await expect(device.getByRole(role)).toHaveCount(1)
     }
-    await expect(device.getByRole("spinbutton", { name: "Quantity" })).toHaveRole("spinbutton")
+    await expect(rolesScreen.quantitySpinButton).toHaveRole("spinbutton")
   })
 
-  test("an RN togglebutton is a button", async ({ device }) => {
-    const bold = device.getByRole("button", { name: "Bold" })
-    await bold.tap()
-    await expect(device.getByTestId("roles-status")).toHaveText("Last action: none, bold on")
+  test("an RN togglebutton is a button", async ({ rolesScreen }) => {
+    await rolesScreen.boldToggle.tap()
+    await expect(rolesScreen.status).toHaveText("Last action: none, bold on")
   })
 
-  test("getByRole('radio') is radiobutton", async ({ device }) => {
+  test("getByRole('radio') is radiobutton", async ({ device, togglesScreen }) => {
     await openScreen(device, "/toggles")
+    await expect(togglesScreen.switchesHeading).toBeVisible()
     await expect(device.getByRole("radio")).toHaveCount(3)
   })
 })
