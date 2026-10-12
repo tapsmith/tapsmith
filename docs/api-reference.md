@@ -765,7 +765,7 @@ Fetch the actual response from the server. Returns a `FetchedAPIResponse` that y
 ```ts
 await device.route('**/api/users/*', async (route) => {
   const response = await route.fetch()
-  const data = response.json()
+  const data = response.json() as { name: string }
   data.name = 'Modified'
   await route.fulfill({ json: data })
 })
