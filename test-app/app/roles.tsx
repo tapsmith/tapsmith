@@ -43,7 +43,13 @@ export default function RolesScreen() {
       </Pressable>
 
       {/* A View, not a Text: iOS reports an RN Text as static text, whatever its role. */}
-      <View style={styles.timer} accessible accessibilityRole="timer" accessibilityLabel="Elapsed time" testID="elapsed-timer">
+      <View
+        style={styles.timer}
+        accessible
+        accessibilityRole="timer"
+        accessibilityLabel="Elapsed time"
+        testID="elapsed-timer"
+      >
         <Text style={styles.timerText}>00:42</Text>
       </View>
 
@@ -51,27 +57,52 @@ export default function RolesScreen() {
       <View style={styles.row} accessibilityRole="menubar" testID="format-menubar">
         <View style={styles.row} accessibilityRole="tablist" testID="period-tabs">
           {["Day", "Week"].map((tab) => (
-            <Pressable key={tab} style={styles.chip} accessibilityRole="tab" accessibilityLabel={tab}>
+            <Pressable
+              key={tab}
+              style={styles.chip}
+              accessibilityRole="tab"
+              accessibilityLabel={tab}
+            >
               <Text>{tab}</Text>
             </Pressable>
           ))}
         </View>
         <View style={styles.row} accessibilityRole="radiogroup" testID="size-group">
           {["S", "L"].map((size) => (
-            <Pressable key={size} style={styles.chip} accessibilityRole="radio" accessibilityLabel={`Size ${size}`}>
+            <Pressable
+              key={size}
+              style={styles.chip}
+              accessibilityRole="radio"
+              accessibilityLabel={`Size ${size}`}
+            >
               <Text>{size}</Text>
             </Pressable>
           ))}
         </View>
       </View>
       <View style={styles.row}>
-        <View style={styles.chip} accessible accessibilityRole="spinbutton" accessibilityLabel="Quantity">
+        <View
+          style={styles.chip}
+          accessible
+          accessibilityRole="spinbutton"
+          accessibilityLabel="Quantity"
+        >
           <Text>3</Text>
         </View>
-        <View style={styles.chip} accessible accessibilityRole="scrollbar" accessibilityLabel="Position">
+        <View
+          style={styles.chip}
+          accessible
+          accessibilityRole="scrollbar"
+          accessibilityLabel="Position"
+        >
           <Text>|</Text>
         </View>
-        <View style={styles.chip} accessible accessibilityRole="summary" accessibilityLabel="Order summary">
+        <View
+          style={styles.chip}
+          accessible
+          accessibilityRole="summary"
+          accessibilityLabel="Order summary"
+        >
           <Text>2 items</Text>
         </View>
       </View>
@@ -104,6 +135,12 @@ const styles = StyleSheet.create({
   timer: { marginBottom: 16 },
   timerText: { fontSize: 18 },
   row: { flexDirection: "row", gap: 8, marginBottom: 12 },
-  chip: { paddingVertical: 8, paddingHorizontal: 12, borderWidth: 1, borderColor: "#ccc", borderRadius: 6 },
+  chip: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 6,
+  },
   status: { fontSize: 14, color: "#333" },
 })
