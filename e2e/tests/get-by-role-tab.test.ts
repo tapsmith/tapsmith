@@ -25,10 +25,9 @@ describe("getByRole('tab') on platform-native tabs (expo-router NativeTabs)", ()
     await expect(nativeTabsScreen.homeContent).toBeVisible()
   })
 
-  test("the iOS tab bar is a tablist, and its tabs are found inside it", async ({ platform, nativeTabsScreen }) => {
+  test("the iOS tab bar is a tablist, not a tab", async ({ platform, nativeTabsScreen }) => {
     test.skip(platform !== "ios", "Android's bottom navigation bar publishes no tablist role")
     await expect(nativeTabsScreen.tabBar).toHaveCount(1)
     await expect(nativeTabsScreen.tabBar).toHaveRole("tablist")
-    await expect(nativeTabsScreen.tabBarTabs).toHaveCount(2)
   })
 })

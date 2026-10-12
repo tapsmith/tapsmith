@@ -11,7 +11,6 @@ export class NativeTabsScreen {
   get tabBar() { return this.device.getByRole("tablist") }
   get tabs() { return this.device.getByRole("tab") }
   tab(name: string) { return this.device.getByRole("tab", { name }) }
-  get tabBarTabs() { return this.tabBar.getByRole("tab") }
 
   get homeContent() { return this.device.getByText("Home content", { exact: true }) }
   get exploreContent() { return this.device.getByText("Explore content", { exact: true }) }
