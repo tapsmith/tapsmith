@@ -19,6 +19,10 @@ describe("getByRole for React Native's generic-view roles", () => {
     await device.getByRole("menuitem", { name: "Paste" }).tap()
     await expect(device.getByTestId("roles-status")).toHaveText("Last action: Paste, bold off")
     await expect(device.getByRole("timer", { name: "Elapsed time" })).toBeVisible()
+    // iOS: RN's summary role sets the summary-element trait, which marks no
+    // other role, so a named query still finds it.
+    await expect(device.getByRole("summary", { name: "Order summary" })).toBeVisible()
+    await expect(device.getByRole("spinbutton", { name: "Quantity" })).toBeVisible()
   })
 
   test("role-only queries find every menu item on Android and none on iOS", async ({ device, platform }) => {
