@@ -103,6 +103,14 @@ The app accepts the author or committer's sign-off,
 exempts merges and GitHub-recognised bots, and allows authors to repair their own missing
 sign-offs with individual remediation commits. Repository setup is in `.github/dco-setup.md`.
 
+Dependency updates are handled by **Renovate** (`.github/renovate.json5`, the comment at the top
+explains the policy). It opens grouped PRs on Monday mornings and merges non-major updates itself
+once every check is green. Majors, runtime dependencies of the published SDK, and Expo SDK upgrades
+of `test-app` (done by hand with `npx expo install --fix`) wait for a human. The "Dependency
+Dashboard" issue lists everything pending. Dependabot is used only for alerts, which Renovate turns
+into immediate fix PRs; Dependabot security-update PRs are deliberately left off so the two don't
+open duplicates.
+
 Device E2E runs separately on every PR: `e2e-android.yml` (ubuntu + KVM emulator, 5 shards) and
 `e2e-ios.yml` (macOS simulators, 3 shards). macOS runners are capped at 5 concurrent jobs org-wide,
 so `e2e-ios.yml` skips draft PRs (it starts when the PR is marked ready), skips changes that cannot
