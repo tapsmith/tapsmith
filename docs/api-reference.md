@@ -463,10 +463,12 @@ The call is recorded in the trace as a `resetApp` action whose detail line names
 
 Force-stops and relaunches the app without clearing persistent storage. Resets all in-memory state (React component state, navigation stack) while preserving data on disk (AsyncStorage, SQLite, SharedPreferences).
 
-Use it in the *middle* of a test, for example to check that state survives a restart. To restart before every test, declare `test.use({ appReset: "restart", appResetScope: "test" })` instead of calling this in a `beforeEach` (the `tapsmith/prefer-app-reset-option` lint rule flags that hook; see [Test isolation](writing-tests.md#test-isolation)):
+Use it in the *middle* of a test, for example to check that state survives a restart. To restart before every test, declare `test.use({ appReset: "restart", appResetScope: "test" })` instead of a `beforeEach` that only restarts the app (the `tapsmith/prefer-app-reset-option` lint rule flags such a hook; see [Test isolation](writing-tests.md#test-isolation)):
 
 ```typescript
 test("remembers the signed-in user across a restart", async ({ device }) => {
+  await device.getByRole("textfield", { name: "Email" }).type("user@example.com")
+  await device.getByRole("button", { name: "Sign In" }).tap()
   await device.restartApp("com.example.myapp")
   await expect(device.getByText("Welcome back")).toBeVisible()
 })

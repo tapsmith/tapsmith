@@ -10,9 +10,10 @@
  * `const` to show alternatives. So the check reports only the diagnostics that
  * mean "this is not the API" (a missing property, a wrong argument, an unknown
  * option) and ignores the ones a fragment produces by being a fragment. In
- * every sample, `device` is a `Device` and `webview` a `WebViewHandle` unless
- * the sample declares them, and the runner's names (`test`, `expect`, …) are
- * typed whether or not it imports them. Only `tapsmith` resolves: names a
+ * every sample, `device` is a `Device`, `webview` a `WebViewHandle` and
+ * `request` an `APIRequestContext` unless the sample declares them, and the
+ * runner's names (`test`, `expect`, …) are typed whether or not it imports
+ * them. Only `tapsmith` resolves: names a
  * sample imports from anywhere else (`@tapsmith/react-native`, its own screen
  * objects) are unchecked, as are TSX samples' JSX props.
  */
@@ -250,11 +251,13 @@ function wrap(sample: Sample): Wrapped {
   // (TS2451, ignored); fixture parameters (`async ({ device }) =>`) shadow it.
   const runnerNames = RUNNER_NAMES.filter((name) => !bindsName(sample.code, name));
   const header = [
-    "import type { Device as __Device, WebViewHandle as __WebViewHandle } from 'tapsmith';",
+    "import type { Device as __Device, WebViewHandle as __WebViewHandle, APIRequestContext as __APIRequestContext } from 'tapsmith';",
     runnerNames.length ? `import { ${runnerNames.join(', ')} } from 'tapsmith';` : '',
     'declare const device: __Device;',
     // WebView guides use `webview` from an earlier `await device.webview()`.
     bindsName(sample.code, 'webview') ? '' : 'declare const webview: __WebViewHandle;',
+    // …and the `request` fixture's samples use it the same way.
+    bindsName(sample.code, 'request') ? '' : 'declare const request: __APIRequestContext;',
     'export {};',
   ];
   // A config fragment is checked as the inside of `defineConfig({ … })`.
@@ -439,6 +442,11 @@ describe('docs TypeScript samples match the SDK API', () => {
   it('reports a call no overload of an overloaded method accepts', () => {
     const found = typeCheck(samplesIn('t.md', '```ts\nawait device.restartApp(123)\n```\n'));
     expect(found.map((m) => m.code)).toEqual([2769]);
+  }, 120_000);
+
+  it('types the `request` fixture in fragments', () => {
+    const found = typeCheck(samplesIn('t.md', '```ts\nawait request.frobnicate("/x")\n```\n'));
+    expect(found.map((m) => m.code)).toEqual([2339]);
   }, 120_000);
 
   it('types `webview` in WebView fragments', () => {

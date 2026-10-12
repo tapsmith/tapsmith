@@ -647,7 +647,7 @@ beforeAll(async ({ device }) => {
 })
 
 beforeEach(async ({ device }) => {
-  await device.getByDescription("Home").tap()
+  await expect(device.getByText("Sign In")).toBeVisible()
 })
 ```
 

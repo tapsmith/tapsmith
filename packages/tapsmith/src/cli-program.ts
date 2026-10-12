@@ -228,13 +228,14 @@ function collectProject(value: string, previous: string[] | undefined): string[]
 
 const ROOT_EXAMPLES = `
 Examples:
-  tapsmith test                           Run every test file
-  tapsmith test login.tapsmith.ts -j 2    Run one file on two devices
-  tapsmith test --ui                      Open UI mode
-  tapsmith test --shard=1/4               Run shard 1 of 4 (CI)
-  tapsmith show-trace trace.zip           Open a trace in the viewer
-  tapsmith init --yes                     Set up a project non-interactively
-  tapsmith help <command>                 Show a command's options`;
+  tapsmith test                      Run every test file
+  tapsmith test login.tapsmith.ts    Run one file
+  tapsmith test -j 2                 Run files on two devices in parallel
+  tapsmith test --ui                 Open UI mode
+  tapsmith test --shard=1/4          Run shard 1 of 4 (CI)
+  tapsmith show-trace trace.zip      Open a trace in the viewer
+  tapsmith init --yes                Set up a project non-interactively
+  tapsmith help <command>            Show a command's options`;
 
 const TEST_EXAMPLES = `
 Examples:
