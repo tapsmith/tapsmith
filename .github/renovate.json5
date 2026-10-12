@@ -1,0 +1,157 @@
+// Renovate (https://docs.renovatebot.com) keeps every dependency in the repo
+// current: the npm packages, Cargo, the Android agent's Gradle build and the
+// GitHub Actions in .github/workflows.
+//
+// - Updates are batched into a few grouped PRs, opened early on Monday
+//   mornings (London time), so CI and the macOS runners aren't swamped.
+// - npm releases must be 3 days old before Renovate proposes them. That's a
+//   guard against compromised releases, which are usually caught and pulled
+//   within hours.
+// - Renovate merges non-major updates itself, but only after every check on
+//   the PR is green, including the device E2E workflows. It does this itself
+//   (platformAutomerge: false) because the `main` ruleset only requires DCO,
+//   so GitHub's own auto-merge would not wait for CI.
+// - Major updates and anything that ships inside the published `tapsmith`
+//   package wait for a human to review and merge.
+// - Security fixes (from GitHub's Dependabot alerts and OSV) get their own PR
+//   straight away, ignoring the schedule and the 3-day wait.
+//
+// The "Dependency Dashboard" issue lists everything pending or blocked.
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  extends: [
+    'config:recommended',
+    ':dependencyDashboard',
+    'helpers:pinGitHubActionDigests',
+    ':timezone(Europe/London)',
+  ],
+  labels: ['dependencies'],
+  semanticCommits: 'disabled',
+  schedule: ['before 6am on monday'],
+  prConcurrentLimit: 8,
+  prHourlyLimit: 4,
+  platformAutomerge: false,
+  automergeType: 'pr',
+  minimumReleaseAge: '3 days',
+  internalChecksFilter: 'strict',
+  rebaseWhen: 'conflicted',
+  // Gitignored scratch projects that hold lockfiles locally.
+  ignorePaths: [
+    '**/node_modules/**',
+    'dogfooding/**',
+    'benchmark/**',
+    'tools/promo-experimental/**',
+  ],
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ['before 6am on the first day of the month'],
+    automerge: true,
+  },
+  vulnerabilityAlerts: {
+    labels: ['dependencies', 'security'],
+    minimumReleaseAge: null,
+    schedule: ['at any time'],
+  },
+  osvVulnerabilityAlerts: true,
+  packageRules: [
+    // ─── Grouping ───
+    {
+      description: 'One PR per area for routine updates',
+      matchFileNames: ['packages/tapsmith/**'],
+      groupName: 'SDK dependencies',
+    },
+    {
+      matchFileNames: ['packages/tapsmith-react-native/**'],
+      groupName: 'React Native package dependencies',
+    },
+    {
+      matchFileNames: ['e2e/**', 'web-tests/**'],
+      groupName: 'test suite dependencies',
+    },
+    {
+      matchFileNames: ['test-app/**'],
+      groupName: 'test app dependencies',
+    },
+    {
+      matchFileNames: ['website/**'],
+      groupName: 'website dependencies',
+    },
+    {
+      matchFileNames: ['tools/**'],
+      groupName: 'tools dependencies',
+      schedule: ['before 6am on the first day of the month'],
+    },
+    {
+      matchManagers: ['cargo'],
+      groupName: 'Rust dependencies',
+    },
+    {
+      matchManagers: ['gradle', 'gradle-wrapper'],
+      groupName: 'Android agent dependencies',
+    },
+    {
+      matchManagers: ['github-actions'],
+      groupName: 'GitHub Actions',
+    },
+    {
+      description: 'Majors stay in their own PRs so one breaking change does not block a whole group',
+      matchUpdateTypes: ['major'],
+      groupName: null,
+    },
+
+    // ─── Automerge ───
+    {
+      description: 'Merge non-major updates once all checks pass',
+      matchUpdateTypes: ['minor', 'patch', 'pin', 'digest', 'pinDigest'],
+      automerge: true,
+    },
+    {
+      description: 'Runtime dependencies of the published SDK ship to users, so a human reviews them',
+      matchFileNames: ['packages/tapsmith/package.json'],
+      matchDepTypes: ['dependencies'],
+      automerge: false,
+    },
+
+    // ─── Pins that need a human ───
+    {
+      description: 'Expo SDK upgrades pin react, react-native and expo-* together (`npx expo install --fix`), so they are done by hand',
+      matchFileNames: ['test-app/**'],
+      matchPackageNames: [
+        'expo',
+        'expo-*',
+        '@expo/*',
+        'react',
+        'react-native',
+        'react-native-*',
+        '@react-native/*',
+        '@react-native-community/cli',
+        '@react-native-async-storage/async-storage',
+        '@types/react',
+      ],
+      enabled: false,
+    },
+    {
+      description: 'Type definitions track the oldest supported Node (engines: >=22)',
+      matchPackageNames: ['@types/node'],
+      allowedVersions: '<23',
+    },
+    {
+      description: 'Leave engines ranges alone; raising the Node floor is a product decision',
+      matchDepTypes: ['engines'],
+      enabled: false,
+    },
+    {
+      description: 'CI JDK follows what the Android Gradle Plugin supports, so it moves with an AGP upgrade',
+      matchManagers: ['github-actions'],
+      matchDepNames: ['java-jdk'],
+      matchUpdateTypes: ['major'],
+      enabled: false,
+    },
+    {
+      description: 'Rust toolchain stays on the moving `stable` channel; just pin the action digest',
+      matchPackageNames: ['dtolnay/rust-toolchain'],
+      matchUpdateTypes: ['major', 'minor', 'patch'],
+      enabled: false,
+    },
+  ],
+}
