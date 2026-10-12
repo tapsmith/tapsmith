@@ -52,7 +52,7 @@ function makeMockInspector(overrides: Record<string, unknown> = {}) {
       state.connected = false;
     }),
     listTargets: vi.fn(async (): Promise<MockTarget[]> => []),
-    connectToPage: vi.fn(async () => {}),
+    connectToPage: vi.fn(async (_appId: string, _pageId: number) => {}),
     // Shape of a successful Runtime.evaluate reply through the inspector
     // transport — _evaluate unwraps the outer `result` key. The connect
     // probe evaluates document.visibilityState, so a "live rendered page"
