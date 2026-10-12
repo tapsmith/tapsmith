@@ -17,6 +17,7 @@
  * objects) are unchecked, as are TSX samples' JSX props.
  */
 
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { glob } from 'glob';
@@ -106,8 +107,22 @@ function samplesIn(file: string, source: string): Sample[] {
   return out;
 }
 
+/** Files git tracks, plus new ones not yet added — never ignored ones (local plans, session notes). */
+function repoFiles(): Set<string> | undefined {
+  try {
+    return new Set(
+      execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+        .split('\n').filter(Boolean),
+    );
+  } catch {
+    return undefined; // not a git checkout: scan what the globs find
+  }
+}
+
 function docFiles(): string[] {
-  return glob.sync(SOURCES, { cwd: REPO, nodir: true, ignore: ['**/node_modules/**'] }).sort();
+  const tracked = repoFiles();
+  return glob.sync(SOURCES, { cwd: REPO, nodir: true, ignore: ['**/node_modules/**'] })
+    .filter((rel) => !tracked || tracked.has(rel)).sort();
 }
 
 function collectSamples(): Sample[] {
@@ -120,11 +135,17 @@ function collectCodeSpans(): Sample[] {
 
 // ─── Names in prose ───
 
-/** Every member name an instance of `cls` has on its prototype chain (methods and getters). */
+/**
+ * The public methods an instance of `cls` has on its prototype chain: not
+ * getters (`device.platform()` is not callable), not `_`-internals.
+ */
 function membersOf(cls: { prototype: object }): Set<string> {
   const names = new Set<string>();
   for (let proto: object | null = cls.prototype; proto && proto !== Object.prototype; proto = Object.getPrototypeOf(proto)) {
-    for (const name of Object.getOwnPropertyNames(proto)) names.add(name);
+    for (const name of Object.getOwnPropertyNames(proto)) {
+      const descriptor = Object.getOwnPropertyDescriptor(proto, name)!;
+      if (typeof descriptor.value === 'function' && name !== 'constructor' && !name.startsWith('_')) names.add(name);
+    }
   }
   return names;
 }
@@ -182,6 +203,10 @@ const API_MISMATCH = new Map<number, string>([
   [2724, 'module has no such export (did you mean …)'],
   [2614, 'module has no such export'],
   [2769, 'no overload matches the call'],
+  [2349, 'not callable (a property called as a method)'],
+  [6234, 'not callable (a getter called as a method)'],
+  [2341, 'private member'],
+  [2445, 'protected member'],
   [2322, 'value is not assignable (a wrong option value)'],
   [2820, 'value is not assignable (did you mean …)'],
 ]);
@@ -201,8 +226,26 @@ function bindsName(code: string, name: string): boolean {
   return imported || new RegExp(`\\b(?:const|let|var|function|class)\\s+${name}\\b`).test(code);
 }
 
+/**
+ * A config fragment — `trace: { mode: "on", … }` or `appReset: "restart",` —
+ * which on its own parses as a labelled statement and checks nothing. Its
+ * first code line is `key:` (no sample uses a JavaScript label).
+ */
+function configFragmentKeyLine(code: string): number | undefined {
+  const lines = code.split('\n');
+  const first = lines.findIndex((line) => line.trim() && !/^\s*\/\//.test(line));
+  return first >= 0 && /^\s*[A-Za-z_$][\w$]*\??\s*:/.test(lines[first]!) ? first : undefined;
+}
+
+interface Wrapped {
+  text: string;
+  headerLines: number;
+  /** For a config fragment, the 0-based line (in `text`) of its first key. */
+  fragmentKeyLine?: number;
+}
+
 /** The header every sample gets: its own imports stay, `device` is a `Device`, runner names are typed. */
-function wrap(sample: Sample): { text: string; headerLines: number } {
+function wrap(sample: Sample): Wrapped {
   // A sample that declares its own top-level `device` collides with this one
   // (TS2451, ignored); fixture parameters (`async ({ device }) =>`) shadow it.
   const runnerNames = RUNNER_NAMES.filter((name) => !bindsName(sample.code, name));
@@ -214,7 +257,14 @@ function wrap(sample: Sample): { text: string; headerLines: number } {
     bindsName(sample.code, 'webview') ? '' : 'declare const webview: __WebViewHandle;',
     'export {};',
   ];
-  return { text: `${header.join('\n')}\n${sample.code}\n`, headerLines: header.length };
+  // A config fragment is checked as the inside of `defineConfig({ … })`.
+  const keyLine = configFragmentKeyLine(sample.code);
+  if (keyLine !== undefined) header.push('defineConfig({');
+  return {
+    text: `${header.join('\n')}\n${sample.code}\n${keyLine !== undefined ? '})\n' : ''}`,
+    headerLines: header.length,
+    fragmentKeyLine: keyLine === undefined ? undefined : header.length + keyLine,
+  };
 }
 
 /**
@@ -257,7 +307,7 @@ interface Mismatch {
 }
 
 function typeCheck(samples: Sample[]): Mismatch[] {
-  const virtual = new Map<string, { sample: Sample; text: string; headerLines: number }>();
+  const virtual = new Map<string, Wrapped & { sample: Sample }>();
   samples.forEach((sample, i) => {
     const name = path.join(REPO, '.docs-snippets', `${i}${sample.tsx ? '.tsx' : '.ts'}`);
     virtual.set(name, { sample, ...wrap(sample) });
@@ -298,6 +348,11 @@ function typeCheck(samples: Sample[]): Mismatch[] {
     for (const d of program.getSemanticDiagnostics(sourceFile)) {
       if (!API_MISMATCH.has(d.code) || d.start === undefined) continue;
       if (fromUnresolvedValue(checker, sourceFile, d.start)) continue;
+      // A fragment of something else shaped like config — a project's `use: {…}`,
+      // a fixture definition — is not a root config key: only what is inside it
+      // could be checked against the root, so drop the unknown-key error on it.
+      const { line: diagnosticLine } = sourceFile.getLineAndCharacterOfPosition(d.start);
+      if (diagnosticLine === v.fragmentKeyLine && (d.code === 2353 || d.code === 2561)) continue;
       // TSX samples are React Native components, checked without React's
       // types: their JSX props and children are not assignable to anything.
       if (v.sample.tsx && (d.code === 2322 || d.code === 2820)) continue;
@@ -390,6 +445,18 @@ describe('docs TypeScript samples match the SDK API', () => {
     const md = ['```ts', 'const a = 1', '```', '', '- item', '', '  ```ts', '  const a = 1', '  ```', '', '```ts', 'const a = 1', '```'].join('\n');
     expect(samplesIn('t.md', md).map((s) => s.line)).toEqual([2, 8, 12]);
   });
+
+  it('checks a config fragment as the inside of defineConfig', () => {
+    const md = '```ts\n// tapsmith.config.ts\ntrace: {\n  mode: "on",\n  networkHost: ["*.myapp.com"],\n},\n```\n';
+    expect(typeCheck(samplesIn('t.md', md)).map((m) => [m.line, m.code])).toEqual([[5, 2561]]);
+  }, 120_000);
+
+  it('reports a property or getter called as a method', () => {
+    const md = '```ts\nconst p = device.platform()\nconst t = device.tracing()\n```\n';
+    expect(typeCheck(samplesIn('t.md', md)).map((m) => m.code)).toEqual([6234, 2349]);
+    expect(codeSpansIn('t.md', '`device.platform()` and `device._setDefaultTimeout(1)`\n').flatMap(unknownNamesIn))
+      .toEqual(['device.platform() is not a Device method', 'device._setDefaultTimeout() is not a Device method']);
+  }, 120_000);
 
   it('reports options a method does not take', () => {
     const found = typeCheck(samplesIn('t.md', '```ts\nconst webview = await device.webview({ timeout: 60_000 })\n```\n'));
