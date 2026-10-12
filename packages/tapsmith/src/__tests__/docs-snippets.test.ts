@@ -37,6 +37,17 @@ interface Sample {
   tsx: boolean;
 }
 
+/** A token's children: list items, inline tokens, and table cells (`header[]` / `rows[][]`). */
+function childTokens(token: Token): Token[] {
+  const t = token as { tokens?: Token[]; items?: Token[]; header?: Array<{ tokens: Token[] }>; rows?: Array<Array<{ tokens: Token[] }>> };
+  return [
+    ...(t.items ?? []),
+    ...(t.tokens ?? []),
+    ...(t.header ?? []).flatMap((cell) => cell.tokens),
+    ...(t.rows ?? []).flatMap((row) => row.flatMap((cell) => cell.tokens)),
+  ];
+}
+
 /** Inline code spans of a markdown file (prose like "use `getByDescription()`"), with their lines. */
 function codeSpansIn(file: string, source: string): Sample[] {
   const out: Sample[] = [];
@@ -47,9 +58,7 @@ function codeSpansIn(file: string, source: string): Sample[] {
       if (at >= 0) searchFrom = at + token.raw.length;
       out.push({ file, line: at >= 0 ? source.slice(0, at).split('\n').length : 0, code: token.text as string, tsx: false });
     }
-    const children = (token as { tokens?: Token[]; items?: Token[] });
-    for (const child of children.items ?? []) visit(child);
-    for (const child of children.tokens ?? []) visit(child);
+    for (const child of childTokens(token)) visit(child);
   };
   for (const token of marked.lexer(source)) visit(token);
   return out;
@@ -72,9 +81,7 @@ function samplesIn(file: string, source: string): Sample[] {
         out.push({ file, line, code: token.text as string, tsx: lang === 'tsx' });
       }
     }
-    const children = (token as { tokens?: Token[]; items?: Token[] });
-    for (const child of children.items ?? []) visit(child);
-    for (const child of children.tokens ?? []) visit(child);
+    for (const child of childTokens(token)) visit(child);
   };
   for (const token of marked.lexer(source)) visit(token);
   return out;
@@ -110,6 +117,9 @@ function membersOf(cls: { prototype: object }): Set<string> {
 const NOT_TAPSMITH: Array<{ problem: string; files: string[]; reason: string }> = [
   { problem: 'device.disableSynchronization() is not a Device method', files: ['docs/migrating-from-detox.md'], reason: 'Detox API' },
   { problem: 'device.reloadReactNative() is not a Device method', files: ['docs/migrating-from-detox.md', 'docs/warm-reset.md'], reason: 'Detox API' },
+  { problem: 'device.openURL() is not a Device method', files: ['docs/migrating-from-detox.md'], reason: 'Detox API, in the device-object mapping table' },
+  { problem: 'device.sendToHome() is not a Device method', files: ['docs/migrating-from-detox.md'], reason: 'Detox API, in the device-object mapping table' },
+  { problem: 'device.getPlatform() is not a Device method', files: ['docs/migrating-from-detox.md'], reason: 'Detox API, in the device-object mapping table' },
 ];
 
 const DEVICE_MEMBERS = membersOf(Device);
@@ -152,14 +162,33 @@ const API_MISMATCH = new Map<number, string>([
   [2305, 'module has no such export'],
   [2724, 'module has no such export (did you mean …)'],
   [2614, 'module has no such export'],
+  [2322, 'value is not assignable (a wrong option value)'],
+  [2820, 'value is not assignable (did you mean …)'],
 ]);
 
-/** The header every sample gets: its own imports stay, `device` is a `Device`. */
+/**
+ * Runner globals a sample may use without importing them. Undeclared, each
+ * would be untyped and hide every check behind it: the callback of an
+ * undeclared `test` gets an untyped `{ device }`, and an undeclared `expect`
+ * returns `any`. So the header imports each one the sample does not declare.
+ */
+const RUNNER_NAMES = ['test', 'describe', 'expect', 'beforeAll', 'beforeEach', 'afterAll', 'afterEach', 'defineConfig'];
+
+/** Whether the sample binds `name` itself: an import, or a top-level-ish declaration. */
+function bindsName(code: string, name: string): boolean {
+  const imported = [...code.matchAll(/\bimport\s*(?:type\s*)?\{([^}]*)\}/g)]
+    .some((m) => m[1]!.split(',').some((part) => part.trim().split(/\s+as\s+/).pop()!.trim() === name));
+  return imported || new RegExp(`\\b(?:const|let|var|function|class)\\s+${name}\\b`).test(code);
+}
+
+/** The header every sample gets: its own imports stay, `device` is a `Device`, runner names are typed. */
 function wrap(sample: Sample): { text: string; headerLines: number } {
   // A sample that declares its own top-level `device` collides with this one
   // (TS2451, ignored); fixture parameters (`async ({ device }) =>`) shadow it.
+  const runnerNames = RUNNER_NAMES.filter((name) => !bindsName(sample.code, name));
   const header = [
     "import type { Device as __Device } from 'tapsmith';",
+    runnerNames.length ? `import { ${runnerNames.join(', ')} } from 'tapsmith';` : '',
     'declare const device: __Device;',
     'export {};',
   ];
@@ -177,8 +206,14 @@ function fromUnresolvedValue(checker: ts.TypeChecker, sourceFile: ts.SourceFile,
   let node: ts.Node | undefined = findNode(sourceFile, start);
   while (node && !ts.isPropertyAccessExpression(node)) node = node.parent;
   if (!node) return false;
-  const receiver = node.expression;
-  if (!ts.isCallExpression(receiver) || !ts.isIdentifier(receiver.expression) || receiver.expression.text !== 'expect') return false;
+  // Through modifiers: `expect(x).not.toBeVisible()`, `expect.soft(x).…`.
+  let receiver: ts.Expression = node.expression;
+  while (ts.isPropertyAccessExpression(receiver)) receiver = receiver.expression;
+  if (!ts.isCallExpression(receiver)) return false;
+  const callee = receiver.expression;
+  const isExpect = (ts.isIdentifier(callee) && callee.text === 'expect')
+    || (ts.isPropertyAccessExpression(callee) && ts.isIdentifier(callee.expression) && callee.expression.text === 'expect');
+  if (!isExpect) return false;
   const arg = receiver.arguments[0];
   return arg !== undefined && (checker.getTypeAtLocation(arg).flags & ts.TypeFlags.Any) !== 0;
 }
@@ -241,6 +276,9 @@ function typeCheck(samples: Sample[]): Mismatch[] {
     for (const d of program.getSemanticDiagnostics(sourceFile)) {
       if (!API_MISMATCH.has(d.code) || d.start === undefined) continue;
       if (fromUnresolvedValue(checker, sourceFile, d.start)) continue;
+      // TSX samples are React Native components, checked without React's
+      // types: their JSX props and children are not assignable to anything.
+      if (v.sample.tsx && (d.code === 2322 || d.code === 2820)) continue;
       const { line } = sourceFile.getLineAndCharacterOfPosition(d.start);
       mismatches.push({
         sample: v.sample,
@@ -294,6 +332,28 @@ describe('docs TypeScript samples match the SDK API', () => {
     expect(found.map((m) => [m.line, m.code])).toEqual([[4, 2339]]);
   }, 120_000);
 
+  it('checks fixture parameters and assertions in samples that import nothing', () => {
+    const md = [
+      '```typescript',
+      'test("x", async ({ device }) => {',
+      '  await device.getByContentDesc("Close").tap()',
+      '  await expect(device.getByText("Hi")).toBeFrobbed()',
+      '})',
+      '```',
+    ].join('\n');
+    expect(typeCheck(samplesIn('t.md', md)).map((m) => [m.line, m.code])).toEqual([[3, 2339], [4, 2339]]);
+  }, 120_000);
+
+  it('reports a wrong value for a real option', () => {
+    const md = '```ts\ntest.use({ appResetScope: "tests" })\ntest.use({ appReset: "wipe" })\n```\n';
+    expect(typeCheck(samplesIn('t.md', md)).map((m) => m.code)).toEqual([2820, 2322]);
+  }, 120_000);
+
+  it('reads inline code inside tables', () => {
+    const spans = codeSpansIn('t.md', '| Detox | Tapsmith |\n|---|---|\n| `x` | `getByContentDesc()` |\n');
+    expect(spans.flatMap(unknownNamesIn)).toEqual(['getByContentDesc() is not a locator method']);
+  });
+
   it('reports options a method does not take', () => {
     const found = typeCheck(samplesIn('t.md', '```ts\nconst webview = await device.webview({ timeout: 60_000 })\n```\n'));
     expect(found.map((m) => m.code)).toEqual([2345]);
@@ -308,6 +368,7 @@ describe('docs TypeScript samples match the SDK API', () => {
       'test("x", async ({ device }) => { /* … */ })',
       'import { LoginScreen } from "../screens/login.screen.js"',
       'await expect(new LoginScreen(device).heading).toBeVisible()',
+      'await expect(webview.locator(".spinner")).not.toBeVisible()',
       '```',
     ].join('\n');
     expect(typeCheck(samplesIn('t.md', md))).toEqual([]);
