@@ -4,12 +4,15 @@ import { _text, _role } from '../selectors.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from '../grpc-client.js';
 
 // PILOT-716: tap-family actions scroll an element the platform reports in the
-// tree but entirely off-screen (iOS) into view before acting, as Playwright's
-// actionability checks do; what cannot be reached ends in one scrollIntoView()
-// hint on both platforms.
+// tree but entirely off-screen (iOS) towards the middle of the screen before
+// acting, as Playwright's actionability checks do; what cannot be reached ends
+// in one scrollIntoView() hint on both platforms.
 
+const SCREEN_W = 390;
 const SCREEN_H = 800;
 const ROW_H = 50;
+const ROW_W = 390;
+const HIERARCHY = `<?xml version="1.0"?><hierarchy><node bounds="[0,0][${SCREEN_W},${SCREEN_H}]"><node bounds="[0,0][1,1]"/></node></hierarchy>`;
 
 function ok(): ActionResponse {
   return { requestId: '1', success: true, errorType: '', errorMessage: '', screenshot: Buffer.alloc(0) };
@@ -25,66 +28,85 @@ function info(overrides: Partial<ElementInfo>): ElementInfo {
 }
 
 /**
- * A vertical list on an 800pt screen. `top` is the row's position; a swipe
- * moves the content by `travel × distance × screen height` (travel > 1
- * simulates a fling that overshoots). Returns the client and the swipe log.
+ * A row on a 390×800pt screen. A vertical swipe moves the content by
+ * `travel × distance × screen height` (travel > 1 simulates a fling past the
+ * target); horizontal swipes move it only with `horizontal: true`. `minTop`
+ * / `maxTop` clamp the row's travel (the ends of the list).
  */
-function simulatedList(opts: {
+function simulatedScreen(opts: {
   top: number;
+  left?: number;
   travel?: number;
   moves?: boolean;
+  horizontal?: boolean;
+  minTop?: number;
+  maxTop?: number;
   checked?: boolean;
   elementIdAfterScroll?: string;
   goneAfterSwipe?: boolean;
-  timeoutMs?: number;
+  /** Reads after the first swipe that come back as an agent fault. */
+  faultReadsAfterSwipe?: number;
+  /** Reads after the first swipe that see the row disabled. */
+  disabledReadsAfterSwipe?: number;
+  /** Bounds the row reports on successive reads before the first swipe (animating in). */
+  animation?: number[];
+  hierarchyFails?: boolean;
 }) {
-  const state = { top: opts.top, swiped: false, checked: opts.checked ?? false };
+  const state = {
+    top: opts.top, left: opts.left ?? 0, swiped: false, checked: opts.checked ?? false,
+    faults: opts.faultReadsAfterSwipe ?? 0, disabled: opts.disabledReadsAfterSwipe ?? 0,
+    animation: [...(opts.animation ?? [])],
+  };
   const row = (): ElementInfo => {
-    const bounds = { left: 0, top: state.top, right: 390, bottom: state.top + ROW_H };
-    const onScreen = bounds.bottom > 0 && bounds.top < SCREEN_H;
+    const bounds = { left: state.left, top: state.top, right: state.left + ROW_W, bottom: state.top + ROW_H };
+    const onScreen = bounds.bottom > 0 && bounds.top < SCREEN_H && bounds.right > 0 && bounds.left < SCREEN_W;
+    let enabled = true;
+    if (state.swiped && state.disabled > 0) {
+      state.disabled--;
+      enabled = false;
+    }
     return info({
       elementId: state.swiped && opts.elementIdAfterScroll ? opts.elementIdAfterScroll : 'el-1',
-      bounds,
-      visible: onScreen,
-      viewportRatio: onScreen ? 1 : 0,
-      checked: state.checked,
+      bounds, visible: onScreen, viewportRatio: onScreen ? 1 : 0, checked: state.checked, enabled,
     });
   };
-  const findElements = vi.fn(async () => ({
-    requestId: '1',
-    elements: opts.goneAfterSwipe && state.swiped ? [] : [row()],
-    errorMessage: '',
-  }));
+  const findElements = vi.fn(async () => {
+    if (!state.swiped && state.animation.length > 0) state.top = state.animation.shift()!;
+    if (state.swiped && state.faults > 0) {
+      state.faults--;
+      return { requestId: '1', elements: [], errorMessage: 'Agent command timed out after 5000ms' };
+    }
+    return { requestId: '1', elements: opts.goneAfterSwipe && state.swiped ? [] : [row()], errorMessage: '' };
+  });
   const swipe = vi.fn(async (direction: string, o?: { distance?: number; speed?: number }) => {
     state.swiped = true;
     if (opts.moves === false) return ok();
-    const delta = (opts.travel ?? 1) * (o?.distance ?? 0.6) * SCREEN_H;
-    state.top += direction === 'up' ? -delta : direction === 'down' ? delta : 0;
+    const travel = opts.travel ?? 1;
+    const d = o?.distance ?? 0.6;
+    if (direction === 'up' || direction === 'down') {
+      state.top += (direction === 'up' ? -1 : 1) * travel * d * SCREEN_H;
+      if (opts.minTop !== undefined) state.top = Math.max(opts.minTop, state.top);
+      if (opts.maxTop !== undefined) state.top = Math.min(opts.maxTop, state.top);
+    } else if (opts.horizontal) {
+      state.left += (direction === 'left' ? -1 : 1) * travel * d * SCREEN_W;
+    }
     return ok();
   });
   const tap = vi.fn(async () => {
     state.checked = !state.checked;
     return ok();
   });
+  const getUiHierarchy = vi.fn(async () => {
+    if (opts.hierarchyFails) throw new Error('hierarchy dump failed');
+    return { requestId: '1', hierarchyXml: HIERARCHY, errorMessage: '' };
+  });
   const client = {
-    findElements,
-    swipe,
-    tap,
+    findElements, swipe, tap, getUiHierarchy,
     doubleTap: vi.fn(async () => ok()),
     longPress: vi.fn(async () => ok()),
     waitForIdle: vi.fn(async () => ok()),
   } as unknown as TapsmithGrpcClient;
-  return { client, swipe, tap, findElements, state, row };
-}
-
-/** The error `fn` rejects with, under a fake clock advanced by `advanceMs`. */
-async function rejectionOf(advanceMs: number, fn: () => Promise<unknown>): Promise<Error> {
-  try {
-    await withFakeClock(advanceMs, fn);
-  } catch (err) {
-    return err as Error;
-  }
-  throw new Error('expected a rejection');
+  return { client, swipe, tap, findElements, getUiHierarchy, state };
 }
 
 async function withFakeClock<T>(advanceMs: number, fn: () => Promise<T>): Promise<T> {
@@ -103,42 +125,98 @@ async function withFakeClock<T>(advanceMs: number, fn: () => Promise<T>): Promis
   }
 }
 
+/** The error `fn` rejects with, under a fake clock advanced by `advanceMs`. */
+async function rejectionOf(advanceMs: number, fn: () => Promise<unknown>): Promise<Error> {
+  try {
+    await withFakeClock(advanceMs, fn);
+  } catch (err) {
+    return err as Error;
+  }
+  throw new Error('expected a rejection');
+}
+
+const midY = (top: number) => top + ROW_H / 2;
+const inMiddleBand = (top: number) => Math.abs(midY(top) - SCREEN_H / 2) <= SCREEN_H / 4;
+
 describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
-  it('scrolls a row below the screen up into view, then taps it', async () => {
-    const { client, swipe, tap, state } = simulatedList({ top: 1500 });
+  it('scrolls a row below the screen up to the middle band, then taps it', async () => {
+    const { client, swipe, tap, state } = simulatedScreen({ top: 1500 });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
 
     expect(swipe.mock.calls.every(([dir]) => dir === 'up')).toBe(true);
-    expect(swipe).toHaveBeenCalledWith('up', { speed: 1000, distance: 0.5 });
-    expect(state.top).toBeLessThan(SCREEN_H);
+    expect(swipe.mock.calls[0]).toEqual(['up', { speed: 1000, distance: 0.5 }]);
+    expect(inMiddleBand(state.top)).toBe(true);
     expect(tap).toHaveBeenCalledTimes(1);
     expect(swipe.mock.invocationCallOrder.at(-1)!).toBeLessThan(tap.mock.invocationCallOrder[0]);
   });
 
-  it('scrolls a row the list was scrolled past (above the screen) back down into view', async () => {
-    // The ticket's repro: "Item 1" after scrolling the list down.
-    const { client, swipe, tap, state } = simulatedList({ top: -700 });
+  it('scrolls a row the list was scrolled past back down — not stopping at the first sliver under the header (review R1-F1)', async () => {
+    // The ticket's repro: "Item 1" after scrolling the list down. Half-screen
+    // steps put it at top 100 — on screen, but where a header sits.
+    const { client, swipe, tap, state } = simulatedScreen({ top: -700 });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
 
-    expect(swipe.mock.calls.map(([dir]) => dir)).toEqual(['down', 'down']);
-    expect(state.top + ROW_H).toBeGreaterThan(0);
+    expect(swipe.mock.calls.map(([dir]) => dir)).toEqual(['down', 'down', 'down']);
+    expect(inMiddleBand(state.top)).toBe(true);
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
-  it('reverses with half the distance when a swipe flings the row past the screen', async () => {
-    // Each swipe travels 3× its nominal distance: 1.5 screens at 0.5.
-    const { client, swipe, tap } = simulatedList({ top: 1000, travel: 3 });
+  it('stops at the end of the list when the row cannot reach the middle', async () => {
+    // The first row of a list sits under the header and goes no lower.
+    const { client, tap, state } = simulatedScreen({ top: -700, maxTop: 120 });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBe(120);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
 
-    const calls = swipe.mock.calls.map(([dir, o]) => [dir, o?.distance]);
-    // 1000 → -200 (overshot above) → down 0.25×3×800=600 → 400: on screen.
-    expect(calls).toEqual([['up', 0.5], ['down', 0.25]]);
+  it('corrects a fling past the middle from the other side', async () => {
+    const { client, swipe, tap, state } = simulatedScreen({ top: 820, travel: 1.9 });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 60_000).tap());
+
+    const dirs = swipe.mock.calls.map(([dir]) => dir);
+    expect(dirs.slice(0, 2)).toEqual(['up', 'down']);
+    expect((swipe.mock.calls[1][1] as { distance: number }).distance).toBeLessThan(0.5);
+    expect(inMiddleBand(state.top)).toBe(true);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('scrolls horizontally, in both directions, for a row off to the left', async () => {
+    const { client, swipe, tap, state } = simulatedScreen({ top: 300, left: -600, horizontal: true });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(swipe.mock.calls.every(([dir]) => dir === 'right' || dir === 'left')).toBe(true);
+    expect(swipe.mock.calls[0][0]).toBe('right');
+    expect(state.left + ROW_W).toBeGreaterThan(0);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('never swipes vertically for an element off to the side; a swipe that does not move it fails with the hint (review R1-F4)', async () => {
+    const { client, swipe, tap } = simulatedScreen({ top: 300, left: 500 });
+    const err = await rejectionOf(10_000, () => new ElementHandle(client, _text('Item 1'), 3000).tap());
+    expect(swipe.mock.calls.map(([dir]) => dir)).toEqual(['left']);
+    expect(tap).not.toHaveBeenCalled();
+    expect(err.message).toMatch(/is off-screen and tap\(\) could not scroll it into view: a "left" screen swipe did not move it/);
+    expect(err.message).toContain('Scroll it into view first (with scrollIntoView(), or scroll() on the list that holds it), then tap() it.');
+  });
+
+  it('falls back to half-screen steps until it is on screen when the screen size cannot be read', async () => {
+    const { client, swipe, tap, state } = simulatedScreen({ top: 1500, hierarchyFails: true });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(swipe.mock.calls).toEqual([['up', { speed: 1000, distance: 0.5 }], ['up', { speed: 1000, distance: 0.5 }]]);
+    expect(state.top).toBe(700);
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
   it('does not swipe for an on-screen element', async () => {
-    const { client, swipe, tap } = simulatedList({ top: 300 });
+    const { client, swipe, tap, getUiHierarchy } = simulatedScreen({ top: 300 });
     await new ElementHandle(client, _text('Item 1'), 5000).tap();
+    expect(swipe).not.toHaveBeenCalled();
+    expect(getUiHierarchy).not.toHaveBeenCalled();
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not swipe at an element still moving in by itself, and taps it once it arrives (review R1-F2)', async () => {
+    const { client, swipe, tap } = simulatedScreen({ top: 1400, animation: [1400, 1100, 800, 500] });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
     expect(swipe).not.toHaveBeenCalled();
     expect(tap).toHaveBeenCalledTimes(1);
   });
@@ -160,51 +238,73 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     }
   });
 
-  it('fails after one swipe that did not move the row, with the scrollIntoView() hint and no tap', async () => {
-    const { client, swipe, tap } = simulatedList({ top: -500, moves: false });
-    const err = await rejectionOf(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+  it('after a swipe that did not move the row, stops swiping but keeps waiting, and reports why at the deadline (review R1-F3)', async () => {
+    const { client, swipe, tap } = simulatedScreen({ top: -500, moves: false });
+    const err = await rejectionOf(30_000, () => new ElementHandle(client, _text('Item 1'), 5000).tap());
 
     expect(swipe).toHaveBeenCalledTimes(1);
     expect(tap).not.toHaveBeenCalled();
     expect(err.message).toMatch(/is off-screen and tap\(\) could not scroll it into view: a "down" screen swipe did not move it/);
-    expect(err.message).toContain('scrollIntoView({ direction: "down" })');
   });
 
-  it('gives up after the swipe cap when the row keeps moving but never arrives', async () => {
-    // Each swipe moves it a little (travel 0.05 → 20pt), never far enough.
-    const { client, swipe, tap } = simulatedList({ top: 5000, travel: 0.05 });
-    const err = await rejectionOf(60_000, () => new ElementHandle(client, _text('Item 1'), 60_000).tap());
+  it('a row that comes on screen by itself after a failed scroll is still tapped (review R1-F3)', async () => {
+    const sim = simulatedScreen({ top: -500, moves: false });
+    const handle = new ElementHandle(sim.client, _text('Item 1'), 10_000);
+    await withFakeClock(10_000, async () => {
+      const done = handle.tap();
+      // Let the failed scroll happen, then the row slides in by itself.
+      setTimeout(() => { sim.state.top = 300; }, 4000);
+      await done;
+    });
+    expect(sim.swipe).toHaveBeenCalledTimes(1);
+    expect(sim.tap).toHaveBeenCalledTimes(1);
+  });
 
-    expect(swipe).toHaveBeenCalledTimes(8);
-    expect(tap).not.toHaveBeenCalled();
-    expect(err.message).toMatch(/still off-screen after 8 scroll\(s\)\. Scroll it into view first/);
+  it('reaches a row far down the list — no fixed swipe cap below the deadline (review R1-F7)', async () => {
+    const { client, swipe, tap, state } = simulatedScreen({ top: 5000 });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(swipe.mock.calls.length).toBeGreaterThan(8);
+    expect(inMiddleBand(state.top)).toBe(true);
+    expect(tap).toHaveBeenCalledTimes(1);
   });
 
   it("stops at the action's deadline", async () => {
-    const { client, swipe, tap } = simulatedList({ top: 5000, travel: 0.05 });
-    const err = await rejectionOf(10_000, () => new ElementHandle(client, _text('Item 1'), 1500).tap());
-
-    expect(swipe.mock.calls.length).toBeLessThan(8);
+    const { client, swipe, tap } = simulatedScreen({ top: 50_000, travel: 0.05 });
+    const err = await rejectionOf(20_000, () => new ElementHandle(client, _text('Item 1'), 3000).tap());
+    expect(swipe.mock.calls.length).toBeGreaterThan(0);
     expect(tap).not.toHaveBeenCalled();
     expect(err.message).toMatch(/the action timed out after \d+ scroll\(s\)/);
   });
 
-  it('fails clearly when the row leaves the tree while scrolling (virtualized list)', async () => {
-    const { client, tap } = simulatedList({ top: 1500, goneAfterSwipe: true });
-    const err = await rejectionOf(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
-    expect(tap).not.toHaveBeenCalled();
-    expect(err.message).toMatch(/left the accessibility tree while scrolling/);
+  it('a fault right after a swipe is retried by the wait like any other read (review R1-F9)', async () => {
+    const { client, tap } = simulatedScreen({ top: 1500, faultReadsAfterSwipe: 4 });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(tap).toHaveBeenCalledTimes(1);
   });
 
-  it('a modified handle taps the element id of the settled, on-screen read', async () => {
-    const { client, tap } = simulatedList({ top: 1500, elementIdAfterScroll: 'el-fresh' });
+  it('waits for an element that turns disabled during the scroll to be enabled again (review R1-F6)', async () => {
+    const sim = simulatedScreen({ top: 1500, disabledReadsAfterSwipe: 40 });
+    await withFakeClock(60_000, () => new ElementHandle(sim.client, _text('Item 1'), 30_000).tap());
+    expect(sim.state.disabled).toBe(0);
+    expect(sim.tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps waiting when the row leaves the tree while scrolling, then reports it not found', async () => {
+    const { client, tap } = simulatedScreen({ top: 1500, goneAfterSwipe: true });
+    const err = await rejectionOf(30_000, () => new ElementHandle(client, _text('Item 1'), 5000).tap());
+    expect(tap).not.toHaveBeenCalled();
+    expect(err.message).toMatch(/was not found after waiting 5000ms\. If it is off-screen in a scrollable list/);
+  });
+
+  it('a modified handle taps the element id of a fresh, on-screen read', async () => {
+    const { client, tap } = simulatedScreen({ top: 1500, elementIdAfterScroll: 'el-fresh' });
     await withFakeClock(30_000, () => new ElementHandle(client, _role('button'), 30_000).first().tap());
     expect(tap).toHaveBeenCalledWith(undefined, expect.any(Number), 'el-fresh');
   });
 
   it('doubleTap() and longPress() scroll too', async () => {
     for (const act of ['doubleTap', 'longPress'] as const) {
-      const { client, swipe } = simulatedList({ top: 1500 });
+      const { client, swipe } = simulatedScreen({ top: 1500 });
       await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000)[act]());
       expect(swipe).toHaveBeenCalled();
       expect((client as unknown as Record<string, ReturnType<typeof vi.fn>>)[act]).toHaveBeenCalledTimes(1);
@@ -212,12 +312,12 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
   });
 
   it('setChecked() scrolls a switch that needs toggling, but not one already in the requested state', async () => {
-    const needs = simulatedList({ top: 1500, checked: false });
+    const needs = simulatedScreen({ top: 1500, checked: false });
     await withFakeClock(30_000, () => new ElementHandle(needs.client, _text('Item 1'), 30_000).setChecked(true));
     expect(needs.swipe).toHaveBeenCalled();
     expect(needs.tap).toHaveBeenCalledTimes(1);
 
-    const already = simulatedList({ top: 1500, checked: true });
+    const already = simulatedScreen({ top: 1500, checked: true });
     await withFakeClock(30_000, () => new ElementHandle(already.client, _text('Item 1'), 30_000).setChecked(true));
     expect(already.swipe).not.toHaveBeenCalled();
     expect(already.tap).not.toHaveBeenCalled();

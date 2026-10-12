@@ -274,15 +274,15 @@ Element {"text":"Submit"} was not found after waiting 30000ms
 ### Element is off-screen and could not be scrolled into view
 
 ```
-Element getByText("Item 1", { exact: true }) is off-screen and tap() could not scroll it into view: a "down" screen swipe did not move it — … Scroll it into view first, e.g. await locator.scrollIntoView({ direction: "down" }).
+Element getByText("Item 1", { exact: true }) is off-screen and tap() could not scroll it into view: a "left" screen swipe did not move it (…). Scroll it into view first (with scrollIntoView(), or scroll() on the list that holds it), then tap() it.
 ```
 
-**What happened:** the element is in the hierarchy but entirely off-screen (iOS), so the tap tried to scroll it into view with screen swipes and could not: the swipe did not move it, it left the hierarchy while scrolling, or it was still off-screen after 8 swipes.
+**What happened:** the element is in the hierarchy but entirely off-screen (iOS reports such elements). The tap tried to scroll it into view with screen swipes and failed: a swipe did not move it, or the swipes stopped bringing it closer. It then waited out the timeout in case the element came on screen by itself.
 
 **Common causes and fixes:**
 
-- **The element is in a horizontal carousel, or the screen swipe starts outside its list** (for example on a header above the list) -- scroll to it yourself with `scrollIntoView()` in the right direction, or scroll the list container with `scroll()`.
-- **The list is virtualised** and unmounted the row while scrolling -- scroll to it with `scrollIntoView()` first, then tap.
+- **The element is in a carousel, or in a list the screen swipe misses** (the swipe starts from the middle of the screen). Scroll the container that holds it with `scroll()`, or use `scrollIntoView()` with the right direction.
+- **The list is virtualised** and unmounted the row while scrolling. Scroll to it with `scrollIntoView()` first, then tap.
 
 ### Timeout: assertion did not pass
 

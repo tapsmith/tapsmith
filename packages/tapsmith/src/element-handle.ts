@@ -611,20 +611,27 @@ type ActionTarget = { selector: Selector } | { elementId: string };
 /** The actions that wait for an enabled target and scroll it into view. */
 type TapFamilyAction = 'tap' | 'doubleTap' | 'longPress' | 'setChecked';
 
-/** Swipes the tap-family auto-scroll may spend before giving up. */
-const AUTO_SCROLL_MAX_SWIPES = 8;
 /**
- * Swipe length as a fraction of the screen. Halved each time the target
- * overshoots to the other side, so a fling past it converges.
+ * Safety cap on the swipes of one auto-scroll. The real bounds are the action
+ * deadline and the progress checks in `_scrollOffScreenIntoView`.
  */
-const AUTO_SCROLL_DISTANCE = 0.5;
+const AUTO_SCROLL_MAX_SWIPES = 25;
+/** Auto-scrolls one action may start (a new one only from a new resting place). */
+const AUTO_SCROLL_MAX_ATTEMPTS = 3;
+/** Swipe length as a fraction of the screen while the screen size is unknown, and the longest swipe. */
+const AUTO_SCROLL_MAX_DISTANCE = 0.5;
+/** The shortest swipe, for the last nudge towards the middle of the screen. */
+const AUTO_SCROLL_MIN_DISTANCE = 0.1;
 /**
  * A slow drag (the agents map ≤1000 px/s to their longest swipe), so the
- * content travels about the swipe distance instead of flinging past the target.
+ * content travels about the swipe distance instead of flinging past the target
+ * — which is also what lets the swipe's travel measure the screen.
  */
 const AUTO_SCROLL_SPEED = 1000;
-/** Unreadable re-reads (miss, stale, fault) tolerated after one swipe. */
-const AUTO_SCROLL_MAX_UNREADABLE_READS = 4;
+/** Budget for the hierarchy read that measures the screen. */
+const SCREEN_SIZE_READ_MS = 5000;
+/** Swipes in a row that may fail to bring the element closer to the middle. */
+const AUTO_SCROLL_MAX_STALLS = 3;
 
 type Bounds = NonNullable<ElementInfo['bounds']>;
 
@@ -638,19 +645,15 @@ function isOffScreen(el: ElementInfo): el is ElementInfo & { bounds: Bounds } {
   return !el.visible && !!b && b.right > b.left && b.bottom > b.top;
 }
 
-/**
- * The screen swipe that brings an off-screen element towards the viewport.
- * Without the screen size an element right of the screen cannot be told from
- * one below it; below is far more common (vertical lists), so it wins.
- */
-function offScreenSwipeDirection(b: Bounds): 'up' | 'down' | 'left' | 'right' {
-  if (b.bottom <= 0) return 'down';
-  if (b.right <= 0) return 'right';
-  return 'up';
-}
-
 function sameBounds(a: Bounds | undefined, b: Bounds | undefined): boolean {
   return !!a && !!b && a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+}
+
+/** Thrown by the tap-family auto-scroll when it cannot bring its element on screen. */
+class OffScreenError extends Error {
+  constructor(message: string, readonly bounds: Bounds) {
+    super(message);
+  }
 }
 
 /**
@@ -1576,6 +1579,16 @@ export class ElementHandle {
     // the same diagnostic _strictResolve gives `type()`, so `nth(5).tap()`
     // does not fail with a worse message than `nth(5).type()`.
     let lastPositionalMiss: Error | undefined;
+    // Auto-scroll state (PILOT-716). An off-screen element is scrolled
+    // towards only once two consecutive reads put it at the same place
+    // (Playwright waits for "stable" too): one still animating in — a sheet
+    // sliding up — must not be swiped at. When a scroll gives up, the wait
+    // goes on polling (it may still arrive by itself) and reports why at the
+    // deadline; it scrolls again only from a new resting place.
+    let lastSeenOffScreen = false;
+    let previousOffScreenBounds: Bounds | undefined;
+    let scrollFailure: { error: Error; bounds: Bounds } | undefined;
+    let scrollAttempts = 0;
     while (true) {
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind === 'fault') {
@@ -1599,29 +1612,55 @@ export class ElementHandle {
         if (tick.kind === 'miss') {
           lastPositionalMiss = tick.positionalMiss;
           lastSeenDisabled = false;
+          lastSeenOffScreen = false;
+          previousOffScreenBounds = undefined;
         }
         if (tick.kind === 'found') {
+          const element = tick.element;
           lastPositionalMiss = undefined;
-          lastSeenDisabled = !tick.element.enabled;
-          if (tick.element.enabled) {
-            let element = tick.element;
-            // Playwright's actionability checks scroll the target into view
-            // before acting (PILOT-716). Only a platform that reports
-            // off-screen nodes reaches this (iOS); Android exposes on-screen
-            // nodes only, so its off-screen rows end in the not-found hint.
-            if (isOffScreen(element) && !options?.needsNoScroll?.(element)) {
-              element = await this._scrollOffScreenIntoView(element, deadline, action);
-            }
+          lastSeenDisabled = !element.enabled;
+          // Playwright's actionability checks scroll the target into view
+          // before acting (PILOT-716). Only a platform that reports
+          // off-screen nodes reaches this (iOS); Android exposes on-screen
+          // nodes only, so its off-screen rows end in the not-found hint.
+          const offScreen = element.enabled && isOffScreen(element) && !options?.needsNoScroll?.(element);
+          lastSeenOffScreen = offScreen;
+          if (element.enabled && !offScreen) {
             const remaining = Math.max(0, deadline - Date.now());
             return {
               remainingMs: Math.min(timeoutMs, Math.max(remaining, MIN_ACTION_BUDGET_MS)),
               element,
             };
           }
+          if (offScreen && isOffScreen(element)) {
+            const stable = sameBounds(previousOffScreenBounds, element.bounds);
+            previousOffScreenBounds = element.bounds;
+            const movedSinceFailure = !scrollFailure || !sameBounds(scrollFailure.bounds, element.bounds);
+            if (stable && movedSinceFailure && scrollAttempts < AUTO_SCROLL_MAX_ATTEMPTS) {
+              scrollAttempts++;
+              previousOffScreenBounds = undefined;
+              try {
+                // Returns once it is in view or the read is inconclusive; the
+                // next tick re-reads, so enabled, faults and misses are
+                // judged by this loop as usual.
+                await this._scrollOffScreenIntoView(element, deadline, action);
+              } catch (err) {
+                if (!(err instanceof OffScreenError)) throw err;
+                scrollFailure = { error: err, bounds: err.bounds };
+              }
+              continue;
+            }
+          } else {
+            previousOffScreenBounds = undefined;
+          }
         }
       }
       if (Date.now() >= deadline) {
         if (lastTransientErr) throw lastTransientErr;
+        if (lastSeenOffScreen) {
+          throw scrollFailure?.error ??
+            this._offScreenError(action, 'it was still moving at the timeout, so it was never scrolled to');
+        }
         const desc = this._describe();
         throw new Error(
           lastSeenDisabled
@@ -2929,85 +2968,125 @@ export class ElementHandle {
 
   // ── Scrolling ──
 
+  /** @internal — The error for an off-screen element a tap-family action could not scroll into view. */
+  private _offScreenError(action: TapFamilyAction, why: string, bounds?: Bounds, direction?: string): OffScreenError {
+    const how = direction
+      ? `await locator.scrollIntoView({ direction: "${direction}" })`
+      : 'with scrollIntoView(), or scroll() on the list that holds it';
+    return new OffScreenError(
+      `Element ${this._describe()} is off-screen and ${action}() could not scroll it into view: ${why}. ` +
+        `Scroll it into view first (${how}), then ${action}() it.`,
+      bounds ?? { left: 0, top: 0, right: 0, bottom: 0 },
+    );
+  }
+
+  /**
+   * @internal — The screen size in the units element bounds use, read from the
+   * root node of one hierarchy dump (the app's frame on iOS, the root window
+   * on Android): no RPC reports it directly. `undefined` when the dump fails
+   * or carries no bounds; a user stop propagates.
+   */
+  private async _screenSize(deadline: number): Promise<{ width: number; height: number } | undefined> {
+    try {
+      const res = await this._client.getUiHierarchy(Math.max(1, Math.min(SCREEN_SIZE_READ_MS, deadline - Date.now())));
+      const m = /bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/.exec(res.hierarchyXml ?? '');
+      if (!m) return undefined;
+      const [left, top, right, bottom] = m.slice(1).map(Number);
+      return right > left && bottom > top ? { width: right - left, height: bottom - top } : undefined;
+    } catch (err) {
+      if (isAbortError(err)) throw err;
+      return undefined;
+    }
+  }
+
   /**
    * @internal — Scroll an element the platform reports in the tree but
-   * entirely off-screen into view before a tap-family action touches it,
-   * as Playwright's actionability checks do (PILOT-716). Without this, iOS
-   * refused the tap at once ("not hittable") while Android, which never
-   * exposes off-screen nodes, waited out the timeout.
+   * entirely off-screen towards the middle of the screen before a tap-family
+   * action touches it, as Playwright's actionability checks do (PILOT-716).
+   * Without this, iOS refused the tap at once ("not hittable").
    *
-   * Each step swipes the screen towards the element (a slow drag, so the list
-   * does not fling past it), waits out the settle time and re-reads the
-   * element through the same modifier-aware read as the auto-wait. A target
-   * that overshot to the other side reverses with half the distance. It stops
-   * when the element is on screen (returning its settled read, so the action
-   * addresses where it came to rest), and fails with the scrollIntoView() hint
-   * when a swipe does not move it, it leaves the tree, the swipe cap is spent
-   * or the action's deadline passes. A user stop and strict-mode violations
-   * propagate from the reads and sleeps.
+   * Scrolls along the axis the element is off-screen on (vertical first),
+   * each step a slow screen drag towards it followed by the settle loop.
+   * Knowing the screen size, every swipe aims the element's centre at the
+   * middle of the screen, so it comes to rest clear of headers and tab bars
+   * rather than as a sliver at the edge, and a fling past it is corrected from
+   * the other side. Without it (the hierarchy read failed), it swipes half a
+   * screen at a time until any part of the element is on screen.
+   *
+   * Returns when the element is in the middle band, when it is on screen and
+   * a swipe no longer moves it (the end of the list), or when a read after a
+   * swipe is inconclusive (a miss, stale snapshot or fault): the caller's
+   * wait loop re-reads and judges every outcome, so enabled, faults and
+   * misses are handled exactly as in the plain auto-wait. Throws
+   * {@link OffScreenError} when a swipe does not move an off-screen element
+   * (a carousel the screen swipe misses, the end of a list), when swipes stop
+   * bringing it closer, or at the deadline or swipe cap. A user stop and
+   * strict-mode violations propagate from the reads and sleeps.
    */
   private async _scrollOffScreenIntoView(
     element: ElementInfo & { bounds: Bounds },
     deadline: number,
     action: TapFamilyAction,
-  ): Promise<ElementInfo> {
-    let bounds: Bounds = element.bounds;
-    let distance = AUTO_SCROLL_DISTANCE;
-    let lastDirection: string | undefined;
-    let swipes = 0;
-    const fail = (why: string): Error => new Error(
-      `Element ${this._describe()} is off-screen and ${action}() could not scroll it into view: ${why}. ` +
-        `Scroll it into view first, e.g. await locator.scrollIntoView({ direction: "${offScreenSwipeDirection(bounds)}" }).`,
-    );
-    for (;;) {
-      if (swipes >= AUTO_SCROLL_MAX_SWIPES) throw fail(`still off-screen after ${swipes} scroll(s)`);
-      if (Date.now() >= deadline) throw fail(`the action timed out after ${swipes} scroll(s)`);
-      const direction = offScreenSwipeDirection(bounds);
-      if (lastDirection !== undefined && direction !== lastDirection) distance /= 2;
+  ): Promise<void> {
+    const screen = await this._screenSize(deadline);
+    const b0 = element.bounds;
+    const vertical = !screen || b0.bottom <= 0 || b0.top >= screen.height;
+    const extent = screen ? (vertical ? screen.height : screen.width) : undefined;
+    const lo = (b: Bounds): number => (vertical ? b.top : b.left);
+    const hi = (b: Bounds): number => (vertical ? b.bottom : b.right);
+    const mid = (b: Bounds): number => (lo(b) + hi(b)) / 2;
+    let bounds: Bounds = b0;
+    let best = Infinity;
+    let stalls = 0;
+    for (let swipes = 0; ; swipes++) {
+      if (swipes >= AUTO_SCROLL_MAX_SWIPES) {
+        throw this._offScreenError(action, `it was still not in view after ${swipes} scroll(s)`, bounds);
+      }
+      if (Date.now() >= deadline) {
+        throw this._offScreenError(action, `the action timed out after ${swipes} scroll(s)`, bounds);
+      }
+      // Positive: the element is past the middle (below / right of it), so
+      // the content has to move back (swipe up / left).
+      const offset = extent === undefined ? (hi(bounds) <= 0 ? -1 : 1) : mid(bounds) - extent / 2;
+      const distance = extent === undefined
+        ? AUTO_SCROLL_MAX_DISTANCE
+        : Math.min(AUTO_SCROLL_MAX_DISTANCE, Math.max(AUTO_SCROLL_MIN_DISTANCE, Math.abs(offset) / extent));
+      const direction = vertical ? (offset > 0 ? 'up' : 'down') : (offset > 0 ? 'left' : 'right');
       const res = await this._client.swipe(direction, { speed: AUTO_SCROLL_SPEED, distance });
       if (!res.success) {
         throw new Error(
           `Swipe failed while scrolling ${this._describe()} into view for ${action}(): ${res.errorMessage || 'unknown error'}`,
         );
       }
-      swipes++;
-      lastDirection = direction;
       await sleep(SCROLL_SETTLE_MS, this._client._getAbortSignal?.());
-
-      // Re-read; a miss, stale snapshot or agent blip right after a swipe is
-      // re-read a few times (a recycled cell can drop out for a frame).
-      let next: ElementInfo | undefined;
-      let lastFault: Error | undefined;
-      for (let reads = 1; ; reads++) {
-        const tick = await this._resolveTick(tickBudget(deadline));
-        if (tick.kind === 'found') {
-          next = tick.element;
-          break;
-        }
-        lastFault = tick.kind === 'fault' ? tick.error : undefined;
-        if (reads >= AUTO_SCROLL_MAX_UNREADABLE_READS || Date.now() >= deadline) break;
-        await sleep(POLL_INTERVAL_MS, this._client._getAbortSignal?.());
-      }
-      if (!next) {
-        // An agent that stopped answering is an infra error, not a scroll one.
-        if (lastFault) throw lastFault;
-        throw fail('it left the accessibility tree while scrolling (a virtualized list may have unmounted it)');
-      }
-      if (next.visible) {
-        const settled = await this._settleAfterScroll(next);
-        // Momentum carried it back out: keep scrolling from where it rests.
-        if (!isOffScreen(settled)) return settled;
-        bounds = settled.bounds;
-        continue;
-      }
-      if (!isOffScreen(next)) return next; // no frame to scroll towards; let the action report it
-      if (sameBounds(next.bounds, bounds)) {
-        throw fail(
-          `a "${direction}" screen swipe did not move it — it may be in a container a screen swipe does not ` +
-            'scroll (a horizontal carousel, or a list the swipe misses)',
+      const tick = await this._resolveTick(tickBudget(deadline));
+      if (tick.kind !== 'found') return;
+      const next = await this._settleAfterScroll(tick.element);
+      const nb = next.bounds;
+      if (!nb || nb.right <= nb.left || nb.bottom <= nb.top) return; // nothing to steer by
+      if (mid(nb) === mid(bounds)) {
+        if (next.visible) return; // on screen, and the list will not go any further
+        throw this._offScreenError(
+          action,
+          `a "${direction}" screen swipe did not move it (it may be in a container a screen swipe does not ` +
+            'scroll, such as a carousel, or in a list the swipe misses)',
+          nb,
         );
       }
-      bounds = next.bounds;
+      bounds = nb;
+      if (extent === undefined) {
+        if (next.visible) return;
+        continue;
+      }
+      const away = Math.abs(mid(nb) - extent / 2);
+      if (next.visible && (away <= extent / 4 || hi(nb) - lo(nb) >= extent / 2)) return;
+      if (away < best - 1) {
+        best = away;
+        stalls = 0;
+      } else if (++stalls >= AUTO_SCROLL_MAX_STALLS) {
+        if (next.visible) return;
+        throw this._offScreenError(action, `${swipes + 1} screen swipes stopped bringing it closer`, nb);
+      }
     }
   }
 
