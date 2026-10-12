@@ -98,6 +98,12 @@
       matchManagers: ['github-actions'],
       groupName: 'GitHub Actions',
     },
+    {
+      description: 'One monthly lockfile refresh PR for the whole repo',
+      matchUpdateTypes: ['lockFileMaintenance'],
+      groupName: 'lockfile maintenance',
+    },
+
     // ─── Automerge ───
     {
       description: 'Merge non-major updates once all checks pass',
