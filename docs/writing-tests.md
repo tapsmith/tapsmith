@@ -193,9 +193,9 @@ describe("without auth", () => {
 
 With `retries` set, a failed test is retried from the state its first attempt started from, not from the screen the failure left behind. Playwright gets this by retrying in a fresh worker; Tapsmith does the same with the app:
 
-- **Per-file scope (the default).** Before the retry, Tapsmith runs the `afterAll` hooks of every `describe` around the test (innermost first), then each scope's reset again, delivered cold, and its `beforeAll` hooks (outermost first). A `beforeAll` that opens a screen with `device.openDeepLink()` therefore runs again before the retry. If the reset or a `beforeAll` hook fails, that attempt fails with its error. An `afterAll` failure is logged, as it is at the end of a scope.
+- **Per-file scope (the default).** Before the retry, Tapsmith runs the `afterAll` hooks of every `describe` around the test (innermost first), then each scope's reset again, delivered cold, and its `beforeAll` hooks (outermost first). A `beforeAll` that opens a screen with `device.openDeepLink()` therefore runs again before the retry. If the reset or a `beforeAll` hook fails, that attempt fails with its error, and the next test runs the reset and `beforeAll` hooks again before it starts. An `afterAll` failure is logged, as it is at the end of a scope.
 - **Per-test scope.** The test's own reset runs before every attempt, delivered cold on a retry.
-- **Exceptions.** A scope with `appReset: "none"` and a [serial group](api-reference.md#testdescribeserialname-fn--testdescribeserialonlyname-fn) retry the test in place, without a reset. A serial group's later tests depend on the state its earlier tests built, which a reset would wipe.
+- **Exceptions.** A test whose own scope has `appReset: "none"`, and a test in a [serial group](api-reference.md#testdescribeserialname-fn--testdescribeserialonlyname-fn), retry in place, without a reset or a replay of the setup in their trace. A serial group's later tests depend on the state its earlier tests built, which a reset would wipe.
 
 The retry's trace shows its own **APP RESET** and **BEFORE ALL** sections, so the reset you see is the one that ran before that attempt. Worker-scoped fixtures are set up once per file and are not set up again for a retry.
 

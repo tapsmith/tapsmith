@@ -275,6 +275,9 @@ describe('runner app reset (declared isolation)', () => {
           'group-start:App reset', 'action:resetApp', 'group-end:App reset',
           'group-start:beforeAll Hooks', 'action:openDeepLink', 'group-end:beforeAll Hooks',
         ]);
+        // Numbered from 0: nothing replayed occupies the first slots, so the
+        // archive keeps the dense index space trace readers check.
+        expect(events.find((e) => e.type === 'action').actionIndex).toBe(0);
         // Attempt 1 was satisfied by the startup launch; the retry was not.
         expect(events.some((e) => e.type === 'action' && e.action === 'appReset')).toBe(false);
         expect(ordered.filter((e) => e === 'action:resetApp')).toHaveLength(1);
@@ -335,6 +338,82 @@ describe('runner app reset (declared isolation)', () => {
       await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
 
       expect(order).toEqual(['reset:clear', 'beforeAll', 'flaky#1', 'flaky#2']);
+    });
+
+    it('a test after a retry whose setup failed sets up again before it starts (no second teardown)', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      let beforeAllRuns = 0;
+      pushContext();
+      tapsmithBeforeAll(async () => { beforeAllRuns++; order.push(`beforeAll#${beforeAllRuns}`); if (beforeAllRuns === 2) throw new Error('login failed'); });
+      tapsmithAfterAll(async () => { order.push('afterAll'); });
+      tapsmithTest('broken', async () => { order.push('broken'); throw new Error('boom'); });
+      tapsmithTest('next', async () => { order.push('next'); });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['failed', 'passed']);
+      expect(order).toEqual([
+        'reset:clear', 'beforeAll#1', 'broken',
+        'afterAll', 'reset:clear:cold', 'beforeAll#2',
+        // the torn-down setup is rebuilt (cold, after a failure) before the
+        // next test, which would otherwise run on it
+        'reset:clear:cold', 'beforeAll#3', 'next',
+        'afterAll',
+      ]);
+    });
+
+    it('a describe with appReset: none under a resetting file retries in place', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      let attempts = 0;
+      pushContext();
+      tapsmithBeforeAll(async () => { order.push('root beforeAll'); });
+      tapsmithDescribe('shared state', () => {
+        tapsmithTest.use({ appReset: 'none' });
+        tapsmithTest('flaky', async () => { attempts++; order.push(`flaky#${attempts}`); if (attempts === 1) throw new Error('boom'); });
+      });
+      const ctx = popContext();
+
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(order).toEqual(['reset:clear', 'root beforeAll', 'flaky#1', 'flaky#2']);
+    });
+
+    it('a retry in place does not replay the file-entry reset into its trace', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-retry-inplace-'));
+      const d = makeDevice();
+      logResets(d, []);
+      let attempts = 0;
+      try {
+        pushContext();
+        tapsmithTest.describe.serial('flow', () => {
+          tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+          tapsmithTest('broken', async () => { attempts++; recordAction('tap'); throw new Error(`boom ${attempts}`); });
+        });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({
+          rootDir: tempRoot, retries: 1,
+          trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+        })));
+
+        const [t] = collectResults(result);
+        expect(t.error?.message).toBe('boom 2');
+        const zip = unzipSync(fs.readFileSync(t.tracePath!));
+        const events = new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+        const actions = events.filter((e) => e.type === 'action');
+        // Nothing reset before the retry, so its trace shows no reset and no
+        // setup: just the attempt itself, numbered from 0.
+        expect(events.some((e) => e.type === 'group-start' && e.name === 'App reset')).toBe(false);
+        expect(actions.map((e) => e.action)).toEqual(['tap']);
+        expect(actions[0].actionIndex).toBe(0);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
     });
 
     it('appReset: none opts out of isolation, so a retry re-runs no setup', async () => {
