@@ -11,10 +11,13 @@
 //   the PR is green, including the device E2E workflows. It does this itself
 //   (platformAutomerge: false) because the `main` ruleset only requires DCO,
 //   so GitHub's own auto-merge would not wait for CI.
-// - Major updates are listed on the Dependency Dashboard and only get a PR
-//   once you tick them there (GitHub Actions majors share one PR). Majors and
-//   anything that ships inside the published `tapsmith` package wait for a
-//   human to review and merge.
+// - Majors get one PR per area, separate from that area's minor/patch PR.
+//   Dev-only majors (npm devDependencies, the website, tools) merge on green
+//   like everything else. Majors of shipped code (SDK runtime dependencies,
+//   Rust crates, the Android agent's Gradle build) and of GitHub Actions
+//   (release.yml only runs on a tag, so PR CI doesn't cover it) wait for a
+//   human, as do all updates to runtime dependencies of the published
+//   `tapsmith` package.
 // - Security fixes (from GitHub's Dependabot alerts and OSV) get their own PR
 //   straight away, ignoring the schedule and the 3-day wait.
 //
@@ -95,27 +98,24 @@
       matchManagers: ['github-actions'],
       groupName: 'GitHub Actions',
     },
-    {
-      description: 'Majors stay in their own PRs so one breaking change does not block a whole group',
-      matchUpdateTypes: ['major'],
-      groupName: null,
-    },
-    {
-      description: 'Majors wait on the Dependency Dashboard: tick one to get its PR (security fixes skip this)',
-      matchUpdateTypes: ['major'],
-      dependencyDashboardApproval: true,
-    },
-    {
-      description: 'Action majors share one PR (release.yml only runs on a tag, so check the next release after merging)',
-      matchManagers: ['github-actions'],
-      matchUpdateTypes: ['major'],
-      groupName: 'GitHub Actions (major)',
-    },
-
     // ─── Automerge ───
     {
       description: 'Merge non-major updates once all checks pass',
       matchUpdateTypes: ['minor', 'patch', 'pin', 'digest', 'pinDigest'],
+      automerge: true,
+    },
+    {
+      description: 'Dev-only majors (lint, typecheck, test, build tooling) never ship to users; CI catches breakage',
+      matchManagers: ['npm'],
+      matchDepTypes: ['devDependencies'],
+      matchUpdateTypes: ['major'],
+      automerge: true,
+    },
+    {
+      description: 'The website and tools are not shipped in any package, so their majors merge on green too',
+      matchManagers: ['npm'],
+      matchFileNames: ['website/**', 'tools/**'],
+      matchUpdateTypes: ['major'],
       automerge: true,
     },
     {
