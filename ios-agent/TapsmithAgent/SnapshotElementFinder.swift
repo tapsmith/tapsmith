@@ -1197,15 +1197,15 @@ class SnapshotElementFinder {
             if isExpanded != wantExpanded { return false }
         }
 
-        // Label selector: match input-type elements whose label matches.
-        if let labelSelector = selector.label {
-            if !ElementFinder.labelInputTypes.contains(elType) { return false }
-            if !TextMatch.equals(label, labelSelector) && !TextMatch.equals(title, labelSelector) { return false }
+        // Label selector: an input named by its label or title (LabelMatch,
+        // PILOT-666); a RegExp tests the raw text (PILOT-520).
+        if let labelSelector = selector.label,
+           !LabelMatch.matches(elementType: elType, label: label, title: title, query: labelSelector) {
+            return false
         }
-        // getByLabel(RegExp) (PILOT-520): tested against the raw label text.
-        if let labelRegex = selector.labelRegex {
-            if !ElementFinder.labelInputTypes.contains(elType) { return false }
-            if !labelRegex.matches(label) && !labelRegex.matches(title) { return false }
+        if let labelRegex = selector.labelRegex,
+           !LabelMatch.matches(elementType: elType, label: label, title: title, regex: labelRegex) {
+            return false
         }
 
         // Must have at least one positive match criterion

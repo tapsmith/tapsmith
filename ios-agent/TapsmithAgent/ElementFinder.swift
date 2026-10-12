@@ -207,30 +207,24 @@ class ElementFinder {
             return []
         }
 
-        // Label selector: find input elements whose accessibilityLabel matches.
-        // Single query on .any avoids multiple expensive IPC calls per element type.
+        // Label selector: input elements whose label or title matches
+        // (LabelMatch). Single query on .any avoids multiple expensive IPC
+        // calls per element type.
         if let label = selector.label {
-            let predicate = NSPredicate(format: "label MATCHES %@", TextMatch.exactPattern(label))
+            let pattern = TextMatch.exactPattern(label)
+            let predicate = NSPredicate(format: "label MATCHES %@ OR title MATCHES %@", pattern, pattern)
             let query = root.descendants(matching: .any).matching(predicate)
-            let all = allElements(from: query)
-            return all.filter { Self.labelInputTypes.contains($0.elementType) }
+            return allElements(from: query).filter { LabelMatch.inputTypes.contains($0.elementType) }
         }
         if let labelRegex = selector.labelRegex {
             let pattern = labelRegex.fullMatchPattern
             let predicate = NSPredicate(format: "label MATCHES %@ OR title MATCHES %@", pattern, pattern)
             let query = root.descendants(matching: .any).matching(predicate)
-            return allElements(from: query).filter { Self.labelInputTypes.contains($0.elementType) }
+            return allElements(from: query).filter { LabelMatch.inputTypes.contains($0.elementType) }
         }
 
         throw AgentError.invalidSelector("No valid selector criteria provided")
     }
-
-    /// The input types getByLabel finds.
-    static let labelInputTypes: Set<XCUIElement.ElementType> = [
-        .textField, .secureTextField, .textView,
-        .switch, .slider, .stepper, .picker,
-        .checkBox, .radioButton,
-    ]
 
     // MARK: - XPath
 
@@ -343,6 +337,7 @@ class ElementFinder {
             "XCUIElementTypeStaticText": .staticText,
             "XCUIElementTypeTextField": .textField,
             "XCUIElementTypeSecureTextField": .secureTextField,
+            "XCUIElementTypeTextView": .textView,
             "XCUIElementTypeImage": .image,
             "XCUIElementTypeCell": .cell,
             "XCUIElementTypeTable": .table,
@@ -354,6 +349,7 @@ class ElementFinder {
             "XCUIElementTypeProgressIndicator": .progressIndicator,
             "XCUIElementTypeActivityIndicator": .activityIndicator,
             "XCUIElementTypePicker": .picker,
+            "XCUIElementTypeStepper": .stepper,
             "XCUIElementTypeToolbar": .toolbar,
             "XCUIElementTypeTabBar": .tabBar,
             "XCUIElementTypeTab": .tab,

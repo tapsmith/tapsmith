@@ -64,3 +64,13 @@ xcrun swiftc -sdk "$SDK" \
   TapsmithAgent/TextMatch.swift \
   -o "$OUT/text-match-tests"
 "$OUT/text-match-tests" "../packages/tapsmith/src/__tests__/fixtures/regex-conformance.json"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/LabelMatchTests/main.swift \
+  TapsmithAgent/LabelMatch.swift \
+  TapsmithAgent/TextMatch.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/label-match-tests"
+"$OUT/label-match-tests" "../packages/tapsmith/src/__tests__/fixtures/label-conformance.json"
