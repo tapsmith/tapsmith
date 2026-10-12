@@ -46,6 +46,8 @@ interface WebViewDomDescription {
   ariaLabel: string
   role: string
   text: string
+  /** No child elements: the only kind of element webview.getByText finds. */
+  leaf: boolean
 }
 
 /** @internal — Single-tick snapshot of a locator's full match set. */
@@ -65,15 +67,27 @@ export interface WebViewLocatorProbe {
   target?: { found: boolean; value?: unknown }
 }
 
+/**
+ * A CSS selector for an element id: `#id` when the id is a plain CSS
+ * identifier, else an attribute selector, which takes any id (`#1st` and
+ * `#order.total` are not the selectors they look like).
+ */
+function cssIdSelector(id: string): string {
+  if (/^-?[A-Za-z_][\w-]*$/.test(id)) return `#${id}`;
+  return `[id="${id.replace(/[\\"]/g, '\\$&').replace(/\n/g, '\\a ')}"]`;
+}
+
 /** Best-effort unambiguous WebView locator suggestion for one DOM match. */
 function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string | undefined {
   if (!d) return undefined;
   // Copy-paste-safe string literals, like the native suggestions (PILOT-659).
   const lit = (v: string): string => `"${escapeJsString(v)}"`;
   if (d.testId) return `webview.getByTestId(${lit(d.testId)})`;
-  if (d.id) return `webview.locator(${lit('#' + d.id)})`;
+  if (d.id) return `webview.locator(${lit(cssIdSelector(d.id))})`;
   if (d.ariaLabel) return `webview.getByLabel(${lit(d.ariaLabel)})`;
-  if (d.text) {
+  // getByText finds leaf elements only: a parent's text would resolve to the
+  // child holding it, or to nothing when it spans several (PILOT-666).
+  if (d.text && d.leaf) {
     // An exact match needs the whole text: a long one is suggested as its
     // leading part, matched as a substring.
     const exact = d.text.length <= 60;
@@ -593,6 +607,7 @@ export class WebViewHandle {
           ariaLabel: el.getAttribute('aria-label') || '',
           role: el.getAttribute('role') || '',
           text: (el.textContent || '').trim().slice(0, 80),
+          leaf: el.children.length === 0,
         })),
         target: ${targetJs},
       };

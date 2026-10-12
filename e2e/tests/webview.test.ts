@@ -120,6 +120,16 @@ describe("WebView testing", () => {
     const all = await buttons.all()
     expect(all.length).toBe(2)
 
+    // The violation's suggestions resolve (PILOT-666): getByText finds leaf
+    // elements only, so a parent's text is never offered as one, and a
+    // leaf's is.
+    const groupError = await webview.locator(".form-group").click().catch((err: unknown) => err)
+    expect(isStrictModeViolation(groupError)).toBe(true)
+    expect(String(groupError)).not.toContain("aka webview.getByText")
+    const labelError = await webview.locator("label").click().catch((err: unknown) => err)
+    expect(String(labelError)).toContain('aka webview.getByText("Email", { exact: true })')
+    expect(await webview.getByText("Email", { exact: true }).count()).toBe(1)
+
     await device.native()
   })
 

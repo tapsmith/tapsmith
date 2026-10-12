@@ -375,6 +375,13 @@ describe('getByLabel suggestions follow the runtime fields (PILOT-666)', () => {
     expect(generateSelectors(node).some((s) => s.code === 'device.getByLabel("Country")')).toBe(true);
   });
 
+  it('a multi-line iOS text view is found by its label, not by a textfield role the runtime does not give it', () => {
+    const node = makeNode('XCUIElementTypeTextView', { type: 'XCUIElementTypeTextView', label: 'Notes' });
+    const selectors = generateSelectors(node);
+    expect(selectors[0].code).toBe('device.getByLabel("Notes")');
+    expect(selectors.some((s) => s.code.startsWith('device.getByRole("textfield"'))).toBe(false);
+  });
+
   it('no getByLabel for an Android view that only reports a checkbox role', () => {
     expect(hasLabel(makeNode('node', { class: 'android.view.ViewGroup', 'tapsmith-role': 'checkbox', 'content-desc': 'Agree' }))).toBe(false);
   });

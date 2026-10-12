@@ -22,6 +22,8 @@ interface ProbeMatch {
   ariaLabel?: string
   role?: string
   text?: string
+  /** Whether the element has no child elements (the elements getByText finds). */
+  leaf?: boolean
   visible?: boolean
 }
 
@@ -39,6 +41,7 @@ function probeOf(matches: ProbeMatch[], nthIndex = 0): WebViewLocatorProbe {
       ariaLabel: m.ariaLabel ?? '',
       role: m.role ?? '',
       text: m.text ?? '',
+      leaf: m.leaf ?? true,
     })),
   };
 }
@@ -123,6 +126,31 @@ describe('WebView strict mode (PILOT-227)', () => {
       expect(message).toContain('aka webview.getByLabel("Pay\\u00A0now")');
       expect(message).toContain(`aka webview.getByText("${long.slice(0, 60)}")`);
       expect(message).not.toContain('…", { exact: true })');
+    });
+
+    it('suggests getByText only for a leaf element, which getByText can find (PILOT-666)', async () => {
+      const { handle } = makeHandle([
+        { tag: 'div', text: 'Email', leaf: false },
+        { tag: 'label', text: 'Email' },
+      ]);
+      const err = await handle.locator('.form-group, label').click().catch((e: unknown) => e);
+      const lines = (err as Error).message.split('\n');
+      expect(lines.find((l) => l.includes('1) div'))).not.toContain(' aka ');
+      expect(lines.find((l) => l.includes('2) label'))).toContain('aka webview.getByText("Email", { exact: true })');
+    });
+
+    it('suggests an id that is not a CSS identifier as an attribute selector (PILOT-666)', async () => {
+      const { handle } = makeHandle([
+        { tag: 'div', id: '1st' },
+        { tag: 'div', id: 'order.total' },
+        { tag: 'div', id: 'say "hi"' },
+        { tag: 'div', id: 'save-2_b' },
+      ]);
+      const message = ((await handle.locator('div').click().catch((e: unknown) => e)) as Error).message;
+      expect(message).toContain('aka webview.locator("[id=\\"1st\\"]")');
+      expect(message).toContain('aka webview.locator("[id=\\"order.total\\"]")');
+      expect(message).toContain('aka webview.locator("[id=\\"say \\\\\\"hi\\\\\\"\\"]")');
+      expect(message).toContain('aka webview.locator("#save-2_b")');
     });
 
     it('reports the total match count when more elements match than are sampled', async () => {

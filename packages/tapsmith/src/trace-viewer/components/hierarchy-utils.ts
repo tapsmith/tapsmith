@@ -118,11 +118,12 @@ export const ANDROID_CLASS_TO_ROLE: Record<string, string> = {
   'com.google.android.material.slider.Slider': 'seekbar',
 };
 
+// No XCUIElementTypeTextView: the iOS agent's getByRole("textfield") does not
+// find a multi-line text view, so the playground must not offer it (PILOT-666).
 export const IOS_TYPE_TO_ROLE: Record<string, string> = {
   'XCUIElementTypeButton': 'button',
   'XCUIElementTypeTextField': 'textfield',
   'XCUIElementTypeSecureTextField': 'textfield',
-  'XCUIElementTypeTextView': 'textfield',
   'XCUIElementTypeSwitch': 'switch',
   'XCUIElementTypeCheckBox': 'checkbox',
   'XCUIElementTypeImage': 'image',
