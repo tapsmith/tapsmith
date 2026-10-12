@@ -1300,6 +1300,53 @@ describe('runner execution', () => {
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    ['hosts the trace filters exclude', { networkIgnoreHosts: ['*.noise.example'] }, undefined, ['pilot712-x.noise.example'], ['pilot712-app.example.com']],
+    ['the host-wide macOS system proxy', {}, 'ios-system-proxy', [], ['pilot712-mac.example.com']],
+  ])('does not name %s as rejected by the app', async (_label, filters, route, excluded, rejected) => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-tls-filter-'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const hosts = [...rejected, ...(route ? [] : ['pilot712-x.noise.example'])];
+    const mockDevice = {
+      tracing: new Tracing(async () => undefined, async () => undefined),
+      waitForIdle: vi.fn(async () => {}),
+      _networkCaptureRoute: route,
+      _startNetworkCapture: vi.fn(async () => ({ success: true, proxyPort: 12345, errorMessage: '' })),
+      _stopNetworkCapture: vi.fn(async () => ({ success: true, entries: [], errorMessage: '', tlsRejectedHosts: hosts })),
+      _stopDeviceLogStream: vi.fn(),
+      _startDaemonLogStream: vi.fn(),
+      _stopDaemonLogStream: vi.fn(),
+      _disposeRouteManager: vi.fn(async () => {}),
+      _disposeWebViewManager: vi.fn(async () => {}),
+      _resetWebViewContext: vi.fn(),
+    };
+    try {
+      pushContext();
+      tapsmithTest('tls filtered', async () => {});
+      const ctx = popContext();
+      await runSuiteContext(ctx, '', [], [], makeOpts({
+        config: makeConfig({
+          rootDir: tempRoot,
+          outputDir: 'out',
+          trace: { mode: 'on', network: true, screenshots: false, snapshots: false, sources: false, deviceLogs: false, ...filters },
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mock
+        devices: [{ name: 'device-1', device: mockDevice as any }],
+      }));
+      const terminal = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('rejected Tapsmith'));
+      if (route) {
+        expect(terminal).toEqual([]);
+      } else {
+        expect(terminal).toHaveLength(1);
+        expect(terminal[0]).toContain('pilot712-app.example.com');
+        for (const h of excluded) expect(terminal[0]).not.toContain(h);
+      }
+    } finally {
+      warn.mockRestore();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
 });
 
 // ─── test.use() ───

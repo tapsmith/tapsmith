@@ -1851,9 +1851,18 @@ mod apex_script_tests {
                 mount_log.display()
             ),
         );
-        for noop in ["chown", "chcon", "umount"] {
-            write_exec(&bin.join(noop), "#!/bin/sh\nexit 0\n");
+        // chown/chcon succeed and record their arguments, so tests can check
+        // that a written cert gets the mandatory SELinux relabel.
+        for logged in ["chown", "chcon"] {
+            write_exec(
+                &bin.join(logged),
+                &format!(
+                    "#!/bin/sh\necho \"$*\" >> '{}'\n",
+                    root.join(format!("{logged}.log")).display()
+                ),
+            );
         }
+        write_exec(&bin.join("umount"), "#!/bin/sh\nexit 0\n");
         Fixture {
             _dir: dir,
             root,
@@ -1958,6 +1967,20 @@ mod apex_script_tests {
             "the existing overlay is rewritten, not stacked over"
         );
         assert!(f.src.join("aaaaaaaa.0").exists());
+        // Apps can't read a cert without the cacerts SELinux label.
+        let target = f.src.join(CERT).display().to_string();
+        let chcon = fs::read_to_string(f.root.join("chcon.log")).unwrap_or_default();
+        assert!(
+            chcon
+                .lines()
+                .any(|l| l == format!("u:object_r:system_security_cacerts_file:s0 {target}")),
+            "replaced cert must be relabelled: {chcon}"
+        );
+        let chown = fs::read_to_string(f.root.join("chown.log")).unwrap_or_default();
+        assert!(
+            chown.lines().any(|l| l == format!("0:0 {target}")),
+            "{chown}"
+        );
     }
 
     #[test]

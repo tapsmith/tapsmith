@@ -2640,11 +2640,21 @@ async function runSuiteContext(
           for (const d of networkDrainDevices()) {
             try {
               const res = await d._stopNetworkCapture({ keepRunning: true });
-              if (res.success && res.tlsRejectedHosts?.length) {
-                tlsRejectNotices.push({ device: d, hosts: res.tlsRejectedHosts });
+              // Same host filters as the entries, so hosts the user scoped out
+              // are never named. Skipped on the host-wide macOS system proxy:
+              // there every Mac process's rejects reach the proxy, and none
+              // of them can be attributed to the app.
+              const rejectedHosts = res.success && d._networkCaptureRoute !== 'ios-system-proxy'
+                ? filterEntriesByHosts((res.tlsRejectedHosts ?? []).map((host) => ({ host, url: `https://${host}/` })), {
+                  allow: traceConfig.networkHosts,
+                  deny: traceConfig.networkIgnoreHosts,
+                }).map((e) => e.host)
+                : [];
+              if (rejectedHosts.length > 0) {
+                tlsRejectNotices.push({ device: d, hosts: rejectedHosts });
                 traceCollector.addDaemonLogEntry(
                   'warn',
-                  `Network capture warning: ${tlsRejectWarning(res.tlsRejectedHosts)}`,
+                  `Network capture warning: ${tlsRejectWarning(rejectedHosts)}`,
                   d._traceDeviceId,
                 );
               }
