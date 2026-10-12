@@ -408,6 +408,15 @@ pub(crate) struct ProxyState {
     /// Tapsmith CA says so instead of silently capturing nothing (PILOT-712).
     /// Bounded by [`MAX_TLS_REJECTED_HOSTS`].
     tls_rejected_hosts: BTreeSet<String>,
+    /// Tunnel every TLS connection end-to-end instead of MITM'ing it: set
+    /// when the device cannot be made to trust the Tapsmith CA (an Android
+    /// emulator on a Google Play image, where there is no `adb root` to
+    /// install it). Every client would reject our generated certificate, so
+    /// MITM would make all of the app's HTTPS fail; tunneling keeps it
+    /// working, records a passthrough marker per connection, and leaves plain
+    /// HTTP captured as usual (PILOT-711). A fact about the device, so
+    /// [`NetworkProxy::reset_capture_state`] leaves it alone.
+    tunnel_all_tls: bool,
 }
 
 /// Cap on [`ProxyState::tls_rejected_hosts`] between drains: enough to name
@@ -530,6 +539,7 @@ impl NetworkProxy {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            tunnel_all_tls: false,
         }));
 
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -730,6 +740,11 @@ impl NetworkProxy {
 
     pub async fn set_android_emulator(&self, enabled: bool) {
         self.state.lock().await.android_emulator = enabled;
+    }
+
+    /// Tunnel all TLS uncaptured — see [`ProxyState::tunnel_all_tls`].
+    pub async fn set_tunnel_all_tls(&self, enabled: bool) {
+        self.state.lock().await.tunnel_all_tls = enabled;
     }
 
     /// Stop the proxy and return all captured entries.
@@ -4051,8 +4066,9 @@ async fn tunnel_tls_passthrough<S>(
 /// Read the client's TLS `ClientHello` and decide how to handle the
 /// connection:
 ///
-/// * **Passthrough** — if the client's ALPN offer has no protocol we can
-///   speak (see [`requires_tls_passthrough`]), the SNI matches
+/// * **Passthrough** — if the device does not trust the Tapsmith CA at all
+///   ([`ProxyState::tunnel_all_tls`]), the client's ALPN offer has no
+///   protocol we can speak (see [`requires_tls_passthrough`]), the SNI matches
 ///   `trace.networkPassthroughHosts`, or a previous h2-capable connection for
 ///   the same SNI rejected our generated MITM certificate, tunnel the raw TLS
 ///   bytes to the origin untouched. The app does end-to-end TLS with the real
@@ -4115,7 +4131,7 @@ async fn handle_transparent_tls<S>(
     }
 
     let alpn_passthrough = requires_tls_passthrough(&hello.alpn);
-    let (host_passthrough, mitm_rejected_passthrough) = {
+    let (host_passthrough, mitm_rejected_passthrough, untrusted_ca_passthrough) = {
         let state = state.lock().await;
         (
             state
@@ -4124,8 +4140,17 @@ async fn handle_transparent_tls<S>(
                 .chain(state.default_passthrough_hosts.iter())
                 .any(|re| re.is_match(&sni)),
             state.mitm_rejected_hosts.contains(&sni_key),
+            state.tunnel_all_tls,
         )
     };
+    if untrusted_ca_passthrough {
+        // Every connection takes this path, so debug-level: the capture
+        // start warning has already said why HTTPS is not captured.
+        debug!(%sni, %upstream_host, dst_port, "TLS connection tunneled without capture: the device does not trust the Tapsmith CA");
+        record_passthrough_entry(&state, &sni, dst_port).await;
+        tunnel_tls_passthrough(client, hello.recorded, upstream_host, dst_port, &sni).await;
+        return;
+    }
     if alpn_passthrough || host_passthrough || mitm_rejected_passthrough {
         // info-level on purpose: this is the breadcrumb a user has when
         // wondering why expected traffic is missing from the capture.
@@ -5223,6 +5248,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            tunnel_all_tls: false,
         }));
 
         let (client_side, server_side) = tokio::io::duplex(65536);
@@ -5883,6 +5909,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            tunnel_all_tls: false,
         }))
     }
 
@@ -6140,6 +6167,64 @@ mod tests {
         assert!(state.lock().await.mitm_rejected_hosts.is_empty());
     }
 
+    // PILOT-711: on an emulator where the CA could not be installed (Google
+    // Play image, no adb root), every client would reject the MITM cert, so
+    // the proxy tunnels all TLS instead: the app's HTTPS keeps working, and a
+    // passthrough marker records the host.
+    #[tokio::test]
+    async fn tunnel_all_tls_passes_https_through_for_a_client_that_does_not_trust_the_ca() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let (server_config, origin_cert) = origin_server_config("api.example.com", &[b"http/1.1"]);
+        let origin_port = spawn_tls_origin(server_config, b"real-origin").await;
+
+        let state = empty_proxy_state(Vec::new());
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let proxy = NetworkProxy {
+            port: 0,
+            state: state.clone(),
+            shutdown_tx: tx,
+            capture_session: "test".to_string(),
+        };
+        proxy.set_tunnel_all_tls(true).await;
+        // A capture start on the kept-alive proxy must not re-enable MITM:
+        // whether the device trusts the CA does not change between tests.
+        proxy.reset_capture_state().await;
+
+        let (client_side, server_side) = tokio::io::duplex(65536);
+        let proxy_state = state.clone();
+        let proxy_task = tokio::spawn(async move {
+            handle_transparent_tls(
+                server_side,
+                "127.0.0.1".to_string(),
+                origin_port,
+                proxy_state,
+                ca,
+            )
+            .await;
+        });
+        let client_config = client_config_trusting(&origin_cert, &[b"http/1.1"]);
+        let (_negotiated, received) =
+            run_passthrough_client(client_config, client_side, "api.example.com").await;
+        assert_eq!(received, b"real-origin");
+        proxy_task.await.unwrap();
+
+        let entries = state.lock().await.entries.clone();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].route_action, "passthrough");
+        assert_eq!(
+            entries[0].url,
+            format!("https://api.example.com:{origin_port}/")
+        );
+        assert!(
+            proxy.take_tls_rejected_hosts().await.is_empty(),
+            "a tunneled connection is not a certificate reject"
+        );
+    }
+
     #[tokio::test]
     async fn tls_rejected_hosts_are_bounded_and_cleared_by_capture_reset() {
         let state = empty_proxy_state(Vec::new());
@@ -6284,6 +6369,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            tunnel_all_tls: false,
         }));
 
         let (client_side, server_side) = tokio::io::duplex(65536);
@@ -6526,6 +6612,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            tunnel_all_tls: false,
         }))
     }
 
@@ -7377,6 +7464,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            tunnel_all_tls: false,
         }))
     }
 

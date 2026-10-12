@@ -700,9 +700,7 @@ pub async fn install_ca_cert(
             }
             Err(e) => {
                 tracing::warn!(%serial, "adb root failed: {e} — CA must be installed manually");
-                return Err(anyhow::anyhow!(
-                    "adb root failed: {e} — HTTPS traffic will not be captured"
-                ));
+                return Err(anyhow::anyhow!("adb root failed: {e}"));
             }
         }
 
