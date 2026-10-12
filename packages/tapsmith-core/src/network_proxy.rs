@@ -22,7 +22,7 @@
 //! our certificate at handshake time (embedded-root stacks — see
 //! [`EmbeddedRootDefaults`]).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
@@ -401,9 +401,27 @@ pub(crate) struct ProxyState {
     /// [`MITM_ABORT_PASSTHROUGH_THRESHOLD`] it graduates into
     /// `mitm_rejected_hosts`. Cleared for a host on any successful handshake.
     mitm_handshake_aborts: HashMap<String, u32>,
+    /// Hosts whose client rejected our MITM certificate with a decodable
+    /// certificate alert (UnknownCA, CertificateUnknown, BadCertificate…)
+    /// since the last drain, over any ALPN. Reported to the SDK on
+    /// `StopNetworkCapture` so a run whose device does not trust the current
+    /// Tapsmith CA says so instead of silently capturing nothing (PILOT-712).
+    /// Bounded by [`MAX_TLS_REJECTED_HOSTS`].
+    tls_rejected_hosts: BTreeSet<String>,
 }
 
+/// Cap on [`ProxyState::tls_rejected_hosts`] between drains: enough to name
+/// every host a real app talks to, small enough that a client probing
+/// arbitrary SNIs cannot grow it without bound.
+const MAX_TLS_REJECTED_HOSTS: usize = 64;
+
 impl ProxyState {
+    fn record_tls_reject(&mut self, host: &str) {
+        if self.tls_rejected_hosts.len() < MAX_TLS_REJECTED_HOSTS {
+            self.tls_rejected_hosts.insert(host.to_string());
+        }
+    }
+
     fn push_entry(&mut self, mut entry: CapturedEntry) {
         entry.capture_id = self.next_stream_key;
         self.next_stream_key += 1;
@@ -511,6 +529,7 @@ impl NetworkProxy {
             default_passthrough_hosts: default_passthrough_regexes(),
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
+            tls_rejected_hosts: BTreeSet::new(),
         }));
 
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -646,6 +665,15 @@ impl NetworkProxy {
         state.entries.clear();
         state.mitm_rejected_hosts.clear();
         state.mitm_handshake_aborts.clear();
+        state.tls_rejected_hosts.clear();
+    }
+
+    /// Return (sorted) and clear the hosts whose client rejected our MITM
+    /// certificate since the last call — see `ProxyState::tls_rejected_hosts`.
+    pub async fn take_tls_rejected_hosts(&self) -> Vec<String> {
+        std::mem::take(&mut self.state.lock().await.tls_rejected_hosts)
+            .into_iter()
+            .collect()
     }
 
     /// Return captured entries and clear the buffer without stopping the
@@ -4158,6 +4186,12 @@ async fn handle_transparent_tls<S>(
             s
         }
         Err(e) => {
+            // Any ALPN: an http/1.1 client that does not trust our CA is
+            // just as uncapturable, and is the common case when the device
+            // trusts a different Tapsmith CA (PILOT-712).
+            if is_likely_client_cert_reject(&e) {
+                state.lock().await.record_tls_reject(&sni_key);
+            }
             if offers_h2(&hello.alpn) {
                 let alpn_dbg = hello
                     .alpn
@@ -5188,6 +5222,7 @@ mod tests {
             default_passthrough_hosts: Vec::new(),
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
+            tls_rejected_hosts: BTreeSet::new(),
         }));
 
         let (client_side, server_side) = tokio::io::duplex(65536);
@@ -5847,6 +5882,7 @@ mod tests {
             default_passthrough_hosts: Vec::new(),
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
+            tls_rejected_hosts: BTreeSet::new(),
         }))
     }
 
@@ -6054,6 +6090,77 @@ mod tests {
         );
     }
 
+    // PILOT-712: a device that trusts a different Tapsmith CA rejects every
+    // MITM handshake with a decodable alert. Those hosts are reported on the
+    // next drain (any ALPN, not just h2) so the run can warn about it.
+    #[tokio::test]
+    async fn client_cert_rejects_are_reported_once_per_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let state = empty_proxy_state(Vec::new());
+        let (_server_config, origin_cert) = origin_server_config("api.example.com", &[b"http/1.1"]);
+        let client_config = client_config_trusting(&origin_cert, &[b"http/1.1"]);
+
+        let (client_side, server_side) = tokio::io::duplex(65536);
+        let proxy_state = state.clone();
+        let proxy_task = tokio::spawn(async move {
+            handle_transparent_tls(server_side, "127.0.0.1".to_string(), 443, proxy_state, ca)
+                .await;
+        });
+        let server_name =
+            rustls::pki_types::ServerName::try_from("API.example.com".to_string()).unwrap();
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            TlsConnector::from(client_config).connect(server_name, client_side),
+        )
+        .await
+        .unwrap();
+        assert!(result.is_err(), "client must reject the MITM certificate");
+        proxy_task.await.unwrap();
+
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let proxy = NetworkProxy {
+            port: 0,
+            state: state.clone(),
+            shutdown_tx: tx,
+            capture_session: "test".to_string(),
+        };
+        assert_eq!(
+            proxy.take_tls_rejected_hosts().await,
+            vec!["api.example.com"]
+        );
+        assert!(
+            proxy.take_tls_rejected_hosts().await.is_empty(),
+            "a drain clears the reported hosts"
+        );
+        // http/1.1 never arms the h2 passthrough fallback.
+        assert!(state.lock().await.mitm_rejected_hosts.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tls_rejected_hosts_are_bounded_and_cleared_by_capture_reset() {
+        let state = empty_proxy_state(Vec::new());
+        {
+            let mut s = state.lock().await;
+            for i in 0..(MAX_TLS_REJECTED_HOSTS + 10) {
+                s.record_tls_reject(&format!("h{i}.example.com"));
+            }
+            assert_eq!(s.tls_rejected_hosts.len(), MAX_TLS_REJECTED_HOSTS);
+        }
+        let (tx, _rx) = tokio::sync::oneshot::channel();
+        let proxy = NetworkProxy {
+            port: 0,
+            state: state.clone(),
+            shutdown_tx: tx,
+            capture_session: "test".to_string(),
+        };
+        proxy.reset_capture_state().await;
+        assert!(proxy.take_tls_rejected_hosts().await.is_empty());
+    }
+
     #[tokio::test]
     async fn h2_handshake_aborts_arm_passthrough_after_threshold() {
         // Embedded-root gRPC clients (Firestore on iOS) reject our MITM cert by
@@ -6176,6 +6283,7 @@ mod tests {
             default_passthrough_hosts: Vec::new(),
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
+            tls_rejected_hosts: BTreeSet::new(),
         }));
 
         let (client_side, server_side) = tokio::io::duplex(65536);
@@ -6417,6 +6525,7 @@ mod tests {
             default_passthrough_hosts: Vec::new(),
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
+            tls_rejected_hosts: BTreeSet::new(),
         }))
     }
 
@@ -7267,6 +7376,7 @@ mod tests {
             default_passthrough_hosts: Vec::new(),
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
+            tls_rejected_hosts: BTreeSet::new(),
         }))
     }
 

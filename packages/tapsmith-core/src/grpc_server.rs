@@ -6214,16 +6214,19 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     success: false,
                     entries: Vec::new(),
                     error_message: "Network capture is not running".to_string(),
+                    ..Default::default()
                 }));
             };
 
             let captured = proxy.drain_entries().await;
             let entries = captured_entries_to_proto(captured, proxy.capture_session());
+            let tls_rejected_hosts = proxy.take_tls_rejected_hosts().await;
             return Ok(Response::new(proto::StopNetworkCaptureResponse {
                 request_id,
                 success: true,
                 entries,
                 error_message: String::new(),
+                tls_rejected_hosts,
             }));
         }
 
@@ -6237,6 +6240,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 success: false,
                 entries: Vec::new(),
                 error_message: "Network capture is not running".to_string(),
+                ..Default::default()
             }));
         };
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
@@ -6333,6 +6337,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         }
 
         let capture_session = proxy.capture_session().to_string();
+        let tls_rejected_hosts = proxy.take_tls_rejected_hosts().await;
         let captured = proxy.stop().await;
         let entries = captured_entries_to_proto(captured, &capture_session);
 
@@ -6341,6 +6346,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             success: true,
             entries,
             error_message: String::new(),
+            tls_rejected_hosts,
         }))
     }
 

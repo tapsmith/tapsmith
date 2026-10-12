@@ -1050,6 +1050,8 @@ export class TapsmithGrpcClient {
       responseBodyOmitted?: boolean;
     }>;
     errorMessage: string;
+    /** Hosts whose client rejected the MITM certificate since the previous stop (PILOT-712). */
+    tlsRejectedHosts?: string[];
   }> {
     // bypassAbort: stopping capture is cleanup — it must reach the daemon
     // even when the run was stopped, or the proxy keeps capturing into a

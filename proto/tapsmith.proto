@@ -933,6 +933,11 @@ message StopNetworkCaptureResponse {
   bool success = 2;
   repeated CapturedNetworkEntry entries = 3;
   string error_message = 4;
+  // Hosts (SNI, lowercased, sorted) whose client rejected the MITM
+  // certificate with a TLS certificate alert since the previous stop. Their
+  // HTTPS requests were not captured and routes could not intercept them —
+  // typically the device trusts a different Tapsmith CA, or the app pins.
+  repeated string tls_rejected_hosts = 5;
 }
 
 // ─── Physical iOS device network capture (PILOT-185) ───

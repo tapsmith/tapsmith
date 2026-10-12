@@ -57,6 +57,7 @@ import { startLiveNetwork } from './trace/live-network.js';
 import { telemetry, runEventFromResults, type RunMode } from './telemetry.js';
 import { isRecoverableInfrastructureError } from './worker-protocol.js';
 import { filterEntriesByHosts } from './trace/filter-hosts.js';
+import { TlsRejectWarnings, tlsRejectWarning } from './tls-reject-warning.js';
 import { defineStandIns, notSupportedYet } from './not-supported.js';
 
 // ─── Trace Device Info ───
@@ -196,6 +197,8 @@ function resettableDevices(opts: RunOptions): Array<RunDevice & { sessionContext
  * for every test.
  */
 const _printedCaptureWarnings = new Set<string>();
+/** Rejected-certificate hosts already reported on the terminal this run (PILOT-712). */
+const _tlsRejectWarnings = new TlsRejectWarnings();
 
 /** Strip HTTP/1.1 chunked transfer encoding framing from a body.
  * Returns the original buffer if parsing fails. */
@@ -2628,10 +2631,23 @@ async function runSuiteContext(
         // once after the file so soft-reset tests do not churn device routing.
         // Each device's daemon runs its own proxy with its own index space,
         // so entries are collected per device and re-indexed when merged.
+        // Hosts whose client rejected the MITM certificate (PILOT-712): the
+        // warning goes into this test's trace now, and to the terminal once
+        // per run per host after the collector stops — printing it here would
+        // also land in the trace a second time through console capture.
+        const tlsRejectNotices: Array<{ device: Device; hosts: string[] }> = [];
         if (traceConfig.network) {
           for (const d of networkDrainDevices()) {
             try {
               const res = await d._stopNetworkCapture({ keepRunning: true });
+              if (res.success && res.tlsRejectedHosts?.length) {
+                tlsRejectNotices.push({ device: d, hosts: res.tlsRejectedHosts });
+                traceCollector.addDaemonLogEntry(
+                  'warn',
+                  `Network capture warning: ${tlsRejectWarning(res.tlsRejectedHosts)}`,
+                  d._traceDeviceId,
+                );
+              }
               if (res.success) {
                 // Apply user-supplied host filters, if any. On physical iOS
                 // and Android emulators the proxy is system-wide and captures
@@ -2707,6 +2723,13 @@ async function runSuiteContext(
 
         const collector = primary.tracing._stopManaged();
         setActiveTraceCollector(null);
+
+        for (const { device: d, hosts } of tlsRejectNotices) {
+          const fresh = _tlsRejectWarnings.takeNew(d._traceDeviceId ?? '', hosts);
+          if (fresh.length === 0) continue;
+          const who = devices.length > 1 && d._traceDeviceId ? `[${d._traceDeviceId}] ` : '';
+          console.warn(`[tapsmith] Network capture warning: ${who}${tlsRejectWarning(fresh)}`);
+        }
 
         const networkEntries = await mapNetworkEntries(
           networkSnapshotEntries(), collector?.events ?? [], requestContext.getNetworkEntries(),

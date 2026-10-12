@@ -972,6 +972,18 @@ To check an existing AVD, look at `tag.id` in `~/.android/avd/<name>.avd/config.
 
 Manually installing `~/.tapsmith/ca.pem` as a *user* CA on a Play image is possible but rarely sufficient: apps targeting API 24+ do not trust user-installed CAs unless they opt in via `network_security_config.xml`. Unless your test build has that opt-in, use a Google APIs image instead.
 
+### When the app rejects Tapsmith's certificate
+
+Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time you capture. On rootable Android emulators it installs that CA into the device's system trust store at every capture start. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
+
+When an app still refuses Tapsmith's certificate, those requests do not appear in the trace and `device.route()` cannot intercept them. Tapsmith then names the hosts in the run output, once per run, and adds the same warning to each affected test's trace as a daemon console message:
+
+```
+[tapsmith] Network capture warning: the app rejected Tapsmith's HTTPS certificate for api.example.com, so those requests were not captured and device.route() could not intercept them. …
+```
+
+If every HTTPS host is rejected, the device or app does not trust the current CA. For example, the CA could only be installed in Android's user store, which apps ignore unless their `network_security_config.xml` opts in. If only some hosts are rejected, the app probably pins their certificates: list them in `trace.networkPassthroughHosts` so they are tunnelled without capture instead of failing.
+
 ---
 
 ## Reference
