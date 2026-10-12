@@ -677,6 +677,8 @@ describe('emulator utilities', () => {
       healthy?: boolean
       /** Successive `adb devices` answers, overriding `adb` (PILOT-710). */
       query?: () => { serial: string, state: string }[] | { error: string }
+      /** Serials another live Tapsmith session holds. */
+      held?: string[]
     }) {
       const written: unknown[][] = [];
       const sleep = vi.fn();
@@ -692,6 +694,7 @@ describe('emulator utilities', () => {
         readProcessArgs: (pid: number) => opts.argv?.[pid],
         findEmulatorPid: (serial: string) => opts.listener?.[serial],
         probeDeviceHealth,
+        devicesHeldElsewhere: () => new Set(opts.held ?? []),
         killEmulator,
         killProcess,
       };
@@ -1144,6 +1147,29 @@ describe('emulator utilities', () => {
       });
     });
 
+    it('never stops an emulator another live Tapsmith session holds, whatever its checks say', () => {
+      for (const [adb, healthy] of [
+        [[], true],
+        [[{ serial: 'emulator-5554', state: 'offline' }], true],
+        [[{ serial: 'emulator-5554', state: 'device' }], false],
+      ] as const) {
+        const e = entry();
+        const h = harness({
+          entries: [e],
+          adb: [...adb],
+          alive: [4242],
+          argv: { 4242: tapsmithArgv() },
+          listener: { 'emulator-5554': 4242 },
+          healthy,
+          held: ['emulator-5554'],
+        });
+        expect(reclaimOrphanedEmulators(h.deps)).toEqual({ reusable: [], killed: [], undetermined: ['emulator-5554'], booting: [] });
+        expect(h.killProcess).not.toHaveBeenCalled();
+        expect(h.killEmulator).not.toHaveBeenCalled();
+        expect(h.written).toEqual([[e]]);
+      }
+    });
+
     it('judges ownership by the last record for a duplicated serial', () => {
       const h = harness({
         entries: [entry({ pid: 4242 }), entry({ pid: 999991 })],
@@ -1163,6 +1189,7 @@ describe('emulator utilities', () => {
       argv?: Record<number, string[] | undefined>
       avdNames?: Record<string, string>
       healthy?: Record<string, boolean>
+      held?: string[]
     }) {
       const killEmulator = vi.fn();
       const deps = {
@@ -1175,6 +1202,7 @@ describe('emulator utilities', () => {
         findEmulatorPid: (serial: string) => opts.listener?.[serial],
         resolveAvdName: (serial: string) => opts.avdNames?.[serial],
         probeDeviceHealth: (serial: string) => ({ serial, healthy: opts.healthy?.[serial] ?? true, reason: 'boot not completed' }),
+        devicesHeldElsewhere: () => new Set(opts.held ?? []),
         killEmulator,
         killProcess: vi.fn(),
         waitForAdbSettle: vi.fn(),
@@ -1280,6 +1308,17 @@ describe('emulator utilities', () => {
         readProcessArgs: () => (reads++ === 0 ? undefined : ['/sdk/qemu', ...emulatorLaunchArgs('Pixel', 5556)]),
       });
       expect(result.killed).toEqual([]);
+      expect(h.killEmulator).not.toHaveBeenCalled();
+    });
+
+    it('leaves an unhealthy Tapsmith-launched orphan another session holds running', () => {
+      const h = harness({
+        adb: [{ serial: 'emulator-5556', state: 'offline' }],
+        listener: { 'emulator-5556': 8888 },
+        argv: { 8888: ['/sdk/qemu', ...emulatorLaunchArgs('Pixel', 5556)] },
+        held: ['emulator-5556'],
+      });
+      expect(cleanupStaleEmulators('Pixel', h.deps).killed).toEqual([]);
       expect(h.killEmulator).not.toHaveBeenCalled();
     });
 
@@ -2240,6 +2279,7 @@ describe('provisionEmulators launch failures', () => {
         readProcessArgs: () => ['/sdk/qemu', ...emulatorLaunchArgs('Pixel', 5570, { headless: false, args: [] })],
         findEmulatorPid: () => 4242,
         probeDeviceHealth: (serial) => ({ serial, healthy: true }),
+        devicesHeldElsewhere: () => new Set<string>(),
         killEmulator: vi.fn(),
         killProcess: vi.fn(),
       });

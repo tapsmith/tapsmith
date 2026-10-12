@@ -20,6 +20,7 @@ import lockfile from 'proper-lockfile';
 import type { DeviceStrategy, EmulatorLaunchOptions } from './config.js';
 import { decodeXmlEntities } from './xml-entities.js';
 import { parseAdbDevicesOutput } from './adb-devices.js';
+import { devicesHeldElsewhere } from './device-claims.js';
 import { describeEmulatorAppNap, disableEmulatorAppNap, type EmulatorAppNapResult } from './emulator-app-nap.js';
 
 const DIM = '\x1b[2m';
@@ -143,8 +144,10 @@ export interface ReclaimResult {
   /** Serials of emulators that were killed (unhealthy or dead process). */
   killed: string[]
   /**
-   * Serials whose recorded PID is alive but whose command line could not be
-   * read: kept in the manifest, and neither reused nor killed this run.
+   * Serials kept in the manifest, and neither reused nor killed this run:
+   * the recorded PID is alive but its command line could not be read; adb
+   * could not be queried or changed its answer (PILOT-710); or the emulator
+   * failed its checks while another live Tapsmith session holds it.
    */
   undetermined: string[]
   /**
@@ -165,6 +168,8 @@ interface ReclaimDeps {
   readProcessArgs: (pid: number) => string[] | undefined
   findEmulatorPid: (serial: string) => number | undefined
   probeDeviceHealth: (serial: string) => DeviceHealthResult
+  /** Serials another live Tapsmith session holds (PILOT-381 claims): never stopped. */
+  devicesHeldElsewhere: () => ReadonlySet<string>
   killEmulator: (serial: string) => void
   killProcess: (pid: number) => void
   platform: NodeJS.Platform
@@ -180,6 +185,7 @@ function resolveReclaimDeps(deps: Partial<ReclaimDeps>): ReclaimDeps {
     readProcessArgs: deps.readProcessArgs ?? readProcessArgs,
     findEmulatorPid: deps.findEmulatorPid ?? findEmulatorPid,
     probeDeviceHealth: deps.probeDeviceHealth ?? probeDeviceHealth,
+    devicesHeldElsewhere: deps.devicesHeldElsewhere ?? (() => devicesHeldElsewhere()),
     killEmulator: deps.killEmulator ?? killEmulator,
     killProcess: deps.killProcess ?? killProcess,
     platform: deps.platform ?? process.platform,
@@ -268,6 +274,8 @@ export function reclaimOrphanedEmulators(
   const adbDeviceMap = new Map((isAdbQueryFailure(adbDevices) ? [] : adbDevices).map((device) => [device.serial, device]));
   const leftUnqueried: string[] = [];
   const leftFlapping: string[] = [];
+  let held: ReadonlySet<string> | undefined;
+  const heldElsewhere = (serial: string) => (held ??= d.devicesHeldElsewhere()).has(serial);
 
   for (const entry of uniqueBySerial.values()) {
     // Mid-boot in a run that is still going: unhealthy only because it has
@@ -338,6 +346,7 @@ export function reclaimOrphanedEmulators(
     }
 
     // Health check to decide reuse vs kill
+    let killReason: string;
     if (inAdb && inAdb.state === 'device') {
       const health = d.probeDeviceHealth(entry.serial);
       if (health.healthy) {
@@ -373,14 +382,23 @@ export function reclaimOrphanedEmulators(
         }
         continue;
       }
-      process.stderr.write(
-        `${YELLOW}Killing unhealthy emulator ${entry.serial} (AVD ${entry.avd}): ${health.reason ?? 'health check failed'}.${RESET}\n`,
-      );
+      killReason = `${YELLOW}Killing unhealthy emulator ${entry.serial} (AVD ${entry.avd}): ${health.reason ?? 'health check failed'}.${RESET}\n`;
     } else {
-      process.stderr.write(
-        `${YELLOW}Killing unresponsive emulator ${entry.serial} (PID ${entry.pid}, AVD ${entry.avd}).${RESET}\n`,
-      );
+      killReason = `${YELLOW}Killing unresponsive emulator ${entry.serial} (PID ${entry.pid}, AVD ${entry.avd}).${RESET}\n`;
     }
+
+    // Another live session is using it: whatever its state looks like from
+    // here (an adb restart, a slow host), stopping it would kill that
+    // session's run. Left running and on record.
+    if (heldElsewhere(entry.serial)) {
+      process.stderr.write(
+        `${DIM}Leaving emulator ${entry.serial} (AVD ${entry.avd}) running: it failed Tapsmith's checks, but another Tapsmith session is using it.${RESET}\n`,
+      );
+      surviving.push(entry);
+      undetermined.push(entry.serial);
+      continue;
+    }
+    process.stderr.write(killReason);
 
     // Go through the serial (adb emu kill, then the port listener) only when
     // the listener is confirmed to be our PID; without lsof, signal the PID.
@@ -665,6 +683,7 @@ export function cleanupStaleEmulators(
   const listed = d.queryAdbDevices();
   const devices = isAdbQueryFailure(listed) ? [] : listed;
   const killed = [...reclaim.killed];
+  let heldInPhase2: ReadonlySet<string> | undefined;
 
   for (const device of devices) {
     if (!device.serial.startsWith('emulator-')) continue;
@@ -691,6 +710,13 @@ export function cleanupStaleEmulators(
     if (argv === undefined || !isTapsmithLaunchedEmulator(argv, { port, avd: targetAvd })) {
       process.stderr.write(
         `${DIM}Leaving emulator ${device.serial} alone (${problem}): Tapsmith can't confirm it launched it.${RESET}\n`,
+      );
+      continue;
+    }
+
+    if ((heldInPhase2 ??= d.devicesHeldElsewhere()).has(device.serial)) {
+      process.stderr.write(
+        `${DIM}Leaving emulator ${device.serial} running (${problem}): another Tapsmith session is using it.${RESET}\n`,
       );
       continue;
     }
