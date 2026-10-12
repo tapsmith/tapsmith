@@ -345,6 +345,8 @@ device.getByRole("tab", { name: "Settings", selected: true })
 device.getByRole("button", { name: "Details", expanded: true })
 ```
 
+`getByRole("tab")` matches the tab items, not the tab bar that holds them (that is `getByRole("tablist")`). A tab bar whose items publish no accessibility role needs `getByText()` or `getByDescription()` instead — the [locators guide](locators.md#getbyrolerole--name-) says what each platform exposes.
+
 ### Cross-platform considerations
 
 On iOS, when a component has an explicit `accessibilityLabel`, child text elements are hidden from the accessibility tree. The parent becomes a single accessible element. On Android, child text remains individually queryable.
