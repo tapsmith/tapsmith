@@ -10,7 +10,11 @@
  * `const` to show alternatives. So the check reports only the diagnostics that
  * mean "this is not the API" (a missing property, a wrong argument, an unknown
  * option) and ignores the ones a fragment produces by being a fragment. In
- * every sample, `device` is a `Device` unless the sample declares it.
+ * every sample, `device` is a `Device` and `webview` a `WebViewHandle` unless
+ * the sample declares them, and the runner's names (`test`, `expect`, …) are
+ * typed whether or not it imports them. Only `tapsmith` resolves: names a
+ * sample imports from anywhere else (`@tapsmith/react-native`, its own screen
+ * objects) are unchecked, as are TSX samples' JSX props.
  */
 
 import fs from 'node:fs';
@@ -64,22 +68,37 @@ function codeSpansIn(file: string, source: string): Sample[] {
   return out;
 }
 
+/**
+ * Fenced code samples of a markdown file, with the line of their first code
+ * line. Tokens arrive in document order, so each code token is the next fence
+ * after the previous one; a fence is found by its own line rather than by the
+ * token's `raw`, which marked dedents for a block nested in a list.
+ */
 function samplesIn(file: string, source: string): Sample[] {
   const out: Sample[] = [];
   let searchFrom = 0;
+  const lineOf = (offset: number): number => source.slice(0, offset).split('\n').length;
   const visit = (token: Token): void => {
     if (token.type === 'code') {
       const lang = (token.lang ?? '').trim().split(/\s+/)[0]!.toLowerCase();
-      const at = source.indexOf(token.raw, searchFrom);
-      if (at >= 0) searchFrom = at + token.raw.length;
-      if (TS_LANGS.has(lang)) {
-        // A fenced block's code starts on the line after its fence; a nested one
-        // (in a list) is dedented in `raw`, so find its first code line instead.
-        const first = (token.text as string).split('\n')[0]!;
-        const found = at >= 0 ? at : source.indexOf(first);
-        const line = found >= 0 ? source.slice(0, found).split('\n').length + (at >= 0 ? 1 : 0) : 0;
-        out.push({ file, line, code: token.text as string, tsx: lang === 'tsx' });
+      const open = /^[ \t>]*(`{3,}|~{3,})[^\n]*$/gm;
+      open.lastIndex = searchFrom;
+      const fence = token.codeBlockStyle === 'indented' ? null : open.exec(source);
+      let line = 0;
+      if (fence) {
+        line = lineOf(fence.index) + 1;
+        const close = new RegExp(`^[ \\t>]*\\${fence[1]![0]}{${fence[1]!.length},}[ \\t]*$`, 'gm');
+        close.lastIndex = fence.index + fence[0].length;
+        const end = close.exec(source);
+        searchFrom = end ? end.index + end[0].length : source.length;
+      } else {
+        const at = source.indexOf(token.raw, searchFrom);
+        if (at >= 0) {
+          line = lineOf(at);
+          searchFrom = at + token.raw.length;
+        }
       }
+      if (TS_LANGS.has(lang)) out.push({ file, line, code: token.text as string, tsx: lang === 'tsx' });
     }
     for (const child of childTokens(token)) visit(child);
   };
@@ -162,6 +181,7 @@ const API_MISMATCH = new Map<number, string>([
   [2305, 'module has no such export'],
   [2724, 'module has no such export (did you mean …)'],
   [2614, 'module has no such export'],
+  [2769, 'no overload matches the call'],
   [2322, 'value is not assignable (a wrong option value)'],
   [2820, 'value is not assignable (did you mean …)'],
 ]);
@@ -187,9 +207,11 @@ function wrap(sample: Sample): { text: string; headerLines: number } {
   // (TS2451, ignored); fixture parameters (`async ({ device }) =>`) shadow it.
   const runnerNames = RUNNER_NAMES.filter((name) => !bindsName(sample.code, name));
   const header = [
-    "import type { Device as __Device } from 'tapsmith';",
+    "import type { Device as __Device, WebViewHandle as __WebViewHandle } from 'tapsmith';",
     runnerNames.length ? `import { ${runnerNames.join(', ')} } from 'tapsmith';` : '',
     'declare const device: __Device;',
+    // WebView guides use `webview` from an earlier `await device.webview()`.
+    bindsName(sample.code, 'webview') ? '' : 'declare const webview: __WebViewHandle;',
     'export {};',
   ];
   return { text: `${header.join('\n')}\n${sample.code}\n`, headerLines: header.length };
@@ -352,6 +374,21 @@ describe('docs TypeScript samples match the SDK API', () => {
   it('reads inline code inside tables', () => {
     const spans = codeSpansIn('t.md', '| Detox | Tapsmith |\n|---|---|\n| `x` | `getByContentDesc()` |\n');
     expect(spans.flatMap(unknownNamesIn)).toEqual(['getByContentDesc() is not a locator method']);
+  });
+
+  it('reports a call no overload of an overloaded method accepts', () => {
+    const found = typeCheck(samplesIn('t.md', '```ts\nawait device.restartApp(123)\n```\n'));
+    expect(found.map((m) => m.code)).toEqual([2769]);
+  }, 120_000);
+
+  it('types `webview` in WebView fragments', () => {
+    const found = typeCheck(samplesIn('t.md', '```ts\nawait webview.frobnicate("#x")\n```\n'));
+    expect(found.map((m) => m.code)).toEqual([2339]);
+  }, 120_000);
+
+  it('gives a list-nested sample its own line when its text repeats', () => {
+    const md = ['```ts', 'const a = 1', '```', '', '- item', '', '  ```ts', '  const a = 1', '  ```', '', '```ts', 'const a = 1', '```'].join('\n');
+    expect(samplesIn('t.md', md).map((s) => s.line)).toEqual([2, 8, 12]);
   });
 
   it('reports options a method does not take', () => {

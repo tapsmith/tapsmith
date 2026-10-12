@@ -2693,7 +2693,7 @@ A pinned device hosts exactly one worker, in every mode — sequential, parallel
 watch and UI. `--device` combined with a `--workers N` the run cannot use is
 refused: both are on the command line and ask for different runs. In a
 single-platform config that is any N > 1 the run could otherwise use (more
-than one file in a wave — `--device X --workers 2 one.test.ts` just runs on X);
+than one file in a wave — `--device X --workers 2 one.tapsmith.ts` just runs on X);
 in a config whose projects span
 Android and iOS, `--device` (like a root `device` in the config) pins only the
 projects of that device's platform, and the other platform's projects may use
