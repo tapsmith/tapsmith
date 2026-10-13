@@ -644,8 +644,6 @@ const AUTO_SCROLL_ENTRY = 0.1;
 const AUTO_SCROLL_MAX_NUDGE = 0.1;
 /** Budget for the hierarchy read that measures the screen. */
 const SCREEN_SIZE_READ_MS = 5000;
-/** The least share of the screen a scroll view must span to count as the element's list. */
-const AUTO_SCROLL_MIN_LIST_FRACTION = 0.5;
 /** Re-reads of the band, per scroll, before an element is called in view. */
 const AUTO_SCROLL_MAX_BAND_REREADS = 2;
 /** Swipes in a row that may fail to bring the element closer to the middle. */
@@ -672,6 +670,8 @@ interface ScrollViewport {
   top: number;
   bottom: number;
   screenHeight: number;
+  /** Whether the element's node was found in the dump (else the band is the screen's). */
+  matched: boolean;
 }
 
 /** Whether `el` has a frame with area to steer by. */
@@ -686,6 +686,30 @@ function hierarchyBounds(node: HierarchyNode): Bounds | undefined {
   if (!m) return undefined;
   const [left, top, right, bottom] = m.slice(1).map(Number);
   return { left, top, right, bottom };
+}
+
+/**
+ * How a scroll view lays out its content, judged along the element's branch
+ * (`path[0]` is the scroll view, the rest leads down to the element): at the
+ * first level where the branch has a framed sibling, siblings side by side
+ * mean a horizontal strip (a carousel), siblings stacked mean a vertical
+ * list. `undefined` when no level has a sibling to compare with.
+ */
+function branchLayout(path: HierarchyNode[]): 'horizontal' | 'vertical' | undefined {
+  for (let j = 1; j < path.length; j++) {
+    const own = hierarchyBounds(path[j]);
+    if (!own) continue;
+    for (const sibling of path[j - 1].children) {
+      if (sibling === path[j]) continue;
+      const b = hierarchyBounds(sibling);
+      if (!b || b.right <= b.left || b.bottom <= b.top) continue;
+      const overlapX = Math.min(b.right, own.right) - Math.max(b.left, own.left);
+      const overlapY = Math.min(b.bottom, own.bottom) - Math.max(b.top, own.top);
+      if (overlapY > 0 && overlapX <= 0) return 'horizontal';
+      if (overlapX > 0 && overlapY <= 0) return 'vertical';
+    }
+  }
+  return undefined;
 }
 
 /** Whether a dump node is a scroll view: an iOS scroll view, table or collection view, or an Android scrollable node. */
@@ -1677,7 +1701,14 @@ export class ElementHandle {
           // before acting (PILOT-716). Only a platform that reports
           // off-screen nodes reaches this (iOS); Android exposes on-screen
           // nodes only, so its off-screen rows end in the not-found hint.
-          const offScreen = element.enabled && isOffScreen(element) && !options?.needsNoScroll?.(element);
+          // Once a scroll has read the band of the element's list, a row the
+          // list still clips (on screen, behind its header) is out of view too:
+          // an early exit from a scroll (a stale read, a failure) must not hand
+          // the action a row the tap would miss.
+          const outOfView = (el: ElementInfo): el is ElementInfo & { bounds: Bounds } =>
+            isOffScreen(el) ||
+            (viewport !== undefined && isFramed(el) && !(el.bounds.bottom > viewport.top && el.bounds.top < viewport.bottom));
+          const offScreen = element.enabled && outOfView(element) && !options?.needsNoScroll?.(element);
           lastSeenOffScreen = offScreen;
           if (offScreen) lastOffScreenBounds = element.bounds;
           if (element.enabled && !offScreen) {
@@ -1686,7 +1717,7 @@ export class ElementHandle {
               // decelerating, and iOS spends the first tap on stopping it.
               unsettledScroll = false;
               const settled = await this._settleAfterScroll(element);
-              if (!settled.enabled || isOffScreen(settled)) continue;
+              if (!settled.enabled || outOfView(settled)) continue;
             }
             const remaining = Math.max(0, deadline - Date.now());
             return {
@@ -1694,7 +1725,7 @@ export class ElementHandle {
               element,
             };
           }
-          if (offScreen && isOffScreen(element)) {
+          if (offScreen && outOfView(element)) {
             const stable = sameBounds(previousOffScreenBounds, element.bounds);
             previousOffScreenBounds = element.bounds;
             const movedSinceFailure = !scrollFailure || !sameBounds(scrollFailure.bounds, element.bounds);
@@ -3078,8 +3109,8 @@ export class ElementHandle {
    * even where its list clips it (behind the header above the list), so the
    * band must be the list's, or the scroll stops on a row that cannot be
    * touched. The list is the nearest scroll view around the element's node
-   * that spans at least half the screen (a carousel around a cell is not the
-   * list that scrolls vertically). Navigation bars at the top and tab bars or
+   * whose content is stacked, not laid out side by side (a carousel around a
+   * cell is not the list that scrolls vertically). Navigation bars at the top and tab bars or
    * toolbars at the bottom narrow the band too. `undefined` when the dump fails or
    * carries no usable frame; a user stop propagates.
    */
@@ -3106,7 +3137,7 @@ export class ElementHandle {
     };
     const screen = firstFramed(roots);
     if (!screen || screen.bottom <= screen.top) return undefined;
-    const band = { top: screen.top, bottom: screen.bottom, screenHeight: screen.bottom - screen.top };
+    const band = { top: screen.top, bottom: screen.bottom, screenHeight: screen.bottom - screen.top, matched: false };
     const target = element.bounds;
     const height = target.bottom - target.top;
     const near = (a: number, b: number): boolean => Math.abs(a - b) <= 2;
@@ -3150,18 +3181,26 @@ export class ElementHandle {
       }
     };
     findBars(roots);
+    const matched = ancestry !== undefined;
     const clear = (top: number, bottom: number): ScrollViewport => {
       const t = Math.max(top, barTop.value);
       const b = Math.min(bottom, barBottom.value);
-      return b - t >= height * 1.5 ? { top: t, bottom: b, screenHeight: band.screenHeight } : { top, bottom, screenHeight: band.screenHeight };
+      return b - t >= height * 1.5
+        ? { top: t, bottom: b, screenHeight: band.screenHeight, matched }
+        : { top, bottom, screenHeight: band.screenHeight, matched };
     };
-    for (const node of (ancestry ?? []).slice(0, -1).reverse()) {
+    const branch = ancestry ?? [];
+    for (let i = branch.length - 2; i >= 0; i--) {
+      const node = branch[i];
       if (!isScrollContainer(node)) continue;
       const b = hierarchyBounds(node);
-      // A vertical list is a large part of the screen; a shorter scroll view
-      // around the element is a carousel or a nested strip, not the list the
-      // screen swipe scrolls.
-      if (!b || b.bottom - b.top < band.screenHeight * AUTO_SCROLL_MIN_LIST_FRACTION) continue;
+      if (!b) continue;
+      // A carousel around the element is not the list the screen swipe
+      // scrolls: tell them apart by how the element's branch sits among its
+      // siblings below the scroll view — side by side, or stacked.
+      const layout = branchLayout(branch.slice(i));
+      if (layout === 'horizontal') continue;
+      if (layout === undefined && b.bottom - b.top < height * 1.5) continue;
       const top = Math.max(band.top, b.top);
       const bottom = Math.min(band.bottom, b.bottom);
       if (bottom - top >= height * 1.5) return clear(top, bottom);
@@ -3223,7 +3262,6 @@ export class ElementHandle {
     // Where the element rests now, in screen coordinates: a failure records
     // it, so the caller scrolls again only once the element has moved on.
     let resting: Bounds = element.bounds;
-    // In line with the band vertically yet off-screen: off to the side.
     const sideError = (r: Bounds): OffScreenError => this._offScreenError(
       action,
       `it is off-screen to the ${r.right <= 0 ? 'left' : 'right'}, and ${action}() scrolls only vertically ` +
@@ -3231,9 +3269,9 @@ export class ElementHandle {
       resting,
       { sideways: r.right <= 0 ? 'right' : 'left' },
     );
-    if (inBand(bounds) && element.bounds.bottom > 0 && element.bounds.top < viewport.screenHeight) {
-      throw sideError(bounds);
-    }
+    // Level with the screen yet not on it: off to the side.
+    const levelWithScreen = (b: Bounds): boolean => b.bottom > 0 && b.top < viewport.screenHeight;
+    if (!element.visible && levelWithScreen(element.bounds)) throw sideError(bounds);
     // How far the element still has to travel: to the near edge of the safe
     // region, with a margin, so a nudge at a list end pulls the list only a
     // little past it; an element too tall for the region aims at the middle.
@@ -3261,7 +3299,9 @@ export class ElementHandle {
       if (rereads >= AUTO_SCROLL_MAX_BAND_REREADS) return true;
       rereads++;
       const fresh = await this._scrollViewport(el, deadline);
-      if (!fresh || (fresh.top === viewport.top && fresh.bottom === viewport.bottom)) return true;
+      // A dump that no longer shows the element where it rests (still
+      // drifting) says nothing about the band: keep the current one.
+      if (!fresh || !fresh.matched || (fresh.top === viewport.top && fresh.bottom === viewport.bottom)) return true;
       viewport.top = fresh.top;
       viewport.bottom = fresh.bottom;
       bounds = rel(el.bounds);
@@ -3325,9 +3365,9 @@ export class ElementHandle {
       resting = next.bounds;
       shown = next.visible && inBand(bounds);
       if (!next.visible) {
-        // Scrolled level with the band and still not on screen: a cell of a
+        // Scrolled level with the screen and still not on it: a cell of a
         // carousel row further down, off to the side.
-        if (inBand(bounds)) throw sideError(bounds);
+        if (levelWithScreen(next.bounds)) throw sideError(bounds);
       } else if (shown && moved > 0) {
         // Resting safely, or under-travel: the list hit its end this swipe.
         if (restsSafely(bounds) || moved < (distance * viewport.screenHeight) / 2) {

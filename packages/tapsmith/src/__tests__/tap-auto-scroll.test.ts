@@ -64,6 +64,10 @@ function simulatedScreen(opts: {
   listRowUnmatched?: boolean;
   /** The list's bottom edge (default the bottom of the screen). */
   listBottom?: number;
+  /** A sibling beside the row inside the list: side by side (a carousel) or stacked (a list). */
+  siblings?: 'side' | 'stacked';
+  /** The dump stops matching the row after the first swipe (taken while the list drifts). */
+  unmatchedAfterSwipe?: boolean;
   /** Extra dump nodes beside the list (navigation bars, tab bars). */
   extraNodes?: string;
   /** The list's top edge after the first swipe (a header that expands as the list scrolls back). */
@@ -154,10 +158,16 @@ function simulatedScreen(opts: {
     }
     if (opts.listTop === undefined) return { requestId: '1', hierarchyXml: HIERARCHY, errorMessage: '' };
     const r = row().bounds!;
-    const shift = opts.listRowUnmatched ? 37 : 0;
+    const shift = opts.listRowUnmatched || (opts.unmatchedAfterSwipe && state.swiped) ? 37 : 0;
     const rowNode = `<XCUIElementTypeButton type="XCUIElementTypeButton" bounds="[${Math.round(r.left)},${Math.round(r.top) + shift}][${Math.round(r.right)},${Math.round(r.bottom) + shift}]"/>`;
+    const h = Math.round(r.bottom - r.top);
+    const sibling = opts.siblings === 'side'
+      ? `<XCUIElementTypeButton type="XCUIElementTypeButton" bounds="[${Math.round(r.right) + 10},${Math.round(r.top)}][${Math.round(r.right) + 200},${Math.round(r.bottom)}]"/>`
+      : opts.siblings === 'stacked'
+        ? `<XCUIElementTypeButton type="XCUIElementTypeButton" bounds="[${Math.round(r.left)},${Math.round(r.bottom) + 10}][${Math.round(r.right)},${Math.round(r.bottom) + 10 + h}]"/>`
+        : '';
     const listTop = state.swiped && opts.listTopAfterSwipe !== undefined ? opts.listTopAfterSwipe : opts.listTop;
-    const list = `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,${listTop}][${SCREEN_W},${opts.listBottom ?? SCREEN_H}]">${rowNode}</XCUIElementTypeScrollView>`;
+    const list = `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,${listTop}][${SCREEN_W},${opts.listBottom ?? SCREEN_H}]">${rowNode}${sibling}</XCUIElementTypeScrollView>`;
     return {
       requestId: '1',
       hierarchyXml: `<?xml version="1.0"?><hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][${SCREEN_W},${SCREEN_H}]">${opts.extraNodes ?? ''}${list}</XCUIElementTypeApplication></hierarchy>`,
@@ -304,9 +314,10 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
   });
 
   it('does not take a carousel around the element for its list (review R10-F2)', async () => {
-    // A 40pt button in a 280pt horizontal strip (100–380): too short to be the
-    // list the screen swipe scrolls, so the band is the screen's.
-    const { client, tap, state } = simulatedScreen({ top: 2000, rowH: 40, listTop: 100, listBottom: 380 });
+    // A 40pt button in a 280pt horizontal strip (100–380) — its siblings sit
+    // side by side — is not the list the screen swipe scrolls, so the band is
+    // the screen's.
+    const { client, tap, state } = simulatedScreen({ top: 2000, rowH: 40, listTop: 100, listBottom: 380, siblings: 'side' });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Get'), 30_000).tap());
     expect(state.top).toBeGreaterThan(380);
     expect(tap).toHaveBeenCalledTimes(1);
@@ -329,6 +340,36 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     const { client, tap, state } = simulatedScreen({ top: -400, listTop: 60, listTopAfterSwipe: 300, maxTop: 320 });
     await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
     expect(state.top).toBe(320);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('never taps a row left behind the header when a stale read cuts the scroll short (review R11-F1)', async () => {
+    const { client, tap, state } = simulatedScreen({ top: -400, listTop: 300, staleAfterSwipes: 1 });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBeGreaterThanOrEqual(300);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a short vertical list (a sheet) for the band, judged by its stacked rows (review R11-F2)', async () => {
+    const { client, tap, state } = simulatedScreen({ top: -400, listTop: 300, listBottom: 650, siblings: 'stacked' });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBeGreaterThanOrEqual(300);
+    expect(state.top + ROW_H).toBeLessThanOrEqual(650);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an element off to the side and level with the header without swiping (review R11-F3)', async () => {
+    const { client, swipe, tap } = simulatedScreen({ top: 100, left: 500, listTop: 300 });
+    const err = await rejectionOf(10_000, () => new ElementHandle(client, _text('Item 1'), 3000).tap());
+    expect(swipe).not.toHaveBeenCalled();
+    expect(tap).not.toHaveBeenCalled();
+    expect(err.message).toMatch(/it is off-screen to the right/);
+  });
+
+  it('keeps the list band when a re-read cannot find the row (a dump taken while it drifts) (review R11-F4)', async () => {
+    const { client, tap, state } = simulatedScreen({ top: -400, listTop: 300, unmatchedAfterSwipe: true });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBeGreaterThanOrEqual(300);
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
