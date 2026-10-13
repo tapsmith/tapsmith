@@ -31,6 +31,7 @@ import { tracedAction } from './trace/traced-action.js';
 import { sleep, isAbortError } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
+import { parseHierarchyXml, type HierarchyNode } from './trace-viewer/components/hierarchy-utils.js';
 
 // ─── Public types ───
 
@@ -656,6 +657,32 @@ type Bounds = NonNullable<ElementInfo['bounds']>;
 function isOffScreen(el: ElementInfo): el is ElementInfo & { bounds: Bounds } {
   const b = el.bounds;
   return !el.visible && !!b && b.right > b.left && b.bottom > b.top;
+}
+
+/**
+ * The vertical band an auto-scroll brings its element into (the screen, or
+ * the part of it the element's list covers), and the screen height swipe
+ * distances are fractions of.
+ */
+interface ScrollViewport {
+  top: number;
+  bottom: number;
+  screenHeight: number;
+}
+
+/** A dump node's frame, negative coordinates included (off-screen nodes). */
+function hierarchyBounds(node: HierarchyNode): Bounds | undefined {
+  const m = /^\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]$/.exec(node.attributes.get('bounds') ?? '');
+  if (!m) return undefined;
+  const [left, top, right, bottom] = m.slice(1).map(Number);
+  return { left, top, right, bottom };
+}
+
+/** Whether a dump node is a scroll view: an iOS scroll view, table or collection view, or an Android scrollable node. */
+function isScrollContainer(node: HierarchyNode): boolean {
+  const type = node.attributes.get('type') ?? node.tagName;
+  return node.attributes.get('scrollable') === 'true' ||
+    type === 'XCUIElementTypeScrollView' || type === 'XCUIElementTypeTable' || type === 'XCUIElementTypeCollectionView';
 }
 
 function sameBounds(a: Bounds | undefined, b: Bounds | undefined): boolean {
@@ -1604,7 +1631,7 @@ export class ElementHandle {
     let scrollFailure: { error: Error; bounds: Bounds } | undefined;
     let scrollAttempts = 0;
     let unsettledScroll = false;
-    let screenHeight: number | undefined;
+    let viewport: ScrollViewport | undefined;
     while (true) {
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind === 'fault') {
@@ -1667,15 +1694,16 @@ export class ElementHandle {
                 // judged by this loop as usual. Only a scroll that finished
                 // (in view, or given up) counts as an attempt: one cut short
                 // by a stale read is resumed, bounded by the deadline.
-                // The screen size steers every swipe; read it once per action.
-                // Without it nothing is swiped: the attempt fails like any
-                // other (its error names no resting place, so the next stable
-                // read may try again, reading the size afresh).
-                screenHeight ??= (await this._screenSize(deadline))?.height;
-                if (screenHeight === undefined) {
+                // The band to scroll into (the screen, narrowed to the list)
+                // steers every swipe; read it once per action. Without it
+                // nothing is swiped: the attempt fails like any other (its
+                // error names no resting place, so the next stable read may
+                // try again, reading it afresh).
+                viewport ??= await this._scrollViewport(element, deadline);
+                if (viewport === undefined) {
                   throw this._offScreenError(action, 'the screen size could not be read to steer the scroll');
                 }
-                unsettledScroll = !(await this._scrollOffScreenIntoView(element, deadline, action, screenHeight));
+                unsettledScroll = !(await this._scrollOffScreenIntoView(element, deadline, action, viewport));
                 if (!unsettledScroll) scrollAttempts++;
               } catch (err) {
                 if (!(err instanceof OffScreenError)) throw err;
@@ -3020,22 +3048,75 @@ export class ElementHandle {
   }
 
   /**
-   * @internal — The screen size in the units element bounds use, read from the
-   * root node of one hierarchy dump (the app's frame on iOS, the root window
-   * on Android): no RPC reports it directly. `undefined` when the dump fails
-   * or carries no bounds; a user stop propagates.
+   * @internal — The vertical band an off-screen element has to be scrolled
+   * into, in the units its bounds use, from one hierarchy dump (no RPC reports
+   * it directly): the screen (the root node's frame — the app on iOS, the root
+   * window on Android), narrowed to the list that holds the element. iOS
+   * reports an element as visible when any part of it is inside the screen,
+   * even where its list clips it (behind the header above the list), so the
+   * band must be the list's, or the scroll stops on a row that cannot be
+   * touched. The list is the nearest scroll view around the element's node
+   * that is clearly taller than the element (a carousel row around a cell is
+   * not the list that scrolls vertically). `undefined` when the dump fails or
+   * carries no usable frame; a user stop propagates.
    */
-  private async _screenSize(deadline: number): Promise<{ width: number; height: number } | undefined> {
+  private async _scrollViewport(
+    element: ElementInfo & { bounds: Bounds },
+    deadline: number,
+  ): Promise<ScrollViewport | undefined> {
+    let xml: string;
     try {
       const res = await this._client.getUiHierarchy(Math.max(1, Math.min(SCREEN_SIZE_READ_MS, deadline - Date.now())));
-      const m = /bounds="\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]"/.exec(res.hierarchyXml ?? '');
-      if (!m) return undefined;
-      const [left, top, right, bottom] = m.slice(1).map(Number);
-      return right > left && bottom > top ? { width: right - left, height: bottom - top } : undefined;
+      xml = res.hierarchyXml ?? '';
     } catch (err) {
       if (isAbortError(err)) throw err;
       return undefined;
     }
+    const roots = parseHierarchyXml(xml);
+    // The first node with a frame (the dump's own <hierarchy> wrapper has none).
+    const firstFramed = (nodes: HierarchyNode[]): Bounds | undefined => {
+      for (const node of nodes) {
+        const b = hierarchyBounds(node) ?? firstFramed(node.children);
+        if (b) return b;
+      }
+      return undefined;
+    };
+    const screen = firstFramed(roots);
+    if (!screen || screen.bottom <= screen.top) return undefined;
+    const band = { top: screen.top, bottom: screen.bottom, screenHeight: screen.bottom - screen.top };
+    const target = element.bounds;
+    const height = target.bottom - target.top;
+    const near = (a: number, b: number): boolean => Math.abs(a - b) <= 2;
+    // Depth-first with the ancestor path; the first node whose frame is the
+    // element's (dumps round frames to whole points) is taken as its node.
+    const path: HierarchyNode[] = [];
+    const visit = (node: HierarchyNode): HierarchyNode[] | undefined => {
+      path.push(node);
+      const b = hierarchyBounds(node);
+      if (b && near(b.left, target.left) && near(b.top, target.top) && near(b.right, target.right) && near(b.bottom, target.bottom)) {
+        return [...path];
+      }
+      for (const child of node.children) {
+        const found = visit(child);
+        if (found) return found;
+      }
+      path.pop();
+      return undefined;
+    };
+    let ancestry: HierarchyNode[] | undefined;
+    for (const root of roots) {
+      ancestry = visit(root);
+      if (ancestry) break;
+    }
+    for (const node of (ancestry ?? []).slice(0, -1).reverse()) {
+      if (!isScrollContainer(node)) continue;
+      const b = hierarchyBounds(node);
+      if (!b || b.bottom - b.top < height * 1.5) continue;
+      const top = Math.max(band.top, b.top);
+      const bottom = Math.min(band.bottom, b.bottom);
+      if (bottom - top >= height * 1.5) return { top, bottom, screenHeight: band.screenHeight };
+    }
+    return band;
   }
 
   /**
@@ -3075,53 +3156,63 @@ export class ElementHandle {
     element: ElementInfo & { bounds: Bounds },
     deadline: number,
     action: TapFamilyAction,
-    extent: number,
+    viewport: ScrollViewport,
   ): Promise<boolean> {
-    let bounds: Bounds = element.bounds;
-    // In line with the screen vertically yet off-screen: off to the side.
-    const sideError = (b: Bounds): OffScreenError => this._offScreenError(
+    // Geometry is relative to the band (`extent` tall, from 0); swipe
+    // distances are fractions of the screen, as the agents take them.
+    const extent = viewport.bottom - viewport.top;
+    const rel = (b: Bounds): Bounds => ({ ...b, top: b.top - viewport.top, bottom: b.bottom - viewport.top });
+    const inBand = (r: Bounds): boolean => r.bottom > 0 && r.top < extent;
+    let bounds: Bounds = rel(element.bounds);
+    // Where the element rests now, in screen coordinates: a failure records
+    // it, so the caller scrolls again only once the element has moved on.
+    let resting: Bounds = element.bounds;
+    // In line with the band vertically yet off-screen: off to the side.
+    const sideError = (r: Bounds): OffScreenError => this._offScreenError(
       action,
-      `it is off-screen to the ${b.right <= 0 ? 'left' : 'right'}, and ${action}() scrolls only vertically ` +
+      `it is off-screen to the ${r.right <= 0 ? 'left' : 'right'}, and ${action}() scrolls only vertically ` +
         '(a sideways swipe from the middle of the screen could drag other content, such as a swipeable row)',
-      b,
-      b.right <= 0 ? 'right' : 'left',
+      resting,
+      r.right <= 0 ? 'right' : 'left',
     );
-    if (bounds.bottom > 0 && bounds.top < extent) throw sideError(bounds);
-    const mid = (b: Bounds): number => (b.top + b.bottom) / 2;
+    if (inBand(bounds) && element.bounds.bottom > 0 && element.bounds.top < viewport.screenHeight) {
+      throw sideError(bounds);
+    }
+    const mid = (r: Bounds): number => (r.top + r.bottom) / 2;
     // How far the element still has to travel: to the near edge of the safe
     // region, with a margin, so a nudge at a list end pulls the list only a
     // little past it; an element too tall for the region aims at the middle.
-    const travelNeeded = (b: Bounds): number => {
-      if (b.bottom - b.top >= extent / 2) return mid(b) - extent / 2;
-      if (b.top < extent * AUTO_SCROLL_SAFE_TOP) return b.top - extent * AUTO_SCROLL_AIM_TOP;
-      if (b.bottom > extent * AUTO_SCROLL_SAFE_BOTTOM) return b.bottom - extent * AUTO_SCROLL_AIM_BOTTOM;
+    const travelNeeded = (r: Bounds): number => {
+      if (r.bottom - r.top >= extent / 2) return mid(r) - extent / 2;
+      if (r.top < extent * AUTO_SCROLL_SAFE_TOP) return r.top - extent * AUTO_SCROLL_AIM_TOP;
+      if (r.bottom > extent * AUTO_SCROLL_SAFE_BOTTOM) return r.bottom - extent * AUTO_SCROLL_AIM_BOTTOM;
       return 0;
     };
     let best = Infinity;
     let stalls = 0;
-    let onScreen = false;
+    let shown = false;
     for (let swipes = 0; ; swipes++) {
       if (swipes >= AUTO_SCROLL_MAX_SWIPES) {
-        throw this._offScreenError(action, `it was still not in view after ${swipes} scroll(s)`, bounds);
+        throw this._offScreenError(action, `it was still not in view after ${swipes} scroll(s)`, resting);
       }
       if (Date.now() >= deadline) {
-        throw this._offScreenError(action, `the action timed out after ${swipes} scroll(s)`, bounds);
+        throw this._offScreenError(action, `the action timed out after ${swipes} scroll(s)`, resting);
       }
       // Positive: the element has to move up (swipe up); negative: down.
       const offset = travelNeeded(bounds);
-      let travel = Math.abs(offset);
-      if (bounds.bottom - bounds.top < extent / 2) {
-        // Steps short enough that a list end cut off by one costs a small pull
-        // past it (rubber band, not a pull-to-refresh): off screen, only as far
-        // as just inside the edge; on screen, a nudge at a time. The
-        // under-travel check below then stops at the end.
-        travel = onScreen
-          ? Math.min(travel, extent * AUTO_SCROLL_MAX_NUDGE)
-          : Math.min(travel, Math.max(0, offset < 0
-            ? extent * AUTO_SCROLL_ENTRY - bounds.top
-            : bounds.bottom - extent * (1 - AUTO_SCROLL_ENTRY)));
-      }
-      const distance = Math.min(AUTO_SCROLL_MAX_DISTANCE, Math.max(AUTO_SCROLL_MIN_DISTANCE, travel / extent));
+      // Steps short enough that a list end cut off by one costs a small pull
+      // past it (rubber band, not a pull-to-refresh): out of view, only as far
+      // as just inside the band's edge; in view, a nudge at a time. The
+      // under-travel check below then stops at the end.
+      const travel = shown
+        ? Math.min(Math.abs(offset), extent * AUTO_SCROLL_MAX_NUDGE)
+        : Math.min(Math.abs(offset), Math.max(0, offset < 0
+          ? extent * AUTO_SCROLL_ENTRY - bounds.top
+          : bounds.bottom - extent * (1 - AUTO_SCROLL_ENTRY)));
+      const distance = Math.min(
+        AUTO_SCROLL_MAX_DISTANCE,
+        Math.max(AUTO_SCROLL_MIN_DISTANCE, travel / viewport.screenHeight),
+      );
       const direction = offset > 0 ? 'up' : 'down';
       const res = await this._client.swipe(direction, { speed: AUTO_SCROLL_SPEED, distance });
       if (!res.success) {
@@ -3133,40 +3224,46 @@ export class ElementHandle {
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind !== 'found') return false;
       const next = await this._settleAfterScroll(tick.element);
-      const nb = next.bounds;
-      if (!nb || nb.right <= nb.left || nb.bottom <= nb.top) return false; // nothing to steer by
+      if (!next.bounds || next.bounds.right <= next.bounds.left || next.bounds.bottom <= next.bounds.top) {
+        return false; // nothing to steer by
+      }
+      const nb = rel(next.bounds);
+      // Shown: on screen (the platform's word) and inside the band — a row
+      // the list clips behind a header is on screen but not shown.
+      const nowShown = next.visible && inBand(nb);
       const moved = Math.abs(mid(nb) - mid(bounds));
       if (moved === 0) {
-        if (next.visible) return true; // on screen, and the list will not go any further
+        if (nowShown) return true; // in view, and the list will not go any further
         throw this._offScreenError(
           action,
           `a "${direction}" screen swipe did not move it (it may be in a list the swipe misses, or one that ` +
             'cannot scroll any further)',
-          nb,
+          next.bounds,
         );
       }
       bounds = nb;
-      onScreen = next.visible;
+      resting = next.bounds;
+      shown = nowShown;
       if (!next.visible) {
-        // Scrolled level with the screen and still not on it: a cell of a
+        // Scrolled level with the band and still not on screen: a cell of a
         // carousel row further down, off to the side.
-        if (nb.bottom > 0 && nb.top < extent) throw sideError(nb);
-      } else {
+        if (inBand(nb)) throw sideError(nb);
+      } else if (nowShown) {
         const inSafeRegion = nb.top >= extent * AUTO_SCROLL_SAFE_TOP && nb.bottom <= extent * AUTO_SCROLL_SAFE_BOTTOM;
         // An element too tall for the safe region is in view once it spans
-        // the middle of the screen, not at the first strip at an edge.
+        // the middle of the band, not at the first strip at an edge.
         const spansMiddle = nb.top <= extent / 2 && nb.bottom >= extent / 2;
         if (inSafeRegion || (nb.bottom - nb.top >= extent / 2 && spansMiddle)) return true;
         // Under-travel: the list hit its end during this swipe.
-        if (moved < (distance * extent) / 2) return true;
+        if (moved < (distance * viewport.screenHeight) / 2) return true;
       }
       const away = Math.abs(travelNeeded(nb));
       if (away < best - 1) {
         best = away;
         stalls = 0;
       } else if (++stalls >= AUTO_SCROLL_MAX_STALLS) {
-        if (next.visible) return true;
-        throw this._offScreenError(action, `${swipes + 1} screen swipes stopped bringing it closer`, nb);
+        if (nowShown) return true;
+        throw this._offScreenError(action, `${swipes + 1} screen swipes stopped bringing it closer`, next.bounds);
       }
     }
   }

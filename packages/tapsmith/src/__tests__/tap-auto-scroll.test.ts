@@ -53,6 +53,17 @@ function simulatedScreen(opts: {
   animation?: number[];
   /** The first N hierarchy reads fail (Infinity: all of them). */
   hierarchyFailures?: number;
+  /**
+   * The list's top edge, when it starts below a header: the hierarchy then
+   * holds a scroll view from there to the bottom of the screen around the row.
+   * Rows above it are clipped by the list yet "visible" (on screen), as iOS
+   * reports them.
+   */
+  listTop?: number;
+  /** The dump's row node does not match the row's frame (or the list is too short to hold it). */
+  listRowUnmatched?: boolean;
+  /** The list's bottom edge (default the bottom of the screen). */
+  listBottom?: number;
   /** The row's height (default ROW_H). */
   rowH?: number;
   /** Reads after each swipe during which the list keeps drifting (momentum), 30pt per read. */
@@ -128,7 +139,16 @@ function simulatedScreen(opts: {
       state.hierarchyFailures--;
       throw new Error('hierarchy dump failed');
     }
-    return { requestId: '1', hierarchyXml: HIERARCHY, errorMessage: '' };
+    if (opts.listTop === undefined) return { requestId: '1', hierarchyXml: HIERARCHY, errorMessage: '' };
+    const r = row().bounds!;
+    const shift = opts.listRowUnmatched ? 37 : 0;
+    const rowNode = `<XCUIElementTypeButton type="XCUIElementTypeButton" bounds="[${Math.round(r.left)},${Math.round(r.top) + shift}][${Math.round(r.right)},${Math.round(r.bottom) + shift}]"/>`;
+    const list = `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,${opts.listTop}][${SCREEN_W},${opts.listBottom ?? SCREEN_H}]">${rowNode}</XCUIElementTypeScrollView>`;
+    return {
+      requestId: '1',
+      hierarchyXml: `<?xml version="1.0"?><hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][${SCREEN_W},${SCREEN_H}]">${list}</XCUIElementTypeApplication></hierarchy>`,
+      errorMessage: '',
+    };
   });
   const client = {
     findElements, swipe, tap, getUiHierarchy,
@@ -209,6 +229,47 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     await withFakeClock(30_000, () => new ElementHandle(sim.client, _text('Item 1'), 30_000).tap());
     expect(sim.tap).toHaveBeenCalledTimes(1);
     expect(sim.state.tappedWhileMoving).toBe(false);
+  });
+
+  it('brings a row into the list below a header, not to a spot the list clips behind the header', async () => {
+    // Device repro: the list starts at y=300 under a header and search box.
+    // Item 1 (scrolled past) can rest no lower than the list's top; on its
+    // way there it passes y=120–300, on screen but clipped by the list, where
+    // a tap lands on the header and silently does nothing.
+    const { client, tap, state } = simulatedScreen({ top: -400, listTop: 300, maxTop: 310 });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBeGreaterThanOrEqual(300);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('aims a row far below into the list band under the header', async () => {
+    const { client, tap, state } = simulatedScreen({ top: 2000, listTop: 300 });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    // Fully inside the list's safe band: 15%–85% of its 500pt.
+    expect(state.top).toBeGreaterThanOrEqual(300 + 0.15 * 500);
+    expect(state.top + ROW_H).toBeLessThanOrEqual(300 + 0.85 * 500);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the whole screen when the row is not found in the dump, or its scroll view is too short to be its list', async () => {
+    // Without the list band the row is aimed into the screen's safe band
+    // (bottom ≤ 85% of 800); with the 300–800 list band it would rest lower.
+    for (const opts of [{ listRowUnmatched: true }, { listBottom: 360 }]) {
+      const { client, tap, state } = simulatedScreen({ top: 2000, listTop: 300, ...opts });
+      await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+      expect(state.top + ROW_H).toBeLessThanOrEqual(0.85 * SCREEN_H);
+      expect(state.top).toBeGreaterThanOrEqual(0.15 * SCREEN_H);
+      expect(tap).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('takes short steps for a tall element too, so a list end is not pulled far (review R8-F2)', async () => {
+    // A 400pt hero card at the top of a feed, scrolled just past it.
+    const { client, tap, state } = simulatedScreen({ top: -450, rowH: 400, maxTop: 0 });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Hero'), 30_000).tap());
+    expect(state.top).toBe(0);
+    expect(state.overpull).toBeLessThanOrEqual(0.1 * SCREEN_H + 1);
+    expect(tap).toHaveBeenCalledTimes(1);
   });
 
   it('pulls a list only a little past its top when the first row rests near the top of the screen (review R7-F1)', async () => {
