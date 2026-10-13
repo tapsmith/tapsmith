@@ -172,6 +172,29 @@ check("a named alert query skips a heading",
 check("a named alert query skips a described checkbox",
       matches("alert", .other, value: "checkbox, checked", named: true), false)
 
+// An RN <Text accessibilityRole="alert"> is plain static text on iOS: Fabric
+// publishes no trait or description for it, so only a named query finds it,
+// on the same terms as a generic view (PILOT-718).
+let staticTextTrait: UInt64 = 1 << 6
+check("a named alert query finds static text", matches("alert", .staticText, traits: staticTextTrait, named: true), true)
+check("an unnamed alert query skips static text", matches("alert", .staticText, traits: staticTextTrait), false)
+check("an \"alert\"-described static text is an alert", matches("alert", .staticText, value: "alert"), true)
+check("a named alert query skips a heading text",
+      matches("alert", .staticText, traits: staticTextTrait | headerTrait, named: true), false)
+check("a named alert query skips a link text",
+      matches("alert", .staticText, traits: staticTextTrait | linkTrait, named: true), false)
+check("a named alert query skips a button-trait text",
+      matches("alert", .staticText, traits: staticTextTrait | buttonTrait, named: true), false)
+check("a named alert query skips a text described as another role",
+      matches("alert", .staticText, value: "checkbox, checked", named: true), false)
+check("static text is still not a combobox, even by name", matches("combobox", .staticText, named: true), false)
+check("static text is still not a menu item, even by name", matches("menuitem", .staticText, named: true), false)
+check("static text still reports \"text\"",
+      RoleMapping.resolveRole(for: .staticText, traits: staticTextTrait, inTabBar: false), "text")
+check("an alert query covers generic views and static text",
+      (try? RoleMapping.queryTypes(for: "alert")) ?? [], [.other, .staticText])
+check("getByRole(\"alert\") still lists generic views only", (try? RoleMapping.elementTypes(for: "alert")) ?? [], [.other])
+
 // ─── React Native's other generic-view roles (PILOT-664) ───
 
 let rnGenericRoles = ["menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer"]

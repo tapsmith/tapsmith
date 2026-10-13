@@ -160,12 +160,16 @@ enum RoleMapping {
 
     /// The element types a type query must cover to find every element of
     /// `role`: its `roleToElementTypes` entry plus, for "tab", the buttons a
-    /// tab bar's items are. A coarse query — callers still filter by
+    /// tab bar's items are, and for "alert" the static text an RN `Text` is
+    /// (`staticTextRoles`). A coarse query — callers still filter by
     /// `matches` or by the tab-bar ancestry.
     /// - Throws: AgentError.invalidSelector if the role is unknown.
     static func queryTypes(for role: String) throws -> [XCUIElement.ElementType] {
         let types = try elementTypes(for: role)
-        return normalize(role) == "tab" ? types + [.button] : types
+        let canonical = normalize(role)
+        if canonical == "tab" { return types + [.button] }
+        if staticTextRoles.contains(canonical) { return types + [.staticText] }
+        return types
     }
 
     /// Cross-platform role aliases — kept in sync with Android's
@@ -230,6 +234,14 @@ enum RoleMapping {
         "menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer",
     ]
 
+    /// The generic-view roles a React Native `Text` also takes on iOS, where
+    /// it is plain static text: Fabric publishes no trait or description for
+    /// `<Text accessibilityRole="alert">`, so a static text is matched as a
+    /// generic view is — by a description, or by a named query when no trait
+    /// marks it as another role (PILOT-718). Only alert: a named checkbox,
+    /// radio or menu item query would also match the label text beside one.
+    static let staticTextRoles: Set<String> = ["alert"]
+
     /// Whether `role` (canonical) is matched on a generic view by its React
     /// Native description or, failing that, by a named query.
     private static func isGenericViewRole(_ canonical: String) -> Bool {
@@ -248,7 +260,8 @@ enum RoleMapping {
     /// - heading: the header trait, on any element type. Static text alone is
     ///   "text"; querying `.staticText` as a heading over-matched every label.
     /// - checkbox, radiobutton, alert, combobox: their native type, if any, or
-    ///   a generic `.other` view carrying that role's React Native description
+    ///   a generic `.other` view (for alert, also static text:
+    ///   `staticTextRoles`) carrying that role's React Native description
     ///   (`otherRoleDescriptions`). A generic view without one is accepted
     ///   only by a named query — the name is then what identifies it — and
     ///   only when nothing marks it as another role (another of these
@@ -278,7 +291,8 @@ enum RoleMapping {
         }
         guard let types = roleToElementTypes[canonical] else { return false }
         if isGenericViewRole(canonical) {
-            if elementType != .other { return types.contains(elementType) }
+            let generic = elementType == .other || (elementType == .staticText && staticTextRoles.contains(canonical))
+            if !generic { return types.contains(elementType) }
             if let described = describedRole(in: value) { return described == otherRoleDescriptions[canonical] }
             return hasNameFilter && resolveRole(for: .other, traits: traits, inTabBar: false).isEmpty
         }
