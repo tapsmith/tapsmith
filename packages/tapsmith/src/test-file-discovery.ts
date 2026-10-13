@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { glob } from 'glob';
+import { glob, type IgnoreLike } from 'glob';
 import { minimatch } from 'minimatch';
 
 /**
@@ -25,14 +25,26 @@ export const DEFAULT_TEST_IGNORE = [
   '**/android/**/.cxx/**',
   '**/.gradle/**',
   '**/.expo/**',
+  // Bundler's gems (the React Native CLI template installs CocoaPods there)
+  // and Yarn's package cache.
+  '**/vendor/bundle/**',
+  '**/.yarn/**',
 ];
+
+/**
+ * Options for every ignore-pattern match, so discovery, the watchers and
+ * project routing agree. Case-sensitive on every platform (glob's own ignore
+ * is case-insensitive on macOS and Windows, which would skip a `pods/` test
+ * folder there but not on Linux CI), and `dot: true` as glob's ignore is.
+ */
+const IGNORE_MATCH_OPTIONS = { dot: true } as const;
 
 export async function discoverTestFiles(
   patterns: string[],
   rootDir: string,
   extraIgnore?: string[],
 ): Promise<string[]> {
-  const ignore = [...DEFAULT_TEST_IGNORE, ...(extraIgnore ?? [])];
+  const ignore = discoveryIgnore(extraIgnore);
   const files: string[] = [];
   for (const pattern of patterns) {
     const matches = await glob(pattern, {
@@ -44,6 +56,26 @@ export async function discoverTestFiles(
   }
 
   return [...new Set(files)].sort();
+}
+
+/**
+ * glob's `ignore`, built on matchesTestIgnore() so discovery skips exactly what
+ * the watchers and matchesTestFile() skip. Like glob's string patterns, only a
+ * pattern ending in `/**` stops the walk descending into a directory.
+ */
+function discoveryIgnore(extraIgnore?: string[]): IgnoreLike {
+  const directoryPatterns = [...DEFAULT_TEST_IGNORE, ...(extraIgnore ?? [])]
+    .map(normalizeGlobPattern)
+    .filter((pattern) => pattern.endsWith('/**'))
+    .map((pattern) => pattern.slice(0, -'/**'.length));
+  return {
+    ignored: (entry) => matchesTestIgnore(entry.relativePosix(), extraIgnore),
+    childrenIgnored: (entry) => {
+      const relative = entry.relativePosix();
+      return relative !== ''
+        && directoryPatterns.some((pattern) => minimatch(relative, pattern, IGNORE_MATCH_OPTIONS));
+    },
+  };
 }
 
 // ─── Positional test-file arguments ───
@@ -298,8 +330,8 @@ function normalizeGlobPattern(pattern: string): string {
 
 function matchesIgnorePattern(relativePath: string, pattern: string): boolean {
   const normalizedPattern = normalizeGlobPattern(pattern);
-  return minimatch(relativePath, normalizedPattern)
-    || minimatch(`${relativePath}/__tapsmith_ignore_probe__`, normalizedPattern);
+  return minimatch(relativePath, normalizedPattern, IGNORE_MATCH_OPTIONS)
+    || minimatch(`${relativePath}/__tapsmith_ignore_probe__`, normalizedPattern, IGNORE_MATCH_OPTIONS);
 }
 
 function staticDirectoryPrefix(pattern: string): string {

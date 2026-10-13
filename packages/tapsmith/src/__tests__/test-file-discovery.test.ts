@@ -73,6 +73,9 @@ describe('test-file-discovery helpers', () => {
       '.expo/types/x.test.ts',
       'ios/DerivedData',
       'DerivedData/App/Build',
+      'vendor/bundle/ruby/3.3.0/gems/cocoapods-1.15.2/lib/x.rb',
+      '.yarn/cache/react-native.zip',
+      '.e2e/node_modules/pkg/x.test.ts',
     ]) {
       expect(matchesTestIgnore(ignored), ignored).toBe(true);
     }
@@ -84,6 +87,8 @@ describe('test-file-discovery helpers', () => {
       'e2e/android/login.test.ts',
       'src/Pods.test.ts',
       'ios/AppTests/login.test.ts',
+      'e2e/pods/cart.test.ts',
+      'e2e/vendor/login.test.ts',
     ]) {
       expect(matchesTestIgnore(kept), kept).toBe(false);
     }
@@ -256,6 +261,33 @@ describe('test-file-discovery helpers', () => {
         path.join(rootDir, 'tests', 'b.test.ts'),
         path.join(rootDir, 'tests', 'nested', 'deep', 'c.test.ts'),
         path.join(rootDir, 'top.test.ts'),
+      ]);
+    });
+
+    // PILOT-713: glob's own ignore is case-insensitive on macOS, which skipped
+    // a `pods/` feature folder there but not on Linux CI.
+    it('skips native build trees case-sensitively, as the watchers do', async () => {
+      touch('ios/Pods/RCT-Folly/folly/x.test.ts');
+      touch('android/app/build/generated/y.test.ts');
+      touch('vendor/bundle/ruby/gems/z.test.ts');
+      touch('e2e/pods/cart.test.ts');
+
+      const files = await discoverTestFiles(['**/*.test.ts'], rootDir);
+      expect(files).toContain(path.join(rootDir, 'e2e', 'pods', 'cart.test.ts'));
+      expect(files.filter((file) => /ios|android|vendor/.test(relativeTestPath(file, rootDir)))).toEqual([]);
+      for (const file of files) {
+        expect(matchesTestFile(file, ['**/*.test.ts'], rootDir), file).toBe(true);
+      }
+    });
+
+    it('keeps project ignores that match a directory from hiding its subdirectories', async () => {
+      await expect(discoverTestFiles(['tests/**/*.test.ts'], rootDir, ['tests/*'])).resolves.toEqual([
+        path.join(rootDir, 'tests', 'nested', 'deep', 'c.test.ts'),
+      ]);
+      await expect(discoverTestFiles(['tests/**/*.test.ts'], rootDir, ['tests/nested/**'])).resolves.toEqual([
+        path.join(rootDir, 'tests', 'a.test.ts'),
+        path.join(rootDir, 'tests', 'b.test.ts'),
+        path.join(rootDir, 'tests', 'smoke-login.test.ts'),
       ]);
     });
 
