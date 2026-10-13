@@ -117,6 +117,38 @@ test.describe("Locator playground", () => {
     await expect(locator.matchCount).toHaveText("1 match")
   })
 
+  test("counts a locator written without device. the same as with it", async ({
+    viewer,
+    detailTabs,
+    locator,
+  }) => {
+    await viewer.open(SPEC)
+    await detailTabs.select("Locator")
+
+    // A bare getter used to read as a shorthand no element has: "0 matches"
+    // for an element on screen (PILOT-717).
+    await locator.type('getByText("Gesture Testing")')
+    await expect(locator.matchCount).toHaveText("1 match")
+    await locator.type('getByRole("button", { name: "Tap area" })')
+    await expect(locator.matchCount).toHaveText("1 match")
+    await locator.type('page.getByText("Gesture")')
+    await expect(locator.matchCount).toHaveText("1 match")
+    await expect(locator.error).toHaveCount(0)
+  })
+
+  test("says it can't parse a locator instead of showing no count", async ({
+    viewer,
+    detailTabs,
+    locator,
+  }) => {
+    await viewer.open(SPEC)
+    await detailTabs.select("Locator")
+
+    await locator.type('getByAltText("Logo")')
+    await expect(locator.error).toContainText("Couldn't parse this locator")
+    await expect(locator.matchCount).toHaveText("")
+  })
+
   test("reports a selector that matches nothing", async ({ viewer, detailTabs, locator }) => {
     await viewer.open(SPEC)
     await detailTabs.select("Locator")

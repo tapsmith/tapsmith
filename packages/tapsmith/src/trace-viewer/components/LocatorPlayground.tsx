@@ -71,6 +71,8 @@ export function computeSelectorHighlights(roots: HierarchyNode[], selector: stri
     .filter((b): b is Bounds => b !== null);
 }
 
+const UNPARSEABLE_LOCATOR = 'Couldn\'t parse this locator. Write one getter, such as getByText("Login") or device.getByRole("button", { name: "Submit" }), optionally followed by .first(), .last() or .nth(n).';
+
 interface LocatorTabProps {
   hierarchyXml: string | undefined
   pickedNode: HierarchyNode | null
@@ -117,11 +119,13 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
   // A locator the test would throw on when it is built (an unknown getByRole
   // role, PILOT-556), or one with an option the playground cannot apply
   // (PILOT-655), or one with a chained call it cannot apply (PILOT-660): say
-  // why instead of counting matches.
+  // why instead of counting matches. Anything else the parser cannot read
+  // says so too, rather than showing no count at all (PILOT-717).
   const selectorError = useMemo(() => {
     if (!selector.trim()) return null;
     const parsed = parseSelectorString(selector);
-    return parsed ? parsedSelectorError(parsed) : locatorStringError(selector);
+    if (parsed) return parsedSelectorError(parsed);
+    return locatorStringError(selector) ?? UNPARSEABLE_LOCATOR;
   }, [selector]);
 
   const matchCount = useMemo(() => {

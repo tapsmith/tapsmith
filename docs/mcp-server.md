@@ -411,6 +411,8 @@ device.getByRole("tab", { name: "Settings", selected: true })
 
 `getByRole` takes the same options as in test code: `name` (a string or a RegExp), `exact`, and the state filters `checked`, `disabled`, `selected` and `expanded`. A locator with an option the tools don't recognize is rejected as invalid instead of run without it.
 
+The `device.` is optional: `getByText("Welcome")`, a screen object's `this.device.getByText("Welcome")` and a Playwright-style `page.getByText("Welcome")` all read as `device.getByText("Welcome")`.
+
 A locator string is one getter, optionally followed by `.first()`, `.last()` or `.nth(n)`. The tools don't take a chained call such as a scoped getter (`.getByRole("list").getByText("x")`), `.filter()`, `.and()` or `.or()`: a locator with one is rejected as invalid, with an error naming the call, instead of run without it. To single an element out, use a more specific getter, such as `getByRole` with a `name` or `getByTestId`, or a positional step.
 
 Use `tapsmith_snapshot` to see suggested locators for every interactive element on screen.

@@ -152,7 +152,7 @@ function getterOptions(
  *   locator matched more than was asked for (PILOT-660).
  */
 export function locatorStringError(input: string): string | null {
-  const chain = parseChain(stripStatementEnd(input));
+  const chain = parseChain(normalizeLocatorString(input));
   if (!chain) return null;
   const call = matchBaseCall(chain.base);
   if (!call) return null;
@@ -203,6 +203,8 @@ const DEVICE_LOCATOR_RE = /^device\.locator\(\s*\{\s*(className|id)\s*:\s*(?:"((
 // Matches: text("value"), contentDesc("value") — legacy/shorthand format
 // Groups: 1 = type, 2 = dq value, 3 = sq value
 const SHORT_RE = /^(\w+)\(\s*(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')\s*\)/;
+/** The selector types a one-string shorthand can name (nodeMatchesSelector's). */
+const SHORTHAND_TYPES = new Set(['text', 'textContains', 'contentDesc', 'id', 'className', 'hint', 'testId', 'label', 'role']);
 
 /** The forms a locator string's call can take, in the order they are tried. */
 const BASE_CALLS = [
@@ -239,6 +241,23 @@ function stripStatementEnd(input: string): string {
   return input.trim().replace(/(?:\s*;)+$/, '');
 }
 
+// The receivers read as `device.`: none at all — `getByText("x")`, as the docs
+// and the trace's action list write a locator — a screen object's
+// `this.device.`, and a pasted Playwright `page.`. Without this a bare
+// `getByText("x")` was read as a shorthand of type "getByText", which no
+// element has, and the playground showed "0 matches" for an element on screen
+// (PILOT-717). Only a getter or a native `locator({ … })` follows: a bare
+// `locator("css")` is a WebView locator without its receiver.
+const DEVICE_RECEIVER_RE = /^(?:(?:this\s*\.\s*)?(?:device|page)\s*\.\s*)?(?=getBy\w|locator\(\s*\{)/;
+const WEBVIEW_RECEIVER_RE = /^(?:this\s*\.\s*)?webview\s*\.\s*/;
+
+/** A locator string as the patterns below read it: no statement end, and `device.`/`webview.` receivers. */
+function normalizeLocatorString(input: string): string {
+  const trimmed = stripStatementEnd(input);
+  if (WEBVIEW_RECEIVER_RE.test(trimmed)) return trimmed.replace(WEBVIEW_RECEIVER_RE, 'webview.');
+  return trimmed.replace(DEVICE_RECEIVER_RE, 'device.');
+}
+
 // Matches trailing .first(), .last(), .nth(N) — N may be negative
 // (the runtime's .nth() counts from the end for negative indices)
 const CHAIN_RE = /\.(first|last)\(\)$|\.nth\(\s*(-?\d+)\s*\)$/;
@@ -270,7 +289,7 @@ function parseChain(input: string): { base: string; index?: number | 'first' | '
 }
 
 export function parseSelectorString(input: string): ParsedSelector | null {
-  const trimmed = stripStatementEnd(input);
+  const trimmed = normalizeLocatorString(input);
   if (!trimmed) return null;
 
   const chain = parseChain(trimmed);
@@ -333,8 +352,11 @@ export function parseSelectorString(input: string): ParsedSelector | null {
       return sel;
     }
 
-    // Legacy/shorthand: text("value"), contentDesc("value")
+    // Legacy/shorthand: text("value"), contentDesc("value"). Only a selector
+    // type the matcher knows: any other name matched nothing, so the
+    // playground counted "0 matches" for a locator it could not read.
     case 'short':
+      if (!SHORTHAND_TYPES.has(match[1])) return null;
       return { type: match[1], value: pick(match[2], match[3]), index };
   }
 }
