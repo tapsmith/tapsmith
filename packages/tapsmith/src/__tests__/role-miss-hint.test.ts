@@ -9,7 +9,8 @@ import { Device } from "../device.js";
 import { iosUnnamedRoleMissHint } from "../roles.js";
 import type { ElementInfo, TapsmithGrpcClient } from "../grpc-client.js";
 
-const HINT = /On iOS, React Native publishes no "alert" role that getByRole\("alert"\) can see without a name: pass the element's name — getByRole\("alert", \{ name: "…" \}\) — or use getByText\(\) or getByTestId\(\)\.$/;
+// Its own sentence: "…after waiting 50ms. On iOS, …".
+const HINT = /[^.]\. On iOS, React Native publishes no "alert" role that getByRole\("alert"\) can see without a name: pass the element's name — getByRole\("alert", \{ name: "…" \}\) — or use getByText\(\) or getByTestId\(\)\.$/;
 
 function emptyClient(): TapsmithGrpcClient {
   return {
@@ -26,7 +27,7 @@ describe("iosUnnamedRoleMissHint()", () => {
   const role = (r: string, name = "") => ({ role: r, name });
 
   it("explains an unnamed alert, combobox or RN generic-view role on iOS", () => {
-    vitestExpect(iosUnnamedRoleMissHint(role("alert"), "ios")).toMatch(HINT);
+    vitestExpect(`x.${iosUnnamedRoleMissHint(role("alert"), "ios")}`).toMatch(HINT);
     for (const r of ["combobox", "menuitem", "timer", "Alert"]) {
       vitestExpect(iosUnnamedRoleMissHint(role(r), "ios"), r).toContain(`getByRole(${JSON.stringify(r)}, { name: "…" })`);
     }

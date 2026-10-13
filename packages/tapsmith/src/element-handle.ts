@@ -1203,13 +1203,16 @@ export class ElementHandle {
 
   /**
    * @internal — The iOS hint a miss of an unnamed `getByRole()` carries for a
-   * role React Native publishes nothing for there (PILOT-718), or ''. Not for
+   * role React Native publishes nothing for there (PILOT-718), as ". On iOS
+   * …" to append to the failure message, or ''. Not for
    * and()/or(): the miss may be the other operand's.
    */
   _roleMissHint(): string {
     if (this._options.andHandle || this._options.orHandle) return '';
     const kind = this._selector.kind;
-    return kind.type === 'role' ? iosUnnamedRoleMissHint(kind.value, this._options.platform) : '';
+    const hint = kind.type === 'role' ? iosUnnamedRoleMissHint(kind.value, this._options.platform) : '';
+    // A sentence of its own after the message it follows.
+    return hint && `.${hint}`;
   }
 
   /** @internal — Build a human-readable description of this handle for error messages. */
@@ -2027,7 +2030,7 @@ export class ElementHandle {
           const missed = (state === 'visible' || state === 'attached') && !lastAttached;
           const hint = missed ? this._roleMissHint() : '';
           throw new Error(
-            `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms${hint && `.${hint}`}`,
+            `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms${hint}`,
           );
         }
         const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
