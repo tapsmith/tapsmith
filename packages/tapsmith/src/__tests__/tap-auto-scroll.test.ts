@@ -64,6 +64,10 @@ function simulatedScreen(opts: {
   listRowUnmatched?: boolean;
   /** The list's bottom edge (default the bottom of the screen). */
   listBottom?: number;
+  /** The list's top edge after the first swipe (a header that expands as the list scrolls back). */
+  listTopAfterSwipe?: number;
+  /** After the first swipe: reads [skip, skip+count) see the row disabled. */
+  disabledWindow?: { skip: number; count: number };
   /** The row's height (default ROW_H). */
   rowH?: number;
   /** Reads after each swipe during which the list keeps drifting (momentum), 30pt per read. */
@@ -74,6 +78,7 @@ function simulatedScreen(opts: {
     faults: opts.faultReadsAfterSwipe ?? 0, disabled: opts.disabledReadsAfterSwipe ?? 0,
     animation: [...(opts.animation ?? [])],
     momentum: 0, momentumDir: 0, overpull: 0, tappedWhileMoving: false,
+    readsAfterSwipe: 0, lastReadEnabled: true, tappedWhileDisabled: false,
     staleSwipes: opts.staleAfterSwipes ?? 0, staleNext: false,
     hierarchyFailures: opts.hierarchyFailures ?? 0,
   };
@@ -85,6 +90,11 @@ function simulatedScreen(opts: {
       state.disabled--;
       enabled = false;
     }
+    if (state.swiped && opts.disabledWindow) {
+      const i = state.readsAfterSwipe++;
+      if (i >= opts.disabledWindow.skip && i < opts.disabledWindow.skip + opts.disabledWindow.count) enabled = false;
+    }
+    state.lastReadEnabled = enabled;
     return info({
       elementId: state.swiped && opts.elementIdAfterScroll ? opts.elementIdAfterScroll : 'el-1',
       bounds, visible: onScreen, viewportRatio: onScreen ? 1 : 0, checked: state.checked, enabled,
@@ -131,6 +141,7 @@ function simulatedScreen(opts: {
   });
   const tap = vi.fn(async () => {
     if (state.momentum > 0) state.tappedWhileMoving = true;
+    if (!state.lastReadEnabled) state.tappedWhileDisabled = true;
     state.checked = !state.checked;
     return ok();
   });
@@ -143,7 +154,8 @@ function simulatedScreen(opts: {
     const r = row().bounds!;
     const shift = opts.listRowUnmatched ? 37 : 0;
     const rowNode = `<XCUIElementTypeButton type="XCUIElementTypeButton" bounds="[${Math.round(r.left)},${Math.round(r.top) + shift}][${Math.round(r.right)},${Math.round(r.bottom) + shift}]"/>`;
-    const list = `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,${opts.listTop}][${SCREEN_W},${opts.listBottom ?? SCREEN_H}]">${rowNode}</XCUIElementTypeScrollView>`;
+    const listTop = state.swiped && opts.listTopAfterSwipe !== undefined ? opts.listTopAfterSwipe : opts.listTop;
+    const list = `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,${listTop}][${SCREEN_W},${opts.listBottom ?? SCREEN_H}]">${rowNode}</XCUIElementTypeScrollView>`;
     return {
       requestId: '1',
       hierarchyXml: `<?xml version="1.0"?><hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][${SCREEN_W},${SCREEN_H}]">${list}</XCUIElementTypeApplication></hierarchy>`,
@@ -272,6 +284,23 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
+  it('re-reads the band before calling a row in view, when the swipes moved the list (review R9-F2)', async () => {
+    // The header was collapsed when the band was read (list from 60) and
+    // expands back over 60–300 as the list scrolls: aimed into the old band,
+    // the row would rest behind it.
+    const { client, tap, state } = simulatedScreen({ top: -400, listTop: 60, listTopAfterSwipe: 300 });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBeGreaterThanOrEqual(300);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('a settle after an inconclusive scroll that sees the row disabled waits for it again (review R9-F7)', async () => {
+    const sim = simulatedScreen({ top: 850, faultReadsAfterSwipe: 1, disabledWindow: { skip: 1, count: 8 } });
+    await withFakeClock(60_000, () => new ElementHandle(sim.client, _text('Item 1'), 30_000).tap());
+    expect(sim.tap).toHaveBeenCalledTimes(1);
+    expect(sim.state.tappedWhileDisabled).toBe(false);
+  });
+
   it('pulls a list only a little past its top when the first row rests near the top of the screen (review R7-F1)', async () => {
     // No header: row 1 rests at top 55 (inside the top band) and was just
     // scrolled past. Aiming straight for the safe region would drag the list
@@ -320,10 +349,12 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     expect(err.message).toMatch(/could not scroll it into view: the screen size could not be read to steer the scroll/);
   });
 
-  it('retries a failed screen-size read on the next attempt, and reads it only once per action once it succeeds (review R5-F2)', async () => {
+  it('retries a failed screen-size read on the next attempt (review R5-F2)', async () => {
     const { client, swipe, tap, getUiHierarchy, state } = simulatedScreen({ top: 1500, hierarchyFailures: 1 });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
-    expect(getUiHierarchy).toHaveBeenCalledTimes(2);
+    // The failed read, the read for the scroll, and the re-read that confirms
+    // the band before calling it in view.
+    expect(getUiHierarchy).toHaveBeenCalledTimes(3);
     expect(swipe).toHaveBeenCalled();
     expect(inSafeRegion(state.top)).toBe(true);
     expect(tap).toHaveBeenCalledTimes(1);
@@ -368,6 +399,12 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     expect(swipe).toHaveBeenCalledTimes(1);
     expect(tap).not.toHaveBeenCalled();
     expect(err.message).toMatch(/is off-screen and tap\(\) could not scroll it into view: a "down" screen swipe did not move it/);
+  });
+
+  it('names the direction scrollIntoView() needs for an element above (review R9-F1)', async () => {
+    const { client } = simulatedScreen({ top: -500, moves: false });
+    const err = await rejectionOf(30_000, () => new ElementHandle(client, _text('Item 1'), 5000).tap());
+    expect(err.message).toContain('Scroll it into view first (with scrollIntoView({ direction: "down" }), or scroll() on the list that holds it)');
   });
 
   it('a row that comes on screen by itself after a failed scroll is still tapped (review R1-F3)', async () => {

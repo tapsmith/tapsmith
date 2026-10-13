@@ -644,6 +644,8 @@ const AUTO_SCROLL_ENTRY = 0.1;
 const AUTO_SCROLL_MAX_NUDGE = 0.1;
 /** Budget for the hierarchy read that measures the screen. */
 const SCREEN_SIZE_READ_MS = 5000;
+/** Re-reads of the band, per scroll, before an element is called in view. */
+const AUTO_SCROLL_MAX_BAND_REREADS = 2;
 /** Swipes in a row that may fail to bring the element closer to the middle. */
 const AUTO_SCROLL_MAX_STALLS = 3;
 
@@ -668,6 +670,12 @@ interface ScrollViewport {
   top: number;
   bottom: number;
   screenHeight: number;
+}
+
+/** Whether `el` has a frame with area to steer by. */
+function isFramed(el: ElementInfo): el is ElementInfo & { bounds: Bounds } {
+  const b = el.bounds;
+  return !!b && b.right > b.left && b.bottom > b.top;
 }
 
 /** A dump node's frame, negative coordinates included (off-screen nodes). */
@@ -1627,6 +1635,7 @@ export class ElementHandle {
     // goes on polling (it may still arrive by itself) and reports why at the
     // deadline; it scrolls again only from a new resting place.
     let lastSeenOffScreen = false;
+    let lastOffScreenBounds: Bounds | undefined;
     let previousOffScreenBounds: Bounds | undefined;
     let scrollFailure: { error: Error; bounds: Bounds } | undefined;
     let scrollAttempts = 0;
@@ -1668,6 +1677,7 @@ export class ElementHandle {
           // nodes only, so its off-screen rows end in the not-found hint.
           const offScreen = element.enabled && isOffScreen(element) && !options?.needsNoScroll?.(element);
           lastSeenOffScreen = offScreen;
+          if (offScreen) lastOffScreenBounds = element.bounds;
           if (element.enabled && !offScreen) {
             if (unsettledScroll) {
               // A scroll ended on an inconclusive read: the list may still be
@@ -1701,7 +1711,9 @@ export class ElementHandle {
                 // try again, reading it afresh).
                 viewport ??= await this._scrollViewport(element, deadline);
                 if (viewport === undefined) {
-                  throw this._offScreenError(action, 'the screen size could not be read to steer the scroll');
+                  throw this._offScreenError(action, 'the screen size could not be read to steer the scroll', undefined, {
+                    vertical: element.bounds.bottom <= 0 ? 'down' : 'up',
+                  });
                 }
                 unsettledScroll = !(await this._scrollOffScreenIntoView(element, deadline, action, viewport));
                 if (!unsettledScroll) scrollAttempts++;
@@ -1721,7 +1733,7 @@ export class ElementHandle {
         if (lastTransientErr) throw lastTransientErr;
         if (lastSeenOffScreen) {
           throw scrollFailure?.error ??
-            this._offScreenError(action, 'it was still moving at the timeout, so it was never scrolled to');
+            this._offScreenError(action, 'it was still moving at the timeout, so it was never scrolled to', lastOffScreenBounds);
         }
         const desc = this._describe();
         throw new Error(
@@ -3035,11 +3047,19 @@ export class ElementHandle {
   // ── Scrolling ──
 
   /** @internal — The error for an off-screen element a tap-family action could not scroll into view. */
-  private _offScreenError(action: TapFamilyAction, why: string, bounds?: Bounds, direction?: string): OffScreenError {
-    const how = direction
-      ? `scroll() on the carousel or list that holds it, or await locator.scrollIntoView({ direction: "${direction}" }) ` +
+  private _offScreenError(
+    action: TapFamilyAction,
+    why: string,
+    bounds?: Bounds,
+    hint?: { sideways: 'left' | 'right' } | { vertical: 'up' | 'down' },
+  ): OffScreenError {
+    // scrollIntoView() swipes up by default, which reveals what is below: name
+    // the direction, or the advice scrolls away from an element above.
+    const vertical = hint && 'vertical' in hint ? hint.vertical : bounds && bounds.bottom <= 0 ? 'down' : 'up';
+    const how = hint && 'sideways' in hint
+      ? `scroll() on the carousel or list that holds it, or await locator.scrollIntoView({ direction: "${hint.sideways}" }) ` +
         'if nothing at the middle of the screen reacts to a sideways swipe'
-      : 'with scrollIntoView(), or scroll() on the list that holds it';
+      : `with scrollIntoView({ direction: "${vertical}" }), or scroll() on the list that holds it`;
     return new OffScreenError(
       `Element ${this._describe()} is off-screen and ${action}() could not scroll it into view: ${why}. ` +
         `Scroll it into view first (${how}), then ${action}() it.`,
@@ -3158,11 +3178,17 @@ export class ElementHandle {
     action: TapFamilyAction,
     viewport: ScrollViewport,
   ): Promise<boolean> {
-    // Geometry is relative to the band (`extent` tall, from 0); swipe
-    // distances are fractions of the screen, as the agents take them.
-    const extent = viewport.bottom - viewport.top;
+    // Geometry is relative to the band (`extent()` tall, from 0); swipe
+    // distances are fractions of the screen, as the agents take them. The
+    // band is updated in place when re-read (see `done`), so the caller's
+    // cached copy follows.
+    const extent = (): number => viewport.bottom - viewport.top;
     const rel = (b: Bounds): Bounds => ({ ...b, top: b.top - viewport.top, bottom: b.bottom - viewport.top });
-    const inBand = (r: Bounds): boolean => r.bottom > 0 && r.top < extent;
+    const inBand = (r: Bounds): boolean => r.bottom > 0 && r.top < extent();
+    const mid = (r: Bounds): number => (r.top + r.bottom) / 2;
+    // Which way scrollIntoView() would have to go for it: down for an element
+    // above the middle of the band, up for one below.
+    const towards = (r: Bounds): { vertical: 'up' | 'down' } => ({ vertical: mid(r) < extent() / 2 ? 'down' : 'up' });
     let bounds: Bounds = rel(element.bounds);
     // Where the element rests now, in screen coordinates: a failure records
     // it, so the caller scrolls again only once the element has moved on.
@@ -3173,30 +3199,53 @@ export class ElementHandle {
       `it is off-screen to the ${r.right <= 0 ? 'left' : 'right'}, and ${action}() scrolls only vertically ` +
         '(a sideways swipe from the middle of the screen could drag other content, such as a swipeable row)',
       resting,
-      r.right <= 0 ? 'right' : 'left',
+      { sideways: r.right <= 0 ? 'right' : 'left' },
     );
     if (inBand(bounds) && element.bounds.bottom > 0 && element.bounds.top < viewport.screenHeight) {
       throw sideError(bounds);
     }
-    const mid = (r: Bounds): number => (r.top + r.bottom) / 2;
     // How far the element still has to travel: to the near edge of the safe
     // region, with a margin, so a nudge at a list end pulls the list only a
     // little past it; an element too tall for the region aims at the middle.
     const travelNeeded = (r: Bounds): number => {
-      if (r.bottom - r.top >= extent / 2) return mid(r) - extent / 2;
-      if (r.top < extent * AUTO_SCROLL_SAFE_TOP) return r.top - extent * AUTO_SCROLL_AIM_TOP;
-      if (r.bottom > extent * AUTO_SCROLL_SAFE_BOTTOM) return r.bottom - extent * AUTO_SCROLL_AIM_BOTTOM;
+      const e = extent();
+      if (r.bottom - r.top >= e / 2) return mid(r) - e / 2;
+      if (r.top < e * AUTO_SCROLL_SAFE_TOP) return r.top - e * AUTO_SCROLL_AIM_TOP;
+      if (r.bottom > e * AUTO_SCROLL_SAFE_BOTTOM) return r.bottom - e * AUTO_SCROLL_AIM_BOTTOM;
       return 0;
+    };
+    const restsSafely = (r: Bounds): boolean => {
+      const e = extent();
+      const inSafeRegion = r.top >= e * AUTO_SCROLL_SAFE_TOP && r.bottom <= e * AUTO_SCROLL_SAFE_BOTTOM;
+      // An element too tall for the safe region is in view once it spans the
+      // middle of the band, not at the first strip at an edge.
+      return inSafeRegion || (r.bottom - r.top >= e / 2 && r.top <= e / 2 && r.bottom >= e / 2);
+    };
+    // Before calling it in view, re-read the band: the swipes can move the
+    // list itself (a collapsing header, a list nested in a scrolling page), so
+    // the band read at the start may no longer be where the list is. A band
+    // that moved means another step against the fresh one. Bounded: a band
+    // that keeps moving is accepted after a couple of re-reads.
+    let rereads = 0;
+    const done = async (el: ElementInfo & { bounds: Bounds }): Promise<boolean> => {
+      if (rereads >= AUTO_SCROLL_MAX_BAND_REREADS) return true;
+      rereads++;
+      const fresh = await this._scrollViewport(el, deadline);
+      if (!fresh || (fresh.top === viewport.top && fresh.bottom === viewport.bottom)) return true;
+      viewport.top = fresh.top;
+      viewport.bottom = fresh.bottom;
+      bounds = rel(el.bounds);
+      return el.visible && inBand(bounds) && restsSafely(bounds);
     };
     let best = Infinity;
     let stalls = 0;
     let shown = false;
     for (let swipes = 0; ; swipes++) {
       if (swipes >= AUTO_SCROLL_MAX_SWIPES) {
-        throw this._offScreenError(action, `it was still not in view after ${swipes} scroll(s)`, resting);
+        throw this._offScreenError(action, `it was still not in view after ${swipes} scroll(s)`, resting, towards(bounds));
       }
       if (Date.now() >= deadline) {
-        throw this._offScreenError(action, `the action timed out after ${swipes} scroll(s)`, resting);
+        throw this._offScreenError(action, `the action timed out after ${swipes} scroll(s)`, resting, towards(bounds));
       }
       // Positive: the element has to move up (swipe up); negative: down.
       const offset = travelNeeded(bounds);
@@ -3205,10 +3254,10 @@ export class ElementHandle {
       // as just inside the band's edge; in view, a nudge at a time. The
       // under-travel check below then stops at the end.
       const travel = shown
-        ? Math.min(Math.abs(offset), extent * AUTO_SCROLL_MAX_NUDGE)
+        ? Math.min(Math.abs(offset), extent() * AUTO_SCROLL_MAX_NUDGE)
         : Math.min(Math.abs(offset), Math.max(0, offset < 0
-          ? extent * AUTO_SCROLL_ENTRY - bounds.top
-          : bounds.bottom - extent * (1 - AUTO_SCROLL_ENTRY)));
+          ? extent() * AUTO_SCROLL_ENTRY - bounds.top
+          : bounds.bottom - extent() * (1 - AUTO_SCROLL_ENTRY)));
       const distance = Math.min(
         AUTO_SCROLL_MAX_DISTANCE,
         Math.max(AUTO_SCROLL_MIN_DISTANCE, travel / viewport.screenHeight),
@@ -3224,46 +3273,43 @@ export class ElementHandle {
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind !== 'found') return false;
       const next = await this._settleAfterScroll(tick.element);
-      if (!next.bounds || next.bounds.right <= next.bounds.left || next.bounds.bottom <= next.bounds.top) {
-        return false; // nothing to steer by
-      }
+      if (!isFramed(next)) return false; // nothing to steer by
       const nb = rel(next.bounds);
       // Shown: on screen (the platform's word) and inside the band — a row
       // the list clips behind a header is on screen but not shown.
       const nowShown = next.visible && inBand(nb);
       const moved = Math.abs(mid(nb) - mid(bounds));
       if (moved === 0) {
-        if (nowShown) return true; // in view, and the list will not go any further
-        throw this._offScreenError(
-          action,
-          `a "${direction}" screen swipe did not move it (it may be in a list the swipe misses, or one that ` +
-            'cannot scroll any further)',
-          next.bounds,
-        );
+        if (nowShown && await done(next)) return true; // in view, and the list will not go any further
+        if (!nowShown) {
+          throw this._offScreenError(
+            action,
+            `a "${direction}" screen swipe did not move it (it may be in a list the swipe misses, or one that ` +
+              'cannot scroll any further)',
+            next.bounds,
+            towards(nb),
+          );
+        }
       }
-      bounds = nb;
+      bounds = rel(next.bounds);
       resting = next.bounds;
-      shown = nowShown;
+      shown = next.visible && inBand(bounds);
       if (!next.visible) {
         // Scrolled level with the band and still not on screen: a cell of a
         // carousel row further down, off to the side.
-        if (inBand(nb)) throw sideError(nb);
-      } else if (nowShown) {
-        const inSafeRegion = nb.top >= extent * AUTO_SCROLL_SAFE_TOP && nb.bottom <= extent * AUTO_SCROLL_SAFE_BOTTOM;
-        // An element too tall for the safe region is in view once it spans
-        // the middle of the band, not at the first strip at an edge.
-        const spansMiddle = nb.top <= extent / 2 && nb.bottom >= extent / 2;
-        if (inSafeRegion || (nb.bottom - nb.top >= extent / 2 && spansMiddle)) return true;
+        if (inBand(bounds)) throw sideError(bounds);
+      } else if (shown && moved > 0) {
+        if (restsSafely(bounds) && await done(next)) return true;
         // Under-travel: the list hit its end during this swipe.
-        if (moved < (distance * viewport.screenHeight) / 2) return true;
+        if (moved < (distance * viewport.screenHeight) / 2 && await done(next)) return true;
       }
-      const away = Math.abs(travelNeeded(nb));
+      const away = Math.abs(travelNeeded(bounds));
       if (away < best - 1) {
         best = away;
         stalls = 0;
       } else if (++stalls >= AUTO_SCROLL_MAX_STALLS) {
-        if (nowShown) return true;
-        throw this._offScreenError(action, `${swipes + 1} screen swipes stopped bringing it closer`, next.bounds);
+        if (shown) return true;
+        throw this._offScreenError(action, `${swipes + 1} screen swipes stopped bringing it closer`, next.bounds, towards(bounds));
       }
     }
   }
