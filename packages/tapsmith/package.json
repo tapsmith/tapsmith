@@ -86,7 +86,7 @@
     "preact": "^10.29.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.0.0",
-    "vite": "^5.4.21",
+    "vite": "^6.0.0",
     "vite-plugin-singlefile": "^2.3.2",
     "vitest": "^3.0.0"
   },
