@@ -953,9 +953,9 @@ Tapsmith prints this at startup:
 
 ```
 Network capture warning: Could not install Tapsmith's CA certificate on the emulator:
-Device does not support adb root — this emulator runs a Google Play (google_apis_playstore)
-system image, which blocks root. Recreate the AVD with a Google APIs image
-(`npx tapsmith create-avd`) to enable HTTPS capture. HTTPS is passed through to its
+Device does not support adb root — this emulator runs a production system image, which
+blocks root. Recreate the AVD with a Google APIs image (`npx tapsmith create-avd`) to
+enable HTTPS capture. HTTPS is passed through to its
 servers uncaptured, so the app's HTTPS requests still work, but they appear in the trace
 only as passthrough entries, and device.route(), waitForRequest() and waitForResponse()
 cannot see them; plain HTTP is still captured
