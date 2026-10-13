@@ -278,7 +278,7 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
       const { json } = await doctorJson();
       expect(check(json, 'android-agent')).toMatchObject({
         status: 'warn',
-        label: expect.stringMatching(/^Android agent not found — @tapsmith\/agent-android.*is not installed: pnpm 11/),
+        label: expect.stringMatching(/^Android agent not found — @tapsmith\/agent-android, which ships the agent APKs, is not installed\. .*pnpm 11/),
         fix: 'pnpm add -D @tapsmith/agent-android',
       });
     });

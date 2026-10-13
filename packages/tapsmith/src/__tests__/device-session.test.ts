@@ -348,7 +348,7 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
         makeConfig(),
         { claimSession: SESSION, label: 'Device', onPhase: (p, s, d) => seen.push([p, s, d]) },
       );
-      await expect(opening).rejects.toThrow(/Failed to start agent: Tapsmith's Android agent is not installed on the device, and there is no agent APK to install: @tapsmith\/agent-android/);
+      await expect(opening).rejects.toThrow(/Failed to start agent: Tapsmith's Android agent is not installed on the device, and there is no agent APK to install\. @tapsmith\/agent-android/);
       await expect(opening).rejects.toThrow(/Install it with `(npm init -y && )?npm i -D @tapsmith\/agent-android`/);
       expect(seen.at(-1)?.[2]).toContain('npm i -D @tapsmith/agent-android');
     } finally {

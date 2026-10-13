@@ -91,8 +91,8 @@ export async function missingAndroidAgentAdvice(dir: string): Promise<AndroidAge
     devDependencyInstallCommand(project, [NPM_PKG], 'the Android agent'),
   ]);
   const why = manager.startsWith('pnpm')
-    ? `${NPM_PKG}, the optional dependency of tapsmith that ships the agent APKs, is not installed: pnpm 11 and later skip it with tapsmith 0.6.0 and earlier, reading its name as Android-only, as does any install that omits optional dependencies`
-    : `${NPM_PKG}, the optional dependency of tapsmith that ships the agent APKs, is not installed: an install that omits optional dependencies (--omit=optional, --no-optional) leaves it out`;
+    ? `${NPM_PKG}, which ships the agent APKs, is not installed. It is an optional dependency of Tapsmith, and pnpm 11 and later skip it with Tapsmith 0.6.0 and earlier (reading its name as Android-only), as does any install that omits optional dependencies`
+    : `${NPM_PKG}, which ships the agent APKs, is not installed. It is an optional dependency of Tapsmith, so an install that omits optional dependencies (--omit=optional, --no-optional) leaves it out`;
   return { why, install: install.display, ...(project !== dir ? { where: project } : {}) };
 }
 
@@ -113,7 +113,7 @@ export async function missingAndroidAgentError(
 ): Promise<string | undefined> {
   if ((artifacts.agentApkPath && artifacts.agentTestApkPath) || !AGENT_NOT_INSTALLED.test(message)) return undefined;
   const advice = await missingAndroidAgentAdvice(dir);
-  return `Tapsmith's Android agent is not installed on the device, and there is no agent APK to install: ${advice.why}. `
+  return `Tapsmith's Android agent is not installed on the device, and there is no agent APK to install. ${advice.why}. `
     + `Install it with ${formatAgentInstall(advice)}, or set agentApk and agentTestApk in your Tapsmith config to your own build.`;
 }
 
