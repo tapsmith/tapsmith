@@ -616,7 +616,8 @@ function createAssertions(
       }, timeout, negated);
 
       if (!negated && !result) {
-        fail(`Expected element ${desc} to be visible, but it was not`);
+        const hint = handle._roleMissHint();
+        fail(`Expected element ${desc} to be visible, but it was not${hint && `.${hint}`}`);
       }
       if (negated && result) {
         fail(`Expected element ${desc} NOT to be visible, but it was`);
@@ -840,8 +841,9 @@ function createAssertions(
 
       if (!negated && !result) {
         handle._assertionResult = { expected: String(count), actual: String(lastCount) };
+        const hint = handle._roleMissHint();
         fail(
-          `Expected element ${desc} to have count ${count}, but found ${lastCount}`,
+          `Expected element ${desc} to have count ${count}, but found ${lastCount}${lastCount === 0 && hint ? `.${hint}` : ''}`,
         );
       }
       if (negated && result) {

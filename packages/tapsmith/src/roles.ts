@@ -307,3 +307,23 @@ export function iosGenericViewHasRole(
   if (lead !== undefined && Object.values(IOS_OTHER_ROLE_DESCRIPTIONS).includes(lead)) return lead === own;
   return view.named && view.traitRole === '';
 }
+
+/**
+ * What to add to a "not found" failure of `getByRole(role)` with no name on
+ * iOS, for a role React Native publishes nothing for there — alert, combobox
+ * and the undescribed generic-view roles — so the miss is explained instead of
+ * looking like a flaky screen (PILOT-718). Empty in every other case. Leads
+ * with a space, ready to append to a sentence.
+ */
+export function iosUnnamedRoleMissHint(
+  role: { role: string; name: string; nameRegex?: unknown },
+  platform: 'android' | 'ios' | undefined,
+): string {
+  if (platform !== 'ios' || role.name !== '' || role.nameRegex !== undefined) return '';
+  const canonical = normalizeRole(role.role);
+  const nameOnly = canonical === 'alert' || canonical === 'combobox' || IOS_UNDESCRIBED_OTHER_ROLES.has(canonical);
+  if (!nameOnly) return '';
+  const quoted = JSON.stringify(role.role);
+  return ` On iOS, React Native publishes no ${quoted} role that getByRole(${quoted}) can see without a name: ` +
+    `pass the element's name — getByRole(${quoted}, { name: "…" }) — or use getByText() or getByTestId().`;
+}
