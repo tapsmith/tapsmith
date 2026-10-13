@@ -200,8 +200,11 @@ export function captureAvdNextStep(
   const info = avd === undefined ? undefined : avds.find((a) => a.name === avd);
   if (avdCaptureSupport(info) !== 'play-image') return undefined;
   const pick = pickCaptureAvd(avds, info?.apiLevel);
-  const trace = captureEnabled ? '' : " and trace: { mode: 'retain-on-failure' }";
-  const setAvd = `set avd: '${pick.name}'${trace} in tapsmith.config.ts`;
+  // Names the value to change rather than "set avd": with several platforms
+  // the generated config keeps `avd` in the android project's `use`, where a
+  // new top-level `avd` would be overridden.
+  const trace = captureEnabled ? '' : ", and add trace: { mode: 'retain-on-failure' }";
+  const setAvd = `change avd: '${avd}' to '${pick.name}' in tapsmith.config.ts${trace}`;
   return { label: 'Capture HTTPS', action: pick.command ? `${pick.command}, then ${setAvd}` : setAvd };
 }
 

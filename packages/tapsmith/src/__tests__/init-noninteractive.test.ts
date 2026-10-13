@@ -632,8 +632,8 @@ describe('resolveInitPlan() AVD choice with network capture', () => {
       for (const networkCapture of [false, true]) {
         const args = android({ networkCapture, exampleTest: false, agentsMd: false, force: true });
         const result = executeInitPlan(resolveInitPlan(args, playOnlyEnv, detectStubs, tmp), args, tmp);
-        const trace = networkCapture ? '' : " and trace: { mode: 'retain-on-failure' }";
-        expect(result.nextSteps).toContain(`Capture HTTPS: npx tapsmith create-avd, then set avd: 'Tapsmith_Phone_API_36'${trace} in tapsmith.config.ts`);
+        const trace = networkCapture ? '' : ", and add trace: { mode: 'retain-on-failure' }";
+        expect(result.nextSteps).toContain(`Capture HTTPS: npx tapsmith create-avd, then change avd: 'Medium_Phone_API_36' to 'Tapsmith_Phone_API_36' in tapsmith.config.ts${trace}`);
       }
       const args = android({ networkCapture: true, exampleTest: false, agentsMd: false, force: true });
       const capable = executeInitPlan(resolveInitPlan(args, studioEnv, detectStubs, tmp), args, tmp);

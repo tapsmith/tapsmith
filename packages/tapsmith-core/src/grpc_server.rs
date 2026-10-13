@@ -8951,9 +8951,11 @@ fn system_proxy_fallback_warning(serial: &str) -> String {
 /// instead and only its capture is lost (PILOT-711). A physical device keeps
 /// MITM: its documented setup is a CA the user installs by hand and the app
 /// trusts through its `network_security_config.xml`, which `adb` cannot see.
-/// Any other failure (a transient adb error) keeps MITM too — the device may
-/// already trust the CA from an earlier install, and the next capture start
-/// retries.
+/// Any other failure (a transient adb error) keeps MITM too: the device may
+/// already trust the CA from the install during device setup. It is not
+/// retried while this proxy lives — a later start reuses the proxy — so a
+/// device that really lacks the CA fails HTTPS until the session ends, which
+/// the warning says.
 fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
     let cause = err.to_string();
     let cause = cause.trim().trim_end_matches('.');
