@@ -91,6 +91,16 @@ allowBuilds:
 
 Then run `pnpm install`. If `tapsmith init` ran the install for you, it prints this snippet.
 
+### pnpm: the Android agent package
+
+pnpm 11 and later skip `@tapsmith/agent-android` when installing tapsmith 0.6.0 or earlier: they read the `-android` in its name as "Android-only" and leave the optional dependency out, so Android runs fail on a device that doesn't already have the agent. Later releases declare the platforms the package installs on. On an affected version, `tapsmith doctor` reports `Android agent not found`; add the package directly:
+
+```bash
+pnpm add -D @tapsmith/agent-android
+```
+
+The same applies to any install that leaves optional dependencies out (`npm install --omit=optional`, `pnpm install --no-optional`).
+
 ### Yarn: use the `node-modules` linker
 
 Tapsmith doesn't run under Yarn Plug'n'Play, the default for new Yarn 2+ projects (a `.pnp.cjs` file next to `package.json`). It starts `tsx`, its daemon and its device agents as programs, and Plug'n'Play keeps packages inside zip archives, so `tapsmith test`, `verify` and `mcp-server` stop with an error naming the fix, and `tapsmith doctor` reports it. Switch the project to the `node-modules` linker (React Native and Expo projects already use it):

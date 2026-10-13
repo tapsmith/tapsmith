@@ -19,7 +19,7 @@ import { deviceGroupSize, type TapsmithConfig } from './config.js';
 import { isNetworkTracingEnabled, networkHostsForPac, networkPassthroughHosts } from './trace/types.js';
 import { installedApkMatches, isPackageInstalled, waitForPackageIndexed } from './emulator.js';
 import { installApp, installAppAsync, installedAppMatches, isAppInstalled, probeSimulatorHealth, rebootSimulator } from './ios-simulator.js';
-import { findAgentApk, findAgentTestApk } from './agent-resolve.js';
+import { findAgentApk, findAgentTestApk, missingAndroidAgentError } from './agent-resolve.js';
 import {
   AGENT_START_RETRY_DELAY_MS,
   DEVICE_SELECT_UNREACHABLE_GRACE_MS,
@@ -718,8 +718,14 @@ export async function openDeviceSession(
         await startAgent();
       }
     } catch (err) {
-      phase('agent', 'fail', err instanceof Error ? err.message : String(err));
-      throw new Error(`Failed to start agent: ${err instanceof Error ? err.message : String(err)}`);
+      let message = err instanceof Error ? err.message : String(err);
+      // No agent on the device and no APKs to install it from: say why the
+      // APKs are missing, with the project's own install command (PILOT-709).
+      if (config.platform !== 'ios') {
+        message = await missingAndroidAgentError(message, artifacts, config.rootDir).catch(() => undefined) ?? message;
+      }
+      phase('agent', 'fail', message);
+      throw new Error(`Failed to start agent: ${message}`);
     }
     progress('agent connected');
     phase('agent', 'complete', 'agent connected');

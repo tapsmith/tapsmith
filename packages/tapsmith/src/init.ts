@@ -21,6 +21,7 @@ import type { InitCommandOptions } from './cli-program.js';
 import { formatJson, jsonError } from './cli-json.js';
 import { avdCaptureSupport, avdCaptureWarning, noAvdsListedMessage, type AvdImageInfo } from './avd-images.js';
 import { isTapsmithResolvableFrom, tapsmithInstallCommand, type InstallCommand } from './config.js';
+import { androidAgentInstalledFor, missingAndroidAgentAdvice } from './agent-resolve.js';
 import { globSync } from 'glob';
 import { minimatch } from 'minimatch';
 import { DEFAULT_TEST_IGNORE } from './test-file-discovery.js';
@@ -636,6 +637,19 @@ export async function offerTapsmithInstall(
 }
 
 /**
+ * Warn when the project's own tapsmith cannot find the Android agent package
+ * (PILOT-709: pnpm 11+ skipped it as an optional dependency). The check reads
+ * the project's install, not the copy of Tapsmith running init, which may be
+ * npx's. Silent when the project has no tapsmith: the install step said so.
+ */
+export async function warnIfAndroidAgentMissing(cwd: string): Promise<void> {
+  if (androidAgentInstalledFor(cwd) !== false) return;
+  const advice = await missingAndroidAgentAdvice(cwd);
+  console.log(`  ${YELLOW}⚠${RESET} Android agent not found — ${advice.why}`);
+  console.log(dim(`    Run: ${advice.install}`));
+}
+
+/**
  * pnpm 11+ fails an install with ERR_PNPM_IGNORED_BUILDS when a dependency has
  * a build script nobody approved: here esbuild (through tsx) and protobufjs
  * (through gRPC). Tapsmith does not need either script (PILOT-560), and a
@@ -1171,6 +1185,7 @@ async function runInitInner(): Promise<void> {
 
   // Step 8.6: Tapsmith itself, which the config and test import (PILOT-551)
   const installStep = await offerTapsmithInstall(process.cwd());
+  if (selectedPlatforms.includes('android')) await warnIfAndroidAgentMissing(process.cwd());
 
   // Step 9: Next steps
   console.log();

@@ -3,8 +3,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import {
+  devDependencyInstallCommand,
   isMissingTapsmithError,
   isTapsmithResolvableFrom,
+  projectPackageManager,
   tapsmithInstallCommand,
 } from '../config.js';
 
@@ -181,5 +183,50 @@ describe('isMissingTapsmithError()', () => {
   it('is false for non-errors', () => {
     expect(isMissingTapsmithError(undefined)).toBe(false);
     expect(isMissingTapsmithError("Cannot find module 'tapsmith'")).toBe(false);
+  });
+});
+
+// The same detection, for any package and for hints that need to know the
+// manager itself (PILOT-709: the Android agent package's install hint).
+describe('projectPackageManager()', () => {
+  it('is npm when nothing names one', async () => {
+    write('package.json', '{}\n');
+    expect(await projectPackageManager(dir)).toBe('npm');
+  });
+
+  it.each([
+    ['pnpm-lock.yaml', 'pnpm'],
+    ['yarn.lock', 'yarn'],
+    ['bun.lock', 'bun'],
+  ])('follows the lockfile %s', async (lockfile, agent) => {
+    write('package.json', '{}\n');
+    write(lockfile, '');
+    expect(await projectPackageManager(dir)).toBe(agent);
+  });
+
+  it('finds a workspace root\'s lockfile from a subdirectory', async () => {
+    write('pnpm-lock.yaml', '');
+    write('apps/mobile/package.json', '{}\n');
+    expect(await projectPackageManager(path.join(dir, 'apps/mobile'))).toBe('pnpm');
+  });
+});
+
+describe('devDependencyInstallCommand()', () => {
+  it('adds the named packages with the project\'s package manager', async () => {
+    write('package.json', '{}\n');
+    write('pnpm-lock.yaml', '');
+    expect(await devDependencyInstallCommand(dir, ['@tapsmith/agent-android'], 'the Android agent')).toEqual({
+      command: 'pnpm',
+      args: ['add', '-D', '@tapsmith/agent-android'],
+      display: 'pnpm add -D @tapsmith/agent-android',
+    });
+  });
+
+  it('names what it installs in the note for a directory without a package.json', async () => {
+    write('package.json', '{}\n');
+    fs.mkdirSync(path.join(dir, 'apps/mobile'), { recursive: true });
+    const install = await devDependencyInstallCommand(path.join(dir, 'apps/mobile'), ['@tapsmith/agent-android'], 'the Android agent');
+    expect(install.display).toBe('npm init -y && npm i -D @tapsmith/agent-android');
+    expect(install.note).toContain(`would add the Android agent to ${dir} instead.`);
   });
 });

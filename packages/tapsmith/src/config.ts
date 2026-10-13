@@ -1457,17 +1457,30 @@ export function isTapsmithResolvableFrom(dir: string): boolean {
 }
 
 /**
- * `<package manager> add -D tapsmith` for the project at `dir`: the manager
- * its lockfile or `packageManager` field names (looking up from `dir`, so a
- * workspace root's lockfile counts), else npm.
+ * The package manager the project at `dir` uses, as package-manager-detector
+ * names it (`npm`, `pnpm`, `yarn`, `yarn@berry`, `bun`, …): the one its
+ * lockfile or `packageManager` field names, looking up from `dir` so a
+ * workspace root's lockfile counts, else npm. Exported for hints that name
+ * the project's own commands (PILOT-709).
  */
-export async function tapsmithInstallCommand(dir: string): Promise<InstallCommand> {
+export async function projectPackageManager(dir: string): Promise<string> {
   // Loaded only when needed: config.ts is part of the SDK every test imports.
-  const { detect, resolveCommand } = await import('package-manager-detector');
+  const { detect } = await import('package-manager-detector');
   const detected = await detect({ cwd: dir }).catch(() => null);
-  const agent = detected?.agent ?? 'npm';
-  const resolved = resolveCommand(agent, 'add', ['-D', 'tapsmith'])
-    ?? { command: 'npm', args: ['i', '-D', 'tapsmith'] };
+  return detected?.agent ?? 'npm';
+}
+
+/**
+ * `<package manager> add -D <packages>` for the project at `dir`, with the
+ * manager `projectPackageManager` finds. `what` names the packages in the
+ * note for a directory without a package.json ("Tapsmith", "the Android
+ * agent").
+ */
+export async function devDependencyInstallCommand(dir: string, packages: string[], what: string): Promise<InstallCommand> {
+  const { resolveCommand } = await import('package-manager-detector');
+  const agent = await projectPackageManager(dir) as Parameters<typeof resolveCommand>[0];
+  const resolved = resolveCommand(agent, 'add', ['-D', ...packages])
+    ?? { command: 'npm', args: ['i', '-D', ...packages] };
   const add = [resolved.command, ...resolved.args].join(' ');
   if (fs.existsSync(path.join(dir, 'package.json'))) return { ...resolved, display: add };
 
@@ -1480,9 +1493,14 @@ export async function tapsmithInstallCommand(dir: string): Promise<InstallComman
     ...resolved,
     display: `${PACKAGE_JSON_INIT[agent] ?? 'npm init -y'} && ${add}`,
     note: ancestor
-      ? `There's no package.json in ${dir}: on its own, \`${add}\` would add Tapsmith to ${ancestor} instead. If that is this project's root, run it there; otherwise create a package.json here first.`
-      : `There's no package.json in ${dir}: create one before installing Tapsmith.`,
+      ? `There's no package.json in ${dir}: on its own, \`${add}\` would add ${what} to ${ancestor} instead. If that is this project's root, run it there; otherwise create a package.json here first.`
+      : `There's no package.json in ${dir}: create one before installing ${what}.`,
   };
+}
+
+/** `<package manager> add -D tapsmith` for the project at `dir`. */
+export function tapsmithInstallCommand(dir: string): Promise<InstallCommand> {
+  return devDependencyInstallCommand(dir, ['tapsmith'], 'Tapsmith');
 }
 
 /**

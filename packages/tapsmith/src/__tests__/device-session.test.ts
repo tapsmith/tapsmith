@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   agentFailures: 0,
   /** Serials whose agent never starts (permanent failure). */
   failAgentFor: new Set<string>(),
+  /** Serials the daemon reports have no agent installed (and no APKs were given). */
+  noAgentFor: new Set<string>(),
   /** iOS simulator installs performed (installAppAsync calls). */
   simInstalls: 0,
   /** Whether the simulator's installed .app matches the build on disk. */
@@ -66,6 +68,7 @@ vi.mock('../device.js', () => ({
       installApk: vi.fn(async () => {}),
       startAgent: vi.fn(async () => {
         if (mocks.failAgentFor.has(serial)) throw new Error('Failed to connect to agent socket on port 18700');
+        if (mocks.noAgentFor.has(serial)) throw new Error('Tapsmith agent is not installed on the device. Set agentApk and agentTestApk in your Tapsmith config, or install manually with: adb install <path-to-agent.apk>');
         if (mocks.agentFailures > 0) {
           mocks.agentFailures--;
           throw new Error('Failed to connect to agent socket on port 18700');
@@ -126,7 +129,8 @@ vi.mock('node:child_process', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('../agent-resolve.js', () => ({
+vi.mock('../agent-resolve.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../agent-resolve.js')>()),
   findAgentApk: vi.fn(() => '/agents/agent.apk'),
   findAgentTestApk: vi.fn(() => '/agents/agent-test.apk'),
 }));
@@ -329,6 +333,27 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
       { claimSession: SESSION, label: 'Device', onPhase: (p, s, d) => seen.push([p, s, d]) },
     )).rejects.toThrow(/^Device \(emulator-5554\): Failed to start agent: /);
     expect(seen.at(-1)?.slice(0, 2)).toEqual(['agent', 'fail']);
+  });
+
+  // PILOT-709: pnpm 11+ skipped @tapsmith/agent-android, and the daemon's
+  // advice (config keys, adb install) did not say so.
+  it('says the agent package is missing, with an install command, when there were no APKs', async () => {
+    const { findAgentApk } = await import('../agent-resolve.js');
+    vi.mocked(findAgentApk).mockReturnValueOnce(undefined);
+    const seen = phases();
+    mocks.noAgentFor.add('emulator-5554');
+    try {
+      const opening = openDeviceSession(
+        { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' },
+        makeConfig(),
+        { claimSession: SESSION, label: 'Device', onPhase: (p, s, d) => seen.push([p, s, d]) },
+      );
+      await expect(opening).rejects.toThrow(/Failed to start agent: Tapsmith's Android agent is not installed on the device, and there is no agent APK to install: @tapsmith\/agent-android/);
+      await expect(opening).rejects.toThrow(/Install it with `(npm init -y && )?npm i -D @tapsmith\/agent-android`/);
+      expect(seen.at(-1)?.[2]).toContain('npm i -D @tapsmith/agent-android');
+    } finally {
+      mocks.noAgentFor.clear();
+    }
   });
 
   it('reuses a caller-provided client and leaves it open on failure', async () => {
