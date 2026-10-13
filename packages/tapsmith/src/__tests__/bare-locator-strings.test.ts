@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes, locatorStringError } from '../trace-viewer/components/selector-matching.js';
 import { parseSelectorToInternal } from '../mcp/locator-helper.js';
-import { selectorToProto } from '../selectors.js';
+import { selectorToProto, _role, _text, _textContains, _testId } from '../selectors.js';
+import { parseSelectorParts, selectorPartsCode } from '../trace-viewer/components/selector-parts.js';
 
 // Locator strings written without `device.` — what the docs, the trace's
 // action list and screen objects show. The Locator Playground read a bare
@@ -119,5 +120,29 @@ describe('the MCP tools take the bare forms too', () => {
 
   it('refuses an unreadable one as invalid, not as an unsupported type', () => {
     expect(() => parseSelectorToInternal('getByAltText("Logo")')).toThrow(/^Invalid locator: "getByAltText\("Logo"\)". Use a Tapsmith locator/);
+  });
+});
+
+describe('the locator the trace\'s action list shows parses back to the same selector', () => {
+  // A named role used to show as getByRole("button", "Explore"), which is not
+  // code and the Locator tab could not read — the copy a user debugging a
+  // failure is most likely to paste.
+  const shown = (sel: Parameters<typeof selectorToProto>[0]): string =>
+    selectorPartsCode(parseSelectorParts(JSON.stringify(selectorToProto(sel)))!);
+
+  it('shows a getByRole name as { name: … }', () => {
+    expect(shown(_role('button', { name: 'Explore' }))).toBe('getByRole("button", { name: "Explore" })');
+    expect(shown(_role('button'))).toBe('getByRole("button")');
+    expect(shown(_role('button', { name: /expl/i }))).toBe('getByRole("button", { name: /expl/i })');
+  });
+
+  for (const sel of [_role('button', { name: 'Explore' }), _role('button', { name: /expl/i }), _textContains('Explore'), _testId('explore')]) {
+    it(shown(sel), () => {
+      expect(count(shown(sel))).toBe(1);
+    });
+  }
+
+  it('an exact text selector still parses (as a substring match: pre-existing)', () => {
+    expect(count(shown(_text('Explore')))).toBe(1);
   });
 });

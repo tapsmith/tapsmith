@@ -131,7 +131,7 @@ test.describe("Locator playground", () => {
     await expect(locator.matchCount).toHaveText("1 match")
     await locator.type('getByRole("button", { name: "Tap area" })')
     await expect(locator.matchCount).toHaveText("1 match")
-    await locator.type('page.getByText("Gesture")')
+    await locator.type('this.device.getByText("Last gesture: None", { exact: true })')
     await expect(locator.matchCount).toHaveText("1 match")
     await expect(locator.error).toHaveCount(0)
   })

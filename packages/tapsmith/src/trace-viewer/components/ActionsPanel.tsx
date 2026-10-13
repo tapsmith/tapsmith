@@ -4,7 +4,8 @@ import { Check, X, Type, Clock, Play, ExternalLink, MoveHorizontal, ArrowUpDown,
 import type { AnyTraceEvent, ActionTraceEvent, AssertionTraceEvent, GroupTraceEvent, NetworkCaptureRoute, TraceMetadata } from '../../trace/types.js';
 import type { InFlightAction } from '../types.js';
 import { deviceTagStyle } from './device-frames.js';
-import { parseSelectorParts } from './selector-parts.js';
+import { parseSelectorParts, selectorPartsCode } from './selector-parts.js';
+import type { SelectorParts } from './selector-parts.js';
 
 interface Props {
   events: AnyTraceEvent[]
@@ -82,8 +83,15 @@ function getInFlightIcon(item: InFlightAction): [ComponentChildren, string] {
 function parseSelectorString(sel: string | undefined): string {
   const parts = parseSelectorParts(sel);
   if (!parts) return sel ?? '';
-  if (parts.optionKey) return `${parts.fn}({ ${parts.optionKey}: "${parts.args[0]}" })`;
-  return `${parts.fn}(${parts.args.map((a, i) => (parts.literal?.[i] ? a : `"${a}"`)).join(', ')})`;
+  return selectorPartsCode(parts);
+}
+
+/** One argument of a locator call: quoted unless a RegExp, and getByRole's name as `{ name: … }`. */
+export function SelectorArg({ parts, index }: { parts: SelectorParts; index: number }) {
+  const arg = parts.args[index];
+  const value = <span class="sel-val">{parts.literal?.[index] ? arg : `"${arg}"`}</span>;
+  if (!parts.nameOption || index !== parts.args.length - 1) return value;
+  return <>{'{ '}<span class="sel-fn">name</span>{': '}{value}{' }'}</>;
 }
 
 function SelectorDisplay({ sel }: { sel: string | undefined }) {
@@ -104,7 +112,7 @@ function SelectorDisplay({ sel }: { sel: string | undefined }) {
     <span class="action-selector-text">
       <span class="sel-fn">{parts.fn}</span>
       ({parts.args.map((a, i) => (
-        <span key={i}>{i > 0 && ', '}<span class="sel-val">{parts.literal?.[i] ? a : `"${a}"`}</span></span>
+        <span key={i}>{i > 0 && ', '}<SelectorArg parts={parts} index={i} /></span>
       ))})
     </span>
   );
