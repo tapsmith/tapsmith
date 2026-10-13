@@ -1,9 +1,12 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { watch as chokidarWatch } from 'chokidar';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   discoverTestFiles,
+  isIgnoredDiscoveryWatchPath,
+  isIgnoredWatchModePath,
   getTestDiscoveryWatchRoots,
   matchesTestIgnore,
   matchesTestFile,
@@ -49,6 +52,112 @@ describe('test-file-discovery helpers', () => {
     expect(matchesTestIgnore('dist')).toBe(true);
     expect(matchesTestIgnore('dist/new.test.ts')).toBe(true);
     expect(matchesTestIgnore('tests/dist.test.ts')).toBe(false);
+  });
+
+  // PILOT-713: an Expo/React Native project's native and generated trees hold
+  // tens of thousands of files that are never tests.
+  it('ignores native build, dependency and tooling directories', () => {
+    for (const ignored of [
+      'ios/Pods',
+      'ios/Pods/Headers/Public/React-Core/React/RCTBridge.h',
+      'ios/build',
+      'ios/build/Build/Products/x.test.ts',
+      'apps/mobile/ios/build',
+      'android/build',
+      'android/app/build',
+      'android/app/build/generated/x.test.ts',
+      'android/app/.cxx',
+      'android/.gradle',
+      '.gradle',
+      '.expo',
+      '.expo/types/x.test.ts',
+      'ios/DerivedData',
+      'DerivedData/App/Build',
+    ]) {
+      expect(matchesTestIgnore(ignored), ignored).toBe(true);
+    }
+    for (const kept of [
+      'build',
+      'build/login.test.ts',
+      'e2e/build.test.ts',
+      'e2e/ios/login.test.ts',
+      'e2e/android/login.test.ts',
+      'src/Pods.test.ts',
+      'ios/AppTests/login.test.ts',
+    ]) {
+      expect(matchesTestIgnore(kept), kept).toBe(false);
+    }
+  });
+
+  describe('isIgnoredDiscoveryWatchPath', () => {
+    it('ignores paths outside rootDir, .git, the output dir and default-ignored directories', () => {
+      const outputDir = path.join(rootDir, 'tapsmith-results');
+      const ignored = (rel: string): boolean => isIgnoredDiscoveryWatchPath(path.join(rootDir, rel), rootDir, outputDir);
+
+      expect(isIgnoredDiscoveryWatchPath(tempDir, rootDir, outputDir)).toBe(true);
+      expect(ignored('.git')).toBe(true);
+      expect(ignored('.git/objects')).toBe(true);
+      expect(ignored('tapsmith-results')).toBe(true);
+      expect(ignored('tapsmith-results/trace.zip')).toBe(true);
+      expect(ignored('ios/Pods')).toBe(true);
+      expect(ignored('node_modules/react-native')).toBe(true);
+      expect(ignored('')).toBe(false);
+      expect(ignored('e2e/login.test.ts')).toBe(false);
+      expect(ignored('ios')).toBe(false);
+    });
+
+    it('in watch mode, keeps files watched by name and anything outside rootDir', () => {
+      const outputDir = path.join(rootDir, 'tapsmith-results');
+      const pinned = path.join(rootDir, 'dist', 'pinned.test.ts');
+      const byName = new Set([pinned]);
+      const ignored = (p: string): boolean => isIgnoredWatchModePath(p, rootDir, outputDir, byName);
+
+      expect(ignored(pinned)).toBe(false);
+      expect(ignored(path.join(rootDir, 'dist', 'other.test.ts'))).toBe(true);
+      expect(ignored(path.join(rootDir, 'ios', 'Pods'))).toBe(true);
+      expect(ignored(path.join(rootDir, 'node_modules'))).toBe(true);
+      expect(ignored(path.join(rootDir, '.git'))).toBe(true);
+      expect(ignored(outputDir)).toBe(true);
+      expect(ignored(path.join(rootDir, 'e2e', 'login.test.ts'))).toBe(false);
+      expect(ignored(path.join(tempDir, 'elsewhere', 'node_modules'))).toBe(false);
+    });
+
+    it('keeps chokidar out of an Expo project\'s native trees, including symlinks into node_modules', async () => {
+      const touch = (rel: string): void => {
+        const file = path.join(rootDir, rel);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, '');
+      };
+      touch('e2e/login.test.ts');
+      touch('node_modules/react-native/React/RCTBridge.h');
+      touch('ios/Pods/RCT-Folly/folly/Format.h');
+      touch('ios/build/Build/Products/Release-iphonesimulator/App.app/main.jsbundle');
+      touch('android/app/build/outputs/apk/app.apk');
+      touch('android/.gradle/8.0/checksums.bin');
+      touch('.expo/devices.json');
+      fs.mkdirSync(path.join(rootDir, 'ios/Pods/Headers/Public'), { recursive: true });
+      // CocoaPods links headers back into node_modules; chokidar follows symlinks.
+      fs.symlinkSync(path.join(rootDir, 'node_modules/react-native/React'), path.join(rootDir, 'ios/Pods/Headers/Public/React-Core'));
+
+      const outputDir = path.join(rootDir, 'tapsmith-results');
+      const watcher = chokidarWatch([rootDir], {
+        ignoreInitial: true,
+        ignored: (candidate) => isIgnoredDiscoveryWatchPath(candidate.toString(), rootDir, outputDir),
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          watcher.once('ready', resolve);
+          watcher.once('error', reject);
+        });
+        const watchedDirs = Object.keys(watcher.getWatched())
+          .map((dir) => relativeTestPath(dir, rootDir))
+          .filter((rel) => !rel.startsWith('..'))
+          .sort();
+        expect(watchedDirs).toEqual(['', 'android', 'android/app', 'e2e', 'ios']);
+      } finally {
+        await watcher.close();
+      }
+    });
   });
 
   it('derives watch roots from the static part of glob patterns', () => {

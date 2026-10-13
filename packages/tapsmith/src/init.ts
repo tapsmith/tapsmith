@@ -899,7 +899,7 @@ export function tapsmithTestsOutsideGeneratedMatch(cwd: string): string[] {
     candidates = globSync(['**/*.test.ts', '**/*.spec.ts'], {
       cwd,
       // Bounded, so init in a huge directory doesn't crawl it: tests live near the top.
-      ignore: [...DEFAULT_TEST_IGNORE, '**/Pods/**', '**/build/**'],
+      ignore: [...DEFAULT_TEST_IGNORE, '**/build/**'],
       maxDepth: 10,
       posix: true,
     });
