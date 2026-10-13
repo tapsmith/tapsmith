@@ -424,6 +424,34 @@ describe('iOS generic-view roles in the playground, like the agent (PILOT-664)',
   });
 });
 
+describe('an RN alert Text in the iOS playground, like the agent (PILOT-718)', () => {
+  // <Text accessibilityRole="alert"> is plain static text on iOS (Fabric
+  // publishes no trait or description for it): a named query finds it.
+  const text = (label: string, y: number, extra: Record<string, string> = {}) => makeNode('XCUIElementTypeStaticText', {
+    type: 'XCUIElementTypeStaticText', label, 'tapsmith-role': 'text', x: '0', y: String(y), width: '300', height: '20', ...extra,
+  });
+  const error = text('Failed to fetch posts: HTTP 500', 100);
+  const heading = text('Failed to fetch', 140, { 'tapsmith-role': 'heading' });
+  const described = text('Failed to save', 180, { value: 'checkbox, checked' });
+  const roots = [makeNode('XCUIElementTypeApplication', { type: 'XCUIElementTypeApplication' }, [error, heading, described])];
+  const on = (selector: string) => findMatchingNodes(roots, parseSelectorString(selector)!);
+
+  it('matches a named alert query on static text, and no unnamed one', () => {
+    expect(on('device.getByRole("alert", { name: "Failed to fetch posts" })')).toEqual([error]);
+    expect(on('device.getByRole("alert")')).toEqual([]);
+  });
+
+  it('skips a heading, and a text described as another role', () => {
+    expect(on('device.getByRole("alert", { name: "Failed to fetch" })')).toEqual([error]);
+    expect(on('device.getByRole("alert", { name: "Failed to save" })')).toEqual([]);
+  });
+
+  it('leaves other generic-view roles off static text', () => {
+    expect(on('device.getByRole("menuitem", { name: "Failed to fetch posts" })')).toEqual([]);
+    expect(on('device.getByRole("text", { name: "Failed to fetch posts" })')).toEqual([error]);
+  });
+});
+
 describe('icon-glyph accessible names (PILOT-659)', () => {
   // React Navigation bottom tabs with an icon-font icon (MaterialIcons via
   // IconSymbol): RN names the tab "<glyph>, <label>", and the glyph is a

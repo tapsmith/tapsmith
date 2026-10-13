@@ -245,6 +245,14 @@ export const IOS_UNDESCRIBED_OTHER_ROLES: ReadonlySet<string> = new Set([
   'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer',
 ]);
 
+/**
+ * The generic-view roles an iOS static text also takes — the agent's
+ * `RoleMapping.staticTextRoles` (PILOT-718), which `roles.test.ts` pins. React
+ * Native's `<Text accessibilityRole="alert">` is plain static text on iOS, so
+ * it is matched as a generic view is: by a description or a named query.
+ */
+export const IOS_STATIC_TEXT_ROLES: ReadonlySet<string> = new Set(['alert']);
+
 const KNOWN = new Set(NATIVE_ROLES);
 
 // ─── Helpers ───
