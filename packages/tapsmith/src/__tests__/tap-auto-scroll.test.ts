@@ -62,7 +62,7 @@ function simulatedScreen(opts: {
     top: opts.top, left: opts.left ?? 0, swiped: false, checked: opts.checked ?? false,
     faults: opts.faultReadsAfterSwipe ?? 0, disabled: opts.disabledReadsAfterSwipe ?? 0,
     animation: [...(opts.animation ?? [])],
-    momentum: 0, momentumDir: 0, overscrolls: 0, tappedWhileMoving: false,
+    momentum: 0, momentumDir: 0, overpull: 0, tappedWhileMoving: false,
     staleSwipes: opts.staleAfterSwipes ?? 0, staleNext: false,
     hierarchyFailures: opts.hierarchyFailures ?? 0,
   };
@@ -106,14 +106,15 @@ function simulatedScreen(opts: {
     const d = o?.distance ?? 0.6;
     if (direction === 'up' || direction === 'down') {
       const sign = direction === 'up' ? -1 : 1;
-      // A drag that starts with the list already at the end it pulls past.
-      if ((sign > 0 && opts.maxTop !== undefined && state.top >= opts.maxTop) ||
-          (sign < 0 && opts.minTop !== undefined && state.top <= opts.minTop)) state.overscrolls++;
-      state.top += sign * travel * d * SCREEN_H;
+      const wanted = state.top + sign * travel * d * SCREEN_H;
+      let top = wanted;
+      if (opts.minTop !== undefined) top = Math.max(opts.minTop, top);
+      if (opts.maxTop !== undefined) top = Math.min(opts.maxTop, top);
+      // How far a drag pulled the list past its end (the part it could not scroll).
+      state.overpull = Math.max(state.overpull, Math.abs(wanted - top));
+      state.top = top;
       state.momentum = opts.momentumReads ?? 0;
       state.momentumDir = sign;
-      if (opts.minTop !== undefined) state.top = Math.max(opts.minTop, state.top);
-      if (opts.maxTop !== undefined) state.top = Math.min(opts.maxTop, state.top);
     }
     return ok();
   });
@@ -168,7 +169,7 @@ async function rejectionOf(advanceMs: number, fn: () => Promise<unknown>): Promi
 const inSafeRegion = (top: number) => top >= 0.2 * SCREEN_H && top + ROW_H <= 0.85 * SCREEN_H;
 
 describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
-  it('scrolls a row below the screen up to the middle band, then taps it', async () => {
+  it('scrolls a row below the screen up into the safe region, then taps it', async () => {
     const { client, swipe, tap, state } = simulatedScreen({ top: 1500 });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
 
@@ -197,7 +198,9 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     const { client, tap, state } = simulatedScreen({ top: -700, maxTop: 120 });
     await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
     expect(state.top).toBe(120);
-    expect(state.overscrolls).toBe(0);
+    // The nudge out of the top band pulls the list only a little past its top
+    // (review R6-F1: aiming at the middle pulled ~250pt past it).
+    expect(state.overpull).toBeLessThanOrEqual(0.15 * SCREEN_H);
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
@@ -208,8 +211,10 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     expect(sim.state.tappedWhileMoving).toBe(false);
   });
 
-  it('corrects a fling past the middle from the other side', async () => {
-    const { client, swipe, tap, state } = simulatedScreen({ top: 820, travel: 1.9 });
+  it('corrects a fling past the safe region from the other side', async () => {
+    // Each drag travels 2.5× its distance: the first carries the row from
+    // below the screen past the safe region to the top band.
+    const { client, swipe, tap, state } = simulatedScreen({ top: 850, travel: 2.5 });
     await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 60_000).tap());
 
     const dirs = swipe.mock.calls.map(([dir]) => dir);
@@ -226,7 +231,7 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
       expect(swipe).not.toHaveBeenCalled();
       expect(tap).not.toHaveBeenCalled();
       expect(err.message).toMatch(/is off-screen and tap\(\) could not scroll it into view: it is off-screen to the (left|right), and tap\(\) scrolls only vertically/);
-      expect(err.message).toContain(`Scroll it into view first (await locator.scrollIntoView({ direction: "${hint}" })), then tap() it.`);
+      expect(err.message).toContain(`Scroll it into view first (scroll() on the carousel or list that holds it, or await locator.scrollIntoView({ direction: "${hint}" }) if nothing at the middle of the screen reacts to a sideways swipe), then tap() it.`);
     }
   });
 
@@ -237,7 +242,7 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     expect(swipe.mock.calls.length).toBeLessThanOrEqual(3);
     expect(tap).not.toHaveBeenCalled();
     expect(err.message).toMatch(/it is off-screen to the right/);
-    expect(err.message).toContain('scrollIntoView({ direction: "left" })');
+    expect(err.message).toContain('or await locator.scrollIntoView({ direction: "left" }) if nothing at the middle of the screen reacts');
   });
 
   it('brings an element taller than half the screen across the middle, not just a strip at the edge (review R4-F1)', async () => {

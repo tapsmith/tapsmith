@@ -620,8 +620,8 @@ const AUTO_SCROLL_MAX_SWIPES = 25;
 const AUTO_SCROLL_MAX_ATTEMPTS = 3;
 /** The longest swipe, as a fraction of the screen height. */
 const AUTO_SCROLL_MAX_DISTANCE = 0.5;
-/** The shortest swipe, for the last nudge towards the middle of the screen. */
-const AUTO_SCROLL_MIN_DISTANCE = 0.1;
+/** The shortest swipe, for the last nudge into the safe region. */
+const AUTO_SCROLL_MIN_DISTANCE = 0.05;
 /**
  * A slow drag (the agents map ≤1000 px/s to their longest swipe), so the
  * content travels about the swipe distance instead of flinging past the target
@@ -634,6 +634,9 @@ const AUTO_SCROLL_SPEED = 1000;
  */
 const AUTO_SCROLL_SAFE_TOP = 0.2;
 const AUTO_SCROLL_SAFE_BOTTOM = 0.85;
+/** Where the near edge of an element is aimed, a margin inside the safe region. */
+const AUTO_SCROLL_AIM_TOP = 0.3;
+const AUTO_SCROLL_AIM_BOTTOM = 0.75;
 /** Budget for the hierarchy read that measures the screen. */
 const SCREEN_SIZE_READ_MS = 5000;
 /** Swipes in a row that may fail to bring the element closer to the middle. */
@@ -3002,7 +3005,8 @@ export class ElementHandle {
   /** @internal — The error for an off-screen element a tap-family action could not scroll into view. */
   private _offScreenError(action: TapFamilyAction, why: string, bounds?: Bounds, direction?: string): OffScreenError {
     const how = direction
-      ? `await locator.scrollIntoView({ direction: "${direction}" })`
+      ? `scroll() on the carousel or list that holds it, or await locator.scrollIntoView({ direction: "${direction}" }) ` +
+        'if nothing at the middle of the screen reacts to a sideways swipe'
       : 'with scrollIntoView(), or scroll() on the list that holds it';
     return new OffScreenError(
       `Element ${this._describe()} is off-screen and ${action}() could not scroll it into view: ${why}. ` +
@@ -3039,11 +3043,11 @@ export class ElementHandle {
    *
    * Each step is a slow vertical screen drag towards the element, then the
    * settle loop. Knowing the screen height (`extent`, in the units of the
-   * element's bounds), every swipe aims the element's centre at the middle of
-   * the screen, and it stops once the element rests
-   * fully inside the safe region (clear of where headers and tab bars sit), so
-   * it does not come to rest as a sliver at an edge; a fling past it is
-   * corrected from the other side. A swipe that moves the element less than
+   * element's bounds), every swipe aims the element just inside the safe
+   * region (clear of where headers and tab bars sit) — its near edge, so the
+   * swipes are no longer than they need to be — and it stops once the element
+   * rests fully inside, so it does not come to rest as a sliver at an edge; a
+   * fling past it is corrected from the other side. A swipe that moves the element less than
    * half as far as it should have means the list has reached its end: it
    * stops there if the element is visible, rather than dragging the list past
    * its end again (a pull-to-refresh, or a sheet dismissed).
@@ -3079,6 +3083,15 @@ export class ElementHandle {
     );
     if (bounds.bottom > 0 && bounds.top < extent) throw sideError(bounds);
     const mid = (b: Bounds): number => (b.top + b.bottom) / 2;
+    // How far the element still has to travel: to the near edge of the safe
+    // region, with a margin, so a nudge at a list end pulls the list only a
+    // little past it; an element too tall for the region aims at the middle.
+    const travelNeeded = (b: Bounds): number => {
+      if (b.bottom - b.top >= extent / 2) return mid(b) - extent / 2;
+      if (b.top < extent * AUTO_SCROLL_SAFE_TOP) return b.top - extent * AUTO_SCROLL_AIM_TOP;
+      if (b.bottom > extent * AUTO_SCROLL_SAFE_BOTTOM) return b.bottom - extent * AUTO_SCROLL_AIM_BOTTOM;
+      return 0;
+    };
     let best = Infinity;
     let stalls = 0;
     for (let swipes = 0; ; swipes++) {
@@ -3088,9 +3101,8 @@ export class ElementHandle {
       if (Date.now() >= deadline) {
         throw this._offScreenError(action, `the action timed out after ${swipes} scroll(s)`, bounds);
       }
-      // Positive: the element is below the middle, so the content has to move
-      // up (swipe up).
-      const offset = mid(bounds) - extent / 2;
+      // Positive: the element has to move up (swipe up); negative: down.
+      const offset = travelNeeded(bounds);
       const distance = Math.min(AUTO_SCROLL_MAX_DISTANCE, Math.max(AUTO_SCROLL_MIN_DISTANCE, Math.abs(offset) / extent));
       const direction = offset > 0 ? 'up' : 'down';
       const res = await this._client.swipe(direction, { speed: AUTO_SCROLL_SPEED, distance });
@@ -3129,7 +3141,7 @@ export class ElementHandle {
         // Under-travel: the list hit its end during this swipe.
         if (moved < (distance * extent) / 2) return true;
       }
-      const away = Math.abs(mid(nb) - extent / 2);
+      const away = Math.abs(travelNeeded(nb));
       if (away < best - 1) {
         best = away;
         stalls = 0;
