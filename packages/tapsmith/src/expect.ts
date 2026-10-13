@@ -609,14 +609,17 @@ function createAssertions(
         return expectHidden(timeout, VISIBLE_FALSE_SUFFIX);
       }
       const desc = selectorDescription(handle);
+      let lastCount = 0;
       const result = await poll(async () => {
         // Negated form is an absence check — evaluate over all matches.
         const els = await resolveTick(handle, !negated);
+        lastCount = els.length;
         return els.some((el) => el.visible);
       }, timeout, negated);
 
       if (!negated && !result) {
-        const hint = handle._roleMissHint();
+        // The hint explains a miss, not a match that isn't visible.
+        const hint = lastCount === 0 ? handle._roleMissHint() : '';
         fail(`Expected element ${desc} to be visible, but it was not${hint && `.${hint}`}`);
       }
       if (negated && result) {
@@ -690,7 +693,8 @@ function createAssertions(
       }, timeout, negated);
 
       if (!negated && !result) {
-        fail(`Expected element ${desc} to exist, but it did not`);
+        const hint = handle._roleMissHint();
+        fail(`Expected element ${desc} to exist, but it did not${hint && `.${hint}`}`);
       }
       if (negated && result) {
         fail(`Expected element ${desc} NOT to exist, but it did`);

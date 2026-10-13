@@ -27,7 +27,7 @@ describe("iosUnnamedRoleMissHint()", () => {
 
   it("explains an unnamed alert, combobox or RN generic-view role on iOS", () => {
     vitestExpect(iosUnnamedRoleMissHint(role("alert"), "ios")).toMatch(HINT);
-    for (const r of ["combobox", "menuitem", "timer", "tablist", "Alert"]) {
+    for (const r of ["combobox", "menuitem", "timer", "Alert"]) {
       vitestExpect(iosUnnamedRoleMissHint(role(r), "ios"), r).toContain(`getByRole(${JSON.stringify(r)}, { name: "…" })`);
     }
   });
@@ -37,7 +37,8 @@ describe("iosUnnamedRoleMissHint()", () => {
     vitestExpect(iosUnnamedRoleMissHint({ role: "alert", name: "", nameRegex: { source: "x", flags: "" } }, "ios")).toBe("");
     vitestExpect(iosUnnamedRoleMissHint(role("alert"), "android")).toBe("");
     vitestExpect(iosUnnamedRoleMissHint(role("alert"), undefined)).toBe("");
-    for (const r of ["button", "checkbox", "radio", "heading", "text"]) {
+    // tablist: the agent matches a native tab bar without a name.
+    for (const r of ["button", "checkbox", "radio", "heading", "text", "tablist"]) {
       vitestExpect(iosUnnamedRoleMissHint(role(r), "ios"), r).toBe("");
     }
   });
@@ -57,6 +58,33 @@ describe("a role-only miss on iOS carries the hint", () => {
     await vitestExpect(d.getByRole("alert").first().find()).rejects.toThrow(HINT);
     await vitestExpect(d.getByTestId("screen").getByRole("alert").find()).rejects.toThrow(HINT);
     await vitestExpect(d.getByTestId("screen").first().getByRole("alert").find()).rejects.toThrow(HINT);
+  });
+
+  it("in toExist and waitFor failures", async () => {
+    await vitestExpect(tapsmithExpect(device("ios").getByRole("alert")).toExist({ timeout: 50 }))
+      .rejects.toThrow(HINT);
+    await vitestExpect(device("ios").getByRole("alert").waitFor({ timeout: 50 })).rejects.toThrow(HINT);
+    await vitestExpect(device("ios").getByRole("alert").waitFor({ state: "attached", timeout: 50 })).rejects.toThrow(HINT);
+  });
+
+  it("not when the query found an element that isn't visible", async () => {
+    const hiddenAlert: ElementInfo = {
+      elementId: "a", className: "XCUIElementTypeOther", text: "Saved", contentDescription: "", resourceId: "",
+      enabled: true, visible: false, clickable: false, focusable: false, scrollable: false, hint: "",
+      checked: false, selected: false, focused: false, role: "", viewportRatio: 0,
+    };
+    const client = {
+      findElement: vi.fn(async () => ({ requestId: "1", found: true, element: hiddenAlert, errorMessage: "" })),
+      findElements: vi.fn(async () => ({ requestId: "1", elements: [hiddenAlert], errorMessage: "" })),
+    } as unknown as TapsmithGrpcClient;
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    const err = (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);
+    const visible = await err(tapsmithExpect(d.getByRole("alert")).toBeVisible({ timeout: 50 }));
+    vitestExpect(visible).toContain("to be visible, but it was not");
+    vitestExpect(visible).not.toContain("On iOS");
+    const waited = await err(d.getByRole("alert").waitFor({ timeout: 50 }));
+    vitestExpect(waited).toContain('did not reach state "visible"');
+    vitestExpect(waited).not.toContain("On iOS");
   });
 
   it("not on Android, nor for a named query", async () => {

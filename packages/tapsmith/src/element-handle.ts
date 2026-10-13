@@ -1963,6 +1963,9 @@ export class ElementHandle {
     const FIND_TIMEOUT_MS = 500;
     const deadline = start + timeoutMs;
 
+    // Whether the last answered tick found anything: a timeout with nothing
+    // found gets the unnamed-role hint, one with a hidden match doesn't.
+    let lastAttached = false;
     const checkState = async (): Promise<boolean> => {
       // Floor at 1ms — the daemon treats a 0 timeout as "use the 30s
       // default", which would stall the final poll tick for 30s.
@@ -1984,6 +1987,7 @@ export class ElementHandle {
       }
 
       const attached = elements.length > 0;
+      lastAttached = attached;
       const visible = attached && elements.some((el) => el.visible);
 
       switch (state) {
@@ -2019,8 +2023,11 @@ export class ElementHandle {
         }
         if (Date.now() >= deadline) {
           if (lastTransientErr) throw lastTransientErr;
+          // A miss of an unnamed iOS role query explains itself (PILOT-718).
+          const missed = (state === 'visible' || state === 'attached') && !lastAttached;
+          const hint = missed ? this._roleMissHint() : '';
           throw new Error(
-            `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms`,
+            `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms${hint && `.${hint}`}`,
           );
         }
         const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
