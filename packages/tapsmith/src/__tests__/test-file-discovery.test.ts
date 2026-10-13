@@ -291,6 +291,20 @@ describe('test-file-discovery helpers', () => {
       ]);
     });
 
+    it('applies ./-prefixed and absolute project ignores as glob does', async () => {
+      const expected = [
+        path.join(rootDir, 'tests', 'a.test.ts'),
+        path.join(rootDir, 'tests', 'b.test.ts'),
+        path.join(rootDir, 'tests', 'smoke-login.test.ts'),
+      ];
+      await expect(discoverTestFiles(['tests/**/*.test.ts'], rootDir, ['./tests/nested/**'])).resolves.toEqual(expected);
+      await expect(
+        discoverTestFiles(['tests/**/*.test.ts'], rootDir, [path.join(rootDir, 'tests', 'nested', '**').split(path.sep).join('/')]),
+      ).resolves.toEqual(expected);
+      // glob reads a leading `!` in an ignore literally: it excludes nothing.
+      await expect(discoverTestFiles(['tests/**/*.test.ts'], rootDir, ['!tests/nested/**'])).resolves.toHaveLength(4);
+    });
+
     it('returns nothing when no file matches', async () => {
       await expect(discoverTestFiles(['missing/**/*.test.ts'], rootDir)).resolves.toEqual([]);
     });

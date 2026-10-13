@@ -1,6 +1,6 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { glob, type IgnoreLike } from 'glob';
+import { glob, Ignore, type IgnoreLike } from 'glob';
 import { minimatch } from 'minimatch';
 
 /**
@@ -31,12 +31,7 @@ export const DEFAULT_TEST_IGNORE = [
   '**/.yarn/**',
 ];
 
-/**
- * Options for every ignore-pattern match, so discovery, the watchers and
- * project routing agree. Case-sensitive on every platform (glob's own ignore
- * is case-insensitive on macOS and Windows, which would skip a `pods/` test
- * folder there but not on Linux CI), and `dot: true` as glob's ignore is.
- */
+/** Matches ignore patterns as glob's `ignore` does (`dot: true`). */
 const IGNORE_MATCH_OPTIONS = { dot: true } as const;
 
 export async function discoverTestFiles(
@@ -59,24 +54,23 @@ export async function discoverTestFiles(
 }
 
 /**
- * glob's `ignore`, built on matchesTestIgnore() so discovery skips exactly what
- * the watchers and matchesTestFile() skip. Like glob's string patterns, only a
- * pattern ending in `/**` stops the walk descending into a directory.
+ * glob's `ignore`. DEFAULT_TEST_IGNORE is matched case-sensitively on every
+ * platform, as matchesTestIgnore() and the watchers match it; glob's own
+ * ignore is case-insensitive on macOS and Windows, which skipped a `pods/`
+ * test folder there but not on Linux CI. A project's `testIgnore` keeps glob's
+ * own handling (`./` and absolute patterns, the platform's case rule).
  */
 function discoveryIgnore(extraIgnore?: string[]): IgnoreLike {
-  const directoryPatterns = [...DEFAULT_TEST_IGNORE, ...(extraIgnore ?? [])]
-    .map(normalizeGlobPattern)
-    .filter((pattern) => pattern.endsWith('/**'))
-    .map((pattern) => pattern.slice(0, -'/**'.length));
+  const defaults = new Ignore(DEFAULT_TEST_IGNORE, { nocase: false });
+  const project = new Ignore(extraIgnore ?? [], { nocase: GLOB_DEFAULT_NOCASE });
   return {
-    ignored: (entry) => matchesTestIgnore(entry.relativePosix(), extraIgnore),
-    childrenIgnored: (entry) => {
-      const relative = entry.relativePosix();
-      return relative !== ''
-        && directoryPatterns.some((pattern) => minimatch(relative, pattern, IGNORE_MATCH_OPTIONS));
-    },
+    ignored: (entry) => defaults.ignored(entry) || project.ignored(entry),
+    childrenIgnored: (entry) => defaults.childrenIgnored(entry) || project.childrenIgnored(entry),
   };
 }
+
+/** glob's default `nocase`, which its string `ignore` patterns inherit. */
+const GLOB_DEFAULT_NOCASE = process.platform === 'darwin' || process.platform === 'win32';
 
 // ─── Positional test-file arguments ───
 
