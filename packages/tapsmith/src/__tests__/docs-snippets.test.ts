@@ -213,6 +213,7 @@ const API_MISMATCH = new Map<number, string>([
   [2724, 'module has no such export (did you mean …)'],
   [2614, 'module has no such export'],
   [2769, 'no overload matches the call'],
+  [2575, 'no overload takes that many arguments'],
   [2349, 'not callable (a property called as a method)'],
   [6234, 'not callable (a getter called as a method)'],
   [2341, 'private member'],
@@ -462,6 +463,9 @@ describe('docs TypeScript samples match the SDK API', () => {
   it('reports a call no overload of an overloaded method accepts', () => {
     const found = typeCheck(samplesIn('t.md', '```ts\nawait device.restartApp(123)\n```\n'));
     expect(found.map((m) => m.code)).toEqual([2769]);
+    // An argument count between two overloads' arities is TS2575, not TS2554.
+    const gap = '```ts\ndeclare function f(): void\ndeclare function f(a: string, b: string): void\nf("x")\n```\n';
+    expect(typeCheck(samplesIn('t.md', gap)).map((m) => m.code)).toEqual([2575]);
   }, 120_000);
 
   it('types Device annotations in samples that import nothing', () => {
