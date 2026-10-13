@@ -652,10 +652,16 @@ describe('wizardNextSteps() (PILOT-562)', () => {
     expect(steps[1][1]).toBe('npx tapsmith verify');
   });
 
-  it('points a Play-image AVD at HTTPS-capable one before verify (PILOT-711)', () => {
-    const steps = wizardNextSteps('npm i -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd' });
+  it('points a Play-image AVD at HTTPS-capable one before verify when capture is on (PILOT-711)', () => {
+    const steps = wizardNextSteps('npm i -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd', optional: false });
     expect(steps[0][0]).toBe('Install Tapsmith');
     expect(steps[1]).toEqual(['Capture HTTPS', 'npx tapsmith create-avd']);
     expect(steps[2][1]).toBe('npx tapsmith verify');
+  });
+
+  it('lists it last, as an option, when capture is off', () => {
+    const steps = wizardNextSteps(undefined, { label: 'Optional, to capture HTTPS', action: 'npx tapsmith create-avd', optional: true });
+    expect(steps[0][1]).toBe('npx tapsmith verify');
+    expect(steps[steps.length - 1]).toEqual(['Optional, to capture HTTPS', 'npx tapsmith create-avd']);
   });
 });

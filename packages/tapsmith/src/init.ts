@@ -950,16 +950,19 @@ export function testsOutsideGeneratedMatchWarning(files: string[]): string | und
  */
 export function wizardNextSteps(
   installStep: string | undefined,
-  captureStep?: { label: string; action: string },
+  captureStep?: { label: string; action: string; optional: boolean },
 ): Array<[string, string]> {
+  // A Play-image AVD (PILOT-711): the AVD to switch to — before the first
+  // run when capture is on, else last, as an option.
+  const capture = captureStep ? [[captureStep.label, captureStep.action] as [string, string]] : [];
   return [
     ...(installStep ? [['Install Tapsmith', installStep] as [string, string]] : []),
-    // A Play-image AVD: the AVD to switch to before the first run (PILOT-711).
-    ...(captureStep ? [[captureStep.label, captureStep.action] as [string, string]] : []),
+    ...(captureStep?.optional ? [] : capture),
     ['Verify your setup', 'npx tapsmith verify'],
     ['Run your tests', 'npx tapsmith test'],
     ['List devices', 'npx tapsmith list-devices'],
     ['Health check', 'npx tapsmith doctor'],
+    ...(captureStep?.optional ? capture : []),
   ];
 }
 

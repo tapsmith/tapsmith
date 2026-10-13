@@ -196,7 +196,7 @@ export function captureAvdNextStep(
   avd: string | undefined,
   avds: AvdImageInfo[],
   captureEnabled: boolean,
-): { label: string; action: string } | undefined {
+): { label: string; action: string; optional: boolean } | undefined {
   const info = avd === undefined ? undefined : avds.find((a) => a.name === avd);
   if (avdCaptureSupport(info) !== 'play-image') return undefined;
   const pick = pickCaptureAvd(avds, info?.apiLevel);
@@ -205,7 +205,10 @@ export function captureAvdNextStep(
   // new top-level `avd` would be overridden.
   const trace = captureEnabled ? '' : ", and add trace: { mode: 'retain-on-failure' }";
   const setAvd = `change avd: '${avd}' to '${pick.name}' in tapsmith.config.ts${trace}`;
-  return { label: 'Capture HTTPS', action: pick.command ? `${pick.command}, then ${setAvd}` : setAvd };
+  // Without capture the step is an option, not part of the setup: callers
+  // list it last, and the label says so.
+  const label = captureEnabled ? 'Capture HTTPS' : 'Optional, to capture HTTPS';
+  return { label, action: pick.command ? `${pick.command}, then ${setAvd}` : setAvd, optional: !captureEnabled };
 }
 
 /**

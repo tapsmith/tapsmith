@@ -764,13 +764,6 @@ pub async fn install_ca_cert(
     result
 }
 
-/// Compose an actionable hint for when `adb root` is unavailable.
-///
-/// On emulators this almost always means a production system image — in
-/// practice a Google Play (`google_apis_playstore`) AVD, since Google APIs
-/// and AOSP emulator images are rootable `userdebug` builds. Recreating the
-/// AVD is the real fix there; a manual user-store CA install only helps apps
-/// that opt in via `network_security_config.xml`.
 /// `install_ca_cert` failed because adbd cannot run as root — a production
 /// build (a Google Play emulator image, or a physical device) — so nothing can
 /// put the CA in the system trust store, on this or any later attempt. Unlike
@@ -801,6 +794,12 @@ impl AdbRootUnavailable {
     }
 }
 
+/// Classify a device whose `adb root` is unavailable, with an actionable hint.
+///
+/// On emulators this almost always means a production system image — in
+/// practice a Google Play (`google_apis_playstore`) AVD, since Google APIs
+/// and AOSP emulator images are rootable `userdebug` builds. Recreating the
+/// AVD is the real fix there.
 async fn adb_root_unavailable(serial: &str) -> AdbRootUnavailable {
     // Serial prefix identifies locally-launched emulators without any adb
     // roundtrips; the getprop probe stays as a fallback for emulators

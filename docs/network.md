@@ -836,7 +836,7 @@ A few HTTP/2 specifics to be aware of:
 - Captured HTTP/2 header names are lowercase (that's how HTTP/2 sends them on the wire).
 - Request/response **bodies in the trace are capped** (~1 MB), but the full stream is always forwarded to the app.
 
-Hosts listed in `networkPassthroughHosts`, and HTTP/2-capable hosts that dynamically fall back after a MITM certificate rejection, are tunneled end-to-end without decryption (see below). A tunneled connection appears in the Network tab as a single `CONNECT` row with a `passthrough` badge; the requests inside are encrypted end-to-end and invisible to the proxy, so `device.route()` / `waitForRequest` / `waitForResponse` can never match them.
+Hosts listed in `networkPassthroughHosts`, HTTP/2-capable hosts that dynamically fall back after a MITM certificate rejection, and all HTTPS on an Android emulator that cannot trust Tapsmith's CA (a Google Play image — see [Android emulator image requirements](#android-emulator-image-requirements)) are tunneled end-to-end without decryption (see below). A tunneled connection appears in the Network tab as a single `CONNECT` row with a `passthrough` badge; the requests inside are encrypted end-to-end and invisible to the proxy, so `device.route()` / `waitForRequest` / `waitForResponse` can never match them.
 
 Force passthrough for specific hosts with `networkPassthroughHosts` -- useful when an app uses **certificate pinning** for a host, which MITM interception would otherwise break:
 

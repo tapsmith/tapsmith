@@ -59,7 +59,7 @@ export interface InitPlan {
   networkCapture: boolean;
   warnings: string[];
   /** Next steps entry for a Play-image AVD (PILOT-711), from `captureAvdNextStep`. */
-  captureAvdStep?: { label: string; action: string };
+  captureAvdStep?: { label: string; action: string; optional: boolean };
 }
 
 export interface InitResult {
@@ -559,12 +559,14 @@ export function executeInitPlan(
   const captureStep = plan.captureAvdStep;
   const nextSteps = [
     ...(missingTapsmith ? [`Install Tapsmith in this project: ${missingTapsmith.display}`] : []),
-    // A Play-image AVD: the AVD to switch to before the first run (PILOT-711).
-    ...(captureStep ? [`${captureStep.label}: ${captureStep.action}`] : []),
+    // A Play-image AVD: the AVD to switch to before the first run (PILOT-711),
+    // or, when capture is off, an option listed last.
+    ...(captureStep && !captureStep.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
     // --json is for agents: a person reading the plain output gets the plain command (PILOT-562).
     `Verify the setup end-to-end: npx tapsmith verify${args.json ? ' --json' : ''}`,
     'Run tests: npx tapsmith test',
     'Register the MCP server for richer agent tooling: claude mcp add tapsmith -- npx tapsmith mcp-server',
+    ...(captureStep?.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
   ];
 
   return { configPath, filesCreated, warnings, nextSteps };
