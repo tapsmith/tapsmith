@@ -35,8 +35,21 @@ describe('missingAndroidAgentAdvice()', () => {
   it('names npm and optional-dependency omission for an npm project', async () => {
     const advice = await missingAndroidAgentAdvice(dir);
     expect(advice.install).toBe('npm i -D @tapsmith/agent-android');
+    expect(advice.where).toBeUndefined();
     expect(advice.why).toContain('optional dependenc');
     expect(advice.why).not.toContain('pnpm');
+  });
+
+  // A config in a subfolder (e2e/) with tapsmith installed at the app root:
+  // the add belongs in the project with the package.json, not a new one here.
+  it('installs into the nearest project above a config folder without package.json', async () => {
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+    const e2e = path.join(dir, 'e2e');
+    fs.mkdirSync(e2e);
+    const advice = await missingAndroidAgentAdvice(e2e);
+    expect(advice.install).toBe('pnpm add -D @tapsmith/agent-android');
+    expect(advice.where).toBe(dir);
+    expect(await missingAndroidAgentError(DAEMON_MESSAGE, {}, e2e)).toContain(`Install it with \`pnpm add -D @tapsmith/agent-android\` in ${dir}`);
   });
 
   it('follows yarn', async () => {

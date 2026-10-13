@@ -14,7 +14,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { findDaemonBin } from './daemon-bin.js';
-import { findAgentApk, findAgentTestApk, missingAndroidAgentAdvice } from './agent-resolve.js';
+import { findAgentApk, findAgentTestApk, missingAndroidAgentAdvice, type AndroidAgentAdvice } from './agent-resolve.js';
 import { formatJson, jsonError, stripAnsi, type JsonCheck } from './cli-json.js';
 import { avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
 import { parseSimctlDevicesJson, tryExec } from './env-scan.js';
@@ -307,6 +307,11 @@ function checkConnectedDevices(report: Reporter): void {
  * the reason and the project's own install command (PILOT-709: pnpm 11+
  * skipped the package, and the old advice was `npm install` regardless).
  */
+/** The install command, and where to run it when that is not here. */
+function agentInstallFix(advice: AndroidAgentAdvice): string {
+  return advice.where ? `${advice.install} (in ${advice.where})` : advice.install;
+}
+
 async function checkAgentApks(report: Reporter, projectDir: string): Promise<void> {
   try {
     const apk = findAgentApk();
@@ -317,9 +322,9 @@ async function checkAgentApks(report: Reporter, projectDir: string): Promise<voi
     }
     const advice = await missingAndroidAgentAdvice(projectDir);
     if (apk || testApk) {
-      warn(report, 'android-agent', 'Android agent incomplete — one APK found but not both', advice.install);
+      warn(report, 'android-agent', 'Android agent incomplete — one APK found but not both', agentInstallFix(advice));
     } else {
-      warn(report, 'android-agent', `Android agent not found — ${advice.why}`, advice.install);
+      warn(report, 'android-agent', `Android agent not found — ${advice.why}`, agentInstallFix(advice));
     }
   } catch {
     warn(report, 'android-agent', 'Could not locate Android agent');

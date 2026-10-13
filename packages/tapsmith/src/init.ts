@@ -646,7 +646,7 @@ export async function warnIfAndroidAgentMissing(cwd: string): Promise<void> {
   if (androidAgentInstalledFor(cwd) !== false) return;
   const advice = await missingAndroidAgentAdvice(cwd);
   console.log(`  ${YELLOW}⚠${RESET} Android agent not found — ${advice.why}`);
-  console.log(dim(`    Run: ${advice.install}`));
+  console.log(dim(`    Run: ${advice.install}${advice.where ? ` (in ${advice.where})` : ''}`));
 }
 
 /**

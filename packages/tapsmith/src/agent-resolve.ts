@@ -54,6 +54,24 @@ export interface AndroidAgentAdvice {
   why: string;
   /** e.g. `pnpm add -D @tapsmith/agent-android`. */
   install: string;
+  /**
+   * Where to run `install`, when that is not the directory asked about: the
+   * nearest project above a config folder that has no package.json.
+   */
+  where?: string;
+}
+
+/** `install`, and where to run it when that is somewhere else. */
+function formatAgentInstall(advice: AndroidAgentAdvice): string {
+  return advice.where ? `\`${advice.install}\` in ${advice.where}` : `\`${advice.install}\``;
+}
+
+/** `dir`, or the nearest directory above it with a package.json; `dir` when there is none. */
+function nearestPackageDir(dir: string): string {
+  for (let current = dir; ; current = path.dirname(current)) {
+    if (fs.existsSync(path.join(current, 'package.json'))) return current;
+    if (path.dirname(current) === current) return dir;
+  }
 }
 
 /**
@@ -65,14 +83,17 @@ export interface AndroidAgentAdvice {
 export async function missingAndroidAgentAdvice(dir: string): Promise<AndroidAgentAdvice> {
   // Loaded only when needed: config.ts pulls in the package-manager detector lazily too.
   const { devDependencyInstallCommand, projectPackageManager } = await import('./config.js');
+  // A config folder without its own package.json (e2e/) belongs to the
+  // project above it: that is where tapsmith, and so the agent, is installed.
+  const project = nearestPackageDir(dir);
   const [manager, install] = await Promise.all([
-    projectPackageManager(dir),
-    devDependencyInstallCommand(dir, [NPM_PKG], 'the Android agent'),
+    projectPackageManager(project),
+    devDependencyInstallCommand(project, [NPM_PKG], 'the Android agent'),
   ]);
   const why = manager.startsWith('pnpm')
     ? `${NPM_PKG}, the optional dependency of tapsmith that ships the agent APKs, is not installed: pnpm 11 and later skip it with tapsmith 0.6.0 and earlier, reading its name as Android-only, as does any install that omits optional dependencies`
     : `${NPM_PKG}, the optional dependency of tapsmith that ships the agent APKs, is not installed: an install that omits optional dependencies (--omit=optional, --no-optional) leaves it out`;
-  return { why, install: install.display };
+  return { why, install: install.display, ...(project !== dir ? { where: project } : {}) };
 }
 
 // The daemon's AGENT_NOT_INSTALLED error (grpc_server.rs): the device has no
@@ -93,7 +114,7 @@ export async function missingAndroidAgentError(
   if ((artifacts.agentApkPath && artifacts.agentTestApkPath) || !AGENT_NOT_INSTALLED.test(message)) return undefined;
   const advice = await missingAndroidAgentAdvice(dir);
   return `Tapsmith's Android agent is not installed on the device, and there is no agent APK to install: ${advice.why}. `
-    + `Install it with \`${advice.install}\`, or set agentApk and agentTestApk in your Tapsmith config to your own build.`;
+    + `Install it with ${formatAgentInstall(advice)}, or set agentApk and agentTestApk in your Tapsmith config to your own build.`;
 }
 
 /**
