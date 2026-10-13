@@ -302,16 +302,16 @@ function checkConnectedDevices(report: Reporter): void {
   else warn(report, 'android-devices', summary.label, summary.fix, summary.detail);
 }
 
-/**
- * The Android agent APKs the runner would hand the daemon. Missing ones get
- * the reason and the project's own install command (PILOT-709: pnpm 11+
- * skipped the package, and the old advice was `npm install` regardless).
- */
 /** The install command, and where to run it when that is not here. */
 function agentInstallFix(advice: AndroidAgentAdvice): string {
   return advice.where ? `${advice.install} (in ${advice.where})` : advice.install;
 }
 
+/**
+ * The Android agent APKs the runner would hand the daemon. Missing ones get
+ * the reason and the project's own install command (PILOT-709: pnpm 11+
+ * skipped the package, and the old advice was `npm install` regardless).
+ */
 async function checkAgentApks(report: Reporter, projectDir: string): Promise<void> {
   try {
     const apk = findAgentApk();
