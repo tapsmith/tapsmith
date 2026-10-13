@@ -64,6 +64,8 @@ function simulatedScreen(opts: {
   listRowUnmatched?: boolean;
   /** The list's bottom edge (default the bottom of the screen). */
   listBottom?: number;
+  /** Extra dump nodes beside the list (navigation bars, tab bars). */
+  extraNodes?: string;
   /** The list's top edge after the first swipe (a header that expands as the list scrolls back). */
   listTopAfterSwipe?: number;
   /** After the first swipe: reads [skip, skip+count) see the row disabled. */
@@ -158,7 +160,7 @@ function simulatedScreen(opts: {
     const list = `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,${listTop}][${SCREEN_W},${opts.listBottom ?? SCREEN_H}]">${rowNode}</XCUIElementTypeScrollView>`;
     return {
       requestId: '1',
-      hierarchyXml: `<?xml version="1.0"?><hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][${SCREEN_W},${SCREEN_H}]">${list}</XCUIElementTypeApplication></hierarchy>`,
+      hierarchyXml: `<?xml version="1.0"?><hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][${SCREEN_W},${SCREEN_H}]">${opts.extraNodes ?? ''}${list}</XCUIElementTypeApplication></hierarchy>`,
       errorMessage: '',
     };
   });
@@ -299,6 +301,35 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     await withFakeClock(60_000, () => new ElementHandle(sim.client, _text('Item 1'), 30_000).tap());
     expect(sim.tap).toHaveBeenCalledTimes(1);
     expect(sim.state.tappedWhileDisabled).toBe(false);
+  });
+
+  it('does not take a carousel around the element for its list (review R10-F2)', async () => {
+    // A 40pt button in a 280pt horizontal strip (100–380): too short to be the
+    // list the screen swipe scrolls, so the band is the screen's.
+    const { client, tap, state } = simulatedScreen({ top: 2000, rowH: 40, listTop: 100, listBottom: 380 });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Get'), 30_000).tap());
+    expect(state.top).toBeGreaterThan(380);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a row clear of a navigation bar the list runs under (review R10-F3)', async () => {
+    // The list's frame starts at the screen's top, under a 200pt translucent
+    // navigation bar (large title + search).
+    const navBar = '<XCUIElementTypeNavigationBar type="XCUIElementTypeNavigationBar" bounds="[0,0][390,200]"/>';
+    const { client, tap, state } = simulatedScreen({ top: -400, listTop: 0, extraNodes: navBar });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBeGreaterThanOrEqual(200);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('after the band moves on an under-travel step, keeps judging against the fresh band (review R10-F1)', async () => {
+    // The band read at the start (list from 60) moves to 300 once the list
+    // scrolls; the row can rest no lower than 320 — inside the fresh band, but
+    // only after the step that hits the list end has been judged against it.
+    const { client, tap, state } = simulatedScreen({ top: -400, listTop: 60, listTopAfterSwipe: 300, maxTop: 320 });
+    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBe(320);
+    expect(tap).toHaveBeenCalledTimes(1);
   });
 
   it('pulls a list only a little past its top when the first row rests near the top of the screen (review R7-F1)', async () => {

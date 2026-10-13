@@ -275,7 +275,7 @@ Element {"text":"Submit"} was not found after waiting 30000ms
 ### Element is off-screen and could not be scrolled into view
 
 ```
-Element getByText("Item 1", { exact: true }) is off-screen and tap() could not scroll it into view: a "down" screen swipe did not move it (…). Scroll it into view first (with scrollIntoView(), or scroll() on the list that holds it), then tap() it.
+Element getByText("Item 1", { exact: true }) is off-screen and tap() could not scroll it into view: a "down" screen swipe did not move it (…). Scroll it into view first (with scrollIntoView({ direction: "down" }), or scroll() on the list that holds it), then tap() it.
 ```
 
 **What happened:** the element is in the hierarchy but entirely off-screen (iOS reports such elements). The tap tried to scroll it into view with vertical screen swipes and failed: a swipe did not move it, the swipes stopped bringing it closer, or the element is off to the side, which the tap does not scroll to. It then waited out the timeout in case the element came on screen by itself.

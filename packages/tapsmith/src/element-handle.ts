@@ -644,6 +644,8 @@ const AUTO_SCROLL_ENTRY = 0.1;
 const AUTO_SCROLL_MAX_NUDGE = 0.1;
 /** Budget for the hierarchy read that measures the screen. */
 const SCREEN_SIZE_READ_MS = 5000;
+/** The least share of the screen a scroll view must span to count as the element's list. */
+const AUTO_SCROLL_MIN_LIST_FRACTION = 0.5;
 /** Re-reads of the band, per scroll, before an element is called in view. */
 const AUTO_SCROLL_MAX_BAND_REREADS = 2;
 /** Swipes in a row that may fail to bring the element closer to the middle. */
@@ -3076,8 +3078,9 @@ export class ElementHandle {
    * even where its list clips it (behind the header above the list), so the
    * band must be the list's, or the scroll stops on a row that cannot be
    * touched. The list is the nearest scroll view around the element's node
-   * that is clearly taller than the element (a carousel row around a cell is
-   * not the list that scrolls vertically). `undefined` when the dump fails or
+   * that spans at least half the screen (a carousel around a cell is not the
+   * list that scrolls vertically). Navigation bars at the top and tab bars or
+   * toolbars at the bottom narrow the band too. `undefined` when the dump fails or
    * carries no usable frame; a user stop propagates.
    */
   private async _scrollViewport(
@@ -3128,15 +3131,42 @@ export class ElementHandle {
       ancestry = visit(root);
       if (ancestry) break;
     }
+    // Navigation bars at the top and tab bars or toolbars at the bottom cover
+    // the list (a list under a translucent bar starts at the screen's top).
+    const barTop = { value: band.top };
+    const barBottom = { value: band.bottom };
+    const screenMid = (screen.top + screen.bottom) / 2;
+    const findBars = (nodes: HierarchyNode[]): void => {
+      for (const node of nodes) {
+        const type = node.attributes.get('type') ?? node.tagName;
+        const b = hierarchyBounds(node);
+        if (b && b.bottom > b.top) {
+          if (type === 'XCUIElementTypeNavigationBar' && b.top < screenMid) barTop.value = Math.max(barTop.value, b.bottom);
+          if ((type === 'XCUIElementTypeTabBar' || type === 'XCUIElementTypeToolbar') && b.bottom > screenMid) {
+            barBottom.value = Math.min(barBottom.value, b.top);
+          }
+        }
+        findBars(node.children);
+      }
+    };
+    findBars(roots);
+    const clear = (top: number, bottom: number): ScrollViewport => {
+      const t = Math.max(top, barTop.value);
+      const b = Math.min(bottom, barBottom.value);
+      return b - t >= height * 1.5 ? { top: t, bottom: b, screenHeight: band.screenHeight } : { top, bottom, screenHeight: band.screenHeight };
+    };
     for (const node of (ancestry ?? []).slice(0, -1).reverse()) {
       if (!isScrollContainer(node)) continue;
       const b = hierarchyBounds(node);
-      if (!b || b.bottom - b.top < height * 1.5) continue;
+      // A vertical list is a large part of the screen; a shorter scroll view
+      // around the element is a carousel or a nested strip, not the list the
+      // screen swipe scrolls.
+      if (!b || b.bottom - b.top < band.screenHeight * AUTO_SCROLL_MIN_LIST_FRACTION) continue;
       const top = Math.max(band.top, b.top);
       const bottom = Math.min(band.bottom, b.bottom);
-      if (bottom - top >= height * 1.5) return { top, bottom, screenHeight: band.screenHeight };
+      if (bottom - top >= height * 1.5) return clear(top, bottom);
     }
-    return band;
+    return clear(band.top, band.bottom);
   }
 
   /**
@@ -3299,9 +3329,15 @@ export class ElementHandle {
         // carousel row further down, off to the side.
         if (inBand(bounds)) throw sideError(bounds);
       } else if (shown && moved > 0) {
-        if (restsSafely(bounds) && await done(next)) return true;
-        // Under-travel: the list hit its end during this swipe.
-        if (moved < (distance * viewport.screenHeight) / 2 && await done(next)) return true;
+        // Resting safely, or under-travel: the list hit its end this swipe.
+        if (restsSafely(bounds) || moved < (distance * viewport.screenHeight) / 2) {
+          if (await done(next)) return true;
+          // The band moved: judge everything against the fresh one from here.
+          shown = next.visible && inBand(bounds);
+          best = Infinity;
+          stalls = 0;
+          continue;
+        }
       }
       const away = Math.abs(travelNeeded(bounds));
       if (away < best - 1) {
