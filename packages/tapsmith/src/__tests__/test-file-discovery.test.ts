@@ -120,6 +120,42 @@ describe('test-file-discovery helpers', () => {
       expect(ignored(outputDir)).toBe(true);
       expect(ignored(path.join(rootDir, 'e2e', 'login.test.ts'))).toBe(false);
       expect(ignored(path.join(tempDir, 'elsewhere', 'node_modules'))).toBe(false);
+      expect(ignored(tempDir)).toBe(false);
+    });
+
+    it('in watch mode, keeps chokidar out of native trees when rootDir itself holds a test file', async () => {
+      const touch = (rel: string): void => {
+        const file = path.join(rootDir, rel);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, '');
+      };
+      touch('top.test.ts');
+      touch('node_modules/react-native/index.js');
+      touch('ios/Pods/RCT-Folly/folly/Format.h');
+      touch('android/app/build/outputs/apk/app.apk');
+      const outputDir = path.join(rootDir, 'tapsmith-results');
+      touch('tapsmith-results/trace.zip');
+      const knownFile = path.join(rootDir, 'top.test.ts');
+      const byName = new Set([knownFile]);
+
+      // What watch.ts watches: the known files and their directories.
+      const watcher = chokidarWatch([knownFile, rootDir], {
+        ignoreInitial: true,
+        ignored: (candidate) => isIgnoredWatchModePath(candidate.toString(), rootDir, outputDir, byName),
+      });
+      try {
+        await new Promise<void>((resolve, reject) => {
+          watcher.once('ready', resolve);
+          watcher.once('error', reject);
+        });
+        const watchedDirs = Object.keys(watcher.getWatched())
+          .map((dir) => relativeTestPath(dir, rootDir))
+          .filter((rel) => !rel.startsWith('..'))
+          .sort();
+        expect(watchedDirs).toEqual(['', 'android', 'android/app', 'ios']);
+      } finally {
+        await watcher.close();
+      }
     });
 
     it('keeps chokidar out of an Expo project\'s native trees, including symlinks into node_modules', async () => {

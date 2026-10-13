@@ -11,8 +11,8 @@ import { minimatch } from 'minimatch';
  * minutes after it said it was ready (PILOT-713). `ios/Pods` also symlinks
  * headers back into `node_modules`, which a watcher would otherwise follow.
  *
- * Build directories are anchored under `ios/` and `android/`, so a test
- * directory of the project's own named `build` is still searched.
+ * Build directories are anchored under `ios/` and `android/`, so a `build`
+ * directory elsewhere (one holding tests, say) is still searched.
  */
 export const DEFAULT_TEST_IGNORE = [
   '**/node_modules/**',
