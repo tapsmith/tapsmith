@@ -632,11 +632,15 @@ const AUTO_SCROLL_SPEED = 1000;
  * The safe region, as fractions of the screen height: an element resting
  * fully inside it is clear of where navigation bars, headers and tab bars sit.
  */
-const AUTO_SCROLL_SAFE_TOP = 0.2;
+const AUTO_SCROLL_SAFE_TOP = 0.15;
 const AUTO_SCROLL_SAFE_BOTTOM = 0.85;
 /** Where the near edge of an element is aimed, a margin inside the safe region. */
-const AUTO_SCROLL_AIM_TOP = 0.3;
-const AUTO_SCROLL_AIM_BOTTOM = 0.75;
+const AUTO_SCROLL_AIM_TOP = 0.2;
+const AUTO_SCROLL_AIM_BOTTOM = 0.8;
+/** How far inside the screen edge an off-screen element is first brought. */
+const AUTO_SCROLL_ENTRY = 0.1;
+/** The longest swipe once the element is on screen. */
+const AUTO_SCROLL_MAX_NUDGE = 0.1;
 /** Budget for the hierarchy read that measures the screen. */
 const SCREEN_SIZE_READ_MS = 5000;
 /** Swipes in a row that may fail to bring the element closer to the middle. */
@@ -3043,11 +3047,12 @@ export class ElementHandle {
    *
    * Each step is a slow vertical screen drag towards the element, then the
    * settle loop. Knowing the screen height (`extent`, in the units of the
-   * element's bounds), every swipe aims the element just inside the safe
-   * region (clear of where headers and tab bars sit) — its near edge, so the
-   * swipes are no longer than they need to be — and it stops once the element
-   * rests fully inside, so it does not come to rest as a sliver at an edge; a
-   * fling past it is corrected from the other side. A swipe that moves the element less than
+   * element's bounds), it first brings an off-screen element just inside the
+   * screen edge, then nudges it (a tenth of the screen at a time) until it
+   * rests fully inside the safe region, clear of where headers and tab bars
+   * sit, so it does not come to rest as a sliver at an edge; a fling past it
+   * is corrected from the other side. Short steps keep a list end that cuts
+   * a step off from turning into a long pull past it. A swipe that moves the element less than
    * half as far as it should have means the list has reached its end: it
    * stops there if the element is visible, rather than dragging the list past
    * its end again (a pull-to-refresh, or a sheet dismissed).
@@ -3094,6 +3099,7 @@ export class ElementHandle {
     };
     let best = Infinity;
     let stalls = 0;
+    let onScreen = false;
     for (let swipes = 0; ; swipes++) {
       if (swipes >= AUTO_SCROLL_MAX_SWIPES) {
         throw this._offScreenError(action, `it was still not in view after ${swipes} scroll(s)`, bounds);
@@ -3103,7 +3109,19 @@ export class ElementHandle {
       }
       // Positive: the element has to move up (swipe up); negative: down.
       const offset = travelNeeded(bounds);
-      const distance = Math.min(AUTO_SCROLL_MAX_DISTANCE, Math.max(AUTO_SCROLL_MIN_DISTANCE, Math.abs(offset) / extent));
+      let travel = Math.abs(offset);
+      if (bounds.bottom - bounds.top < extent / 2) {
+        // Steps short enough that a list end cut off by one costs a small pull
+        // past it (rubber band, not a pull-to-refresh): off screen, only as far
+        // as just inside the edge; on screen, a nudge at a time. The
+        // under-travel check below then stops at the end.
+        travel = onScreen
+          ? Math.min(travel, extent * AUTO_SCROLL_MAX_NUDGE)
+          : Math.min(travel, Math.max(0, offset < 0
+            ? extent * AUTO_SCROLL_ENTRY - bounds.top
+            : bounds.bottom - extent * (1 - AUTO_SCROLL_ENTRY)));
+      }
+      const distance = Math.min(AUTO_SCROLL_MAX_DISTANCE, Math.max(AUTO_SCROLL_MIN_DISTANCE, travel / extent));
       const direction = offset > 0 ? 'up' : 'down';
       const res = await this._client.swipe(direction, { speed: AUTO_SCROLL_SPEED, distance });
       if (!res.success) {
@@ -3128,6 +3146,7 @@ export class ElementHandle {
         );
       }
       bounds = nb;
+      onScreen = next.visible;
       if (!next.visible) {
         // Scrolled level with the screen and still not on it: a cell of a
         // carousel row further down, off to the side.

@@ -211,16 +211,14 @@ describe('tap() scrolls an off-screen element into view (PILOT-716)', () => {
     expect(sim.state.tappedWhileMoving).toBe(false);
   });
 
-  it('corrects a fling past the safe region from the other side', async () => {
-    // Each drag travels 2.5× its distance: the first carries the row from
-    // below the screen past the safe region to the top band.
-    const { client, swipe, tap, state } = simulatedScreen({ top: 850, travel: 2.5 });
-    await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 60_000).tap());
-
-    const dirs = swipe.mock.calls.map(([dir]) => dir);
-    expect(dirs.slice(0, 2)).toEqual(['up', 'down']);
-    expect((swipe.mock.calls[1][1] as { distance: number }).distance).toBeLessThan(0.5);
-    expect(inSafeRegion(state.top)).toBe(true);
+  it('pulls a list only a little past its top when the first row rests near the top of the screen (review R7-F1)', async () => {
+    // No header: row 1 rests at top 55 (inside the top band) and was just
+    // scrolled past. Aiming straight for the safe region would drag the list
+    // ~100pt+ past its top; short steps keep it to at most a nudge.
+    const { client, tap, state } = simulatedScreen({ top: -60, maxTop: 55 });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(state.top).toBe(55);
+    expect(state.overpull).toBeLessThanOrEqual(0.1 * SCREEN_H + 1);
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
