@@ -1,6 +1,6 @@
 {
   "name": "@tapsmith/react-native",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "In-app reset hooks for Tapsmith — sub-second, acknowledged app resets in React Native / Expo test builds",
   "type": "module",
   "main": "dist/index.js",

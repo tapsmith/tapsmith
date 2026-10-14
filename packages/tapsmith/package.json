@@ -1,6 +1,6 @@
 {
   "name": "tapsmith",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Mobile app testing framework — TypeScript SDK and test runner",
   "type": "module",
   "main": "dist/index.js",
