@@ -2217,25 +2217,27 @@ export class ElementHandle {
     options?: { offScreenOk?: (el: ElementInfo) => boolean },
   ): Promise<ActionResponse> {
     const deadline = Date.now() + remainingMs;
+    const refusedAtDeadline = (res: ActionResponse): ActionResponse => ({
+      ...res,
+      // Its own type: the message embeds the locator, whose text must not be
+      // read as the agent's (setChecked() looks for "stale" in it).
+      errorType: NOT_HITTABLE_ERROR_TYPE,
+      errorMessage:
+        `Element ${this._describe()} was still not hittable by the end of the ${this._timeoutMs}ms timeout: ` +
+        'it may be off-screen, or clipped by its list (for example behind a header). ' +
+        scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)'),
+    });
     let res = await dispatch(first);
     for (;;) {
       // timeout 0 keeps its no-wait behaviour: the agent's refusal as it is.
       if (res.success || remainingMs <= 0 || !isNotHittableRefusal(res.errorMessage)) return res;
-      if (Date.now() >= deadline) {
-        return {
-          ...res,
-          // Its own type: the message embeds the locator, whose text must not
-          // be read as the agent's (setChecked() looks for "stale" in it).
-          errorType: NOT_HITTABLE_ERROR_TYPE,
-          errorMessage:
-            `Element ${this._describe()} was still not hittable by the end of the ${this._timeoutMs}ms timeout: ` +
-            'it may be off-screen, or clipped by its list (for example behind a header). ' +
-            scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)'),
-        };
-      }
+      if (Date.now() >= deadline) return refusedAtDeadline(res);
       // Each refusal costs the daemon an error screenshot: retry at a slower
       // pace than the read-only auto-wait.
       await sleep(Math.min(NOT_HITTABLE_RETRY_MS, Math.max(0, deadline - Date.now())), this._client._getAbortSignal?.());
+      // No retry is started at the deadline: its one read could misreport the
+      // element, and its touch would land after the timeout.
+      if (Date.now() >= deadline) return refusedAtDeadline(res);
       const { element } = await this._waitForEnabled(action, { ...options, deadline });
       res = await dispatch(await this._actionTarget(element), element);
     }

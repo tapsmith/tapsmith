@@ -187,7 +187,7 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     const m = client(() => [row({ bounds: onScreen })]);
     m.tap.mockImplementation(async () => refusal());
     const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
-    expect(m.tap.mock.calls.length).toBeGreaterThan(3);
+    expect(m.tap.mock.calls.length).toBe(3); // at 0, 1 and 2 s — none started at the deadline
     expect(err.elapsedMs).toBeGreaterThanOrEqual(3000);
     expect(err.message).toBe(
       'Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 3000ms timeout: it may be off-screen, ' +
@@ -243,7 +243,10 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     m.findElements.mockImplementation(async () => ({ requestId: '1', elements: [row({ bounds: onScreen, checked: state })], errorMessage: '' }));
     const start = Date.now();
     m.tap.mockImplementation(async () => {
-      if (Date.now() - start < 2900) return refusal();
+      if (Date.now() - start < 1900) return refusal();
+      // The last retry (at about 2 s) is slow to land: 1.1 s, so the tap
+      // completes just after the 3 s deadline.
+      await new Promise((r) => setTimeout(r, 1100));
       state = !state;
       return ok();
     });

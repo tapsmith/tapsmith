@@ -255,6 +255,8 @@ See [Environment Variables for Debugging](#environment-variables-for-debugging) 
 Element {"text":"Submit"} was not found after waiting 30000ms
 ```
 
+For a tap (`tap()`, `doubleTap()`, `longPress()`, `setChecked()`), the message goes on: `It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() …`.
+
 **What happened:** Tapsmith polled the UI hierarchy for 30 seconds and never found an element matching your locator.
 
 **Common causes and fixes:**
