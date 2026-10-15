@@ -630,19 +630,23 @@ function offScreenHint(action: TapFamilyAction): string {
     scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)');
 }
 
-/**
- * The iOS agent's refusals of a touch on an element it cannot hit at all: off
- * the screen, or clipped by its list (behind a header) — iOS still calls a
- * clipped row "visible", so the auto-wait cannot see it coming. tap() words
- * it with the reason; doubleTap() and longPress() without.
- */
 /** How often a refused tap-family dispatch is retried. */
 const NOT_HITTABLE_RETRY_MS = 1000;
 /** The error type of the advice a still-refused dispatch ends with. */
 const NOT_HITTABLE_ERROR_TYPE = 'ELEMENT_NOT_HITTABLE';
 
+/**
+ * The agents' refusals of a touch on an element they cannot hit at all: off
+ * the screen, or clipped by its list (behind a header) — iOS still calls a
+ * clipped row "visible", so the auto-wait cannot see it coming. The iOS
+ * agent words tap()'s refusal with the reason, doubleTap()'s and
+ * longPress()'s without.
+ */
 function isNotHittableRefusal(message: string | undefined): boolean {
-  return message === 'Element is not hittable (may be off-screen or hidden)' || message === 'Element is not hittable';
+  return message === 'Element is not hittable (may be off-screen or hidden)' || message === 'Element is not hittable' ||
+    // Android's agent says it after waiting out the budget for a fully
+    // clipped node (one its list hides): the same advice applies.
+    !!message?.includes('is not visible on screen (scrolled off, hidden, or fully clipped)');
 }
 
 /**
@@ -2498,19 +2502,19 @@ export class ElementHandle {
       // cached id we re-resolve, but DON'T tap if the element is already in the
       // desired state: the change that staled it may have set it, and tapping
       // would toggle it the wrong way (cf. _dispatchTargeted, which re-taps).
-      let tapRes: ActionResponse;
-      try {
-        // A refused tap touched nothing; before trying again, re-read the
-        // switch — the app may have set it meanwhile, and tapping would
-        // toggle it the wrong way.
-        tapRes = await this._untilHittable('setChecked', remainingMs, target, async (to, fresh) =>
-          fresh?.checked === checked ? synthetic(true) : tapByTarget(to),
-        { offScreenOk: (el) => el.checked === checked });
-      } catch (err) {
+      // A refused tap touched nothing; before trying again, the retry re-reads
+      // the switch — the app may have set it meanwhile, and tapping would
+      // toggle it the wrong way. Only the tap's own stale error is caught here:
+      // what the retry's auto-wait throws (not found, disabled, off-screen)
+      // quotes the locator and must propagate as itself.
+      const tapRes0 = (to: ActionTarget): Promise<ActionResponse> => tapByTarget(to).catch((err: unknown) => {
         const msg = err instanceof Error ? err.message : String(err);
         if (!isStaleElementError(msg)) throw err;
-        tapRes = synthetic(false, msg);
-      }
+        return synthetic(false, msg);
+      });
+      let tapRes = await this._untilHittable('setChecked', remainingMs, target, async (to, fresh) =>
+        fresh?.checked === checked ? synthetic(true) : tapRes0(to),
+      { offScreenOk: (el) => el.checked === checked });
       // A covered target (PILOT-223) is never stale, whatever its cover's
       // label says (see _dispatchTargeted).
       if (

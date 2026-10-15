@@ -308,6 +308,28 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     expect(m.tap.mock.calls.map((c) => (c as unknown[])[2])).toEqual(['el-old', 'el-new']);
   });
 
+  it('setChecked() reports what the retry found — disabled — even when the locator says "stale", and taps no more', async () => {
+    let reads = 0;
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.findElements.mockImplementation(async () => ({
+      requestId: '1', elements: [row({ bounds: onScreen, checked: false, enabled: ++reads <= 1 })], errorMessage: '',
+    }));
+    m.tap.mockImplementation(async () => refusal());
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _role('switch', { name: 'Show stale items' }), 3000).setChecked(true));
+    expect(err.message).toMatch(/is disabled after waiting 3000ms$/);
+    expect(m.tap).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives Android's refusal of a fully clipped node the same advice", async () => {
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.tap.mockImplementation(async () => ({
+      ...refusal(),
+      errorMessage: 'Element is not visible on screen (scrolled off, hidden, or fully clipped), so it was not touched',
+    }));
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
+    expect(err.message).toMatch(/was still not hittable by the end of the 3000ms timeout: .*scrollIntoView\(\)/);
+  });
+
   it('with timeout 0, returns the agent refusal as it is (no wait, no rewrite)', async () => {
     const m = client(() => [row({ bounds: onScreen })]);
     m.tap.mockImplementation(async () => refusal());
