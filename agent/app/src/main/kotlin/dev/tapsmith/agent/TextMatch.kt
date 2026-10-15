@@ -96,9 +96,10 @@ object TextMatch {
     /**
      * Full-match pattern: the normalized text contains the normalized
      * [query], ignoring case — Playwright's non-exact getByText (PILOT-522).
-     * Unicode-aware and locale-independent (java.util.regex folds each
-     * character with the root case mappings), so a Turkish device locale
-     * doesn't break "LOGIN" vs "login".
+     * Unicode-aware and independent of the device locale, so a Turkish
+     * locale doesn't break "LOGIN" vs "login". The host tests run on the
+     * JVM's engine; on a device the regex engine is ICU, which may fold a
+     * few special characters (such as ß) differently.
      */
     fun containsPattern(query: String): Pattern =
         Pattern.compile("(?s).*${wordsPattern(query)}.*", Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
