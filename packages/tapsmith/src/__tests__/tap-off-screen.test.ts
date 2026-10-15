@@ -190,7 +190,7 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     expect(m.tap.mock.calls.length).toBeGreaterThan(3);
     expect(err.elapsedMs).toBeGreaterThanOrEqual(3000);
     expect(err.message).toBe(
-      'Element getByText("Item 1", { exact: true }) is not hittable after waiting 3000ms: it may be off-screen, ' +
+      'Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 3000ms timeout: it may be off-screen, ' +
         'or clipped by its list (for example behind a header). tap() does not scroll, so scroll it into view first with ' +
         'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen), then tap() it.',
     );
@@ -232,7 +232,7 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     const m = client(() => [row({ bounds: onScreen, checked: false })]);
     m.tap.mockImplementation(async () => refusal());
     const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _role('switch', { name: 'Show stale items' }), 3000).setChecked(true));
-    expect(err.message).toMatch(/is not hittable after waiting 3000ms: .*setChecked\(\) does not scroll/);
+    expect(err.message).toMatch(/was still not hittable by the end of the 3000ms timeout: .*setChecked\(\) does not scroll/);
     const calls = m.tap.mock.calls.length;
     expect(calls).toBeLessThanOrEqual(5);
   });
@@ -249,6 +249,33 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     });
     await withFakeClock(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).setChecked(true));
     expect(state).toBe(true);
+  });
+
+  it('re-checks strict mode before each retry: a second match appearing meanwhile is refused, not tapped (review)', async () => {
+    let reads = 0;
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.findElements.mockImplementation(async () => ({
+      requestId: '1',
+      elements: ++reads <= 1
+        ? [row({ bounds: onScreen })]
+        : [row({ bounds: onScreen }), row({ elementId: 'el-2', bounds: { left: 0, top: 400, right: 390, bottom: 450 } })],
+      errorMessage: '',
+    }));
+    m.tap.mockImplementation(async () => refusal());
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
+    expect(m.tap).toHaveBeenCalledTimes(1);
+    expect(err.message).toMatch(/strict mode violation/i);
+  });
+
+  it('does not re-send a refused tap while the element is disabled', async () => {
+    let reads = 0;
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.findElements.mockImplementation(async () => ({
+      requestId: '1', elements: [row({ bounds: onScreen, enabled: ++reads <= 1 })], errorMessage: '',
+    }));
+    m.tap.mockImplementation(async () => refusal());
+    await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
+    expect(m.tap).toHaveBeenCalledTimes(1);
   });
 
   it('with timeout 0, returns the agent refusal as it is (no wait, no rewrite)', async () => {

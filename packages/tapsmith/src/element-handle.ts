@@ -2203,25 +2203,30 @@ export class ElementHandle {
     dispatch: (attempt: number) => Promise<ActionResponse>,
   ): Promise<ActionResponse> {
     const deadline = Date.now() + remainingMs;
-    for (let attempt = 0; ; attempt++) {
-      const res = await dispatch(attempt);
+    const refusedUntilDeadline = (res: ActionResponse): ActionResponse => ({
+      ...res,
+      // Its own type: the message embeds the locator, whose text must not
+      // be read as the agent's (setChecked() looks for "stale" in it).
+      errorType: NOT_HITTABLE_ERROR_TYPE,
+      errorMessage:
+        `Element ${this._describe()} was still not hittable by the end of the ${this._timeoutMs}ms timeout: ` +
+        'it may be off-screen, or clipped by its list (for example behind a header). ' +
+        scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)'),
+    });
+    let res = await dispatch(0);
+    for (let attempt = 1; ; attempt++) {
       // timeout 0 keeps its no-wait behaviour: the agent's refusal as it is.
       if (res.success || remainingMs <= 0 || !isNotHittableRefusal(res.errorMessage)) return res;
-      if (Date.now() >= deadline) {
-        return {
-          ...res,
-          // Its own type: the message embeds the locator, whose text must not
-          // be read as the agent's (setChecked() looks for "stale" in it).
-          errorType: NOT_HITTABLE_ERROR_TYPE,
-          errorMessage:
-            `Element ${this._describe()} is not hittable after waiting ${this._timeoutMs}ms: it may be off-screen, ` +
-            'or clipped by its list (for example behind a header). ' +
-            scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)'),
-        };
-      }
+      if (Date.now() >= deadline) return refusedUntilDeadline(res);
       // Each refusal costs the daemon an error screenshot: retry at a slower
       // pace than the read-only auto-wait.
       await sleep(Math.min(NOT_HITTABLE_RETRY_MS, Math.max(0, deadline - Date.now())), this._client._getAbortSignal?.());
+      // The auto-wait's checks ran once, before the first dispatch; over a
+      // retry window they must hold again — strict mode (a violation throws),
+      // and the target still there and enabled — or a later retry could tap
+      // another match or a disabled control. Until they do, nothing is sent.
+      const tick = await this._resolveTick(tickBudget(deadline));
+      if (tick.kind === 'found' && tick.element.enabled) res = await dispatch(attempt);
     }
   }
 

@@ -240,9 +240,13 @@ describe("List screen — scrollIntoView on a modified locator", () => {
 // Last in the file for the same reason as the describe above: it scrolls the
 // list, and restarts the app to start from the top.
 describe("List screen — tap() on a row scrolled off-screen (PILOT-716)", () => {
-  // The failing tap waits out the config's action timeout (30 s on iOS CI,
-  // 15 s on Android CI); the test body's 3× budget covers it and the
-  // scrollIntoView() before it.
+  // Also the action timeout (the runner applies a scope's timeout to the
+  // device default), so the failing tap waits 15 s on both platforms — not
+  // iOS CI's 30 s. The test body keeps 3× the config's timeout (45 s on
+  // Android CI, 90 s on iOS CI): a scope timeout only raises that, never
+  // lowers it.
+  test.use({ timeout: 15_000 })
+
   test("tap() on a row scrolled off-screen fails with the scrollIntoView() advice instead of scrolling", async ({ device, listScreen, platform }) => {
     await device.resetApp({ mode: "restart", fallback: false })
     await device.openDeepLink("tapsmithtest:///list")
