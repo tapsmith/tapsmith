@@ -289,7 +289,12 @@ class ElementFinder {
             element,
             elementId: elementId,
             bounds: bounds,
-            viewportRatio: viewportRatio
+            viewportRatio: viewportRatio,
+            // This query-based finder (xpath, parentId and the wait engine's
+            // fast path) never knows an element's ancestors, so it can't tell
+            // a tab bar's button from any other; the snapshot finder can
+            // (PILOT-514).
+            inTabBar: false
         )
     }
 

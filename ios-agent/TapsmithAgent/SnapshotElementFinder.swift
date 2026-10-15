@@ -36,6 +36,9 @@ class SnapshotElementFinder {
         let elementType: XCUIElement.ElementType
         let label: String
         let identifier: String
+        /// Whether the element had a `.tabBar` ancestor, so a live re-read
+        /// still reports a tab bar's button as a tab (PILOT-514).
+        let inTabBar: Bool
     }
 
     /// Maximum number of cached elements before eviction. Prevents unbounded
@@ -165,6 +168,7 @@ class SnapshotElementFinder {
         var suppressed = Set<Int>()
         findMatches(
             in: snapshotDict,
+            inTabBar: false,
             selector: selector,
             results: &matches,
             otherAncestors: &otherAncestors,
@@ -222,7 +226,8 @@ class SnapshotElementFinder {
             // are needed for React Native roles like "header" that map to a
             // trait bit rather than a dedicated element type.
             let traits = SnapshotElementFinder.extractTraits(from: nodeDict)
-            let role = RoleMapping.resolveRole(for: elType, traits: traits)
+            let inTabBar = nodeDict[SnapshotElementFinder.inTabBarKey] as? Bool ?? false
+            let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
             let isEnabled = nodeDict["enabled"] as? Bool ?? true
             let value = nodeDict["value"] as? String
             let isSelected = nodeDict["selected"] as? Bool ?? false
@@ -234,7 +239,9 @@ class SnapshotElementFinder {
             // Cache the snapshot bounds for fast coordinate-based actions.
             lock.lock()
             boundsCache[elementId] = frame
-            identityCache[elementId] = CachedIdentity(elementType: elType, label: label, identifier: identifier)
+            identityCache[elementId] = CachedIdentity(
+                elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar
+            )
             // Every minted id takes part in eviction, with or without a live
             // query — ids that get none (placeholder, className, …) would
             // otherwise stay in the bounds and identity caches for the whole
@@ -951,8 +958,13 @@ class SnapshotElementFinder {
         let resultIndex: Int
     }
 
+    /// Key under which `findMatches` marks a matched node that has a
+    /// `.tabBar` ancestor (RoleMapping.isTabBarItem, PILOT-514).
+    static let inTabBarKey = "tapsmithInTabBar"
+
     private func findMatches(
         in nodeDict: [String: Any],
+        inTabBar: Bool,
         selector: ElementSelector,
         results: inout [([String: Any], CGRect)],
         otherAncestors: inout [WrapperAncestor],
@@ -969,6 +981,7 @@ class SnapshotElementFinder {
         var pushedAncestor = false
         if matchesSelector(
             nodeDict,
+            inTabBar: inTabBar,
             selector: selector,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
@@ -1001,7 +1014,9 @@ class SnapshotElementFinder {
             }
 
             let frame = parseFrame(nodeDict)
-            results.append((nodeDict, frame))
+            var matched = nodeDict
+            if inTabBar { matched[SnapshotElementFinder.inTabBarKey] = true }
+            results.append((matched, frame))
             let myIndex = results.count - 1
 
             // Push this node onto the ancestor stack if it's a generic
@@ -1015,9 +1030,12 @@ class SnapshotElementFinder {
         }
 
         if let children = nodeDict["children"] as? [[String: Any]] {
+            let childrenInTabBar = inTabBar
+                || parseUInt(nodeDict["elementType"]) == XCUIElement.ElementType.tabBar.rawValue
             for child in children {
                 findMatches(
                     in: child,
+                    inTabBar: childrenInTabBar,
                     selector: selector,
                     results: &results,
                     otherAncestors: &otherAncestors,
@@ -1036,6 +1054,7 @@ class SnapshotElementFinder {
 
     private func matchesSelector(
         _ node: [String: Any],
+        inTabBar: Bool,
         selector: ElementSelector,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
@@ -1132,7 +1151,8 @@ class SnapshotElementFinder {
                 elementType: elType,
                 traits: traits,
                 value: value,
-                hasNameFilter: selector.hasNameFilter
+                hasNameFilter: selector.hasNameFilter,
+                inTabBar: inTabBar
             ) {
                 return false
             }
@@ -1513,7 +1533,8 @@ class SnapshotElementFinder {
             element,
             elementId: elementId,
             bounds: bounds,
-            viewportRatio: viewportRatio
+            viewportRatio: viewportRatio,
+            inTabBar: getIdentity(elementId)?.inTabBar ?? false
         )
     }
 

@@ -733,7 +733,7 @@ For maximum visibility into a hard-to-debug failure:
 RUST_LOG=tapsmith_core=debug \
   TAPSMITH_DAEMON_LOG=daemon.log \
   TAPSMITH_DEBUG=1 \
-  npx tapsmith test --trace on tests/problematic.test.ts
+  npx tapsmith test --trace on tests/problematic.tapsmith.ts
 ```
 
 This gives you:

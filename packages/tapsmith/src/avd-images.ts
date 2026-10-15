@@ -98,11 +98,21 @@ const PLAY_STORE_TAG_RE = /playstore/;
 /**
  * - `capable`: a rootable image (Google APIs, AOSP, ATD), so Tapsmith can
  *   install its CA cert and HTTPS is captured.
- * - `play-image`: a Google Play image; tests run, HTTPS is not captured.
+ * - `play-image`: a Google Play image; tests run, HTTPS is passed through
+ *   uncaptured (see {@link PLAY_IMAGE_CAPTURE_EFFECT}).
  * - `unknown`: the AVD's `config.ini` could not be read (or the AVD was not
  *   found), so nothing can be promised either way.
  */
 export type AvdCaptureSupport = 'capable' | 'play-image' | 'unknown';
+
+/**
+ * What network capture does on a Google Play image, for every message that
+ * names one (init, doctor). The daemon tunnels HTTPS there instead of
+ * breaking it (PILOT-711), so the app keeps working and only capture is lost.
+ */
+export const PLAY_IMAGE_CAPTURE_EFFECT =
+  "no adb root, so Tapsmith can't install its CA certificate: the app's HTTPS requests still reach their servers, "
+  + "but they are not captured and device.route() can't intercept them (plain HTTP is still captured)";
 
 export function avdCaptureSupport(avd: AvdImageInfo | undefined): AvdCaptureSupport {
   if (!avd || avd.tagId === undefined) return 'unknown';
@@ -155,18 +165,55 @@ export interface CaptureAvdFixOptions {
 export function captureAvdFix(avds: AvdImageInfo[], opts: CaptureAvdFixOptions = {}): string {
   const { replacing = [], apiLevel, reserved } = opts;
   const inPlaceOf = replacing.length > 0 ? ` in place of ${replacing.map((n) => `'${n}'`).join(', ')}` : '';
-  const capable = avds.filter((a) => avdCaptureSupport(a) === 'capable');
-  if (capable.length > 0) {
-    const pick = capable.find((a) => apiLevel !== undefined && a.apiLevel === apiLevel) ?? capable[0];
+  const pick = pickCaptureAvd(avds, apiLevel, reserved);
+  if (!pick.command) {
     return `Use ${pick.name}, which supports HTTPS capture: set avd: '${pick.name}' in your Tapsmith config${inPlaceOf}`;
   }
-  const { name, command } = newCaptureAvd(avds, apiLevel, reserved);
   const untouched = avds.length > 0 ? ' (your existing AVDs are left untouched)' : '';
-  return `Create a capture-capable AVD${untouched} — run: ${command}, then set avd: '${name}' in your Tapsmith config${inPlaceOf}`;
+  return `Create a capture-capable AVD${untouched} — run: ${pick.command}, then set avd: '${pick.name}' in your Tapsmith config${inPlaceOf}`;
 }
 
 /**
- * Why HTTPS will not be captured on the AVD named `name`, with the fix, or
+ * The capture-capable AVD to point `avd` at: one the machine already has
+ * (preferring `apiLevel`; no `command`), or else a new one and the
+ * `create-avd` command that makes it.
+ */
+function pickCaptureAvd(avds: AvdImageInfo[], apiLevel?: number, reserved?: string[]): { name: string; command?: string } {
+  const capable = avds.filter((a) => avdCaptureSupport(a) === 'capable');
+  if (capable.length > 0) {
+    return { name: (capable.find((a) => apiLevel !== undefined && a.apiLevel === apiLevel) ?? capable[0]).name };
+  }
+  return newCaptureAvd(avds, apiLevel, reserved);
+}
+
+/**
+ * init's Next steps entry for an AVD on a Google Play image (PILOT-711): the
+ * capture-capable AVD to switch to, or the `create-avd` command for one, and
+ * — when the config was written without capture — the trace setting that
+ * turns it on. `undefined` unless `avd` is known to be a Play image.
+ */
+export function captureAvdNextStep(
+  avd: string | undefined,
+  avds: AvdImageInfo[],
+  captureEnabled: boolean,
+): { label: string; action: string; optional: boolean } | undefined {
+  const info = avd === undefined ? undefined : avds.find((a) => a.name === avd);
+  if (avdCaptureSupport(info) !== 'play-image') return undefined;
+  const pick = pickCaptureAvd(avds, info?.apiLevel);
+  // Names the value to change rather than "set avd": with several platforms
+  // the generated config keeps `avd` in the android project's `use`, where a
+  // new top-level `avd` would be overridden.
+  const trace = captureEnabled ? '' : ", and add trace: { mode: 'retain-on-failure' }";
+  const setAvd = `change avd: '${avd}' to '${pick.name}' in tapsmith.config.ts${trace}`;
+  // Without capture the step is an option, not part of the setup: callers
+  // list it last, and the label says so.
+  const label = captureEnabled ? 'Capture HTTPS' : 'Optional, to capture HTTPS';
+  return { label, action: pick.command ? `${pick.command}, then ${setAvd}` : setAvd, optional: !captureEnabled };
+}
+
+/**
+ * Why HTTPS will not be captured on the AVD named `name` (and what happens
+ * to it instead), with the fix, or
  * `undefined` when it will be.
  */
 export function avdCaptureWarning(name: string, avds: AvdImageInfo[]): string | undefined {
@@ -176,7 +223,7 @@ export function avdCaptureWarning(name: string, avds: AvdImageInfo[]): string | 
   const problem = !avd
     ? `AVD ${name} was not found on this machine, so HTTPS capture on it is unverified — check the name`
     : support === 'play-image'
-      ? `AVD ${name} uses a Google Play system image — no adb root, so HTTPS traffic will not be captured`
+      ? `AVD ${name} uses a Google Play system image — ${PLAY_IMAGE_CAPTURE_EFFECT}`
       : `Could not read the system image of AVD ${name}, so HTTPS capture on it is unverified (it needs a Google APIs image, not Google Play)`;
   return `${problem}. ${captureAvdFix(avds, { replacing: [name], apiLevel: avd?.apiLevel })}`;
 }

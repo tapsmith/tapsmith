@@ -210,7 +210,9 @@ class WaitEngine {
             )
         }
         if let role = selector.role {
-            if let types = try? RoleMapping.elementTypes(for: role), !types.isEmpty {
+            // queryTypes: a tab is also a tab bar's button (PILOT-514); the
+            // snapshot finder then checks the ancestry.
+            if let types = try? RoleMapping.queryTypes(for: role), !types.isEmpty {
                 let rawValues = types.map { NSNumber(value: $0.rawValue) }
                 let predicate = NSPredicate(format: "elementType IN %@", rawValues)
                 return app.descendants(matching: .any).matching(predicate)

@@ -26,21 +26,25 @@ vi.mock('../runner.js', () => ({
 }));
 
 vi.mock('../grpc-client.js', () => ({
-  TapsmithGrpcClient: vi.fn().mockImplementation(() => ({
-    waitForReady: vi.fn(async () => true),
-    close: vi.fn(),
-  })),
+  TapsmithGrpcClient: vi.fn().mockImplementation(function () {
+    return {
+      waitForReady: vi.fn(async () => true),
+      close: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../device.js', () => ({
-  Device: vi.fn().mockImplementation(() => ({
-    setDevice: vi.fn(async () => {}),
-    wake: vi.fn(async () => {}),
-    unlock: vi.fn(async () => {}),
-    installApk: vi.fn(async () => {}),
-    startAgent: vi.fn(async () => {}),
-    close: vi.fn(),
-  })),
+  Device: vi.fn().mockImplementation(function () {
+    return {
+      setDevice: vi.fn(async () => {}),
+      wake: vi.fn(async () => {}),
+      unlock: vi.fn(async () => {}),
+      installApk: vi.fn(async () => {}),
+      startAgent: vi.fn(async () => {}),
+      close: vi.fn(),
+    };
+  }),
 }));
 
 vi.mock('../emulator.js', () => ({

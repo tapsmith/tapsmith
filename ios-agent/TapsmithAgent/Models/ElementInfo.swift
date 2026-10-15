@@ -150,12 +150,15 @@ struct ElementInfo {
     /// because each path measures the screen differently. `traits` is
     /// resolved here via KVC (with a `responds(to:)` guard, mirroring
     /// `SnapshotElementFinder.annotateTraits`) so the returned `role`
-    /// honours React Native `accessibilityRole` flags.
+    /// honours React Native `accessibilityRole` flags. A live element can't
+    /// see its ancestors, so the caller says whether it is inside a tab bar
+    /// (`inTabBar`, from find time), which makes a button a tab (PILOT-514).
     static func makeFromXCUIElement(
         _ element: XCUIElement,
         elementId: String,
         bounds: ElementBounds,
-        viewportRatio: Float
+        viewportRatio: Float,
+        inTabBar: Bool
     ) -> ElementInfo {
         let elType = element.elementType
         let label = element.label
@@ -173,7 +176,7 @@ struct ElementInfo {
 
         let className = RoleMapping.typeName(for: elType)
         let traits = ElementInfo.extractTraits(from: element)
-        let role = RoleMapping.resolveRole(for: elType, traits: traits)
+        let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
 
         let isSelected = element.isSelected
         let isChecked = ElementInfo.deriveCheckedState(

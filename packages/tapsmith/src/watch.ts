@@ -34,6 +34,7 @@ import {
   type RunFileUseOptions,
 } from './worker-protocol.js';
 import type { WatchRunMessage, WatchRunChildMessage } from './watch-run.js';
+import { isIgnoredWatchModePath } from './test-file-discovery.js';
 import { type DeviceGroupEntry } from './config.js';
 import { startDaemon } from './device-session.js';
 import type {
@@ -1352,7 +1353,16 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
       filesToWatch.push(configPath);
     }
 
-    const watcher = chokidarWatch(filesToWatch, { ignoreInitial: true });
+    // A test file at the top of rootDir makes rootDir itself a watched
+    // directory, recursively: keep the watcher out of node_modules and the
+    // native build trees (PILOT-713).
+    const rootDir = path.resolve(ctx.config.rootDir);
+    const outputDir = path.resolve(rootDir, ctx.config.outputDir);
+    const watchedByName = new Set([...state.knownFiles, ...(configPath ? [configPath] : [])]);
+    const watcher = chokidarWatch(filesToWatch, {
+      ignoreInitial: true,
+      ignored: (candidate) => isIgnoredWatchModePath(candidate.toString(), rootDir, outputDir, watchedByName),
+    });
 
     watcher.on('change', (filePath) => {
       if (configPath && filePath === configPath) {

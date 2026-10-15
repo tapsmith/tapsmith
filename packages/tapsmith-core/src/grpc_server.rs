@@ -5564,6 +5564,12 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             };
             existing.set_android_emulator(android_emulator).await;
             existing.reset_capture_state().await;
+            // Still tunneling because the device cannot trust the CA: repeat
+            // why, since a watch or MCP re-run starts in a fresh process that
+            // never saw the first start's warning (the runner dedupes it).
+            if let Some(warning) = existing.tunnel_all_tls_warning().await {
+                warnings.push(warning);
+            }
             // Clone out of the read guard before awaiting — holding a
             // RwLock guard across an await risks starving writers.
             let passthrough_hosts = self.passthrough_hosts.read().await.clone();
@@ -5635,6 +5641,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let platform = self.require_platform().await?;
         let ca_pem_path = mitm_ca.ca_pem_path().to_string_lossy().to_string();
         let mut warnings: Vec<String> = Vec::new();
+        // The warning, when the device cannot trust the CA and all TLS is
+        // tunneled — see `android_ca_install_failure`.
+        let mut tunnel_all_tls: Option<String> = None;
 
         let is_ios_physical = self.is_active_ios_physical().await;
 
@@ -5734,9 +5743,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                         *self.proxy_ca_cert_path.write().await = Some(installed_path);
                     }
                     Err(e) => {
-                        let msg = format!(
-                            "Failed to install CA cert on device: {e} — HTTPS traffic will not be captured"
-                        );
+                        let (tunnel, msg) = android_ca_install_failure(&e);
+                        if tunnel {
+                            tunnel_all_tls = Some(msg.clone());
+                        }
                         error!("{msg}");
                         warnings.push(msg);
                     }
@@ -5794,6 +5804,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             matches!(dm.active_device(), Some(d) if d.platform == Platform::Android && d.is_emulator)
         };
         proxy.set_android_emulator(android_emulator).await;
+        proxy.set_tunnel_all_tls(tunnel_all_tls).await;
         let host_port = proxy.port();
 
         // Physical iOS: verify the proxy is reachable from the LAN. On
@@ -6214,16 +6225,19 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     success: false,
                     entries: Vec::new(),
                     error_message: "Network capture is not running".to_string(),
+                    ..Default::default()
                 }));
             };
 
             let captured = proxy.drain_entries().await;
             let entries = captured_entries_to_proto(captured, proxy.capture_session());
+            let tls_rejected_hosts = proxy.take_tls_rejected_hosts().await;
             return Ok(Response::new(proto::StopNetworkCaptureResponse {
                 request_id,
                 success: true,
                 entries,
                 error_message: String::new(),
+                tls_rejected_hosts,
             }));
         }
 
@@ -6237,6 +6251,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 success: false,
                 entries: Vec::new(),
                 error_message: "Network capture is not running".to_string(),
+                ..Default::default()
             }));
         };
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
@@ -6333,6 +6348,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         }
 
         let capture_session = proxy.capture_session().to_string();
+        let tls_rejected_hosts = proxy.take_tls_rejected_hosts().await;
         let captured = proxy.stop().await;
         let entries = captured_entries_to_proto(captured, &capture_session);
 
@@ -6341,6 +6357,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             success: true,
             entries,
             error_message: String::new(),
+            tls_rejected_hosts,
         }))
     }
 
@@ -8925,6 +8942,52 @@ fn system_proxy_fallback_warning(serial: &str) -> String {
     )
 }
 
+/// What capture does when the Tapsmith CA could not be installed on an
+/// Android device, and the warning that says so: `(tunnel_all_tls, warning)`.
+///
+/// Only a device without `adb root` changes how capture works, because there
+/// nothing can ever install the CA. On such an emulator (a Google Play image)
+/// MITM would make every HTTPS request the app makes fail, so TLS is tunneled
+/// instead and only its capture is lost (PILOT-711). A physical device keeps
+/// MITM: its documented setup is a CA the user installs by hand and the app
+/// trusts through its `network_security_config.xml`, which `adb` cannot see.
+/// Any other failure (a transient adb error) keeps MITM too: the device may
+/// already trust the CA from the install during device setup. It is not
+/// retried while this proxy lives — a later start reuses the proxy — so a
+/// device that really lacks the CA fails HTTPS until the session ends, which
+/// the warning says.
+fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
+    let cause = err.to_string();
+    let cause = cause.trim().trim_end_matches('.');
+    match err.downcast_ref::<adb::AdbRootUnavailable>() {
+        Some(root) if root.is_emulator => (
+            true,
+            format!(
+                "Could not install Tapsmith's CA certificate on the emulator: {cause}. \
+                 HTTPS is passed through to its servers uncaptured, so the app's HTTPS requests \
+                 still work, but they appear in the trace only as passthrough entries, and \
+                 device.route(), waitForRequest() and waitForResponse() cannot see them; \
+                 plain HTTP is still captured"
+            ),
+        ),
+        Some(_) => (
+            false,
+            format!(
+                "Could not install Tapsmith's CA certificate on the device: {cause}. \
+                 Unless the app trusts that CA, its HTTPS requests fail while network capture is on"
+            ),
+        ),
+        None => (
+            false,
+            format!(
+                "Could not install Tapsmith's CA certificate on the device: {cause}. \
+                 HTTPS is still intercepted, so if the device does not already trust the CA, \
+                 the app's HTTPS requests fail"
+            ),
+        ),
+    }
+}
+
 /// Capture-start warnings as one line each, newline-separated. The runner
 /// dedupes line by line (the set of warnings differs between a fresh start and
 /// the per-test reuse of a running proxy), so a warning that embeds multi-line
@@ -8978,6 +9041,50 @@ mod tests {
         assert_eq!(p.platform, "android");
         assert_eq!(p.os_version, "");
         assert!(!p.is_emulator);
+    }
+
+    fn root_unavailable(is_emulator: bool) -> anyhow::Error {
+        adb::AdbRootUnavailable::for_test(is_emulator, "hint").into()
+    }
+
+    // PILOT-711: a Play-image emulator cannot trust the CA, so HTTPS is
+    // tunneled and the warning says what that costs — not that traffic
+    // "will not be captured" while the app's requests actually fail.
+    #[test]
+    fn untrusted_ca_on_an_emulator_tunnels_https_and_says_so() {
+        let (tunnel, msg) = android_ca_install_failure(&root_unavailable(true));
+        assert!(tunnel);
+        assert!(msg.starts_with(
+            "Could not install Tapsmith's CA certificate on the emulator: Device does not support adb root — hint."
+        ), "{msg}");
+        assert!(msg.contains("HTTPS requests still work"), "{msg}");
+        assert!(msg.contains("passthrough"), "{msg}");
+        assert!(msg.contains("device.route()"), "{msg}");
+        assert!(msg.contains("plain HTTP is still captured"), "{msg}");
+    }
+
+    // Physical devices keep MITM: the documented path there is a CA the user
+    // installs by hand, which the app trusts via network_security_config.xml.
+    #[test]
+    fn untrusted_ca_on_a_physical_device_keeps_mitm_and_warns_requests_fail() {
+        let (tunnel, msg) = android_ca_install_failure(&root_unavailable(false));
+        assert!(!tunnel);
+        assert!(
+            msg.contains("on the device: Device does not support adb root"),
+            "{msg}"
+        );
+        assert!(msg.contains("HTTPS requests fail"), "{msg}");
+    }
+
+    // A transient adb failure says nothing permanent about the device (it may
+    // already trust the CA from the setup-time install), so it never tunnels.
+    #[test]
+    fn transient_ca_install_failure_keeps_mitm_even_on_an_emulator() {
+        let err = anyhow::anyhow!("adb push failed: device offline");
+        let (tunnel, msg) = android_ca_install_failure(&err);
+        assert!(!tunnel);
+        assert!(msg.contains("adb push failed: device offline."), "{msg}");
+        assert!(msg.contains("HTTPS is still intercepted"), "{msg}");
     }
 
     #[test]

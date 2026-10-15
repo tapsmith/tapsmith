@@ -1,6 +1,6 @@
 {
   "name": "@tapsmith/agent-ios-simulator-x64",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Prebuilt iOS simulator agent for macOS x64 (Intel)",
   "os": ["darwin"],
   "cpu": ["x64"],

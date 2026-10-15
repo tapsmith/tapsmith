@@ -14,9 +14,9 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { findDaemonBin } from './daemon-bin.js';
-import { findAgentApk, findAgentTestApk } from './agent-resolve.js';
+import { findAgentApk, findAgentTestApk, missingAndroidAgentAdvice, type AndroidAgentAdvice } from './agent-resolve.js';
 import { formatJson, jsonError, stripAnsi, type JsonCheck } from './cli-json.js';
-import { avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
+import { PLAY_IMAGE_CAPTURE_EFFECT, avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
 import { parseSimctlDevicesJson, tryExec } from './env-scan.js';
 import { androidUnusableDeviceFix, parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
 import { isTapsmithNotInstalledError, type TapsmithConfig } from './config.js';
@@ -302,16 +302,29 @@ function checkConnectedDevices(report: Reporter): void {
   else warn(report, 'android-devices', summary.label, summary.fix, summary.detail);
 }
 
-function checkAgentApks(report: Reporter): void {
+/** The install command, and where to run it when that is not here. */
+function agentInstallFix(advice: AndroidAgentAdvice): string {
+  return advice.where ? `${advice.install} (in ${advice.where})` : advice.install;
+}
+
+/**
+ * The Android agent APKs the runner would hand the daemon. Missing ones get
+ * the reason and the project's own install command (PILOT-709: pnpm 11+
+ * skipped the package, and the old advice was `npm install` regardless).
+ */
+async function checkAgentApks(report: Reporter, projectDir: string): Promise<void> {
   try {
     const apk = findAgentApk();
     const testApk = findAgentTestApk();
     if (apk && testApk) {
       pass(report, 'android-agent', 'Android agent', apk.includes(path.join('@tapsmith', 'agent-android')) ? '@tapsmith/agent-android' : 'monorepo build');
-    } else if (apk || testApk) {
-      warn(report, 'android-agent', 'Android agent incomplete — one APK found but not both', 'npm install @tapsmith/agent-android');
+      return;
+    }
+    const advice = await missingAndroidAgentAdvice(projectDir);
+    if (apk || testApk) {
+      warn(report, 'android-agent', 'Android agent incomplete — one APK found but not both', agentInstallFix(advice));
     } else {
-      warn(report, 'android-agent', 'Android agent not found — install @tapsmith/agent-android or build from source in agent/', 'npm install @tapsmith/agent-android');
+      warn(report, 'android-agent', `Android agent not found — ${advice.why}`, agentInstallFix(advice));
     }
   } catch {
     warn(report, 'android-agent', 'Could not locate Android agent');
@@ -413,7 +426,7 @@ export function summarizeAvdImages(avds: AvdImageInfo[], configuredAvd?: string 
     const configuredUnreadable = configured.filter((a) => avdCaptureSupport(a) === 'unknown');
     const issues: string[] = [
       ...missing.map((name) => `Configured AVD ${name} not found on this machine`),
-      ...configuredPlay.map((a) => `Configured AVD ${a.name} uses a Google Play system image — no adb root, so HTTPS traffic will not be captured`),
+      ...configuredPlay.map((a) => `Configured AVD ${a.name} uses a Google Play system image — ${PLAY_IMAGE_CAPTURE_EFFECT}`),
       ...configuredUnreadable.map((a) => `Could not read the system image tag of configured AVD ${a.name}`),
     ];
     if (issues.length > 0) {
@@ -450,7 +463,7 @@ export function summarizeAvdImages(avds: AvdImageInfo[], configuredAvd?: string 
     const context = capable > 0 ? `; ${capable} other AVD${capable === 1 ? ' is' : 's are'} capture-capable` : '';
     return {
       status: 'warn',
-      label: `${playStore.length} of ${avds.length} AVD${avds.length === 1 ? '' : 's'} use${playStore.length === 1 ? 's' : ''} a Google Play system image — no adb root, so HTTPS traffic will not be captured`,
+      label: `${playStore.length} of ${avds.length} AVD${avds.length === 1 ? '' : 's'} use${playStore.length === 1 ? 's' : ''} a Google Play system image — ${PLAY_IMAGE_CAPTURE_EFFECT}`,
       detail: `${playStore.map((a) => a.name).join(', ')}${context}`,
       fix: captureAvdFix(avds, { apiLevel: playStore[0].apiLevel }),
     };
@@ -1100,7 +1113,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
     if (androidChecked) {
       checkAndroidHome(report);
       if (adbOk) checkConnectedDevices(report);
-      checkAgentApks(report);
+      await checkAgentApks(report, config?.rootDir ?? process.cwd());
       // With adb here, Android runs on this machine, so its APK must exist.
       checkAppApk(report, config, androidPlan.required || (adbOk && !!targets));
       checkEmulatorBinary(report, avdLaunches, androidPlan.required || adbOk);

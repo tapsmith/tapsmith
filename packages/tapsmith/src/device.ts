@@ -491,7 +491,12 @@ export class Device {
         captureTraceState: (opts: CaptureTraceStateOptions) => this._captureTraceState(opts),
       } : {}),
     } : undefined;
-    return new ElementHandle(this._client, selector, this._defaultTimeoutMs, { traceCapture, typingDelay: this._typingDelayMs, doubleTapInterval: this._doubleTapIntervalMs });
+    return new ElementHandle(this._client, selector, this._defaultTimeoutMs, {
+      traceCapture,
+      typingDelay: this._typingDelayMs,
+      doubleTapInterval: this._doubleTapIntervalMs,
+      platform: this._platform,
+    });
   }
 
   // ── Device-level actions ──

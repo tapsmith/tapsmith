@@ -228,18 +228,19 @@ function collectProject(value: string, previous: string[] | undefined): string[]
 
 const ROOT_EXAMPLES = `
 Examples:
-  tapsmith test                       Run every test file
-  tapsmith test login.test.ts -j 2    Run one file on two devices
-  tapsmith test --ui                  Open UI mode
-  tapsmith test --shard=1/4           Run shard 1 of 4 (CI)
-  tapsmith show-trace trace.zip       Open a trace in the viewer
-  tapsmith init --yes                 Set up a project non-interactively
-  tapsmith help <command>             Show a command's options`;
+  tapsmith test                      Run every test file
+  tapsmith test login.tapsmith.ts    Run one file
+  tapsmith test -j 2                 Run files on two devices in parallel
+  tapsmith test --ui                 Open UI mode
+  tapsmith test --shard=1/4          Run shard 1 of 4 (CI)
+  tapsmith show-trace trace.zip      Open a trace in the viewer
+  tapsmith init --yes                Set up a project non-interactively
+  tapsmith help <command>            Show a command's options`;
 
 const TEST_EXAMPLES = `
 Examples:
   tapsmith test
-  tapsmith test tests/login.test.ts --device emulator-5554
+  tapsmith test tests/login.tapsmith.ts --device emulator-5554
   tapsmith test --workers 4 --trace retain-on-failure
   tapsmith test --shard 2/4 --reporter junit
   tapsmith test --grep "checkout" --project android
@@ -259,8 +260,8 @@ Examples:
 
 const MCP_EXAMPLES = `
 Examples:
-  codex mcp add tapsmith -- npx tapsmith mcp-server
-  claude mcp add tapsmith -- npx tapsmith mcp-server
+  codex mcp add tapsmith-headless -- npx tapsmith mcp-server
+  claude mcp add tapsmith-headless -- npx tapsmith mcp-server
   npx tapsmith mcp-server --config tapsmith.config.ios.mjs`;
 
 const TELEMETRY_HELP = `

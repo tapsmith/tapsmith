@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, ANDROID_TRAIT_ONLY_ROLES, IOS_OTHER_ROLE_DESCRIPTIONS, IOS_ROLE_TYPES, IOS_UNDESCRIBED_OTHER_ROLES, NATIVE_ROLES, ROLE_ALIASES, assertKnownRole, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../roles.js';
+import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, ANDROID_TRAIT_ONLY_ROLES, IOS_OTHER_ROLE_DESCRIPTIONS, IOS_ROLE_TYPES, IOS_STATIC_TEXT_ROLES, IOS_UNDESCRIBED_OTHER_ROLES, NATIVE_ROLES, ROLE_ALIASES, assertKnownRole, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../roles.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const read = (rel: string): string => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
@@ -142,9 +142,10 @@ describe('role set parity with the agents', () => {
     expect([...ANDROID_DUAL_PATH_ROLES].sort()).toEqual(roles('val DUAL_PATH_ROLES'));
     expect([...ANDROID_TRAIT_ONLY_ROLES].sort()).toEqual(roles('val TRAIT_ONLY_ROLES'));
     // React Native publishes these only as a role description on a generic view.
-    for (const role of ['tab', 'progressbar', 'toolbar']) expect(ANDROID_DUAL_PATH_ROLES).toContain(role);
-    // …and these only as a description, on a generic View (PILOT-664).
-    for (const role of ['menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer']) {
+    for (const role of ['progressbar', 'toolbar', 'tablist']) expect(ANDROID_DUAL_PATH_ROLES).toContain(role);
+    // …and these only as a description, on a generic View (PILOT-664). A tab
+    // item has no class of its own on any toolkit (PILOT-514).
+    for (const role of ['menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tab', 'timer']) {
       expect(ANDROID_TRAIT_ONLY_ROLES).toContain(role);
     }
   });
@@ -171,6 +172,8 @@ describe('role set parity with the agents', () => {
     expect(IOS_OTHER_ROLE_DESCRIPTIONS).toEqual(table('static let otherRoleDescriptions'));
     const undescribed = [...block(source, 'static let undescribedOtherRoles', ']\n').matchAll(/"([a-z]+)"/g)].map((m) => m[1]!);
     expect([...IOS_UNDESCRIBED_OTHER_ROLES].sort()).toEqual(undescribed.sort());
+    const staticText = [...block(source, 'static let staticTextRoles', ']\n').matchAll(/"([a-z]+)"/g)].map((m) => m[1]!);
+    expect([...IOS_STATIC_TEXT_ROLES].sort()).toEqual(staticText.sort());
   });
 
   it('lists NATIVE_ROLES sorted, so the error message reads alphabetically', () => {

@@ -36,9 +36,11 @@ vi.mock('node:child_process', async (importOriginal) => {
 });
 
 vi.mock('../daemon-bin.js', () => ({ findDaemonBin: () => '/opt/tapsmith-core' }));
-vi.mock('../agent-resolve.js', () => ({
-  findAgentApk: () => '/n/@tapsmith/agent-android/app.apk',
-  findAgentTestApk: () => '/n/@tapsmith/agent-android/test.apk',
+const agentApks = vi.hoisted(() => ({ app: '/n/@tapsmith/agent-android/app.apk' as string | undefined, test: '/n/@tapsmith/agent-android/test.apk' as string | undefined }));
+vi.mock('../agent-resolve.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../agent-resolve.js')>()),
+  findAgentApk: () => agentApks.app,
+  findAgentTestApk: () => agentApks.test,
 }));
 const xctestrun = vi.hoisted(() => ({ found: undefined as string | undefined }));
 vi.mock('../ios-device-resolve.js', () => ({
@@ -257,6 +259,43 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
     expect(check(json, 'app-apk')).toMatchObject({ status: 'fail' });
     expect(check(json, 'simctl')).toMatchObject({ status: 'fail' });
     expect(code).toBe(1);
+  });
+
+  // PILOT-709: pnpm 11+ skipped the agent package, and doctor said `npm install` regardless.
+  describe('a missing Android agent package', () => {
+    afterEach(() => {
+      agentApks.app = '/n/@tapsmith/agent-android/app.apk';
+      agentApks.test = '/n/@tapsmith/agent-android/test.apk';
+    });
+
+    it('says why, with the project\'s own install command', async () => {
+      withAdb();
+      agentApks.app = undefined;
+      agentApks.test = undefined;
+      fs.writeFileSync(path.join(dir, 'package.json'), '{}\n');
+      fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+      writeConfig("export default { platform: 'android' }\n");
+      const { json } = await doctorJson();
+      expect(check(json, 'android-agent')).toMatchObject({
+        status: 'warn',
+        label: expect.stringMatching(/^Android agent not found — @tapsmith\/agent-android, which ships the agent APKs, is not installed\. .*pnpm 11/),
+        fix: 'pnpm add -D @tapsmith/agent-android',
+      });
+    });
+
+    it('names the project\'s package manager for an incomplete install', async () => {
+      withAdb();
+      agentApks.test = undefined;
+      fs.writeFileSync(path.join(dir, 'package.json'), '{}\n');
+      fs.writeFileSync(path.join(dir, 'yarn.lock'), '');
+      writeConfig("export default { platform: 'android' }\n");
+      const { json } = await doctorJson();
+      expect(check(json, 'android-agent')).toMatchObject({
+        status: 'warn',
+        label: expect.stringContaining('one APK found but not both'),
+        fix: 'yarn add -D @tapsmith/agent-android',
+      });
+    });
   });
 
   it('checks each Android project\'s own apk, not only the root one', async () => {

@@ -836,7 +836,7 @@ A few HTTP/2 specifics to be aware of:
 - Captured HTTP/2 header names are lowercase (that's how HTTP/2 sends them on the wire).
 - Request/response **bodies in the trace are capped** (~1 MB), but the full stream is always forwarded to the app.
 
-Hosts listed in `networkPassthroughHosts`, and HTTP/2-capable hosts that dynamically fall back after a MITM certificate rejection, are tunneled end-to-end without decryption (see below). A tunneled connection appears in the Network tab as a single `CONNECT` row with a `passthrough` badge; the requests inside are encrypted end-to-end and invisible to the proxy, so `device.route()` / `waitForRequest` / `waitForResponse` can never match them.
+Hosts listed in `networkPassthroughHosts`, HTTP/2-capable hosts that dynamically fall back after a MITM certificate rejection, and all HTTPS on an Android emulator that cannot trust Tapsmith's CA (a Google Play image — see [Android emulator image requirements](#android-emulator-image-requirements)) are tunneled end-to-end without decryption (see below). A tunneled connection appears in the Network tab as a single `CONNECT` row with a `passthrough` badge; the requests inside are encrypted end-to-end and invisible to the proxy, so `device.route()` / `waitForRequest` / `waitForResponse` can never match them.
 
 Force passthrough for specific hosts with `networkPassthroughHosts` -- useful when an app uses **certificate pinning** for a host, which MITM interception would otherwise break:
 
@@ -942,14 +942,24 @@ iOS simulators are already per-PID filtered by the macOS Network Extension, so s
 
 ### Android emulator image requirements
 
-HTTPS decryption on Android emulators requires `adb root`, which only works on **Google APIs** (`google_apis`) and AOSP system images. **Google Play** images (`google_apis_playstore`) are production builds on which `adbd` cannot restart as root, so Tapsmith cannot install its CA certificate into the system trust store or set up the `iptables` redirect. On a Play image, tests still run and plain-HTTP traffic is still captured through the global proxy fallback, but HTTPS traffic is not decrypted and Tapsmith prints this at startup:
+HTTPS decryption on Android emulators requires `adb root`, which only works on **Google APIs** (`google_apis`) and AOSP system images. **Google Play** images (`google_apis_playstore`) are production builds on which `adbd` cannot restart as root, so Tapsmith cannot install its CA certificate into the system trust store or set up the `iptables` redirect. Nothing on the emulator would trust Tapsmith's certificate, so on a Play image Tapsmith passes HTTPS through to the real servers instead of decrypting it:
+
+- tests still run, and the app's HTTPS requests still work;
+- each HTTPS connection appears in the trace only as a `passthrough` entry naming the host, with no request or response detail;
+- `device.route()`, `waitForRequest()` and `waitForResponse()` cannot see HTTPS requests;
+- plain-HTTP traffic is still captured, through the global proxy fallback.
+
+Tapsmith prints this at startup:
 
 ```
-Network capture warning: Failed to install CA cert on device: Device does not support
-adb root — this emulator runs a Google Play (google_apis_playstore) system image,
-which blocks root. Recreate the AVD with a Google APIs image (`npx tapsmith create-avd`)
-to enable HTTPS capture — HTTPS traffic will not be captured
-iptables redirect unavailable; using Android system HTTP proxy fallback
+Network capture warning: Could not install Tapsmith's CA certificate on the emulator:
+Device does not support adb root — this emulator runs a production system image, which
+blocks root. Recreate the AVD with a Google APIs image (`npx tapsmith create-avd`) to
+enable HTTPS capture. HTTPS is passed through to its
+servers uncaptured, so the app's HTTPS requests still work, but they appear in the trace
+only as passthrough entries, and device.route(), waitForRequest() and waitForResponse()
+cannot see them; plain HTTP is still captured
+Network capture warning: iptables redirect unavailable; using Android system HTTP proxy fallback
 ```
 
 Android Studio's Device Manager preselects Google Play images for most phone profiles (marked with a Play Store icon next to the system image). When creating an AVD for Tapsmith, pick an image from the **Google APIs** tab instead — or let Tapsmith do it:
@@ -966,11 +976,23 @@ avdmanager create avd -n Tapsmith_Phone_API_36 \
   -k "system-images;android-36;google_apis;arm64-v8a" -d medium_phone
 ```
 
-`npx tapsmith doctor` flags any existing AVD that uses a Google Play image, and suggests a capture-capable AVD you already have or a new one to create. It never suggests overwriting yours. With network capture on, `npx tapsmith init` picks a capture-capable AVD when there is one, marks Play images "no HTTPS capture" in the wizard, and warns when it can only pick a Play image.
+`npx tapsmith doctor` flags any existing AVD that uses a Google Play image, and suggests a capture-capable AVD you already have or a new one to create. It never suggests overwriting yours. With network capture on, `npx tapsmith init` picks a capture-capable AVD when there is one, marks Play images "no HTTPS capture" in the wizard, and warns when it can only pick a Play image. When the AVD it sets up is a Play image, the wizard's network-capture question defaults to no (unless iOS is set up too), and its next steps name the capture-capable AVD to switch to, or the `create-avd` command for one (and, if you declined capture, the `trace` setting that turns it on).
 
 To check an existing AVD, look at `tag.id` in `~/.android/avd/<name>.avd/config.ini`: `google_apis` (or `default`/`aosp_atd`) supports HTTPS capture; `google_apis_playstore` does not.
 
-Manually installing `~/.tapsmith/ca.pem` as a *user* CA on a Play image is possible but rarely sufficient: apps targeting API 24+ do not trust user-installed CAs unless they opt in via `network_security_config.xml`. Unless your test build has that opt-in, use a Google APIs image instead.
+Manually installing `~/.tapsmith/ca.pem` as a *user* CA does not help on a Play-image emulator: Tapsmith cannot see a user-installed CA, so it passes HTTPS through uncaptured there either way. Use a Google APIs image instead. (On a physical Android device, where there is no `adb root` either, Tapsmith keeps decrypting HTTPS, so a user-installed CA that your test build opts into via `network_security_config.xml` does work.)
+
+### When the app rejects Tapsmith's certificate
+
+Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time you capture. On rootable Android emulators it installs that CA into the device's system trust store when it first sets up capture on the device in a test session. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
+
+When an HTTPS client on the device still refuses Tapsmith's certificate, those requests do not appear in the trace and `device.route()` cannot intercept them. Tapsmith then names the hosts in the run output, once per run, and adds the same warning to each affected test's trace as a daemon console message. Hosts excluded by `networkHosts` or `networkIgnoreHosts` are left out, and there is no warning on the iOS simulator's macOS system-proxy fallback, where other Mac processes' traffic reaches the proxy too:
+
+```
+[tapsmith] Network capture warning: an HTTPS client on the device rejected Tapsmith's certificate for api.example.com, so those requests were not captured and device.route() could not intercept them. …
+```
+
+If every host your app uses is rejected, the device or app does not trust the current CA. For example, the CA could only be installed in Android's user store, which apps ignore unless their `network_security_config.xml` opts in. If only some hosts are rejected, those clients probably pin their certificates. List your app's pinned hosts in `trace.networkPassthroughHosts` so they are tunnelled without capture instead of failing. On system-wide capture routes the hosts can also belong to background services, which you can drop with `trace.networkIgnoreHosts`.
 
 ---
 

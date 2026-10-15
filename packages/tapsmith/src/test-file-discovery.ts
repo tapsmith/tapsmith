@@ -1,16 +1,45 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
-import { glob } from 'glob';
-import { minimatch } from 'minimatch';
+import { glob, Ignore, type IgnoreLike } from 'glob';
+import { Minimatch, minimatch } from 'minimatch';
 
-export const DEFAULT_TEST_IGNORE = ['**/node_modules/**', '**/dist/**'];
+/**
+ * Directories never searched for tests, and never watched for new ones: the
+ * dependency, build and tooling trees of a JS / React Native / Expo project.
+ * They are never tests, and an Expo app's `ios/Pods` and `ios/build` alone hold
+ * tens of thousands of files — watching them kept UI mode unresponsive for
+ * minutes after it said it was ready (PILOT-713). `ios/Pods` also symlinks
+ * headers back into `node_modules`, which a watcher would otherwise follow.
+ *
+ * Build directories are anchored under `ios/` and `android/`, so a `build`
+ * directory elsewhere (one holding tests, say) is still searched.
+ */
+export const DEFAULT_TEST_IGNORE = [
+  '**/node_modules/**',
+  '**/dist/**',
+  // CocoaPods, Xcode and Gradle output of a native or prebuilt (Expo) app.
+  '**/Pods/**',
+  '**/ios/build/**',
+  '**/DerivedData/**',
+  '**/android/**/build/**',
+  '**/android/**/.cxx/**',
+  '**/.gradle/**',
+  '**/.expo/**',
+  // Bundler's gems (the React Native CLI template installs CocoaPods there)
+  // and Yarn's package cache.
+  '**/vendor/bundle/**',
+  '**/.yarn/**',
+];
+
+/** Matches ignore patterns as glob's `ignore` does (`dot: true`). */
+const IGNORE_MATCH_OPTIONS = { dot: true } as const;
 
 export async function discoverTestFiles(
   patterns: string[],
   rootDir: string,
   extraIgnore?: string[],
 ): Promise<string[]> {
-  const ignore = [...DEFAULT_TEST_IGNORE, ...(extraIgnore ?? [])];
+  const ignore = discoveryIgnore(extraIgnore);
   const files: string[] = [];
   for (const pattern of patterns) {
     const matches = await glob(pattern, {
@@ -23,6 +52,25 @@ export async function discoverTestFiles(
 
   return [...new Set(files)].sort();
 }
+
+/**
+ * glob's `ignore`. DEFAULT_TEST_IGNORE is matched case-sensitively on every
+ * platform, as matchesTestIgnore() and the watchers match it; glob's own
+ * ignore is case-insensitive on macOS and Windows, which skipped a `pods/`
+ * test folder there but not on Linux CI. A project's `testIgnore` keeps glob's
+ * own handling (`./` and absolute patterns, the platform's case rule).
+ */
+function discoveryIgnore(extraIgnore?: string[]): IgnoreLike {
+  const defaults = new Ignore(DEFAULT_TEST_IGNORE, { nocase: false });
+  const project = new Ignore(extraIgnore ?? [], { nocase: GLOB_DEFAULT_NOCASE });
+  return {
+    ignored: (entry) => defaults.ignored(entry) || project.ignored(entry),
+    childrenIgnored: (entry) => defaults.childrenIgnored(entry) || project.childrenIgnored(entry),
+  };
+}
+
+/** glob's default `nocase`, which its string `ignore` patterns inherit. */
+const GLOB_DEFAULT_NOCASE = process.platform === 'darwin' || process.platform === 'win32';
 
 // ─── Positional test-file arguments ───
 
@@ -216,6 +264,44 @@ export function matchesTestIgnore(relativePath: string, extraIgnore?: string[]):
   return false;
 }
 
+/**
+ * The `ignored` predicate for a watcher that looks for new or changed test
+ * files under `rootDir`: true for anything outside `rootDir`, inside `.git` or
+ * `outputDir` (traces and screenshots written during a run), or in a
+ * DEFAULT_TEST_IGNORE directory. Given a directory, it keeps the watcher from
+ * descending into it at all.
+ */
+export function isIgnoredDiscoveryWatchPath(filePath: string, rootDir: string, outputDir: string): boolean {
+  const resolved = path.resolve(rootDir, filePath);
+  const relative = relativeTestPath(resolved, rootDir);
+  if (relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) return true;
+  if (relative.split('/').includes('.git') || matchesTestIgnore(relative)) return true;
+
+  const outputRelative = path.relative(outputDir, resolved);
+  return outputRelative === '' || (!outputRelative.startsWith('..') && !path.isAbsolute(outputRelative));
+}
+
+/**
+ * The `ignored` predicate for headless watch mode, which watches the
+ * directories of the test files it runs (recursively) and those files by name.
+ * Within rootDir it skips what isIgnoredDiscoveryWatchPath() skips, except the
+ * files in `watchedByName` (`tapsmith test --watch <file>` can select a file
+ * anywhere). Outside rootDir (an explicitly selected file's directory) it skips
+ * nothing.
+ */
+export function isIgnoredWatchModePath(
+  filePath: string,
+  rootDir: string,
+  outputDir: string,
+  watchedByName: ReadonlySet<string>,
+): boolean {
+  const resolved = path.resolve(rootDir, filePath);
+  if (watchedByName.has(resolved)) return false;
+  const relative = relativeTestPath(resolved, rootDir);
+  if (relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) return false;
+  return isIgnoredDiscoveryWatchPath(resolved, rootDir, outputDir);
+}
+
 export function getTestDiscoveryWatchRoots(patterns: string[], rootDir: string): string[] {
   const roots = new Set<string>();
   for (const pattern of patterns) {
@@ -237,9 +323,23 @@ function normalizeGlobPattern(pattern: string): string {
 }
 
 function matchesIgnorePattern(relativePath: string, pattern: string): boolean {
-  const normalizedPattern = normalizeGlobPattern(pattern);
-  return minimatch(relativePath, normalizedPattern)
-    || minimatch(`${relativePath}/__tapsmith_ignore_probe__`, normalizedPattern);
+  const matcher = ignoreMatcher(pattern);
+  return matcher.match(relativePath) || matcher.match(`${relativePath}/__tapsmith_ignore_probe__`);
+}
+
+/**
+ * Compiled once per pattern: a watcher's `ignored` predicate runs for every
+ * path it scans, and compiling each pattern per call cost ~60 µs a path.
+ */
+const ignoreMatchers = new Map<string, Minimatch>();
+
+function ignoreMatcher(pattern: string): Minimatch {
+  let matcher = ignoreMatchers.get(pattern);
+  if (!matcher) {
+    matcher = new Minimatch(normalizeGlobPattern(pattern), IGNORE_MATCH_OPTIONS);
+    ignoreMatchers.set(pattern, matcher);
+  }
+  return matcher;
 }
 
 function staticDirectoryPrefix(pattern: string): string {

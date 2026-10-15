@@ -1,6 +1,6 @@
 {
   "name": "@tapsmith/core-linux-arm64",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Tapsmith daemon binary for Linux ARM64",
   "os": ["linux"],
   "cpu": ["arm64"],

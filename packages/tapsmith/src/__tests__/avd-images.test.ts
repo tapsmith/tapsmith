@@ -6,6 +6,7 @@ import {
   avdCaptureSupport,
   avdCaptureWarning,
   avdHomeDir,
+  captureAvdNextStep,
   noAvdsListedMessage,
   captureAvdFix,
   newCaptureAvd,
@@ -145,7 +146,11 @@ describe('avdCaptureWarning()', () => {
 
   it('explains a Play image and suggests the capable AVD', () => {
     const warning = avdCaptureWarning('Medium_Phone_API_36', [good, play]);
-    expect(warning).toContain('AVD Medium_Phone_API_36 uses a Google Play system image — no adb root, so HTTPS traffic will not be captured.');
+    // PILOT-711: says what happens to the app's HTTPS, not just "not captured".
+    expect(warning).toContain(
+      "AVD Medium_Phone_API_36 uses a Google Play system image — no adb root, so Tapsmith can't install its CA certificate: "
+      + "the app's HTTPS requests still reach their servers, but they are not captured and device.route() can't intercept them",
+    );
     expect(warning).toContain("set avd: 'Tapsmith_Phone_API_36'");
   });
 
@@ -157,6 +162,38 @@ describe('avdCaptureWarning()', () => {
     const warning = avdCaptureWarning('Pixle_7', [good]);
     expect(warning).toContain('AVD Pixle_7 was not found on this machine');
     expect(warning).toContain("set avd: 'Tapsmith_Phone_API_36' in your Tapsmith config in place of 'Pixle_7'");
+  });
+});
+
+describe('captureAvdNextStep() (PILOT-711)', () => {
+  it('is undefined for a capture-capable AVD, an unreadable image, or no AVD', () => {
+    expect(captureAvdNextStep('Tapsmith_Phone_API_36', [good, play], true)).toBeUndefined();
+    expect(captureAvdNextStep('Broken', [broken], true)).toBeUndefined();
+    expect(captureAvdNextStep(undefined, [play], true)).toBeUndefined();
+  });
+
+  it('points a Play-image AVD at the capable AVD the machine already has', () => {
+    expect(captureAvdNextStep('Medium_Phone_API_36', [play, good], true)).toEqual({
+      label: 'Capture HTTPS',
+      optional: false,
+      action: "change avd: 'Medium_Phone_API_36' to 'Tapsmith_Phone_API_36' in tapsmith.config.ts",
+    });
+  });
+
+  it('otherwise suggests create-avd, then the avd to set', () => {
+    expect(captureAvdNextStep('Medium_Phone_API_36', [play], true)).toEqual({
+      label: 'Capture HTTPS',
+      optional: false,
+      action: "npx tapsmith create-avd, then change avd: 'Medium_Phone_API_36' to 'Tapsmith_Phone_API_36' in tapsmith.config.ts",
+    });
+  });
+
+  it('is an option that also turns capture on when the config was written without it', () => {
+    expect(captureAvdNextStep('Medium_Phone_API_36', [play, good], false)).toEqual({
+      label: 'Optional, to capture HTTPS',
+      action: "change avd: 'Medium_Phone_API_36' to 'Tapsmith_Phone_API_36' in tapsmith.config.ts, and add trace: { mode: 'retain-on-failure' }",
+      optional: true,
+    });
   });
 });
 

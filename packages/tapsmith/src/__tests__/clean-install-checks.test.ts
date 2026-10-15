@@ -6,6 +6,8 @@
  * is caught here.
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ALLOWED_INSTALL_SCRIPTS,
@@ -17,6 +19,7 @@ import {
   packEntry,
   parseInstallScriptWarnings,
   testPaths,
+  undeclaredPlatformFields,
 } from '../../scripts/clean-install-checks.mjs';
 
 // ─── Fixtures: real npm output (npm 11.17.0 and 12.2.0, Oct 2026) ───
@@ -195,5 +198,36 @@ describe('nonExecutableFiles', () => {
 
   it('flags a binary that is missing from the tarball', () => {
     expect(nonExecutableFiles(packed, ['tapsmith-core', 'gone'])).toEqual(['gone (not in the tarball)']);
+  });
+});
+
+describe('undeclaredPlatformFields (PILOT-709)', () => {
+  it('names the field pnpm 11+ would infer from a platform word in the name', () => {
+    // pnpm reads `-android` as `os: ["android"]` and skips the optional
+    // dependency on every machine that can run Tapsmith.
+    expect(undeclaredPlatformFields({ name: '@tapsmith/agent-android' })).toEqual(['os']);
+    expect(undeclaredPlatformFields({ name: '@tapsmith/core-linux-x64' })).toEqual(['os', 'cpu']);
+    expect(undeclaredPlatformFields({ name: 'some_pkg.win32.musl' })).toEqual(['os', 'libc']);
+  });
+
+  it('is satisfied once the inferable fields are declared', () => {
+    expect(undeclaredPlatformFields({ name: '@tapsmith/agent-android', os: ['darwin', 'linux', 'win32'] })).toEqual([]);
+    expect(undeclaredPlatformFields({ name: '@tapsmith/core-linux-x64', os: ['linux'], cpu: ['x64'] })).toEqual([]);
+  });
+
+  it('ignores the scope and words that are not platform tokens', () => {
+    expect(undeclaredPlatformFields({ name: '@android/tools' })).toEqual([]);
+    expect(undeclaredPlatformFields({ name: 'tapsmith' })).toEqual([]);
+    expect(undeclaredPlatformFields({ name: 'androidx-thing' })).toEqual([]);
+  });
+
+  it('holds for every package under npm-packages/', () => {
+    const root = path.resolve(import.meta.dirname, '../../../../npm-packages');
+    const offenders = fs.readdirSync(root)
+      .map((dir) => path.join(root, dir, 'package.json'))
+      .filter((file) => fs.existsSync(file))
+      .map((file) => JSON.parse(fs.readFileSync(file, 'utf8')) as { name: string })
+      .flatMap((pkg) => undeclaredPlatformFields(pkg).map((field) => `${pkg.name}: ${field}`));
+    expect(offenders).toEqual([]);
   });
 });

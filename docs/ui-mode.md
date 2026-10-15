@@ -63,8 +63,8 @@ The UI server exposes a [Streamable HTTP](https://modelcontextprotocol.io/) MCP 
 The MCP endpoint listens on its own port, not the UI's: `http://127.0.0.1:9274/mcp` by default, or a free port when 9274 is taken (two UI sessions at once, say). The terminal prints the address as `MCP ready at …` when UI mode starts; the commands below use the default, so substitute the printed address if it differs. To connect an agent:
 
 ```bash
-claude mcp add tapsmith --transport http http://localhost:9274/mcp
-codex mcp add tapsmith --url http://localhost:9274/mcp
+claude mcp add tapsmith-ui --transport http http://localhost:9274/mcp
+codex mcp add tapsmith-ui --url http://localhost:9274/mcp
 ```
 
 The **Device activity** panel (the "MCP" button in the top rail) keeps these connect instructions — endpoint URL and the `claude mcp add` one-liner, both copyable — pinned above the feed whenever no agent is attached.

@@ -206,6 +206,8 @@ describe('summarizeAvdImages()', () => {
       const summary = summarizeAvdImages([goodAvd, playAvd], 'Medium_Phone_API_36');
       expect(summary?.status).toBe('warn');
       expect(summary?.label).toContain('Medium_Phone_API_36 uses a Google Play system image');
+      // PILOT-711: what happens to the app's HTTPS, not just "not captured".
+      expect(summary?.label).toContain("the app's HTTPS requests still reach their servers, but they are not captured");
       expect(summary?.fix).toBe("Use Tapsmith_Phone_API_36, which supports HTTPS capture: set avd: 'Tapsmith_Phone_API_36' in your Tapsmith config in place of 'Medium_Phone_API_36'");
     });
 
@@ -282,6 +284,7 @@ describe('summarizeAvdImages()', () => {
       const summary = summarizeAvdImages([goodAvd, playAvd]);
       expect(summary?.status).toBe('warn');
       expect(shown(summary!)).toContain('1 of 2 AVDs uses a Google Play system image');
+      expect(shown(summary!)).toContain("the app's HTTPS requests still reach their servers, but they are not captured");
       expect(shown(summary!)).toContain('1 other AVD is capture-capable');
       expect(summary?.fix).toBe("Use Tapsmith_Phone_API_36, which supports HTTPS capture: set avd: 'Tapsmith_Phone_API_36' in your Tapsmith config");
     });

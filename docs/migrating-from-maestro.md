@@ -177,6 +177,10 @@ Name Tapsmith test files `*.tapsmith.ts` (what `tapsmith init` sets up), so that
 - Instead of relational selectors, scope a locator inside another (`device.getByTestId("row-5").getByRole("button", { name: "Delete" })`), or narrow it with `filter()`, `first()`, `nth()`, `and()` and `or()` ([ElementHandle](api-reference.md#elementhandle)). Position on screen (`below`, `leftOf`) has no locator equivalent.
 - Ambiguity is an error. When a locator matches several elements, Tapsmith's strict mode refuses to guess: it reports every match and suggests a unique locator for each.
 
+**Grouping steps.** Tapsmith's test API follows Playwright's, but Playwright's `test.step()` isn't there yet. To group actions under a name in the trace, use `device.tracing.group(name)` and `device.tracing.groupEnd()` ([other Playwright APIs not supported yet](api-reference.md#playwright-apis-not-supported-yet)).
+
+**Counting list rows.** A locator counts what the platform's accessibility tree holds, and for a long, scrolling list the platforms differ: on Android the tree usually holds just the rows on screen, while on iOS it can also hold rows the list has already rendered off screen. So `count()` and `toHaveCount()` on such a list can give a different number on each platform. Assert on the rows you care about instead (bring one into view with `scrollIntoView()`), or count a list that fits on screen.
+
 **Conditional steps.** `runFlow` with `when: visible:` becomes an `if`. Use `isVisible()` or `exists()`, which answer without waiting out the timeout (an absent element costs a second read once the screen settles, usually a second or two):
 
 ```typescript

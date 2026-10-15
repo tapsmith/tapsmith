@@ -293,8 +293,11 @@ class ElementFinder(
         // entry in roleClassMap — React Native renders these as a generic
         // android.view.View and names the role only through
         // AccessibilityNodeInfoCompat.setRoleDescription() (PILOT-664 added
-        // all but alert and combobox). The SDK's ANDROID_TRAIT_ONLY_ROLES
-        // (roles.ts) is pinned to this list.
+        // all but alert, combobox and tab). A tab item has no class of its
+        // own either: RN, Material's TabLayout.TabView and
+        // NavigationBarItemView, and Compose's Role.Tab all publish the
+        // "Tab" description on a generic layout (PILOT-514). The SDK's
+        // ANDROID_TRAIT_ONLY_ROLES (roles.ts) is pinned to this list.
         val TRAIT_ONLY_ROLES: Set<String> =
             setOf(
                 "alert",
@@ -306,7 +309,7 @@ class ElementFinder(
                 "scrollbar",
                 "spinbutton",
                 "summary",
-                "tablist",
+                "tab",
                 "timer",
             )
 
@@ -314,11 +317,13 @@ class ElementFinder(
         // entries) but also have trait-based variants via RN
         // accessibilityRole. The post-filter accepts both class-matched
         // AND roleDescription-matched elements. React Native (and Compose)
-        // render tab, progressbar and toolbar as a generic android.view.View
-        // with only a role description, so they must be here too (PILOT-656).
+        // render progressbar and toolbar as a generic android.view.View
+        // with only a role description, so they must be here too (PILOT-656),
+        // and RN's tab list ("Tab List") is a tablist beside the native tab
+        // containers (PILOT-514).
         // The SDK's ANDROID_DUAL_PATH_ROLES (roles.ts) is pinned to this list.
         val DUAL_PATH_ROLES: Set<String> =
-            setOf("heading", "link", "image", "searchfield", "tab", "progressbar", "toolbar")
+            setOf("heading", "link", "image", "searchfield", "progressbar", "toolbar", "tablist")
     }
 
     /**
@@ -424,7 +429,9 @@ class ElementFinder(
                     "androidx.appcompat.widget.Toolbar",
                     "com.google.android.material.appbar.MaterialToolbar",
                 ),
-            "tab" to
+            // The tab containers. Their items are "tab"s, known only by
+            // their role description (TRAIT_ONLY_ROLES, PILOT-514).
+            "tablist" to
                 listOf(
                     "android.widget.TabWidget",
                     "com.google.android.material.tabs.TabLayout",

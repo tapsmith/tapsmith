@@ -77,7 +77,9 @@ jobs:
       # install: `npm warn deprecated` lines (PILOT-405), an install-scripts
       # warning naming a Tapsmith or unvetted package, a daemon binary that is
       # not executable without scripts (PILOT-437), and compiled tests in the
-      # tarball (PILOT-438). It runs here rather than in release.yml so the
+      # tarball (PILOT-438). It also installs the tarball with pnpm 11 and 12
+      # (through corepack) and fails if pnpm leaves @tapsmith/agent-android
+      # out (PILOT-709). It runs here rather than in release.yml so the
       # release PR catches it before the tag, and without racing registry
       # propagation of the just-published platform packages.
       #

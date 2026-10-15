@@ -16,8 +16,9 @@
 //     because the build stopped bundling docs/api-reference.md (PILOT-359).
 //
 // The host platform's @tapsmith/core-* package is packed from npm-packages/
-// with stub binaries in place of the Rust build, so the check exercises this
-// commit's package.json and file modes rather than the last published ones.
+// with stub binaries in place of the Rust build, and @tapsmith/agent-android
+// with stub APKs, so the check exercises this commit's package.json and file
+// modes rather than the last published ones.
 //
 // Run after `npm run build`: `npm run check:clean-install`.
 // Pass --keep to leave the scratch directory behind for inspection.
@@ -36,6 +37,7 @@ import {
   packEntry,
   parseInstallScriptWarnings,
   testPaths,
+  undeclaredPlatformFields,
 } from './clean-install-checks.mjs';
 
 const packageDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -136,6 +138,25 @@ function checkNoInstallScripts() {
   }
 }
 
+/**
+ * No package under npm-packages/ may leave a platform field undeclared that
+ * pnpm 11+ would infer from its name (PILOT-709).
+ */
+function checkDeclaredPlatforms() {
+  for (const entry of fs.readdirSync(npmPackagesDir, { withFileTypes: true })) {
+    const pkgPath = path.join(npmPackagesDir, entry.name, 'package.json');
+    if (!entry.isDirectory() || !fs.existsSync(pkgPath)) continue;
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    const fields = undeclaredPlatformFields(pkg);
+    if (fields.length > 0) {
+      fail(
+        `npm-packages/${entry.name}/package.json does not declare ${fields.join(', ')}, which pnpm 11+ infers ` +
+          `from the name ${pkg.name}. Declare the platforms it installs on.`,
+      );
+    }
+  }
+}
+
 /** Pack tapsmith and fail on compiled tests; report the size. */
 function packTapsmith() {
   const info = pack(packageDir);
@@ -178,6 +199,17 @@ function packHostCorePackage() {
     fail(`npm pack dropped the execute bit from ${pkg.name}'s binaries: ${problems.join(', ')}.`);
   }
   return { ...info, pkgName: pkg.name, binaries };
+}
+
+/** Pack @tapsmith/agent-android from a copy whose APKs are stub files. */
+function packAgentAndroid() {
+  const source = path.join(npmPackagesDir, 'agent-android');
+  const copy = path.join(scratch, 'agent-android');
+  fs.mkdirSync(copy);
+  fs.copyFileSync(path.join(source, 'package.json'), path.join(copy, 'package.json'));
+  const pkg = JSON.parse(fs.readFileSync(path.join(copy, 'package.json'), 'utf8'));
+  for (const apk of pkg.files) fs.writeFileSync(path.join(copy, apk), 'clean-install-stub\n');
+  return { ...pack(copy), pkgName: pkg.name };
 }
 
 /** Install with scripts, as a user does, and read npm's warnings. */
@@ -320,23 +352,110 @@ function checkMcpApiReference(project) {
   console.log(`check-clean-install: the installed MCP server serves tapsmith://api-reference (${run.stdout.trim()} chars).`);
 }
 
+// ─── pnpm (PILOT-709) ───
+
+// pnpm 11 started inferring an optional dependency's platform from its name
+// and skipped @tapsmith/agent-android; pnpm 10 did not, so it is not checked.
+// Pinned so a pnpm release cannot turn this red without a change here.
+const PNPM_VERSIONS = ['11.28.5', '12.11.2'];
+
+/**
+ * `pnpm add -D tapsmith` with each pinned pnpm (through corepack) must
+ * install @tapsmith/agent-android, and the installed SDK must find its APKs.
+ * Overrides point the Tapsmith packages at this commit's tarballs. Returns
+ * whether pnpm was run at all.
+ */
+function checkPnpmInstallsAgent(tapsmith, core, agent) {
+  const corepackEnv = {
+    ...env,
+    COREPACK_ENABLE_DOWNLOAD_PROMPT: '0',
+    COREPACK_ENABLE_STRICT: '0',
+    COREPACK_HOME: path.join(scratch, 'corepack'),
+  };
+  const corepack = spawnSync('corepack', ['--version'], { env: corepackEnv, encoding: 'utf8' });
+  if (corepack.error || corepack.status !== 0) {
+    const message = 'corepack is not on PATH, so the pnpm install was not checked. It ships with Node 22 and 24.';
+    if (process.env.CI) fail(message);
+    else console.warn(`\ncheck-clean-install: warning: ${message}`);
+    return false;
+  }
+  for (const version of PNPM_VERSIONS) {
+    const project = emptyProject(`pnpm-${version}`);
+    // allowBuilds: pnpm 11+ exits 1 over the build scripts it skipped
+    // (esbuild, protobufjs) unless the project records a decision, which is
+    // what docs/getting-started.md tells pnpm users to do.
+    fs.writeFileSync(
+      path.join(project, 'pnpm-workspace.yaml'),
+      [
+        'allowBuilds:',
+        '  esbuild: false',
+        '  protobufjs: false',
+        'overrides:',
+        `  '${agent.pkgName}': 'file:${agent.tarball}'`,
+        `  '${core.pkgName}': 'file:${core.tarball}'`,
+        '',
+      ].join('\n'),
+    );
+    const install = spawnSync(
+      'corepack',
+      [`pnpm@${version}`, 'add', '-D', tapsmith.tarball, '--store-dir', path.join(scratch, 'pnpm-store')],
+      { cwd: project, env: corepackEnv, encoding: 'utf8' },
+    );
+    if (install.error || install.status !== 0) {
+      console.error(`${install.stdout ?? ''}${install.stderr ?? ''}`);
+      fail(`pnpm ${version} add -D ${tapsmith.filename} failed (${install.error?.message ?? `exit ${install.status}`}).`);
+      continue;
+    }
+    const resolve = spawnSync(
+      process.execPath,
+      [
+        '--input-type=module',
+        '-e',
+        `const { findAgentApk, findAgentTestApk } = await import(${JSON.stringify(path.join(project, 'node_modules/tapsmith/dist/agent-resolve.js'))});` +
+          'console.log(JSON.stringify([findAgentApk() ?? null, findAgentTestApk() ?? null]));',
+      ],
+      { cwd: project, env, encoding: 'utf8' },
+    );
+    let found = [];
+    try {
+      found = JSON.parse(resolve.stdout.trim());
+    } catch {
+      // Reported below.
+    }
+    const fromPackage = (p) => typeof p === 'string' && p.includes(path.join('@tapsmith', 'agent-android'));
+    if (resolve.status !== 0 || found.length !== 2 || !found.every(fromPackage)) {
+      fail(
+        `after \`pnpm ${version} add -D tapsmith\`, the installed SDK does not find the Android agent APKs in ` +
+          `${agent.pkgName} (pnpm skipped it, or it is not resolvable from tapsmith):\n${resolve.stdout}${resolve.stderr}`,
+      );
+      continue;
+    }
+    console.log(`check-clean-install: pnpm ${version} installs ${agent.pkgName} and the SDK finds its APKs.`);
+  }
+  return true;
+}
+
 // ─── Main ───
 
 let exitCode = 0;
 try {
   const npmVersion = npm(['--version'], scratch).stdout.trim();
   checkNoInstallScripts();
+  checkDeclaredPlatforms();
   const tapsmith = packTapsmith();
   const core = packHostCorePackage();
+  const agent = packAgentAndroid();
   checkInstallWarnings(tapsmith, core, npmVersion);
   const installed = checkBinariesWithoutScripts(tapsmith, core);
   if (installed) checkMcpApiReference(installed);
+  const pnpmChecked = checkPnpmInstallsAgent(tapsmith, core, agent);
   if (failures.length > 0) {
     exitCode = 1;
   } else {
     console.log(
       `check-clean-install: ${tapsmith.filename} installs into an empty project with no deprecation warnings, ` +
-        `no Tapsmith install scripts, a runnable daemon binary and its MCP API reference (npm ${npmVersion}).`,
+        `no Tapsmith install scripts, a runnable daemon binary and its MCP API reference (npm ${npmVersion})` +
+        (pnpmChecked ? `, and pnpm ${PNPM_VERSIONS.join(' and ')} install the Android agent.` : '.'),
     );
   }
 } catch (err) {

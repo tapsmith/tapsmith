@@ -21,7 +21,7 @@ vi.mock('enquirer', () => ({
   },
 }));
 
-const { offerTapsmithInstall } = await import('../init.js');
+const { offerTapsmithInstall, warnIfAndroidAgentMissing } = await import('../init.js');
 
 let dir: string;
 let logged: string[];
@@ -136,5 +136,30 @@ describe('offerTapsmithInstall()', () => {
     expect(questions).toEqual([]);
     expect(ran).toEqual([]);
     expect(logged.join('\n')).toContain(`⚠ There's no package.json in ${app}: on its own, \`npm i -D tapsmith\` would add Tapsmith to ${dir} instead. If that is this project's root, run it there; otherwise create a package.json here first.`);
+  });
+});
+
+// PILOT-709: pnpm 11+ skipped @tapsmith/agent-android, and init said nothing.
+describe('warnIfAndroidAgentMissing()', () => {
+  it('warns with the project\'s install command when its tapsmith has no agent package', async () => {
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}\n');
+    fs.writeFileSync(path.join(dir, 'pnpm-lock.yaml'), '');
+    installTapsmithStub();
+    await warnIfAndroidAgentMissing(dir);
+    expect(logged.join('\n')).toMatch(/⚠ Android agent not found — @tapsmith\/agent-android.*pnpm 11.*\n.*Run: pnpm add -D @tapsmith\/agent-android/);
+  });
+
+  it('says nothing when the agent package is installed', async () => {
+    installTapsmithStub();
+    const agent = path.join(dir, 'node_modules', '@tapsmith', 'agent-android');
+    fs.mkdirSync(agent, { recursive: true });
+    fs.writeFileSync(path.join(agent, 'package.json'), '{ "name": "@tapsmith/agent-android" }\n');
+    await warnIfAndroidAgentMissing(dir);
+    expect(logged).toEqual([]);
+  });
+
+  it('says nothing when the project has no tapsmith (the install step already said so)', async () => {
+    await warnIfAndroidAgentMissing(dir);
+    expect(logged).toEqual([]);
   });
 });

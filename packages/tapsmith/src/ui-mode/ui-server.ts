@@ -80,9 +80,8 @@ import {
 } from '../launch-progress.js';
 import {
   getTestDiscoveryWatchRoots,
-  matchesTestIgnore,
+  isIgnoredDiscoveryWatchPath,
   matchesTestFile,
-  relativeTestPath,
 } from '../test-file-discovery.js';
 
 // ─── SPA paths ───
@@ -3738,17 +3737,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   }
 
   function shouldIgnoreDiscoveryPath(filePath: string): boolean {
-    const resolved = path.resolve(resolvedRootDir, filePath);
-    const normalizedRelative = relativeTestPath(resolved, resolvedRootDir);
-    if (normalizedRelative.startsWith('../') || path.isAbsolute(normalizedRelative)) return true;
-
-    const parts = normalizedRelative.split('/');
-    if (parts.includes('.git') || matchesTestIgnore(normalizedRelative)) {
-      return true;
-    }
-
-    const outputRelative = path.relative(resolvedOutputDir, resolved);
-    return outputRelative === '' || (!outputRelative.startsWith('..') && !path.isAbsolute(outputRelative));
+    return isIgnoredDiscoveryWatchPath(filePath, resolvedRootDir, resolvedOutputDir);
   }
 
   function addUnique(files: string[], filePath: string): boolean {

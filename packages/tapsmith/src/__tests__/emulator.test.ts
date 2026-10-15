@@ -54,6 +54,7 @@ import {
   waitForBoot,
   waitForSystemSettle,
   listAdbDevices,
+  queryAdbDevices,
   reserveEmulatorPort,
   emulatorsBootingThisProcess,
   stopLaunchedEmulator,
@@ -674,23 +675,30 @@ describe('emulator utilities', () => {
       argv?: Record<number, string[] | undefined>
       listener?: Record<string, number | undefined>
       healthy?: boolean
+      /** Successive `adb devices` answers, overriding `adb` (PILOT-710). */
+      query?: () => { serial: string, state: string }[] | { error: string }
+      /** Serials another live Tapsmith session holds. */
+      held?: string[]
     }) {
       const written: unknown[][] = [];
+      const sleep = vi.fn();
       const killEmulator = vi.fn();
       const killProcess = vi.fn();
       const probeDeviceHealth = vi.fn((serial: string) => ({ serial, healthy: opts.healthy ?? true, reason: opts.healthy === false ? 'pm unresponsive' : undefined }));
       const deps = {
         readManifest: () => opts.entries,
         writeManifest: (e: unknown[]) => { written.push(e); },
-        listAdbDevices: () => opts.adb ?? [],
+        queryAdbDevices: opts.query ?? (() => opts.adb ?? []),
+        sleep,
         isProcessAlive: (pid: number) => (opts.alive ?? []).includes(pid),
         readProcessArgs: (pid: number) => opts.argv?.[pid],
         findEmulatorPid: (serial: string) => opts.listener?.[serial],
         probeDeviceHealth,
+        devicesHeldElsewhere: () => new Set(opts.held ?? []),
         killEmulator,
         killProcess,
       };
-      return { deps, written, killEmulator, killProcess, probeDeviceHealth };
+      return { deps, written, sleep, killEmulator, killProcess, probeDeviceHealth };
     }
 
     beforeEach(() => {
@@ -974,6 +982,194 @@ describe('emulator utilities', () => {
       expect(h.killEmulator).not.toHaveBeenCalled();
     });
 
+    // PILOT-710: a failed `adb devices` (adb not on PATH, timed out, restarting)
+    // read as "no devices", so every live emulator Tapsmith had launched was
+    // killed as unresponsive — another session's mid-test emulator included.
+    describe('when adb cannot be queried (PILOT-710)', () => {
+      const answers = (...seq: Array<{ serial: string, state: string }[] | { error: string }>) => {
+        let i = 0;
+        return vi.fn(() => seq[Math.min(i++, seq.length - 1)]);
+      };
+
+      it('never kills or reuses a live emulator it launched, and keeps its record', () => {
+        const e = entry();
+        const query = answers({ error: 'adb was not found on PATH' });
+        const h = harness({ entries: [e], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
+        expect(reclaimOrphanedEmulators(h.deps)).toEqual({ reusable: [], killed: [], undetermined: ['emulator-5554'], booting: [] });
+        expect(h.killProcess).not.toHaveBeenCalled();
+        expect(h.killEmulator).not.toHaveBeenCalled();
+        expect(h.probeDeviceHealth).not.toHaveBeenCalled();
+        expect(h.written).toEqual([[e]]);
+        // Asked twice, a settle delay apart, before giving up.
+        expect(query).toHaveBeenCalledTimes(2);
+        expect(h.sleep).toHaveBeenCalledTimes(1);
+      });
+
+      it('says why it left the emulators alone', () => {
+        const h = harness({
+          entries: [entry(), entry({ serial: 'emulator-5556', port: 5556, pid: 4343 })],
+          query: answers({ error: '`adb devices` timed out after 10 s' }),
+          alive: [4242, 4343],
+          argv: { 4242: tapsmithArgv(), 4343: tapsmithArgv('Pixel_API_36', 5556) },
+        });
+        reclaimOrphanedEmulators(h.deps);
+        const output = vi.mocked(process.stderr.write).mock.calls.map((call) => String(call[0])).join('');
+        expect(output).toContain('`adb devices` timed out after 10 s');
+        expect(output).toContain('emulator-5554, emulator-5556');
+        expect(output).toContain('leaving');
+        expect(output).not.toContain('Killing');
+        expect(output.split("Couldn't query adb").length - 1).toBe(1);
+      });
+
+      it('still drops records whose emulator has gone, killing nothing', () => {
+        const h = harness({ entries: [entry()], query: answers({ error: 'adb was not found on PATH' }), alive: [] });
+        expect(reclaimOrphanedEmulators(h.deps)).toEqual({ reusable: [], killed: [], undetermined: [], booting: [] });
+        expect(h.killProcess).not.toHaveBeenCalled();
+        expect(h.written).toEqual([[]]);
+        // Nothing alive to protect: no second query, no delay.
+        expect(h.sleep).not.toHaveBeenCalled();
+      });
+
+      it('judges normally when a second query answers', () => {
+        const h = harness({
+          entries: [entry()],
+          query: answers({ error: 'adb exited with code 1' }, [{ serial: 'emulator-5554', state: 'device' }]),
+          alive: [4242],
+          argv: { 4242: tapsmithArgv() },
+          listener: { 'emulator-5554': 4242 },
+        });
+        expect(reclaimOrphanedEmulators(h.deps).reusable).toEqual(['emulator-5554']);
+        expect(h.killProcess).not.toHaveBeenCalled();
+      });
+
+      it('reuses an emulator that adb lists again on the second look (adb server restarting)', () => {
+        const query = answers([], [{ serial: 'emulator-5554', state: 'device' }]);
+        const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
+        expect(reclaimOrphanedEmulators(h.deps).reusable).toEqual(['emulator-5554']);
+        expect(h.killProcess).not.toHaveBeenCalled();
+        expect(query).toHaveBeenCalledTimes(2);
+      });
+
+      it('reuses an emulator that was offline on the first look and online on the second', () => {
+        const query = answers([{ serial: 'emulator-5554', state: 'offline' }], [{ serial: 'emulator-5554', state: 'device' }]);
+        const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
+        expect(reclaimOrphanedEmulators(h.deps).reusable).toEqual(['emulator-5554']);
+        expect(h.killEmulator).not.toHaveBeenCalled();
+      });
+
+      it('does not kill on one answer that follows a failure (adb server restarting)', () => {
+        for (const second of [[], [{ serial: 'emulator-5554', state: 'offline' }]]) {
+          const query = answers({ error: '`adb devices` failed: cannot connect to daemon' }, second, { error: '`adb devices` timed out after 10 s' });
+          const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
+          expect(reclaimOrphanedEmulators(h.deps)).toEqual({ reusable: [], killed: [], undetermined: ['emulator-5554'], booting: [] });
+          expect(h.killProcess).not.toHaveBeenCalled();
+          expect(query).toHaveBeenCalledTimes(3);
+        }
+      });
+
+      it('kills after a failure only once two later answers agree it is gone', () => {
+        const query = answers({ error: 'adb exited with code 1' }, [], []);
+        const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() } });
+        expect(reclaimOrphanedEmulators(h.deps).killed).toEqual(['emulator-5554']);
+        expect(query).toHaveBeenCalledTimes(3);
+        expect(h.sleep).toHaveBeenCalledTimes(2);
+      });
+
+      it('never kills an emulator one answer showed online and the next did not', () => {
+        // emulator-5556 is really gone; emulator-5554 is another session's,
+        // and adb restarts between the looks.
+        const query = answers(
+          [{ serial: 'emulator-5554', state: 'device' }],
+          [],
+        );
+        const h = harness({
+          entries: [entry(), entry({ serial: 'emulator-5556', port: 5556, pid: 4343 })],
+          query,
+          alive: [4242, 4343],
+          argv: { 4242: tapsmithArgv(), 4343: tapsmithArgv('Pixel_API_36', 5556) },
+          listener: { 'emulator-5554': 4242 },
+        });
+        const result = reclaimOrphanedEmulators(h.deps);
+        expect(result.killed).toEqual(['emulator-5556']);
+        expect(result.undetermined).toEqual(['emulator-5554']);
+        expect(h.killProcess).not.toHaveBeenCalledWith(4242);
+        expect(h.killEmulator).not.toHaveBeenCalledWith('emulator-5554');
+        const output = vi.mocked(process.stderr.write).mock.calls.map((call) => String(call[0])).join('');
+        expect(output).toContain("adb's state for emulator-5554 changed while Tapsmith checked it");
+      });
+
+      it('never kills an emulator whose state differs between the two answers', () => {
+        // adb restarting: fails, then lists nothing yet, then the emulator reconnecting.
+        const query = answers({ error: 'adb exited with code 1' }, [], [{ serial: 'emulator-5554', state: 'offline' }]);
+        const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
+        expect(reclaimOrphanedEmulators(h.deps)).toEqual({ reusable: [], killed: [], undetermined: ['emulator-5554'], booting: [] });
+        expect(h.killProcess).not.toHaveBeenCalled();
+      });
+
+      it('judges on the two answers around a failed look', () => {
+        const gone = harness({ entries: [entry()], query: answers([], { error: 'x' }, []), alive: [4242], argv: { 4242: tapsmithArgv() } });
+        expect(reclaimOrphanedEmulators(gone.deps).killed).toEqual(['emulator-5554']);
+        const back = harness({
+          entries: [entry()],
+          query: answers({ error: 'x' }, [], [{ serial: 'emulator-5554', state: 'device' }]),
+          alive: [4242],
+          argv: { 4242: tapsmithArgv() },
+          listener: { 'emulator-5554': 4242 },
+        });
+        expect(reclaimOrphanedEmulators(back.deps).reusable).toEqual(['emulator-5554']);
+        expect(back.killProcess).not.toHaveBeenCalled();
+      });
+
+      it("keeps a record another run wrote while it was checking adb", () => {
+        const mine = entry();
+        const theirs = entry({ serial: 'emulator-5560', port: 5560, pid: 5151, booting: true, ownerPid: 6161 });
+        let reads = 0;
+        const h = harness({ entries: [mine], query: answers([], []), alive: [4242], argv: { 4242: tapsmithArgv() } });
+        reclaimOrphanedEmulators({ ...h.deps, readManifest: () => (reads++ === 0 ? [mine] : [mine, theirs]) });
+        expect(h.written).toEqual([[theirs]]);
+      });
+
+      it('kills an emulator adb positively left out twice, after one settle delay', () => {
+        const query = answers([], []);
+        const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() } });
+        expect(reclaimOrphanedEmulators(h.deps).killed).toEqual(['emulator-5554']);
+        expect(h.killProcess).toHaveBeenCalledWith(4242);
+        expect(query).toHaveBeenCalledTimes(2);
+        expect(h.sleep).toHaveBeenCalledTimes(1);
+      });
+
+      it('asks only once when every live emulator is online', () => {
+        const query = answers([{ serial: 'emulator-5554', state: 'device' }]);
+        const h = harness({ entries: [entry()], query, alive: [4242], argv: { 4242: tapsmithArgv() }, listener: { 'emulator-5554': 4242 } });
+        reclaimOrphanedEmulators(h.deps);
+        expect(query).toHaveBeenCalledTimes(1);
+        expect(h.sleep).not.toHaveBeenCalled();
+      });
+    });
+
+    it('never stops an emulator another live Tapsmith session holds, whatever its checks say', () => {
+      for (const [adb, healthy] of [
+        [[], true],
+        [[{ serial: 'emulator-5554', state: 'offline' }], true],
+        [[{ serial: 'emulator-5554', state: 'device' }], false],
+      ] as const) {
+        const e = entry();
+        const h = harness({
+          entries: [e],
+          adb: [...adb],
+          alive: [4242],
+          argv: { 4242: tapsmithArgv() },
+          listener: { 'emulator-5554': 4242 },
+          healthy,
+          held: ['emulator-5554'],
+        });
+        expect(reclaimOrphanedEmulators(h.deps)).toEqual({ reusable: [], killed: [], undetermined: ['emulator-5554'], booting: [] });
+        expect(h.killProcess).not.toHaveBeenCalled();
+        expect(h.killEmulator).not.toHaveBeenCalled();
+        expect(h.written).toEqual([[e]]);
+      }
+    });
+
     it('judges ownership by the last record for a duplicated serial', () => {
       const h = harness({
         entries: [entry({ pid: 4242 }), entry({ pid: 999991 })],
@@ -993,17 +1189,20 @@ describe('emulator utilities', () => {
       argv?: Record<number, string[] | undefined>
       avdNames?: Record<string, string>
       healthy?: Record<string, boolean>
+      held?: string[]
     }) {
       const killEmulator = vi.fn();
       const deps = {
         readManifest: () => [],
         writeManifest: vi.fn(),
-        listAdbDevices: () => opts.adb,
+        queryAdbDevices: () => opts.adb,
+        sleep: vi.fn(),
         isProcessAlive: () => false,
         readProcessArgs: (pid: number) => opts.argv?.[pid],
         findEmulatorPid: (serial: string) => opts.listener?.[serial],
         resolveAvdName: (serial: string) => opts.avdNames?.[serial],
         probeDeviceHealth: (serial: string) => ({ serial, healthy: opts.healthy?.[serial] ?? true, reason: 'boot not completed' }),
+        devicesHeldElsewhere: () => new Set(opts.held ?? []),
         killEmulator,
         killProcess: vi.fn(),
         waitForAdbSettle: vi.fn(),
@@ -1109,6 +1308,24 @@ describe('emulator utilities', () => {
         readProcessArgs: () => (reads++ === 0 ? undefined : ['/sdk/qemu', ...emulatorLaunchArgs('Pixel', 5556)]),
       });
       expect(result.killed).toEqual([]);
+      expect(h.killEmulator).not.toHaveBeenCalled();
+    });
+
+    it('leaves an unhealthy Tapsmith-launched orphan another session holds running', () => {
+      const h = harness({
+        adb: [{ serial: 'emulator-5556', state: 'offline' }],
+        listener: { 'emulator-5556': 8888 },
+        argv: { 8888: ['/sdk/qemu', ...emulatorLaunchArgs('Pixel', 5556)] },
+        held: ['emulator-5556'],
+      });
+      expect(cleanupStaleEmulators('Pixel', h.deps).killed).toEqual([]);
+      expect(h.killEmulator).not.toHaveBeenCalled();
+    });
+
+    it('kills nothing heuristically when adb cannot be queried (PILOT-710)', () => {
+      const h = harness({ adb: [] });
+      const result = cleanupStaleEmulators('Pixel', { ...h.deps, queryAdbDevices: () => ({ error: 'adb was not found on PATH' }) });
+      expect(result).toEqual({ reusable: [], killed: [] });
       expect(h.killEmulator).not.toHaveBeenCalled();
     });
 
@@ -2057,11 +2274,12 @@ describe('provisionEmulators launch failures', () => {
       const result = reclaimOrphanedEmulators({
         readManifest: () => [{ serial: 'emulator-5570', pid: 4242, avd: 'Pixel', port: 5570, launchedAt: '' }],
         writeManifest: () => undefined,
-        listAdbDevices: () => [{ serial: 'emulator-5570', state: 'device' }],
+        queryAdbDevices: () => [{ serial: 'emulator-5570', state: 'device' }],
         isProcessAlive: () => true,
         readProcessArgs: () => ['/sdk/qemu', ...emulatorLaunchArgs('Pixel', 5570, { headless: false, args: [] })],
         findEmulatorPid: () => 4242,
         probeDeviceHealth: (serial) => ({ serial, healthy: true }),
+        devicesHeldElsewhere: () => new Set<string>(),
         killEmulator: vi.fn(),
         killProcess: vi.fn(),
       });
@@ -2241,6 +2459,40 @@ describe('listAdbDevices', () => {
   it('is empty when adb cannot be run', () => {
     const exec = vi.fn(() => { throw new Error('spawn adb ENOENT'); }) as unknown as typeof import('node:child_process').execFileSync;
     expect(listAdbDevices(exec)).toEqual([]);
+  });
+});
+
+// PILOT-710: a failed query must not look like "no devices" to the callers
+// that kill on absence.
+describe('queryAdbDevices', () => {
+  const failing = (err: Error & { code?: string, signal?: string }) =>
+    vi.fn(() => { throw err; }) as unknown as typeof import('node:child_process').execFileSync;
+
+  it('lists devices when adb answers, an empty list included', () => {
+    const exec = vi.fn(() => 'List of devices attached\n\n') as unknown as typeof import('node:child_process').execFileSync;
+    expect(queryAdbDevices(exec)).toEqual([]);
+  });
+
+  it('reports adb missing from PATH as a failure, not an empty list', () => {
+    const result = queryAdbDevices(failing(Object.assign(new Error('spawnSync adb ENOENT'), { code: 'ENOENT' })));
+    expect(result).toEqual({ error: 'adb was not found on PATH' });
+  });
+
+  it('reports a timed-out query as a failure', () => {
+    const result = queryAdbDevices(failing(Object.assign(new Error('spawnSync adb ETIMEDOUT'), { code: 'ETIMEDOUT', signal: 'SIGTERM' })));
+    expect(result).toEqual({ error: '`adb devices` timed out after 10 s' });
+  });
+
+  it("reports any other error with adb's own reason from stderr", () => {
+    const err = Object.assign(new Error('Command failed: adb devices\n* daemon not running\nadb: cannot connect to daemon\n'), {
+      stderr: '* daemon not running; starting now at tcp:5037\nadb: cannot connect to daemon\n',
+    });
+    expect(queryAdbDevices(failing(err))).toEqual({ error: '`adb devices` failed: adb: cannot connect to daemon' });
+  });
+
+  it('falls back to the error message when adb wrote nothing to stderr', () => {
+    const result = queryAdbDevices(failing(Object.assign(new Error('Command failed: adb devices'), { stderr: '' })));
+    expect(result).toEqual({ error: '`adb devices` failed: Command failed: adb devices' });
   });
 });
 

@@ -115,3 +115,30 @@ export function nonExecutableFiles(files, names) {
   }
   return problems;
 }
+
+// ─── Platform fields pnpm infers from a name (PILOT-709) ───
+
+// pnpm 11+ gives an optional dependency that leaves `os`, `cpu` or `libc`
+// undeclared the value a platform word in its name implies (pnpm's
+// inferPlatformFromPackageName: the unscoped name split on `-`, `_` and `.`).
+// `@tapsmith/agent-android` declared none, so pnpm read it as Android-only and
+// skipped it on every machine that runs Tapsmith. These are pnpm's tokens.
+const PLATFORM_TOKENS = Object.freeze({
+  os: ['aix', 'android', 'darwin', 'macos', 'osx', 'freebsd', 'linux', 'netbsd', 'openbsd', 'openharmony', 'sunos', 'win32', 'windows'],
+  cpu: ['arm', 'armv6', 'armv7', 'arm64', 'aarch64', 'ia32', 'loong64', 'mips64el', 'ppc64', 'ppc64le', 'riscv64', 's390x', 'x64', 'amd64', 'wasm32'],
+  libc: ['glibc', 'gnu', 'gnueabihf', 'musl', 'musleabihf'],
+});
+
+/**
+ * The platform fields (`os`, `cpu`, `libc`) a package's name implies to pnpm
+ * but its package.json does not declare. Each one is a field pnpm fills in
+ * from the name, so it must be declared for the package to install where it
+ * is meant to.
+ */
+export function undeclaredPlatformFields(pkg) {
+  const name = pkg.name.includes('/') ? pkg.name.slice(pkg.name.indexOf('/') + 1) : pkg.name;
+  const tokens = name.toLowerCase().split(/[-_.]/);
+  return Object.entries(PLATFORM_TOKENS)
+    .filter(([field, words]) => pkg[field] === undefined && tokens.some((token) => words.includes(token)))
+    .map(([field]) => field);
+}

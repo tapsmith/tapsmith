@@ -17,7 +17,7 @@ test("can navigate to settings", async ({ device }) => {
 
 ## Features
 
-- **Playwright-style locators** -- `getByText()`, `getByRole()`, `getByContentDesc()`, and more
+- **Playwright-style locators** -- `getByRole()`, `getByText()`, `getByLabel()`, `getByDescription()`, and more
 - **Auto-waiting assertions** -- `toBeVisible()`, `toBeChecked()`, `toHaveText()` poll until the condition is met
 - **Android and iOS** -- same API, same test files, both platforms
 - **Parallel execution** -- multi-device test runs with automatic emulator/simulator provisioning

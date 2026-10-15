@@ -3,7 +3,7 @@ import { parseBounds, getNodeRole, isLabelField, webViewAriaLabel } from './hier
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
-import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../../roles.js';
+import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, IOS_STATIC_TEXT_ROLES, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../../roles.js';
 
 // ─── Selector Parsing ───
 
@@ -786,6 +786,13 @@ function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean
     // like the agent (PILOT-608, PILOT-664).
     const generic = iosGenericViewHasRole(role, { value: node.attributes.get('value'), traitRole: reported, named });
     if (generic !== undefined) return generic;
+  } else if (type === 'XCUIElementTypeStaticText' && IOS_STATIC_TEXT_ROLES.has(role)) {
+    // An RN alert Text, on the same terms (PILOT-718). A static text reports
+    // "text" unless a trait makes it a heading or link; the dump can't show
+    // a button trait, which the agent also excludes.
+    return iosGenericViewHasRole(role, {
+      value: node.attributes.get('value'), traitRole: reported === 'text' ? '' : reported, named,
+    }) ?? false;
   }
   return role !== 'heading' && (IOS_ROLE_TYPES[role]?.includes(type) ?? false);
 }

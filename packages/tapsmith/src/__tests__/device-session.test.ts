@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll, type Mock } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   agentFailures: 0,
   /** Serials whose agent never starts (permanent failure). */
   failAgentFor: new Set<string>(),
+  /** Serials the daemon reports have no agent installed (and no APKs were given). */
+  noAgentFor: new Set<string>(),
   /** iOS simulator installs performed (installAppAsync calls). */
   simInstalls: 0,
   /** Whether the simulator's installed .app matches the build on disk. */
@@ -45,7 +47,7 @@ vi.mock('../worker-protocol.js', async (importOriginal) => ({
 }));
 
 vi.mock('../grpc-client.js', () => ({
-  TapsmithGrpcClient: vi.fn().mockImplementation(() => {
+  TapsmithGrpcClient: vi.fn().mockImplementation(function () {
     const client = { waitForReady: vi.fn(async () => mocks.clientReady), close: vi.fn() };
     mocks.clients.push(client);
     return client;
@@ -53,7 +55,7 @@ vi.mock('../grpc-client.js', () => ({
 }));
 
 vi.mock('../device.js', () => ({
-  Device: vi.fn().mockImplementation(() => {
+  Device: vi.fn().mockImplementation(function () {
     let serial = '';
     const device: Record<string, ReturnType<typeof vi.fn>> = {
       listDevices: vi.fn(async () => ({ devices: [] })),
@@ -66,6 +68,7 @@ vi.mock('../device.js', () => ({
       installApk: vi.fn(async () => {}),
       startAgent: vi.fn(async () => {
         if (mocks.failAgentFor.has(serial)) throw new Error('Failed to connect to agent socket on port 18700');
+        if (mocks.noAgentFor.has(serial)) throw new Error('Tapsmith agent is not installed on the device. Set agentApk and agentTestApk in your Tapsmith config, or install manually with: adb install <path-to-agent.apk>');
         if (mocks.agentFailures > 0) {
           mocks.agentFailures--;
           throw new Error('Failed to connect to agent socket on port 18700');
@@ -126,7 +129,8 @@ vi.mock('node:child_process', async (importOriginal) => ({
   }),
 }));
 
-vi.mock('../agent-resolve.js', () => ({
+vi.mock('../agent-resolve.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../agent-resolve.js')>()),
   findAgentApk: vi.fn(() => '/agents/agent.apk'),
   findAgentTestApk: vi.fn(() => '/agents/agent-test.apk'),
 }));
@@ -135,6 +139,14 @@ vi.mock('../session-preflight.js', () => mocks.preflight);
 
 const { openDeviceGroup, openDeviceSession, closeDeviceSession, recoverDeviceSessions, sessionsForRun, sessionsToPrepare, runDeviceCount } = await import('../device-session.js');
 const { CLAIMS_DIR_ENV, claimDevice } = await import('../device-claims.js');
+
+type MockDevice = Record<string, Mock>;
+
+/** The mocked `Device` class, typed as the factory the `vi.mock` above installs. */
+async function mockedDevice(): Promise<Mock<(...args: unknown[]) => MockDevice>> {
+  const { Device } = await import('../device.js');
+  return vi.mocked(Device) as unknown as Mock<(...args: unknown[]) => MockDevice>;
+}
 
 // Claims go to a throwaway registry, never the real `~/.tapsmith/claims`.
 const claimsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-session-claims-'));
@@ -323,6 +335,27 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     expect(seen.at(-1)?.slice(0, 2)).toEqual(['agent', 'fail']);
   });
 
+  // PILOT-709: pnpm 11+ skipped @tapsmith/agent-android, and the daemon's
+  // advice (config keys, adb install) did not say so.
+  it('says the agent package is missing, with an install command, when there were no APKs', async () => {
+    const { findAgentApk } = await import('../agent-resolve.js');
+    vi.mocked(findAgentApk).mockReturnValueOnce(undefined);
+    const seen = phases();
+    mocks.noAgentFor.add('emulator-5554');
+    try {
+      const opening = openDeviceSession(
+        { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' },
+        makeConfig(),
+        { claimSession: SESSION, label: 'Device', onPhase: (p, s, d) => seen.push([p, s, d]) },
+      );
+      await expect(opening).rejects.toThrow(/Failed to start agent: Tapsmith's Android agent is not installed on the device, and there is no agent APK to install\. @tapsmith\/agent-android/);
+      await expect(opening).rejects.toThrow(/Install it with `(npm init -y && )?npm i -D @tapsmith\/agent-android`/);
+      expect(seen.at(-1)?.[2]).toContain('npm i -D @tapsmith/agent-android');
+    } finally {
+      mocks.noAgentFor.clear();
+    }
+  });
+
   it('reuses a caller-provided client and leaves it open on failure', async () => {
     const client = { waitForReady: vi.fn(async () => true), close: vi.fn() };
     const session = await openDeviceSession(
@@ -427,17 +460,17 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
   it('still checks reachability when the first selection failure was a transient infrastructure error', async () => {
     let calls = 0;
     mocks.unknownToDaemon.add('GONE-2');
-    const { Device } = await import('../device.js');
-    const real = vi.mocked(Device).getMockImplementation()!;
-    vi.mocked(Device).mockImplementationOnce((...args: Parameters<typeof real>) => {
-      const device = real(...args) as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const DeviceMock = await mockedDevice();
+    const real = DeviceMock.getMockImplementation()!;
+    DeviceMock.mockImplementationOnce(function (...args) {
+      const device = real(...args);
       const notFound = device.setDevice.getMockImplementation()!;
       device.setDevice.mockImplementation(async (s: string) => {
         calls++;
         if (calls === 1) throw new Error('Agent connection dropped');
         return notFound(s);
       });
-      return device as never;
+      return device;
     });
     await expect(openDeviceSession(
       { name: 'device-1', serial: 'GONE-2', daemonAddress: 'localhost:50052' },
@@ -466,10 +499,10 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     mocks.unreachableGraceMs = 30_000;
     mocks.unknownToDaemon.add('PHYS-BACK');
     mocks.unreachable.add('PHYS-BACK');
-    const { Device } = await import('../device.js');
-    const real = vi.mocked(Device).getMockImplementation()!;
-    vi.mocked(Device).mockImplementationOnce((...args: Parameters<typeof real>) => {
-      const device = real(...args) as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const DeviceMock = await mockedDevice();
+    const real = DeviceMock.getMockImplementation()!;
+    DeviceMock.mockImplementationOnce(function (...args) {
+      const device = real(...args);
       const original = device.setDevice.getMockImplementation()!;
       let calls = 0;
       device.setDevice.mockImplementation(async (s: string) => {
@@ -481,7 +514,7 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
         }
         return original(s);
       });
-      return device as never;
+      return device;
     });
     const session = await openDeviceSession(
       { name: 'device-1', serial: 'PHYS-BACK', daemonAddress: 'localhost:50052' },

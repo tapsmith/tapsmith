@@ -4,7 +4,7 @@ Tapsmith includes a built-in [MCP](https://modelcontextprotocol.io/) server that
 
 ## Modes
 
-The MCP server operates in two modes:
+The MCP server operates in two modes. Register each under its own name, so an agent can have both and you can tell them apart: **`tapsmith-ui`** for the UI session's HTTP endpoint, and **`tapsmith-headless`** for the stdio server. When a UI session is running, prefer `tapsmith-ui`: the agent then works in the session you can see.
 
 ### HTTP mode (recommended)
 
@@ -17,13 +17,13 @@ To connect, copy the MCP URL from the MCP panel in the UI into any MCP client th
 Claude Code:
 
 ```bash
-claude mcp add tapsmith --transport http http://localhost:9274/mcp
+claude mcp add tapsmith-ui --transport http http://localhost:9274/mcp
 ```
 
 Codex CLI:
 
 ```bash
-codex mcp add tapsmith --url http://localhost:9274/mcp
+codex mcp add tapsmith-ui --url http://localhost:9274/mcp
 ```
 
 Generic MCP config:
@@ -31,7 +31,7 @@ Generic MCP config:
 ```json
 {
   "mcpServers": {
-    "tapsmith": {
+    "tapsmith-ui": {
       "url": "http://localhost:9274/mcp"
     }
   }
@@ -54,13 +54,13 @@ platform keeps working.
 Codex CLI:
 
 ```bash
-codex mcp add tapsmith -- npx tapsmith mcp-server
+codex mcp add tapsmith-headless -- npx tapsmith mcp-server
 ```
 
 Claude Code:
 
 ```bash
-claude mcp add tapsmith -- npx tapsmith mcp-server
+claude mcp add tapsmith-headless -- npx tapsmith mcp-server
 ```
 
 Generic MCP stdio config:
@@ -68,7 +68,7 @@ Generic MCP stdio config:
 ```json
 {
   "mcpServers": {
-    "tapsmith": {
+    "tapsmith-headless": {
       "command": "npx",
       "args": ["tapsmith", "mcp-server"]
     }
@@ -79,8 +79,8 @@ Generic MCP stdio config:
 To use a non-default Tapsmith config, include the config flag in the command your MCP client launches:
 
 ```bash
-codex mcp add tapsmith-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
-claude mcp add tapsmith-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
+codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
+claude mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
 ```
 
 If a UI server is already running, stdio mode will detect it and suggest connecting via HTTP instead. Use HTTP mode when you want the agent and browser UI to share one visible session; use stdio when you want a standalone agent-owned session.
@@ -238,7 +238,7 @@ Run Tapsmith test files and return structured results. Only one test run can exe
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `files` | string[] | Yes | File paths — absolute, relative to the config's directory (`rootDir`) or the server's working directory, or globs matched the same way (e.g. `"tests/login.test.ts"`, `"**/login.test.ts"`). Use `tapsmith_list_tests` to find available files. An argument that matches no discovered file is named in the error rather than reported as an empty run. |
+| `files` | string[] | Yes | File paths — absolute, relative to the config's directory (`rootDir`) or the server's working directory, or globs matched the same way (e.g. `"tests/login.tapsmith.ts"`, `"**/login.tapsmith.ts"`). Use `tapsmith_list_tests` to find available files. An argument that matches no discovered file is named in the error rather than reported as an empty run. |
 | `test` | string | No | Run only the tests whose full name (`"Describe > test name"`) contains this text, case-insensitively (e.g. `"submits form"`). It can match more than one test, and it applies across every file in `files`. A filter that matches nothing is an error listing the available tests, never a silent pass. |
 | `project` | string | No | Project name to target a specific platform/device (e.g. `"android"`, `"ios"`). Required when a requested file runs under more than one project: such a run is refused rather than sent to the first one. An unknown project name is refused too. |
 | `device` | string | No | Device serial, or a `use.devices` member name, the run must use. Prefer `project` to pick a platform. A session keeps its devices for its whole life, so `device` can confirm the device a run would use — or, on a headless session, choose it: until a test run or a device tool needs a device (listing tests and reading session info do not), `device` pins the device the session will use. A device that cannot be set up is refused with the reason, and nothing is pinned. A device the session cannot use for the run is refused with the one it holds; it is never ignored. In HTTP (UI) mode it is accepted only when exactly one worker of the files' device target could take the run and holds that device, since each run goes to whichever of those workers is free. |
@@ -387,7 +387,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 
 ### Headless stdio workflow
 
-1. **Add the MCP server config:** `codex mcp add tapsmith -- npx tapsmith mcp-server`
+1. **Add the MCP server config:** `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
 4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device

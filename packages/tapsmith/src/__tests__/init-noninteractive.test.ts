@@ -626,6 +626,27 @@ describe('resolveInitPlan() AVD choice with network capture', () => {
     expect(plan.warnings).toEqual([]);
   });
 
+  it('points a Play-image AVD at create-avd in the next steps: before verify with capture, last and optional without (PILOT-711)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-exec-'));
+    try {
+      const step = "npx tapsmith create-avd, then change avd: 'Medium_Phone_API_36' to 'Tapsmith_Phone_API_36' in tapsmith.config.ts";
+      const on = android({ networkCapture: true, exampleTest: false, agentsMd: false, force: true });
+      const withCapture = executeInitPlan(resolveInitPlan(on, playOnlyEnv, detectStubs, tmp), on, tmp).nextSteps;
+      // Part of the setup, before verify.
+      expect(withCapture[0]).toBe(`Capture HTTPS: ${step}`);
+      const off = android({ networkCapture: false, exampleTest: false, agentsMd: false, force: true });
+      const without = executeInitPlan(resolveInitPlan(off, playOnlyEnv, detectStubs, tmp), off, tmp).nextSteps;
+      // Not requested: an option, listed last, after verify.
+      expect(without[0]).toContain('tapsmith verify');
+      expect(without[without.length - 1]).toBe(`Optional, to capture HTTPS: ${step}, and add trace: { mode: 'retain-on-failure' }`);
+      const args = android({ networkCapture: true, exampleTest: false, agentsMd: false, force: true });
+      const capable = executeInitPlan(resolveInitPlan(args, studioEnv, detectStubs, tmp), args, tmp);
+      expect(capable.nextSteps.some((s) => s.startsWith('Capture HTTPS'))).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('puts the warning in the --json result', () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-exec-'));
     try {

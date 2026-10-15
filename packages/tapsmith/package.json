@@ -1,6 +1,6 @@
 {
   "name": "tapsmith",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Mobile app testing framework — TypeScript SDK and test runner",
   "type": "module",
   "main": "dist/index.js",
@@ -86,9 +86,9 @@
     "preact": "^10.29.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.0.0",
-    "vite": "^5.4.21",
+    "vite": "^7.0.0",
     "vite-plugin-singlefile": "^2.3.2",
-    "vitest": "^3.0.0"
+    "vitest": "^4.0.0"
   },
   "optionalDependencies": {
     "@tapsmith/agent-android": "*",

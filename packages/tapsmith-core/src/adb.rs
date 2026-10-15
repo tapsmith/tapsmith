@@ -692,17 +692,15 @@ pub async fn install_ca_cert(
             Ok(output) => {
                 let msg = String::from_utf8_lossy(&output);
                 if msg.contains("cannot run as root") || msg.contains("adbd cannot run as root") {
-                    let hint = adb_root_unavailable_hint(serial).await;
-                    tracing::warn!(%serial, "Device does not support adb root — {hint}");
-                    return Err(anyhow::anyhow!("Device does not support adb root — {hint}"));
+                    let err = adb_root_unavailable(serial).await;
+                    tracing::warn!(%serial, "{err}");
+                    return Err(err.into());
                 }
                 debug!(%serial, "adb root succeeded, waiting for device");
             }
             Err(e) => {
                 tracing::warn!(%serial, "adb root failed: {e} — CA must be installed manually");
-                return Err(anyhow::anyhow!(
-                    "adb root failed: {e} — HTTPS traffic will not be captured"
-                ));
+                return Err(anyhow::anyhow!("adb root failed: {e}"));
             }
         }
 
@@ -766,14 +764,43 @@ pub async fn install_ca_cert(
     result
 }
 
-/// Compose an actionable hint for when `adb root` is unavailable.
+/// `install_ca_cert` failed because adbd cannot run as root — a production
+/// build (a Google Play emulator image, or a physical device) — so nothing can
+/// put the CA in the system trust store, on this or any later attempt. Unlike
+/// a transient adb failure, it says something permanent about the device, and
+/// `is_emulator` (serial prefix, else the qemu properties) decides how network
+/// capture copes with it (PILOT-711).
+#[derive(Debug)]
+pub struct AdbRootUnavailable {
+    pub is_emulator: bool,
+    hint: String,
+}
+
+impl std::fmt::Display for AdbRootUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Device does not support adb root — {}", self.hint)
+    }
+}
+
+impl std::error::Error for AdbRootUnavailable {}
+
+#[cfg(test)]
+impl AdbRootUnavailable {
+    pub fn for_test(is_emulator: bool, hint: &str) -> Self {
+        Self {
+            is_emulator,
+            hint: hint.to_string(),
+        }
+    }
+}
+
+/// Classify a device whose `adb root` is unavailable, with an actionable hint.
 ///
 /// On emulators this almost always means a production system image — in
 /// practice a Google Play (`google_apis_playstore`) AVD, since Google APIs
 /// and AOSP emulator images are rootable `userdebug` builds. Recreating the
-/// AVD is the real fix there; a manual user-store CA install only helps apps
-/// that opt in via `network_security_config.xml`.
-async fn adb_root_unavailable_hint(serial: &str) -> String {
+/// AVD is the real fix there.
+async fn adb_root_unavailable(serial: &str) -> AdbRootUnavailable {
     // Serial prefix identifies locally-launched emulators without any adb
     // roundtrips; the getprop probe stays as a fallback for emulators
     // reached over TCP (e.g. CI port-forwards with an opaque serial).
@@ -793,7 +820,10 @@ async fn adb_root_unavailable_hint(serial: &str) -> String {
     let product_name = shell_lenient(serial, "getprop ro.product.name")
         .await
         .unwrap_or_default();
-    root_unavailable_hint(is_emulator, product_name.trim())
+    AdbRootUnavailable {
+        is_emulator,
+        hint: root_unavailable_hint(is_emulator, product_name.trim()),
+    }
 }
 
 fn root_unavailable_hint(is_emulator: bool, product_name: &str) -> String {
@@ -886,17 +916,100 @@ async fn device_sdk_int(serial: &str) -> Option<u32> {
 /// Returns `true` if at least one zygote namespace was patched. The tmpfs
 /// overlays are volatile (cleared on reboot); a per-namespace idempotency check
 /// avoids stacking mounts across repeated capture sessions.
+///
+/// The idempotency check compares cert *content*, not just the filename: the
+/// filename is the subject hash, and every Tapsmith CA has the same subject, so
+/// a CA left by an older `~/.tapsmith` (a regenerated home dir, another macOS
+/// user, a cached AVD snapshot, a teammate's AVD) sits at the same path. That
+/// stale CA is replaced, or HTTPS capture and `route()` silently fail
+/// (PILOT-712).
 async fn try_install_apex_ca(serial: &str, cert_filename: &str, tmp_cert_path: &str) -> bool {
-    // Built as one device-side script: assemble the combined cert set once, then
-    // nsenter into init + every zygote and tmpfs-overlay the APEX cacerts dir.
-    // The SELinux relabel to `system_security_cacerts_file` is mandatory — apps
-    // can't read certs left with the default tmpfs label.
-    let script = format!(
-        r#"SRC={APEX_CA_CERT_DIR}
-TMP=/data/local/tmp/tapsmith-cacerts
+    let script = apex_ca_install_script(
+        APEX_CA_CERT_DIR,
+        "/data/local/tmp/tapsmith-cacerts",
+        cert_filename,
+        tmp_cert_path,
+    );
+
+    match shell_lenient(serial, &script).await {
+        Ok(out) => match parse_apex_outcome(&out) {
+            ApexInstallOutcome::Installed => {
+                info!(
+                    %serial, cert_filename,
+                    "CA certificate injected into Conscrypt APEX trust store (Android 14+); \
+                     trusted by apps launched after this point"
+                );
+                true
+            }
+            ApexInstallOutcome::Replaced => {
+                info!(
+                    %serial, cert_filename,
+                    "Replaced a different Tapsmith CA in the Conscrypt APEX trust store \
+                     (left by an earlier ~/.tapsmith, AVD snapshot or shared AVD) with the \
+                     current ~/.tapsmith/ca.pem; trusted by apps launched after this point"
+                );
+                true
+            }
+            ApexInstallOutcome::Failed => {
+                debug!(%serial, "APEX CA injection did not confirm success — falling back to user store");
+                false
+            }
+        },
+        Err(e) => {
+            debug!(%serial, "APEX CA injection failed: {e} — falling back to user store");
+            false
+        }
+    }
+}
+
+/// What [`apex_ca_install_script`] reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ApexInstallOutcome {
+    /// At least one namespace trusts the current CA (freshly overlaid, or
+    /// already byte-identical).
+    Installed,
+    /// As `Installed`, and at least one namespace held a *different* cert at
+    /// our filename that was replaced.
+    Replaced,
+    Failed,
+}
+
+fn parse_apex_outcome(out: &str) -> ApexInstallOutcome {
+    let has = |marker: &str| out.lines().any(|l| l.trim() == marker);
+    match (has("TAPSMITH_APEX_OK"), has("TAPSMITH_APEX_REPLACED")) {
+        (true, true) => ApexInstallOutcome::Replaced,
+        (true, false) => ApexInstallOutcome::Installed,
+        _ => ApexInstallOutcome::Failed,
+    }
+}
+
+/// The device-side script behind [`try_install_apex_ca`]: assemble the combined
+/// cert set once in `stage_dir`, then nsenter into init + every zygote and make
+/// `src_dir` (the APEX cacerts dir) hold our CA. Paths are parameters so the
+/// unit tests can run the real script on the host.
+///
+/// Per namespace:
+/// - our filename present and byte-identical to the staged cert → nothing to do;
+/// - present but different (a stale Tapsmith CA) → overwrite it in place (the
+///   existing overlay is a writable tmpfs), verified with `cmp`; if that fails,
+///   fall through to a fresh overlay on top;
+/// - absent → tmpfs-overlay the dir with the staged set.
+///
+/// The SELinux relabel to `system_security_cacerts_file` is mandatory — apps
+/// can't read certs left with the default tmpfs label.
+fn apex_ca_install_script(
+    src_dir: &str,
+    stage_dir: &str,
+    cert_filename: &str,
+    tmp_cert_path: &str,
+) -> String {
+    format!(
+        r#"SRC={src_dir}
+TMP={stage_dir}
 rm -rf "$TMP" && mkdir -p "$TMP" || exit 1
 NCERTS=$(ls "$SRC" 2>/dev/null | wc -l)
 cp "$SRC"/* "$TMP"/ 2>/dev/null || exit 1
+rm -f "$TMP"/{cert_filename}
 cp "{tmp_cert_path}" "$TMP"/{cert_filename} || exit 1
 chmod 644 "$TMP"/* || exit 1
 # Never mount a store smaller than the source: the staged set is the source
@@ -907,33 +1020,29 @@ chmod 644 "$TMP"/* || exit 1
 # from every app forked by the zygote.
 [ "$(ls "$TMP" | wc -l)" -ge "$NCERTS" ] || exit 1
 ok=0
+replaced=0
 for PID in 1 $(pidof zygote) $(pidof zygote64); do
   [ -z "$PID" ] && continue
-  if nsenter -t "$PID" -m -- test -f "$SRC"/{cert_filename} 2>/dev/null; then ok=1; continue; fi
-  if nsenter -t "$PID" -m -- sh -c "mount -t tmpfs tmpfs $SRC && (cp $TMP/* $SRC/ && chmod 644 $SRC/* && chown 0:0 $SRC/* && chcon u:object_r:system_security_cacerts_file:s0 $SRC/* || (umount -l $SRC && exit 1))" 2>/dev/null; then ok=1; fi
+  stale=0
+  if nsenter -t "$PID" -m -- test -f "$SRC"/{cert_filename} 2>/dev/null; then
+    # Every Tapsmith CA has the same subject, hence this same filename, so a
+    # present file is only ours if it is byte-identical (PILOT-712).
+    if nsenter -t "$PID" -m -- cmp -s "$TMP"/{cert_filename} "$SRC"/{cert_filename} 2>/dev/null; then ok=1; continue; fi
+    if nsenter -t "$PID" -m -- sh -c "cp $TMP/{cert_filename} $SRC/{cert_filename} && chmod 644 $SRC/{cert_filename} && chown 0:0 $SRC/{cert_filename} && chcon u:object_r:system_security_cacerts_file:s0 $SRC/{cert_filename}" 2>/dev/null \
+      && nsenter -t "$PID" -m -- cmp -s "$TMP"/{cert_filename} "$SRC"/{cert_filename} 2>/dev/null; then
+      ok=1; replaced=1; continue
+    fi
+    stale=1
+  fi
+  if nsenter -t "$PID" -m -- sh -c "mount -t tmpfs tmpfs $SRC && (cp $TMP/* $SRC/ && chmod 644 $SRC/* && chown 0:0 $SRC/* && chcon u:object_r:system_security_cacerts_file:s0 $SRC/* || (umount -l $SRC && exit 1))" 2>/dev/null; then
+    ok=1
+    [ "$stale" = 1 ] && replaced=1
+  fi
 done
 rm -rf "$TMP"
+[ "$replaced" = 1 ] && echo TAPSMITH_APEX_REPLACED
 [ "$ok" = 1 ] && echo TAPSMITH_APEX_OK"#
-    );
-
-    match shell_lenient(serial, &script).await {
-        Ok(out) if out.contains("TAPSMITH_APEX_OK") => {
-            info!(
-                %serial, cert_filename,
-                "CA certificate injected into Conscrypt APEX trust store (Android 14+); \
-                 trusted by apps launched after this point"
-            );
-            true
-        }
-        Ok(_) => {
-            debug!(%serial, "APEX CA injection did not confirm success — falling back to user store");
-            false
-        }
-        Err(e) => {
-            debug!(%serial, "APEX CA injection failed: {e} — falling back to user store");
-            false
-        }
-    }
+    )
 }
 
 /// Run an adb command (with serial targeting) that may fail, returning combined
@@ -1706,5 +1815,303 @@ mod tests {
             model: String::new(),
         };
         assert!(!dev.is_emulator());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod apex_script_tests {
+    //! Run the real APEX install script under the host `/bin/sh`, with shims
+    //! for the device-only tools (`nsenter`, `pidof`, `mount`, `chown`,
+    //! `chcon`), against temp dirs standing in for the APEX cacerts dir and
+    //! the staging dir. Exercises the script's actual control flow — what it
+    //! compares, replaces and mounts — rather than its text.
+
+    use super::{apex_ca_install_script, parse_apex_outcome, ApexInstallOutcome};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    const CERT: &str = "e79c02f7.0";
+    const NEW_CA: &str =
+        "-----BEGIN CERTIFICATE-----\ncurrent CA body\n-----END CERTIFICATE-----\n";
+    const STALE_CA: &str =
+        "-----BEGIN CERTIFICATE-----\nstale CA body\n-----END CERTIFICATE-----\n";
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        root: PathBuf,
+        src: PathBuf,
+        stage: PathBuf,
+        cert: PathBuf,
+        bin: PathBuf,
+        mount_log: PathBuf,
+    }
+
+    fn write_exec(path: &Path, body: &str) {
+        fs::write(path, body).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let src = root.join("apex-cacerts");
+        let stage = root.join("stage");
+        let bin = root.join("bin");
+        let mount_log = root.join("mounts.log");
+        fs::create_dir_all(&src).unwrap();
+        fs::create_dir_all(&bin).unwrap();
+        // Two stock system CAs in the "APEX" store.
+        fs::write(src.join("aaaaaaaa.0"), "system CA a").unwrap();
+        fs::write(src.join("bbbbbbbb.0"), "system CA b").unwrap();
+        let cert = root.join("tapsmith-ca.pem");
+        fs::write(&cert, NEW_CA).unwrap();
+
+        // `nsenter -t PID -m -- cmd…`: PID 1's namespace sees the real `src`
+        // dir; any other PID's namespace sees its own `src-<PID>` dir, so a
+        // test can give init and a zygote different stores.
+        write_exec(
+            &bin.join("nsenter"),
+            &format!(
+                "#!/bin/sh\npid=\"$2\"\nshift 4\n[ \"$pid\" = 1 ] && exec \"$@\"\nfor a do shift; set -- \"$@\" \"$(printf '%s' \"$a\" | sed \"s#{src}#{src}-$pid#g\")\"; done\nexec \"$@\"\n",
+                src = src.display()
+            ),
+        );
+        // No zygotes unless a test adds one (`with_zygote`).
+        write_exec(&bin.join("pidof"), "#!/bin/sh\nexit 1\n");
+        // A fresh tmpfs hides whatever was there: empty the dir and make it
+        // writable, then record the mount.
+        write_exec(
+            &bin.join("mount"),
+            &format!(
+                "#!/bin/sh\nd=\"$4\"\nchmod u+w \"$d\"\nfor f in \"$d\"/*; do [ -e \"$f\" ] && chmod u+w \"$f\" && rm -f \"$f\"; done\necho \"$d\" >> '{}'\n",
+                mount_log.display()
+            ),
+        );
+        // chown/chcon succeed and record their arguments, so tests can check
+        // that a written cert gets the mandatory SELinux relabel.
+        for logged in ["chown", "chcon"] {
+            write_exec(
+                &bin.join(logged),
+                &format!(
+                    "#!/bin/sh\necho \"$*\" >> '{}'\n",
+                    root.join(format!("{logged}.log")).display()
+                ),
+            );
+        }
+        write_exec(&bin.join("umount"), "#!/bin/sh\nexit 0\n");
+        Fixture {
+            _dir: dir,
+            root,
+            src,
+            stage,
+            cert,
+            bin,
+            mount_log,
+        }
+    }
+
+    /// Add a zygote64 (PID 100) whose namespace has its own copy of the stock
+    /// store, at `src-100`. Returns that dir.
+    fn with_zygote(f: &Fixture) -> PathBuf {
+        write_exec(
+            &f.bin.join("pidof"),
+            "#!/bin/sh\n[ \"$1\" = zygote64 ] && echo 100 && exit 0\nexit 1\n",
+        );
+        let zygote_src = PathBuf::from(format!("{}-100", f.src.display()));
+        fs::create_dir_all(&zygote_src).unwrap();
+        for name in ["aaaaaaaa.0", "bbbbbbbb.0"] {
+            fs::copy(f.src.join(name), zygote_src.join(name)).unwrap();
+        }
+        zygote_src
+    }
+
+    fn run(f: &Fixture) -> String {
+        let script = apex_ca_install_script(
+            &f.src.to_string_lossy(),
+            &f.stage.to_string_lossy(),
+            CERT,
+            &f.cert.to_string_lossy(),
+        );
+        let path = format!(
+            "{}:{}",
+            f.bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(&script)
+            .env("PATH", path)
+            .current_dir(&f.root)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    fn mounts(f: &Fixture) -> usize {
+        fs::read_to_string(&f.mount_log)
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    }
+
+    fn installed(f: &Fixture) -> String {
+        fs::read_to_string(f.src.join(CERT)).unwrap()
+    }
+
+    fn is_root() -> bool {
+        Command::new("id")
+            .arg("-u")
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim() == "0")
+            .unwrap_or(false)
+    }
+
+    #[test]
+    fn missing_cert_mounts_a_fresh_overlay_with_every_system_ca() {
+        let f = fixture();
+        let out = run(&f);
+        assert_eq!(
+            parse_apex_outcome(&out),
+            ApexInstallOutcome::Installed,
+            "{out}"
+        );
+        assert_eq!(mounts(&f), 1);
+        assert_eq!(installed(&f), NEW_CA);
+        assert!(f.src.join("aaaaaaaa.0").exists() && f.src.join("bbbbbbbb.0").exists());
+        assert!(!f.stage.exists(), "staging dir is cleaned up");
+    }
+
+    #[test]
+    fn identical_cert_is_left_alone() {
+        let f = fixture();
+        fs::write(f.src.join(CERT), NEW_CA).unwrap();
+        let out = run(&f);
+        assert_eq!(
+            parse_apex_outcome(&out),
+            ApexInstallOutcome::Installed,
+            "{out}"
+        );
+        assert_eq!(
+            mounts(&f),
+            0,
+            "an identical overlay must not stack another tmpfs"
+        );
+        assert_eq!(installed(&f), NEW_CA);
+    }
+
+    // PILOT-712: every Tapsmith CA has the same subject, so a CA from an older
+    // ~/.tapsmith (or a snapshot / shared AVD) sits at the same hash filename.
+    // It used to count as "already installed".
+    #[test]
+    fn stale_cert_in_a_writable_overlay_is_replaced_in_place() {
+        let f = fixture();
+        fs::write(f.src.join(CERT), STALE_CA).unwrap();
+        let out = run(&f);
+        assert_eq!(
+            parse_apex_outcome(&out),
+            ApexInstallOutcome::Replaced,
+            "{out}"
+        );
+        assert_eq!(installed(&f), NEW_CA);
+        assert_eq!(
+            mounts(&f),
+            0,
+            "the existing overlay is rewritten, not stacked over"
+        );
+        assert!(f.src.join("aaaaaaaa.0").exists());
+        // Apps can't read a cert without the cacerts SELinux label.
+        let target = f.src.join(CERT).display().to_string();
+        let chcon = fs::read_to_string(f.root.join("chcon.log")).unwrap_or_default();
+        assert!(
+            chcon
+                .lines()
+                .any(|l| l == format!("u:object_r:system_security_cacerts_file:s0 {target}")),
+            "replaced cert must be relabelled: {chcon}"
+        );
+        let chown = fs::read_to_string(f.root.join("chown.log")).unwrap_or_default();
+        assert!(
+            chown.lines().any(|l| l == format!("0:0 {target}")),
+            "{chown}"
+        );
+    }
+
+    #[test]
+    fn stale_cert_that_cannot_be_rewritten_gets_a_fresh_overlay() {
+        if is_root() {
+            // Permission bits do not stop root; the read-only layer cannot be
+            // simulated.
+            return;
+        }
+        let f = fixture();
+        fs::write(f.src.join(CERT), STALE_CA).unwrap();
+        fs::set_permissions(f.src.join(CERT), fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&f.src, fs::Permissions::from_mode(0o555)).unwrap();
+        let out = run(&f);
+        assert_eq!(
+            parse_apex_outcome(&out),
+            ApexInstallOutcome::Replaced,
+            "{out}"
+        );
+        assert_eq!(mounts(&f), 1);
+        assert_eq!(installed(&f), NEW_CA);
+        assert!(f.src.join("bbbbbbbb.0").exists());
+    }
+
+    #[test]
+    fn namespaces_are_checked_independently() {
+        // init already trusts the current CA; the zygote still holds a stale one.
+        let f = fixture();
+        let zygote_src = with_zygote(&f);
+        fs::write(f.src.join(CERT), NEW_CA).unwrap();
+        fs::write(zygote_src.join(CERT), STALE_CA).unwrap();
+        let out = run(&f);
+        assert_eq!(
+            parse_apex_outcome(&out),
+            ApexInstallOutcome::Replaced,
+            "{out}"
+        );
+        assert_eq!(fs::read_to_string(zygote_src.join(CERT)).unwrap(), NEW_CA);
+        assert_eq!(installed(&f), NEW_CA);
+        assert_eq!(mounts(&f), 0);
+    }
+
+    #[test]
+    fn a_missing_zygote_overlay_is_mounted_while_init_is_replaced() {
+        let f = fixture();
+        let zygote_src = with_zygote(&f);
+        fs::write(f.src.join(CERT), STALE_CA).unwrap();
+        let out = run(&f);
+        assert_eq!(
+            parse_apex_outcome(&out),
+            ApexInstallOutcome::Replaced,
+            "{out}"
+        );
+        assert_eq!(installed(&f), NEW_CA);
+        assert_eq!(fs::read_to_string(zygote_src.join(CERT)).unwrap(), NEW_CA);
+        assert!(zygote_src.join("aaaaaaaa.0").exists());
+        let log = fs::read_to_string(&f.mount_log).unwrap_or_default();
+        assert_eq!(
+            log.lines().collect::<Vec<_>>(),
+            vec![zygote_src.display().to_string()]
+        );
+    }
+
+    #[test]
+    fn outcome_parsing() {
+        assert_eq!(parse_apex_outcome(""), ApexInstallOutcome::Failed);
+        assert_eq!(
+            parse_apex_outcome("noise\nTAPSMITH_APEX_OK\n"),
+            ApexInstallOutcome::Installed
+        );
+        assert_eq!(
+            parse_apex_outcome("TAPSMITH_APEX_REPLACED\nTAPSMITH_APEX_OK\n"),
+            ApexInstallOutcome::Replaced
+        );
+        // A replacement without a patched namespace is still a failure.
+        assert_eq!(
+            parse_apex_outcome("TAPSMITH_APEX_REPLACED\n"),
+            ApexInstallOutcome::Failed
+        );
     }
 }

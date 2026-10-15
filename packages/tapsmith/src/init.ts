@@ -19,8 +19,9 @@ import {
 import { adbMissingFix } from './toolchain.js';
 import type { InitCommandOptions } from './cli-program.js';
 import { formatJson, jsonError } from './cli-json.js';
-import { avdCaptureSupport, avdCaptureWarning, noAvdsListedMessage, type AvdImageInfo } from './avd-images.js';
+import { avdCaptureSupport, avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, type AvdImageInfo } from './avd-images.js';
 import { isTapsmithResolvableFrom, tapsmithInstallCommand, type InstallCommand } from './config.js';
+import { androidAgentInstalledFor, missingAndroidAgentAdvice } from './agent-resolve.js';
 import { globSync } from 'glob';
 import { minimatch } from 'minimatch';
 import { DEFAULT_TEST_IGNORE } from './test-file-discovery.js';
@@ -224,8 +225,8 @@ export interface IosConfig {
 /**
  * The wizard's AVD picker: list order kept, Google Play images marked (HTTPS
  * is never captured on them), and a capture-capable AVD pre-selected. The
- * capture question comes later and defaults to yes, so the picker always
- * prefers a capable AVD.
+ * capture question comes later and defaults to yes on a capable AVD, so the
+ * picker always prefers one.
  */
 export function avdPickerChoices(
   avds: string[],
@@ -237,6 +238,23 @@ export function avdPickerChoices(
     : { name, message: name }));
   const firstCapable = support.indexOf('capable');
   return { choices, initial: firstCapable === -1 ? 0 : firstCapable };
+}
+
+/**
+ * The capture question's default (PILOT-711): no when the only thing set up
+ * is an Android emulator on a Google Play image, where HTTPS cannot be
+ * captured, with the reason for the prompt. iOS capture works, so a mixed
+ * setup keeps yes (and the Android warning still prints).
+ */
+export function networkCaptureDefault(
+  platforms: Platform[],
+  androidConfig: AndroidConfig | undefined,
+  avdImages: AvdImageInfo[],
+): { initial: boolean; reason?: string } {
+  const avd = androidConfig?.useEmulators ? androidConfig.avd : undefined;
+  if (platforms.includes('ios') || avd === undefined) return { initial: true };
+  if (avdCaptureSupport(avdImages.find((a) => a.name === avd)) !== 'play-image') return { initial: true };
+  return { initial: false, reason: `AVD ${avd} can't capture HTTPS: it uses a Google Play system image` };
 }
 
 /** The wizard's network-capture summary line for the Android emulator. */
@@ -498,7 +516,9 @@ async function setupNetworkCapture(
   androidConfig: AndroidConfig | undefined,
   iosHasPhysicalDevice: boolean,
 ): Promise<boolean> {
-  const enableNetwork = await ask<boolean>(confirmQuestion('Enable network trace capture? (records HTTP/HTTPS traffic during tests)', true));
+  const { initial, reason } = networkCaptureDefault(platforms, androidConfig, env.avdImages);
+  const why = reason ? ` — ${reason}` : '';
+  const enableNetwork = await ask<boolean>(confirmQuestion(`Enable network trace capture? (records HTTP/HTTPS traffic during tests${why})`, initial));
 
   if (!enableNetwork) return false;
 
@@ -633,6 +653,19 @@ export async function offerTapsmithInstall(
   console.log(`  ${green('✓')} Tapsmith installed ${dim(`(${result})`)}`);
   if (install.command === 'pnpm') console.log(dim(PNPM_IGNORED_BUILDS_HINT));
   return undefined;
+}
+
+/**
+ * Warn when the project's own tapsmith cannot find the Android agent package
+ * (PILOT-709: pnpm 11+ skipped it as an optional dependency). The check reads
+ * the project's install, not the copy of Tapsmith running init, which may be
+ * npx's. Silent when the project has no tapsmith: the install step said so.
+ */
+export async function warnIfAndroidAgentMissing(cwd: string): Promise<void> {
+  if (androidAgentInstalledFor(cwd) !== false) return;
+  const advice = await missingAndroidAgentAdvice(cwd);
+  console.log(`  ${YELLOW}⚠${RESET} Android agent not found — ${advice.why}`);
+  console.log(dim(`    Run: ${advice.install}${advice.where ? ` (in ${advice.where})` : ''}`));
 }
 
 /**
@@ -899,7 +932,7 @@ export function tapsmithTestsOutsideGeneratedMatch(cwd: string): string[] {
     candidates = globSync(['**/*.test.ts', '**/*.spec.ts'], {
       cwd,
       // Bounded, so init in a huge directory doesn't crawl it: tests live near the top.
-      ignore: [...DEFAULT_TEST_IGNORE, '**/Pods/**', '**/build/**'],
+      ignore: [...DEFAULT_TEST_IGNORE, '**/build/**'],
       maxDepth: 10,
       posix: true,
     });
@@ -929,13 +962,21 @@ export function testsOutsideGeneratedMatchWarning(files: string[]): string | und
  * (PILOT-551), then `tapsmith verify`, which getting-started has a new user
  * run before writing tests (PILOT-562). Plain commands: `--json` is for agents.
  */
-export function wizardNextSteps(installStep: string | undefined): Array<[string, string]> {
+export function wizardNextSteps(
+  installStep: string | undefined,
+  captureStep?: { label: string; action: string; optional: boolean },
+): Array<[string, string]> {
+  // A Play-image AVD (PILOT-711): the AVD to switch to — before the first
+  // run when capture is on, else last, as an option.
+  const capture = captureStep ? [[captureStep.label, captureStep.action] as [string, string]] : [];
   return [
     ...(installStep ? [['Install Tapsmith', installStep] as [string, string]] : []),
+    ...(captureStep?.optional ? [] : capture),
     ['Verify your setup', 'npx tapsmith verify'],
     ['Run your tests', 'npx tapsmith test'],
     ['List devices', 'npx tapsmith list-devices'],
     ['Health check', 'npx tapsmith doctor'],
+    ...(captureStep?.optional ? capture : []),
   ];
 }
 
@@ -1171,12 +1212,14 @@ async function runInitInner(): Promise<void> {
 
   // Step 8.6: Tapsmith itself, which the config and test import (PILOT-551)
   const installStep = await offerTapsmithInstall(process.cwd());
+  if (selectedPlatforms.includes('android')) await warnIfAndroidAgentMissing(process.cwd());
 
   // Step 9: Next steps
   console.log();
   console.log(`  ${bold('Next steps')}`);
   const projects = generatedProjects(selectedPlatforms, iosConfig);
-  const steps = wizardNextSteps(installStep);
+  const captureStep = androidConfig?.useEmulators ? captureAvdNextStep(androidConfig.avd, env.avdImages, enableNetwork) : undefined;
+  const steps = wizardNextSteps(installStep, captureStep);
   const width = Math.max(...[...steps.map(([l]) => l), ...projects.map((p) => p.label)].map((l) => l.length)) + 3;
   const step = (label: string, cmd: string): void => console.log(`  ${`${label}:`.padEnd(width)}${green(cmd)}`);
   for (const [label, cmd] of steps) step(label, cmd);

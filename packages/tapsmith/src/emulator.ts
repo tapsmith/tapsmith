@@ -20,6 +20,7 @@ import lockfile from 'proper-lockfile';
 import type { DeviceStrategy, EmulatorLaunchOptions } from './config.js';
 import { decodeXmlEntities } from './xml-entities.js';
 import { parseAdbDevicesOutput } from './adb-devices.js';
+import { devicesHeldElsewhere } from './device-claims.js';
 import { describeEmulatorAppNap, disableEmulatorAppNap, type EmulatorAppNapResult } from './emulator-app-nap.js';
 
 const DIM = '\x1b[2m';
@@ -143,8 +144,10 @@ export interface ReclaimResult {
   /** Serials of emulators that were killed (unhealthy or dead process). */
   killed: string[]
   /**
-   * Serials whose recorded PID is alive but whose command line could not be
-   * read: kept in the manifest, and neither reused nor killed this run.
+   * Serials kept in the manifest, and neither reused nor killed this run:
+   * the recorded PID is alive but its command line could not be read; adb
+   * could not be queried or changed its answer (PILOT-710); or the emulator
+   * failed its checks while another live Tapsmith session holds it.
    */
   undetermined: string[]
   /**
@@ -157,11 +160,16 @@ export interface ReclaimResult {
 interface ReclaimDeps {
   readManifest: () => EmulatorManifestEntry[]
   writeManifest: (entries: EmulatorManifestEntry[]) => void
-  listAdbDevices: () => AdbDeviceEntry[]
+  /** `adb devices`, or why it could not be read — never "no devices" for a failure (PILOT-710). */
+  queryAdbDevices: () => AdbDeviceQuery
+  /** Blocks for the settle delay between two `adb devices` looks. */
+  sleep: (ms: number) => void
   isProcessAlive: (pid: number) => boolean
   readProcessArgs: (pid: number) => string[] | undefined
   findEmulatorPid: (serial: string) => number | undefined
   probeDeviceHealth: (serial: string) => DeviceHealthResult
+  /** Serials another live Tapsmith session holds (PILOT-381 claims): never stopped. */
+  devicesHeldElsewhere: () => ReadonlySet<string>
   killEmulator: (serial: string) => void
   killProcess: (pid: number) => void
   platform: NodeJS.Platform
@@ -171,11 +179,13 @@ function resolveReclaimDeps(deps: Partial<ReclaimDeps>): ReclaimDeps {
   return {
     readManifest: deps.readManifest ?? readManifest,
     writeManifest: deps.writeManifest ?? writeManifest,
-    listAdbDevices: deps.listAdbDevices ?? listAdbDevices,
+    queryAdbDevices: deps.queryAdbDevices ?? queryAdbDevices,
+    sleep: deps.sleep ?? sleepSync,
     isProcessAlive: deps.isProcessAlive ?? isProcessAlive,
     readProcessArgs: deps.readProcessArgs ?? readProcessArgs,
     findEmulatorPid: deps.findEmulatorPid ?? findEmulatorPid,
     probeDeviceHealth: deps.probeDeviceHealth ?? probeDeviceHealth,
+    devicesHeldElsewhere: deps.devicesHeldElsewhere ?? (() => devicesHeldElsewhere()),
     killEmulator: deps.killEmulator ?? killEmulator,
     killProcess: deps.killProcess ?? killProcess,
     platform: deps.platform ?? process.platform,
@@ -229,6 +239,12 @@ function killProcess(pid: number): void {
  * - **Ours and healthy**: keep it running and in the manifest for reuse.
  * - **Ours but unhealthy or unresponsive**: kill it and drop the entry.
  *
+ * "Unresponsive" needs adb to have answered — twice, a settle delay apart —
+ * without the emulator online. When `adb devices` cannot be read at all (adb
+ * not on PATH, timed out, restarting), an emulator's state is unknown, so
+ * every live one is left running and kept on record (PILOT-710): it may be
+ * another session's, mid-test.
+ *
  * This is what makes back-to-back `npx tapsmith test` fast — emulators survive
  * between runs and get reused instead of relaunched.
  */
@@ -253,8 +269,13 @@ export function reclaimOrphanedEmulators(
   const undetermined: string[] = [];
   const booting: string[] = [];
   const surviving: EmulatorManifestEntry[] = [];
-  const adbDevices = d.listAdbDevices();
-  const adbDeviceMap = new Map(adbDevices.map((device) => [device.serial, device]));
+  const { devices: adbDevices, unsettled } = queryAdbDevicesSettled(d, [...uniqueBySerial.values()]);
+  const adbFailure = isAdbQueryFailure(adbDevices) ? adbDevices : undefined;
+  const adbDeviceMap = new Map((isAdbQueryFailure(adbDevices) ? [] : adbDevices).map((device) => [device.serial, device]));
+  const leftUnqueried: string[] = [];
+  const leftFlapping: string[] = [];
+  let held: ReadonlySet<string> | undefined;
+  const heldElsewhere = (serial: string) => (held ??= d.devicesHeldElsewhere()).has(serial);
 
   for (const entry of uniqueBySerial.values()) {
     // Mid-boot in a run that is still going: unhealthy only because it has
@@ -281,6 +302,25 @@ export function reclaimOrphanedEmulators(
     const owned = argv !== undefined
       && isTapsmithLaunchedEmulator(argv, { port: entry.port, avd: entry.avd });
 
+    // Ours and alive, but adb could not say whether it is healthy: never kill
+    // (or reuse) on a failed query. Kept for the next run to judge.
+    if (owned && adbFailure) {
+      surviving.push(entry);
+      undetermined.push(entry.serial);
+      leftUnqueried.push(entry.serial);
+      continue;
+    }
+
+    // adb's two answers disagreed about it (online, then gone; gone, then
+    // offline — a server restart mid-check): it is in flux, which proves
+    // nothing about the emulator. Like unqueried: left running, judged next run.
+    if (owned && inAdb?.state !== 'device' && unsettled.has(entry.serial)) {
+      surviving.push(entry);
+      undetermined.push(entry.serial);
+      leftFlapping.push(entry.serial);
+      continue;
+    }
+
     if (!owned) {
       if (inAdb) {
         process.stderr.write(
@@ -306,6 +346,7 @@ export function reclaimOrphanedEmulators(
     }
 
     // Health check to decide reuse vs kill
+    let killReason: string;
     if (inAdb && inAdb.state === 'device') {
       const health = d.probeDeviceHealth(entry.serial);
       if (health.healthy) {
@@ -341,14 +382,23 @@ export function reclaimOrphanedEmulators(
         }
         continue;
       }
-      process.stderr.write(
-        `${YELLOW}Killing unhealthy emulator ${entry.serial} (AVD ${entry.avd}): ${health.reason ?? 'health check failed'}.${RESET}\n`,
-      );
+      killReason = `${YELLOW}Killing unhealthy emulator ${entry.serial} (AVD ${entry.avd}): ${health.reason ?? 'health check failed'}.${RESET}\n`;
     } else {
-      process.stderr.write(
-        `${YELLOW}Killing unresponsive emulator ${entry.serial} (PID ${entry.pid}, AVD ${entry.avd}).${RESET}\n`,
-      );
+      killReason = `${YELLOW}Killing unresponsive emulator ${entry.serial} (PID ${entry.pid}, AVD ${entry.avd}).${RESET}\n`;
     }
+
+    // Another live session is using it: whatever its state looks like from
+    // here (an adb restart, a slow host), stopping it would kill that
+    // session's run. Left running and on record.
+    if (heldElsewhere(entry.serial)) {
+      process.stderr.write(
+        `${DIM}Leaving emulator ${entry.serial} (AVD ${entry.avd}) running: it failed Tapsmith's checks, but another Tapsmith session is using it.${RESET}\n`,
+      );
+      surviving.push(entry);
+      undetermined.push(entry.serial);
+      continue;
+    }
+    process.stderr.write(killReason);
 
     // Go through the serial (adb emu kill, then the port listener) only when
     // the listener is confirmed to be our PID; without lsof, signal the PID.
@@ -360,9 +410,78 @@ export function reclaimOrphanedEmulators(
     killed.push(entry.serial);
   }
 
-  // Write back only the surviving healthy entries
-  d.writeManifest(surviving);
+  if (adbFailure && leftUnqueried.length > 0) {
+    process.stderr.write(
+      `${YELLOW}Couldn't query adb (${adbFailure.error}), so Tapsmith can't tell whether the emulator(s) it launched earlier `
+      + `(${leftUnqueried.join(', ')}) are healthy: leaving them running and not reusing them this run.${RESET}\n`,
+    );
+  }
+
+  if (leftFlapping.length > 0) {
+    process.stderr.write(
+      `${YELLOW}adb's state for ${leftFlapping.join(', ')} changed while Tapsmith checked it, so Tapsmith can't tell `
+      + `whether it is healthy: leaving it running.${RESET}\n`,
+    );
+  }
+
+  // Write back only the surviving healthy entries, plus any another run
+  // recorded since the read above — the adb and health checks in between can
+  // take seconds, and the file has no lock.
+  const read = new Set(entries.map((entry) => `${entry.serial}:${entry.pid}`));
+  const recordedSince = d.readManifest().filter((entry) => !read.has(`${entry.serial}:${entry.pid}`));
+  d.writeManifest([...surviving, ...recordedSince]);
   return { reusable, killed, undetermined, booting };
+}
+
+/** How long to let adb settle before a second `adb devices` look (PILOT-710). */
+const ADB_RECHECK_DELAY_MS = 3_000;
+
+/**
+ * `adb devices` for the reclaim pass. One look is enough when it shows every
+ * live recorded emulator online. Otherwise — a failed query, or one that
+ * lists a live emulator absent or not online — it looks again after a settle
+ * delay, because a restarting adb server fails, then answers before its
+ * emulators have reconnected, and a loaded host can time out once
+ * (PILOT-710). It returns an answer only once adb has answered twice, and
+ * that answer condemns only emulators both answers agree about: those whose
+ * state differs between them are `unsettled`. Two failed looks return the
+ * failure, which condemns nothing. Either count reaches two within three looks.
+ */
+function queryAdbDevicesSettled(
+  d: ReclaimDeps,
+  entries: readonly EmulatorManifestEntry[],
+): { devices: AdbDeviceQuery, unsettled: Set<string> } {
+  const unsettled = new Set<string>();
+  const live = entries.filter((entry) =>
+    !(entry.booting && entry.ownerPid !== undefined && d.isProcessAlive(entry.ownerPid))
+    && entry.pid > 0 && d.isProcessAlive(entry.pid));
+  const condemnsNone = (devices: AdbDeviceEntry[]) => live.every((entry) =>
+    devices.some((device) => device.serial === entry.serial && device.state === 'device'));
+  // Nothing alive to protect or condemn: one look, whatever it says.
+  if (live.length === 0) return { devices: d.queryAdbDevices(), unsettled };
+
+  const stateOf = (devices: AdbDeviceEntry[], serial: string) =>
+    devices.find((device) => device.serial === serial)?.state ?? 'absent';
+  let firstAnswer: AdbDeviceEntry[] | undefined;
+  let failed = false;
+  for (;;) {
+    const result = d.queryAdbDevices();
+    if (isAdbQueryFailure(result)) {
+      // Two failures: adb is not coming back in time; judge nothing.
+      if (failed) return { devices: result, unsettled };
+      failed = true;
+    } else {
+      if (condemnsNone(result)) return { devices: result, unsettled };
+      if (firstAnswer) {
+        for (const entry of live) {
+          if (stateOf(firstAnswer, entry.serial) !== stateOf(result, entry.serial)) unsettled.add(entry.serial);
+        }
+        return { devices: result, unsettled };
+      }
+      firstAnswer = result;
+    }
+    d.sleep(ADB_RECHECK_DELAY_MS);
+  }
 }
 
 type ExecFileSyncLike = typeof execFileSync
@@ -370,6 +489,18 @@ type ExecFileSyncLike = typeof execFileSync
 export interface AdbDeviceEntry {
   serial: string
   state: string
+}
+
+/** `adb devices` could not be read; `error` says why, for the user. */
+export interface AdbQueryFailure {
+  error: string
+}
+
+/** The devices adb listed (possibly none), or why it could not be asked. */
+export type AdbDeviceQuery = AdbDeviceEntry[] | AdbQueryFailure
+
+export function isAdbQueryFailure(result: AdbDeviceQuery): result is AdbQueryFailure {
+  return !Array.isArray(result);
 }
 
 // ─── ADB package queries ───
@@ -444,15 +575,35 @@ export function isPackageInstalled(serial: string, packageName: string): boolean
  * (…)`, …) — the run paths name an unusable device by it.
  */
 export function listAdbDevices(exec: ExecFileSyncLike = execFileSync): AdbDeviceEntry[] {
+  const result = queryAdbDevices(exec);
+  return isAdbQueryFailure(result) ? [] : result;
+}
+
+const ADB_DEVICES_TIMEOUT_MS = 10_000;
+
+/**
+ * {@link listAdbDevices}, but a query that failed (adb not on PATH, timed
+ * out, exited non-zero) is reported as such rather than as no devices — for
+ * callers that act on a device's absence, such as killing it (PILOT-710).
+ */
+export function queryAdbDevices(exec: ExecFileSyncLike = execFileSync): AdbDeviceQuery {
   try {
     const output = exec('adb', ['devices'], {
       encoding: 'utf-8',
-      timeout: 10_000,
+      timeout: ADB_DEVICES_TIMEOUT_MS,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     return parseAdbDevicesOutput(output);
-  } catch {
-    return [];
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | undefined)?.code;
+    if (code === 'ENOENT') return { error: 'adb was not found on PATH' };
+    if (code === 'ETIMEDOUT') return { error: `\`adb devices\` timed out after ${ADB_DEVICES_TIMEOUT_MS / 1000} s` };
+    // A non-zero exit's message is just "Command failed: adb devices"; adb's
+    // own reason is the last line it wrote to stderr.
+    const stderr = String((err as { stderr?: unknown } | undefined)?.stderr ?? '');
+    const reason = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).pop()
+      ?? (err instanceof Error ? err.message : String(err)).split('\n')[0].trim();
+    return { error: `\`adb devices\` failed: ${reason}` };
   }
 }
 
@@ -528,8 +679,11 @@ export function cleanupStaleEmulators(
   // entry). An emulator is only killed here when the process holding its
   // console port carries Tapsmith's launch arguments; a user's own emulator —
   // offline, unauthorized or mid-ANR — is left running.
-  const devices = d.listAdbDevices();
+  // Without an adb answer there is nothing to judge, so nothing to kill.
+  const listed = d.queryAdbDevices();
+  const devices = isAdbQueryFailure(listed) ? [] : listed;
   const killed = [...reclaim.killed];
+  let heldInPhase2: ReadonlySet<string> | undefined;
 
   for (const device of devices) {
     if (!device.serial.startsWith('emulator-')) continue;
@@ -556,6 +710,13 @@ export function cleanupStaleEmulators(
     if (argv === undefined || !isTapsmithLaunchedEmulator(argv, { port, avd: targetAvd })) {
       process.stderr.write(
         `${DIM}Leaving emulator ${device.serial} alone (${problem}): Tapsmith can't confirm it launched it.${RESET}\n`,
+      );
+      continue;
+    }
+
+    if ((heldInPhase2 ??= d.devicesHeldElsewhere()).has(device.serial)) {
+      process.stderr.write(
+        `${DIM}Leaving emulator ${device.serial} running (${problem}): another Tapsmith session is using it.${RESET}\n`,
       );
       continue;
     }
