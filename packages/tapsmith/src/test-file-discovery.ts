@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { glob, Ignore, type IgnoreLike } from 'glob';
-import { minimatch } from 'minimatch';
+import { Minimatch, minimatch } from 'minimatch';
 
 /**
  * Directories never searched for tests, and never watched for new ones: the
@@ -323,9 +323,23 @@ function normalizeGlobPattern(pattern: string): string {
 }
 
 function matchesIgnorePattern(relativePath: string, pattern: string): boolean {
-  const normalizedPattern = normalizeGlobPattern(pattern);
-  return minimatch(relativePath, normalizedPattern, IGNORE_MATCH_OPTIONS)
-    || minimatch(`${relativePath}/__tapsmith_ignore_probe__`, normalizedPattern, IGNORE_MATCH_OPTIONS);
+  const matcher = ignoreMatcher(pattern);
+  return matcher.match(relativePath) || matcher.match(`${relativePath}/__tapsmith_ignore_probe__`);
+}
+
+/**
+ * Compiled once per pattern: a watcher's `ignored` predicate runs for every
+ * path it scans, and compiling each pattern per call cost ~60 µs a path.
+ */
+const ignoreMatchers = new Map<string, Minimatch>();
+
+function ignoreMatcher(pattern: string): Minimatch {
+  let matcher = ignoreMatchers.get(pattern);
+  if (!matcher) {
+    matcher = new Minimatch(normalizeGlobPattern(pattern), IGNORE_MATCH_OPTIONS);
+    ignoreMatchers.set(pattern, matcher);
+  }
+  return matcher;
 }
 
 function staticDirectoryPrefix(pattern: string): string {
