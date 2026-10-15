@@ -55,12 +55,13 @@ enum TextMatch {
 
     /// Whether the normalized `text` contains the normalized `query`,
     /// ignoring case — Playwright's non-exact getByText (PILOT-522).
-    /// Foundation's case-insensitive search folds case the way ICU's `(?i)`
-    /// does (fully: "straße" matches "STRASSE"), so this snapshot test and
-    /// the live `containsPattern` query agree on which labels match.
+    /// Evaluated with the very predicate the live XCUIElement queries use
+    /// (`MATCHES containsPattern`), so the snapshot walk and a live query
+    /// agree on every label — NSPredicate's ICU folding has corners (full
+    /// folding, width under `(?i)`) no Swift string search reproduces — and
+    /// a live query's positional index binds the element the walk matched.
     static func contains(_ text: String, _ query: String) -> Bool {
-        let needle = normalize(query)
-        return needle.isEmpty || normalize(text).range(of: needle, options: .caseInsensitive) != nil
+        NSPredicate(format: "SELF MATCHES %@", containsPattern(query)).evaluate(with: text)
     }
 
     /// Whether `childText` is one of the child texts iOS joined with ", " to

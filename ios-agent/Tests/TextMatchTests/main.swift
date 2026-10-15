@@ -82,6 +82,10 @@ let foldCorpus: [(String, String)] = [
     ("\u{212A}elvin", "kelvin"), ("ſtop", "STOP"), ("STOP", "ſtop"), ("ΣΟΦΙΑΣ", "σοφιας"),
     ("σοφιας", "ΣΟΦΙΑΣ"), ("ﬁle", "FILE"), ("FILE", "ﬁle"), ("ÉCOLE", "école"), ("Save draft", "SAVE  DRAFT"),
     ("Sign out", "sign in"),
+    // NSPredicate's MATCHES also ignores character width under (?i), which
+    // Foundation's case-insensitive search does not; Greek dialytika go the
+    // other way.
+    ("ＯＫ", "ok"), ("OK", "ｏｋ"), ("\u{0390}", "\u{03AA}\u{0301}"),
 ]
 for (text, query) in foldCorpus {
     expect("snapshot and live query agree: \(text) / \(query)",
