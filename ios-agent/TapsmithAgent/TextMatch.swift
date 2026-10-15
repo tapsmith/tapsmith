@@ -11,10 +11,11 @@ import Foundation
 /// "Whitespace" is JavaScript's `\s` set, the same set the Android agent's
 /// TextMatch.kt and the SDK's trace-viewer matcher use.
 ///
-/// The snapshot walk compares normalized strings. XCUIElement queries can't
-/// normalize, so they get an ICU pattern (`label MATCHES %@`, a full match)
-/// that accepts the same labels: the query's words, escaped, joined by
-/// one-or-more whitespace.
+/// The snapshot walk compares normalized strings, except a substring match,
+/// which evaluates the same ICU pattern the live queries use (see `contains`).
+/// XCUIElement queries can't normalize, so they get an ICU pattern
+/// (`label MATCHES %@`, a full match) that accepts the same labels: the
+/// query's words, escaped, joined by one-or-more whitespace.
 enum TextMatch {
     /// JavaScript's `\s`: ECMAScript WhiteSpace and LineTerminator code points.
     private static let whitespace: Set<Unicode.Scalar> = {

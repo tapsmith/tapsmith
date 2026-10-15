@@ -40,9 +40,10 @@ struct ElementSelector {
     /// Whether a match is re-resolved as a live element by its own label
     /// (QueryIndex.liveIndex) rather than by the selector — needed when the
     /// selector also matches other labels (a substring role name, PILOT-549;
-    /// a RegExp, PILOT-520) and would shift the positional index.
+    /// a RegExp, PILOT-520; a case-insensitive substring getByText, PILOT-522)
+    /// and would shift the positional index.
     var reResolvesByLabel: Bool {
-        (role != nil && hasNameFilter) || textRegex != nil || labelRegex != nil
+        (role != nil && hasNameFilter) || textRegex != nil || labelRegex != nil || textContains != nil
     }
 
     /// Whether a role-only selector's match is re-resolved by its own label

@@ -141,9 +141,9 @@ class SnapshotElementFinder {
         let keyboardVisibleInSnapshot = hasKeyboardInTree(snapshotDict)
 
         // Number the app's descendants in pre-order (XCUIElementQuery order)
-        // so a role+name or RegExp match can be re-resolved by its index
-        // within the live query that finds it again (cacheQueryElement,
-        // PILOT-549, PILOT-520).
+        // so a role+name, RegExp or substring-text match can be re-resolved
+        // by its index within the live query that finds it again
+        // (cacheQueryElement, PILOT-549, PILOT-520, PILOT-522).
         var queryNodes: [QueryNode] = []
         if selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel {
             SnapshotElementFinder.numberDescendants(of: &snapshotDict, into: &queryNodes)
@@ -1392,14 +1392,24 @@ class SnapshotElementFinder {
         } else if let text = selector.text {
             element = resolve(labelQuery(normalizedConcatenatedLabelPredicate(text)))
         } else if let textContains = selector.textContains {
-            // Mirror the snapshot walk's substring match (label/title/value),
-            // whitespace-normalized.
-            let pattern = TextMatch.containsPattern(textContains)
-            let predicate = NSPredicate(
-                format: "label MATCHES %@ OR title MATCHES %@ OR value MATCHES %@",
-                pattern, pattern, pattern
-            )
-            element = resolve(labelQuery(predicate))
+            // A case-insensitive substring (PILOT-522) also matches other
+            // elements, of any type, whose label holds the text; the
+            // type-scoped query below wouldn't return those, so matchIndex
+            // would shift. Re-resolve by the node's own label at its index
+            // in that query, as a role name does.
+            let nodeLabel = snapshotNode?["label"] as? String ?? ""
+            if !nodeLabel.isEmpty, let labelIndex {
+                element = byOwnLabel(nodeLabel, at: labelIndex)
+            } else {
+                // Matched through its title or value: mirror the snapshot
+                // walk's substring match (label/title/value).
+                let pattern = TextMatch.containsPattern(textContains)
+                let predicate = NSPredicate(
+                    format: "label MATCHES %@ OR title MATCHES %@ OR value MATCHES %@",
+                    pattern, pattern, pattern
+                )
+                element = resolve(labelQuery(predicate))
+            }
         } else if let contentDesc = selector.contentDesc {
             element = resolve(labelQuery(concatenatedLabelPredicate(contentDesc)))
         } else if selector.reResolvesByLabel {
