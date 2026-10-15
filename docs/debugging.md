@@ -265,26 +265,21 @@ Element {"text":"Submit"} was not found after waiting 30000ms
   await device.getByText("Submit", { exact: true }).tap()
   ```
 - **The locator is wrong** -- the text does not match exactly, or the element uses a different role. Use the trace viewer's Hierarchy tab or the `tapsmith_snapshot` MCP tool to inspect what is actually on screen.
-- **The element is off-screen** -- Android's accessibility tree contains only on-screen elements, and a virtualised list has not rendered rows far from the visible ones, so an off-screen row is not found at all. (An off-screen element that *is* in the tree, which happens on iOS, is scrolled into view by the tap itself.) The error then ends with a hint to scroll first. Use `scrollIntoView()`:
+- **The element is off-screen** -- taps do not scroll, unlike a Playwright click, by design so both platforms behave the same. On Android an off-screen row is not in the accessibility tree at all, so a tap reports it not found and says it may be off-screen. Scroll to it first with `scrollIntoView()` (pass `{ direction: "down" }` for a row above the screen), then tap:
   ```typescript
   await device.getByText("Submit", { exact: true }).scrollIntoView()
   await device.getByText("Submit", { exact: true }).tap()
   ```
-  `scrollIntoView()` swipes up by default, which reveals rows below the screen. For a row above the screen, such as one the list was scrolled past, pass `{ direction: "down" }`.
 
-### Element is off-screen and could not be scrolled into view
+### Element is off-screen
 
 ```
-Element getByText("Item 1", { exact: true }) is off-screen and tap() could not scroll it into view: it is inside nested scroll views. Scroll it into view first (await locator.scrollIntoView({ direction: "down" })), then tap() it.
+Element getByText("Item 1", { exact: true }) is off-screen: it was found, but no part of it was on screen after waiting 30000ms. tap() does not scroll, so scroll it into view first with await locator.scrollIntoView({ direction: "down" }), then tap() it.
 ```
 
-**What happened:** the element is in the hierarchy but entirely off-screen (iOS reports such elements). A tap scrolls an element into view itself only when it is directly above or below the screen in a single list that scrolls vertically and covers the middle of the screen. Anything else fails at once rather than swiping blindly: the reason after the colon says which case it was.
+**What happened:** the element is in the hierarchy (iOS lists off-screen elements) but no part of it was on screen for the whole action timeout. Taps do not scroll for you, so the tap waited for it to come into view and then gave up.
 
-**Common causes and fixes:**
-
-- **The element is in a carousel or a horizontal list**, off to the side. Scroll the container that holds it with `scroll()`, or use `scrollIntoView()` with the direction the error names.
-- **Nested scroll views, or a list that does not cover the middle of the screen** (for example a short list at the bottom of the screen). Use `scrollIntoView()` with the direction the error names, or `scroll()` on the list.
-- **The list is virtualised** and unmounted the row while scrolling. Scroll to it with `scrollIntoView()` first, then tap.
+**Fix:** scroll to it first with `scrollIntoView()`, using the direction the error names, then tap. For an element in a horizontal list, scroll that list with `scroll()`.
 
 ### Timeout: assertion did not pass
 

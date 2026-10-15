@@ -231,42 +231,20 @@ describe("List screen — scrollIntoView on a modified locator", () => {
   })
 })
 
-// PILOT-716: like a Playwright click, tap() scrolls an element that is in the
-// accessibility tree but entirely off-screen into view first. Only iOS reports
-// off-screen rows; Android's tree holds on-screen nodes only, so there the tap
-// cannot know where to scroll and fails as not found with a scrollIntoView()
-// hint instead. Split per platform so either regressing fails loudly.
+// PILOT-716: tap() does not scroll (unlike a Playwright click; by design, the
+// same on both platforms). A row scrolled past waits out the action timeout,
+// then fails with one message that points at scrollIntoView(): definite on iOS,
+// which lists off-screen rows in its tree, and hedged on Android, which does
+// not.
 //
 // Last in the file for the same reason as the describe above: it scrolls the
-// list, and each test restarts the app to start from the top.
-describe("List screen — tap() on a row scrolled off-screen, iOS (PILOT-716)", () => {
-  // As above: scrollIntoView()'s swipes and settles are not progress-tracked.
-  test.use({ timeout: 45_000 })
+// list, and restarts the app to start from the top.
+describe("List screen — tap() on a row scrolled off-screen (PILOT-716)", () => {
+  // Also the action timeout the failing tap waits out; the test body's safety
+  // budget (3×) covers the scrollIntoView() before it.
+  test.use({ timeout: 15_000 })
 
-  test("iOS: tap() scrolls a row the list was scrolled past back into view and taps it", async ({ device, listScreen, platform }) => {
-    if (platform !== "ios") return
-    await device.resetApp({ mode: "restart", fallback: false })
-    await device.openDeepLink("tapsmithtest:///list")
-    await expect(listScreen.selectedCount).toContainText("0 selected")
-
-    // The ticket's repro: scroll down until "Item 1" is off the top.
-    await listScreen.item(25).scrollIntoView({ maxScrolls: 8 })
-    await expect(listScreen.item(1)).not.toBeVisible()
-
-    await listScreen.item(1).tap()
-    await expect(listScreen.item(1)).toBeVisible()
-    await expect(listScreen.selectedCount).toContainText("1 selected")
-  })
-
-})
-
-describe("List screen — tap() on a row scrolled off-screen, Android (PILOT-716)", () => {
-  // The timeout is also the action timeout the failing tap waits out, so keep
-  // it short; the test body's safety budget (3×) still covers the scroll.
-  test.use({ timeout: 20_000 })
-
-  test("Android: tap() on a row scrolled off-screen fails as not found, pointing at scrollIntoView()", async ({ device, listScreen, platform }) => {
-    if (platform !== "android") return
+  test("tap() on a row scrolled off-screen fails with the scrollIntoView() advice instead of scrolling", async ({ device, listScreen, platform }) => {
     await device.resetApp({ mode: "restart", fallback: false })
     await device.openDeepLink("tapsmithtest:///list")
     await expect(listScreen.itemCount).toHaveText("30 items")
@@ -274,10 +252,13 @@ describe("List screen — tap() on a row scrolled off-screen, Android (PILOT-716
     await listScreen.item(25).scrollIntoView({ maxScrolls: 8 })
     await expect(listScreen.item(1)).not.toBeVisible()
 
-    // The tap waits out the 20 s action timeout, then fails.
     const error = await listScreen.item(1).tap().then(() => null, (e: unknown) => e)
     expect(error).toBeInstanceOf(Error)
-    expect((error as Error).message).toMatch(/was not found after waiting \d+ms\. If it is off-screen in a scrollable list, scroll to it first with scrollIntoView\(\) before tap\(\)/)
+    expect((error as Error).message).toMatch(
+      platform === "ios"
+        ? /is off-screen: it was found, but no part of it was on screen after waiting \d+ms\. tap\(\) does not scroll, so scroll it into view first with await locator\.scrollIntoView\(\{ direction: "down" \}\), then tap\(\) it\./
+        : /was not found after waiting \d+ms\. It may be off-screen in a scrollable list: tap\(\) does not scroll, so scroll it into view first with await locator\.scrollIntoView\(\)/,
+    )
     await expect(listScreen.selectedCount).toContainText("0 selected")
   })
 })

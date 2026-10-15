@@ -1099,18 +1099,7 @@ await device.getByRole("button", { name: "Submit" }).tap();
 
 **Covered elements.** Like a Playwright click, a tap auto-waits for the element to be enabled and then for nothing to be drawn over it. If something covers the point it would tap, the tap waits for the cover to go away. Covers include the software keyboard, a bar or window drawn over the element, and another control painted on top of it (a button, link, text input, list cell, alert, sheet…). If the cover clears within the action timeout, the tap goes ahead. If it is still there at the timeout, the tap fails instead of tapping the cover: `Element is covered by the keyboard …` or `Element is covered by button "Overlay" …`. When the keyboard or a bar covers only part of the element, the tap lands on the visible part. `doubleTap()`, `longPress()`, and the tap that `type()`, `clear()` and `focus()` use to focus a field follow the same rules. A field that already has focus is not tapped at all when the keyboard, or a control on the same screen, covers it (typically its own keyboard): typing reaches it anyway. A dialog or other window over the field is waited out like any other cover, since it takes the input. If the element goes away, or turns into a different element, while its cover is being waited out, the action does not tap whatever replaced it: it looks the locator up again and fails as not found if nothing matches. If the keyboard is in the way, dismiss it first (`device.hideKeyboard()`, or submit the field). A plain view that is not a control (for example an unlabeled backdrop) is not detected as a cover yet (PILOT-364).
 
-**Off-screen elements.** Like a Playwright click, a tap first scrolls its element into view when the element is in the accessibility tree but entirely above or below the screen, inside a list that scrolls vertically, for example a row you have scrolled past. It waits until two reads put the element in the same place, so it never swipes at something still animating in. Then it swipes the screen towards the element with slow vertical drags until the element rests clear of the list's top and bottom edges, where headers and tab bars sit. When the list reaches its end, the tap goes ahead wherever the element is visible. The steps are kept short so any pull past the end of the list rubber-bands back rather than triggering a pull-to-refresh or dismissing a sheet. The swipes count against the action timeout. Each one is a slow drag followed by a wait for the list to stop, so reaching a row a screen or two away takes several seconds.
-
-The tap scrolls only that simple case. In these cases it fails at once, without tapping, and the error names the element and the API to use:
-
-- the element is off to the side, such as a carousel cell
-- it sits inside nested scroll views, or in no scrollable list
-- its list scrolls horizontally, or does not cover the middle of the screen, where the swipe starts
-- a swipe does not move it, or the swipes stop bringing it closer (any swipes already made have scrolled the list)
-
-The error reads: `Element … is off-screen and tap() could not scroll it into view: … Scroll it into view first (await locator.scrollIntoView({ direction: "down" })), then tap() it.` It names the direction `scrollIntoView()` needs, `"down"` for an element above, since it swipes up by default. For an element off to the side it suggests `scroll()` on the carousel that holds it. `doubleTap()`, `longPress()` and `setChecked()` scroll the same way; `setChecked()` scrolls only when it has to tap.
-
-Only iOS reports off-screen elements. Android's accessibility tree contains on-screen elements only, so an off-screen row is simply not found, and neither platform has the rows a virtualised list has not rendered. The tap then cannot know where to scroll, so it waits out the timeout and fails as not found, with a hint to scroll to the element first with [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid):
+**Off-screen elements.** Unlike a Playwright click, a tap does not scroll its element into view. This is by design, so taps behave the same on both platforms: Android's accessibility tree holds only on-screen elements, so a tap there cannot see a row that is scrolled away, let alone scroll to it. Scroll to the element first with [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid), then tap it:
 
 ```typescript
 const row = device.getByText("Item 40", { exact: true });
@@ -1121,6 +1110,8 @@ const first = device.getByText("Item 1", { exact: true });
 await first.scrollIntoView({ direction: "down" }); // a row the list was scrolled past
 await first.tap();
 ```
+
+An element that is off-screen auto-waits like any other, in case it scrolls or animates into view within the timeout. If it is still off-screen at the timeout, the tap fails with advice to scroll first. iOS lists off-screen elements in its tree, so it can say for certain: `Element … is off-screen: it was found, but no part of it was on screen after waiting 30000ms. tap() does not scroll, so scroll it into view first with await locator.scrollIntoView({ direction: "down" }), then tap() it.` (the direction is the one `scrollIntoView()` needs). Android never finds the element, so it says it may be off-screen: `Element … was not found after waiting 30000ms. It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with …`. `doubleTap()`, `longPress()` and `setChecked()` behave the same; `setChecked()` does not wait for an element already in the requested state.
 
 On Android, an element that is *entirely* behind the keyboard is hidden from the accessibility tree. An action on it fails as not found (after waiting out the timeout) rather than as covered, and assertions such as `toBeVisible()` and `toHaveValue()` cannot see it until the keyboard is gone.
 
@@ -1205,7 +1196,7 @@ The device agents don't apply `distance` yet: each call scrolls by a fixed step 
 
 Scroll the viewport until this element is visible on screen. Useful for reaching elements that are below the fold in a scrollable container.
 
-Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Tap actions already scroll an element into view themselves in the simple case, a row the platform reports above or below the screen in a vertical list (iOS; see [Off-screen elements](#elementhandletap-promisevoid)). Call `scrollIntoView()` for everything else, including every off-screen element on Android and the unrendered rows of a virtualised list on both platforms.
+Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Taps do not scroll for you (see [Off-screen elements](#elementhandletap-promisevoid)), so call this first for an element that may be off-screen. It swipes up by default, which reveals what is below; pass `{ direction: "down" }` for an element above the screen, such as a row the list was scrolled past.
 
 If the element is already visible, this is a no-op — it returns without scrolling, so calling `scrollIntoView()` before every `tap()` is safe even when the target is on screen (an unnecessary swipe could otherwise shift it under a pinned app bar). When the element isn't found on the first check, Tapsmith waits for the UI to settle and re-checks before the first swipe, so a briefly stale accessibility tree (e.g. right after navigation) doesn't trigger a spurious scroll. A handle from `all()` is a live `.nth(i)` locator, so on a virtualised list the scroll stops on whatever row is at index `i` in the scrolled window — see the [`all()`](#elementhandleall-promiseelementhandle) section.
 
@@ -1238,7 +1229,7 @@ await source.dragTo(target);
 
 #### `elementHandle.setChecked(checked: boolean): Promise<void>`
 
-Ensure a checkbox, switch, or radio button is in the desired state. Idempotent -- only taps if the current state differs from the desired state, and verifies the state changed after tapping. Like `tap()`, it scrolls an off-screen element into view before tapping it (see [Off-screen elements](#elementhandletap-promisevoid)).
+Ensure a checkbox, switch, or radio button is in the desired state. Idempotent -- only taps if the current state differs from the desired state, and verifies the state changed after tapping. Like `tap()`, it does not scroll an off-screen element into view (see [Off-screen elements](#elementhandletap-promisevoid)).
 
 ```typescript
 await device.getByRole("switch", { name: "Dark Mode" }).setChecked(true);
