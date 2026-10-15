@@ -241,11 +241,11 @@ describe("List screen — scrollIntoView on a modified locator", () => {
 // list, and restarts the app to start from the top.
 describe("List screen — tap() on a row scrolled off-screen (PILOT-716)", () => {
   // Also the action timeout (the runner applies a scope's timeout to the
-  // device default), so the failing tap waits 15 s on both platforms — not
-  // iOS CI's 30 s. The test body keeps 3× the config's timeout (45 s on
-  // Android CI, 90 s on iOS CI): a scope timeout only raises that, never
-  // lowers it.
-  test.use({ timeout: 15_000 })
+  // device default), so the failing tap waits 10 s on both platforms. The
+  // test body keeps 3× the config's timeout (30 s with the local 10 s configs,
+  // 45 s on Android CI, 90 s on iOS CI): a scope timeout only raises that,
+  // never lowers it.
+  test.use({ timeout: 10_000 })
 
   test("tap() on a row scrolled off-screen fails with the scrollIntoView() advice instead of scrolling", async ({ device, listScreen, platform }) => {
     await device.resetApp({ mode: "restart", fallback: false })

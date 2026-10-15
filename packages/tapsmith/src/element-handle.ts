@@ -644,9 +644,11 @@ const NOT_HITTABLE_ERROR_TYPE = 'ELEMENT_NOT_HITTABLE';
  */
 function isNotHittableRefusal(message: string | undefined): boolean {
   return message === 'Element is not hittable (may be off-screen or hidden)' || message === 'Element is not hittable' ||
-    // Android's agent says it after waiting out the budget for a fully
-    // clipped node (one its list hides): the same advice applies.
-    !!message?.includes('is not visible on screen (scrolled off, hidden, or fully clipped)');
+    // Android's agent, for a fully clipped node (one its list hides), after
+    // waiting out the budget: tap() in one wording, doubleTap()/longPress() in
+    // another. The same advice applies.
+    !!message?.includes('is not visible on screen (scrolled off, hidden, or fully clipped)') ||
+    !!message?.includes('element has empty visible bounds (zero-size, fully clipped, or off screen)');
 }
 
 /**

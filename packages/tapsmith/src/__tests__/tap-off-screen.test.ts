@@ -323,14 +323,17 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     expect(m.tap).toHaveBeenCalledTimes(1);
   });
 
-  it("gives Android's refusal of a fully clipped node the same advice", async () => {
-    const m = client(() => [row({ bounds: onScreen })]);
-    m.tap.mockImplementation(async () => ({
-      ...refusal(),
-      errorMessage: 'Element is not visible on screen (scrolled off, hidden, or fully clipped), so it was not touched',
-    }));
-    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
-    expect(err.message).toMatch(/was still not hittable by the end of the 3000ms timeout: .*scrollIntoView\(\)/);
+  it("gives Android's refusals of a fully clipped node the same advice (tap, and doubleTap/longPress)", async () => {
+    for (const [act, message] of [
+      ['tap', 'Element is not visible on screen (scrolled off, hidden, or fully clipped), so it was not touched'],
+      ['doubleTap', 'Cannot double tap: element has empty visible bounds (zero-size, fully clipped, or off screen)'],
+      ['longPress', 'Cannot long press: element has empty visible bounds (zero-size, fully clipped, or off screen)'],
+    ] as const) {
+      const m = client(() => [row({ bounds: onScreen })]);
+      m[act].mockImplementation(async () => ({ ...refusal(), errorMessage: message }));
+      const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000)[act]());
+      expect(err.message).toMatch(new RegExp(`was still not hittable by the end of the 3000ms timeout: .*${act}\\(\\) does not scroll`));
+    }
   });
 
   it('with timeout 0, returns the agent refusal as it is (no wait, no rewrite)', async () => {
