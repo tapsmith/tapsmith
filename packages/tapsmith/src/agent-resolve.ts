@@ -91,7 +91,7 @@ export async function missingAndroidAgentAdvice(dir: string): Promise<AndroidAge
     devDependencyInstallCommand(project, [NPM_PKG], 'the Android agent'),
   ]);
   const why = manager.startsWith('pnpm')
-    ? `${NPM_PKG}, which ships the agent APKs, is not installed. It is an optional dependency of Tapsmith, and pnpm 11 and later skip it with Tapsmith 0.6.0 and earlier (reading its name as Android-only), as does any install that omits optional dependencies`
+    ? `${NPM_PKG}, which ships the agent APKs, is not installed. It is an optional dependency of Tapsmith, and pnpm 11 and later skip it with Tapsmith 0.7.0 and earlier (reading its name as Android-only), as does any install that omits optional dependencies`
     : `${NPM_PKG}, which ships the agent APKs, is not installed. It is an optional dependency of Tapsmith, so an install that omits optional dependencies (--omit=optional, --no-optional) leaves it out`;
   return { why, install: install.display, ...(project !== dir ? { where: project } : {}) };
 }

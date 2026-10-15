@@ -93,7 +93,7 @@ Then run `pnpm install`. If `tapsmith init` ran the install for you, it prints t
 
 ### pnpm: the Android agent package
 
-pnpm 11 and later skip `@tapsmith/agent-android` when installing tapsmith 0.6.0 or earlier: they read the `-android` in its name as "Android-only" and leave the optional dependency out, so Android runs fail on a device that doesn't already have the agent. Later releases declare the platforms the package installs on. On an affected version, `tapsmith doctor` reports `Android agent not found`; add the package directly:
+pnpm 11 and later skip `@tapsmith/agent-android` when installing Tapsmith 0.7.0 or earlier: they read the `-android` in its name as "Android-only" and leave the optional dependency out, so Android runs fail on a device that doesn't already have the agent. Later releases declare the platforms the package installs on. On an affected version, `tapsmith doctor` reports `Android agent not found`; add the package directly:
 
 ```bash
 pnpm add -D @tapsmith/agent-android
