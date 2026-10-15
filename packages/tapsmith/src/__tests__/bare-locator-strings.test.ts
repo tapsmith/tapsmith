@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes, locatorStringError } from '../trace-viewer/components/selector-matching.js';
 import { parseSelectorToInternal } from '../mcp/locator-helper.js';
-import { selectorToProto, _role, _text, _textContains, _testId } from '../selectors.js';
+import { selectorToProto, withParent, _role, _text, _textContains, _testId } from '../selectors.js';
 import { parseSelectorParts, selectorPartsCode } from '../trace-viewer/components/selector-parts.js';
 
 // Locator strings written without `device.` — what the docs, the trace's
@@ -151,6 +151,13 @@ describe('the locator the trace\'s action list shows parses back to the same sel
       type: 'role', value: 'tab', name: 'Home', exact: true, selected: true, disabled: false, index: undefined,
     });
     expect(shown(_role('button', { name: /home/i, exact: true }))).toBe('getByRole("button", { name: /home/i })');
+  });
+
+  it('keeps a scoped locator\'s scope, so a copy is refused rather than matching every row', () => {
+    const scoped = withParent(_text('Row'), withParent(_role('listitem'), _role('list')));
+    expect(shown(scoped)).toBe('getByRole("list").getByRole("listitem").getByText("Row", { exact: true })');
+    expect(parseSelectorString(shown(scoped))).toBeNull();
+    expect(locatorStringError(shown(scoped))).toMatch(/^unsupported chained call \.getByRole\(\) — /);
   });
 
   it('escapes a value so it reads back the same', () => {

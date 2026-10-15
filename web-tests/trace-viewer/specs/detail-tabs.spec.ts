@@ -72,11 +72,17 @@ test.describe("Detail tabs", () => {
             action: "tap",
             selector: JSON.stringify({ text: "Save" }),
           }),
+          actionEvent({
+            actionIndex: 2,
+            action: "tap",
+            selector: JSON.stringify({ textContains: "Row", parent: { role: { role: "list", name: "" } } }),
+          }),
         ],
       })
 
       await expect(actions.items.first()).toContainText(code)
       await expect(actions.items.nth(1)).toContainText('getByText("Save", { exact: true })')
+      await expect(actions.items.nth(2)).toContainText('getByRole("list").getByText("Row")')
       await actions.items.first().click()
       await expect(detailTabs.callGrid).toContainText(code)
     })

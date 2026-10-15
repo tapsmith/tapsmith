@@ -87,10 +87,19 @@ function parseSelectorString(sel: string | undefined): string {
 }
 
 /**
- * A locator call's arguments and options object, highlighted — the same code
- * {@link selectorPartsCode} writes, for the action list and the Call tab.
+ * A locator call, its scope and its options object, highlighted — the same
+ * code {@link selectorPartsCode} writes, for the action list and the Call tab.
  */
-export function SelectorCallArgs({ parts }: { parts: SelectorParts }) {
+export function SelectorCall({ parts }: { parts: SelectorParts }) {
+  return (
+    <>
+      {parts.parent && <><SelectorCall parts={parts.parent} />.</>}
+      <span class="sel-fn">{parts.fn}</span>(<SelectorCallArgs parts={parts} />)
+    </>
+  );
+}
+
+function SelectorCallArgs({ parts }: { parts: SelectorParts }) {
   if (parts.optionKey) {
     return <>{'{ '}<span class="sel-fn">{parts.optionKey}</span>{': '}<span class="sel-val">{selectorValueCode(parts.args[0], false)}</span>{' }'}</>;
   }
@@ -119,7 +128,7 @@ function SelectorDisplay({ sel }: { sel: string | undefined }) {
   }
   return (
     <span class="action-selector-text">
-      <span class="sel-fn">{parts.fn}</span>(<SelectorCallArgs parts={parts} />)
+      <SelectorCall parts={parts} />
     </span>
   );
 }

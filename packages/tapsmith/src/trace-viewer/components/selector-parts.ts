@@ -27,6 +27,11 @@ export interface SelectorParts {
    * action matched (PILOT-717).
    */
   options?: SelectorOption[];
+  /**
+   * The locator this one is scoped to (`getByRole("list").getByText("x")`).
+   * Shown, so a copy keeps the scope instead of matching every "x" on screen.
+   */
+  parent?: SelectorParts;
 }
 
 /** A raw value as it is written in code: quoted and escaped, or as is when `literal`. */
@@ -51,30 +56,48 @@ function roleOptions(role: Record<string, unknown>): SelectorOption[] {
 export function parseSelectorParts(sel: string | undefined): SelectorParts | null {
   if (!sel) return null;
   try {
-    const parsed = JSON.parse(sel);
-    if (parsed.text) return { fn: 'getByText', args: [parsed.text], options: [{ key: 'exact', value: 'true', literal: true }] };
-    if (parsed.textContains) return { fn: 'getByText', args: [parsed.textContains] };
-    if (parsed.textRegex) return { fn: 'getByText', args: [parsed.textRegex.display], literal: [true] };
-    if (parsed.labelRegex) return { fn: 'getByLabel', args: [parsed.labelRegex.display], literal: [true] };
-    if (parsed.role) {
-      const options = roleOptions(parsed.role);
-      return { fn: 'getByRole', args: [parsed.role.role], ...(options.length ? { options } : {}) };
-    }
-    if (parsed.contentDesc) return { fn: 'getByDescription', args: [parsed.contentDesc] };
-    if (parsed.hint) return { fn: 'getByPlaceholder', args: [parsed.hint] };
-    if (parsed.testId) return { fn: 'getByTestId', args: [parsed.testId] };
-    if (parsed.label) return { fn: 'getByLabel', args: [parsed.label] };
-    if (parsed.resourceId) return { fn: 'locator', args: [parsed.resourceId], optionKey: 'id' };
-    if (parsed.className) return { fn: 'locator', args: [parsed.className], optionKey: 'className' };
-    if (parsed.xpath) return { fn: 'locator', args: [parsed.xpath], optionKey: 'xpath' };
-    return null;
+    return protoParts(JSON.parse(sel));
   } catch {
     return null;
   }
 }
 
+/** The parts of one proto selector and the parents it is scoped to, or null for one this cannot show. */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the trace's untyped selector JSON
+function protoParts(parsed: any): SelectorParts | null {
+  const leaf = leafParts(parsed);
+  if (!leaf || !parsed.parent) return leaf;
+  const parent = protoParts(parsed.parent);
+  return parent ? { ...leaf, parent } : null;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- the trace's untyped selector JSON
+function leafParts(parsed: any): SelectorParts | null {
+  if (parsed.text) return { fn: 'getByText', args: [parsed.text], options: [{ key: 'exact', value: 'true', literal: true }] };
+  if (parsed.textContains) return { fn: 'getByText', args: [parsed.textContains] };
+  if (parsed.textRegex) return { fn: 'getByText', args: [parsed.textRegex.display], literal: [true] };
+  if (parsed.labelRegex) return { fn: 'getByLabel', args: [parsed.labelRegex.display], literal: [true] };
+  if (parsed.role) {
+    const options = roleOptions(parsed.role);
+    return { fn: 'getByRole', args: [parsed.role.role], ...(options.length ? { options } : {}) };
+  }
+  if (parsed.contentDesc) return { fn: 'getByDescription', args: [parsed.contentDesc] };
+  if (parsed.hint) return { fn: 'getByPlaceholder', args: [parsed.hint] };
+  if (parsed.testId) return { fn: 'getByTestId', args: [parsed.testId] };
+  if (parsed.label) return { fn: 'getByLabel', args: [parsed.label] };
+  if (parsed.resourceId) return { fn: 'locator', args: [parsed.resourceId], optionKey: 'id' };
+  if (parsed.className) return { fn: 'locator', args: [parsed.className], optionKey: 'className' };
+  if (parsed.xpath) return { fn: 'locator', args: [parsed.xpath], optionKey: 'xpath' };
+  return null;
+}
+
 /** The parts as one line of locator code, e.g. `getByRole("button", { name: "Save" })`. */
 export function selectorPartsCode(parts: SelectorParts): string {
+  const leaf = leafCode(parts);
+  return parts.parent ? `${selectorPartsCode(parts.parent)}.${leaf}` : leaf;
+}
+
+function leafCode(parts: SelectorParts): string {
   if (parts.optionKey) return `${parts.fn}({ ${parts.optionKey}: ${selectorValueCode(parts.args[0], false)} })`;
   const args = parts.args.map((a, i) => selectorValueCode(a, parts.literal?.[i]));
   if (parts.options?.length) {

@@ -10,7 +10,7 @@ import type { Bounds } from './HierarchyTree.js';
 import { NetworkTab } from './NetworkTab.js';
 import { actingDevice, deviceNamesFor, deviceTagStyle, frameIndexForDevice, hierarchyForDeviceFrame, type DeviceGroupView } from './device-frames.js';
 import { parseSelectorParts } from './selector-parts.js';
-import { SelectorCallArgs } from './ActionsPanel.js';
+import { SelectorCall } from './ActionsPanel.js';
 
 interface Props {
   event: ActionTraceEvent | AssertionTraceEvent | undefined
@@ -245,7 +245,7 @@ function formatSelectorForCall(sel: string | undefined): ComponentChildren {
   if (!parts) return <span class="call-value mono">{sel}</span>;
   return (
     <span class="call-value mono">
-      <span class="sel-fn">{parts.fn}</span>(<SelectorCallArgs parts={parts} />)
+      <SelectorCall parts={parts} />
     </span>
   );
 }
