@@ -14,6 +14,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   no-break space), for getByRole's name; tapping it counts.
 // - "Full name" is a text field whose accessibility label uses U+00A0, for
 //   getByLabel.
+// - "Get started" renders as "GET STARTED" through textTransform, as the
+//   stock Expo template's button does: a non-exact getByText ignores case
+//   (PILOT-522), so getByText("get started") finds it. Tapping it counts.
 //
 // Reached by deep link only (not on the home list, so the home cards keep
 // their positions).
@@ -21,6 +24,7 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 export default function TextMatchingScreen() {
   const [welcomeTaps, setWelcomeTaps] = useState(0)
   const [saveTaps, setSaveTaps] = useState(0)
+  const [startedTaps, setStartedTaps] = useState(0)
   const [name, setName] = useState("")
 
   // A warm reset navigates here rather than remounting, so clear local state
@@ -30,6 +34,7 @@ export default function TextMatchingScreen() {
     if (resetEpoch === 0) return
     setWelcomeTaps(0)
     setSaveTaps(0)
+    setStartedTaps(0)
     setName("")
   }, [resetEpoch])
 
@@ -37,6 +42,9 @@ export default function TextMatchingScreen() {
     <View style={styles.container}>
       <Text style={styles.heading} onPress={() => setWelcomeTaps((n) => n + 1)}>
         Welcome to&nbsp;Expo
+      </Text>
+      <Text style={styles.uppercase} onPress={() => setStartedTaps((n) => n + 1)}>
+        Get started
       </Text>
       <Text style={styles.body}>{"Line one\nLine two"}</Text>
       <Text style={styles.body}>{"Spaced   out"}</Text>
@@ -58,6 +66,7 @@ export default function TextMatchingScreen() {
         accessibilityLabel={"Full name"}
       />
       <Text testID="text-matching-counts">{`welcome=${welcomeTaps} save=${saveTaps}`}</Text>
+      <Text testID="text-matching-started">{`started=${startedTaps}`}</Text>
     </View>
   )
 }
@@ -77,6 +86,12 @@ const styles = StyleSheet.create({
   body: {
     fontSize: 16,
     color: "#333",
+  },
+  uppercase: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#007AFF",
+    textTransform: "uppercase",
   },
   button: {
     backgroundColor: "#007AFF",
