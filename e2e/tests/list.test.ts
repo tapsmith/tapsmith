@@ -240,9 +240,10 @@ describe("List screen — scrollIntoView on a modified locator", () => {
 // Last in the file for the same reason as the describe above: it scrolls the
 // list, and restarts the app to start from the top.
 describe("List screen — tap() on a row scrolled off-screen (PILOT-716)", () => {
-  // Also the action timeout the failing tap waits out; the test body's safety
-  // budget (3×) covers the scrollIntoView() before it.
-  test.use({ timeout: 15_000 })
+  // The test body's budget: the failing tap waits out the config's action
+  // timeout (30 s on iOS CI, 15 s on Android CI) after a restart reset and a
+  // scrollIntoView(), whose swipes and settles are not progress-tracked.
+  test.use({ timeout: 60_000 })
 
   test("tap() on a row scrolled off-screen fails with the scrollIntoView() advice instead of scrolling", async ({ device, listScreen, platform }) => {
     await device.resetApp({ mode: "restart", fallback: false })

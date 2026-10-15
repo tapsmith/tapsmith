@@ -631,6 +631,13 @@ function offScreenHint(action: TapFamilyAction): string {
 }
 
 /**
+ * The iOS agent's refusal of a touch on an element it cannot hit at all: off
+ * the screen, or clipped by its list (behind a header) — iOS still calls a
+ * clipped row "visible", so the auto-wait cannot see it coming.
+ */
+const NOT_HITTABLE_SIGNATURE = 'is not hittable (may be off-screen or hidden)';
+
+/**
  * The deadline error for an element found in the tree but entirely
  * off-screen (iOS reports such nodes): definite, with the way to scroll to
  * it that the element's position tells.
@@ -2174,6 +2181,37 @@ export class ElementHandle {
   private _resolvedActionIndex: number | undefined;
 
   /** @internal — Wrap an action with trace recording. */
+  /**
+   * @internal — Run a tap-family dispatch, retrying while the agent refuses
+   * the element as not hittable (PILOT-716): a row its list clips behind a
+   * header is still "visible" to the auto-wait, so the agent is the one to
+   * refuse it — and the refusal is waited out until the action's deadline,
+   * like an off-screen element, not returned at once. A refusal means nothing
+   * was touched, so retrying never repeats a touch. At the deadline the
+   * response carries the same scrollIntoView() advice as the off-screen error.
+   */
+  private async _untilHittable(
+    action: TapFamilyAction,
+    remainingMs: number,
+    dispatch: () => Promise<ActionResponse>,
+  ): Promise<ActionResponse> {
+    const deadline = Date.now() + remainingMs;
+    for (;;) {
+      const res = await dispatch();
+      if (res.success || !res.errorMessage?.includes(NOT_HITTABLE_SIGNATURE)) return res;
+      if (Date.now() >= deadline) {
+        return {
+          ...res,
+          errorMessage:
+            `Element ${this._describe()} is not hittable after waiting ${this._timeoutMs}ms: it may be off-screen, ` +
+            'or clipped by its list (for example behind a header). ' +
+            scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)'),
+        };
+      }
+      await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())), this._client._getAbortSignal?.());
+    }
+  }
+
   private async _tracedAction(
     action: string,
     category: ActionCategory,
@@ -2277,9 +2315,9 @@ export class ElementHandle {
     });
     const budget = actionBudget(remainingMs);
     return this._tracedAction('tap', 'tap',
-      () => this._dispatchTargeted(target, (t) => 'elementId' in t
+      () => this._untilHittable('tap', remainingMs, () => this._dispatchTargeted(target, (t) => 'elementId' in t
         ? this._client.tap(undefined, budget(), t.elementId)
-        : this._client.tap(t.selector, budget())),
+        : this._client.tap(t.selector, budget()))),
       'Tap failed');
   }
 
@@ -2290,9 +2328,9 @@ export class ElementHandle {
     });
     const budget = actionBudget(remainingMs);
     return this._tracedAction('longPress', 'tap',
-      () => this._dispatchTargeted(target, (t) => 'elementId' in t
+      () => this._untilHittable('longPress', remainingMs, () => this._dispatchTargeted(target, (t) => 'elementId' in t
         ? this._client.longPress(undefined, durationMs, budget(), t.elementId)
-        : this._client.longPress(t.selector, durationMs, budget())),
+        : this._client.longPress(t.selector, durationMs, budget()))),
       'Long press failed');
   }
 
@@ -2361,9 +2399,9 @@ export class ElementHandle {
     const intervalMs = Math.max(0, options?.intervalMs ?? this._options.doubleTapInterval ?? 0);
     const budget = actionBudget(remainingMs);
     return this._tracedAction('doubleTap', 'tap',
-      () => this._dispatchTargeted(target, (t) => 'elementId' in t
+      () => this._untilHittable('doubleTap', remainingMs, () => this._dispatchTargeted(target, (t) => 'elementId' in t
         ? this._client.doubleTap(undefined, budget(), intervalMs, t.elementId)
-        : this._client.doubleTap(t.selector, budget(), intervalMs)),
+        : this._client.doubleTap(t.selector, budget(), intervalMs))),
       'Double tap failed');
   }
 
@@ -2436,7 +2474,7 @@ export class ElementHandle {
       // would toggle it the wrong way (cf. _dispatchTargeted, which re-taps).
       let tapRes: ActionResponse;
       try {
-        tapRes = await tapByTarget(target);
+        tapRes = await this._untilHittable('setChecked', remainingMs, () => tapByTarget(target));
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (!isStaleElementError(msg)) throw err;

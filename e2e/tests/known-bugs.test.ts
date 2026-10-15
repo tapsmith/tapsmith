@@ -16,12 +16,6 @@ describe("Known bugs (open)", () => {
   // doesn't disappear from the suite.
   test.skip("PILOT-134: cross-file test isolation", () => {})
 
-  // ─── PILOT-135: tap() should auto-scroll off-screen targets ───
-  // https://samsmithyeah.atlassian.net/browse/PILOT-135
-  // Today users have to call `scrollIntoView()` explicitly; Playwright
-  // auto-scrolls on actionable operations like tap.
-  test.skip("PILOT-135: tap() should auto-scroll to off-screen elements", () => {})
-
   // ─── PILOT-195: pressRecentApps() leaves launcher in foreground ───
   // https://samsmithyeah.atlassian.net/browse/PILOT-195
   // Under parallel workers, the test that runs immediately after

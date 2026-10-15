@@ -149,6 +149,22 @@ describe('tap() on an element found but off-screen (iOS) (PILOT-716)', () => {
     expect(err.message).toMatch(/is disabled after waiting 2000ms$/);
   });
 
+  it('with timeout 0 (no auto-wait), hands an off-screen element straight to the action, as before', async () => {
+    const m = client(() => [row({ visible: false, viewportRatio: 0, bounds: below })]);
+    await new ElementHandle(m.c, _text('Item 1'), 0).tap();
+    expect(m.tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports an agent fault at the deadline rather than the off-screen element', async () => {
+    let reads = 0;
+    const m = client(() => [row({ visible: false, viewportRatio: 0, bounds: below })]);
+    m.findElements.mockImplementation(async () => (reads++ < 2
+      ? { requestId: '1', elements: [row({ visible: false, viewportRatio: 0, bounds: below })], errorMessage: '' }
+      : { requestId: '1', elements: [], errorMessage: 'Agent command timed out after 5000ms' }));
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 2000).tap());
+    expect(err.message).toMatch(/Agent command timed out/);
+  });
+
   it('still hands an element invisible for another reason (zero-size frame, no bounds) to the action, as before', async () => {
     for (const el of [
       row({ visible: false, viewportRatio: 0, bounds: { left: 10, top: 300, right: 10, bottom: 340 } }),
@@ -158,6 +174,42 @@ describe('tap() on an element found but off-screen (iOS) (PILOT-716)', () => {
       await new ElementHandle(m.c, _text('Item 1'), 5000).tap();
       expect(m.tap).toHaveBeenCalledTimes(1);
     }
+  });
+});
+
+describe('tap() on an element the iOS agent refuses as not hittable (clipped by its list) (PILOT-716)', () => {
+  const refusal = (): ActionResponse => ({
+    requestId: '1', success: false, errorType: 'ACTION_FAILED',
+    errorMessage: 'Element is not hittable (may be off-screen or hidden)', screenshot: Buffer.alloc(0),
+  });
+
+  it('retries the refusal until the timeout, then gives the same scrollIntoView() advice', async () => {
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.tap.mockImplementation(async () => refusal());
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
+    expect(m.tap.mock.calls.length).toBeGreaterThan(3);
+    expect(err.elapsedMs).toBeGreaterThanOrEqual(3000);
+    expect(err.message).toBe(
+      'Element getByText("Item 1", { exact: true }) is not hittable after waiting 3000ms: it may be off-screen, ' +
+        'or clipped by its list (for example behind a header). tap() does not scroll, so scroll it into view first with ' +
+        'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen), then tap() it.',
+    );
+  });
+
+  it('taps once the element becomes hittable within the timeout', async () => {
+    const m = client(() => [row({ bounds: onScreen })]);
+    let calls = 0;
+    m.tap.mockImplementation(async () => (++calls < 3 ? refusal() : ok()));
+    await withFakeClock(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
+    expect(m.tap).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not retry any other failure (a covered element is waited out by the agent itself)', async () => {
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.tap.mockImplementation(async () => ({ ...refusal(), errorType: 'ELEMENT_COVERED', errorMessage: 'Element is covered by the keyboard' }));
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
+    expect(m.tap).toHaveBeenCalledTimes(1);
+    expect(err.message).toBe('Element is covered by the keyboard');
   });
 });
 
