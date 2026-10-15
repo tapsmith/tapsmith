@@ -677,23 +677,28 @@ function hierarchyBounds(node: HierarchyNode): Bounds | undefined {
 /**
  * How a scroll view lays out its content, judged along the element's branch
  * (`path[0]` is the scroll view, the rest leads down to the element): at the
- * first level where the branch has a framed sibling, siblings side by side
- * mean a horizontal strip (a carousel), siblings stacked mean a vertical
- * list. `undefined` when no level has a sibling to compare with.
+ * first level where the branch has a framed sibling, any sibling stacked
+ * above or below means a vertical list (or grid); siblings only side by side
+ * mean a horizontal strip (a carousel). `undefined` when no level has a
+ * sibling to compare with.
  */
 function branchLayout(path: HierarchyNode[]): 'horizontal' | 'vertical' | undefined {
   for (let j = 1; j < path.length; j++) {
     const own = hierarchyBounds(path[j]);
     if (!own) continue;
+    let sideBySide = false;
     for (const sibling of path[j - 1].children) {
       if (sibling === path[j]) continue;
       const b = hierarchyBounds(sibling);
       if (!b || b.right <= b.left || b.bottom <= b.top) continue;
       const overlapX = Math.min(b.right, own.right) - Math.max(b.left, own.left);
       const overlapY = Math.min(b.bottom, own.bottom) - Math.max(b.top, own.top);
-      if (overlapY > 0 && overlapX <= 0) return 'horizontal';
+      // Any sibling stacked above or below means rows: a vertical list, or a
+      // grid whose rows also hold siblings side by side.
       if (overlapX > 0 && overlapY <= 0) return 'vertical';
+      if (overlapY > 0 && overlapX <= 0) sideBySide = true;
     }
+    if (sideBySide) return 'horizontal';
   }
   return undefined;
 }
@@ -1729,7 +1734,11 @@ export class ElementHandle {
       if (Date.now() >= deadline) {
         if (lastTransientErr) throw lastTransientErr;
         if (lastSeenOutOfView) {
-          throw this._offScreenError(action, 'it kept moving, so it was never still long enough to scroll to', lastSeenOutOfView);
+          throw this._offScreenError(
+            action,
+            'it was still out of view at the timeout, before two reads could confirm it was at rest to scroll to',
+            lastSeenOutOfView,
+          );
         }
         const desc = this._describe();
         throw new Error(
@@ -3082,14 +3091,12 @@ export class ElementHandle {
     action: TapFamilyAction,
   ): Promise<ScrollList | 'on-screen'> {
     const fail = (why: string): OffScreenError => this._offScreenError(action, why, element.bounds);
-    let xml: string;
-    try {
-      const budget = Math.max(1, Math.min(AUTO_SCROLL_HIERARCHY_READ_MS, deadline - Date.now()));
-      xml = (await this._client.getUiHierarchy(budget)).hierarchyXml ?? '';
-    } catch (err) {
-      if (isAbortError(err)) throw err;
-      throw fail('the UI hierarchy could not be read to find the list that holds it');
-    }
+    // A failed read propagates as itself (a transport or agent error), so
+    // session recovery recognises it, as it does a failed findElements.
+    const budget = Math.max(1, Math.min(AUTO_SCROLL_HIERARCHY_READ_MS, deadline - Date.now()));
+    const res = await this._client.getUiHierarchy(budget);
+    if (res.errorMessage) throw new Error(`getUiHierarchy failed: ${res.errorMessage}`);
+    const xml = res.hierarchyXml ?? '';
     const roots = parseHierarchyXml(xml);
     // The screen: the first node with a frame (the dump's own <hierarchy>
     // wrapper has none) — the app on iOS, the root window on Android.
@@ -3201,6 +3208,7 @@ export class ElementHandle {
     const restsSafely = (r: Bounds): boolean =>
       (r.top >= extent * AUTO_SCROLL_SAFE_TOP && r.bottom <= extent * AUTO_SCROLL_SAFE_BOTTOM) ||
       (r.bottom - r.top >= extent / 2 && r.top <= extent / 2 && r.bottom >= extent / 2);
+    let last: ElementInfo = element;
     let current: Bounds = element.bounds;
     let bounds = rel(current);
     // The way scrollIntoView() would have to go for it: down for an element
@@ -3215,6 +3223,9 @@ export class ElementHandle {
       if (Date.now() >= deadline) throw fail(`the action timed out after ${swipes} swipe(s)`, current);
       // Positive: the element has to move up (swipe up); negative: down.
       const offset = travelNeeded(bounds);
+      // Already resting in the safe region (the platform's visibility can lag
+      // the dump): nothing to swipe.
+      if (offset === 0) return last;
       const travel = shown
         ? Math.min(Math.abs(offset), extent * AUTO_SCROLL_MAX_NUDGE)
         : Math.min(Math.abs(offset), Math.max(0, offset < 0
@@ -3254,6 +3265,7 @@ export class ElementHandle {
         if (nowShown) return next; // in view, and the list will not go any further
         throw fail(`a "${direction}" screen swipe did not move it`, next.bounds);
       }
+      last = next;
       current = next.bounds;
       bounds = nb;
       shown = nowShown;

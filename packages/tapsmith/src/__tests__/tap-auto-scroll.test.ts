@@ -46,7 +46,8 @@ function simulatedScreen(opts: {
   checked?: boolean;
   listTop?: number;
   listBottom?: number;
-  siblings?: 'stacked' | 'side' | 'none';
+  /** Sibling cells around the row: stacked (a list), side by side (a carousel), or a grid row-mate first then a row below. */
+  siblings?: 'stacked' | 'side' | 'grid' | 'none';
   /** The list sits inside another scroll view. */
   nested?: boolean;
   /** The row is in no scroll view at all. */
@@ -56,6 +57,8 @@ function simulatedScreen(opts: {
   /** The agent reports the row not visible even where it is on screen (a stale screen size). */
   agentSaysHidden?: boolean;
   hierarchyFails?: boolean;
+  /** The hierarchy read answers with an agent error. */
+  hierarchyError?: string;
   elementIdAfterScroll?: string;
   goneAfterSwipe?: boolean;
   /** Reads after the first swipe that come back as an agent fault. */
@@ -134,7 +137,8 @@ function simulatedScreen(opts: {
     return ok();
   });
   const getUiHierarchy = vi.fn(async () => {
-    if (opts.hierarchyFails) throw new Error('hierarchy dump failed');
+    if (opts.hierarchyFails) throw new Error('Agent command timed out after 5000ms');
+    if (opts.hierarchyError) return { requestId: '1', hierarchyXml: '', errorMessage: opts.hierarchyError };
     const r = row().bounds!;
     const shift = opts.unmatched ? 37 : 0;
     const node = (t: number, l: number) =>
@@ -142,12 +146,13 @@ function simulatedScreen(opts: {
     const rowNode = node(r.top + shift, r.left);
     const sibling = opts.siblings === 'none' ? ''
       : opts.siblings === 'side' ? node(r.top, r.left + ROW_W + 10)
-        : node(r.top + rowH + 10, r.left);
+        : opts.siblings === 'grid' ? node(r.top, r.left + ROW_W + 10) + node(r.top + rowH + 10, r.left)
+          : node(r.top + rowH + 10, r.left);
     const listTop = opts.listTop ?? 0;
     const listBottom = opts.listBottom ?? SCREEN_H;
     let content = opts.noList
       ? `<XCUIElementTypeOther type="XCUIElementTypeOther" bounds="[0,0][${SCREEN_W},${SCREEN_H}]">${rowNode}${sibling}</XCUIElementTypeOther>`
-      : `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,${listTop}][${SCREEN_W},${listBottom}]">${rowNode}${sibling}</XCUIElementTypeScrollView>`;
+      : `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,${listTop}][${SCREEN_W},${listBottom}]">${sibling}${rowNode}</XCUIElementTypeScrollView>`;
     if (opts.nested) content = `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,0][${SCREEN_W},${SCREEN_H}]">${content}</XCUIElementTypeScrollView>`;
     return {
       requestId: '1',
@@ -251,6 +256,21 @@ describe('tap() scrolls an off-screen row into view (PILOT-716)', () => {
     await withFakeClock(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
     expect(swipe.mock.calls.length).toBeGreaterThan(8);
     expect(inSafeRegion(state.top)).toBe(true);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes a grid for a vertical list even when the row-mate beside the element comes first (review R13-F2)', async () => {
+    const { client, swipe, tap, state } = simulatedScreen({ top: 1500, siblings: 'grid' });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(swipe).toHaveBeenCalled();
+    expect(inSafeRegion(state.top)).toBe(true);
+    expect(tap).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops swiping once the element rests in the safe region, even if the agent still calls it hidden (review R13-F3)', async () => {
+    const { client, swipe, tap } = simulatedScreen({ top: 1500, agentSaysHidden: true });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+    expect(swipe.mock.calls.every(([dir]) => dir === 'up')).toBe(true);
     expect(tap).toHaveBeenCalledTimes(1);
   });
 
@@ -374,7 +394,6 @@ describe('tap() fails fast, without guessing, outside the simple case (PILOT-716
     ['in a horizontal list (a carousel)', { siblings: 'side' as const }, /the list that holds it does not scroll vertically/],
     ['in a list that does not cover the middle of the screen', { listTop: 500 }, /its list does not cover the middle of the screen/],
     ['not found in the hierarchy', { unmatched: true }, /it could not be found in the UI hierarchy/],
-    ['when the hierarchy cannot be read', { hierarchyFails: true }, /the UI hierarchy could not be read/],
   ])('an element below the screen %s: no swipe, a scrollIntoView() hint', async (_name, opts, why) => {
     const { client, swipe, tap } = simulatedScreen({ top: 1500, ...opts });
     const err = await rejectionOf(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
@@ -384,6 +403,27 @@ describe('tap() fails fast, without guessing, outside the simple case (PILOT-716
     expect(err.message).toMatch(why);
     expect(err.message).toContain('Scroll it into view first (await locator.scrollIntoView({ direction: "up" })), then tap() it.');
     expect(err.elapsedMs).toBeLessThan(5000);
+  });
+
+  it('a failed hierarchy read propagates as itself, so session recovery can see the infra error (review R13-F1)', async () => {
+    for (const [opts, message] of [
+      [{ hierarchyFails: true }, /^Agent command timed out after 5000ms$/],
+      [{ hierarchyError: 'agent not connected' }, /^getUiHierarchy failed: agent not connected$/],
+    ] as const) {
+      const { client, swipe, tap } = simulatedScreen({ top: 1500, ...opts });
+      const err = await rejectionOf(60_000, () => new ElementHandle(client, _text('Item 1'), 30_000).tap());
+      expect(err.message).toMatch(message);
+      expect(swipe).not.toHaveBeenCalled();
+      expect(tap).not.toHaveBeenCalled();
+    }
+  });
+
+  it('an element never at rest by the timeout is reported as such (review R13-F4)', async () => {
+    const animation = Array.from({ length: 40 }, (_, i) => 3000 - i * 10);
+    const { client, swipe } = simulatedScreen({ top: 3000, animation });
+    const err = await rejectionOf(5000, () => new ElementHandle(client, _text('Item 1'), 1000).tap());
+    expect(swipe).not.toHaveBeenCalled();
+    expect(err.message).toMatch(/it was still out of view at the timeout, before two reads could confirm it was at rest/);
   });
 
   it('a swipe that does not move the element: one swipe, then a hint naming the way scrollIntoView() must go', async () => {
