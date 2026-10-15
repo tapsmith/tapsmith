@@ -274,8 +274,38 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
       requestId: '1', elements: [row({ bounds: onScreen, enabled: ++reads <= 1 })], errorMessage: '',
     }));
     m.tap.mockImplementation(async () => refusal());
-    await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
     expect(m.tap).toHaveBeenCalledTimes(1);
+    expect(err.message).toMatch(/is disabled after waiting 3000ms$/);
+  });
+
+  it('fails as not found, or off-screen, when that is what the element became during the retries', async () => {
+    for (const [later, message] of [
+      [[], /was not found after waiting 3000ms/],
+      [[row({ visible: false, viewportRatio: 0, bounds: above })], /is off-screen: it was found.*scrollIntoView\(\{ direction: "down" \}\)/],
+    ] as const) {
+      let reads = 0;
+      const m = client(() => [row({ bounds: onScreen })]);
+      m.findElements.mockImplementation(async () => ({
+        requestId: '1', elements: ++reads <= 1 ? [row({ bounds: onScreen })] : [...later], errorMessage: '',
+      }));
+      m.tap.mockImplementation(async () => refusal());
+      const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).tap());
+      expect(m.tap).toHaveBeenCalledTimes(1);
+      expect(err.message).toMatch(message);
+    }
+  });
+
+  it('a modified handle retries on the element it resolves to now, not the id first resolved', async () => {
+    let reads = 0;
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.findElements.mockImplementation(async () => ({
+      requestId: '1', elements: [row({ bounds: onScreen, elementId: ++reads <= 1 ? 'el-old' : 'el-new' })], errorMessage: '',
+    }));
+    let calls = 0;
+    m.tap.mockImplementation(async () => (++calls < 2 ? refusal() : ok()));
+    await withFakeClock(30_000, () => new ElementHandle(m.c, _role('button'), 3000).first().tap());
+    expect(m.tap.mock.calls.map((c) => (c as unknown[])[2])).toEqual(['el-old', 'el-new']);
   });
 
   it('with timeout 0, returns the agent refusal as it is (no wait, no rewrite)', async () => {
