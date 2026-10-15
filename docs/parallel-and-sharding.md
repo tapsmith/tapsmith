@@ -272,7 +272,9 @@ Sharding is file-based and deterministic -- the same `--shard` value always sele
 
 ### GitHub Actions Matrix
 
-Here is a complete workflow that shards tests across 4 CI jobs, then merges the results:
+Here is a complete workflow that shards tests across 4 CI jobs, then merges the results. A `build` job
+builds the app once, as the [Android CI workflow](ci-setup.md#github-actions-android) does, and each
+shard downloads it to the same path, so `tapsmith.config.ts` keeps the `apk` path shown there:
 
 ```yaml
 name: Mobile Tests
@@ -284,7 +286,47 @@ on:
     branches: [main]
 
 jobs:
+  # Build the APK once and share it with every shard.
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: "temurin"
+          java-version: "17"
+
+      # Expo projects that don't commit android/ generate it here.
+      - name: Generate the native project (Expo)
+        if: hashFiles('android/gradlew') == ''
+        run: npx expo prebuild --platform android
+
+      # Release, because a debug APK needs the Metro dev server.
+      - name: Build the release APK
+        working-directory: android
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=x86_64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 1
+
   test:
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -304,11 +346,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Set up JDK
-        uses: actions/setup-java@v4
+      - name: Download the APK
+        uses: actions/download-artifact@v4
         with:
-          distribution: "temurin"
-          java-version: "17"
+          name: app-apk
+          path: android/app/build/outputs/apk/release/
 
       - name: Enable KVM
         run: |

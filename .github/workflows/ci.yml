@@ -62,6 +62,14 @@ jobs:
       - name: Build SDK for the unit tests
         run: npx tsc -p tsconfig.build.json
 
+      # docs-workflows.test.ts lints the docs' GitHub Actions samples with
+      # actionlint (and fails without it under CI). `go install` checks the
+      # module against Go's checksum database; the runner image has Go.
+      - name: Install actionlint
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: Unit tests
         run: npx vitest run
 

@@ -18,21 +18,17 @@
  * objects) are unchecked, as are TSX samples' JSX props.
  */
 
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { glob } from 'glob';
 import { marked, type Token } from 'marked';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { Device, ElementHandle, WebViewHandle } from '../index.js';
+import { childTokens, docFiles, fencedBlocksIn, REPO } from './doc-samples.js';
 
 // ─── Extraction ───
 
-const REPO = path.resolve(import.meta.dirname, '../../../..');
 const SDK_ENTRY = path.resolve(import.meta.dirname, '../index.ts');
-
-const SOURCES = ['docs/**/*.md', '*.md', 'packages/*/README.md'];
 const TS_LANGS = new Set(['typescript', 'ts', 'tsx']);
 
 interface Sample {
@@ -43,16 +39,6 @@ interface Sample {
   tsx: boolean;
 }
 
-/** A token's children: list items, inline tokens, and table cells (`header[]` / `rows[][]`). */
-function childTokens(token: Token): Token[] {
-  const t = token as { tokens?: Token[]; items?: Token[]; header?: Array<{ tokens: Token[] }>; rows?: Array<Array<{ tokens: Token[] }>> };
-  return [
-    ...(t.items ?? []),
-    ...(t.tokens ?? []),
-    ...(t.header ?? []).flatMap((cell) => cell.tokens),
-    ...(t.rows ?? []).flatMap((row) => row.flatMap((cell) => cell.tokens)),
-  ];
-}
 
 /** Inline code spans of a markdown file (prose like "use `getByDescription()`"), with their lines. */
 function codeSpansIn(file: string, source: string): Sample[] {
@@ -79,60 +65,11 @@ function codeSpansIn(file: string, source: string): Sample[] {
   return out;
 }
 
-/**
- * Fenced code samples of a markdown file, with the line of their first code
- * line. Tokens arrive in document order, so each code token is the next fence
- * after the previous one; a fence is found by its own line rather than by the
- * token's `raw`, which marked dedents for a block nested in a list.
- */
+/** The TypeScript samples among a markdown file's fenced blocks. */
 function samplesIn(file: string, source: string): Sample[] {
-  const out: Sample[] = [];
-  let searchFrom = 0;
-  const lineOf = (offset: number): number => source.slice(0, offset).split('\n').length;
-  const visit = (token: Token): void => {
-    if (token.type === 'code') {
-      const lang = (token.lang ?? '').trim().split(/\s+/)[0]!.toLowerCase();
-      const open = /^[ \t>]*(`{3,}|~{3,})[^\n]*$/gm;
-      open.lastIndex = searchFrom;
-      const fence = token.codeBlockStyle === 'indented' ? null : open.exec(source);
-      let line = 0;
-      if (fence) {
-        line = lineOf(fence.index) + 1;
-        const close = new RegExp(`^[ \\t>]*\\${fence[1]![0]}{${fence[1]!.length},}[ \\t]*$`, 'gm');
-        close.lastIndex = fence.index + fence[0].length;
-        const end = close.exec(source);
-        searchFrom = end ? end.index + end[0].length : source.length;
-      } else {
-        const at = source.indexOf(token.raw, searchFrom);
-        if (at >= 0) {
-          line = lineOf(at);
-          searchFrom = at + token.raw.length;
-        }
-      }
-      if (TS_LANGS.has(lang)) out.push({ file, line, code: token.text as string, tsx: lang === 'tsx' });
-    }
-    for (const child of childTokens(token)) visit(child);
-  };
-  for (const token of marked.lexer(source)) visit(token);
-  return out;
-}
-
-/** Files git tracks, plus new ones not yet added — never ignored ones (local plans, session notes). */
-function repoFiles(): Set<string> | undefined {
-  try {
-    return new Set(
-      execFileSync('git', ['ls-files', '--cached', '--others', '--exclude-standard'], { cwd: REPO, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-        .split('\n').filter(Boolean),
-    );
-  } catch {
-    return undefined; // not a git checkout: scan what the globs find
-  }
-}
-
-function docFiles(): string[] {
-  const tracked = repoFiles();
-  return glob.sync(SOURCES, { cwd: REPO, nodir: true, ignore: ['**/node_modules/**'] })
-    .filter((rel) => !tracked || tracked.has(rel)).sort();
+  return fencedBlocksIn(file, source)
+    .filter((block) => TS_LANGS.has(block.lang))
+    .map(({ file: f, line, code, lang }) => ({ file: f, line, code, tsx: lang === 'tsx' }));
 }
 
 function collectSamples(): Sample[] {
