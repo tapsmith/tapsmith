@@ -5,7 +5,8 @@ import Foundation
 /// collapse to one space and the ends are trimmed, on both the element's
 /// label and the query, exact or substring. A label rendered with a
 /// non-breaking space (`Welcome to&nbsp;Expo`) or a line break then matches a
-/// query typed with plain spaces.
+/// query typed with plain spaces. As in Playwright, a substring match ignores
+/// case and an exact one doesn't.
 ///
 /// "Whitespace" is JavaScript's `\s` set, the same set the Android agent's
 /// TextMatch.kt and the SDK's trace-viewer matcher use.
@@ -52,10 +53,14 @@ enum TextMatch {
         normalize(text) == normalize(query)
     }
 
-    /// Whether the normalized `text` contains the normalized `query`.
+    /// Whether the normalized `text` contains the normalized `query`,
+    /// ignoring case — Playwright's non-exact getByText (PILOT-522).
+    /// Foundation's case-insensitive search folds case the way ICU's `(?i)`
+    /// does (fully: "straße" matches "STRASSE"), so this snapshot test and
+    /// the live `containsPattern` query agree on which labels match.
     static func contains(_ text: String, _ query: String) -> Bool {
         let needle = normalize(query)
-        return needle.isEmpty || normalize(text).contains(needle)
+        return needle.isEmpty || normalize(text).range(of: needle, options: .caseInsensitive) != nil
     }
 
     /// Whether `childText` is one of the child texts iOS joined with ", " to
@@ -88,9 +93,10 @@ enum TextMatch {
         "\(wsClass)*\(words(query))\(wsClass)*"
     }
 
-    /// ICU full-match pattern: the normalized label contains the normalized `query`.
+    /// ICU full-match pattern: the normalized label contains the normalized
+    /// `query`, ignoring case (PILOT-522), the same test as `contains`.
     static func containsPattern(_ query: String) -> String {
-        "(?s).*\(words(query)).*"
+        "(?is).*\(words(query)).*"
     }
 
     /// ICU full-match pattern for `containsChildText`: the whole label, or a

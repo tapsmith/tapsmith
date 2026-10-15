@@ -63,6 +63,31 @@ expect("metacharacters are literal (contains)", matches(TextMatch.containsPatter
 expect("metacharacters are literal (quantifier)", !matches(TextMatch.containsPattern("a+"), "aaa"))
 expect("backslash sequences are literal", matches(TextMatch.exactPattern("\\Q\\E"), "\\Q\\E"))
 
+// Substring getByText ignores case, as Playwright's non-exact getByText does
+// (PILOT-522); exact matching stays case-sensitive.
+expect("contains ignores case (textTransform uppercase)", TextMatch.contains("GET STARTED", "get started"))
+expect("contains ignores case, mixed and normalized", TextMatch.contains("Welcome to\u{00A0}Expo", "wElCoMe  TO"))
+expect("contains ignores case, non-ASCII", TextMatch.contains("ÉCOLE NORMALE", "école"))
+expect("contains ignoring case still needs a substring", !TextMatch.contains("GET STARTED", "get startedx"))
+expect("contains pattern ignores case", matches(TextMatch.containsPattern("get started"), "GET STARTED"))
+expect("contains pattern ignores case across NBSP", matches(TextMatch.containsPattern("TO expo"), "Welcome to\u{00A0}Expo"))
+expect("contains pattern metacharacters stay literal", matches(TextMatch.containsPattern("[BETA]*"), "try [beta]* now"))
+expect("exact pattern stays case-sensitive", !matches(TextMatch.exactPattern("get started"), "GET STARTED"))
+
+// The snapshot walk (TextMatch.contains) and the live XCUIElement query
+// (containsPattern) must agree, or the live query's index binds another
+// element: including the case-folding corners ICU folds fully.
+let foldCorpus: [(String, String)] = [
+    ("STRASSE", "straße"), ("straße", "STRASSE"), ("İSTANBUL", "istanbul"), ("istanbul", "İSTANBUL"),
+    ("\u{212A}elvin", "kelvin"), ("ſtop", "STOP"), ("STOP", "ſtop"), ("ΣΟΦΙΑΣ", "σοφιας"),
+    ("σοφιας", "ΣΟΦΙΑΣ"), ("ﬁle", "FILE"), ("FILE", "ﬁle"), ("ÉCOLE", "école"), ("Save draft", "SAVE  DRAFT"),
+    ("Sign out", "sign in"),
+]
+for (text, query) in foldCorpus {
+    expect("snapshot and live query agree: \(text) / \(query)",
+           TextMatch.contains(text, query) == matches(TextMatch.containsPattern(query), text))
+}
+
 // The concatenated-label pattern accepts at least what containsChildText does.
 let concat = TextMatch.concatenatedLabelPattern("Welcome to Expo")
 expect("concatenated pattern: whole label", matches(concat, "Welcome to\u{00A0}Expo"))
