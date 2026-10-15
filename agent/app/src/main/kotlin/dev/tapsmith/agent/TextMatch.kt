@@ -16,7 +16,8 @@ import java.util.regex.Pattern
  *
  * UIAutomator compares text inside `By.text(Pattern)`, so for those queries
  * this builds a full-match [Pattern] equivalent to comparing normalized
- * strings: the query's words, quoted, joined by one-or-more whitespace.
+ * strings: the query's words, quoted, joined by one-or-more whitespace. As in
+ * Playwright, a substring match ignores case and an exact one doesn't.
  */
 object TextMatch {
     /** JavaScript's `\s`: ECMAScript WhiteSpace and LineTerminator code points. */
@@ -92,8 +93,15 @@ object TextMatch {
     /** Full-match pattern: the text equals [query] after normalizing both. */
     fun exactPattern(query: String): Pattern = Pattern.compile("$WS_CLASS*${wordsPattern(query)}$WS_CLASS*")
 
-    /** Full-match pattern: the normalized text contains the normalized [query]. */
-    fun containsPattern(query: String): Pattern = Pattern.compile("(?s).*${wordsPattern(query)}.*")
+    /**
+     * Full-match pattern: the normalized text contains the normalized
+     * [query], ignoring case — Playwright's non-exact getByText (PILOT-522).
+     * Unicode-aware and locale-independent (java.util.regex folds each
+     * character with the root case mappings), so a Turkish device locale
+     * doesn't break "LOGIN" vs "login".
+     */
+    fun containsPattern(query: String): Pattern =
+        Pattern.compile("(?s).*${wordsPattern(query)}.*", Pattern.CASE_INSENSITIVE or Pattern.UNICODE_CASE)
 
     private fun wordsPattern(query: String): String {
         val normalized = normalize(query)

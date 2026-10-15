@@ -52,6 +52,32 @@ class TextMatchTest {
     }
 
     @Test
+    fun `contains pattern ignores case, as Playwright's non-exact getByText does (PILOT-522)`() {
+        // RN's textTransform: 'uppercase' renders "Get started" as "GET STARTED".
+        assertTrue(contains("get started", "GET STARTED"))
+        assertTrue(contains("Started", "get started now"))
+        assertTrue(contains("wElCoMe  TO", "Welcome to\nExpo"))
+        // Non-ASCII letters fold too.
+        assertTrue(contains("école", "ÉCOLE NORMALE"))
+        assertTrue(contains("ΣΟΦΙΑ", "σοφια"))
+        assertFalse(contains("get startedx", "GET STARTED"))
+        // Metacharacters stay literal with the case-insensitive flag.
+        assertTrue(contains("[BETA]*", "try [beta]* now"))
+    }
+
+    @Test
+    fun `contains pattern case folding ignores the default locale`() {
+        val saved = java.util.Locale.getDefault()
+        try {
+            java.util.Locale.setDefault(java.util.Locale.forLanguageTag("tr"))
+            assertTrue(contains("login", "LOGIN"))
+            assertTrue(contains("LOGIN", "login"))
+        } finally {
+            java.util.Locale.setDefault(saved)
+        }
+    }
+
+    @Test
     fun `regex metacharacters in the query are literal`() {
         assertTrue(exact("Total: $5.00 (x)", "Total: $5.00 (x)"))
         assertFalse(exact("a.c", "abc"))
