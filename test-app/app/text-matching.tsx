@@ -19,6 +19,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   (PILOT-522), so getByText("get started") finds it. Tapping it counts.
 // - "Full name" above the field, also uppercased: getByText("full name")
 //   matches it and the field, two element types (PILOT-522).
+// - "Nickname", uppercased, above a field with no accessibility label and
+//   the placeholder "Nickname": getByText("nickname") finds the field only
+//   through its placeholder (PILOT-522).
 //
 // Reached by deep link only (not on the home list, so the home cards keep
 // their positions).
@@ -28,6 +31,7 @@ export default function TextMatchingScreen() {
   const [saveTaps, setSaveTaps] = useState(0)
   const [startedTaps, setStartedTaps] = useState(0)
   const [name, setName] = useState("")
+  const [nickname, setNickname] = useState("")
 
   // A warm reset navigates here rather than remounting, so clear local state
   // explicitly when the epoch moves.
@@ -38,6 +42,7 @@ export default function TextMatchingScreen() {
     setSaveTaps(0)
     setStartedTaps(0)
     setName("")
+    setNickname("")
   }, [resetEpoch])
 
   return (
@@ -67,6 +72,15 @@ export default function TextMatchingScreen() {
         autoCapitalize="none"
         autoCorrect={false}
         accessibilityLabel={"Full name"}
+      />
+      <Text style={styles.uppercase}>Nickname</Text>
+      <TextInput
+        style={styles.input}
+        value={nickname}
+        onChangeText={setNickname}
+        placeholder="Nickname"
+        autoCapitalize="none"
+        autoCorrect={false}
       />
       <Text testID="text-matching-counts">{`welcome=${welcomeTaps} save=${saveTaps}`}</Text>
       <Text testID="text-matching-started">{`started=${startedTaps}`}</Text>
