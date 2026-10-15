@@ -228,6 +228,29 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     expect(m.tap.mock.calls.length).toBeLessThan(3);
   });
 
+  it('setChecked() on a switch refused until its deadline gives the advice, even when the locator says "stale"', async () => {
+    const m = client(() => [row({ bounds: onScreen, checked: false })]);
+    m.tap.mockImplementation(async () => refusal());
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _role('switch', { name: 'Show stale items' }), 3000).setChecked(true));
+    expect(err.message).toMatch(/is not hittable after waiting 3000ms: .*setChecked\(\) does not scroll/);
+    const calls = m.tap.mock.calls.length;
+    expect(calls).toBeLessThanOrEqual(5);
+  });
+
+  it('setChecked() confirms a toggle that lands right at its deadline after refused taps', async () => {
+    let state = false;
+    const m = client(() => [row({ bounds: onScreen, checked: state })]);
+    m.findElements.mockImplementation(async () => ({ requestId: '1', elements: [row({ bounds: onScreen, checked: state })], errorMessage: '' }));
+    const start = Date.now();
+    m.tap.mockImplementation(async () => {
+      if (Date.now() - start < 2900) return refusal();
+      state = !state;
+      return ok();
+    });
+    await withFakeClock(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).setChecked(true));
+    expect(state).toBe(true);
+  });
+
   it('with timeout 0, returns the agent refusal as it is (no wait, no rewrite)', async () => {
     const m = client(() => [row({ bounds: onScreen })]);
     m.tap.mockImplementation(async () => refusal());

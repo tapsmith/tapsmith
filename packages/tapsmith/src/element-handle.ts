@@ -636,6 +636,11 @@ function offScreenHint(action: TapFamilyAction): string {
  * clipped row "visible", so the auto-wait cannot see it coming. tap() words
  * it with the reason; doubleTap() and longPress() without.
  */
+/** How often a refused tap-family dispatch is retried. */
+const NOT_HITTABLE_RETRY_MS = 1000;
+/** The error type of the advice a still-refused dispatch ends with. */
+const NOT_HITTABLE_ERROR_TYPE = 'ELEMENT_NOT_HITTABLE';
+
 function isNotHittableRefusal(message: string | undefined): boolean {
   return message === 'Element is not hittable (may be off-screen or hidden)' || message === 'Element is not hittable';
 }
@@ -2205,13 +2210,18 @@ export class ElementHandle {
       if (Date.now() >= deadline) {
         return {
           ...res,
+          // Its own type: the message embeds the locator, whose text must not
+          // be read as the agent's (setChecked() looks for "stale" in it).
+          errorType: NOT_HITTABLE_ERROR_TYPE,
           errorMessage:
             `Element ${this._describe()} is not hittable after waiting ${this._timeoutMs}ms: it may be off-screen, ` +
             'or clipped by its list (for example behind a header). ' +
             scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)'),
         };
       }
-      await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())), this._client._getAbortSignal?.());
+      // Each refusal costs the daemon an error screenshot: retry at a slower
+      // pace than the read-only auto-wait.
+      await sleep(Math.min(NOT_HITTABLE_RETRY_MS, Math.max(0, deadline - Date.now())), this._client._getAbortSignal?.());
     }
   }
 
@@ -2494,7 +2504,10 @@ export class ElementHandle {
       }
       // A covered target (PILOT-223) is never stale, whatever its cover's
       // label says (see _dispatchTargeted).
-      if (!tapRes.success && tapRes.errorType !== 'ELEMENT_COVERED' && isStaleElementError(tapRes.errorMessage)) {
+      if (
+        !tapRes.success && tapRes.errorType !== 'ELEMENT_COVERED' && tapRes.errorType !== NOT_HITTABLE_ERROR_TYPE &&
+        isStaleElementError(tapRes.errorMessage)
+      ) {
         const fresh = await this._resolveOne();
         if (fresh.checked === checked) return synthetic(true); // already set after the change
         tapRes = await tapByTarget(await this._actionTarget(fresh));
