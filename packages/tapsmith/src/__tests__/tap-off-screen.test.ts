@@ -204,6 +204,38 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     expect(m.tap).toHaveBeenCalledTimes(3);
   });
 
+  it('retries doubleTap() and longPress() refusals too, which the agent words without the reason', async () => {
+    for (const act of ['doubleTap', 'longPress'] as const) {
+      const m = client(() => [row({ bounds: onScreen })]);
+      let calls = 0;
+      m[act].mockImplementation(async () => (++calls < 3 ? { ...refusal(), errorMessage: 'Element is not hittable' } : ok()));
+      await withFakeClock(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000)[act]());
+      expect(m[act]).toHaveBeenCalledTimes(3);
+    }
+  });
+
+  it('setChecked() re-reads the switch between refused taps, and stops if the app set it meanwhile', async () => {
+    let state = false;
+    let reads = 0;
+    const m = client(() => [row({ bounds: onScreen, checked: state })]);
+    m.findElements.mockImplementation(async () => {
+      if (++reads === 3) state = true; // the app sets it while taps are refused
+      return { requestId: '1', elements: [row({ bounds: onScreen, checked: state })], errorMessage: '' };
+    });
+    m.tap.mockImplementation(async () => refusal());
+    await withFakeClock(30_000, () => new ElementHandle(m.c, _text('Item 1'), 5000).setChecked(true));
+    expect(state).toBe(true);
+    expect(m.tap.mock.calls.length).toBeLessThan(3);
+  });
+
+  it('with timeout 0, returns the agent refusal as it is (no wait, no rewrite)', async () => {
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.tap.mockImplementation(async () => refusal());
+    const err = await rejectionOf(5000, () => new ElementHandle(m.c, _text('Item 1'), 0).tap());
+    expect(m.tap).toHaveBeenCalledTimes(1);
+    expect(err.message).toBe('Element is not hittable (may be off-screen or hidden)');
+  });
+
   it('does not retry any other failure (a covered element is waited out by the agent itself)', async () => {
     const m = client(() => [row({ bounds: onScreen })]);
     m.tap.mockImplementation(async () => ({ ...refusal(), errorType: 'ELEMENT_COVERED', errorMessage: 'Element is covered by the keyboard' }));

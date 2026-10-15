@@ -631,11 +631,14 @@ function offScreenHint(action: TapFamilyAction): string {
 }
 
 /**
- * The iOS agent's refusal of a touch on an element it cannot hit at all: off
+ * The iOS agent's refusals of a touch on an element it cannot hit at all: off
  * the screen, or clipped by its list (behind a header) — iOS still calls a
- * clipped row "visible", so the auto-wait cannot see it coming.
+ * clipped row "visible", so the auto-wait cannot see it coming. tap() words
+ * it with the reason; doubleTap() and longPress() without.
  */
-const NOT_HITTABLE_SIGNATURE = 'is not hittable (may be off-screen or hidden)';
+function isNotHittableRefusal(message: string | undefined): boolean {
+  return message === 'Element is not hittable (may be off-screen or hidden)' || message === 'Element is not hittable';
+}
 
 /**
  * The deadline error for an element found in the tree but entirely
@@ -2180,7 +2183,6 @@ export class ElementHandle {
    */
   private _resolvedActionIndex: number | undefined;
 
-  /** @internal — Wrap an action with trace recording. */
   /**
    * @internal — Run a tap-family dispatch, retrying while the agent refuses
    * the element as not hittable (PILOT-716): a row its list clips behind a
@@ -2193,12 +2195,13 @@ export class ElementHandle {
   private async _untilHittable(
     action: TapFamilyAction,
     remainingMs: number,
-    dispatch: () => Promise<ActionResponse>,
+    dispatch: (attempt: number) => Promise<ActionResponse>,
   ): Promise<ActionResponse> {
     const deadline = Date.now() + remainingMs;
-    for (;;) {
-      const res = await dispatch();
-      if (res.success || !res.errorMessage?.includes(NOT_HITTABLE_SIGNATURE)) return res;
+    for (let attempt = 0; ; attempt++) {
+      const res = await dispatch(attempt);
+      // timeout 0 keeps its no-wait behaviour: the agent's refusal as it is.
+      if (res.success || remainingMs <= 0 || !isNotHittableRefusal(res.errorMessage)) return res;
       if (Date.now() >= deadline) {
         return {
           ...res,
@@ -2212,6 +2215,7 @@ export class ElementHandle {
     }
   }
 
+  /** @internal — Wrap an action with trace recording. */
   private async _tracedAction(
     action: string,
     category: ActionCategory,
@@ -2474,7 +2478,15 @@ export class ElementHandle {
       // would toggle it the wrong way (cf. _dispatchTargeted, which re-taps).
       let tapRes: ActionResponse;
       try {
-        tapRes = await this._untilHittable('setChecked', remainingMs, () => tapByTarget(target));
+        // A refused tap touched nothing; before trying again, re-read the
+        // switch — the app may have set it meanwhile, and tapping would
+        // toggle it the wrong way.
+        tapRes = await this._untilHittable('setChecked', remainingMs, async (attempt) => {
+          if (attempt === 0) return tapByTarget(target);
+          const fresh = await this._resolveOne();
+          if (fresh.checked === checked) return synthetic(true);
+          return tapByTarget(await this._actionTarget(fresh));
+        });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         if (!isStaleElementError(msg)) throw err;
@@ -2504,7 +2516,11 @@ export class ElementHandle {
       let retaps = 0;
       let lastTapAt = Date.now();
       let lastTransientErr: Error | undefined;
-      while (Date.now() < deadline) {
+      // A tap that landed at or past the deadline (one the agent refused as
+      // not hittable until then) still gets the action floor to see its change
+      // land, so a toggle that worked is not reported as unchanged.
+      const verifyUntil = Math.max(deadline, lastTapAt + MIN_ACTION_BUDGET_MS);
+      while (Date.now() < verifyUntil) {
         await sleep(POLL_INTERVAL_MS, this._client._getAbortSignal?.());
         try {
           const after = await this._resolveOne();
