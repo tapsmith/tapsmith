@@ -46,11 +46,15 @@ function indentOf(line: string): number {
   return line.length - line.trimStart().length;
 }
 
-/** The sample with its common indentation removed (a steps fragment is often shown at its in-job depth). */
+/**
+ * The sample with its common indentation removed (a steps fragment is often
+ * shown at its in-job depth). A comment may sit left of the code (a
+ * `# .github/workflows/…` heading), so it loses only the spaces it has.
+ */
 function dedent(code: string): string {
   const lines = code.split('\n');
   const min = Math.min(...contentLines(code).map(indentOf));
-  return lines.map((l) => (l.trim() === '' ? '' : l.slice(min))).join('\n');
+  return lines.map((l) => (l.trim() === '' ? '' : l.slice(Math.min(min, indentOf(l))))).join('\n');
 }
 
 /** What part of a workflow a YAML sample is, or `null` when it is not GitHub Actions at all. */
@@ -218,6 +222,15 @@ describe('docs-workflows guard', () => {
       '        if: ${{ true }}', // 5
       '        run: echo hi', // 6
       '```', // 7
+      '', // 8
+      '```yaml', // 9
+      '# .github/workflows/e2e.yml', // 10
+      '      strategy:', // 11
+      '        matrix:', // 12
+      '          shard: [1, 2]', // 13
+      '      steps:', // 14
+      '        - run: echo ${{ matrix.shrad }}', // 15
+      '```',
       '',
       '```yaml',
       'merge:',
@@ -228,8 +241,10 @@ describe('docs-workflows guard', () => {
       '```',
     ].join('\n');
     const samples = yamlBlocksIn('t.md', md).map((b) => ({ ...b, shape: shapeOf(b.code)! }));
+    expect(samples.map((s) => s.shape)).toEqual(['steps', 'job', 'jobs']);
     const findings = lint(samples);
-    expect(findings.map((f) => [f.file, f.line])).toEqual([['t.md', 5]]);
+    expect(findings.map((f) => [f.file, f.line])).toEqual([['t.md', 5], ['t.md', 15]]);
     expect(findings[0]!.message).toMatch(/constant/);
+    expect(findings[1]!.message).toMatch(/shrad/);
   });
 });

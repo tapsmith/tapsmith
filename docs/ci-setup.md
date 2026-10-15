@@ -117,6 +117,13 @@ export default defineConfig({
 - The `if: always()` on the upload step ensures screenshots are uploaded even when tests fail.
 - The workflow uses npm. With Yarn or pnpm, change the `cache` input and the install command (for
   example `yarn install --frozen-lockfile`).
+- **What a release build turns off.** `__DEV__` is false in a release build, so anything your app
+  enables only in development is off in CI. Two things Tapsmith uses: the
+  [`@tapsmith/react-native` reset hooks](warm-reset.md#release-builds-for-e2e), which you keep by
+  setting `EXPO_PUBLIC_TAPSMITH_HOOKS: "1"` in the `env` of the build step (only in the job that
+  builds your test app, never a store build); and [WebView debugging](webview.md), which
+  `device.webview()` needs — a `webviewDebuggingEnabled={__DEV__}` prop must be enabled for the test
+  build too.
 
 ### Letting Tapsmith launch the emulator
 
@@ -136,8 +143,8 @@ export default defineConfig({
 });
 ```
 
-These steps replace the workflow's last two steps, `Enable KVM` and `Start the emulator and run the
-tests`:
+These steps replace the workflow's `Enable KVM` and `Start the emulator and run the tests` steps
+(keep `Upload test artifacts` after them):
 
 ```yaml
       - name: Enable KVM
@@ -278,6 +285,9 @@ export default defineConfig({
   through CocoaPods.
 - **Native project.** `expo prebuild --no-install` generates `ios/` without installing pods, so the
   `Install CocoaPods` step does that for both project kinds.
+- **Release build caveats.** As on Android, `__DEV__` is false: set `EXPO_PUBLIC_TAPSMITH_HOOKS: "1"`
+  on the build step to keep the [reset hooks](warm-reset.md#release-builds-for-e2e), and keep WebView
+  debugging enabled in the test build if your tests use `device.webview()`.
 - Tapsmith boots and manages simulators automatically -- no manual `xcrun simctl` setup needed. Tapsmith's own CI checks this weekly and on changes to its simulator-provisioning code: it starts with no simulator booted and verifies that Tapsmith booted the configured one.
 - With `workers` above 1, Tapsmith boots a simulator for each extra worker (another simulator of the same name and OS, or a clone of the configured one). The standard 3-core GitHub-hosted macOS runner cannot run two simulators at usable speed (app installs and XCUITest launches time out), so keep `workers: 1` there or use a larger runner. Tapsmith's CI does not cover multiple simulators on hosted runners for this reason.
 
