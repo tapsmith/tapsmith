@@ -101,7 +101,7 @@ Set `TAPSMITH_REDIRECTOR_APP=/path/to/Mitmproxy Redirector.app/Contents/MacOS/Mi
 
 ## CI setup
 
-See the [iOS network capture on CI](./ci-setup.md#ios-network-capture-on-ci) section for `brew install mitmproxy` + SE approval on CI runners.
+See the [iOS network capture on CI](./ci-setup.md#ios-network-capture-on-ci) section: GitHub-hosted runners need no setup (capture uses the system-proxy fallback), and per-device capture on a self-hosted runner needs the redirector set up once.
 
 ## Troubleshooting
 

@@ -211,15 +211,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Required for iOS network capture — see "iOS network capture on CI" below.
-      # Omit this step if you disable network capture in the trace config.
-      - name: Install mitmproxy (for iOS network capture redirector)
-        run: |
-          brew install mitmproxy
-          sudo mitmproxy --mode local:Safari <<< 'q' || true
-          # The redirector System Extension needs pre-approval on self-hosted runners;
-          # GitHub-hosted macOS runners accept new SEs automatically on first launch.
-
       # Expo projects that don't commit ios/ generate it here.
       - name: Generate the native project (Expo)
         if: hashFiles('ios/Podfile') == ''
@@ -293,12 +284,26 @@ export default defineConfig({
 
 ### iOS network capture on CI
 
-iOS network capture (trace + `network.json` in the trace viewer) routes simulator traffic through Tapsmith's MITM proxy via a macOS **Network Extension** redirector that is bundled with [mitmproxy](https://mitmproxy.org). You need two one-time prerequisites on the CI runner for this to work:
+iOS network capture (trace + `network.json` in the trace viewer) needs no setup step on a
+GitHub-hosted runner. On a developer Mac, Tapsmith routes each simulator's traffic through a macOS
+**Network Extension** redirector (bundled with [mitmproxy](https://mitmproxy.org)) that captures that
+simulator's traffic only. When the redirector is unavailable and the `CI` environment variable is set,
+as it is on GitHub Actions, Tapsmith falls back to the macOS system proxy instead. That fallback is
+host-wide: the trace can also hold the runner's own traffic, the trace records
+`"networkCaptureRoute": "ios-system-proxy"`, and the trace viewer flags it. Tapsmith's own iOS CI
+runs this way. See [When the Network Extension is unavailable](./ios-network-capture.md#when-the-network-extension-is-unavailable)
+for the details.
 
-1. **`brew install mitmproxy`** — Tapsmith discovers the redirector at `/Applications/Mitmproxy Redirector.app` (mitmproxy's installer unpacks it there) or via `$TAPSMITH_REDIRECTOR_APP`. Alternatively, it will extract the redirector from mitmproxy's brew cask tarball into `~/.tapsmith/redirector/` on first use.
-2. **System Extension approval** — the redirector's Network Extension must be approved on first launch. On **GitHub-hosted macOS runners**, SEs are accepted automatically on first launch, so no action is needed. On **self-hosted runners**, run `sudo systemextensionsctl developer on` once to bypass interactive approval, or pre-approve the extension manually.
+The fallback is not device-isolated, so a [multi-device group](./ios-network-capture.md#multi-device-groups)
+refuses it. For per-device capture, use a self-hosted runner with the redirector set up once:
+`brew install mitmproxy` (Tapsmith extracts the redirector from mitmproxy's cask), then approve its
+System Extension — `sudo systemextensionsctl developer on`, or approve it by hand in System Settings
+as the [first-run setup](./ios-network-capture.md#first-run-setup) describes. Don't add an
+interactive `mitmproxy` command to a workflow: with no terminal it waits forever and the job hangs
+until it times out.
 
-If your tests do not need network capture, disable it in your tapsmith config (`trace: { network: false }`) and skip the mitmproxy install step above.
+If your tests do not need network capture, disable it in your tapsmith config
+(`trace: { network: false }`).
 
 See [iOS network capture](./ios-network-capture.md) for the full first-run walkthrough and troubleshooting.
 
@@ -422,7 +427,7 @@ npx tapsmith show-trace tapsmith-results/traces/trace-login_test.zip
 
 Or drop the `.zip` file onto [trace.tapsmith.dev](https://trace.tapsmith.dev) to view it in the browser without installing anything.
 
-Network capture works in CI as well -- HTTP/HTTPS requests made by the app are recorded in the trace and visible in the Network tab of the trace viewer. **Android** runs need no extra setup; **iOS** runs need `brew install mitmproxy` and (on self-hosted runners) a pre-approved System Extension — see [iOS network capture on CI](#ios-network-capture-on-ci) above.
+Network capture works in CI as well -- HTTP/HTTPS requests made by the app are recorded in the trace and visible in the Network tab of the trace viewer. **Android** runs need no extra setup, and neither do **iOS** runs on GitHub-hosted runners, where capture goes through the host-wide macOS system proxy — see [iOS network capture on CI](#ios-network-capture-on-ci) above.
 
 ### Caching
 
