@@ -25,6 +25,7 @@ function row(overrides: Partial<ElementInfo>): ElementInfo {
 const below = { left: 0, top: 1500, right: 390, bottom: 1550 };
 const above = { left: 0, top: -400, right: 390, bottom: -350 };
 const leftOf = { left: -600, top: 300, right: -210, bottom: 350 };
+const rightOf = { left: 800, top: 300, right: 1190, bottom: 350 };
 const onScreen = { left: 0, top: 300, right: 390, bottom: 350 };
 
 /** A client whose reads return `reads()`; no swipe or scroll RPC exists, so any attempt would throw. */
@@ -82,13 +83,16 @@ describe('tap() on an element found but off-screen (iOS) (PILOT-716)', () => {
     expect(m.tap).not.toHaveBeenCalled();
     expect(err.message).toBe(
       'Element getByText("Item 1", { exact: true }) is off-screen: it was found, but no part of it was on screen after waiting 5000ms. ' +
-        'tap() does not scroll, so scroll it into view first with await locator.scrollIntoView(), then tap() it.',
+        'tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() ' +
+        '(or scroll() on the horizontal list that holds it, if it is off to the side), then tap() it.',
     );
   });
 
   it.each([
     ['above the screen', above, 'await locator.scrollIntoView({ direction: "down" })'],
-    ['left of the screen', leftOf, 'await locator.scrollIntoView({ direction: "right" })'],
+    ['left of the screen', leftOf, 'scroll() on the horizontal list that holds it (or await locator.scrollIntoView({ direction: "right" }))'],
+    ['right of the screen (below and right look alike without the screen width)', rightOf,
+      'await locator.scrollIntoView() (or scroll() on the horizontal list that holds it, if it is off to the side)'],
   ])('names the direction scrollIntoView() needs for an element %s', async (_where, bounds, how) => {
     const m = client(() => [row({ visible: false, viewportRatio: 0, bounds })]);
     const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 2000).tap());
@@ -108,7 +112,8 @@ describe('tap() on an element found but off-screen (iOS) (PILOT-716)', () => {
     for (const act of ['doubleTap', 'longPress'] as const) {
       const m = client(() => [row({ visible: false, viewportRatio: 0, bounds: below })]);
       const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 1000)[act]());
-      expect(err.message).toContain(`${act}() does not scroll, so scroll it into view first with await locator.scrollIntoView(), then ${act}() it.`);
+      expect(err.message).toContain(`${act}() does not scroll, so scroll it into view first with await locator.scrollIntoView() `);
+      expect(err.message).toMatch(new RegExp(`then ${act}\\(\\) it\\.$`));
       expect(m[act]).not.toHaveBeenCalled();
     }
   });
@@ -122,6 +127,19 @@ describe('tap() on an element found but off-screen (iOS) (PILOT-716)', () => {
     const already = client(() => [row({ visible: false, viewportRatio: 0, bounds: below, checked: true })]);
     await withFakeClock(30_000, () => new ElementHandle(already.c, _text('Item 1'), 1000).setChecked(true));
     expect(already.tap).not.toHaveBeenCalled();
+  });
+
+  it('reports an element seen off-screen and then gone as not found, not off-screen', async () => {
+    let reads = 0;
+    const m = client(() => (reads++ < 3 ? [row({ visible: false, viewportRatio: 0, bounds: below })] : []));
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 2000).tap());
+    expect(err.message).toMatch(/was not found after waiting 2000ms\. It may be off-screen/);
+  });
+
+  it('reports an element both disabled and off-screen as disabled', async () => {
+    const m = client(() => [row({ visible: false, viewportRatio: 0, bounds: below, enabled: false })]);
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 2000).tap());
+    expect(err.message).toMatch(/is disabled after waiting 2000ms$/);
   });
 
   it('still hands an element invisible for another reason (zero-size frame, no bounds) to the action, as before', async () => {

@@ -632,15 +632,17 @@ function offScreenHint(action: TapFamilyAction): string {
 
 /**
  * The deadline error for an element found in the tree but entirely
- * off-screen (iOS reports such nodes): definite, with the direction
- * scrollIntoView() needs where the element's position tells it.
+ * off-screen (iOS reports such nodes): definite, with the way to scroll to
+ * it that the element's position tells.
  */
 function offScreenError(desc: string, timeoutMs: number, action: TapFamilyAction, bounds: ElementInfo['bounds']): Error {
+  // Above or left of the screen is certain from the frame; below and right of
+  // it look alike without the screen's width, so that advice covers both.
   const how = bounds && bounds.bottom <= 0
     ? 'await locator.scrollIntoView({ direction: "down" })'
     : bounds && bounds.right <= 0
-      ? 'await locator.scrollIntoView({ direction: "right" })'
-      : 'await locator.scrollIntoView()';
+      ? 'scroll() on the horizontal list that holds it (or await locator.scrollIntoView({ direction: "right" }))'
+      : 'await locator.scrollIntoView() (or scroll() on the horizontal list that holds it, if it is off to the side)';
   return new Error(
     `Element ${desc} is off-screen: it was found, but no part of it was on screen after waiting ${timeoutMs}ms. ` +
       scrollFirstAdvice(action, how),
