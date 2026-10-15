@@ -118,12 +118,15 @@ export default defineConfig({
 - The workflow uses npm. With Yarn or pnpm, change the `cache` input and the install command (for
   example `yarn install --frozen-lockfile`).
 - **What a release build turns off.** `__DEV__` is false in a release build, so anything your app
-  enables only in development is off in CI. Two things Tapsmith uses: the
-  [`@tapsmith/react-native` reset hooks](warm-reset.md#release-builds-for-e2e), which you keep by
-  setting `EXPO_PUBLIC_TAPSMITH_HOOKS: "1"` in the `env` of the build step (only in the job that
-  builds your test app, never a store build); and [WebView debugging](webview.md), which
-  `device.webview()` needs — a `webviewDebuggingEnabled={__DEV__}` prop must be enabled for the test
-  build too.
+  enables only in development is off in CI. Two things Tapsmith uses:
+  - the [`@tapsmith/react-native` reset hooks](warm-reset.md#release-builds-for-e2e). In an Expo
+    project, keep them by setting `EXPO_PUBLIC_TAPSMITH_HOOKS: "1"` in the `env` of the build step
+    (only in the job that builds your test app, never a store build). A React Native CLI project's
+    Babel preset does not inline that variable: add a Babel plugin that does (such as
+    `babel-plugin-transform-inline-environment-variables`), or set the provider's `enabled` prop from
+    a flag your own build already passes.
+  - [WebView debugging](webview.md), which `device.webview()` needs: a
+    `webviewDebuggingEnabled={__DEV__}` prop must be enabled for the test build too.
 
 ### Letting Tapsmith launch the emulator
 
@@ -183,7 +186,9 @@ iOS tests require a macOS runner with Xcode installed. Tapsmith manages the simu
 automatically. Like the Android workflow, this one works as pasted in a React Native CLI project and
 in an Expo project, generating `ios/` with `npx expo prebuild` when the project does not commit it.
 Replace `MyApp` with your app's name — the name of the `.xcworkspace` in `ios/`, which is also its
-scheme:
+scheme and the name of the built `.app`. In an Expo project that doesn't commit `ios/`, `expo prebuild`
+derives that name from `name` in `app.json` and drops characters Xcode can't use, so run
+`npx expo prebuild --platform ios` once locally and use the name of the `.xcworkspace` it creates:
 
 ```yaml
 name: iOS Tests
@@ -223,6 +228,8 @@ jobs:
       # A Release build bundles the JavaScript into the app. A Debug build
       # loads it from the Metro dev server, which isn't running in CI.
       # -derivedDataPath puts the .app where tapsmith.config.ts expects it.
+      # ARCHS=arm64 builds only the Apple-silicon simulator slice the runner
+      # needs; a Release build otherwise compiles x86_64 too, doubling the time.
       - name: Build the app for the simulator
         working-directory: ios
         run: |
@@ -233,6 +240,7 @@ jobs:
             -sdk iphonesimulator \
             -destination 'generic/platform=iOS Simulator' \
             -derivedDataPath build \
+            ARCHS=arm64 \
             -quiet
 
       - name: Run Tapsmith tests
@@ -269,16 +277,21 @@ export default defineConfig({
 
 - **macOS runner** is required for iOS simulators. The workflow pins `macos-26`, whose Xcode has the
   `iPhone 17` simulator the config names; if you change the runner image, check the simulator names
-  it has (`xcrun simctl list devices available`) and update `simulator` to match.
+  it has (`xcrun simctl list devices available`) and update `simulator` to match. `ARCHS=arm64`
+  assumes an Apple-silicon runner, as `macos-26` is; drop it on an Intel one.
+- **Time.** A stock Expo app took about 25 minutes end to end on `macos-26`: around 10 for the
+  build, and around 10 for Tapsmith's first-run setup (booting the simulator, then installing and
+  starting its XCUITest agent). A larger app's build takes longer; raise `timeout-minutes` to suit.
 - **Release build and a fixed output path.** Without `-derivedDataPath`, `xcodebuild` puts the
   `.app` under `~/Library/Developer/Xcode/DerivedData/<name>-<hash>/`, a path the config cannot name.
   `-workspace` (not `-project`) is needed because React Native projects build their dependencies
   through CocoaPods.
 - **Native project.** `expo prebuild --no-install` generates `ios/` without installing pods, so the
   `Install CocoaPods` step does that for both project kinds.
-- **Release build caveats.** As on Android, `__DEV__` is false: set `EXPO_PUBLIC_TAPSMITH_HOOKS: "1"`
-  on the build step to keep the [reset hooks](warm-reset.md#release-builds-for-e2e), and keep WebView
-  debugging enabled in the test build if your tests use `device.webview()`.
+- **Release build caveats.** As on Android, `__DEV__` is false: keep the
+  [reset hooks](warm-reset.md#release-builds-for-e2e) and WebView debugging on in the test build as
+  [the Android notes](#key-points) describe, with `EXPO_PUBLIC_TAPSMITH_HOOKS: "1"` on this build step
+  in an Expo project.
 - Tapsmith boots and manages simulators automatically -- no manual `xcrun simctl` setup needed. Tapsmith's own CI checks this weekly and on changes to its simulator-provisioning code: it starts with no simulator booted and verifies that Tapsmith booted the configured one.
 - With `workers` above 1, Tapsmith boots a simulator for each extra worker (another simulator of the same name and OS, or a clone of the configured one). The standard 3-core GitHub-hosted macOS runner cannot run two simulators at usable speed (app installs and XCUITest launches time out), so keep `workers: 1` there or use a larger runner. Tapsmith's CI does not cover multiple simulators on hosted runners for this reason.
 
@@ -297,8 +310,8 @@ for the details.
 The fallback is not device-isolated, so a [multi-device group](./ios-network-capture.md#multi-device-groups)
 refuses it. For per-device capture, use a self-hosted runner with the redirector set up once:
 `brew install mitmproxy` (Tapsmith extracts the redirector from mitmproxy's cask), then approve its
-System Extension — `sudo systemextensionsctl developer on`, or approve it by hand in System Settings
-as the [first-run setup](./ios-network-capture.md#first-run-setup) describes. Don't add an
+System Extension by hand in System Settings, as the
+[first-run setup](./ios-network-capture.md#first-run-setup) describes. Don't add an
 interactive `mitmproxy` command to a workflow: with no terminal it waits forever and the job hangs
 until it times out.
 
