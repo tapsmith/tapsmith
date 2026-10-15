@@ -10,7 +10,7 @@ import type { Bounds } from './HierarchyTree.js';
 import { NetworkTab } from './NetworkTab.js';
 import { actingDevice, deviceNamesFor, deviceTagStyle, frameIndexForDevice, hierarchyForDeviceFrame, type DeviceGroupView } from './device-frames.js';
 import { parseSelectorParts } from './selector-parts.js';
-import { SelectorArg } from './ActionsPanel.js';
+import { SelectorCallArgs } from './ActionsPanel.js';
 
 interface Props {
   event: ActionTraceEvent | AssertionTraceEvent | undefined
@@ -243,16 +243,9 @@ function formatSelectorForCall(sel: string | undefined): ComponentChildren {
   if (!sel) return null;
   const parts = parseSelectorParts(sel);
   if (!parts) return <span class="call-value mono">{sel}</span>;
-  if (parts.optionKey) {
-    return (
-      <span class="call-value mono">
-        <span class="sel-fn">{parts.fn}</span>({'{ '}<span class="sel-fn">{parts.optionKey}</span>{': '}<span class="sel-val">"{parts.args[0]}"</span>{' }'})
-      </span>
-    );
-  }
   return (
     <span class="call-value mono">
-      <span class="sel-fn">{parts.fn}</span>({parts.args.map((_a, i) => <span key={i}>{i > 0 && ', '}<SelectorArg parts={parts} index={i} /></span>)})
+      <span class="sel-fn">{parts.fn}</span>(<SelectorCallArgs parts={parts} />)
     </span>
   );
 }

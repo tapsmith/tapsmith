@@ -142,7 +142,22 @@ describe('the locator the trace\'s action list shows parses back to the same sel
     });
   }
 
-  it('an exact text selector still parses (as a substring match: pre-existing)', () => {
-    expect(count(shown(_text('Explore')))).toBe(1);
+  it('shows the options the action used, so the copy matches what it matched', () => {
+    expect(shown(_text('Explore'))).toBe('getByText("Explore", { exact: true })');
+    expect(parseSelectorString(shown(_text('Explore')))).toMatchObject({ type: 'text', value: 'Explore' });
+    expect(shown(_role('tab', { name: 'Home', exact: true, selected: true, disabled: false })))
+      .toBe('getByRole("tab", { name: "Home", exact: true, disabled: false, selected: true })');
+    expect(parseSelectorString(shown(_role('tab', { name: 'Home', exact: true, selected: true, disabled: false })))).toEqual({
+      type: 'role', value: 'tab', name: 'Home', exact: true, selected: true, disabled: false, index: undefined,
+    });
+    expect(shown(_role('button', { name: /home/i, exact: true }))).toBe('getByRole("button", { name: /home/i })');
+  });
+
+  it('escapes a value so it reads back the same', () => {
+    expect(shown(_textContains('Say "hi"'))).toBe('getByText("Say \\"hi\\"")');
+    for (const value of ['Say "hi"', 'back\\slash', 'two\nlines']) {
+      expect(parseSelectorString(shown(_textContains(value)))).toMatchObject({ type: 'textContains', value });
+      expect(parseSelectorString(shown(_role('button', { name: value })))).toMatchObject({ type: 'role', name: value });
+    }
   });
 });

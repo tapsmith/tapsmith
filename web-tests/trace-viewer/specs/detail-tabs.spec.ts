@@ -54,6 +54,33 @@ test.describe("Detail tabs", () => {
       await expect(detailTabs.callGrid).toContainText("Tap area")
     })
 
+    test("shows the locator as the code the test ran", async ({ viewer, detailTabs, actions }) => {
+      // The trace records the selector as proto JSON. Shown as code, a copy
+      // pasted into the Locator tab must match what the action matched, so
+      // getByRole's name and options go in an options object, values escaped
+      // (PILOT-717).
+      const code = 'getByRole("button", { name: "Say \\"hi\\"", exact: true, selected: true })'
+      await viewer.open({
+        events: [
+          actionEvent({
+            actionIndex: 0,
+            action: "tap",
+            selector: JSON.stringify({ role: { role: "button", name: 'Say "hi"', exact: true, selected: true } }),
+          }),
+          actionEvent({
+            actionIndex: 1,
+            action: "tap",
+            selector: JSON.stringify({ text: "Save" }),
+          }),
+        ],
+      })
+
+      await expect(actions.items.first()).toContainText(code)
+      await expect(actions.items.nth(1)).toContainText('getByText("Save", { exact: true })')
+      await actions.items.first().click()
+      await expect(detailTabs.callGrid).toContainText(code)
+    })
+
     test("describes a failed action's error", async ({ viewer, detailTabs, actions }) => {
       await viewer.open({
         events: [

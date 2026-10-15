@@ -126,7 +126,7 @@ describe('trace action list shows RegExp locators (PILOT-520)', () => {
     expect(display(_textContains(/Welcome\sto/i))).toEqual({ fn: 'getByText', args: ['/Welcome\\sto/i'], literal: [true] });
     expect(display(_label(/name/))).toEqual({ fn: 'getByLabel', args: ['/name/'], literal: [true] });
     expect(display(_role('button', { name: /save/i }))).toEqual({
-      fn: 'getByRole', args: ['button', '/save/i'], literal: [false, true], nameOption: true,
+      fn: 'getByRole', args: ['button'], options: [{ key: 'name', value: '/save/i', literal: true }],
     });
   });
 
