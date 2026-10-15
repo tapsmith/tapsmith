@@ -275,14 +275,15 @@ Element {"text":"Submit"} was not found after waiting 30000ms
 ### Element is off-screen and could not be scrolled into view
 
 ```
-Element getByText("Item 1", { exact: true }) is off-screen and tap() could not scroll it into view: a "down" screen swipe did not move it (…). Scroll it into view first (with scrollIntoView({ direction: "down" }), or scroll() on the list that holds it), then tap() it.
+Element getByText("Item 1", { exact: true }) is off-screen and tap() could not scroll it into view: it is inside nested scroll views. Scroll it into view first (await locator.scrollIntoView({ direction: "down" })), then tap() it.
 ```
 
-**What happened:** the element is in the hierarchy but entirely off-screen (iOS reports such elements). The tap tried to scroll it into view with vertical screen swipes and failed: a swipe did not move it, the swipes stopped bringing it closer, or the element is off to the side, which the tap does not scroll to. It then waited out the timeout in case the element came on screen by itself.
+**What happened:** the element is in the hierarchy but entirely off-screen (iOS reports such elements). A tap scrolls an element into view itself only when it is directly above or below the screen in a single list that scrolls vertically and covers the middle of the screen. Anything else fails at once rather than swiping blindly: the reason after the colon says which case it was.
 
 **Common causes and fixes:**
 
-- **The element is in a carousel** (off to the side), **or in a list the screen swipe misses** (the swipe starts from the middle of the screen). Scroll the container that holds it with `scroll()`, or use `scrollIntoView()` with the right direction.
+- **The element is in a carousel or a horizontal list**, off to the side. Scroll the container that holds it with `scroll()`, or use `scrollIntoView()` with the direction the error names.
+- **Nested scroll views, or a list that does not cover the middle of the screen** (for example a short list at the bottom of the screen). Use `scrollIntoView()` with the direction the error names, or `scroll()` on the list.
 - **The list is virtualised** and unmounted the row while scrolling. Scroll to it with `scrollIntoView()` first, then tap.
 
 ### Timeout: assertion did not pass

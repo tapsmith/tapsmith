@@ -599,79 +599,65 @@ function anonymousIdentity(el: ElementInfo): string {
  */
 type ActionTarget = { selector: Selector } | { elementId: string };
 
-/**
- * @internal — Whether an action failure means the agent's cached element is no
- * longer usable, so re-resolving to a fresh id and retrying may succeed. Covers
- * both wordings: the cached id was evicted / its snapshot invalidated by an
- * intervening snapshot ("…not found. It may have gone stale.") and a live
- * StaleObjectException where the cached object's view re-rendered ("Element is
- * stale (UI changed): …", Android).
- */
 // ─── Tap-family auto-scroll (PILOT-716) ───
+//
+// A tap-family action scrolls its element into view itself in one case only:
+// the element is in the tree but entirely above or below the screen, inside a
+// single vertically scrolling list whose frame covers the middle of the
+// screen (where the agents' screen swipe starts). Only iOS reports such
+// nodes; Android's tree holds on-screen nodes only. Any other off-screen
+// element — off to the side, in nested scroll views, in a list the swipe
+// would miss, or one the swipes cannot reach — fails at once with a message
+// naming the element and pointing at scrollIntoView(), rather than guessing.
 
 /** The actions that wait for an enabled target and scroll it into view. */
 type TapFamilyAction = 'tap' | 'doubleTap' | 'longPress' | 'setChecked';
 
-/**
- * Safety cap on the swipes of one auto-scroll. The real bounds are the action
- * deadline and the progress checks in `_scrollOffScreenIntoView`.
- */
+/** Safety cap on the swipes of one scroll; the deadline and the progress check are the real bounds. */
 const AUTO_SCROLL_MAX_SWIPES = 25;
-/** Auto-scrolls one action may start (a new one only from a new resting place). */
-const AUTO_SCROLL_MAX_ATTEMPTS = 3;
+/** Scrolls one action may start (a second only if the list moved the element out of view again). */
+const AUTO_SCROLL_MAX_ATTEMPTS = 2;
 /** The longest swipe, as a fraction of the screen height. */
 const AUTO_SCROLL_MAX_DISTANCE = 0.5;
 /** The shortest swipe, for the last nudge into the safe region. */
 const AUTO_SCROLL_MIN_DISTANCE = 0.05;
 /**
  * A slow drag (the agents map ≤1000 px/s to their longest swipe), so the
- * content travels about the swipe distance instead of flinging past the target
- * — which is also what lets the swipe's travel measure the screen.
+ * content travels about the swipe distance instead of flinging past the target.
  */
 const AUTO_SCROLL_SPEED = 1000;
 /**
- * The safe region, as fractions of the screen height: an element resting
- * fully inside it is clear of where navigation bars, headers and tab bars sit.
+ * The safe region, as fractions of the list's visible height: an element
+ * resting fully inside it is clear of the list's edges, where headers, bars
+ * and the list's own clipping are.
  */
 const AUTO_SCROLL_SAFE_TOP = 0.15;
 const AUTO_SCROLL_SAFE_BOTTOM = 0.85;
 /** Where the near edge of an element is aimed, a margin inside the safe region. */
 const AUTO_SCROLL_AIM_TOP = 0.2;
 const AUTO_SCROLL_AIM_BOTTOM = 0.8;
-/** How far inside the screen edge an off-screen element is first brought. */
+/** How far inside the list's edge an element out of view is first brought. */
 const AUTO_SCROLL_ENTRY = 0.1;
-/** The longest swipe once the element is on screen. */
+/**
+ * The longest swipe once the element is in view: short steps, so a list end
+ * that cuts a step short costs only a small pull past it (a rubber band, not a
+ * pull-to-refresh or a dismissed sheet).
+ */
 const AUTO_SCROLL_MAX_NUDGE = 0.1;
-/** Budget for the hierarchy read that measures the screen. */
-const SCREEN_SIZE_READ_MS = 5000;
-/** Re-reads of the band, per scroll, before an element is called in view. */
-const AUTO_SCROLL_MAX_BAND_REREADS = 2;
-/** Swipes in a row that may fail to bring the element closer to the middle. */
+/** Swipes in a row that may fail to bring the element closer before the scroll gives up. */
 const AUTO_SCROLL_MAX_STALLS = 3;
+/** Reads after a swipe that may come back inconclusive (stale, fault, miss) before the scroll gives up. */
+const AUTO_SCROLL_MAX_UNREADABLE_READS = 4;
+/** Budget for the hierarchy read that finds the element's list. */
+const AUTO_SCROLL_HIERARCHY_READ_MS = 5000;
 
 type Bounds = NonNullable<ElementInfo['bounds']>;
 
-/**
- * Whether the platform reports `el` in the tree with no part of it on screen
- * (iOS: viewport ratio 0). An element without bounds or with a zero-size frame
- * is invisible for another reason, and scrolling would not bring it on screen.
- */
-function isOffScreen(el: ElementInfo): el is ElementInfo & { bounds: Bounds } {
-  const b = el.bounds;
-  return !el.visible && !!b && b.right > b.left && b.bottom > b.top;
-}
-
-/**
- * The vertical band an auto-scroll brings its element into (the screen, or
- * the part of it the element's list covers), and the screen height swipe
- * distances are fractions of.
- */
-interface ScrollViewport {
+/** The part of the screen the element's list covers, and the screen height swipe distances are fractions of. */
+interface ScrollList {
   top: number;
   bottom: number;
   screenHeight: number;
-  /** Whether the element's node was found in the dump (else the band is the screen's). */
-  matched: boolean;
 }
 
 /** Whether `el` has a frame with area to steer by. */
@@ -723,16 +709,12 @@ function sameBounds(a: Bounds | undefined, b: Bounds | undefined): boolean {
   return !!a && !!b && a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
 }
 
-/** Thrown by the tap-family auto-scroll when it cannot bring its element on screen. */
-class OffScreenError extends Error {
-  constructor(message: string, readonly bounds: Bounds) {
-    super(message);
-  }
-}
+/** Thrown by the tap-family auto-scroll when it cannot bring its element into view. */
+class OffScreenError extends Error {}
 
 /**
- * The one hint both platforms give when a tap-family action cannot reach an
- * element that may be off-screen in a scrollable list.
+ * The hint a tap-family action's not-found error carries: the element may be
+ * off-screen in a scrollable list, where the action cannot see it to scroll.
  */
 function offScreenHint(action: TapFamilyAction): string {
   return `If it is off-screen in a scrollable list, scroll to it first with scrollIntoView() before ${action}() ` +
@@ -741,6 +723,14 @@ function offScreenHint(action: TapFamilyAction): string {
     `so ${action}() cannot scroll to them itself.`;
 }
 
+/**
+ * @internal — Whether an action failure means the agent's cached element is no
+ * longer usable, so re-resolving to a fresh id and retrying may succeed. Covers
+ * both wordings: the cached id was evicted / its snapshot invalidated by an
+ * intervening snapshot ("…not found. It may have gone stale.") and a live
+ * StaleObjectException where the cached object's view re-rendered ("Element is
+ * stale (UI changed): …", Android).
+ */
 /**
  * The least an action dispatch is given: an element that became enabled right
  * at the deadline, or a stale retry late in the budget, still gets time to act.
@@ -1654,19 +1644,18 @@ export class ElementHandle {
     // the same diagnostic _strictResolve gives `type()`, so `nth(5).tap()`
     // does not fail with a worse message than `nth(5).type()`.
     let lastPositionalMiss: Error | undefined;
-    // Auto-scroll state (PILOT-716). An off-screen element is scrolled
-    // towards only once two consecutive reads put it at the same place
-    // (Playwright waits for "stable" too): one still animating in — a sheet
-    // sliding up — must not be swiped at. When a scroll gives up, the wait
-    // goes on polling (it may still arrive by itself) and reports why at the
-    // deadline; it scrolls again only from a new resting place.
-    let lastSeenOffScreen = false;
-    let lastOffScreenBounds: Bounds | undefined;
-    let previousOffScreenBounds: Bounds | undefined;
-    let scrollFailure: { error: Error; bounds: Bounds } | undefined;
+    // Auto-scroll state (PILOT-716). An element out of view is scrolled to
+    // only once two consecutive reads put it at the same place (Playwright
+    // waits for "stable" too): one still animating in — a sheet sliding up —
+    // must not be swiped at.
+    let previousOutOfView: Bounds | undefined;
+    let lastSeenOutOfView: Bounds | undefined;
     let scrollAttempts = 0;
-    let unsettledScroll = false;
-    let viewport: ScrollViewport | undefined;
+    // The element's list, once a scroll has found it. From then on a row the
+    // list clips (on screen, behind its header) is out of view too.
+    let list: ScrollList | undefined;
+    const outOfView = (el: ElementInfo): el is ElementInfo & { bounds: Bounds } =>
+      isFramed(el) && (!el.visible || (list !== undefined && !(el.bounds.bottom > list.top && el.bounds.top < list.bottom)));
     while (true) {
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind === 'fault') {
@@ -1690,83 +1679,57 @@ export class ElementHandle {
         if (tick.kind === 'miss') {
           lastPositionalMiss = tick.positionalMiss;
           lastSeenDisabled = false;
-          lastSeenOffScreen = false;
-          previousOffScreenBounds = undefined;
+          lastSeenOutOfView = undefined;
+          previousOutOfView = undefined;
         }
         if (tick.kind === 'found') {
           const element = tick.element;
           lastPositionalMiss = undefined;
           lastSeenDisabled = !element.enabled;
-          // Playwright's actionability checks scroll the target into view
-          // before acting (PILOT-716). Only a platform that reports
-          // off-screen nodes reaches this (iOS); Android exposes on-screen
-          // nodes only, so its off-screen rows end in the not-found hint.
-          // Once a scroll has read the band of the element's list, a row the
-          // list still clips (on screen, behind its header) is out of view too:
-          // an early exit from a scroll (a stale read, a failure) must not hand
-          // the action a row the tap would miss.
-          const outOfView = (el: ElementInfo): el is ElementInfo & { bounds: Bounds } =>
-            isOffScreen(el) ||
-            (viewport !== undefined && isFramed(el) && !(el.bounds.bottom > viewport.top && el.bounds.top < viewport.bottom));
-          const offScreen = element.enabled && outOfView(element) && !options?.needsNoScroll?.(element);
-          lastSeenOffScreen = offScreen;
-          if (offScreen) lastOffScreenBounds = element.bounds;
-          if (element.enabled && !offScreen) {
-            if (unsettledScroll) {
-              // A scroll ended on an inconclusive read: the list may still be
-              // decelerating, and iOS spends the first tap on stopping it.
-              unsettledScroll = false;
-              const settled = await this._settleAfterScroll(element);
-              if (!settled.enabled || outOfView(settled)) continue;
-            }
+          lastSeenOutOfView = undefined;
+          const ready = (el: ElementInfo): { remainingMs: number; element: ElementInfo } => {
             const remaining = Math.max(0, deadline - Date.now());
-            return {
-              remainingMs: Math.min(timeoutMs, Math.max(remaining, MIN_ACTION_BUDGET_MS)),
-              element,
-            };
-          }
-          if (offScreen && outOfView(element)) {
-            const stable = sameBounds(previousOffScreenBounds, element.bounds);
-            previousOffScreenBounds = element.bounds;
-            const movedSinceFailure = !scrollFailure || !sameBounds(scrollFailure.bounds, element.bounds);
-            if (stable && movedSinceFailure && scrollAttempts < AUTO_SCROLL_MAX_ATTEMPTS) {
-              previousOffScreenBounds = undefined;
-              try {
-                // Returns once it is in view or a read is inconclusive; the
-                // next tick re-reads, so enabled, faults and misses are
-                // judged by this loop as usual. Only a scroll that finished
-                // (in view, or given up) counts as an attempt: one cut short
-                // by a stale read is resumed, bounded by the deadline.
-                // The band to scroll into (the screen, narrowed to the list)
-                // steers every swipe; read it once per action. Without it
-                // nothing is swiped: the attempt fails like any other (its
-                // error names no resting place, so the next stable read may
-                // try again, reading it afresh).
-                viewport ??= await this._scrollViewport(element, deadline);
-                if (viewport === undefined) {
-                  throw this._offScreenError(action, 'the screen size could not be read to steer the scroll', undefined, {
-                    vertical: element.bounds.bottom <= 0 ? 'down' : 'up',
-                  });
-                }
-                unsettledScroll = !(await this._scrollOffScreenIntoView(element, deadline, action, viewport));
-                if (!unsettledScroll) scrollAttempts++;
-              } catch (err) {
-                if (!(err instanceof OffScreenError)) throw err;
-                scrollAttempts++;
-                scrollFailure = { error: err, bounds: err.bounds };
-              }
-              continue;
-            }
+            return { remainingMs: Math.min(timeoutMs, Math.max(remaining, MIN_ACTION_BUDGET_MS)), element: el };
+          };
+          if (!element.enabled) {
+            previousOutOfView = undefined;
+          } else if (!outOfView(element) || options?.needsNoScroll?.(element)) {
+            return ready(element);
           } else {
-            previousOffScreenBounds = undefined;
+            // Playwright's actionability checks scroll the target into view
+            // before acting (PILOT-716).
+            lastSeenOutOfView = element.bounds;
+            const stable = sameBounds(previousOutOfView, element.bounds);
+            previousOutOfView = element.bounds;
+            if (stable) {
+              previousOutOfView = undefined;
+              const target = list ?? await this._scrollListFor(element, deadline, action);
+              // Not off-screen after all: the dump puts it on the screen (the
+              // agent's own visibility check can go stale, e.g. after rotation).
+              if (target === 'on-screen') return ready(element);
+              if (++scrollAttempts > AUTO_SCROLL_MAX_ATTEMPTS) {
+                const above = list ? element.bounds.bottom <= (list.top + list.bottom) / 2 : element.bounds.bottom <= 0;
+                throw this._offScreenError(
+                  action,
+                  `it was out of view again after ${AUTO_SCROLL_MAX_ATTEMPTS} scrolls`,
+                  element.bounds,
+                  above ? 'down' : 'up',
+                );
+              }
+              list = target;
+              const inView = await this._scrollIntoList(element, deadline, action, list);
+              if (inView.enabled) return ready(inView);
+              // Disabled once in view: wait for it like any other.
+              lastSeenOutOfView = undefined;
+              lastSeenDisabled = true;
+            }
           }
         }
       }
       if (Date.now() >= deadline) {
         if (lastTransientErr) throw lastTransientErr;
-        if (lastSeenOffScreen) {
-          throw scrollFailure?.error ??
-            this._offScreenError(action, 'it was still moving at the timeout, so it was never scrolled to', lastOffScreenBounds);
+        if (lastSeenOutOfView) {
+          throw this._offScreenError(action, 'it kept moving, so it was never still long enough to scroll to', lastSeenOutOfView);
         }
         const desc = this._describe();
         throw new Error(
@@ -3079,55 +3042,57 @@ export class ElementHandle {
 
   // ── Scrolling ──
 
-  /** @internal — The error for an off-screen element a tap-family action could not scroll into view. */
+  /**
+   * @internal — The error for an element a tap-family action could not
+   * scroll into view: names the element, says why, and points at the API that
+   * does it — scrollIntoView() with the direction it needs (it swipes up by
+   * default, revealing what is below), or scroll() on the carousel for an
+   * element off to the side.
+   */
   private _offScreenError(
     action: TapFamilyAction,
     why: string,
-    bounds?: Bounds,
-    hint?: { sideways: 'left' | 'right' } | { vertical: 'up' | 'down' },
+    bounds: Bounds,
+    direction: 'up' | 'down' | 'left' | 'right' = bounds.bottom <= 0 ? 'down' : 'up',
   ): OffScreenError {
-    // scrollIntoView() swipes up by default, which reveals what is below: name
-    // the direction, or the advice scrolls away from an element above.
-    const vertical = hint && 'vertical' in hint ? hint.vertical : bounds && bounds.bottom <= 0 ? 'down' : 'up';
-    const how = hint && 'sideways' in hint
-      ? `scroll() on the carousel or list that holds it, or await locator.scrollIntoView({ direction: "${hint.sideways}" }) ` +
-        'if nothing at the middle of the screen reacts to a sideways swipe'
-      : `with scrollIntoView({ direction: "${vertical}" }), or scroll() on the list that holds it`;
+    const how = direction === 'left' || direction === 'right'
+      ? `scroll() on the carousel or list that holds it, or await locator.scrollIntoView({ direction: "${direction}" })`
+      : `await locator.scrollIntoView({ direction: "${direction}" })`;
     return new OffScreenError(
       `Element ${this._describe()} is off-screen and ${action}() could not scroll it into view: ${why}. ` +
         `Scroll it into view first (${how}), then ${action}() it.`,
-      bounds ?? { left: 0, top: 0, right: 0, bottom: 0 },
     );
   }
 
   /**
-   * @internal — The vertical band an off-screen element has to be scrolled
-   * into, in the units its bounds use, from one hierarchy dump (no RPC reports
-   * it directly): the screen (the root node's frame — the app on iOS, the root
-   * window on Android), narrowed to the list that holds the element. iOS
-   * reports an element as visible when any part of it is inside the screen,
-   * even where its list clips it (behind the header above the list), so the
-   * band must be the list's, or the scroll stops on a row that cannot be
-   * touched. The list is the nearest scroll view around the element's node
-   * whose content is stacked, not laid out side by side (a carousel around a
-   * cell is not the list that scrolls vertically). Navigation bars at the top and tab bars or
-   * toolbars at the bottom narrow the band too. `undefined` when the dump fails or
-   * carries no usable frame; a user stop propagates.
+   * @internal — Find the list a tap-family action may scroll its off-screen
+   * element into, from one hierarchy dump, or fail at once (an
+   * {@link OffScreenError}) when the element is not the simple case: entirely
+   * above or below the screen inside a single vertically scrolling list whose
+   * frame covers the middle of the screen, where the agents' screen swipe
+   * starts. `'on-screen'` when the dump puts the element on the screen after
+   * all (the agent's visibility can go stale). The list's band is its frame
+   * clipped to the screen: iOS calls a row visible when any part is on the
+   * screen even where its list clips it behind a header, so the scroll aims
+   * into the list, not the screen. A user stop propagates.
    */
-  private async _scrollViewport(
+  private async _scrollListFor(
     element: ElementInfo & { bounds: Bounds },
     deadline: number,
-  ): Promise<ScrollViewport | undefined> {
+    action: TapFamilyAction,
+  ): Promise<ScrollList | 'on-screen'> {
+    const fail = (why: string): OffScreenError => this._offScreenError(action, why, element.bounds);
     let xml: string;
     try {
-      const res = await this._client.getUiHierarchy(Math.max(1, Math.min(SCREEN_SIZE_READ_MS, deadline - Date.now())));
-      xml = res.hierarchyXml ?? '';
+      const budget = Math.max(1, Math.min(AUTO_SCROLL_HIERARCHY_READ_MS, deadline - Date.now()));
+      xml = (await this._client.getUiHierarchy(budget)).hierarchyXml ?? '';
     } catch (err) {
       if (isAbortError(err)) throw err;
-      return undefined;
+      throw fail('the UI hierarchy could not be read to find the list that holds it');
     }
     const roots = parseHierarchyXml(xml);
-    // The first node with a frame (the dump's own <hierarchy> wrapper has none).
+    // The screen: the first node with a frame (the dump's own <hierarchy>
+    // wrapper has none) — the app on iOS, the root window on Android.
     const firstFramed = (nodes: HierarchyNode[]): Bounds | undefined => {
       for (const node of nodes) {
         const b = hierarchyBounds(node) ?? firstFramed(node.children);
@@ -3136,13 +3101,23 @@ export class ElementHandle {
       return undefined;
     };
     const screen = firstFramed(roots);
-    if (!screen || screen.bottom <= screen.top) return undefined;
-    const band = { top: screen.top, bottom: screen.bottom, screenHeight: screen.bottom - screen.top, matched: false };
+    if (!screen || screen.bottom <= screen.top) throw fail('the UI hierarchy has no screen frame to steer by');
     const target = element.bounds;
-    const height = target.bottom - target.top;
+    if (target.bottom > screen.top && target.top < screen.bottom && target.right > screen.left && target.left < screen.right) {
+      return 'on-screen';
+    }
+    if (target.right <= screen.left || target.left >= screen.right) {
+      const side = target.right <= screen.left ? 'left' : 'right';
+      throw this._offScreenError(
+        action,
+        `it is off-screen to the ${side}, and ${action}() scrolls only vertically`,
+        target,
+        side === 'left' ? 'right' : 'left',
+      );
+    }
+    // The element's node: the first whose frame is the element's (dumps round
+    // frames to whole points), with the path down to it.
     const near = (a: number, b: number): boolean => Math.abs(a - b) <= 2;
-    // Depth-first with the ancestor path; the first node whose frame is the
-    // element's (dumps round frames to whole points) is taken as its node.
     const path: HierarchyNode[] = [];
     const visit = (node: HierarchyNode): HierarchyNode[] | undefined => {
       path.push(node);
@@ -3157,235 +3132,139 @@ export class ElementHandle {
       path.pop();
       return undefined;
     };
-    let ancestry: HierarchyNode[] | undefined;
+    let branch: HierarchyNode[] | undefined;
     for (const root of roots) {
-      ancestry = visit(root);
-      if (ancestry) break;
+      branch = visit(root);
+      if (branch) break;
     }
-    // Navigation bars at the top and tab bars or toolbars at the bottom cover
-    // the list (a list under a translucent bar starts at the screen's top).
-    const barTop = { value: band.top };
-    const barBottom = { value: band.bottom };
-    const screenMid = (screen.top + screen.bottom) / 2;
-    const findBars = (nodes: HierarchyNode[]): void => {
-      for (const node of nodes) {
-        const type = node.attributes.get('type') ?? node.tagName;
-        const b = hierarchyBounds(node);
-        if (b && b.bottom > b.top) {
-          if (type === 'XCUIElementTypeNavigationBar' && b.top < screenMid) barTop.value = Math.max(barTop.value, b.bottom);
-          if ((type === 'XCUIElementTypeTabBar' || type === 'XCUIElementTypeToolbar') && b.bottom > screenMid) {
-            barBottom.value = Math.min(barBottom.value, b.top);
-          }
-        }
-        findBars(node.children);
-      }
-    };
-    findBars(roots);
-    const matched = ancestry !== undefined;
-    const clear = (top: number, bottom: number): ScrollViewport => {
-      const t = Math.max(top, barTop.value);
-      const b = Math.min(bottom, barBottom.value);
-      return b - t >= height * 1.5
-        ? { top: t, bottom: b, screenHeight: band.screenHeight, matched }
-        : { top, bottom, screenHeight: band.screenHeight, matched };
-    };
-    const branch = ancestry ?? [];
-    for (let i = branch.length - 2; i >= 0; i--) {
-      const node = branch[i];
-      if (!isScrollContainer(node)) continue;
-      const b = hierarchyBounds(node);
-      if (!b) continue;
-      // A carousel around the element is not the list the screen swipe
-      // scrolls: tell them apart by how the element's branch sits among its
-      // siblings below the scroll view — side by side, or stacked.
-      const layout = branchLayout(branch.slice(i));
-      if (layout === 'horizontal') continue;
-      if (layout === undefined && b.bottom - b.top < height * 1.5) continue;
-      const top = Math.max(band.top, b.top);
-      const bottom = Math.min(band.bottom, b.bottom);
-      if (bottom - top >= height * 1.5) return clear(top, bottom);
+    if (!branch) throw fail('it could not be found in the UI hierarchy to tell which list holds it');
+    const scrollers = branch.slice(0, -1).map((node, i) => ({ node, i })).filter(({ node }) => isScrollContainer(node));
+    if (scrollers.length === 0) throw fail('it is not inside a scrollable list');
+    if (scrollers.length > 1) throw fail('it is inside nested scroll views');
+    const { node, i } = scrollers[0];
+    const frame = hierarchyBounds(node);
+    const height = target.bottom - target.top;
+    const layout = branchLayout(branch.slice(i));
+    if (!frame || layout === 'horizontal' || (layout === undefined && frame.bottom - frame.top < height * 1.5)) {
+      throw fail('the list that holds it does not scroll vertically');
     }
-    return clear(band.top, band.bottom);
+    const top = Math.max(screen.top, frame.top);
+    const bottom = Math.min(screen.bottom, frame.bottom);
+    const midX = (screen.left + screen.right) / 2;
+    const midY = (screen.top + screen.bottom) / 2;
+    if (!(top < midY && midY < bottom && frame.left < midX && midX < frame.right)) {
+      throw fail('its list does not cover the middle of the screen, where the scroll swipe starts');
+    }
+    if (bottom - top < height * 1.5) throw fail('its list shows too little of itself on screen');
+    return { top, bottom, screenHeight: screen.bottom - screen.top };
   }
 
   /**
-   * @internal — Scroll an element the platform reports in the tree but
-   * entirely off-screen (above or below) towards the middle of the screen
-   * before a tap-family action touches it, as Playwright's actionability
-   * checks do (PILOT-716). Without this, iOS refused the tap at once ("not
-   * hittable").
+   * @internal — Scroll an element entirely above or below its list's band
+   * (from {@link _scrollListFor}) into it, as Playwright's actionability checks
+   * do (PILOT-716); without this, iOS refused the tap at once ("not hittable").
    *
    * Each step is a slow vertical screen drag towards the element, then the
-   * settle loop. Knowing the screen height (`extent`, in the units of the
-   * element's bounds), it first brings an off-screen element just inside the
-   * screen edge, then nudges it (a tenth of the screen at a time) until it
-   * rests fully inside the safe region, clear of where headers and tab bars
-   * sit, so it does not come to rest as a sliver at an edge; a fling past it
-   * is corrected from the other side. Short steps keep a list end that cuts
-   * a step off from turning into a long pull past it. A swipe that moves the element less than
-   * half as far as it should have means the list has reached its end: it
-   * stops there if the element is visible, rather than dragging the list past
-   * its end again (a pull-to-refresh, or a sheet dismissed).
+   * settle loop. The first steps bring it just inside the list's edge; then it
+   * is nudged a tenth of the list's height at a time until it rests fully in
+   * the safe region (clear of the list's edges, so not a sliver behind a
+   * header). Short steps keep a list end that cuts one off from turning into a
+   * long pull past it; a swipe that moves a visible element less than half as
+   * far as it should means the list has reached its end, and the element is
+   * taken where it rests. An element taller than half the list is aimed at the
+   * middle and is done once it spans it.
    *
-   * An element off to the side (a carousel cell) is not scrolled to: a
-   * sideways drag from the middle of the screen could reveal a swipeable
-   * row's actions or turn a pager.
-   *
-   * Resolves `true` when it stopped on a settled, visible read, and `false`
-   * when a read after a swipe was inconclusive (a miss, stale snapshot or
-   * fault, or no bounds): the caller's wait loop re-reads and judges every
-   * outcome, so enabled, faults and misses are handled exactly as in the
-   * plain auto-wait, and settles a `false` return's next visible read.
-   * Throws {@link OffScreenError} for an element off to the side, when a swipe
-   * does not move an off-screen element, when swipes stop bringing it closer,
-   * or at the deadline or swipe cap. A user stop and strict-mode violations
-   * propagate from the reads and sleeps.
+   * Returns the settled read of the element in view. Throws an
+   * {@link OffScreenError} at once when a swipe does not move it, when the
+   * swipes stop bringing it closer, when it leaves the tree, or at the swipe
+   * cap or deadline; a user stop, an agent fault and strict-mode violations
+   * propagate.
    */
-  private async _scrollOffScreenIntoView(
+  private async _scrollIntoList(
     element: ElementInfo & { bounds: Bounds },
     deadline: number,
     action: TapFamilyAction,
-    viewport: ScrollViewport,
-  ): Promise<boolean> {
-    // Geometry is relative to the band (`extent()` tall, from 0); swipe
-    // distances are fractions of the screen, as the agents take them. The
-    // band is updated in place when re-read (see `done`), so the caller's
-    // cached copy follows.
-    const extent = (): number => viewport.bottom - viewport.top;
-    const rel = (b: Bounds): Bounds => ({ ...b, top: b.top - viewport.top, bottom: b.bottom - viewport.top });
-    const inBand = (r: Bounds): boolean => r.bottom > 0 && r.top < extent();
+    list: ScrollList,
+  ): Promise<ElementInfo> {
+    const extent = list.bottom - list.top;
+    const rel = (b: Bounds): Bounds => ({ ...b, top: b.top - list.top, bottom: b.bottom - list.top });
     const mid = (r: Bounds): number => (r.top + r.bottom) / 2;
-    // Which way scrollIntoView() would have to go for it: down for an element
-    // above the middle of the band, up for one below.
-    const towards = (r: Bounds): { vertical: 'up' | 'down' } => ({ vertical: mid(r) < extent() / 2 ? 'down' : 'up' });
-    let bounds: Bounds = rel(element.bounds);
-    // Where the element rests now, in screen coordinates: a failure records
-    // it, so the caller scrolls again only once the element has moved on.
-    let resting: Bounds = element.bounds;
-    const sideError = (r: Bounds): OffScreenError => this._offScreenError(
-      action,
-      `it is off-screen to the ${r.right <= 0 ? 'left' : 'right'}, and ${action}() scrolls only vertically ` +
-        '(a sideways swipe from the middle of the screen could drag other content, such as a swipeable row)',
-      resting,
-      { sideways: r.right <= 0 ? 'right' : 'left' },
-    );
-    // Level with the screen yet not on it: off to the side.
-    const levelWithScreen = (b: Bounds): boolean => b.bottom > 0 && b.top < viewport.screenHeight;
-    if (!element.visible && levelWithScreen(element.bounds)) throw sideError(bounds);
-    // How far the element still has to travel: to the near edge of the safe
-    // region, with a margin, so a nudge at a list end pulls the list only a
-    // little past it; an element too tall for the region aims at the middle.
+    const inList = (r: Bounds): boolean => r.bottom > 0 && r.top < extent;
+    // How far the element still has to travel: its near edge to just inside
+    // the safe region; an element too tall for the region aims at the middle.
     const travelNeeded = (r: Bounds): number => {
-      const e = extent();
-      if (r.bottom - r.top >= e / 2) return mid(r) - e / 2;
-      if (r.top < e * AUTO_SCROLL_SAFE_TOP) return r.top - e * AUTO_SCROLL_AIM_TOP;
-      if (r.bottom > e * AUTO_SCROLL_SAFE_BOTTOM) return r.bottom - e * AUTO_SCROLL_AIM_BOTTOM;
+      if (r.bottom - r.top >= extent / 2) return mid(r) - extent / 2;
+      if (r.top < extent * AUTO_SCROLL_SAFE_TOP) return r.top - extent * AUTO_SCROLL_AIM_TOP;
+      if (r.bottom > extent * AUTO_SCROLL_SAFE_BOTTOM) return r.bottom - extent * AUTO_SCROLL_AIM_BOTTOM;
       return 0;
     };
-    const restsSafely = (r: Bounds): boolean => {
-      const e = extent();
-      const inSafeRegion = r.top >= e * AUTO_SCROLL_SAFE_TOP && r.bottom <= e * AUTO_SCROLL_SAFE_BOTTOM;
-      // An element too tall for the safe region is in view once it spans the
-      // middle of the band, not at the first strip at an edge.
-      return inSafeRegion || (r.bottom - r.top >= e / 2 && r.top <= e / 2 && r.bottom >= e / 2);
-    };
-    // Before calling it in view, re-read the band: the swipes can move the
-    // list itself (a collapsing header, a list nested in a scrolling page), so
-    // the band read at the start may no longer be where the list is. A band
-    // that moved means another step against the fresh one. Bounded: a band
-    // that keeps moving is accepted after a couple of re-reads.
-    let rereads = 0;
-    const done = async (el: ElementInfo & { bounds: Bounds }): Promise<boolean> => {
-      if (rereads >= AUTO_SCROLL_MAX_BAND_REREADS) return true;
-      rereads++;
-      const fresh = await this._scrollViewport(el, deadline);
-      // A dump that no longer shows the element where it rests (still
-      // drifting) says nothing about the band: keep the current one.
-      if (!fresh || !fresh.matched || (fresh.top === viewport.top && fresh.bottom === viewport.bottom)) return true;
-      viewport.top = fresh.top;
-      viewport.bottom = fresh.bottom;
-      bounds = rel(el.bounds);
-      return el.visible && inBand(bounds) && restsSafely(bounds);
-    };
+    const restsSafely = (r: Bounds): boolean =>
+      (r.top >= extent * AUTO_SCROLL_SAFE_TOP && r.bottom <= extent * AUTO_SCROLL_SAFE_BOTTOM) ||
+      (r.bottom - r.top >= extent / 2 && r.top <= extent / 2 && r.bottom >= extent / 2);
+    let current: Bounds = element.bounds;
+    let bounds = rel(current);
+    // The way scrollIntoView() would have to go for it: down for an element
+    // above the middle of the list, up for one below.
+    const fail = (why: string, b: Bounds): OffScreenError =>
+      this._offScreenError(action, why, b, mid(rel(b)) < extent / 2 ? 'down' : 'up');
+    let shown = false;
     let best = Infinity;
     let stalls = 0;
-    let shown = false;
     for (let swipes = 0; ; swipes++) {
-      if (swipes >= AUTO_SCROLL_MAX_SWIPES) {
-        throw this._offScreenError(action, `it was still not in view after ${swipes} scroll(s)`, resting, towards(bounds));
-      }
-      if (Date.now() >= deadline) {
-        throw this._offScreenError(action, `the action timed out after ${swipes} scroll(s)`, resting, towards(bounds));
-      }
+      if (swipes >= AUTO_SCROLL_MAX_SWIPES) throw fail(`it was still not in view after ${swipes} swipes`, current);
+      if (Date.now() >= deadline) throw fail(`the action timed out after ${swipes} swipe(s)`, current);
       // Positive: the element has to move up (swipe up); negative: down.
       const offset = travelNeeded(bounds);
-      // Steps short enough that a list end cut off by one costs a small pull
-      // past it (rubber band, not a pull-to-refresh): out of view, only as far
-      // as just inside the band's edge; in view, a nudge at a time. The
-      // under-travel check below then stops at the end.
       const travel = shown
-        ? Math.min(Math.abs(offset), extent() * AUTO_SCROLL_MAX_NUDGE)
+        ? Math.min(Math.abs(offset), extent * AUTO_SCROLL_MAX_NUDGE)
         : Math.min(Math.abs(offset), Math.max(0, offset < 0
-          ? extent() * AUTO_SCROLL_ENTRY - bounds.top
-          : bounds.bottom - extent() * (1 - AUTO_SCROLL_ENTRY)));
-      const distance = Math.min(
-        AUTO_SCROLL_MAX_DISTANCE,
-        Math.max(AUTO_SCROLL_MIN_DISTANCE, travel / viewport.screenHeight),
-      );
+          ? extent * AUTO_SCROLL_ENTRY - bounds.top
+          : bounds.bottom - extent * (1 - AUTO_SCROLL_ENTRY)));
+      const distance = Math.min(AUTO_SCROLL_MAX_DISTANCE, Math.max(AUTO_SCROLL_MIN_DISTANCE, travel / list.screenHeight));
       const direction = offset > 0 ? 'up' : 'down';
       const res = await this._client.swipe(direction, { speed: AUTO_SCROLL_SPEED, distance });
       if (!res.success) {
-        throw new Error(
-          `Swipe failed while scrolling ${this._describe()} into view for ${action}(): ${res.errorMessage || 'unknown error'}`,
-        );
+        throw new Error(`Swipe failed while scrolling ${this._describe()} into view for ${action}(): ${res.errorMessage || 'unknown error'}`);
       }
       await sleep(SCROLL_SETTLE_MS, this._client._getAbortSignal?.());
-      const tick = await this._resolveTick(tickBudget(deadline));
-      if (tick.kind !== 'found') return false;
-      const next = await this._settleAfterScroll(tick.element);
-      if (!isFramed(next)) return false; // nothing to steer by
+      // Re-read; a stale snapshot, an agent blip or a cell dropping out for a
+      // frame right after a swipe is read again a few times.
+      let found: ElementInfo | undefined;
+      let fault: Error | undefined;
+      for (let reads = 1; ; reads++) {
+        const tick = await this._resolveTick(tickBudget(deadline));
+        if (tick.kind === 'found') {
+          found = tick.element;
+          break;
+        }
+        fault = tick.kind === 'fault' ? tick.error : undefined;
+        if (reads >= AUTO_SCROLL_MAX_UNREADABLE_READS || Date.now() >= deadline) break;
+        await sleep(POLL_INTERVAL_MS, this._client._getAbortSignal?.());
+      }
+      if (!found) {
+        if (fault) throw fault;
+        throw fail('it left the accessibility tree while scrolling (a virtualized list may have unmounted it)', current);
+      }
+      const next = await this._settleAfterScroll(found);
+      if (!isFramed(next)) return next; // nothing to steer by: let the action judge it
       const nb = rel(next.bounds);
-      // Shown: on screen (the platform's word) and inside the band — a row
-      // the list clips behind a header is on screen but not shown.
-      const nowShown = next.visible && inBand(nb);
+      const nowShown = next.visible && inList(nb);
       const moved = Math.abs(mid(nb) - mid(bounds));
       if (moved === 0) {
-        if (nowShown && await done(next)) return true; // in view, and the list will not go any further
-        if (!nowShown) {
-          throw this._offScreenError(
-            action,
-            `a "${direction}" screen swipe did not move it (it may be in a list the swipe misses, or one that ` +
-              'cannot scroll any further)',
-            next.bounds,
-            towards(nb),
-          );
-        }
+        if (nowShown) return next; // in view, and the list will not go any further
+        throw fail(`a "${direction}" screen swipe did not move it`, next.bounds);
       }
-      bounds = rel(next.bounds);
-      resting = next.bounds;
-      shown = next.visible && inBand(bounds);
-      if (!next.visible) {
-        // Scrolled level with the screen and still not on it: a cell of a
-        // carousel row further down, off to the side.
-        if (levelWithScreen(next.bounds)) throw sideError(bounds);
-      } else if (shown && moved > 0) {
-        // Resting safely, or under-travel: the list hit its end this swipe.
-        if (restsSafely(bounds) || moved < (distance * viewport.screenHeight) / 2) {
-          if (await done(next)) return true;
-          // The band moved: judge everything against the fresh one from here.
-          shown = next.visible && inBand(bounds);
-          best = Infinity;
-          stalls = 0;
-          continue;
-        }
-      }
-      const away = Math.abs(travelNeeded(bounds));
+      current = next.bounds;
+      bounds = nb;
+      shown = nowShown;
+      if (shown && (restsSafely(nb) || moved < (distance * list.screenHeight) / 2)) return next;
+      const away = Math.abs(travelNeeded(nb));
       if (away < best - 1) {
         best = away;
         stalls = 0;
       } else if (++stalls >= AUTO_SCROLL_MAX_STALLS) {
-        if (shown) return true;
-        throw this._offScreenError(action, `${swipes + 1} screen swipes stopped bringing it closer`, next.bounds, towards(bounds));
+        if (shown) return next;
+        throw fail(`${swipes + 1} swipes stopped bringing it closer`, next.bounds);
       }
     }
   }
