@@ -194,6 +194,17 @@ class SnapshotElementFinder {
             idSeen[id] = n + 1
             return n
         }
+        // A label-less substring-text match is re-resolved by the selector's
+        // own query: which numbered nodes that query returns, computed once
+        // and only when such a match exists.
+        var substringMatched: [Bool]?
+        if let textContains = selector.textContains, matches.contains(where: { (nodeDict, _) in
+            guard let ordinal = nodeDict[SnapshotElementFinder.ordinalKey] as? Int,
+                  ordinal < queryNodes.count else { return false }
+            return queryNodes[ordinal].label.isEmpty
+        }) {
+            substringMatched = QueryIndex.substringMatches(in: queryNodes, query: textContains)
+        }
         // Each role+name match's index within the live query that
         // cacheQueryElement re-resolves it with (nil: no numbered node).
         let labelIndices: [Int?] = matches.map { (nodeDict, _) in
@@ -204,9 +215,9 @@ class SnapshotElementFinder {
             let specific = type != nil && type != .other && type != .any
             // A substring-text match with no label is found again by the
             // selector's own query (cacheQueryElement), so index it there.
-            if let textContains = selector.textContains, queryNodes[ordinal].label.isEmpty {
+            if let substringMatched, queryNodes[ordinal].label.isEmpty {
                 return QueryIndex.substringLiveIndex(
-                    of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil, query: textContains
+                    of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil, matched: substringMatched
                 )
             }
             return QueryIndex.liveIndex(of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil)
@@ -987,18 +998,8 @@ class SnapshotElementFinder {
         // reorder here. We use an ancestor stack to suppress RN-style
         // `.other` wrappers whose identifier/label matches a native
         // descendant in one linear pass.
-        //
-        // A substring getByText ignores case (PILOT-522), so it would also
-        // match the software keyboard's lowercase keys ("delete", "more")
-        // and the application element, whose label is the app's name.
-        // Neither is text in the app — Android's keyboard is another window
-        // — so skip the keyboard's subtree and the application node.
-        let nodeTypeRaw = parseUInt(nodeDict["elementType"]) ?? 0
-        if selector.textContains != nil, nodeTypeRaw == XCUIElement.ElementType.keyboard.rawValue { return }
-        let skipSelf = selector.textContains != nil
-            && nodeTypeRaw == XCUIElement.ElementType.application.rawValue
         var pushedAncestor = false
-        if !skipSelf, matchesSelector(
+        if matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
             selector: selector,

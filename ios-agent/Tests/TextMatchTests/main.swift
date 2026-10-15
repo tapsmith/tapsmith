@@ -146,12 +146,16 @@ let emailScreen = [
     QueryNode(typeRaw: textField, label: "", identifier: "", title: "", value: "Email"),
     QueryNode(typeRaw: textField, label: "", identifier: "", title: "", value: "Confirm email"),
 ]
+let emailMatched = QueryIndex.substringMatches(in: emailScreen, query: "email")
+expect("substring fallback: the query returns all three nodes", emailMatched == [true, true, true])
 expect("substring fallback: first field is index 0 in the field query",
-       QueryIndex.substringLiveIndex(of: 1, in: emailScreen, scopeTypeRaw: textField, query: "email") == 0)
+       QueryIndex.substringLiveIndex(of: 1, in: emailScreen, scopeTypeRaw: textField, matched: emailMatched) == 0)
 expect("substring fallback: second field counts the first",
-       QueryIndex.substringLiveIndex(of: 2, in: emailScreen, scopeTypeRaw: textField, query: "email") == 1)
+       QueryIndex.substringLiveIndex(of: 2, in: emailScreen, scopeTypeRaw: textField, matched: emailMatched) == 1)
 expect("substring fallback: .any scope counts the header too",
-       QueryIndex.substringLiveIndex(of: 1, in: emailScreen, scopeTypeRaw: nil, query: "email") == 1)
+       QueryIndex.substringLiveIndex(of: 1, in: emailScreen, scopeTypeRaw: nil, matched: emailMatched) == 1)
+expect("contains: empty text holds only an empty query",
+       !TextMatch.contains("", "email") && TextMatch.contains("", " "))
 
 // RegExp locators (PILOT-520): the SDK's conformance fixture, replayed
 // through ICU (NSRegularExpression for the snapshot walk, NSPredicate MATCHES

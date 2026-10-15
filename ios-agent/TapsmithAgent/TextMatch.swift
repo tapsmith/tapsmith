@@ -62,7 +62,20 @@ enum TextMatch {
     /// folding, width under `(?i)`) no Swift string search reproduces — and
     /// a live query's positional index binds the element the walk matched.
     static func contains(_ text: String, _ query: String) -> Bool {
-        NSPredicate(format: "SELF MATCHES %@", containsPattern(query)).evaluate(with: text)
+        // An empty text contains only an empty query (the pattern says the
+        // same), and is most titles and values: skip the predicate.
+        if text.isEmpty { return normalize(query).isEmpty }
+        return containsPredicate(query).evaluate(with: text)
+    }
+
+    /// One parsed predicate per query: the snapshot walk tests every node.
+    private static let containsPredicates = NSCache<NSString, NSPredicate>()
+
+    private static func containsPredicate(_ query: String) -> NSPredicate {
+        if let cached = containsPredicates.object(forKey: query as NSString) { return cached }
+        let predicate = NSPredicate(format: "SELF MATCHES %@", containsPattern(query))
+        containsPredicates.setObject(predicate, forKey: query as NSString)
+        return predicate
     }
 
     /// Whether `childText` is one of the child texts iOS joined with ", " to
@@ -148,16 +161,22 @@ enum QueryIndex {
         return count
     }
 
-    /// The index of `nodes[ordinal]` within a live substring-text query
-    /// (`label/title/value MATCHES containsPattern(query)`, PILOT-522) on the
-    /// scoped type: every earlier node of that type the same predicate
-    /// matches — for a match with no label to re-resolve it by.
-    static func substringLiveIndex(of ordinal: Int, in nodes: [QueryNode], scopeTypeRaw: UInt?, query: String) -> Int {
+    /// Which `nodes` a live substring-text query
+    /// (`label/title/value MATCHES containsPattern(query)`, PILOT-522)
+    /// returns, ignoring its type scope. Computed once per find.
+    static func substringMatches(in nodes: [QueryNode], query: String) -> [Bool] {
+        nodes.map {
+            TextMatch.contains($0.label, query) || TextMatch.contains($0.title, query)
+                || TextMatch.contains($0.value, query)
+        }
+    }
+
+    /// The index of `nodes[ordinal]` within that query on the scoped type:
+    /// every earlier node of that type it returns (`matched`, from
+    /// `substringMatches`) — for a match with no label to re-resolve it by.
+    static func substringLiveIndex(of ordinal: Int, in nodes: [QueryNode], scopeTypeRaw: UInt?, matched: [Bool]) -> Int {
         var count = 0
-        for node in nodes[..<ordinal]
-        where (scopeTypeRaw == nil || node.typeRaw == scopeTypeRaw)
-            && (TextMatch.contains(node.label, query) || TextMatch.contains(node.title, query)
-                || TextMatch.contains(node.value, query)) {
+        for i in 0..<ordinal where matched[i] && (scopeTypeRaw == nil || nodes[i].typeRaw == scopeTypeRaw) {
             count += 1
         }
         return count
