@@ -136,7 +136,7 @@ function simulatedScreen(opts: {
     state.checked = !state.checked;
     return ok();
   });
-  const getUiHierarchy = vi.fn(async () => {
+  const getUiHierarchy = vi.fn(async (_deadlineMs?: number) => {
     if (opts.hierarchyFails) throw new Error('Agent command timed out after 5000ms');
     if (opts.hierarchyError) return { requestId: '1', hierarchyXml: '', errorMessage: opts.hierarchyError };
     const r = row().bounds!;
@@ -416,6 +416,14 @@ describe('tap() fails fast, without guessing, outside the simple case (PILOT-716
       expect(swipe).not.toHaveBeenCalled();
       expect(tap).not.toHaveBeenCalled();
     }
+  });
+
+  it('reads the hierarchy with its full budget, never a sliver of the action deadline (review R14-F1)', async () => {
+    // Settles off-screen only near the end of a 2 s timeout.
+    const animation = Array.from({ length: 6 }, (_, i) => 3000 - i * 10);
+    const { client, getUiHierarchy } = simulatedScreen({ top: 3000, animation });
+    await withFakeClock(30_000, () => new ElementHandle(client, _text('Item 1'), 2000).tap()).catch(() => undefined);
+    for (const [budget] of getUiHierarchy.mock.calls as unknown as [number][]) expect(budget).toBe(5000);
   });
 
   it('an element never at rest by the timeout is reported as such (review R13-F4)', async () => {

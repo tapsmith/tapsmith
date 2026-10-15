@@ -1659,6 +1659,10 @@ export class ElementHandle {
     // The element's list, once a scroll has found it. From then on a row the
     // list clips (on screen, behind its header) is out of view too.
     let list: ScrollList | undefined;
+    // The way scrollIntoView() must go for it: down for an element above the
+    // middle of its list (or above the screen, before the list is known).
+    const towardsInList = (b: Bounds): 'up' | 'down' =>
+      (list ? b.bottom <= (list.top + list.bottom) / 2 : b.bottom <= 0) ? 'down' : 'up';
     const outOfView = (el: ElementInfo): el is ElementInfo & { bounds: Bounds } =>
       isFramed(el) && (!el.visible || (list !== undefined && !(el.bounds.bottom > list.top && el.bounds.top < list.bottom)));
     while (true) {
@@ -1713,12 +1717,11 @@ export class ElementHandle {
               // agent's own visibility check can go stale, e.g. after rotation).
               if (target === 'on-screen') return ready(element);
               if (++scrollAttempts > AUTO_SCROLL_MAX_ATTEMPTS) {
-                const above = list ? element.bounds.bottom <= (list.top + list.bottom) / 2 : element.bounds.bottom <= 0;
                 throw this._offScreenError(
                   action,
                   `it was out of view again after ${AUTO_SCROLL_MAX_ATTEMPTS} scrolls`,
                   element.bounds,
-                  above ? 'down' : 'up',
+                  towardsInList(element.bounds),
                 );
               }
               list = target;
@@ -1738,6 +1741,7 @@ export class ElementHandle {
             action,
             'it was still out of view at the timeout, before two reads could confirm it was at rest to scroll to',
             lastSeenOutOfView,
+            towardsInList(lastSeenOutOfView),
           );
         }
         const desc = this._describe();
@@ -3091,10 +3095,14 @@ export class ElementHandle {
     action: TapFamilyAction,
   ): Promise<ScrollList | 'on-screen'> {
     const fail = (why: string): OffScreenError => this._offScreenError(action, why, element.bounds);
-    // A failed read propagates as itself (a transport or agent error), so
-    // session recovery recognises it, as it does a failed findElements.
-    const budget = Math.max(1, Math.min(AUTO_SCROLL_HIERARCHY_READ_MS, deadline - Date.now()));
-    const res = await this._client.getUiHierarchy(budget);
+    // The read's budget is a hard call deadline (not a hint with daemon
+    // headroom, as a find's is), so it gets its full budget — a bounded
+    // overrun — rather than whatever is left of the action's; past the
+    // deadline it is not attempted at all. A failed read propagates as itself
+    // (a transport or agent error), so session recovery recognises it, as it
+    // does a failed findElements.
+    if (Date.now() >= deadline) throw fail('the action timed out before it could be scrolled to');
+    const res = await this._client.getUiHierarchy(AUTO_SCROLL_HIERARCHY_READ_MS);
     if (res.errorMessage) throw new Error(`getUiHierarchy failed: ${res.errorMessage}`);
     const xml = res.hierarchyXml ?? '';
     const roots = parseHierarchyXml(xml);
