@@ -19,9 +19,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   (PILOT-522), so getByText("get started") finds it. Tapping it counts.
 // - "Full name" above the field, also uppercased: getByText("full name")
 //   matches it and the field, two element types (PILOT-522).
-// - "Nickname", uppercased, above a field with no accessibility label and
-//   the placeholder "Nickname": getByText("nickname") finds the field only
-//   through its placeholder (PILOT-522).
+// - "Nickname", uppercased, above a field with no accessibility label: once
+//   text is typed into it, getByText finds the field only through that
+//   value (PILOT-522).
 //
 // Reached by deep link only (not on the home list, so the home cards keep
 // their positions).

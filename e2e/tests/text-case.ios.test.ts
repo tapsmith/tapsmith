@@ -22,14 +22,17 @@ describe("Case-insensitive substring getByText, live elements (PILOT-522)", () =
     await expect(device.getByLabel("Full name")).toHaveValue("Ada")
   })
 
-  test("a field matched only through its placeholder types into that field", async ({ device }) => {
-    // The field has no accessibility label: it matches through its value,
-    // the placeholder "Nickname", after the uppercased "NICKNAME" text.
-    const matches = device.getByText("nickname")
+  test("a field matched only through its value types into that field", async ({ device }) => {
+    // The nickname field has no accessibility label. An empty field's
+    // placeholder isn't its value, so give it one: it then matches through
+    // that value alone, after the uppercased "NICKNAME" text above it.
+    const nickname = device.getByPlaceholder("Nickname")
+    await nickname.type("nick")
+    const matches = device.getByText("NICK")
     await expect(matches).toHaveCount(2)
-    await matches.last().type("Ada")
-    // The typed value now replaces the placeholder in that field alone.
-    await expect(device.getByText("Ada", { exact: true })).toHaveCount(1)
-    await expect(device.getByText("nickname")).toHaveCount(1)
+    // type(), not clearAndType(): clearing would remove the very value the
+    // locator matches through.
+    await matches.last().type("name")
+    await expect(nickname).toHaveValue("nickname")
   })
 })
