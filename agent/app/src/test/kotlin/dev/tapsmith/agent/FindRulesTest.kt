@@ -82,22 +82,39 @@ class FindRulesTest {
     fun `roles RN publishes only as a description resolve through it`() {
         // RN renders these on a generic android.view.View with a role
         // description, so getByRole must read the description (PILOT-656).
-        for (role in listOf("tab", "progressbar", "toolbar", "heading", "link", "image", "searchfield")) {
+        for (role in listOf("progressbar", "toolbar", "heading", "link", "image", "searchfield", "tablist")) {
             assertTrue("$role is dual-path", role in ElementFinder.DUAL_PATH_ROLES)
         }
-        val tabClasses = setOf("android.widget.TabWidget", "com.google.android.material.tabs.TabLayout")
-        assertTrue(FindRules.matchesTraitRole("tab", "android.view.View", setOf("tab"), tabClasses, false))
-        // A native TabLayout without a description still matches by class.
-        assertTrue(FindRules.matchesTraitRole(null, "com.google.android.material.tabs.TabLayout", setOf("tab"), tabClasses, false))
-        // RN's tab list container is not a tab.
-        assertFalse(FindRules.matchesTraitRole("tablist", "android.view.View", setOf("tab"), tabClasses, false))
+        assertTrue(FindRules.matchesTraitRole("tab", "android.view.View", setOf("tab"), emptySet(), false))
+    }
+
+    @Test
+    fun `a tab is a tab item and the tab container is a tablist`() {
+        // PILOT-514: TabWidget / TabLayout are the containers, so they are
+        // "tablist" classes; a tab item is known only by its "Tab" role
+        // description (RN, Material's TabView and NavigationBarItemView,
+        // Compose's Role.Tab).
+        assertTrue("tab is description-only", "tab" in ElementFinder.TRAIT_ONLY_ROLES)
+        assertFalse("tab has no classes", "tab" in ElementFinder.DUAL_PATH_ROLES)
+        val listClasses = setOf("android.widget.TabWidget", "com.google.android.material.tabs.TabLayout")
+        // Material's TabView publishes "Tab" on a LinearLayout.
+        assertTrue(FindRules.matchesTraitRole("tab", "android.widget.LinearLayout", setOf("tab"), emptySet(), false))
+        // An undescribed TabWidget is not a tab, but is a tablist by class.
+        assertFalse(FindRules.matchesTraitRole(null, "android.widget.TabWidget", setOf("tab"), emptySet(), false))
+        assertTrue(FindRules.matchesTraitRole(null, "android.widget.TabWidget", setOf("tablist"), listClasses, false))
+        // RN's tab list container is a tablist, not a tab.
+        val rnList = FindRules.canonicalRoleDescription("Tab List")
+        assertFalse(FindRules.matchesTraitRole(rnList, "android.view.View", setOf("tab"), emptySet(), false))
+        assertTrue(FindRules.matchesTraitRole(rnList, "android.view.View", setOf("tablist"), listClasses, false))
+        // A tab item inside a TabLayout is not the tablist.
+        assertFalse(FindRules.matchesTraitRole("tab", "android.widget.LinearLayout", setOf("tablist"), listClasses, false))
     }
 
     @Test
     fun `RN's description-only roles resolve through the description alone`() {
         // PILOT-664: RN publishes these only as a role description on a
         // generic View ("Menu Item", "Timer"), so they have no class at all.
-        val roles = listOf("menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer")
+        val roles = listOf("menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "timer")
         for (role in roles) {
             assertTrue("$role is description-only", role in ElementFinder.TRAIT_ONLY_ROLES)
         }

@@ -463,13 +463,16 @@ The call is recorded in the trace as a `resetApp` action whose detail line names
 
 Force-stops and relaunches the app without clearing persistent storage. Resets all in-memory state (React component state, navigation stack) while preserving data on disk (AsyncStorage, SQLite, SharedPreferences).
 
-Use this in `beforeEach` hooks when tests modify in-memory state and you need isolation, but don't need a clean persistent state:
+Use it in the *middle* of a test, for example to check that state survives a restart. To restart before every test, declare `test.use({ appReset: "restart", appResetScope: "test" })` instead of a `beforeEach` that only restarts the app (the `tapsmith/prefer-app-reset-option` lint rule flags such a hook; see [Test isolation](writing-tests.md#test-isolation)):
 
 ```typescript
-beforeEach(async ({ device }) => {
+test("remembers the signed-in user across a restart", async ({ device }) => {
+  await device.getByRole("textfield", { name: "Email" }).type("user@example.com")
+  await device.getByRole("textfield", { name: "Password" }).type("password123")
+  await device.getByRole("button", { name: "Sign In" }).tap()
+  await expect(device.getByText("Welcome back")).toBeVisible()
   await device.restartApp("com.example.myapp")
-  await device.getByDescription("Settings").tap()
-  await expect(device.getByText("Settings", { exact: true })).toBeVisible()
+  await expect(device.getByText("Welcome back")).toBeVisible()
 })
 ```
 
@@ -765,7 +768,7 @@ Fetch the actual response from the server. Returns a `FetchedAPIResponse` that y
 ```ts
 await device.route('**/api/users/*', async (route) => {
   const response = await route.fetch()
-  const data = response.json()
+  const data = response.json() as { name: string }
   data.name = 'Modified'
   await route.fulfill({ json: data })
 })
@@ -1802,7 +1805,7 @@ describe("custom config", () => {
 | ------------ | ------------------------------------------- | -------------------------------------------- |
 | `timeout`    | `number`                                    | Action/assertion timeout (ms)                |
 | `screenshot` | `'always' \| 'only-on-failure' \| 'never'` | Screenshot capture mode                      |
-| `retries`    | `number`                                    | Retry count for failed tests                 |
+| `retries`    | `number`                                    | Retry count for failed tests. A retry starts from a reset app ([details](writing-tests.md#retries-start-from-a-fresh-app)) |
 | `trace`      | `TraceMode \| Partial<TraceConfig>`         | Trace recording configuration. See [configuration.md](./configuration.md#traceconfig) for the full `TraceConfig` shape (includes `network`, `networkHttpPorts`, `networkHosts`, `networkIgnoreHosts`, `networkPassthroughHosts`, `screenshots`, etc.). |
 | `video`      | `VideoMode \| Partial<VideoConfig>`         | Video recording configuration. See the [Video recording](#video-recording) section below. |
 | `appState`   | `string`                                    | Path to saved app state archive to restore; `""` means clear |
@@ -1970,7 +1973,7 @@ test.describe.serial("checkout", () => {
 });
 ```
 
-A test that passes on a retry does not stop the group. Unlike Playwright, retries apply to each test where it failed rather than re-running the whole group from its first test. Tests that sit directly in a describe run before its nested describes, so in a serial group a failure in a direct test also skips the nested describes declared above it.
+A test that passes on a retry does not stop the group. Unlike Playwright, retries apply to each test where it failed rather than re-running the whole group from its first test, and a retry inside a serial group does not reset the app first, since that would wipe the state the group's earlier tests built (outside a serial group, a retry starts from a reset app; see [Retries start from a fresh app](writing-tests.md#retries-start-from-a-fresh-app)). Tests that sit directly in a describe run before its nested describes, so in a serial group a failure in a direct test also skips the nested describes declared above it.
 
 ### `test.describe.configure(options: DescribeConfigureOptions): void`
 
@@ -2028,7 +2031,7 @@ Run a function before each test in the current suite. Hooks are inherited by nes
 
 ```typescript
 beforeEach(async ({ device }) => {
-  await device.restartApp("com.example.myapp");
+  await device.getByDescription("Settings").tap();
 });
 ```
 
@@ -2045,7 +2048,7 @@ Each hook call gets its own time budget, equal to the test timeout: 3× the conf
 - `afterEach`: the test fails, even if its body passed. If the test had already failed, the timeout is added to its error. The remaining `afterEach` hooks still run.
 - `afterAll`: the error is printed, like an error thrown by an `afterAll` hook, and the run carries on.
 
-Unlike Playwright, `beforeEach`/`afterEach` hooks do not share the test body's budget: slow setup such as `device.restartApp()` on a loaded machine does not eat into the time the test itself has. A hook that timed out is fenced off like a timed-out test body: device calls it starts after the timeout are refused.
+Unlike Playwright, `beforeEach`/`afterEach` hooks do not share the test body's budget: slow setup such as signing in through the UI on a loaded machine does not eat into the time the test itself has. A hook that timed out is fenced off like a timed-out test body: device calls it starts after the timeout are refused.
 
 ### `test.beforeAll(fn)` / `test.afterAll(fn)` / `test.beforeEach(fn)` / `test.afterEach(fn)`
 
@@ -2664,9 +2667,9 @@ Run test files. If no files are specified, discovers tests using the `testMatch`
 
 ```bash
 npx tapsmith test
-npx tapsmith test tests/login.test.ts tests/signup.test.ts
+npx tapsmith test tests/login.tapsmith.ts tests/signup.tapsmith.ts
 npx tapsmith test tests/auth                  # every test file under a directory
-npx tapsmith test 'tests/auth/*.test.ts'      # a glob (quote it so the shell leaves it alone)
+npx tapsmith test 'tests/auth/*.tapsmith.ts'  # a glob (quote it so the shell leaves it alone)
 npx tapsmith test login checkout              # files whose path matches "login" or "checkout"
 ```
 
@@ -2693,7 +2696,7 @@ A pinned device hosts exactly one worker, in every mode — sequential, parallel
 watch and UI. `--device` combined with a `--workers N` the run cannot use is
 refused: both are on the command line and ask for different runs. In a
 single-platform config that is any N > 1 the run could otherwise use (more
-than one file in a wave — `--device X --workers 2 one.test.ts` just runs on X);
+than one file in a wave — `--device X --workers 2 one.tapsmith.ts` just runs on X);
 in a config whose projects span
 Android and iOS, `--device` (like a root `device` in the config) pins only the
 projects of that device's platform, and the other platform's projects may use
@@ -2796,7 +2799,7 @@ run with the list of available projects. Combine with file arguments to further
 narrow a project to specific test files:
 
 ```bash
-npx tapsmith test --project android tests/login.test.ts
+npx tapsmith test --project android tests/login.tapsmith.ts
 ```
 
 ### `tapsmith test --watch` / `tapsmith test -w`
@@ -2805,7 +2808,7 @@ Watch test files for changes and re-run them automatically. The daemon, device, 
 
 ```bash
 npx tapsmith test --watch
-npx tapsmith test -w tests/login.test.ts   # Watch a specific file
+npx tapsmith test -w tests/login.tapsmith.ts   # Watch a specific file
 ```
 
 See [Watch Mode](watch-mode.md) for details.
@@ -2923,8 +2926,8 @@ npx tapsmith telemetry status --json
 Run the MCP server on stdio, for an AI coding agent to launch as a subprocess. It runs its own headless test session, with its own daemon and device. `-c` / `--config` uses a specific config file. Stdout carries the MCP protocol, so messages and usage errors go to stderr. See the [MCP Server Guide](mcp-server.md) for setup.
 
 ```bash
-claude mcp add tapsmith -- npx tapsmith mcp-server
-codex mcp add tapsmith -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
+claude mcp add tapsmith-headless -- npx tapsmith mcp-server
+codex mcp add tapsmith-headless-ios -- npx tapsmith mcp-server --config tapsmith.config.ios.mjs
 ```
 
 ### `tapsmith create-avd [--api <level>] [--name <name>] [--device <profile>] [--abi <abi>] [--force] [--install-tools]`
@@ -2982,7 +2985,7 @@ npx tapsmith test --trace retain-on-failure     # Only keep traces for failures
 ```
 
 A bare `--trace` directly followed by a test file reads the file as the mode (and fails): write
-`--trace on login.test.ts`, or put the file first.
+`--trace on login.tapsmith.ts`, or put the file first.
 
 ### `tapsmith test --video [mode]`
 

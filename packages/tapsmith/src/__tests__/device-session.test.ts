@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterAll, type Mock } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -45,7 +45,7 @@ vi.mock('../worker-protocol.js', async (importOriginal) => ({
 }));
 
 vi.mock('../grpc-client.js', () => ({
-  TapsmithGrpcClient: vi.fn().mockImplementation(() => {
+  TapsmithGrpcClient: vi.fn().mockImplementation(function () {
     const client = { waitForReady: vi.fn(async () => mocks.clientReady), close: vi.fn() };
     mocks.clients.push(client);
     return client;
@@ -53,7 +53,7 @@ vi.mock('../grpc-client.js', () => ({
 }));
 
 vi.mock('../device.js', () => ({
-  Device: vi.fn().mockImplementation(() => {
+  Device: vi.fn().mockImplementation(function () {
     let serial = '';
     const device: Record<string, ReturnType<typeof vi.fn>> = {
       listDevices: vi.fn(async () => ({ devices: [] })),
@@ -135,6 +135,14 @@ vi.mock('../session-preflight.js', () => mocks.preflight);
 
 const { openDeviceGroup, openDeviceSession, closeDeviceSession, recoverDeviceSessions, sessionsForRun, sessionsToPrepare, runDeviceCount } = await import('../device-session.js');
 const { CLAIMS_DIR_ENV, claimDevice } = await import('../device-claims.js');
+
+type MockDevice = Record<string, Mock>;
+
+/** The mocked `Device` class, typed as the factory the `vi.mock` above installs. */
+async function mockedDevice(): Promise<Mock<(...args: unknown[]) => MockDevice>> {
+  const { Device } = await import('../device.js');
+  return vi.mocked(Device) as unknown as Mock<(...args: unknown[]) => MockDevice>;
+}
 
 // Claims go to a throwaway registry, never the real `~/.tapsmith/claims`.
 const claimsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-session-claims-'));
@@ -427,17 +435,17 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
   it('still checks reachability when the first selection failure was a transient infrastructure error', async () => {
     let calls = 0;
     mocks.unknownToDaemon.add('GONE-2');
-    const { Device } = await import('../device.js');
-    const real = vi.mocked(Device).getMockImplementation()!;
-    vi.mocked(Device).mockImplementationOnce((...args: Parameters<typeof real>) => {
-      const device = real(...args) as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const DeviceMock = await mockedDevice();
+    const real = DeviceMock.getMockImplementation()!;
+    DeviceMock.mockImplementationOnce(function (...args) {
+      const device = real(...args);
       const notFound = device.setDevice.getMockImplementation()!;
       device.setDevice.mockImplementation(async (s: string) => {
         calls++;
         if (calls === 1) throw new Error('Agent connection dropped');
         return notFound(s);
       });
-      return device as never;
+      return device;
     });
     await expect(openDeviceSession(
       { name: 'device-1', serial: 'GONE-2', daemonAddress: 'localhost:50052' },
@@ -466,10 +474,10 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     mocks.unreachableGraceMs = 30_000;
     mocks.unknownToDaemon.add('PHYS-BACK');
     mocks.unreachable.add('PHYS-BACK');
-    const { Device } = await import('../device.js');
-    const real = vi.mocked(Device).getMockImplementation()!;
-    vi.mocked(Device).mockImplementationOnce((...args: Parameters<typeof real>) => {
-      const device = real(...args) as unknown as Record<string, ReturnType<typeof vi.fn>>;
+    const DeviceMock = await mockedDevice();
+    const real = DeviceMock.getMockImplementation()!;
+    DeviceMock.mockImplementationOnce(function (...args) {
+      const device = real(...args);
       const original = device.setDevice.getMockImplementation()!;
       let calls = 0;
       device.setDevice.mockImplementation(async (s: string) => {
@@ -481,7 +489,7 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
         }
         return original(s);
       });
-      return device as never;
+      return device;
     });
     const session = await openDeviceSession(
       { name: 'device-1', serial: 'PHYS-BACK', daemonAddress: 'localhost:50052' },

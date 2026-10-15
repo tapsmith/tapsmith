@@ -39,7 +39,7 @@ class HierarchyDumper {
     func dumpFallback() -> String {
         var xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
         xml += "<hierarchy>\n"
-        dumpElementFallback(app, depth: 1, into: &xml)
+        dumpElementFallback(app, depth: 1, inTabBar: false, into: &xml)
         xml += "</hierarchy>\n"
         return xml
     }
@@ -50,14 +50,16 @@ class HierarchyDumper {
         xml += "<hierarchy>\n"
         var dict = convertKeys(snapshot.dictionaryRepresentation)
         SnapshotElementFinder.annotateTraits(dict: &dict, snapshot: snapshot)
-        dumpNode(dict, depth: 1, into: &xml)
+        dumpNode(dict, depth: 1, inTabBar: false, into: &xml)
         xml += "</hierarchy>\n"
         return xml
     }
 
     // MARK: - Snapshot-based dump (fast path)
 
-    private func dumpNode(_ node: [String: Any], depth: Int, into xml: inout String) {
+    /// `inTabBar`: whether the node has a `.tabBar` ancestor, which makes a
+    /// button a tab (RoleMapping.isTabBarItem, PILOT-514).
+    private func dumpNode(_ node: [String: Any], depth: Int, inTabBar: Bool, into xml: inout String) {
         let indent = String(repeating: "  ", count: depth)
         let elTypeRaw = (node["elementType"] as? UInt) ?? (node["elementType"] as? Int).map(UInt.init) ?? 0
         let elType = XCUIElement.ElementType(rawValue: elTypeRaw) ?? .other
@@ -79,7 +81,7 @@ class HierarchyDumper {
 
         // Resolve role from traits (heading, link, alert, etc.) and element type.
         let traits = SnapshotElementFinder.extractTraits(from: node)
-        let role = RoleMapping.resolveRole(for: elType, traits: traits)
+        let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
 
         xml += "\(indent)<\(typeName)"
         xml += " label=\"\(label)\""
@@ -107,7 +109,7 @@ class HierarchyDumper {
         } else {
             xml += ">\n"
             for child in children {
-                dumpNode(child, depth: depth + 1, into: &xml)
+                dumpNode(child, depth: depth + 1, inTabBar: inTabBar || elType == .tabBar, into: &xml)
             }
             xml += "\(indent)</\(typeName)>\n"
         }
@@ -140,9 +142,10 @@ class HierarchyDumper {
 
     // MARK: - XCUIElement fallback (slow path, used if snapshot fails)
 
-    private func dumpElementFallback(_ element: XCUIElement, depth: Int, into xml: inout String) {
+    private func dumpElementFallback(_ element: XCUIElement, depth: Int, inTabBar: Bool, into xml: inout String) {
         let indent = String(repeating: "  ", count: depth)
-        let typeName = RoleMapping.typeName(for: element.elementType)
+        let elType = element.elementType
+        let typeName = RoleMapping.typeName(for: elType)
         let frame = element.frame
 
         let bounds = "[\(Int(frame.origin.x)),\(Int(frame.origin.y))]"
@@ -162,7 +165,7 @@ class HierarchyDumper {
             if let v = raw as? NSNumber { return v.uint64Value }
             return 0
         }()
-        let role = RoleMapping.resolveRole(for: element.elementType, traits: traits)
+        let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
 
         xml += "\(indent)<\(typeName)"
         xml += " label=\"\(label)\""
@@ -194,7 +197,9 @@ class HierarchyDumper {
             for i in 0..<childCount {
                 let child = children.element(boundBy: i)
                 if child.exists {
-                    dumpElementFallback(child, depth: depth + 1, into: &xml)
+                    dumpElementFallback(
+                        child, depth: depth + 1, inTabBar: inTabBar || elType == .tabBar, into: &xml
+                    )
                 }
             }
             xml += "\(indent)</\(typeName)>\n"

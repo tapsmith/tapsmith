@@ -279,7 +279,7 @@ describe('tapsmith mcp-server arguments', () => {
     const { code, stdout } = await run(['--help']);
     expect(code).toBe(0);
     expect(stdout).toContain('--config');
-    expect(stdout).toContain('claude mcp add tapsmith -- npx tapsmith mcp-server');
+    expect(stdout).toContain('claude mcp add tapsmith-headless -- npx tapsmith mcp-server');
   }, START_TIMEOUT_MS);
 
   it('refuses an argument it does not know rather than starting anyway', async () => {

@@ -565,7 +565,7 @@ export function executeInitPlan(
     // --json is for agents: a person reading the plain output gets the plain command (PILOT-562).
     `Verify the setup end-to-end: npx tapsmith verify${args.json ? ' --json' : ''}`,
     'Run tests: npx tapsmith test',
-    'Register the MCP server for richer agent tooling: claude mcp add tapsmith -- npx tapsmith mcp-server',
+    'Register the MCP server for richer agent tooling: claude mcp add tapsmith-headless -- npx tapsmith mcp-server',
     ...(captureStep?.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
   ];
 

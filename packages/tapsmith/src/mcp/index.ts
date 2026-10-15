@@ -372,13 +372,13 @@ export async function runMcpServer(
   process.stderr.write(`  ${DIM}This terminal is also watching MCP activity from client-owned Tapsmith subprocesses.${RESET}\n`);
   process.stderr.write(`\n  ${BOLD}Connect your AI agent${RESET}\n`);
   process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Codex CLI:${RESET}\n`);
-  process.stderr.write(`    codex mcp add tapsmith -- npx tapsmith mcp-server\n`);
+  process.stderr.write(`    codex mcp add tapsmith-headless -- npx tapsmith mcp-server\n`);
   process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Claude Code:${RESET}\n`);
-  process.stderr.write(`    claude mcp add tapsmith -- npx tapsmith mcp-server\n`);
+  process.stderr.write(`    claude mcp add tapsmith-headless -- npx tapsmith mcp-server\n`);
   process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Custom config:${RESET}\n`);
   process.stderr.write(`    npx tapsmith mcp-server --config tapsmith.config.ios.mjs\n`);
   process.stderr.write(`  ${DIM}${CYAN}›${RESET}${DIM} Generic MCP stdio config:${RESET}\n`);
-  process.stderr.write(`    { "mcpServers": { "tapsmith": { "command": "npx", "args": ["tapsmith", "mcp-server"] } } }\n\n`);
+  process.stderr.write(`    { "mcpServers": { "tapsmith-headless": { "command": "npx", "args": ["tapsmith", "mcp-server"] } } }\n\n`);
 
 }
 

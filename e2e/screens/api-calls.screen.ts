@@ -15,4 +15,7 @@ export class ApiCallsScreen {
   get postsHeading() { return this.device.getByText("Posts", { exact: true }) }
   get userHeading() { return this.device.getByText("User", { exact: true }) }
   get errorMessage() { return this.device.getByText("Request failed") }
+  // A <Text accessibilityRole="alert">: static text on iOS, found there by
+  // its name (PILOT-718).
+  get postsErrorAlert() { return this.device.getByRole("alert", { name: "Failed to fetch posts" }) }
 }

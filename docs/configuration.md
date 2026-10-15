@@ -51,7 +51,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `activity` | `string` | `undefined` | Optional activity name to launch (Android only). Usually not needed; Tapsmith will try the default launcher activity automatically. |
 | `timeout` | `number` | `30000` | Default timeout in milliseconds for actions and assertions. Each test body also gets a safety timeout of 3× this value; that budget counts only time spent in test code — time inside slow device operations (app launches, deep links, state saves), which carry their own bounded deadlines and may run long while Tapsmith recovers a struggling device, is excluded, backstopped by a hard wall-clock cap of 5× the test timeout. Each `beforeAll`/`beforeEach`/`afterEach`/`afterAll` hook gets a budget of its own of the same length ([hook timeouts](api-reference.md#hook-timeouts)). |
 | `typingDelay` | `number` | `0` | Delay in milliseconds between keystrokes when typing text. Helps prevent dropped characters on slow CI simulators/emulators. Can be overridden per-call via `type("text", { delay: 50 })`. |
-| `retries` | `number` | `0` | Number of times to retry a failed test. |
+| `retries` | `number` | `0` | Number of times to retry a failed test. A retry starts from a freshly reset app, with the enclosing `beforeAll` hooks run again (see [Retries start from a fresh app](writing-tests.md#retries-start-from-a-fresh-app)). |
 | `screenshot` | `ScreenshotMode` | `"only-on-failure"` | When to capture screenshots: `"always"`, `"only-on-failure"`, or `"never"`. |
 | `testMatch` | `string[]` | `["**/*.test.ts", "**/*.spec.ts"]` | Glob patterns for discovering test files. To exclude files, use a project's `testIgnore` ([Projects](writing-tests.md#filtering-with-testmatch-and-testignore)); there is no root-level `testIgnore`. |
 | `daemonAddress` | `string` | `"localhost:50051"` | Address of the Tapsmith daemon (host:port). If another live Tapsmith session already answers on that port, this session starts its own daemon on a free port instead of taking it over. |
@@ -415,7 +415,10 @@ Tapsmith's launch arguments (`-avd`, an explicit `-port` and `-read-only`). An
 emulator you start from Android Studio, or from the command line without
 `-read-only`, is left running, even if it is unhealthy or
 sits on a port an earlier Tapsmith emulator used. An unhealthy one is skipped, and
-Tapsmith launches its own emulator on a free port.
+Tapsmith launches its own emulator on a free port. Tapsmith also leaves its own
+emulators running when `adb devices` can't list them reliably (adb isn't on
+`PATH`, the command fails or times out, or its answer changes between two looks
+while adb restarts), and when another Tapsmith session is using the emulator.
 
 If you want the opposite behavior, set `deviceStrategy: "prefer-connected"` to
 let Tapsmith reuse unrelated healthy connected devices first even when `avd` is

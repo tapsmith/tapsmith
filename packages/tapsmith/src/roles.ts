@@ -158,7 +158,9 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
     'androidx.appcompat.widget.Toolbar',
     'com.google.android.material.appbar.MaterialToolbar',
   ],
-  tab: [
+  // The tab containers; a tab item is known only by its description
+  // (PILOT-514).
+  tablist: [
     'android.widget.TabWidget',
     'com.google.android.material.tabs.TabLayout',
   ],
@@ -173,11 +175,11 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
  * (React Native's `accessibilityRole`, Compose's `Role`) — the agent's
  * `DUAL_PATH_ROLES`, which `roles.test.ts` pins. A node with a description
  * matches only through it; one without falls back to the role's classes.
- * RN renders tab, progressbar and toolbar as a generic View with only a
- * description (PILOT-656).
+ * RN renders progressbar, toolbar and tablist as a generic View with only a
+ * description (PILOT-656, PILOT-514).
  */
 export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
-  'heading', 'link', 'image', 'searchfield', 'tab', 'progressbar', 'toolbar',
+  'heading', 'link', 'image', 'searchfield', 'progressbar', 'toolbar', 'tablist',
 ]);
 
 /**
@@ -185,16 +187,19 @@ export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
  * the agent's `TRAIT_ONLY_ROLES`, which `roles.test.ts` pins. React Native
  * renders each as a generic android.view.View whose role description names
  * it ("Menu Item", "Timer"); PILOT-664 added the menu, radiogroup, scrollbar,
- * spinbutton, summary, tablist and timer families.
+ * spinbutton, summary and timer families. A tab item is one too: RN, Material
+ * and Compose all publish "Tab" on a generic layout (PILOT-514).
  */
 export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
-  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer',
+  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tab', 'timer',
 ]);
 
 /**
  * iOS element types per role — the agent's `RoleMapping.roleToElementTypes`
  * without `.other` (a generic view, which the agent narrows by trait or name),
  * as the `XCUIElementType…` names hierarchy dumps use. `roles.test.ts` pins it.
+ * A tab bar's items are buttons the agent reports as "tab" (`tapsmith-role`)
+ * from their tab-bar ancestor, which no type can say (PILOT-514).
  */
 export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   button: ['XCUIElementTypeButton'],
@@ -213,8 +218,9 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   radiobutton: ['XCUIElementTypeRadioButton'],
   spinner: ['XCUIElementTypePicker', 'XCUIElementTypeActivityIndicator'],
   toolbar: ['XCUIElementTypeToolbar'],
-  tab: ['XCUIElementTypeTab', 'XCUIElementTypeTabBar'],
+  tab: ['XCUIElementTypeTab'],
   searchfield: ['XCUIElementTypeSearchField'],
+  tablist: ['XCUIElementTypeTabBar'],
 };
 
 /**
@@ -238,6 +244,14 @@ export const IOS_OTHER_ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
 export const IOS_UNDESCRIBED_OTHER_ROLES: ReadonlySet<string> = new Set([
   'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tablist', 'timer',
 ]);
+
+/**
+ * The generic-view roles an iOS static text also takes — the agent's
+ * `RoleMapping.staticTextRoles` (PILOT-718), which `roles.test.ts` pins. React
+ * Native's `<Text accessibilityRole="alert">` is plain static text on iOS, so
+ * it is matched as a generic view is: by a description or a named query.
+ */
+export const IOS_STATIC_TEXT_ROLES: ReadonlySet<string> = new Set(['alert']);
 
 const KNOWN = new Set(NATIVE_ROLES);
 
@@ -292,4 +306,26 @@ export function iosGenericViewHasRole(
   const lead = view.value === undefined ? undefined : view.value.split(',')[0]!.trim().toLowerCase();
   if (lead !== undefined && Object.values(IOS_OTHER_ROLE_DESCRIPTIONS).includes(lead)) return lead === own;
   return view.named && view.traitRole === '';
+}
+
+/**
+ * What to add to a "not found" failure of `getByRole(role)` with no name on
+ * iOS, for a role React Native publishes nothing for there — alert, combobox
+ * and the undescribed generic-view roles but tablist — so the miss is explained instead of
+ * looking like a flaky screen (PILOT-718). Empty in every other case. Leads
+ * with a space, ready to append to a sentence.
+ */
+export function iosUnnamedRoleMissHint(
+  role: { role: string; name: string; nameRegex?: unknown },
+  platform: 'android' | 'ios' | undefined,
+): string {
+  if (platform !== 'ios' || role.name !== '' || role.nameRegex !== undefined) return '';
+  const canonical = normalizeRole(role.role);
+  // tablist is left out: the agent matches a native tab bar without a name.
+  const nameOnly = canonical === 'alert' || canonical === 'combobox'
+    || (IOS_UNDESCRIBED_OTHER_ROLES.has(canonical) && canonical !== 'tablist');
+  if (!nameOnly) return '';
+  const quoted = JSON.stringify(role.role);
+  return ` On iOS, React Native publishes no ${quoted} role that getByRole(${quoted}) can see without a name: ` +
+    `pass the element's name — getByRole(${quoted}, { name: "…" }) — or use getByText() or getByTestId().`;
 }

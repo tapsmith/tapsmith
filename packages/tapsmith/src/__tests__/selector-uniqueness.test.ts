@@ -290,16 +290,65 @@ describe('Android description-resolved roles in the playground (PILOT-656)', () 
     expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab", { name: "Settings" })')!)).toEqual([settings]);
   });
 
-  it('still matches a native TabLayout with no role description by class', () => {
-    const native = makeNode('com.google.android.material.tabs.TabLayout', { class: 'com.google.android.material.tabs.TabLayout', bounds: '[0,0][100,50]' });
+  it('matches a native tab container as a tablist, not a tab (PILOT-514)', () => {
+    const native = makeNode('android.widget.TabWidget', { class: 'android.widget.TabWidget', bounds: '[0,0][100,50]' });
     const roots = [makeNode('android.widget.FrameLayout', { class: 'android.widget.FrameLayout' }, [native])];
-    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab")')!)).toEqual([native]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab")')!)).toEqual([]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tablist")')!)).toEqual([native]);
+  });
+
+  it('matches the RN tab list as a tablist, and only its tabs as tabs (PILOT-514)', () => {
+    const { roots, library, settings } = bottomTabs();
+    const tabList = roots[0]!.children[0]!;
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tablist")')!)).toEqual([tabList]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab")')!)).toEqual([library, settings]);
   });
 
   it('does not match a TabLayout whose role description names another role, like the agent', () => {
-    const other = makeNode('com.google.android.material.tabs.TabLayout', { class: 'com.google.android.material.tabs.TabLayout', 'tapsmith-role': 'tablist', bounds: '[0,0][100,50]' });
+    const other = makeNode('com.google.android.material.tabs.TabLayout', { class: 'com.google.android.material.tabs.TabLayout', 'tapsmith-role': 'toolbar', bounds: '[0,0][100,50]' });
     const roots = [makeNode('android.widget.FrameLayout', { class: 'android.widget.FrameLayout' }, [other])];
-    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab")')!)).toEqual([]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tablist")')!)).toEqual([]);
+  });
+});
+
+describe('iOS tab bars in the playground (PILOT-514)', () => {
+  // A UITabBar (expo-router NativeTabs): the agent reports the bar as
+  // "tablist" and its buttons as "tab".
+  function tabBar() {
+    const item = (label: string, left: number) => makeNode('XCUIElementTypeButton', {
+      type: 'XCUIElementTypeButton', label, 'tapsmith-role': 'tab', bounds: `[${left},800][${left + 100},850]`,
+    });
+    const home = item('Home', 0);
+    const explore = item('Explore', 100);
+    const bar = makeNode('XCUIElementTypeTabBar', {
+      type: 'XCUIElementTypeTabBar', label: 'Tab Bar', 'tapsmith-role': 'tablist', bounds: '[0,800][200,850]',
+    }, [home, explore]);
+    const other = makeNode('XCUIElementTypeButton', { type: 'XCUIElementTypeButton', label: 'Explore more', 'tapsmith-role': 'button', bounds: '[0,100][200,150]' });
+    return { roots: [makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther' }, [other, bar])], home, explore, bar, other };
+  }
+
+  it('matches the tab bar\'s buttons as tabs, by role and by name', () => {
+    const { roots, home, explore } = tabBar();
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab")')!)).toEqual([home, explore]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab", { name: "Explore" })')!)).toEqual([explore]);
+  });
+
+  it('matches the bar as a tablist and not as a tab', () => {
+    const { roots, bar } = tabBar();
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tablist")')!)).toEqual([bar]);
+  });
+
+  it('still matches the tab bar\'s buttons as buttons, like the agent', () => {
+    const { roots, explore, other } = tabBar();
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("button", { name: "Explore" })')!)).toEqual([other, explore]);
+  });
+
+  it('matches a native tab element as a tab and a bare tab bar as a tablist (dumps without a reported role)', () => {
+    const tab = makeNode('XCUIElementTypeTab', { type: 'XCUIElementTypeTab', label: 'One', bounds: '[0,0][50,50]' });
+    const bar = makeNode('XCUIElementTypeTabBar', { type: 'XCUIElementTypeTabBar', label: 'Bar', bounds: '[0,0][100,50]' }, [tab]);
+    const roots = [bar];
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tab")')!)).toEqual([tab]);
+    expect(findMatchingNodes(roots, parseSelectorString('device.getByRole("tablist")')!)).toEqual([bar]);
   });
 
   it('matches role-description progress bars and toolbars', () => {
@@ -372,6 +421,34 @@ describe('iOS generic-view roles in the playground, like the agent (PILOT-664)',
     expect(on('device.getByRole("menuitem", { name: "Bold" })')).toEqual([]);
     expect(on('device.getByRole("menuitem", { name: "Small" })')).toEqual([]);
     expect(on('device.getByRole("radio")')).toEqual([radio]);
+  });
+});
+
+describe('an RN alert Text in the iOS playground, like the agent (PILOT-718)', () => {
+  // <Text accessibilityRole="alert"> is plain static text on iOS (Fabric
+  // publishes no trait or description for it): a named query finds it.
+  const text = (label: string, y: number, extra: Record<string, string> = {}) => makeNode('XCUIElementTypeStaticText', {
+    type: 'XCUIElementTypeStaticText', label, 'tapsmith-role': 'text', x: '0', y: String(y), width: '300', height: '20', ...extra,
+  });
+  const error = text('Failed to fetch posts: HTTP 500', 100);
+  const heading = text('Failed to fetch', 140, { 'tapsmith-role': 'heading' });
+  const described = text('Failed to save', 180, { value: 'checkbox, checked' });
+  const roots = [makeNode('XCUIElementTypeApplication', { type: 'XCUIElementTypeApplication' }, [error, heading, described])];
+  const on = (selector: string) => findMatchingNodes(roots, parseSelectorString(selector)!);
+
+  it('matches a named alert query on static text, and no unnamed one', () => {
+    expect(on('device.getByRole("alert", { name: "Failed to fetch posts" })')).toEqual([error]);
+    expect(on('device.getByRole("alert")')).toEqual([]);
+  });
+
+  it('skips a heading, and a text described as another role', () => {
+    expect(on('device.getByRole("alert", { name: "Failed to fetch" })')).toEqual([error]);
+    expect(on('device.getByRole("alert", { name: "Failed to save" })')).toEqual([]);
+  });
+
+  it('leaves other generic-view roles off static text', () => {
+    expect(on('device.getByRole("menuitem", { name: "Failed to fetch posts" })')).toEqual([]);
+    expect(on('device.getByRole("text", { name: "Failed to fetch posts" })')).toEqual([error]);
   });
 });
 

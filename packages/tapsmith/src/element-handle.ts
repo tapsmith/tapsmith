@@ -23,7 +23,8 @@ import {
   _xpath,
   _label,
 } from './selectors.js';
-import { unknownRoleMessage } from './roles.js';
+import { iosUnnamedRoleMissHint, unknownRoleMessage } from './roles.js';
+import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory } from './trace/types.js';
@@ -139,6 +140,12 @@ interface ElementHandleOptions {
   typingDelay?: number;
   /** Default double-tap interval in ms, from config.doubleTapInterval. */
   doubleTapInterval?: number;
+  /**
+   * The device's platform, for failure hints that only hold on one
+   * (`iosUnnamedRoleMissHint`, PILOT-718). Absent on handles built outside a
+   * Device; it only ever adds a hint, so a missing one costs nothing else.
+   */
+  platform?: Platform;
 }
 
 // ─── Helpers ───
@@ -734,10 +741,14 @@ export class ElementHandle {
       return new ElementHandle(this._client, child, this._timeoutMs, {
         scopeParent: this,
         traceCapture: this._options.traceCapture,
+        platform: this._options.platform,
       });
     }
     const scoped = withParent(child, this._selector);
-    return new ElementHandle(this._client, scoped, this._timeoutMs, { traceCapture: this._options.traceCapture });
+    return new ElementHandle(this._client, scoped, this._timeoutMs, {
+      traceCapture: this._options.traceCapture,
+      platform: this._options.platform,
+    });
   }
 
   // ── Positional selection (PILOT-15) ──
@@ -817,6 +828,7 @@ export class ElementHandle {
       andSelf: this,
       andHandle: other,
       traceCapture: this._options.traceCapture,
+      platform: this._options.platform,
       // Deliberately NOT ...this._options: the receiver's modifiers live in
       // andSelf and must not double-apply on the combined handle. Only the
       // config-derived action knobs carry over.
@@ -836,6 +848,7 @@ export class ElementHandle {
       orSelf: this,
       orHandle: other,
       traceCapture: this._options.traceCapture,
+      platform: this._options.platform,
       // As in and(): only the config-derived action knobs carry over.
       typingDelay: this._options.typingDelay,
       doubleTapInterval: this._options.doubleTapInterval,
@@ -1188,6 +1201,20 @@ export class ElementHandle {
     return desc;
   }
 
+  /**
+   * @internal — The iOS hint a miss of an unnamed `getByRole()` carries for a
+   * role React Native publishes nothing for there (PILOT-718), as ". On iOS
+   * …" to append to the failure message, or ''. Not for
+   * and()/or(): the miss may be the other operand's.
+   */
+  _roleMissHint(): string {
+    if (this._options.andHandle || this._options.orHandle) return '';
+    const kind = this._selector.kind;
+    const hint = kind.type === 'role' ? iosUnnamedRoleMissHint(kind.value, this._options.platform) : '';
+    // A sentence of its own after the message it follows.
+    return hint && `.${hint}`;
+  }
+
   /** @internal — Build a human-readable description of this handle for error messages. */
   private _describe(): string {
     const sel = formatSelector(this._selector);
@@ -1310,7 +1337,7 @@ export class ElementHandle {
       if (Date.now() >= deadline) {
         if (lastTransientErr) throw lastTransientErr;
         throw new Error(
-          `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}`,
+          `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}${this._roleMissHint()}`,
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -1558,7 +1585,7 @@ export class ElementHandle {
         throw new Error(
           lastSeenDisabled
             ? `Element ${desc} is disabled after waiting ${timeoutMs}ms`
-            : `Element ${desc} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}`,
+            : `Element ${desc} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}${this._roleMissHint()}`,
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -1670,7 +1697,7 @@ export class ElementHandle {
           detail = positionalMissDetail(err instanceof Error ? err : undefined);
           el = undefined;
         }
-        if (!el) throw new Error(`Element not found: ${this._describe()}${detail}`);
+        if (!el) throw new Error(`Element not found: ${this._describe()}${detail}${this._roleMissHint()}`);
         result = el;
       } else {
         // Strict resolution (PILOT-226): poll so multiple matches throw
@@ -1939,6 +1966,9 @@ export class ElementHandle {
     const FIND_TIMEOUT_MS = 500;
     const deadline = start + timeoutMs;
 
+    // Whether the last answered tick found anything: a timeout with nothing
+    // found gets the unnamed-role hint, one with a hidden match doesn't.
+    let lastAttached = false;
     const checkState = async (): Promise<boolean> => {
       // Floor at 1ms — the daemon treats a 0 timeout as "use the 30s
       // default", which would stall the final poll tick for 30s.
@@ -1960,6 +1990,7 @@ export class ElementHandle {
       }
 
       const attached = elements.length > 0;
+      lastAttached = attached;
       const visible = attached && elements.some((el) => el.visible);
 
       switch (state) {
@@ -1995,8 +2026,11 @@ export class ElementHandle {
         }
         if (Date.now() >= deadline) {
           if (lastTransientErr) throw lastTransientErr;
+          // A miss of an unnamed iOS role query explains itself (PILOT-718).
+          const missed = (state === 'visible' || state === 'attached') && !lastAttached;
+          const hint = missed ? this._roleMissHint() : '';
           throw new Error(
-            `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms`,
+            `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms${hint}`,
           );
         }
         const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));

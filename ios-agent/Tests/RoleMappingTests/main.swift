@@ -27,9 +27,9 @@ let imageTrait: UInt64 = 1 << 2
 
 check("plain static text is \"text\"", RoleMapping.resolveRole(for: .staticText), "text")
 check("plain static text with no traits is \"text\"",
-      RoleMapping.resolveRole(for: .staticText, traits: 0), "text")
+      RoleMapping.resolveRole(for: .staticText, traits: 0, inTabBar: false), "text")
 check("static text with the header trait is \"heading\"",
-      RoleMapping.resolveRole(for: .staticText, traits: headerTrait), "heading")
+      RoleMapping.resolveRole(for: .staticText, traits: headerTrait, inTabBar: false), "heading")
 check("the reverse map names static text \"text\"", RoleMapping.elementTypeToRole[.staticText], "text")
 check("getByRole(\"heading\") still queries static text",
       (try? RoleMapping.elementTypes(for: "heading")) ?? [], [.staticText])
@@ -40,9 +40,9 @@ check("getByRole(\"text\") queries static text",
 
 check(".other has no type-derived role", RoleMapping.resolveRole(for: .other), "")
 check(".other with the button trait is \"button\"",
-      RoleMapping.resolveRole(for: .other, traits: buttonTrait), "button")
+      RoleMapping.resolveRole(for: .other, traits: buttonTrait, inTabBar: false), "button")
 check(".other with the image trait is \"image\"",
-      RoleMapping.resolveRole(for: .other, traits: imageTrait), "image")
+      RoleMapping.resolveRole(for: .other, traits: imageTrait, inTabBar: false), "image")
 
 // ─── Round trip ───
 
@@ -108,8 +108,10 @@ check(".other is never reverse-mapped, even when only one role lists it",
 
 let linkTrait: UInt64 = 1 << 1
 
-func matches(_ role: String, _ type: ElementType, traits: UInt64 = 0, value: String? = nil, named: Bool = false) -> Bool {
-    RoleMapping.matches(role: role, elementType: type, traits: traits, value: value, hasNameFilter: named)
+func matches(
+    _ role: String, _ type: ElementType, traits: UInt64 = 0, value: String? = nil, named: Bool = false, inTabBar: Bool = false
+) -> Bool {
+    RoleMapping.matches(role: role, elementType: type, traits: traits, value: value, hasNameFilter: named, inTabBar: inTabBar)
 }
 
 // heading: the header trait, whatever the element type.
@@ -170,11 +172,36 @@ check("a named alert query skips a heading",
 check("a named alert query skips a described checkbox",
       matches("alert", .other, value: "checkbox, checked", named: true), false)
 
+// An RN <Text accessibilityRole="alert"> is plain static text on iOS: Fabric
+// publishes no trait or description for it, so only a named query finds it,
+// on the same terms as a generic view (PILOT-718).
+let staticTextTrait: UInt64 = 1 << 6
+check("a named alert query finds static text", matches("alert", .staticText, traits: staticTextTrait, named: true), true)
+check("an unnamed alert query skips static text", matches("alert", .staticText, traits: staticTextTrait), false)
+check("an \"alert\"-described static text is an alert", matches("alert", .staticText, value: "alert"), true)
+check("a named alert query skips a heading text",
+      matches("alert", .staticText, traits: staticTextTrait | headerTrait, named: true), false)
+check("a named alert query skips a link text",
+      matches("alert", .staticText, traits: staticTextTrait | linkTrait, named: true), false)
+check("a named alert query skips a button-trait text",
+      matches("alert", .staticText, traits: staticTextTrait | buttonTrait, named: true), false)
+check("a named alert query skips a text described as another role",
+      matches("alert", .staticText, value: "checkbox, checked", named: true), false)
+check("static text is still not a combobox, even by name", matches("combobox", .staticText, named: true), false)
+check("static text is still not a menu item, even by name", matches("menuitem", .staticText, named: true), false)
+check("static text still reports \"text\"",
+      RoleMapping.resolveRole(for: .staticText, traits: staticTextTrait, inTabBar: false), "text")
+check("an alert query covers generic views and static text",
+      (try? RoleMapping.queryTypes(for: "alert")) ?? [], [.other, .staticText])
+check("getByRole(\"alert\") still lists generic views only", (try? RoleMapping.elementTypes(for: "alert")) ?? [], [.other])
+
 // ─── React Native's other generic-view roles (PILOT-664) ───
 
 let rnGenericRoles = ["menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer"]
 for role in rnGenericRoles {
-    check("getByRole(\"\(role)\") is a known role", (try? RoleMapping.elementTypes(for: role)) ?? [], [.other])
+    // tablist also lists the native tab bar (PILOT-514).
+    check("getByRole(\"\(role)\") is a known role", (try? RoleMapping.elementTypes(for: role)) ?? [],
+          role == "tablist" ? [.tabBar, .other] : [.other])
     check("an unnamed \(role) query doesn't match a generic view", matches(role, .other), false)
     check("a named \(role) query finds an undescribed generic view", matches(role, .other, named: true), true)
     check("a named \(role) query skips a button-trait view", matches(role, .other, traits: buttonTrait, named: true), false)
@@ -215,6 +242,36 @@ check("a generic view is not a button", matches("button", .other, named: true), 
 check("a link-trait view is a link", matches("link", .other, traits: linkTrait), true)
 check("a switch is a switch", matches("switch", .switch), true)
 check("an unknown role matches nothing", matches("row", .other, named: true), false)
+
+// ─── Tab items and tab lists (PILOT-514) ───
+
+// A UITabBar's items are buttons inside the bar: they, not the bar, are tabs.
+check("a button inside a tab bar is a tab", matches("tab", .button, traits: buttonTrait, inTabBar: true), true)
+// UITabBar items are always buttons; a generic view in one is not a tab.
+check("a button-trait generic view inside a tab bar is not a tab",
+      matches("tab", .other, traits: buttonTrait, inTabBar: true), false)
+check("a native tab is a tab", matches("tab", .tab), true)
+check("a button outside a tab bar is not a tab", matches("tab", .button, traits: buttonTrait), false)
+check("the tab bar itself is not a tab", matches("tab", .tabBar), false)
+check("static text inside a tab bar is not a tab", matches("tab", .staticText, inTabBar: true), false)
+check("a tab bar item is still a button", matches("button", .button, traits: buttonTrait, inTabBar: true), true)
+check("the tab bar is a tablist", matches("tablist", .tabBar), true)
+check("a tab bar item is not a tablist", matches("tablist", .button, named: true, inTabBar: true), false)
+check("an unnamed tablist query still skips a generic view", matches("tablist", .other), false)
+check("a tab bar item reports \"tab\"",
+      RoleMapping.resolveRole(for: .button, traits: buttonTrait, inTabBar: true), "tab")
+check("a button-trait generic view in a tab bar reports \"button\"",
+      RoleMapping.resolveRole(for: .other, traits: buttonTrait, inTabBar: true), "button")
+check("a button outside a tab bar reports \"button\"",
+      RoleMapping.resolveRole(for: .button, traits: buttonTrait, inTabBar: false), "button")
+check("the tab bar reports \"tablist\"", RoleMapping.resolveRole(for: .tabBar, traits: 0, inTabBar: false), "tablist")
+check("a native tab reports \"tab\"", RoleMapping.resolveRole(for: .tab, traits: 0, inTabBar: true), "tab")
+check("a heading in a tab bar is still a heading",
+      RoleMapping.resolveRole(for: .staticText, traits: headerTrait, inTabBar: true), "heading")
+check("getByRole(\"tab\") lists native tabs", (try? RoleMapping.elementTypes(for: "tab")) ?? [], [.tab])
+check("a tab query covers native tabs and buttons", (try? RoleMapping.queryTypes(for: "tab")) ?? [], [.tab, .button])
+check("a button query covers buttons only", (try? RoleMapping.queryTypes(for: "button")) ?? [], [.button])
+check("role-only tab re-resolves by label", RoleMapping.needsLabelReResolution(role: "tab"), true)
 
 // Role-only live re-resolution goes by the matched node's label for the roles
 // a type query can't express.
