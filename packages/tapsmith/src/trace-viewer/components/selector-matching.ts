@@ -538,7 +538,10 @@ function nodeMatchesSelector(node: HierarchyNode, selector: ParsedSelector): boo
     case 'text':
       return normalizeWhitespace(getNodeText(node)) === normalizeWhitespace(selector.value);
     case 'textContains':
-      return normalizeWhitespace(getNodeText(node)).includes(normalizeWhitespace(selector.value));
+      // Case-insensitive, like Playwright's non-exact getByText and the
+      // agents (PILOT-522); { exact: true } stays case-sensitive.
+      return normalizeWhitespace(getNodeText(node)).toLowerCase()
+        .includes(normalizeWhitespace(selector.value).toLowerCase());
     case 'textRegex':
       return selector.regex !== undefined && textMatchesRegex(node, toJsRegExp(selector.regex));
     case 'contentDesc':

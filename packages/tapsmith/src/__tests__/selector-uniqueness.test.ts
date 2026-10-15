@@ -676,3 +676,43 @@ describe('getByTestId parity with the Android agent (PILOT-659)', () => {
     expect(findMatchingNodes(roots, parseSelectorString('device.getByTestId("email-input")')!)).toEqual([node]);
   });
 });
+
+describe('substring getByText ignores case in the playground, like the agents (PILOT-522)', () => {
+  function count(roots: HierarchyNode[], code: string): number {
+    const parsed = parseSelectorString(code);
+    if (!parsed) throw new Error(`unparsed: ${code}`);
+    return findMatchingNodes(roots, parsed).length;
+  }
+
+  // React Native's textTransform: 'uppercase' renders "Get started" as "GET STARTED".
+  const androidButton = makeNode('node', { class: 'android.widget.TextView', text: 'GET STARTED' });
+  const androidRoots = [makeNode('node', { class: 'android.widget.FrameLayout' }, [androidButton])];
+  const iosButton = makeNode('XCUIElementTypeButton', { type: 'XCUIElementTypeButton', label: 'GET STARTED' });
+  const iosRoots = [makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther' }, [iosButton])];
+
+  it('matches a substring in any case on both platforms', () => {
+    for (const roots of [androidRoots, iosRoots]) {
+      expect(count(roots, 'device.getByText("get started")')).toBe(1);
+      expect(count(roots, 'device.getByText("Started")')).toBe(1);
+      expect(count(roots, 'device.getByText("GET  started ")')).toBe(1);
+      expect(count(roots, 'device.getByText("get startedx")')).toBe(0);
+    }
+  });
+
+  it('keeps { exact: true } case-sensitive', () => {
+    for (const roots of [androidRoots, iosRoots]) {
+      expect(count(roots, 'device.getByText("get started", { exact: true })')).toBe(0);
+      expect(count(roots, 'device.getByText("GET STARTED", { exact: true })')).toBe(1);
+    }
+  });
+
+  it('upgrades a suggestion that now also matches differently-cased text to { exact: true }', () => {
+    const header = makeNode('node', { class: 'android.widget.TextView', text: 'SIGN IN' });
+    const button = makeNode('node', { class: 'android.widget.TextView', text: 'Sign in' });
+    const root = makeNode('node', { class: 'android.widget.FrameLayout' }, [header, button]);
+    const suggestion = [{ code: 'device.getByText("Sign in")', label: 'Text', priority: 6 }];
+    expect(count([root], suggestion[0].code)).toBe(2);
+    const result = disambiguateSelectors([root], button, suggestion);
+    expect(result[0].code).toBe('device.getByText("Sign in", { exact: true })');
+  });
+});
