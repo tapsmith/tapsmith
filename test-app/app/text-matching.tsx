@@ -17,6 +17,8 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - "Get started" renders as "GET STARTED" through textTransform, as the
 //   stock Expo template's button does: a non-exact getByText ignores case
 //   (PILOT-522), so getByText("get started") finds it. Tapping it counts.
+// - "Full name" above the field, also uppercased: getByText("full name")
+//   matches it and the field, two element types (PILOT-522).
 //
 // Reached by deep link only (not on the home list, so the home cards keep
 // their positions).
@@ -56,6 +58,7 @@ export default function TextMatchingScreen() {
       >
         <Text style={styles.buttonText}>Save</Text>
       </Pressable>
+      <Text style={styles.uppercase}>Full name</Text>
       <TextInput
         style={styles.input}
         value={name}
