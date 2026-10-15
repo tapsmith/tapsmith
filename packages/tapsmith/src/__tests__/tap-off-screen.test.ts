@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ElementHandle } from '../element-handle.js';
-import { _text } from '../selectors.js';
+import { _text, _role } from '../selectors.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from '../grpc-client.js';
 
 // PILOT-716: tap-family actions do not scroll (unlike a Playwright click, by
@@ -84,15 +84,15 @@ describe('tap() on an element found but off-screen (iOS) (PILOT-716)', () => {
     expect(err.message).toBe(
       'Element getByText("Item 1", { exact: true }) is off-screen: it was found, but no part of it was on screen after waiting 5000ms. ' +
         'tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() ' +
-        '(or scroll() on the horizontal list that holds it, if it is off to the side), then tap() it.',
+        '(or scroll("right") on the horizontal list that holds it, if it is off to the side), then tap() it.',
     );
   });
 
   it.each([
     ['above the screen', above, 'await locator.scrollIntoView({ direction: "down" })'],
-    ['left of the screen', leftOf, 'scroll() on the horizontal list that holds it (or await locator.scrollIntoView({ direction: "right" }))'],
+    ['left of the screen', leftOf, 'scroll("left") on the horizontal list that holds it'],
     ['right of the screen (below and right look alike without the screen width)', rightOf,
-      'await locator.scrollIntoView() (or scroll() on the horizontal list that holds it, if it is off to the side)'],
+      'await locator.scrollIntoView() (or scroll("right") on the horizontal list that holds it, if it is off to the side)'],
   ])('names the direction scrollIntoView() needs for an element %s', async (_where, bounds, how) => {
     const m = client(() => [row({ visible: false, viewportRatio: 0, bounds })]);
     const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _text('Item 1'), 2000).tap());
@@ -127,6 +127,13 @@ describe('tap() on an element found but off-screen (iOS) (PILOT-716)', () => {
     const already = client(() => [row({ visible: false, viewportRatio: 0, bounds: below, checked: true })]);
     await withFakeClock(30_000, () => new ElementHandle(already.c, _text('Item 1'), 1000).setChecked(true));
     expect(already.tap).not.toHaveBeenCalled();
+  });
+
+  it('waits the same for a modified handle (first()/nth()/filter()) resolving to an off-screen element', async () => {
+    const m = client(() => [row({ visible: false, viewportRatio: 0, bounds: below })]);
+    const err = await rejectionOf(30_000, () => new ElementHandle(m.c, _role('button'), 2000).first().tap());
+    expect(err.message).toMatch(/is off-screen: it was found, but no part of it was on screen after waiting 2000ms/);
+    expect(m.tap).not.toHaveBeenCalled();
   });
 
   it('reports an element seen off-screen and then gone as not found, not off-screen', async () => {

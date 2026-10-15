@@ -641,8 +641,8 @@ function offScreenError(desc: string, timeoutMs: number, action: TapFamilyAction
   const how = bounds && bounds.bottom <= 0
     ? 'await locator.scrollIntoView({ direction: "down" })'
     : bounds && bounds.right <= 0
-      ? 'scroll() on the horizontal list that holds it (or await locator.scrollIntoView({ direction: "right" }))'
-      : 'await locator.scrollIntoView() (or scroll() on the horizontal list that holds it, if it is off to the side)';
+      ? 'scroll("left") on the horizontal list that holds it'
+      : 'await locator.scrollIntoView() (or scroll("right") on the horizontal list that holds it, if it is off to the side)';
   return new Error(
     `Element ${desc} is off-screen: it was found, but no part of it was on screen after waiting ${timeoutMs}ms. ` +
       scrollFirstAdvice(action, how),
