@@ -136,6 +136,23 @@ let saves = [node(staticText, "Save"), node(other, "Save"), node(button, "Save")
 expect(".any scope counts every same-label node", QueryIndex.liveIndex(of: 3, in: saves, scopeTypeRaw: nil) == 3)
 expect("a specific scope counts only its type", QueryIndex.liveIndex(of: 2, in: saves, scopeTypeRaw: button) == 0)
 
+// A substring getByText match found only through its value (an RN field's
+// placeholder, empty label) is re-resolved by the selector's own query, so
+// its index counts every earlier node of the scoped type that query returns
+// (PILOT-522) — not its position among matches of every type.
+let textField: UInt = 49
+let emailScreen = [
+    QueryNode(typeRaw: staticText, label: "EMAIL", identifier: ""),
+    QueryNode(typeRaw: textField, label: "", identifier: "", title: "", value: "Email"),
+    QueryNode(typeRaw: textField, label: "", identifier: "", title: "", value: "Confirm email"),
+]
+expect("substring fallback: first field is index 0 in the field query",
+       QueryIndex.substringLiveIndex(of: 1, in: emailScreen, scopeTypeRaw: textField, query: "email") == 0)
+expect("substring fallback: second field counts the first",
+       QueryIndex.substringLiveIndex(of: 2, in: emailScreen, scopeTypeRaw: textField, query: "email") == 1)
+expect("substring fallback: .any scope counts the header too",
+       QueryIndex.substringLiveIndex(of: 1, in: emailScreen, scopeTypeRaw: nil, query: "email") == 1)
+
 // RegExp locators (PILOT-520): the SDK's conformance fixture, replayed
 // through ICU (NSRegularExpression for the snapshot walk, NSPredicate MATCHES
 // with the whole-string wrapper for XCUIElement queries).

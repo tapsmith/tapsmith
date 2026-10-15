@@ -202,6 +202,13 @@ class SnapshotElementFinder {
             let raw = queryNodes[ordinal].typeRaw
             let type = XCUIElement.ElementType(rawValue: raw)
             let specific = type != nil && type != .other && type != .any
+            // A substring-text match with no label is found again by the
+            // selector's own query (cacheQueryElement), so index it there.
+            if let textContains = selector.textContains, queryNodes[ordinal].label.isEmpty {
+                return QueryIndex.substringLiveIndex(
+                    of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil, query: textContains
+                )
+            }
             return QueryIndex.liveIndex(of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil)
         }
 
@@ -757,7 +764,9 @@ class SnapshotElementFinder {
             nodes.append(QueryNode(
                 typeRaw: parseUInt(children[i]["elementType"]) ?? 0,
                 label: children[i]["label"] as? String ?? "",
-                identifier: children[i]["identifier"] as? String ?? ""
+                identifier: children[i]["identifier"] as? String ?? "",
+                title: children[i]["title"] as? String ?? "",
+                value: children[i]["value"] as? String ?? ""
             ))
             numberDescendants(of: &children[i], into: &nodes)
         }
@@ -978,8 +987,18 @@ class SnapshotElementFinder {
         // reorder here. We use an ancestor stack to suppress RN-style
         // `.other` wrappers whose identifier/label matches a native
         // descendant in one linear pass.
+        //
+        // A substring getByText ignores case (PILOT-522), so it would also
+        // match the software keyboard's lowercase keys ("delete", "more")
+        // and the application element, whose label is the app's name.
+        // Neither is text in the app — Android's keyboard is another window
+        // — so skip the keyboard's subtree and the application node.
+        let nodeTypeRaw = parseUInt(nodeDict["elementType"]) ?? 0
+        if selector.textContains != nil, nodeTypeRaw == XCUIElement.ElementType.keyboard.rawValue { return }
+        let skipSelf = selector.textContains != nil
+            && nodeTypeRaw == XCUIElement.ElementType.application.rawValue
         var pushedAncestor = false
-        if matchesSelector(
+        if !skipSelf, matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
             selector: selector,
@@ -1401,14 +1420,19 @@ class SnapshotElementFinder {
             if !nodeLabel.isEmpty, let labelIndex {
                 element = byOwnLabel(nodeLabel, at: labelIndex)
             } else {
-                // Matched through its title or value: mirror the snapshot
-                // walk's substring match (label/title/value).
+                // Matched through its title or value: the selector's own
+                // substring query (label/title/value), at the node's index
+                // among the nodes that query returns.
                 let pattern = TextMatch.containsPattern(textContains)
                 let predicate = NSPredicate(
                     format: "label MATCHES %@ OR title MATCHES %@ OR value MATCHES %@",
                     pattern, pattern, pattern
                 )
-                element = resolve(labelQuery(predicate))
+                if nodeIdentifier.isEmpty, let labelIndex {
+                    element = labelQuery(predicate).element(boundBy: labelIndex)
+                } else {
+                    element = resolve(labelQuery(predicate))
+                }
             }
         } else if let contentDesc = selector.contentDesc {
             element = resolve(labelQuery(concatenatedLabelPredicate(contentDesc)))

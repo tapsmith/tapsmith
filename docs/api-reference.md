@@ -20,7 +20,7 @@ device.getByText(/^welcome to\sexpo$/i)              // RegExp
 
 Whitespace is normalized on both sides before comparing a string, exact or not, as in Playwright: runs of whitespace — including non-breaking spaces (`&nbsp;`, U+00A0), other Unicode spaces and line breaks — collapse to one space, and leading and trailing whitespace is ignored. So `getByText("Welcome to Expo", { exact: true })` matches text rendered as `Welcome to&nbsp;Expo` or split over two lines. The same applies to `getByRole`'s `name` and to `getByLabel`.
 
-Without `exact`, a string `getByText` also ignores case, as `getByRole`'s `name` does. Case is folded with Unicode case mappings that don't depend on the device's locale, so `getByText("login")` finds `LOGIN` on a Turkish device too. A few special characters (such as `ß`) may fold differently per platform. `{ exact: true }`, `getByLabel`, `getByPlaceholder` and `getByDescription` are case-sensitive.
+Without `exact`, a string `getByText` also ignores case, as `getByRole`'s `name` does. Case is folded with Unicode case mappings that don't depend on the device's locale, so `getByText("login")` finds `LOGIN` on a Turkish device too. A few special characters (such as `ß`) may fold differently per platform. On iOS, a substring match skips the software keyboard's keys and the application element (whose label is the app's name), so `getByText("delete")` doesn't find the keyboard's delete key. `{ exact: true }`, `getByLabel`, `getByPlaceholder` and `getByDescription` are case-sensitive.
 
 #### Regular expressions
 

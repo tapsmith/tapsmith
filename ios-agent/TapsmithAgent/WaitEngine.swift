@@ -227,6 +227,10 @@ class WaitEngine {
     private func waitQueryFullyRepresentsSelector(_ selector: ElementSelector) -> Bool {
         if selector.role != nil { return false }
         if selector.name != nil { return false }
+        // The query's case-insensitive substring also returns keyboard keys
+        // and the application element, which the snapshot matcher skips
+        // (PILOT-522).
+        if selector.textContains != nil { return false }
         if selector.enabled != nil || selector.checked != nil || selector.focused != nil
             || selector.selected != nil || selector.expanded != nil {
             return false

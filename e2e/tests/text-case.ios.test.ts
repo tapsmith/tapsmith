@@ -21,4 +21,14 @@ describe("Case-insensitive substring getByText, live elements (PILOT-522)", () =
     await matches.last().type("Ada")
     await expect(device.getByLabel("Full name")).toHaveValue("Ada")
   })
+
+  test("a substring match skips the application element and the keyboard", async ({ device }) => {
+    // The application element's label is the app's name, "Tapsmith Test App".
+    await expect(device.getByText("tapsmith test app")).toHaveCount(0)
+    // With the software keyboard up, its lowercase keys ("shift", "delete")
+    // aren't text in the app either.
+    await device.getByLabel("Full name").type("Ada")
+    await expect(device.getByText("SHIFT")).toHaveCount(0)
+    await expect(device.getByText("Delete")).toHaveCount(0)
+  })
 })

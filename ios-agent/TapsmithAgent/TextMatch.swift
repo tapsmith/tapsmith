@@ -122,6 +122,8 @@ struct QueryNode {
     let typeRaw: UInt
     let label: String
     let identifier: String
+    var title: String = ""
+    var value: String = ""
 }
 
 /// Positional bookkeeping for re-resolving a role+name snapshot match through
@@ -141,6 +143,21 @@ enum QueryIndex {
         where node.label == target.label
             && (target.identifier.isEmpty || node.identifier == target.identifier)
             && (scopeTypeRaw == nil || node.typeRaw == scopeTypeRaw) {
+            count += 1
+        }
+        return count
+    }
+
+    /// The index of `nodes[ordinal]` within a live substring-text query
+    /// (`label/title/value MATCHES containsPattern(query)`, PILOT-522) on the
+    /// scoped type: every earlier node of that type the same predicate
+    /// matches — for a match with no label to re-resolve it by.
+    static func substringLiveIndex(of ordinal: Int, in nodes: [QueryNode], scopeTypeRaw: UInt?, query: String) -> Int {
+        var count = 0
+        for node in nodes[..<ordinal]
+        where (scopeTypeRaw == nil || node.typeRaw == scopeTypeRaw)
+            && (TextMatch.contains(node.label, query) || TextMatch.contains(node.title, query)
+                || TextMatch.contains(node.value, query)) {
             count += 1
         }
         return count
