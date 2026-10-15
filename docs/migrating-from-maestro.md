@@ -136,7 +136,7 @@ What changed, line by line:
 - **`appId`** moved into the config as `package`, along with the build to install (`apk`, or for iOS `platform: "ios"`, `app` and the `simulator` to boot). Tapsmith installs the build and launches the app before the first test of each file; there is no `launchApp` step.
 - **`launchApp: { clearState: true }`** became `test.use({ appResetScope: "test" })`. Without that line, Tapsmith resets the app once per test file rather than before every test (a clear, or a warm reset when the app mounts [`@tapsmith/react-native`](warm-reset.md)), which is faster and is often what a suite of separate flows really needs. See [Test isolation](writing-tests.md#test-isolation).
 - **`tapOn` followed by `inputText`** became one call: `type()` taps the field and types into it. The fields are found by role and accessible name (`accessibilityLabel` in React Native) rather than by `testID`. `getByTestId("email-input")` also works; Tapsmith recommends user-visible locators first, as Playwright does ([Locators](locators.md)).
-- **`tapOn: "Sign in"`** became `getByRole("button", { name: "Sign in" })`. Maestro treats `text` as a regular expression; `getByText` matches a substring unless you pass `{ exact: true }`, and `getByRole`'s `name` is a case-insensitive substring. If a locator matches more than one element, Tapsmith throws a [strict mode](api-reference.md#strict-mode) error listing them instead of tapping the first.
+- **`tapOn: "Sign in"`** became `getByRole("button", { name: "Sign in" })`. Maestro treats `text` as a regular expression; `getByText` and `getByRole`'s `name` match a case-insensitive substring unless you pass `{ exact: true }`. If a locator matches more than one element, Tapsmith throws a [strict mode](api-reference.md#strict-mode) error listing them instead of tapping the first.
 - **`assertVisible`** became `await expect(...).toBeVisible()`, which retries until the text appears or the timeout passes.
 
 Run it with:
@@ -172,7 +172,7 @@ Name Tapsmith test files `*.tapsmith.ts` (what `tapsmith init` sets up), so that
 
 **Locators.** Maestro treats `text` and `id` as regular expressions, and relational selectors (`below`, `childOf`, …) narrow them. In Tapsmith:
 
-- `getByText("Sign in")` is a substring match; `{ exact: true }` matches the whole text; a `RegExp` (`getByText(/^Sign in$/i)`) works as in JavaScript.
+- `getByText("Sign in")` is a case-insensitive substring match; `{ exact: true }` matches the whole text, case-sensitively; a `RegExp` (`getByText(/^Sign in$/i)`) works as in JavaScript.
 - `getByRole(role, { name })` checks what the element is as well as its label, which also makes the app more accessible ([Making React Native apps testable](locators.md#making-react-native-apps-testable-and-accessible)).
 - Instead of relational selectors, scope a locator inside another (`device.getByTestId("row-5").getByRole("button", { name: "Delete" })`), or narrow it with `filter()`, `first()`, `nth()`, `and()` and `or()` ([ElementHandle](api-reference.md#elementhandle)). Position on screen (`below`, `leftOf`) has no locator equivalent.
 - Ambiguity is an error. When a locator matches several elements, Tapsmith's strict mode refuses to guess: it reports every match and suggests a unique locator for each.

@@ -425,8 +425,9 @@ export class Device {
   // ── Locators (Playwright-style getBy* methods) ──
 
   /**
-   * Locate an element by visible text. Substring match by default; pass
-   * `{ exact: true }` for an exact match, or a RegExp to test the element's
+   * Locate an element by visible text. Case-insensitive substring match by
+   * default, as in Playwright (PILOT-522); pass `{ exact: true }` for a
+   * case-sensitive, whole-text match, or a RegExp to test the element's
    * text with (PILOT-520).
    */
   getByText(text: string | RegExp, options?: { exact?: boolean }): ElementHandle {

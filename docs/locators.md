@@ -153,11 +153,14 @@ Common components and their recommended props:
 
 ### `getByText(text | RegExp, { exact? })`
 
-Find an element by its visible text content. **Substring match by default**, like Playwright. Pass `{ exact: true }` for an exact match.
+Find an element by its visible text content. **Case-insensitive substring match by default**, like Playwright. Pass `{ exact: true }` for a case-sensitive, whole-text match.
 
 ```typescript
-// Substring match — finds elements containing "Welcome"
+// Substring match — finds elements containing "Welcome", in any case
 await expect(device.getByText("Welcome")).toBeVisible()
+
+// Finds a button rendered as "GET STARTED" (e.g. textTransform: "uppercase")
+await device.getByText("get started").tap()
 
 // Exact match
 await device.getByText("Sign In", { exact: true }).tap()
@@ -173,7 +176,7 @@ Whitespace differences don't matter for a string: non-breaking spaces, line brea
 
 A `RegExp` (also accepted by `getByLabel` and `getByRole`'s `name`) is matched with JavaScript's semantics against the text as it is: `\s` covers non-breaking spaces, and `^`/`$` anchor the whole text unless you pass the `m` flag. See [Regular expressions](api-reference.md#regular-expressions) for the details.
 
-> **Strict mode:** because of the substring default, `getByText("Sign in")` also matches longer text such as `"Sign in to continue"`. A locator that resolves to more than one element throws a `strict mode violation` when you act or assert on it (instead of silently using the first match). Disambiguate with `{ exact: true }`, `getByRole(role, { name, exact: true })`, `getByTestId()`, or `.first()/.nth()/.last()`. Absence checks (`toBeHidden`, `not.toBeVisible`, `waitFor({ state: "hidden" })`) and multi-element APIs (`count()`, `all()`, `toHaveCount`) are exempt. See the [API reference](api-reference.md#strict-mode) for the full rules. WebView locators (`webview.getBy*`, `webview.locator(css)`) enforce the same rules.
+> **Strict mode:** because of the case-insensitive substring default, `getByText("Sign in")` also matches longer or differently-cased text such as `"Sign in to continue"` or a `"SIGN IN"` heading. A locator that resolves to more than one element throws a `strict mode violation` when you act or assert on it (instead of silently using the first match). Disambiguate with `{ exact: true }`, `getByRole(role, { name, exact: true })`, `getByTestId()`, or `.first()/.nth()/.last()`. Absence checks (`toBeHidden`, `not.toBeVisible`, `waitFor({ state: "hidden" })`) and multi-element APIs (`count()`, `all()`, `toHaveCount`) are exempt. See the [API reference](api-reference.md#strict-mode) for the full rules. WebView locators (`webview.getBy*`, `webview.locator(css)`) enforce the same rules.
 
 ### `getByDescription(text)`
 

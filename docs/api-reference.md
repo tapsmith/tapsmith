@@ -10,15 +10,17 @@ See the [Locators Guide](locators.md) for a deeper discussion of when to use eac
 
 ### `device.getByText(text: string | RegExp, options?: { exact?: boolean }): ElementHandle`
 
-Locate an element by its visible text. **Substring match by default**, like Playwright. Pass `{ exact: true }` for an exact match, or a regular expression to test the text with.
+Locate an element by its visible text. **Case-insensitive substring match by default**, like Playwright, so `getByText("get started")` finds a button rendered as `GET STARTED`. Pass `{ exact: true }` for a case-sensitive, whole-text match, or a regular expression to test the text with.
 
 ```typescript
-device.getByText("Welcome")                          // substring
+device.getByText("Welcome")                          // substring, any case
 device.getByText("Sign In", { exact: true })         // exact
 device.getByText(/^welcome to\sexpo$/i)              // RegExp
 ```
 
-Whitespace is normalized on both sides before comparing a string, exact or not, as in Playwright: runs of whitespace — including non-breaking spaces (`&nbsp;`, U+00A0), other Unicode spaces and line breaks — collapse to one space, and leading and trailing whitespace is ignored. So `getByText("Welcome to Expo", { exact: true })` matches text rendered as `Welcome to&nbsp;Expo` or split over two lines. The same applies to `getByRole`'s `name` and to `getByLabel`. String matching is case-sensitive.
+Whitespace is normalized on both sides before comparing a string, exact or not, as in Playwright: runs of whitespace — including non-breaking spaces (`&nbsp;`, U+00A0), other Unicode spaces and line breaks — collapse to one space, and leading and trailing whitespace is ignored. So `getByText("Welcome to Expo", { exact: true })` matches text rendered as `Welcome to&nbsp;Expo` or split over two lines. The same applies to `getByRole`'s `name` and to `getByLabel`.
+
+Without `exact`, a string `getByText` also ignores case, as `getByRole`'s `name` does. Case is folded with Unicode case mappings that don't depend on the device's locale, so `getByText("login")` finds `LOGIN` on a Turkish device too; a few special characters fold differently per platform (on iOS, `straße` also matches `STRASSE`). `{ exact: true }`, `getByLabel`, `getByPlaceholder` and `getByDescription` are case-sensitive.
 
 #### Regular expressions
 
@@ -40,7 +42,7 @@ device.getByLabel(/e-?mail/i)
 
 Any other value (a number, `null`, …) throws a `TypeError`.
 
-> Because the default is a substring match, `getByText("Sign in")` also matches longer text like `"Sign in to continue"`. When that happens, acting on the locator throws a [strict mode](#strict-mode) violation — add `{ exact: true }` or use `getByRole(role, { name, exact: true })` to pin a single element.
+> Because the default is a case-insensitive substring match, `getByText("Sign in")` also matches longer or differently-cased text like `"Sign in to continue"` or a `"SIGN IN"` heading. When that happens, acting on the locator throws a [strict mode](#strict-mode) violation — add `{ exact: true }` or use `getByRole(role, { name, exact: true })` to pin a single element.
 
 ### `device.getByRole(role: string, options?): ElementHandle`
 
@@ -791,7 +793,7 @@ An `ElementHandle` is a lazy reference to a UI element. It is returned by every 
 
 | Method | Description |
 |---|---|
-| `getByText(text, options?)` | Substring (default), exact or RegExp text match within the parent. |
+| `getByText(text, options?)` | Case-insensitive substring (default), exact or RegExp text match within the parent. |
 | `getByRole(role, options?)` | Accessibility role within the parent. |
 | `getByDescription(text)` | Accessibility description within the parent. |
 | `getByPlaceholder(text)` | Placeholder / hint text within the parent. |
@@ -3372,7 +3374,7 @@ Playwright-style locators for DOM elements, mirroring the native `device.getBy*`
 
 | Method | Matches |
 |---|---|
-| `webview.getByText(text, { exact? })` | Leaf elements by visible text (substring by default) |
+| `webview.getByText(text, { exact? })` | Leaf elements by visible text (substring by default; unlike `device.getByText`, case-sensitive) |
 | `webview.getByRole(role, { name? })` | ARIA/HTML role, optionally filtered by accessible name |
 | `webview.getByPlaceholder(text)` | `placeholder` attribute |
 | `webview.getByTestId(testId)` | `data-testid` attribute |

@@ -43,7 +43,7 @@ Appium has clients in many languages. The examples here use [WebdriverIO](https:
 | `$("~Sign in")` (accessibility id) | [`device.getByRole("button", { name: "Sign in" })`](api-reference.md#devicegetbyrolerole-string-options-elementhandle), or [`device.getByDescription("Sign in")`](api-reference.md#devicegetbydescriptiontext-string-elementhandle) |
 | `$("id=com.example:id/submit")` (resource id) | [`device.locator({ id: "com.example:id/submit" })`](api-reference.md#devicelocatoroptions-locatoroptions-elementhandle); a React Native `testID` is [`device.getByTestId("submit")`](api-reference.md#devicegetbytestidtestid-string-elementhandle) |
 | `$('//*[@text="Welcome"]')` (XPath) | [`device.getByText("Welcome", { exact: true })`](api-reference.md#devicegetbytexttext-string--regexp-options--exact-boolean--elementhandle) |
-| `$('android=new UiSelector().textContains("Wel")')` | `device.getByText("Wel")` (substring by default) |
+| `$('android=new UiSelector().textContains("Wel")')` | `device.getByText("Wel")` (substring by default, ignoring case) |
 | `$("-ios predicate string:label == 'Done'")` | `device.getByText("Done", { exact: true })`, or `getByRole(role, { name: "Done", exact: true })` |
 | `$("android.widget.Switch")` (class name) | [`device.getByRole("switch")`](api-reference.md#devicegetbyrolerole-string-options-elementhandle), or `device.locator({ className: "android.widget.Switch" })` |
 | `$$(selector)` | [`locator.all()`](api-reference.md#elementhandleall-promiseelementhandle) or [`locator.count()`](api-reference.md#elementhandlecount-promisenumber) |
