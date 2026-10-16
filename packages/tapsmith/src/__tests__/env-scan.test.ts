@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseSimctlDevicesJson } from '../env-scan.js';
+import { isCustomSimulatorName, parseSimctlDevicesJson, parseSimctlDeviceTypesJson } from '../env-scan.js';
 import { parseAdbDevicesOutput } from '../adb-devices.js';
 
 describe('parseAdbDevicesOutput()', () => {
@@ -87,6 +87,35 @@ describe('parseSimctlDevicesJson()', () => {
       devices: Object.fromEntries(Object.keys(runtimes).map((id, i) => [id, [{ name: `Sim ${i}`, udid: `U${i}`, state: 'Shutdown' }]])),
     });
     expect(parseSimctlDevicesJson(output).map((s) => s.runtime)).toEqual(Object.values(runtimes));
+  });
+
+  it('names each simulator\'s device type, so init can tell a custom name from a stock one (PILOT-721)', () => {
+    const types = parseSimctlDeviceTypesJson(JSON.stringify({
+      devicetypes: [
+        { name: 'iPhone 16', identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16' },
+        { name: 'iPhone SE (3rd generation)', identifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation' },
+      ],
+    }));
+    const output = JSON.stringify({
+      devices: {
+        'com.apple.CoreSimulator.SimRuntime.iOS-18-2': [
+          { name: 'iPhone 16', udid: 'A', state: 'Shutdown', deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16' },
+          { name: 'PersonaA iPhone', udid: 'B', state: 'Booted', deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-16' },
+          { name: 'iPhone SE (3rd generation)', udid: 'C', state: 'Shutdown', deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.iPhone-SE-3rd-generation' },
+          { name: 'Mystery', udid: 'D', state: 'Shutdown', deviceTypeIdentifier: 'com.apple.CoreSimulator.SimDeviceType.Unknown' },
+        ],
+      },
+    });
+    const sims = parseSimctlDevicesJson(output, types);
+    expect(sims.map((s) => s.deviceTypeName)).toEqual(['iPhone 16', 'iPhone 16', 'iPhone SE (3rd generation)', undefined]);
+    expect(sims.map(isCustomSimulatorName)).toEqual([false, true, false, false]);
+    // Without the device type list, nothing is called custom.
+    expect(parseSimctlDevicesJson(output).map(isCustomSimulatorName)).toEqual([false, false, false, false]);
+  });
+
+  it('reads no device types from malformed JSON', () => {
+    expect(parseSimctlDeviceTypesJson('nope').size).toBe(0);
+    expect(parseSimctlDeviceTypesJson(JSON.stringify({ devicetypes: [{ name: 1 }, null] })).size).toBe(0);
   });
 
   it('returns an empty list for malformed or unexpected JSON', () => {

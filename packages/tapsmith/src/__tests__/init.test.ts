@@ -312,6 +312,30 @@ const studioAvds: AvdImageInfo[] = [
   { name: 'Tapsmith_Phone_API_36', tagId: 'google_apis', apiLevel: 36 },
 ];
 
+describe('generateConfig() with a custom-named simulator (PILOT-721)', () => {
+  const ios: IosConfig = { appPath: 'ios/App.app', bundleId: 'com.example', simulator: "Sam's iPhone", simulatorDeviceType: 'iPhone 17', usePhysicalDevice: false };
+
+  it('comments that the name is machine-local, naming a stock alternative', () => {
+    const text = generateConfig(['ios'], undefined, ios, false);
+    const lines = text.split('\n');
+    const at = lines.findIndex((l) => l.includes("simulator: 'Sam\\'s iPhone'"));
+    expect(at).toBeGreaterThan(0);
+    expect(lines.slice(at - 2, at).join(' ')).toMatch(/only on this Mac.*'iPhone 17'/);
+    expect(evaluateConfig(text).simulator).toBe("Sam's iPhone");
+  });
+
+  it('comments it inside the ios project of a multi-platform config too', () => {
+    const android: AndroidConfig = { apkPath: 'a.apk', packageName: 'com.a', useEmulators: true, usePhysicalDevices: false, avd: 'X' };
+    const text = generateConfig(['android', 'ios'], android, ios, false);
+    expect(text).toMatch(/only on this Mac[\s\S]*simulator: 'Sam\\'s iPhone'/);
+    expect(evaluateConfig(text).projects?.find((p) => p.name === 'ios')?.use?.simulator).toBe("Sam's iPhone");
+  });
+
+  it('adds no comment for a stock name', () => {
+    expect(generateConfig(['ios'], undefined, { ...ios, simulator: 'iPhone 17', simulatorDeviceType: undefined }, false)).not.toContain('only on this Mac');
+  });
+});
+
 describe('avdPickerChoices()', () => {
   it('marks Play images and pre-selects the first capture-capable AVD, keeping list order', () => {
     const { choices, initial } = avdPickerChoices(['Medium_Phone_API_36', 'Tapsmith_Phone_API_36'], studioAvds);

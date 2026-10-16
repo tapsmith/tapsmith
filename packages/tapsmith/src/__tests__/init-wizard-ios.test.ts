@@ -410,6 +410,21 @@ describe('configureIos() simulator picker (PILOT-562)', () => {
     expect(q?.choices?.[1]).toMatchObject({ name: 'iPhone 17 Pro', hint: 'iOS 26.5' });
   });
 
+  it('hints a custom-named simulator as this Mac only, and records its device type when picked (PILOT-721)', async () => {
+    script('simulators', [[/Which simulator/, 'PersonaA iPhone']]);
+
+    const ios = await configureIos({ ...env, simulators: [
+      { ...sim('PersonaA iPhone', 'iOS 26.5', 'Booted'), deviceTypeName: 'iPhone 17' },
+      { ...sim('iPhone 17', 'iOS 26.5'), deviceTypeName: 'iPhone 17' },
+    ] });
+
+    const q = picker();
+    expect(q?.initial).toBe(0);
+    expect(q?.choices?.[0]).toMatchObject({ name: 'iPhone 17', hint: 'iOS 26.5' });
+    expect(q?.choices?.[1]).toMatchObject({ name: 'PersonaA iPhone', hint: 'iOS 26.5, booted, custom name: this Mac only' });
+    expect(ios).toMatchObject({ simulator: 'PersonaA iPhone', simulatorDeviceType: 'iPhone 17' });
+  });
+
   it('with only worker clones to offer, falls back to a default simulator instead of an empty list', async () => {
     script('simulators');
 

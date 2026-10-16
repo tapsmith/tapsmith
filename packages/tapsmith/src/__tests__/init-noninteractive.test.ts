@@ -1174,6 +1174,36 @@ describe('simulatorChoices() (PILOT-562)', () => {
     expect(plan.warnings.join('\n')).toContain('No iOS simulators found');
   });
 
+  it('puts custom-named simulators after stock ones, even a booted one (PILOT-721)', () => {
+    const sims = [
+      { ...sim('PersonaA iPhone', 'iOS 26.5', 'Booted'), deviceTypeName: 'iPhone 17' },
+      { ...sim('iPhone 17', 'iOS 26.5'), deviceTypeName: 'iPhone 17' },
+      { ...sim('iPad Air', 'iOS 26.5'), deviceTypeName: 'iPad Air' },
+    ];
+    expect(simulatorChoices(sims).map((s) => s.name)).toEqual(['iPhone 17', 'iPad Air', 'PersonaA iPhone']);
+    const plan = resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), { ...baseEnv, simulators: sims }, detectStubs);
+    expect(plan.ios?.simulator).toBe('iPhone 17');
+    expect(plan.ios?.simulatorDeviceType).toBeUndefined();
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('init --yes marks a custom-named simulator as machine-local when it is all there is, or was asked for (PILOT-721)', () => {
+    const persona = { ...sim('PersonaA iPhone', 'iOS 26.5', 'Booted'), deviceTypeName: 'iPhone 17' };
+    const only = resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), { ...baseEnv, simulators: [persona] }, detectStubs);
+    expect(only.ios).toMatchObject({ simulator: 'PersonaA iPhone', simulatorDeviceType: 'iPhone 17' });
+    expect(only.warnings.join('\n')).toContain("Simulator 'PersonaA iPhone' is a custom name on this Mac");
+    expect(only.warnings.join('\n')).toContain('iPhone 17');
+    const asked = resolveInitPlan(
+      initArgs({ yes: true, platform: 'ios', simulator: 'PersonaA iPhone' }),
+      { ...baseEnv, simulators: [persona, { ...sim('iPhone 17', 'iOS 26.5'), deviceTypeName: 'iPhone 17' }] },
+      detectStubs,
+    );
+    expect(asked.ios).toMatchObject({ simulator: 'PersonaA iPhone', simulatorDeviceType: 'iPhone 17' });
+    // A UDID or unknown name is left alone: init cannot judge it.
+    const udid = resolveInitPlan(initArgs({ yes: true, platform: 'ios', simulator: 'SOME-UDID' }), { ...baseEnv, simulators: [persona] }, detectStubs);
+    expect(udid.ios?.simulatorDeviceType).toBeUndefined();
+  });
+
   it('init --yes picks the booted simulator over the newest iPhone', () => {
     const env = { ...baseEnv, simulators: [sim('iPhone 17 Pro', 'iOS 26.5'), sim('iPhone 16', 'iOS 18.2', 'Booted')] };
     const plan = resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), env, detectStubs);

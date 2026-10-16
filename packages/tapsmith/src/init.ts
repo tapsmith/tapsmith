@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Enquirer from 'enquirer';
 import figlet from 'figlet';
-import { tryExec, scanEnvironment, simulatorChoices, type EnvScan } from './env-scan.js';
+import { isCustomSimulatorName, scanEnvironment, simulatorChoices, tryExec, type EnvScan } from './env-scan.js';
 import {
   detectAndroidPackage,
   detectExpoProject,
@@ -215,6 +215,11 @@ export interface IosConfig {
   /** The device build's bundle id, when it differs from `bundleId` (per-configuration ids). */
   deviceBundleId?: string;
   simulator?: string;
+  /**
+   * Set when `simulator` is a custom name, only on this Mac (PILOT-721): the
+   * simulator's device type, which the config's comment offers instead.
+   */
+  simulatorDeviceType?: string;
   usePhysicalDevice: boolean;
   /** Device-signed (iphoneos) build; set whenever `usePhysicalDevice` is. */
   deviceAppPath?: string;
@@ -426,6 +431,7 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject): Promise<Io
   }
 
   let simulator: string | undefined;
+  let simulatorDeviceType: string | undefined;
   if (useSimulators) {
     // Every simulator, a booted one first and selected (PILOT-562).
     const choices = simulatorChoices(env.simulators);
@@ -438,11 +444,12 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject): Promise<Io
         choices: choices.map((s) => ({
           name: s.name,
           message: s.name,
-          hint: s.state === 'Booted' ? `${s.runtime}, booted` : s.runtime,
+          hint: [s.runtime, ...(s.state === 'Booted' ? ['booted'] : []), ...(isCustomSimulatorName(s) ? ['custom name: this Mac only'] : [])].join(', '),
         })),
         initial: 0,
         limit: SIMULATOR_PICKER_ROWS,
       });
+      simulatorDeviceType = customSimulatorDeviceType(simulator, env);
     } else {
       console.log(`  ${YELLOW}⚠${RESET} No iOS simulators found. Install one via Xcode.`);
       simulator = 'iPhone 17';
@@ -541,7 +548,17 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject): Promise<Io
   const bundleId = simBundleId ?? deviceBundleIdRead;
   const deviceBundleId = both && deviceBundleIdRead !== simBundleId ? deviceBundleIdRead : undefined;
 
-  return { appPath, bundleId, deviceBundleId, simulator, usePhysicalDevice, deviceAppPath };
+  return { appPath, bundleId, deviceBundleId, simulator, ...(simulatorDeviceType ? { simulatorDeviceType } : {}), usePhysicalDevice, deviceAppPath };
+}
+
+/**
+ * The device type of the simulator named `name`, when that name is a custom
+ * one only this Mac has (PILOT-721); undefined for a stock name, a UDID or a
+ * name init does not know.
+ */
+export function customSimulatorDeviceType(name: string, env: EnvScan): string | undefined {
+  const sim = simulatorChoices(env.simulators).find((s) => s.name === name);
+  return sim && isCustomSimulatorName(sim) ? sim.deviceTypeName : undefined;
 }
 
 function detectBundleId(appPath: string): string | undefined {
@@ -797,6 +814,16 @@ export function generateConfig(
   lines.push('export default defineConfig({');
 
   const esc = (s: string): string => s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  // A custom simulator name resolves only on this Mac (PILOT-721).
+  const simulatorLines = (indent: string, iosCfg: IosConfig, simulator: string): string[] => [
+    ...(iosCfg.simulatorDeviceType
+      ? [
+        `${indent}// A custom simulator name, only on this Mac: teammates and CI need a simulator`,
+        `${indent}// with this exact name. A stock one such as '${esc(iosCfg.simulatorDeviceType).replace(/[\r\n]+/g, ' ')}' works anywhere it is installed.`,
+      ]
+      : []),
+    `${indent}simulator: '${esc(simulator)}',`,
+  ];
 
   lines.push(...GENERATED_TEST_MATCH_LINES);
   if (enableNetwork) lines.push("  trace: { mode: 'retain-on-failure' },");
@@ -812,7 +839,7 @@ export function generateConfig(
       out.push("        platform: 'ios',");
       if (iosCfg.bundleId) out.push(`        package: '${esc(iosCfg.bundleId)}',`);
       out.push(`        app: '${esc(iosSim.app)}',`);
-      out.push(`        simulator: '${esc(iosSim.simulator)}',`);
+      out.push(...simulatorLines('        ', iosCfg, iosSim.simulator));
       out.push('      },');
       out.push('    },');
     }
@@ -852,7 +879,7 @@ export function generateConfig(
         lines.push(`  app: '${esc(iosDeviceApp)}',`);
       } else if (ios.appPath) {
         lines.push(`  app: '${esc(ios.appPath)}',`);
-        if (ios.simulator) lines.push(`  simulator: '${esc(ios.simulator)}',`);
+        if (ios.simulator) lines.push(...simulatorLines('  ', ios, ios.simulator));
       }
     }
   }

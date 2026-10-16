@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { simulatorChoices, type EnvScan } from './env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
-import { EXAMPLE_TEST_PATH, generateConfig, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
+import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, generateConfig, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
 import { ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
@@ -300,7 +300,11 @@ export function resolveInitPlan(
         warnings.push('No iOS simulators found — install one via Xcode; defaulting to "iPhone 17"');
       }
     }
-    ios = { appPath, bundleId, simulator, usePhysicalDevice: false };
+    const simulatorDeviceType = customSimulatorDeviceType(simulator, env);
+    if (simulatorDeviceType) {
+      warnings.push(`Simulator '${simulator}' is a custom name on this Mac, so the config resolves only here: teammates and CI need a simulator with that exact name. For one that works anywhere it is installed, pass --simulator '${simulatorDeviceType}'`);
+    }
+    ios = { appPath, bundleId, simulator, ...(simulatorDeviceType ? { simulatorDeviceType } : {}), usePhysicalDevice: false };
   }
 
   const captureAvdStep = android?.useEmulators ? captureAvdNextStep(android.avd, env.avdImages, args.networkCapture) : undefined;
