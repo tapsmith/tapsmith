@@ -53,6 +53,11 @@ export class TestExplorerPane {
     return this.page.getByRole("button", { name: "Run all tests" })
   }
 
+  /** Run all's label while a name or status filter narrows the tree. */
+  get runVisibleButton() {
+    return this.page.getByRole("button", { name: "Run visible tests" })
+  }
+
   get stopButton() {
     return this.page.getByRole("button", { name: "Stop current run" })
   }

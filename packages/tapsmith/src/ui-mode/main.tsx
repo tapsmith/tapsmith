@@ -28,6 +28,7 @@ import {
 } from './hooks/use-trace-data.js';
 import { useScreenMirror, useMultiScreenMirror } from './hooks/use-screen-mirror.js';
 import { useTestTree } from './hooks/use-test-tree.js';
+import { visibleRunSelection } from './run-selection.js';
 import { useRunTimer } from './hooks/use-run-timer.js';
 import { usePersistedJSON } from './hooks/use-persisted-state.js';
 import { resolveShortcut } from './keyboard-shortcuts.js';
@@ -705,7 +706,36 @@ function App() {
         // Scope trace clearing: single test > single file > all.
         // This preserves traces from other tests/files so clicking back
         // on them still shows their actions and status.
-        if (msg.testFilter) {
+        if (msg.selection) {
+          // A filtered Run all — clear only the traces of what it runs: each
+          // selected test, or every test of a whole file, under its project.
+          // The rest of the tree keeps its results, as for a scoped run.
+          const selection = msg.selection;
+          setTestTraces((prev) => {
+            const doomed = new Set<string>();
+            for (const entry of selection) {
+              if (entry.tests) {
+                for (const fullName of entry.tests) {
+                  const key = traceIdentitiesRef.current.resolve(entry.projectName, fullName, entry.filePath);
+                  if (key) doomed.add(key);
+                }
+                continue;
+              }
+              for (const [k, data] of prev) {
+                if (data.filePath === entry.filePath && (!entry.projectName || parseTraceKey(k).projectName === entry.projectName)) doomed.add(k);
+              }
+            }
+            if (![...doomed].some((k) => prev.has(k))) return prev;
+            const next = new Map(prev);
+            for (const k of doomed) {
+              const old = next.get(k);
+              if (!old) continue;
+              revokeTraceScreenshots(old);
+              next.delete(k);
+            }
+            return next;
+          });
+        } else if (msg.testFilter) {
           // Running a single test — clear only the trace for this exact
           // (project, file, test) tuple. Without the project scope we'd wipe the
           // sibling project's copy of the same test from a previous run.
@@ -757,11 +787,18 @@ function App() {
         if (msg.filePath) {
           treeRef.current.setPendingForRun(msg.filePath, msg.testFilter, msg.projectName);
         }
+        for (const entry of msg.selection ?? []) {
+          if (!entry.tests) {
+            treeRef.current.setPendingForRun(entry.filePath, undefined, entry.projectName);
+            continue;
+          }
+          for (const fullName of entry.tests) treeRef.current.setPendingForRun(entry.filePath, fullName, entry.projectName);
+        }
 
         pendingSourcesRef.current = new Map();
         setPinnedIndex(0);
         setHoveredIndex(null);
-        if (!msg.filePath && !msg.testFilter) {
+        if (!msg.filePath && !msg.testFilter && !msg.selection) {
           // Full run — clear worker mappings
           testWorkerMapRef.current.clear();
         }
@@ -1447,6 +1484,20 @@ function App() {
     }
   }, [send]);
 
+  // Run all — or, while a name/status filter narrows the tree, only the tests
+  // it shows, as Playwright's UI mode does (PILOT-729). The toolbar button and
+  // the `r` shortcut both come through here.
+  const handleRunAll = useCallback(() => {
+    const t = treeRef.current;
+    if (!t.isFiltered) {
+      send({ type: 'run-all' });
+      return;
+    }
+    const selection = visibleRunSelection(t.files);
+    if (selection.length === 0) return;
+    send({ type: 'run-all', selection, ...(runDepsRef.current ? { runDeps: true } : {}) });
+  }, [send]);
+
   // Wrap tree.setPending to also clear trace data for the node being run so
   // the Actions tab immediately shows the preflight "Waiting for first
   // action…" message instead of lingering actions from the previous run.
@@ -1590,7 +1641,7 @@ function App() {
       // and on form-field focus, so a browser refresh never fires run-all.
       switch (resolveShortcut(e)) {
         case 'run-all':
-          send({ type: 'run-all' });
+          handleRunAll();
           break;
         case 'run-failed':
           send({ type: 'run-failed' });
@@ -1606,7 +1657,7 @@ function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [send]);
+  }, [send, handleRunAll]);
 
   // ─── Download trace ───
 
@@ -1774,6 +1825,7 @@ function App() {
           onSetNameFilter={tree.setNameFilter}
           onSetStatusFilter={tree.setStatusFilter}
           onSend={handleSend}
+          onRunAll={handleRunAll}
           onStop={() => { send({ type: 'stop-run' }); setIsStopping(true); }}
           onToggleRunDeps={handleToggleRunDeps}
           pendingIds={tree.pendingIds}

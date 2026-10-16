@@ -34,6 +34,8 @@ interface TestExplorerProps {
   onSetNameFilter: (filter: string) => void
   onSetStatusFilter: (filter: 'all' | 'passed' | 'failed' | 'skipped') => void
   onSend: (msg: ClientMessage) => void
+  /** Run every test — or, while a filter narrows the tree, only the visible ones. */
+  onRunAll: () => void
   onStop: () => void
   onToggleRunDeps: () => void
   onSetPending: (nodeId: string) => void
@@ -44,8 +46,10 @@ export function TestExplorer(props: TestExplorerProps) {
     files, expandedNodes, selectedTestId, nameFilter, statusFilter,
     counts, connected, isRunning, isStopping, isWatching, hasProjectDeps, runDepsFirst,
     pendingIds, onToggleExpanded, onExpandAll, onCollapseAll, onSelectTest,
-    onSetNameFilter, onSetStatusFilter, onSend, onStop, onToggleRunDeps, onSetPending,
+    onSetNameFilter, onSetStatusFilter, onSend, onRunAll, onStop, onToggleRunDeps, onSetPending,
   } = props;
+  // As in Playwright's UI mode, a filtered tree's Run all runs the visible tests.
+  const isFiltered = !!nameFilter || statusFilter !== 'all';
 
   // Pending state and the matching set/clear effects live in useTestTree
   // so main.tsx can read pendingIds for its own in-progress derivations.
@@ -83,9 +87,9 @@ export function TestExplorer(props: TestExplorerProps) {
         <div class="te-toolbar-actions explorer-toolbar-actions">
           <button
             class="te-toolbar-btn"
-            onClick={() => onSend({ type: 'run-all' })}
-            disabled={isRunning || !connected}
-            title="Run all tests"
+            onClick={onRunAll}
+            disabled={isRunning || !connected || (isFiltered && files.length === 0)}
+            title={isFiltered ? 'Run visible tests' : 'Run all tests'}
           >
             <Play size={TOOLBAR_ICON_SIZE} />
           </button>

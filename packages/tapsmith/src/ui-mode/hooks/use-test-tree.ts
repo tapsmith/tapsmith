@@ -248,10 +248,11 @@ export function useTestTree(isRunning: boolean = false) {
   }, [files, setPending]);
 
   // Filter the tree based on name and status
+  const isFiltered = !!nameFilter || statusFilter !== 'all';
   const filteredFiles = useMemo(() => {
-    if (!nameFilter && statusFilter === 'all') return files;
+    if (!isFiltered) return files;
     return filterTree(files, nameFilter.toLowerCase(), statusFilter);
-  }, [files, nameFilter, statusFilter]);
+  }, [files, nameFilter, statusFilter, isFiltered]);
 
   // Compute summary counts
   const counts = useMemo(() => {
@@ -285,6 +286,8 @@ export function useTestTree(isRunning: boolean = false) {
   return {
     files: filteredFiles,
     allFiles: files,
+    /** A name or status filter narrows the tree, so Run all runs only what it shows. */
+    isFiltered,
     hasWatchedFiles,
     expandedNodes,
     selectedTestId,

@@ -80,6 +80,89 @@ test.describe("Run controls", () => {
     })
   })
 
+  // Playwright's UI mode runs only the tests visible in a filtered tree; so
+  // does ours (PILOT-729). Before, Run all ignored the filter and started the
+  // whole suite on every device.
+  test.describe("Run all with a filter applied", () => {
+    test("runs only the tests the name filter leaves visible", async ({ ui, explorer }) => {
+      ui.seed(idleSeed(twoFileTree()))
+      await ui.open()
+
+      await explorer.filterByName("long press")
+      await expect(explorer.runAllButton).toHaveCount(0)
+      await explorer.runVisibleButton.click()
+
+      const msg = await ui.waitForMessage("run-all")
+      expect(msg.selection).toEqual([
+        { filePath: GESTURES_FILE, tests: ["Gestures screen > long press registers long press"] },
+      ])
+    })
+
+    test("runs the visible test under each project, named by its project", async ({ ui, explorer }) => {
+      ui.seed(idleSeed(twoProjectTree()))
+      await ui.open()
+
+      await explorer.filterByName("swipe registers")
+      await explorer.runVisibleButton.click()
+
+      const msg = await ui.waitForMessage("run-all")
+      expect(msg.selection).toEqual([
+        { filePath: GESTURES_FILE, projectName: "android", tests: ["Gestures screen > swipe registers swipe"] },
+        { filePath: GESTURES_FILE, projectName: "ios", tests: ["Gestures screen > swipe registers swipe"] },
+      ])
+    })
+
+    test("runs only the failures the Fail filter shows", async ({ ui, explorer }) => {
+      ui.seed(idleSeed(twoFileTree()))
+      await ui.open()
+      ui.send(
+        { type: "test-status", fullName: "Gestures screen > swipe registers swipe", filePath: GESTURES_FILE, status: "failed", error: "boom" },
+        { type: "test-status", fullName: "Home screen > displays navigation cards", filePath: HOME_FILE, status: "failed", error: "boom" },
+        { type: "test-status", fullName: "smoke", filePath: GESTURES_FILE, status: "passed" },
+      )
+      await expect(explorer.statusFilterCount("Fail")).toHaveText("2")
+
+      await explorer.filterByStatus("Fail")
+      await explorer.runVisibleButton.click()
+
+      const msg = await ui.waitForMessage("run-all")
+      expect(msg.selection).toEqual([
+        { filePath: GESTURES_FILE, tests: ["Gestures screen > swipe registers swipe"] },
+        { filePath: HOME_FILE, tests: ["Home screen > displays navigation cards"] },
+      ])
+    })
+
+    test("r runs the visible tests too", async ({ ui, explorer, runControls }) => {
+      ui.seed(idleSeed(twoFileTree()))
+      await ui.open()
+      await explorer.filterByName("can scroll")
+      // Shortcuts are plain text while focus is in the filter box.
+      await explorer.searchInput.blur()
+
+      await runControls.pressShortcut("r")
+      const msg = await ui.waitForMessage("run-all")
+      expect(msg.selection).toEqual([
+        { filePath: HOME_FILE, tests: ["Home screen > can scroll to see more cards"] },
+      ])
+    })
+
+    test("is disabled when the filter leaves nothing visible", async ({ app, explorer }) => {
+      await explorer.filterByName("no test is called this")
+      await expect(explorer.emptyState).toBeVisible()
+      await expect(explorer.runVisibleButton).toBeDisabled()
+    })
+
+    test("runs the whole suite again once the filter is cleared", async ({ app, explorer }) => {
+      const ui = app
+      await explorer.filterByName("long press")
+      await explorer.clearNameFilter()
+
+      await explorer.runAllButton.click()
+      const msg = await ui.waitForMessage("run-all")
+      expect(msg.selection).toBeUndefined()
+    })
+  })
+
   test.describe("keyboard shortcuts", () => {
     test("r runs everything", async ({ app, runControls }) => {
       const ui = app

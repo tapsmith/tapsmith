@@ -238,6 +238,35 @@ test.describe("Run lifecycle", () => {
     })
   })
 
+  // PILOT-729: a filtered Run all runs a selection; it must clear only the
+  // selected tests' traces, as a scoped run does, not every trace in the tree.
+  test.describe("a filtered Run all", () => {
+    const LONG_PRESS = "Gestures screen > long press registers long press"
+
+    test("clears only the selected tests' traces", async ({ app, explorer, actions }) => {
+      const ui = app
+      await explorer.expandAll()
+
+      ui.send({ type: "run-start", fileCount: 1 })
+      for (const fullName of [DOUBLE_TAP, LONG_PRESS]) {
+        ui.send({ type: "test-start", fullName, filePath: GESTURES_FILE })
+        ui.send(...action({ testFullName: fullName, actionIndex: 0, action: "tap" }))
+        ui.send({ type: "test-status", fullName, filePath: GESTURES_FILE, status: "passed", duration: 10 })
+      }
+      ui.send({ type: "run-end", status: "passed", duration: 20, passed: 2, failed: 0, skipped: 0 })
+      await explorer.clickNode("long press registers long press")
+      await expect(actions.items).toHaveCount(1)
+
+      ui.send({ type: "run-start", fileCount: 1, selection: [{ filePath: GESTURES_FILE, tests: [DOUBLE_TAP] }] })
+
+      // The other test keeps its result and its trace; the selected one's is cleared.
+      await expect(explorer.node("long press registers long press")).toHaveAttribute("data-status", "passed")
+      await expect(actions.items).toHaveCount(1)
+      await explorer.clickNode(TEST_NAME)
+      await expect(actions.items).toHaveCount(0)
+    })
+  })
+
   test.describe("in-flight actions", () => {
     // Neighbourhood of abbcf347 (#133): a started-but-not-completed action has
     // to render, or the panel looks empty while the device is busy.

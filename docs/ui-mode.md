@@ -23,7 +23,7 @@ npx tapsmith test --ui --ui-port 8080
 The UI provides:
 
 - **Interactive test tree** -- tests are listed in a tree structure, grouped by file and `describe` block. When projects are configured, tests are grouped by project first. A file that fails to load (a missing import, an error thrown while loading) shows a single failed `<file name> — failed to load` row carrying the error; fixing the file brings its tests back.
-- **Click to run** -- click any test, file, or project node to run it. You can also run the entire suite.
+- **Click to run** -- click any test, file, or project node to run it. You can also run the entire suite (the run button in the Tests toolbar, or `R`). While the search box or a Pass/Fail/Skip filter narrows the tree, that button becomes **Run visible tests** and runs only the tests the tree shows, under the projects it shows them in, as in Playwright's UI mode.
 - **Live progress** -- test results stream into the UI in real time as tests execute. You see pass/fail status, duration, and error details as each test completes.
 - **Result browsing** -- after a run, browse results with error messages, stack traces, screenshots, and trace data inline.
 - **Watch mode toggle** -- toggle file-level watching from the UI. When a file's watch is enabled, it re-runs automatically on save (the same mechanism as `--watch` mode).
