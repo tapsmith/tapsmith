@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Tapsmith film</title>
+<style>
+  @font-face { font-family: 'Poppins'; font-weight: 500; src: url('../assets/poppins-500.woff2') format('woff2'); }
+  @font-face { font-family: 'Poppins'; font-weight: 600; src: url('../assets/poppins-600.woff2') format('woff2'); }
+  @font-face { font-family: 'JetBrains Mono'; font-weight: 400; src: url('../assets/jetbrains-mono-latin.woff2') format('woff2'); }
+  @font-face { font-family: 'Inter'; font-weight: 100 900; src: url('../assets/inter-variable-latin.woff2') format('woff2'); }
+  :root {
+    --coral: #fd8567; --coral-hi: #ffb199; --cream: #f4eee7; --sand: #cfc6bb; --muted: #9a8f83; --dim: #5d544c;
+    --ink: #0d0a08; --panel: #1a1512; --panel-2: #221c17; --line: rgba(255, 236, 218, 0.09);
+    --red: #ff5a52; --green: #5fd38d; --blue: #8fb4ff; --steel: #aab6c4;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; font-variant-ligatures: none !important; font-feature-settings: 'liga' 0, 'calt' 0; }
+  html, body { width: 1920px; height: 1080px; overflow: hidden; background: #0d0a08; }
+  #stage { position: absolute; width: 1920px; height: 1080px; overflow: hidden; background: #0d0a08;
+           font-family: 'Inter', sans-serif; color: var(--cream);
+           font-variant-ligatures: none; -webkit-font-smoothing: antialiased; }
+  canvas.full { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; pointer-events: none; }
+  #grain { mix-blend-mode: overlay; }
+  #flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; }
+  #vig { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 75% 70% at 50% 50%, rgba(0,0,0,0) 55%, rgba(8,5,3,0.42) 100%); }
+  #fade { position: absolute; inset: 0; background: #000; opacity: 0; pointer-events: none; }
+
+  .scene { position: absolute; inset: 0; }
+  .vp { position: absolute; inset: 0; perspective: 2400px; perspective-origin: 960px 540px; overflow: hidden; }
+  .world { position: absolute; left: 960px; top: 540px; width: 0; height: 0; transform-style: preserve-3d; transform-origin: 0 0; }
+  .world > * { position: absolute; left: 0; top: 0; }
+  .flat { position: absolute; inset: 0; }   /* screen-space overlay layer inside a scene */
+
+  /* ── type ── */
+  .kin { font-family: 'Inter', sans-serif; font-weight: 800; letter-spacing: -0.04em; line-height: 0.98; white-space: nowrap; }
+  .disp { font-family: 'Poppins', sans-serif; font-weight: 600; letter-spacing: -0.01em; line-height: 1; white-space: nowrap; }
+  .mono { font-family: 'JetBrains Mono', monospace; font-weight: 400; white-space: pre; }
+  .mask { display: inline-block; overflow: hidden; vertical-align: top; padding: 0.04em 0.02em 0.12em; margin: -0.04em -0.02em -0.12em; }
+  .mask-in { display: inline-block; will-change: transform; }
+  .ch { display: inline-block; }
+  .eyebrow { font-family: 'JetBrains Mono', monospace; font-size: 18px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--coral); }
+
+  /* ── code ── */
+  .c-kw { color: #ff9a7c; } .c-str { color: #b5dd96; } .c-fn { color: #93b9ff; } .c-cm { color: #6d655c; }
+  .c-num { color: #f2c27a; } .c-key { color: #93b9ff; } .c-ps { color: var(--coral); }
+  .caret { display: inline-block; width: 3px; height: 1.05em; background: var(--coral); vertical-align: -0.17em; margin-left: 1px;
+           box-shadow: 0 0 12px rgba(253,133,103,0.8); }
+  .caret.off { opacity: 0; }
+
+  /* ── surfaces ── */
+  .panel { border-radius: 20px; background: linear-gradient(180deg, rgba(38,31,26,0.96), rgba(22,18,15,0.96));
+           border: 1px solid var(--line); box-shadow: 0 50px 140px rgba(0,0,0,0.6), 0 2px 0 rgba(255,240,225,0.05) inset; }
+  .win { border-radius: 14px; overflow: hidden; background: #fbfaf8;
+         box-shadow: 0 70px 180px rgba(0,0,0,0.7), 0 0 0 1px rgba(255,236,218,0.12); }
+  .win-bar { height: 40px; display: flex; align-items: center; gap: 9px; padding: 0 18px; background: #1d1814;
+             border-bottom: 1px solid rgba(255,236,218,0.06); position: relative; }
+  .win-bar i { width: 12px; height: 12px; border-radius: 50%; background: #3a322b; display: block; }
+  .win-bar i:nth-child(1) { background: #ff5f57; } .win-bar i:nth-child(2) { background: #febc2e; } .win-bar i:nth-child(3) { background: #28c840; }
+  .win-bar .url { position: absolute; left: 50%; transform: translateX(-50%); font: 15px 'JetBrains Mono', monospace; color: #9a8f83;
+                  background: #13100d; border-radius: 7px; padding: 4px 48px; }
+  .footage-body { position: relative; width: 1600px; height: 1000px; overflow: hidden; }
+  .footage-body video { display: block; width: 1600px; height: 1000px; }
+  /* covers the Call tab's SOURCE value column (real filesystem paths) */
+  .src-patch { position: absolute; left: 438px; padding-left: 8px; width: 1000px; background: #fafafa;
+               font: 13px 'JetBrains Mono', monospace; color: #3b4148; display: none; align-items: center;
+               white-space: nowrap; overflow: hidden; }
+
+  /* ── chapter title ── */
+  .chapter { position: absolute; left: 96px; top: 84px; display: flex; align-items: baseline; gap: 22px; }
+  .chapter .num { font: 500 20px 'JetBrains Mono', monospace; color: var(--coral); letter-spacing: 0.1em; }
+  .chapter .ttl { font: 700 44px 'Inter', sans-serif; letter-spacing: -0.03em; color: var(--cream); }
+  .chapter .rule { position: absolute; left: 0; top: 64px; height: 2px; background: linear-gradient(90deg, var(--coral), transparent); width: 420px; transform-origin: 0 0; }
+
+  .chap { position:absolute; left:84px; bottom:76px; padding:22px 34px 26px 30px; border-radius:20px; background:rgba(16,13,11,0.82);
+          border:1px solid rgba(255,236,218,0.1); box-shadow:0 30px 90px rgba(0,0,0,0.55); backdrop-filter: blur(14px); }
+  .chap-num { font:500 17px 'JetBrains Mono',monospace; letter-spacing:0.22em; color:var(--coral); margin-bottom:8px; }
+  .chap-ttl { font:800 50px 'Inter'; letter-spacing:-0.035em; color:var(--cream); white-space:nowrap; line-height:1.05; }
+  .chap-rule { height:3px; margin-top:14px; border-radius:2px; background:linear-gradient(90deg,var(--coral),rgba(253,133,103,0)); transform-origin:0 50%; }
+  /* callouts */
+  .callout { position: absolute; display: flex; align-items: center; gap: 12px; padding: 12px 20px 12px 16px; border-radius: 14px;
+             background: rgba(20,16,13,0.92); border: 1px solid rgba(253,133,103,0.45); color: var(--cream);
+             font: 600 24px 'Inter', sans-serif; letter-spacing: -0.01em; white-space: nowrap;
+             box-shadow: 0 20px 60px rgba(0,0,0,0.5), 0 0 40px rgba(253,133,103,0.12); }
+  .callout .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--coral); box-shadow: 0 0 14px var(--coral); }
+  .ring { position: absolute; border: 3px solid var(--coral); border-radius: 10px; box-shadow: 0 0 0 6px rgba(253,133,103,0.16), 0 0 40px rgba(253,133,103,0.35); }
+</style>
+</head>
+<body>
+<div id="stage">
+  <canvas id="bg" class="full" width="1920" height="1080"></canvas>
+  <div id="scenes"></div>
+  <div id="vig"></div>
+  <canvas id="fx" class="full" width="3840" height="2160"></canvas>
+  <div id="flash"></div>
+  <canvas id="grain" class="full" width="1920" height="1080"></canvas>
+  <div id="fade"></div>
+</div>
+<script src="../node_modules/gsap/dist/gsap.min.js"></script>
+<script src="../node_modules/gsap/dist/CustomEase.min.js"></script>
+<script src="vo-words.js"></script>
+<script src="timeline.js"></script>
+<script src="engine.js"></script>
+<script src="../patch-table.js"></script>
+<script>window.SCENES = [];</script>
+<script src="brand.js"></script>
+<script src="scenes/problem.js"></script>
+<script src="scenes/turn.js"></script>
+<script src="scenes/code.js"></script>
+<script src="scenes/ui.js"></script>
+<script src="scenes/pick.js"></script>
+<script src="scenes/multi.js"></script>
+<script src="scenes/mcp.js"></script>
+<script src="scenes/trace.js"></script>
+<script src="scenes/features.js"></script>
+<script src="scenes/outro.js"></script>
+<script src="main.js"></script>
+</body>
+</html>

@@ -4,6 +4,8 @@
   "type": "module",
   "description": "Promo video generation pipeline (see README.md)",
   "dependencies": {
-    "puppeteer-core": "^24.0.0"
+    "gsap": "^3.15.0",
+    "puppeteer-core": "^24.0.0",
+    "sharp": "^0.35.5"
   }
 }
