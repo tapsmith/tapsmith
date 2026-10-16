@@ -25,7 +25,7 @@ import { configureMcpConnection } from '../mcp/connection.js';
 import { matchRequestedFiles, fileFailureEntry } from '../mcp/headless-dispatcher.js';
 import { fileLoadFailureTitle, isLoadFailureNode, loadFailureFollowUp, loadFailureTreeNode, runFilterForFile, withoutLoadFailedFiles } from '../load-failure.js';
 import { resolveRunSelection } from './run-selection.js';
-import { planRunAll } from './run-all-plan.js';
+import { isPlannedTest, planRunAll, type PlannedFile } from './run-all-plan.js';
 import { pickResolvedDeviceName } from '../mcp/tools/device-target.js';
 
 import type { TestDispatcher, TestRunResult, TestResultEntry, TestTreeEntry, SessionInfo, DiscoveryError, DeviceTarget } from '../mcp/index.js';
@@ -1592,10 +1592,11 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
    * Walk the test tree and broadcast 'skipped' status for every test under
    * a project whose dependency failed, so the UI shows them correctly.
    */
-  function markProjectTestsSkipped(projectName: string): void {
+  /** Mark a blocked project's tests skipped — only those `planned` lists, when given (a filtered Run all). */
+  function markProjectTestsSkipped(projectName: string, planned?: readonly PlannedFile[]): void {
     function markChildren(nodes: TestTreeNode[]): void {
       for (const node of nodes) {
-        if (node.type === 'test') {
+        if (node.type === 'test' && (!planned || isPlannedTest(planned, node.filePath, node.fullName))) {
           updateTestStatus(node.fullName, node.filePath, 'skipped', undefined, undefined, undefined, undefined, undefined, projectName);
         }
         if (node.children) markChildren(node.children);
@@ -2966,7 +2967,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
             const blockedBy = project.dependencies.find((d) => failedProjects.has(d));
             if (blockedBy) {
               broadcast({ type: 'error', message: `Skipping project "${project.name}" — dependency "${blockedBy}" failed` });
-              markProjectTestsSkipped(project.name);
+              markProjectTestsSkipped(project.name, selection ? files : undefined);
               failedProjects.add(project.name);
               continue;
             }

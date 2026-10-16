@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { planRunAll, type PlannedFile, type RunAllPlan } from '../ui-mode/run-all-plan.js';
+import { isPlannedTest, planRunAll, type PlannedFile, type RunAllPlan } from '../ui-mode/run-all-plan.js';
 import { selectionKey } from '../ui-mode/run-selection.js';
 import type { ResolvedProject } from '../project.js';
 
@@ -93,5 +93,19 @@ describe('planRunAll', () => {
 
     const some = planRunAll(flat, new Map([[selectionKey(undefined, B), ['x']]]));
     expect('files' in some && some.files.map(describeFile)).toEqual(['b.test.ts[x]']);
+  });
+});
+
+describe('isPlannedTest', () => {
+  const files: PlannedFile[] = [
+    { filePath: A, fullNames: ['logs in'] },
+    { filePath: B },
+  ];
+
+  it('takes every test of a whole file and only the listed names of a narrowed one', () => {
+    expect(isPlannedTest(files, B, 'anything')).toBe(true);
+    expect(isPlannedTest(files, A, 'logs in')).toBe(true);
+    expect(isPlannedTest(files, A, 'logs out')).toBe(false);
+    expect(isPlannedTest(files, SETUP, 'one')).toBe(false);
   });
 });

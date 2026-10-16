@@ -94,3 +94,13 @@ function planFile(
     ...(fullNames ? { fullNames } : {}),
   };
 }
+
+/**
+ * Whether a test is part of these planned files — every test of a whole
+ * file, else only its listed full names. A project a failed dependency blocks
+ * marks only what the run would have run as skipped, so a filtered Run all
+ * leaves the rest of the tree's results alone.
+ */
+export function isPlannedTest(files: readonly PlannedFile[], filePath: string, fullName: string): boolean {
+  return files.some((f) => f.filePath === filePath && (!f.fullNames || f.fullNames.includes(fullName)));
+}
