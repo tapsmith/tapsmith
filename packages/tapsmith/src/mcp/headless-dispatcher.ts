@@ -37,7 +37,7 @@ import { loadMcpConfig } from './config-loader.js';
 import { pickResolvedDeviceName } from './tools/device-target.js';
 
 import type { TestTreeNode, UIDiscoverMessage, UIDiscoverChildMessage } from '../ui-mode/ui-protocol.js';
-import { grepSelectsNothing, pruneTreeByGrep } from '../ui-mode/grep-tree.js';
+import { pruneTreeByGrep } from '../ui-mode/grep-tree.js';
 import { grepFiltersFor, type GrepFilters } from '../test-filter.js';
 
 /** Key for a session with no platform of its own (single-platform configs). */
@@ -1277,12 +1277,10 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       throw new Error('No Tapsmith config is loaded, so there is nothing to run against.');
     }
 
-    // A file the config's grep selects no test in has nothing to run: no
-    // device, no child, no result — as `tapsmith test` leaves it out (PILOT-730).
+    // The child applies the config's grep itself. Nothing re-discovers a file
+    // here after startup, so the tree cannot say a file has nothing to run:
+    // an edit since may have added the test the grep selects (PILOT-730).
     const grep = this._grepFiltersFor(projectName);
-    if (grepSelectsNothing(this._fileNodes.get(filePath), grep)) {
-      return { results: [], suite: { name: '', tests: [], suites: [], durationMs: 0 } };
-    }
 
     const target = await this._ensureTargetForProject(projectName);
     const serializedConfig = this._configForProject(projectName);

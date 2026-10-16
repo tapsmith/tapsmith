@@ -4,10 +4,11 @@
  *
  * A test a grep leaves out is not part of the suite — not run, listed or
  * counted as skipped (docs/configuration.md) — so UI mode and the headless
- * MCP server leave it out of the tree they list, and never dispatch a file
- * the grep selects nothing in. The run itself applies the same filters again
- * (the worker passes them to `runTestFile`), so a test added to a file since
- * it was discovered is filtered all the same.
+ * MCP server leave it out of the tree they list, and UI mode does not
+ * dispatch a file its up-to-date tree says the grep selects nothing in. The
+ * run itself applies the same filters again (the worker passes them to
+ * `runTestFile`), so a test added to a file since it was discovered is
+ * filtered all the same.
  */
 
 import { hasGrepFilter, matchesTestFilter, passesSelectionFilters, type GrepFilters } from '../test-filter.js';

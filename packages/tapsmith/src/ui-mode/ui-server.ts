@@ -718,6 +718,8 @@ export async function startUIServer(
   let watcher: FSWatcher | null = null;
   let discoveryWatcher: FSWatcher | null = null;
   const pendingDiscoveryFiles = new Set<string>();
+  /** Files whose re-discovery is under way: their tree nodes may be stale. */
+  const discoveringFiles = new Set<string>();
   let discoveryTimer: ReturnType<typeof setTimeout> | null = null;
   let discoveryBatchRunning = false;
   const discoveredFileNodes = new Map<string, TestTreeNode>();
@@ -1412,6 +1414,17 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   function grepFor(projectName: string | undefined): GrepFilters {
     const project = projectName !== undefined ? ctx.projects?.find((p) => p.name === projectName) : undefined;
     return grepFiltersFor(ctx.config, project);
+  }
+
+  /**
+   * Whether the grep is known to select no test in a file run under its
+   * project. Not while the file waits to be re-discovered: an edit that
+   * triggers a watch re-run may have just added the test the grep selects,
+   * and the old tree would drop that run — the worker applies the grep itself.
+   */
+  function grepSelectsNothingIn(file: TaggedFile): boolean {
+    if (pendingDiscoveryFiles.has(file.filePath) || discoveringFiles.has(file.filePath)) return false;
+    return grepSelectsNothing(discoveredFileNodes.get(file.filePath), grepFor(file.projectName));
   }
 
   /** Deep-clone a discovered tree node, prefixing every id so the same file
@@ -2500,7 +2513,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // grep selects no test in has nothing to run, so it is not dispatched:
     // no device work, and no failure for it when its target cannot start
     // (PILOT-593). The worker applies the same filters to the files it runs.
-    const files = requested.filter((f) => !grepSelectsNothing(discoveredFileNodes.get(f.filePath), grepFor(f.projectName)));
+    const files = requested.filter((f) => !grepSelectsNothingIn(f));
 
     // A device target that could not start is tried again first; while it
     // still cannot, its files fail with the reason (PILOT-415).
@@ -4004,7 +4017,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
         let treeChanged = false;
         const filesToRun = new Set<string>();
-        const results = await discoverBatch(files);
+        for (const f of files) discoveringFiles.add(f);
+        let results: Awaited<ReturnType<typeof discoverBatch>>;
+        try {
+          results = await discoverBatch(files);
+        } finally {
+          for (const f of files) discoveringFiles.delete(f);
+        }
         for (const { file, result } of results) {
           if (result.treeChanged) treeChanged = true;
           if (result.shouldRun) filesToRun.add(file);

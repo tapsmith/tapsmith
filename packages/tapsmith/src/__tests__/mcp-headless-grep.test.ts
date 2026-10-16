@@ -69,18 +69,17 @@ describe('headless MCP and the config grep', () => {
     expect(listed(d.getTestTree())).toEqual(['smoke: logs in', 'rejects a bad password', 'adds an item']);
   });
 
-  it('runs nothing — no device, no child — for a file the grep selects no test in', async () => {
+  // Nothing re-discovers a file during the session, so the tree from startup
+  // cannot rule a run out: an edit since may have added a matching test. The
+  // child applies the grep itself.
+  it('still runs a file the startup tree says the grep selects nothing in', async () => {
     const { internals } = dispatcher({}, [{ name: 'android', grep: /smoke/ }, { name: 'ios' }]);
     const targets: Array<string | undefined> = [];
     internals._ensureTargetForProject = async (projectName?: string): Promise<unknown> => {
       targets.push(projectName);
       throw new Error('device work');
     };
-    await expect(internals._runFileInChild(CART, undefined, 'android')).resolves.toMatchObject({ results: [] });
-    expect(targets).toEqual([]);
-    // Under a project whose grep selects it, the file does run.
-    await expect(internals._runFileInChild(CART, undefined, 'ios')).rejects.toThrow('device work');
-    await expect(internals._runFileInChild(LOGIN, undefined, 'android')).rejects.toThrow('device work');
-    expect(targets).toEqual(['ios', 'android']);
+    await expect(internals._runFileInChild(CART, undefined, 'android')).rejects.toThrow('device work');
+    expect(targets).toEqual(['android']);
   });
 });
