@@ -2,7 +2,8 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { EXAMPLE_TEST_PATH, GENERATED_TEST_MATCH, androidEmulatorCaptureLine, avdPickerChoices, normalizeTypedPath, typedBuildPath, validateBuildPath, generateConfig, generatedProjects, generateExampleTest, networkCaptureDefault, runInit, wizardNextSteps } from '../init.js';
+import { EXAMPLE_TEST_PATH, GENERATED_TEST_MATCH, androidEmulatorCaptureLine, avdPickerChoices, normalizeTypedPath, typedBuildPath, validateBuildPath, generateConfig, generatedProjects, generateExampleTest, networkCaptureDefault, platformPrompt, runInit, wizardNextSteps } from '../init.js';
+import type { EnvScan } from '../env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from '../init.js';
 import { platformlessIosFields } from '../doctor.js';
 import { _internal } from '../runner.js';
@@ -330,6 +331,64 @@ describe('avdPickerChoices()', () => {
     const { choices, initial } = avdPickerChoices(['Mystery'], [{ name: 'Mystery' }]);
     expect(choices[0].hint).toBeUndefined();
     expect(initial).toBe(0);
+  });
+
+  it('pre-selects an AVD whose image could not be read over an earlier Play image (PILOT-721)', () => {
+    const { initial } = avdPickerChoices(['Medium_Phone_API_36', 'Mystery'], [...studioAvds, { name: 'Mystery' }]);
+    expect(initial).toBe(1);
+  });
+});
+
+// ─── Platform prompt (PILOT-721) ───
+
+describe('platformPrompt() (PILOT-721)', () => {
+  const env = (over: Partial<EnvScan> = {}): EnvScan => ({
+    nodeVersion: '22.0.0', rosettaWarning: undefined, daemonBin: '/bin/tapsmith-core', agentApk: true, agentTestApk: true,
+    adbVersion: '35.0.1', androidHome: '/sdk', xcodeVersion: '26.0',
+    simulators: [{ name: 'iPhone 17', udid: 'A', state: 'Shutdown', runtime: 'iOS 26.0' }],
+    avds: [], avdImages: [], isMacOS: true, ...over,
+  });
+  const none = { hasAndroidDir: false, hasIosDir: false };
+  const selected = (p: ReturnType<typeof platformPrompt>): string => p.choices[p.initial].name;
+
+  it('defaults to iOS when adb is missing and Xcode is ready, hinting why Android is not', () => {
+    const p = platformPrompt(env({ adbVersion: undefined }), none);
+    expect(selected(p)).toBe('ios');
+    expect(p.choices.find((c) => c.name === 'android')?.hint).toBe('ADB not found');
+  });
+
+  it('defaults to iOS in a project with only ios/', () => {
+    expect(selected(platformPrompt(env(), { hasAndroidDir: false, hasIosDir: true }))).toBe('ios');
+  });
+
+  it('defaults to Android in a project with only android/', () => {
+    expect(selected(platformPrompt(env(), { hasAndroidDir: true, hasIosDir: false }))).toBe('android');
+  });
+
+  it('defaults to both when the project has android/ and ios/ and both toolchains are ready', () => {
+    expect(selected(platformPrompt(env(), { hasAndroidDir: true, hasIosDir: true }))).toBe('both');
+  });
+
+  it('defaults to the usable one of a two-platform project', () => {
+    expect(selected(platformPrompt(env({ adbVersion: undefined }), { hasAndroidDir: true, hasIosDir: true }))).toBe('ios');
+    expect(selected(platformPrompt(env({ xcodeVersion: undefined }), { hasAndroidDir: true, hasIosDir: true }))).toBe('android');
+  });
+
+  it('keeps Android first when both toolchains are ready and the layout says nothing', () => {
+    const p = platformPrompt(env(), none);
+    expect(selected(p)).toBe('android');
+    expect(p.choices.every((c) => c.hint === undefined)).toBe(true);
+  });
+
+  it('hints an iOS without Xcode, and an iOS with no simulators', () => {
+    expect(platformPrompt(env({ xcodeVersion: undefined }), none).choices.find((c) => c.name === 'ios')?.hint).toBe('Xcode not found');
+    expect(platformPrompt(env({ simulators: [] }), none).choices.find((c) => c.name === 'ios')?.hint).toBe('no iOS simulators found');
+  });
+
+  it('offers only Android off macOS', () => {
+    const p = platformPrompt(env({ isMacOS: false, xcodeVersion: undefined, simulators: [], adbVersion: undefined }), { hasAndroidDir: false, hasIosDir: true });
+    expect(p.choices.map((c) => c.name)).toEqual(['android']);
+    expect(p.initial).toBe(0);
   });
 });
 

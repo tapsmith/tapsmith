@@ -19,7 +19,7 @@ import {
 import { adbMissingFix } from './toolchain.js';
 import type { InitCommandOptions } from './cli-program.js';
 import { formatJson, jsonError } from './cli-json.js';
-import { avdCaptureSupport, avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, type AvdImageInfo } from './avd-images.js';
+import { avdCaptureSupport, avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd, type AvdImageInfo } from './avd-images.js';
 import { isTapsmithResolvableFrom, tapsmithInstallCommand, type InstallCommand } from './config.js';
 import { androidAgentInstalledFor, missingAndroidAgentAdvice } from './agent-resolve.js';
 import { globSync } from 'glob';
@@ -224,9 +224,9 @@ export interface IosConfig {
 
 /**
  * The wizard's AVD picker: list order kept, Google Play images marked (HTTPS
- * is never captured on them), and a capture-capable AVD pre-selected. The
- * capture question comes later and defaults to yes on a capable AVD, so the
- * picker always prefers one.
+ * is never captured on them), and the AVD `init --yes` would choose
+ * pre-selected ({@link preferredAvd}: a capture-capable one first). The
+ * capture question comes later and defaults to yes on a capable AVD.
  */
 export function avdPickerChoices(
   avds: string[],
@@ -236,8 +236,8 @@ export function avdPickerChoices(
   const choices = avds.map((name, i) => (support[i] === 'play-image'
     ? { name, message: name, hint: 'no HTTPS capture' }
     : { name, message: name }));
-  const firstCapable = support.indexOf('capable');
-  return { choices, initial: firstCapable === -1 ? 0 : firstCapable };
+  const preferred = preferredAvd(avds, avdImages);
+  return { choices, initial: preferred === undefined ? 0 : avds.indexOf(preferred) };
 }
 
 /**
@@ -273,6 +273,48 @@ export function androidEmulatorCaptureLine(avd: string | undefined, avdImages: A
   return warning
     ? `  ${YELLOW}⚠${RESET} Android emulator — ${warning}`
     : `  ${green('✓')} Android emulator (${avd}) — works automatically`;
+}
+
+// ─── Platform choice (PILOT-721) ───
+
+/**
+ * The platform prompt: Android, and on macOS iOS and Both, each that cannot
+ * run here hinted with why, and a default that can. The project's layout
+ * narrows it (an `ios/`-only project means iOS, both directories mean Both,
+ * as `init --yes` infers), then the toolchains: Android needs adb, iOS needs
+ * Xcode and a simulator. A project with neither directory gets Android when
+ * adb is there, else iOS when it can run.
+ */
+export function platformPrompt(
+  env: EnvScan,
+  layout: { hasAndroidDir: boolean; hasIosDir: boolean },
+): { choices: Array<{ name: string; message: string; hint?: string }>; initial: number } {
+  const androidHint = env.adbVersion ? undefined : 'ADB not found';
+  if (!env.isMacOS) return { choices: [{ name: 'android', message: 'Android', ...(androidHint ? { hint: androidHint } : {}) }], initial: 0 };
+  const iosHint = !env.xcodeVersion
+    ? 'Xcode not found'
+    : simulatorChoices(env.simulators).length === 0 ? 'no iOS simulators found' : undefined;
+  const choices = [
+    { name: 'android', message: 'Android', ...(androidHint ? { hint: androidHint } : {}) },
+    { name: 'ios', message: 'iOS', ...(iosHint ? { hint: iosHint } : {}) },
+    { name: 'both', message: 'Both' },
+  ];
+  const androidOk = !androidHint;
+  const iosOk = !iosHint;
+  const { hasAndroidDir, hasIosDir } = layout;
+  let pick: 'android' | 'ios' | 'both';
+  if (hasAndroidDir || hasIosDir) {
+    const android = hasAndroidDir && androidOk;
+    const ios = hasIosDir && iosOk;
+    if (android && ios) pick = 'both';
+    else if (android) pick = 'android';
+    else if (ios) pick = 'ios';
+    // Nothing the layout names can run yet: the layout still says what the project is.
+    else pick = hasAndroidDir && hasIosDir ? 'both' : hasIosDir ? 'ios' : 'android';
+  } else {
+    pick = !androidOk && iosOk ? 'ios' : 'android';
+  }
+  return { choices, initial: choices.findIndex((c) => c.name === pick) };
 }
 
 /**
@@ -1121,19 +1163,17 @@ async function runInitInner(): Promise<void> {
   const expo = detectExpoProject(process.cwd());
   displayEnvironment(env, expo);
 
-  // Step 2: Platform selection
-  const platformChoices: Array<{ name: string; message: string; hint?: string }> = [
-    { name: 'android', message: 'Android' },
-  ];
-  if (env.isMacOS) {
-    platformChoices.push({ name: 'ios', message: 'iOS' });
-    platformChoices.push({ name: 'both', message: 'Both' });
-  }
-
+  // Step 2: Platform selection, defaulting to one that can run (PILOT-721)
+  const cwd = process.cwd();
+  const platforms = platformPrompt(env, {
+    hasAndroidDir: fs.existsSync(path.join(cwd, 'android')),
+    hasIosDir: fs.existsSync(path.join(cwd, 'ios')),
+  });
   const platformChoice = await ask<string>({
     type: 'select',
     message: 'Which platform(s) will you test?',
-    choices: platformChoices,
+    choices: platforms.choices,
+    initial: platforms.initial,
   });
 
   const selectedPlatforms: Platform[] = platformChoice === 'both'

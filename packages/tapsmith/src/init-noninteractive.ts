@@ -11,7 +11,7 @@ import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { EXAMPLE_TEST_PATH, generateConfig, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
 import { ignoreTestResultsOrWarn } from './init-gitignore.js';
-import { avdCaptureSupport, avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage } from './avd-images.js';
+import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
 import * as detectDefaults from './init-detect.js';
 import type { InitCommandOptions } from './cli-program.js';
 import type { InstallCommand } from './config.js';
@@ -226,12 +226,10 @@ export function resolveInitPlan(
     const useEmulators = deviceType === 'emulator' || deviceType === 'both';
     let avd = args.avd;
     if (useEmulators && !avd) {
-      // With capture on, skip past Play-image AVDs (Android Studio's default,
-      // usually listed first): HTTPS is never captured on them (PILOT-403).
-      const capable = args.networkCapture
-        ? env.avds.find((name) => avdCaptureSupport(env.avdImages.find((a) => a.name === name)) === 'capable')
-        : undefined;
-      avd = capable ?? env.avds[0];
+      // Skip past Play-image AVDs (Android Studio's default, usually listed
+      // first), capture on or off: HTTPS is never captured or routed on them
+      // (PILOT-403, PILOT-721).
+      avd = preferredAvd(env.avds, env.avdImages);
     }
     // Nothing listed: either there are no AVDs, or `emulator` (which Tapsmith
     // launches AVDs with) was not found — the latter matters for an explicit

@@ -120,6 +120,20 @@ export function avdCaptureSupport(avd: AvdImageInfo | undefined): AvdCaptureSupp
 }
 
 /**
+ * The AVD init chooses when the user names none (PILOT-721): the first
+ * capture-capable one, else the first whose image could not be read (it may
+ * well be capable), else the first listed. A Google Play image is the last
+ * resort even when capture is off: `device.route()` cannot intercept HTTPS
+ * there either, and `doctor` warns about it. `undefined` when none is listed.
+ */
+export function preferredAvd(avds: string[], avdImages: AvdImageInfo[]): string | undefined {
+  const support = (name: string): AvdCaptureSupport => avdCaptureSupport(avdImages.find((a) => a.name === name));
+  return avds.find((name) => support(name) === 'capable')
+    ?? avds.find((name) => support(name) === 'unknown')
+    ?? avds[0];
+}
+
+/**
  * The `create-avd` command for a NEW capture-capable AVD. The name is the
  * `create-avd` default (`Tapsmith_Phone_API_<api>`) unless an AVD already
  * has it, in which case a numeric suffix keeps it free — `create-avd`

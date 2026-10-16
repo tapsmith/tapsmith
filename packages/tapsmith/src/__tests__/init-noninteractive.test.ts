@@ -564,10 +564,23 @@ describe('resolveInitPlan() AVD choice with network capture', () => {
     expect(plan.warnings).toEqual([]);
   });
 
-  it('keeps "first available" when capture is off', () => {
+  it('prefers the capture-capable AVD when capture is off too, so route() mocking works later (PILOT-721)', () => {
     const plan = resolveInitPlan(android(), studioEnv, detectStubs);
-    expect(plan.android?.avd).toBe('Medium_Phone_API_36');
+    expect(plan.android?.avd).toBe('Tapsmith_Phone_API_36');
     expect(plan.warnings).toEqual([]);
+    expect(plan.captureAvdStep).toBeUndefined();
+  });
+
+  it('prefers an AVD whose image could not be read over a Play image (PILOT-721)', () => {
+    const env: EnvScan = { ...playOnlyEnv, avds: ['Medium_Phone_API_36', 'Mystery'], avdImages: [...playOnlyEnv.avdImages, { name: 'Mystery' }] };
+    expect(resolveInitPlan(android(), env, detectStubs).android?.avd).toBe('Mystery');
+  });
+
+  it('falls back to a Play image when it is all there is, offering create-avd as an optional step (PILOT-721)', () => {
+    const plan = resolveInitPlan(android(), playOnlyEnv, detectStubs);
+    expect(plan.android?.avd).toBe('Medium_Phone_API_36');
+    expect(plan.captureAvdStep?.optional).toBe(true);
+    expect(plan.captureAvdStep?.action).toContain('npx tapsmith create-avd');
   });
 
   it('warns, suggesting a NEW AVD, when only Play images exist', () => {
