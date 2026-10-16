@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fileTestsInTree, grepSelectsNothing, pruneTreeByGrep } from '../ui-mode/grep-tree.js';
+import { fileTestsInTree, pruneTreeByGrep } from '../ui-mode/grep-tree.js';
 import { grepFiltersFor } from '../test-filter.js';
 import { loadFailureTreeNode } from '../load-failure.js';
 import type { TestTreeNode } from '../ui-mode/ui-protocol.js';
@@ -62,23 +62,6 @@ describe('pruneTreeByGrep', () => {
     const before = JSON.stringify(tree);
     pruneTreeByGrep(tree, grepFiltersFor({ grep: /smoke/ }));
     expect(JSON.stringify(tree)).toBe(before);
-  });
-});
-
-describe('grepSelectsNothing', () => {
-  it('is true for a discovered file whose tests the grep all leaves out', () => {
-    expect(grepSelectsNothing(tree, grepFiltersFor({ grep: /checkout/ }))).toBe(true);
-  });
-
-  it('is false when the grep selects a test, or without a grep', () => {
-    expect(grepSelectsNothing(tree, grepFiltersFor({ grep: /smoke/ }))).toBe(false);
-    expect(grepSelectsNothing(tree, grepFiltersFor({}))).toBe(false);
-    expect(grepSelectsNothing(file([]), grepFiltersFor({}))).toBe(false);
-  });
-
-  it('is false when the tests are unknown: a file that failed to load, or was never discovered', () => {
-    expect(grepSelectsNothing(loadFailureTreeNode(FILE, 'boom'), grepFiltersFor({ grep: /checkout/ }))).toBe(false);
-    expect(grepSelectsNothing(undefined, grepFiltersFor({ grep: /checkout/ }))).toBe(false);
   });
 });
 

@@ -53,8 +53,8 @@ import {
   type SerializedConfig,
   type RunFileUseOptions,
 } from '../worker-protocol.js';
-import { grepFiltersFor, type GrepFilters } from '../test-filter.js';
-import { fileTestsInTree, grepSelectsNothing, pruneTreeByGrep } from './grep-tree.js';
+import { grepFiltersFor, hasGrepFilter, type GrepFilters } from '../test-filter.js';
+import { fileTestsInTree, pruneTreeByGrep } from './grep-tree.js';
 import type {
   ServerMessage,
   ClientMessage,
@@ -718,8 +718,6 @@ export async function startUIServer(
   let watcher: FSWatcher | null = null;
   let discoveryWatcher: FSWatcher | null = null;
   const pendingDiscoveryFiles = new Set<string>();
-  /** Files whose re-discovery is under way: their tree nodes may be stale. */
-  const discoveringFiles = new Set<string>();
   let discoveryTimer: ReturnType<typeof setTimeout> | null = null;
   let discoveryBatchRunning = false;
   const discoveredFileNodes = new Map<string, TestTreeNode>();
@@ -1417,14 +1415,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   }
 
   /**
-   * Whether the grep is known to select no test in a file run under its
-   * project. Not while the file waits to be re-discovered: an edit that
-   * triggers a watch re-run may have just added the test the grep selects,
-   * and the old tree would drop that run — the worker applies the grep itself.
+   * Whether the config's grep is what leaves this run of a file with no test
+   * in the tree: the file was discovered (its tests are known, unlike a file
+   * that failed to load) and a grep applies to its project.
    */
-  function grepSelectsNothingIn(file: TaggedFile): boolean {
-    if (pendingDiscoveryFiles.has(file.filePath) || discoveringFiles.has(file.filePath)) return false;
-    return grepSelectsNothing(discoveredFileNodes.get(file.filePath), grepFor(file.projectName));
+  function grepExcludesRun(file: TaggedFile): boolean {
+    const node = discoveredFileNodes.get(file.filePath);
+    return node !== undefined && !isLoadFailureNode(node) && hasGrepFilter(grepFor(file.projectName));
   }
 
   /** Deep-clone a discovered tree node, prefixing every id so the same file
@@ -2363,7 +2360,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   /**
    * Fail a file no worker can run with `reason`. Each of its tests fails, as
    * Playwright fails every test of a project whose browser cannot launch; a
-   * file with no discovered tests gets one file-level failure.
+   * file with no discovered tests gets one file-level failure. A run the
+   * config's grep selects no test of in this file records nothing: those
+   * tests were never part of it (PILOT-593).
    *
    * @returns how many failures were recorded.
    */
@@ -2373,7 +2372,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     /** The file was partway through on a worker that died: these tests (fullName) already reported and keep their result. */
     reported?: ReadonlySet<string>,
   ): number {
-    const tests = treeTestsOf(file).filter((t) => !reported?.has(t.fullName));
+    const selected = treeTestsOf(file);
+    if (selected.length === 0 && grepExcludesRun(file)) {
+      broadcastFileStatus(file.filePath, 'done', file.projectName);
+      return 0;
+    }
+    const tests = selected.filter((t) => !reported?.has(t.fullName));
     if (tests.length === 0) {
       recordFileFailure(file.filePath, file.projectName, new Error(reason));
     } else {
@@ -2503,17 +2507,15 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
    * Dispatch files across workers using work-stealing.
    * Returns aggregate counts.
    */
-  async function dispatchFilesParallel(requested: TaggedFile[]): Promise<{
+  async function dispatchFilesParallel(files: TaggedFile[]): Promise<{
     passed: number; failed: number; skipped: number; duration: number; anyFailed: boolean; failedProjectNames: Set<string>
   }> {
     let passed = 0, failed = 0, skipped = 0, duration = 0, anyFailed = false;
     const failedProjectsInDispatch = new Set<string>();
-    // Every run comes through here — Run all, a project, a file, a test, its
-    // dependencies, a watch re-run, an MCP agent's run. A file the config's
-    // grep selects no test in has nothing to run, so it is not dispatched:
-    // no device work, and no failure for it when its target cannot start
-    // (PILOT-593). The worker applies the same filters to the files it runs.
-    const files = requested.filter((f) => !grepSelectsNothingIn(f));
+    // Every file is dispatched, even one the tree says the grep selects
+    // nothing in: the tree can be stale (a helper that names the tests
+    // changed, an import broke since), and the worker applies the grep to
+    // what the file holds now, as `tapsmith test` does (PILOT-730).
 
     // A device target that could not start is tried again first; while it
     // still cannot, its files fail with the reason (PILOT-415).
@@ -2521,9 +2523,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     if (!parallelRunAborted) {
       for (const f of unavailable) {
         const sig = f.projectName ? ctx.bucketByProject?.get(f.projectName) : undefined;
-        failed += failUnservableFile(f, (sig && ctx.unavailableTargets.reason(sig)) || 'Its device target could not start');
-        anyFailed = true;
-        if (f.projectName) failedProjectsInDispatch.add(f.projectName);
+        const n = failUnservableFile(f, (sig && ctx.unavailableTargets.reason(sig)) || 'Its device target could not start');
+        failed += n;
+        if (n > 0) {
+          anyFailed = true;
+          if (f.projectName) failedProjectsInDispatch.add(f.projectName);
+        }
       }
     }
     // Copies: dispatch state (`reported`) must not outlive this dispatch on a caller's entries.
@@ -2538,8 +2543,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // fail the rest alongside the target's files, so the counts and the
       // tree agree, rather than throwing them away.
       for (const f of fileQueue) {
-        failed += failUnservableFile(f, NO_WORKER_MESSAGE);
-        if (f.projectName) failedProjectsInDispatch.add(f.projectName);
+        const n = failUnservableFile(f, NO_WORKER_MESSAGE);
+        failed += n;
+        if (n > 0 && f.projectName) failedProjectsInDispatch.add(f.projectName);
       }
       broadcast({ type: 'error', message: NO_WORKER_MESSAGE });
       return { passed, failed, skipped, duration, anyFailed: true, failedProjectNames: failedProjectsInDispatch };
@@ -2586,9 +2592,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
             // Recorded, not just counted, so the file shows why it failed
             // (PILOT-415) — the same as a drained file below.
             for (const f of fileQueue.splice(0)) {
-              failed += failUnservableFile(f, unservableReason(f), f.reported);
-              anyFailed = true;
-              if (f.projectName) failedProjectsInDispatch.add(f.projectName);
+              const n = failUnservableFile(f, unservableReason(f), f.reported);
+              failed += n;
+              if (n > 0) {
+                anyFailed = true;
+                if (f.projectName) failedProjectsInDispatch.add(f.projectName);
+              }
             }
             broadcast({ type: 'error', message: 'Some test files could not be dispatched to any available worker' });
           } else {
@@ -2755,9 +2764,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           // results and the status board showed nothing — the failure existed
           // only in the number. It carries the reason the worker gave, which
           // is the actual cause (an import error, say) rather than the drain.
-          failed += failUnservableFile(f, `No worker could run this file: ${reason}`, f.reported);
-          anyFailed = true;
-          if (f.projectName) failedProjectsInDispatch.add(f.projectName);
+          const n = failUnservableFile(f, `No worker could run this file: ${reason}`, f.reported);
+          failed += n;
+          if (n > 0) {
+            anyFailed = true;
+            if (f.projectName) failedProjectsInDispatch.add(f.projectName);
+          }
         }
         if (orphaned.length > 0) {
           const names = orphaned.map((f) => path.basename(f.filePath)).join(', ');
@@ -4017,13 +4029,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
         let treeChanged = false;
         const filesToRun = new Set<string>();
-        for (const f of files) discoveringFiles.add(f);
-        let results: Awaited<ReturnType<typeof discoverBatch>>;
-        try {
-          results = await discoverBatch(files);
-        } finally {
-          for (const f of files) discoveringFiles.delete(f);
-        }
+        const results = await discoverBatch(files);
         for (const { file, result } of results) {
           if (result.treeChanged) treeChanged = true;
           if (result.shouldRun) filesToRun.add(file);

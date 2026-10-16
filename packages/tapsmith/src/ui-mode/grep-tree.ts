@@ -4,11 +4,10 @@
  *
  * A test a grep leaves out is not part of the suite — not run, listed or
  * counted as skipped (docs/configuration.md) — so UI mode and the headless
- * MCP server leave it out of the tree they list, and UI mode does not
- * dispatch a file its up-to-date tree says the grep selects nothing in. The
- * run itself applies the same filters again (the worker passes them to
- * `runTestFile`), so a test added to a file since it was discovered is
- * filtered all the same.
+ * MCP server leave it out of the tree they list. Runs do not rely on the
+ * tree, which can be stale: the worker applies the same filters to what the
+ * file holds when it runs (it passes them to `runTestFile`), as
+ * `tapsmith test` does.
  */
 
 import { hasGrepFilter, matchesTestFilter, passesSelectionFilters, type GrepFilters } from '../test-filter.js';
@@ -32,16 +31,6 @@ export function pruneTreeByGrep(file: TestTreeNode, filters: GrepFilters): TestT
     return children.length > 0 ? { ...node, children } : undefined;
   };
   return prune(file);
-}
-
-/**
- * Whether the grep is known to select no test in this file — so a run has
- * nothing to dispatch for it. False without a grep, and when its tests are
- * unknown (no discovered tree, or a file that failed to load).
- */
-export function grepSelectsNothing(file: TestTreeNode | undefined, filters: GrepFilters): boolean {
-  if (!file || !hasGrepFilter(filters) || isLoadFailureNode(file)) return false;
-  return pruneTreeByGrep(file, filters) === undefined;
 }
 
 /**
