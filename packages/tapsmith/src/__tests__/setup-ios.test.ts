@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { runSetupIos, setupSimulatorNetworkCapture, type SetupSimulatorDeps } from '../setup-ios.js';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { mitmproxyRedirectorSource, runSetupIos, setupSimulatorNetworkCapture, type SetupSimulatorDeps } from '../setup-ios.js';
 
 type SeStatus = ReturnType<SetupSimulatorDeps['checkSeStatus']>;
 
@@ -32,6 +35,30 @@ async function setup(opts: {
 }
 
 const DEVICE_TRACK = /physical iPhone or iPad[\s\S]*tapsmith ios setup-device[\s\S]*tapsmith ios network configure <udid>/;
+
+describe('mitmproxy detection (PILOT-721)', () => {
+  it('finds the redirector where the daemon (and doctor) look, not only through brew list', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-redirector-'));
+    const app = path.join(dir, 'Redirector');
+    fs.writeFileSync(app, '');
+    const saved = process.env.TAPSMITH_REDIRECTOR_APP;
+    try {
+      process.env.TAPSMITH_REDIRECTOR_APP = app;
+      expect(mitmproxyRedirectorSource()).toBe('TAPSMITH_REDIRECTOR_APP');
+    } finally {
+      if (saved === undefined) delete process.env.TAPSMITH_REDIRECTOR_APP;
+      else process.env.TAPSMITH_REDIRECTOR_APP = saved;
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('asks for a mitmproxy install without claiming it must come from Homebrew', async () => {
+    const { code, out } = await setup({ mitmproxy: false });
+    expect(code).toBe(1);
+    expect(out).toContain('brew install mitmproxy');
+    expect(out).not.toContain('via Homebrew');
+  });
+});
 
 describe('tapsmith ios network setup-simulator (PILOT-271)', () => {
   it('says it is about simulator network capture', async () => {

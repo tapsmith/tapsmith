@@ -717,6 +717,23 @@ describe('executeInitPlan()', () => {
     }
   });
 
+  it('names the project\'s runner in Next steps and warnings, not npx (PILOT-721)', () => {
+    const tmp = makeTmp();
+    try {
+      const args = initArgs({ yes: true, platform: 'android', exampleTest: false, agentsMd: false });
+      const playOnly: EnvScan = { ...baseEnv, avds: ['Medium_Phone_API_36'], avdImages: [{ name: 'Medium_Phone_API_36', tagId: 'google_apis_playstore', apiLevel: 36 }] };
+      const plan = resolveInitPlan({ ...args, networkCapture: true }, playOnly, detectStubs, tmp);
+      const result = executeInitPlan(plan, { ...args, networkCapture: true }, tmp, undefined, 'pnpm exec tapsmith');
+      const text = [...result.nextSteps, ...result.warnings].join('\n');
+      expect(text).toContain('pnpm exec tapsmith verify');
+      expect(text).toContain('pnpm exec tapsmith create-avd');
+      expect(text).toContain('claude mcp add tapsmith-headless -- pnpm exec tapsmith mcp-server');
+      expect(text).not.toContain('npx tapsmith');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   // PILOT-631: no package.json in the project directory.
   it('says why the install step creates a package.json first', () => {
     const tmp = makeTmp();

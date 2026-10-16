@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { simulatorChoices, type EnvScan } from './env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
-import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, generateConfig, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
+import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
 import { ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
@@ -530,6 +530,7 @@ export function executeInitPlan(
   args: InitArgs,
   cwd: string = process.cwd(),
   missingTapsmith?: InstallCommand,
+  cli = 'npx tapsmith',
 ): InitResult {
   const filesCreated: string[] = [];
   const warnings = [...plan.warnings];
@@ -571,5 +572,7 @@ export function executeInitPlan(
     ...(captureStep?.optional ? [`${captureStep.label}: ${captureStep.action}`] : []),
   ];
 
-  return { configPath, filesCreated, warnings, nextSteps };
+  // In the project's own runner (`pnpm exec tapsmith`, PILOT-721).
+  const local = (text: string): string => withTapsmithCommand(text, cli);
+  return { configPath, filesCreated, warnings: warnings.map(local), nextSteps: nextSteps.map(local) };
 }

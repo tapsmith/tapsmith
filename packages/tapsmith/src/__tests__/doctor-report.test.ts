@@ -67,7 +67,8 @@ vi.mock('../host-arch.js', async (importOriginal) => {
 });
 
 import { stripAnsi } from '../cli-json.js';
-import { findMitmRedirector, runDoctor, type DoctorJson } from '../doctor.js';
+import { runDoctor, type DoctorJson } from '../doctor.js';
+import { findMitmRedirector } from '../setup-ios.js';
 
 // ─── Fake machine ───
 

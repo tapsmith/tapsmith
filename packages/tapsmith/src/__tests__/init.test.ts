@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { EXAMPLE_TEST_PATH, GENERATED_TEST_MATCH, androidEmulatorCaptureLine, avdPickerChoices, normalizeTypedPath, typedBuildPath, validateBuildPath, generateConfig, generatedProjects, generateExampleTest, networkCaptureDefault, platformPrompt, runInit, wizardNextSteps } from '../init.js';
+import { EXAMPLE_TEST_PATH, GENERATED_TEST_MATCH, androidEmulatorCaptureLine, avdPickerChoices, normalizeTypedPath, typedBuildPath, validateBuildPath, generateConfig, generatedProjects, generateExampleTest, iosSimulatorCaptureLine, networkCaptureDefault, platformPrompt, runInit, wizardNextSteps } from '../init.js';
 import type { EnvScan } from '../env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from '../init.js';
 import { platformlessIosFields } from '../doctor.js';
@@ -453,6 +453,31 @@ describe('androidEmulatorCaptureLine()', () => {
   });
 });
 
+describe('iosSimulatorCaptureLine() (PILOT-721)', () => {
+  const line = (...args: Parameters<typeof iosSimulatorCaptureLine>): string => stripAnsi(iosSimulatorCaptureLine(...args));
+
+  it('asks for mitmproxy only when doctor would not find it', () => {
+    expect(line(undefined, 'not-registered', 'npx tapsmith')).toBe('  ⚠ iOS simulator — run `brew install mitmproxy`, then `npx tapsmith ios network setup-simulator`');
+    expect(line('/Applications', 'not-registered', 'npx tapsmith')).not.toContain('brew install');
+  });
+
+  it('says it is ready when mitmproxy and its Network Extension are', () => {
+    expect(line('/Applications', 'enabled', 'npx tapsmith')).toBe('  ✓ iOS simulator — ready (mitmproxy and its Network Extension)');
+  });
+
+  it('on a fresh machine, says the extension asks for approval on the first run, with nothing to run now', () => {
+    const l = line('Homebrew cask', 'not-registered', 'npx tapsmith');
+    expect(l).toMatch(/^ {2}✓ iOS simulator — mitmproxy installed/);
+    expect(l).toContain('first iOS simulator test run');
+    expect(l).not.toContain('setup-simulator');
+  });
+
+  it('points at setup-simulator only for an extension waiting for approval or in an unknown state, in the project\'s runner', () => {
+    expect(line('/Applications', 'waiting-for-user', 'pnpm exec tapsmith')).toBe('  ⚠ iOS simulator — approve mitmproxy\'s Network Extension: run `pnpm exec tapsmith ios network setup-simulator`');
+    expect(line('/Applications', 'unknown', 'npx tapsmith')).toContain('`npx tapsmith ios network setup-simulator`');
+  });
+});
+
 describe('networkCaptureDefault() (PILOT-711)', () => {
   const android = (avd: string | undefined, over: Partial<{ useEmulators: boolean }> = {}) => ({
     apkPath: './app.apk', packageName: 'com.example', useEmulators: true, usePhysicalDevices: false, avd, ...over,
@@ -724,26 +749,38 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('runIn
 
 describe('wizardNextSteps() (PILOT-562)', () => {
   it('leads with `tapsmith verify`, as getting-started does, and never shows a person --json', () => {
-    const steps = wizardNextSteps(undefined);
+    const steps = wizardNextSteps('npx tapsmith', undefined);
     expect(steps[0]).toEqual(['Verify your setup', 'npx tapsmith verify']);
     expect(steps.map(([, cmd]) => cmd)).toEqual(['npx tapsmith verify', 'npx tapsmith test', 'npx tapsmith list-devices', 'npx tapsmith doctor']);
   });
 
   it('puts a declined install first (PILOT-551)', () => {
-    const steps = wizardNextSteps('npm i -D tapsmith');
+    const steps = wizardNextSteps('npx tapsmith', 'npm i -D tapsmith');
     expect(steps[0]).toEqual(['Install Tapsmith', 'npm i -D tapsmith']);
     expect(steps[1][1]).toBe('npx tapsmith verify');
   });
 
   it('points a Play-image AVD at HTTPS-capable one before verify when capture is on (PILOT-711)', () => {
-    const steps = wizardNextSteps('npm i -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd', optional: false });
+    const steps = wizardNextSteps('npx tapsmith', 'npm i -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd', optional: false });
     expect(steps[0][0]).toBe('Install Tapsmith');
     expect(steps[1]).toEqual(['Capture HTTPS', 'npx tapsmith create-avd']);
     expect(steps[2][1]).toBe('npx tapsmith verify');
   });
 
+  it('names the project\'s own runner, in the capture step too (PILOT-721)', () => {
+    const steps = wizardNextSteps('pnpm exec tapsmith', 'pnpm add -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd, then change avd', optional: false });
+    expect(steps.map(([, cmd]) => cmd)).toEqual([
+      'pnpm add -D tapsmith',
+      'pnpm exec tapsmith create-avd, then change avd',
+      'pnpm exec tapsmith verify',
+      'pnpm exec tapsmith test',
+      'pnpm exec tapsmith list-devices',
+      'pnpm exec tapsmith doctor',
+    ]);
+  });
+
   it('lists it last, as an option, when capture is off', () => {
-    const steps = wizardNextSteps(undefined, { label: 'Optional, to capture HTTPS', action: 'npx tapsmith create-avd', optional: true });
+    const steps = wizardNextSteps('npx tapsmith', undefined, { label: 'Optional, to capture HTTPS', action: 'npx tapsmith create-avd', optional: true });
     expect(steps[0][1]).toBe('npx tapsmith verify');
     expect(steps[steps.length - 1]).toEqual(['Optional, to capture HTTPS', 'npx tapsmith create-avd']);
   });

@@ -4,7 +4,8 @@ import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import Enquirer from 'enquirer';
 import figlet from 'figlet';
-import { isCustomSimulatorName, scanEnvironment, simulatorChoices, tryExec, type EnvScan } from './env-scan.js';
+import { isCustomSimulatorName, scanEnvironment, simulatorChoices, type EnvScan } from './env-scan.js';
+import type { SeStatus } from './setup-ios.js';
 import {
   detectAndroidPackage,
   detectExpoProject,
@@ -20,7 +21,7 @@ import { adbMissingFix } from './toolchain.js';
 import type { InitCommandOptions } from './cli-program.js';
 import { formatJson, jsonError } from './cli-json.js';
 import { avdCaptureSupport, avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd, type AvdImageInfo } from './avd-images.js';
-import { isTapsmithResolvableFrom, tapsmithInstallCommand, type InstallCommand } from './config.js';
+import { isTapsmithResolvableFrom, tapsmithExecCommand, tapsmithInstallCommand, type InstallCommand } from './config.js';
 import { androidAgentInstalledFor, missingAndroidAgentAdvice } from './agent-resolve.js';
 import { globSync } from 'glob';
 import { minimatch } from 'minimatch';
@@ -326,7 +327,7 @@ export function platformPrompt(
  * The Android questions. `expo` (PILOT-557) swaps the build hint for the Expo
  * one and prefills the package prompt from the app config.
  */
-export async function configureAndroid(env: EnvScan, expo?: ExpoProject): Promise<AndroidConfig> {
+export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = 'npx tapsmith'): Promise<AndroidConfig> {
   console.log(`  ${bold('Android')}`);
   if (!env.adbVersion) {
     console.log(`  ${YELLOW}⚠${RESET} ADB not found — Tapsmith cannot reach Android devices or emulators until it is on PATH`);
@@ -381,7 +382,7 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject): Promis
       initial,
     });
   } else if (useEmulators) {
-    console.log(`  ${YELLOW}⚠${RESET} ${noAvdsListedMessage(env.avdImages)}`);
+    console.log(`  ${YELLOW}⚠${RESET} ${withTapsmithCommand(noAvdsListedMessage(env.avdImages), cli)}`);
   }
 
   if (deviceType === 'physical' || deviceType === 'both') {
@@ -399,7 +400,7 @@ const SIMULATOR_PICKER_ROWS = 12;
  * The iOS questions. `expo` (PILOT-557) swaps the simulator build hint for
  * the Expo one and is the last fallback for the bundle id prompt's prefill.
  */
-export async function configureIos(env: EnvScan, expo?: ExpoProject): Promise<IosConfig> {
+export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx tapsmith'): Promise<IosConfig> {
   console.log(`  ${bold('iOS')}`);
 
   // Device type first: a physical-only user has no use for a simulator
@@ -506,7 +507,7 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject): Promise<Io
         console.log(`  ${green('✓')} iOS agent built`);
       } catch (err) {
         console.log(`  ${YELLOW}⚠${RESET} iOS agent build failed: ${err instanceof Error ? err.message : String(err)}`);
-        console.log(dim('  You can run `npx tapsmith ios build-agent` later.'));
+        console.log(dim(`  You can run \`${cli} ios build-agent\` later.`));
       }
     }
 
@@ -569,11 +570,34 @@ function detectBundleId(appPath: string): string | undefined {
 
 // ─── Network capture setup ───
 
+/**
+ * The network capture summary line for iOS simulators (PILOT-721): what
+ * still needs doing, judged as `doctor` judges it — mitmproxy's redirector
+ * (`source`, from `mitmproxyRedirectorSource`) and then its Network
+ * Extension. `cli` is how the project runs Tapsmith (`npx tapsmith`).
+ */
+export function iosSimulatorCaptureLine(source: string | undefined, seStatus: SeStatus, cli: string): string {
+  const setup = `\`${cli} ios network setup-simulator\``;
+  if (!source) return `  ${YELLOW}⚠${RESET} iOS simulator — run \`brew install mitmproxy\`, then ${setup}`;
+  switch (seStatus) {
+    case 'enabled':
+      return `  ${green('✓')} iOS simulator — ready (mitmproxy and its Network Extension)`;
+    case 'not-registered':
+      // A fresh machine: nothing to do until the first run, which asks.
+      return `  ${green('✓')} iOS simulator — mitmproxy installed; macOS asks you to allow its Network Extension on your first iOS simulator test run`;
+    case 'waiting-for-user':
+      return `  ${YELLOW}⚠${RESET} iOS simulator — approve mitmproxy's Network Extension: run ${setup}`;
+    default:
+      return `  ${YELLOW}⚠${RESET} iOS simulator — mitmproxy installed, but its Network Extension's state is unclear: run ${setup}`;
+  }
+}
+
 async function setupNetworkCapture(
   platforms: Platform[],
   env: EnvScan,
   androidConfig: AndroidConfig | undefined,
-  iosHasPhysicalDevice: boolean,
+  iosConfig: IosConfig | undefined,
+  cli: string,
 ): Promise<boolean> {
   const { initial, reason } = networkCaptureDefault(platforms, androidConfig, env.avdImages);
   const why = reason ? ` — ${reason}` : '';
@@ -597,22 +621,20 @@ async function setupNetworkCapture(
     }
   }
 
-  if (platforms.includes('ios') && env.isMacOS) {
-    const hasMitmproxy = !!tryExec('brew', ['list', 'mitmproxy']);
-    if (hasMitmproxy) {
-      lines.push(`  ${green('✓')} iOS simulator — mitmproxy ready`);
-    } else {
-      lines.push(`  ${YELLOW}⚠${RESET} iOS simulator — run \`brew install mitmproxy\` then \`npx tapsmith ios network setup-simulator\``);
-    }
+  if (iosConfig?.appPath && env.isMacOS) {
+    // doctor's detection (PILOT-721), and only the step still missing.
+    const { checkSeStatus, mitmproxyRedirectorSource } = await import('./setup-ios.js');
+    const source = mitmproxyRedirectorSource();
+    lines.push(iosSimulatorCaptureLine(source, source ? checkSeStatus() : 'not-registered', cli));
   }
 
-  if (iosHasPhysicalDevice) {
-    lines.push(`  ${YELLOW}⚠${RESET} iOS physical — run \`npx tapsmith ios network configure <udid>\` per device`);
+  if (iosConfig?.usePhysicalDevice) {
+    lines.push(`  ${YELLOW}⚠${RESET} iOS physical — run \`${cli} ios network configure <udid>\` per device`);
   }
 
   if (lines.length > 0) {
     console.log(`\n  ${bold('Network capture')}`);
-    console.log(lines.join('\n'));
+    console.log(withTapsmithCommand(lines.join('\n'), cli));
   }
 
   return true;
@@ -1032,21 +1054,30 @@ export function testsOutsideGeneratedMatchWarning(files: string[]): string | und
  * run before writing tests (PILOT-562). Plain commands: `--json` is for agents.
  */
 export function wizardNextSteps(
+  cli: string,
   installStep: string | undefined,
   captureStep?: { label: string; action: string; optional: boolean },
 ): Array<[string, string]> {
   // A Play-image AVD (PILOT-711): the AVD to switch to — before the first
   // run when capture is on, else last, as an option.
-  const capture = captureStep ? [[captureStep.label, captureStep.action] as [string, string]] : [];
+  const capture = captureStep ? [[captureStep.label, withTapsmithCommand(captureStep.action, cli)] as [string, string]] : [];
   return [
     ...(installStep ? [['Install Tapsmith', installStep] as [string, string]] : []),
     ...(captureStep?.optional ? [] : capture),
-    ['Verify your setup', 'npx tapsmith verify'],
-    ['Run your tests', 'npx tapsmith test'],
-    ['List devices', 'npx tapsmith list-devices'],
-    ['Health check', 'npx tapsmith doctor'],
+    ['Verify your setup', `${cli} verify`],
+    ['Run your tests', `${cli} test`],
+    ['List devices', `${cli} list-devices`],
+    ['Health check', `${cli} doctor`],
     ...(captureStep?.optional ? capture : []),
   ];
+}
+
+/**
+ * `text` with each `npx tapsmith` made `cli`, the project's own way to run
+ * Tapsmith (`tapsmithExecCommand`, PILOT-721), for messages built elsewhere.
+ */
+export function withTapsmithCommand(text: string, cli: string): string {
+  return cli === 'npx tapsmith' ? text : text.replace(/\bnpx tapsmith\b/g, cli);
 }
 
 /** The fix for an unexpected init error: `--json` only for an agent that asked for JSON. */
@@ -1110,7 +1141,7 @@ export async function runInit(opts: InitCommandOptions): Promise<void> {
 
       const cwd = process.cwd();
       const missingTapsmith = isTapsmithResolvableFrom(cwd) ? undefined : await tapsmithInstallCommand(cwd);
-      const result = executeInitPlan(plan, parsed, cwd, missingTapsmith);
+      const result = executeInitPlan(plan, parsed, cwd, missingTapsmith, await tapsmithExecCommand(cwd));
 
       if (parsed.json) {
         process.stdout.write(formatJson(result));
@@ -1171,11 +1202,14 @@ async function runInitInner(): Promise<void> {
 
   // Check for existing config
   const configNames = ['tapsmith.config.ts', 'tapsmith.config.mjs', 'tapsmith.config.js'];
-  const existingConfig = configNames.find((name) => fs.existsSync(path.resolve(process.cwd(), name)));
+  const cwd = process.cwd();
+  // How this project runs Tapsmith, for every command printed (PILOT-721).
+  const cli = await tapsmithExecCommand(cwd);
+  const existingConfig = configNames.find((name) => fs.existsSync(path.resolve(cwd, name)));
   if (existingConfig) {
     const overwrite = await ask<boolean>(confirmQuestion(`Found existing ${existingConfig}. Overwrite it?`, false));
     if (!overwrite) {
-      console.log(dim('  Keeping existing config. Run `npx tapsmith verify` to check your setup.'));
+      console.log(dim(`  Keeping existing config. Run \`${cli} verify\` to check your setup.`));
       return;
     }
   }
@@ -1191,7 +1225,6 @@ async function runInitInner(): Promise<void> {
   displayEnvironment(env, expo);
 
   // Step 2: Platform selection, defaulting to one that can run (PILOT-721)
-  const cwd = process.cwd();
   const platforms = platformPrompt(env, {
     hasAndroidDir: fs.existsSync(path.join(cwd, 'android')),
     hasIosDir: fs.existsSync(path.join(cwd, 'ios')),
@@ -1212,15 +1245,14 @@ async function runInitInner(): Promise<void> {
   let iosConfig: IosConfig | undefined;
 
   if (selectedPlatforms.includes('android')) {
-    androidConfig = await configureAndroid(env, expo);
+    androidConfig = await configureAndroid(env, expo, cli);
   }
   if (selectedPlatforms.includes('ios')) {
-    iosConfig = await configureIos(env, expo);
+    iosConfig = await configureIos(env, expo, cli);
   }
 
   // Step 5: Network capture
-  const iosHasPhysicalDevice = iosConfig?.usePhysicalDevice ?? false;
-  const enableNetwork = await setupNetworkCapture(selectedPlatforms, env, androidConfig, iosHasPhysicalDevice);
+  const enableNetwork = await setupNetworkCapture(selectedPlatforms, env, androidConfig, iosConfig, cli);
 
   // Step 6: iOS simulator agent check
   if (needsSimulatorAgent(iosConfig)) {
@@ -1286,13 +1318,13 @@ async function runInitInner(): Promise<void> {
   console.log(`  ${bold('Next steps')}`);
   const projects = generatedProjects(selectedPlatforms, iosConfig);
   const captureStep = androidConfig?.useEmulators ? captureAvdNextStep(androidConfig.avd, env.avdImages, enableNetwork) : undefined;
-  const steps = wizardNextSteps(installStep, captureStep);
+  const steps = wizardNextSteps(cli, installStep, captureStep);
   const width = Math.max(...[...steps.map(([l]) => l), ...projects.map((p) => p.label)].map((l) => l.length)) + 3;
   const step = (label: string, cmd: string): void => console.log(`  ${`${label}:`.padEnd(width)}${green(cmd)}`);
   for (const [label, cmd] of steps) step(label, cmd);
   if (projects.length > 0) {
     console.log();
-    for (const { name, label } of projects) step(label, `npx tapsmith test --project ${name}`);
+    for (const { name, label } of projects) step(label, `${cli} test --project ${name}`);
   }
 
   console.log();

@@ -5,7 +5,7 @@
  * `tapsmith ios setup-device` and `tapsmith ios network configure` instead.
  *
  * Runs the user through the (currently three-step) install flow:
- *   1. mitmproxy present via Homebrew
+ *   1. mitmproxy present (its redirector where the daemon looks)
  *   2. Mitmproxy Redirector Network Extension registered with macOS
  *   3. Network Extension approved by the user in System Settings
  *
@@ -18,6 +18,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
@@ -42,14 +45,14 @@ const SETTINGS_DEEP_LINK = 'x-apple.systempreferences:com.apple.LoginItems-Setti
 const APPROVAL_POLL_TIMEOUT_MS = 2 * 60 * 1000;
 const APPROVAL_POLL_INTERVAL_MS = 2_000;
 
-type SeStatus = 'enabled' | 'waiting-for-user' | 'not-registered' | 'unknown';
+export type SeStatus = 'enabled' | 'waiting-for-user' | 'not-registered' | 'unknown';
 
 /**
  * Parse `systemextensionsctl list` output for the state of the Mitmproxy
  * Redirector Network Extension. See `tapsmith-core/src/ios_redirect.rs`'s
  * `check_se_status()` for the Rust-side equivalent used at test-run time.
  */
-function checkSeStatus(): SeStatus {
+export function checkSeStatus(): SeStatus {
   let out: string;
   try {
     out = execFileSync('systemextensionsctl', ['list'], {
@@ -68,16 +71,47 @@ function checkSeStatus(): SeStatus {
   return 'unknown';
 }
 
-/** Check whether mitmproxy is installed via Homebrew. Returns true on success. */
-function isMitmproxyInstalledViaBrew(): boolean {
-  try {
-    execFileSync('brew', ['list', 'mitmproxy'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    return true;
-  } catch {
-    return false;
+/**
+ * Where the daemon will find mitmproxy's `Mitmproxy Redirector.app`, checked
+ * in the daemon's own order (`resolve_redirector_path` in ios_redirect.rs),
+ * so a pip/pipx install that unpacked the redirector is not reported
+ * missing. Undefined when none of them has it.
+ */
+export function findMitmRedirector(
+  env: NodeJS.ProcessEnv,
+  homedir: string,
+  exists: (p: string) => boolean,
+  listDir: (dir: string) => string[],
+): string | undefined {
+  if (env.TAPSMITH_REDIRECTOR_APP && exists(env.TAPSMITH_REDIRECTOR_APP)) return 'TAPSMITH_REDIRECTOR_APP';
+  const bin = path.join('Mitmproxy Redirector.app', 'Contents', 'MacOS', 'Mitmproxy Redirector');
+  if (exists(path.join('/Applications', bin))) return '/Applications';
+  if (exists(path.join(homedir, '.tapsmith', 'redirector', bin))) return '~/.tapsmith/redirector';
+  // The daemon extracts the redirector from the tarball inside the Homebrew
+  // cask on first use (`find_brew_tarball`), so look for that tarball rather
+  // than trusting `brew list`.
+  const tarball = path.join('mitmproxy.app', 'Contents', 'Resources', 'mitmproxy_macos', 'Mitmproxy Redirector.app.tar');
+  for (const caskroom of ['/opt/homebrew/Caskroom/mitmproxy', '/usr/local/Caskroom/mitmproxy']) {
+    if (listDir(caskroom).some((version) => exists(path.join(caskroom, version, tarball)))) return 'Homebrew cask';
   }
+  return undefined;
+}
+
+/**
+ * Where this machine has mitmproxy's redirector ({@link findMitmRedirector}),
+ * or undefined. The one check `doctor`, `init` and this command share
+ * (PILOT-721): `brew list mitmproxy` misses a pip or /Applications install
+ * that the daemon uses happily.
+ */
+export function mitmproxyRedirectorSource(): string | undefined {
+  const listDir = (dir: string): string[] => {
+    try {
+      return fs.readdirSync(dir);
+    } catch {
+      return [];
+    }
+  };
+  return findMitmRedirector(process.env, os.homedir(), fs.existsSync, listDir);
 }
 
 /**
@@ -129,7 +163,7 @@ export interface SetupSimulatorDeps {
 
 const defaultDeps: SetupSimulatorDeps = {
   platform: process.platform,
-  isMitmproxyInstalled: isMitmproxyInstalledViaBrew,
+  isMitmproxyInstalled: () => mitmproxyRedirectorSource() !== undefined,
   checkSeStatus,
   openSettings: openLoginItemsExtensions,
   sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -181,12 +215,12 @@ export async function setupSimulatorNetworkCapture(deps: SetupSimulatorDeps = de
   log(dim('Checks what HTTP(S) capture on iOS simulators needs: mitmproxy and its macOS Network Extension.'));
   log();
 
-  // ─── Step 1: Homebrew + mitmproxy ────────────────────────────────────
-  log(bold('1. Homebrew mitmproxy install'));
+  // ─── Step 1: mitmproxy ───────────────────────────────────────────────
+  log(bold('1. mitmproxy install'));
   if (deps.isMitmproxyInstalled()) {
     log(`   ${green('✓')} mitmproxy is installed`);
   } else {
-    log(`   ${red('✗')} mitmproxy is not installed via Homebrew`);
+    log(`   ${red('✗')} mitmproxy is not installed`);
     log();
     log('   Install it with:');
     log(`      ${bold('brew install mitmproxy')}`);

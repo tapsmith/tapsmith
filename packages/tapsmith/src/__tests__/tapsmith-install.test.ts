@@ -7,6 +7,7 @@ import {
   isMissingTapsmithError,
   isTapsmithResolvableFrom,
   projectPackageManager,
+  tapsmithExecCommand,
   tapsmithInstallCommand,
 } from '../config.js';
 
@@ -208,6 +209,24 @@ describe('projectPackageManager()', () => {
     write('pnpm-lock.yaml', '');
     write('apps/mobile/package.json', '{}\n');
     expect(await projectPackageManager(path.join(dir, 'apps/mobile'))).toBe('pnpm');
+  });
+});
+
+describe('tapsmithExecCommand() (PILOT-721)', () => {
+  it.each([
+    [undefined, 'npx tapsmith'],
+    ['pnpm-lock.yaml', 'pnpm exec tapsmith'],
+    ['yarn.lock', 'yarn tapsmith'],
+    ['bun.lock', 'bunx tapsmith'],
+  ])('with lockfile %s runs Tapsmith as `%s`', async (lockfile, expected) => {
+    write('package.json', '{}\n');
+    if (lockfile) write(lockfile, '');
+    expect(await tapsmithExecCommand(dir)).toBe(expected);
+  });
+
+  it('runs yarn berry projects through yarn too', async () => {
+    write('package.json', JSON.stringify({ packageManager: 'yarn@4.5.0' }));
+    expect(await tapsmithExecCommand(dir)).toBe('yarn tapsmith');
   });
 });
 

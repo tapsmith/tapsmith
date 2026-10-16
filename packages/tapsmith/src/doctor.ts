@@ -24,6 +24,7 @@ import { MIN_NODE_MAJOR, isSupportedNodeVersion } from './node-runtime.js';
 import { emulatorNotFoundMessage, resolveEmulatorBinary, type EmulatorBinary } from './emulator.js';
 import { hostArch, nodeUnderRosetta, ROSETTA_NODE_FIX } from './host-arch.js';
 import { adbMissingFix, XCODE_FIX } from './toolchain.js';
+import { mitmproxyRedirectorSource } from './setup-ios.js';
 import { isYarnPnp, YARN_PNP_FIX } from './yarn-pnp.js';
 
 // ─── ANSI helpers ───
@@ -584,42 +585,9 @@ function checkMitmCa(report: Reporter): void {
   }
 }
 
-/**
- * Where the daemon will find mitmproxy's `Mitmproxy Redirector.app`, checked
- * in the daemon's own order (`resolve_redirector_path` in ios_redirect.rs),
- * so a pip/pipx install that unpacked the redirector is not reported
- * missing. Undefined when none of them has it.
- */
-export function findMitmRedirector(
-  env: NodeJS.ProcessEnv,
-  homedir: string,
-  exists: (p: string) => boolean,
-  listDir: (dir: string) => string[],
-): string | undefined {
-  if (env.TAPSMITH_REDIRECTOR_APP && exists(env.TAPSMITH_REDIRECTOR_APP)) return 'TAPSMITH_REDIRECTOR_APP';
-  const bin = path.join('Mitmproxy Redirector.app', 'Contents', 'MacOS', 'Mitmproxy Redirector');
-  if (exists(path.join('/Applications', bin))) return '/Applications';
-  if (exists(path.join(homedir, '.tapsmith', 'redirector', bin))) return '~/.tapsmith/redirector';
-  // The daemon extracts the redirector from the tarball inside the Homebrew
-  // cask on first use (`find_brew_tarball`), so look for that tarball rather
-  // than trusting `brew list`.
-  const tarball = path.join('mitmproxy.app', 'Contents', 'Resources', 'mitmproxy_macos', 'Mitmproxy Redirector.app.tar');
-  for (const caskroom of ['/opt/homebrew/Caskroom/mitmproxy', '/usr/local/Caskroom/mitmproxy']) {
-    if (listDir(caskroom).some((version) => exists(path.join(caskroom, version, tarball)))) return 'Homebrew cask';
-  }
-  return undefined;
-}
-
 function checkMitmproxy(report: Reporter): void {
   try {
-    const listDir = (dir: string): string[] => {
-      try {
-        return fs.readdirSync(dir);
-      } catch {
-        return [];
-      }
-    };
-    const source = findMitmRedirector(process.env, os.homedir(), fs.existsSync, listDir);
+    const source = mitmproxyRedirectorSource();
     if (source) {
       pass(report, 'mitmproxy', 'mitmproxy installed', source);
     } else {

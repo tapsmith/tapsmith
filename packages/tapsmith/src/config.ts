@@ -1471,6 +1471,25 @@ export async function projectPackageManager(dir: string): Promise<string> {
 }
 
 /**
+ * How the project at `dir` runs its own Tapsmith, for the commands init and
+ * its hints print (PILOT-721): `pnpm exec tapsmith`, `yarn tapsmith`,
+ * `bunx tapsmith`, else `npx tapsmith`. Not package-manager-detector's
+ * `execute-local`, which gives Yarn 1 `yarn exec tapsmith --`.
+ */
+export async function tapsmithExecCommand(dir: string): Promise<string> {
+  const agent = await projectPackageManager(dir);
+  return TAPSMITH_EXEC[agent] ?? 'npx tapsmith';
+}
+
+const TAPSMITH_EXEC: Record<string, string> = {
+  pnpm: 'pnpm exec tapsmith',
+  'pnpm@6': 'pnpm exec tapsmith',
+  yarn: 'yarn tapsmith',
+  'yarn@berry': 'yarn tapsmith',
+  bun: 'bunx tapsmith',
+};
+
+/**
  * `<package manager> add -D <packages>` for the project at `dir`, with the
  * manager `projectPackageManager` finds. `what` names the packages in the
  * note for a directory without a package.json ("Tapsmith", "the Android
