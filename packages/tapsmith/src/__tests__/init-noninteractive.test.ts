@@ -190,6 +190,22 @@ describe('resolveInitPlan()', () => {
     expect(config).not.toContain('apk:');
   });
 
+  it('takes --package without --platform as Android, as --apk is (PILOT-721)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
+    try {
+      const detect = { ...detectStubs, findApkCandidates: () => [], detectExpoProject: () => ({ hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false } as ExpoProject) };
+      const plan = resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, detect, tmp);
+      expect(plan.platforms).toEqual(['android']);
+      expect(plan.android).toMatchObject({ packageName: 'com.x' });
+      // Beside an ios/ directory, it adds Android rather than being dropped.
+      fs.mkdirSync(path.join(tmp, 'ios'));
+      const both = resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, detect, tmp);
+      expect(both.platforms).toEqual(['android', 'ios']);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('with --package on an Expo project with no build, plans a package-only config too (PILOT-721)', () => {
     const detect = { ...detectStubs, findApkCandidates: () => [], detectExpoProject: () => ({ hasAndroidDir: false, hasIosDir: false, androidPackage: 'com.expo' } as ExpoProject) };
     const plan = resolveInitPlan(initArgs({ yes: true, platform: 'android', package: 'com.x' }), baseEnv, detect);

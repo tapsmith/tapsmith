@@ -457,7 +457,7 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .command('init')
     .description('Initialize a new Tapsmith project (interactive wizard, or --yes for scripts)')
     .option('-y, --yes', 'Accept auto-detected defaults for anything not specified', false)
-    .option('--platform <list>', 'android, ios, or android,ios (default: inferred from --apk/--app and android/ and ios/)')
+    .option('--platform <list>', 'android, ios, or android,ios (default: inferred from --apk/--package/--app and android/ and ios/)')
     .option('--apk <path>', 'Android APK (default: auto-detected under android/**/build/outputs/apk/)')
     .option('--package <id>', 'Android package name (default: read from the APK; with no APK, writes a package-only config for an installed app)')
     .option('--app <path>', 'iOS simulator .app bundle (default: auto-detected under ios/)')

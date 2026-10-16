@@ -145,11 +145,13 @@ export function resolveInitPlan(
   // project layout. A given build names its platform (PILOT-626) — an Expo
   // managed project has no android/ or ios/ — and adds to, rather than
   // replaces, what the directories imply, so `--apk` alone in a project with
-  // both never drops iOS. `--app` off macOS is an explicit iOS ask, refused below.
+  // both never drops iOS. `--package`, an Android package (installed already
+  // when there is no APK, PILOT-721), names Android the same way. `--app` off
+  // macOS is an explicit iOS ask, refused below.
   let platforms = args.platforms;
   if (!platforms) {
     const inferred: Platform[] = [];
-    if (args.apk || fs.existsSync(path.join(cwd, 'android'))) inferred.push('android');
+    if (args.apk || args.packageName || fs.existsSync(path.join(cwd, 'android'))) inferred.push('android');
     if (args.app || (env.isMacOS && fs.existsSync(path.join(cwd, 'ios')))) inferred.push('ios');
     if (inferred.length === 0) {
       const expoProject = expo();
