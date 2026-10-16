@@ -183,6 +183,9 @@ export interface RunStartMessage {
    * the file belongs to. Lets the client scope trace clearing to just that
    * project's copy and leave sibling projects' traces intact. */
   projectName?: string
+  /** When running an explicit selection (a filtered Run all), what runs.
+   * Lets the client scope trace clearing and the pending pulse to it. */
+  selection?: RunSelectionEntry[]
 }
 
 export interface RunEndMessage {
@@ -517,8 +520,28 @@ export interface RunFileCommand {
   runDeps?: boolean
 }
 
+/**
+ * One (project, file) of an explicit test selection: the tests to run in it,
+ * by exact full name.
+ */
+export interface RunSelectionEntry {
+  filePath: string
+  /** The project the file shows under; omitted when no projects are configured. */
+  projectName?: string
+  /** Exact full names of the tests to run. Omitted = the whole file. */
+  tests?: string[]
+}
+
 export interface RunAllCommand {
   type: 'run-all'
+  /**
+   * Run only these tests — the ones visible in a filtered tree, as
+   * Playwright's UI mode runs only the visible tests (PILOT-729). Omitted =
+   * the whole suite.
+   */
+  selection?: RunSelectionEntry[]
+  /** When true (and `selection` is set), run the selected projects' dependency projects first. */
+  runDeps?: boolean
 }
 
 export interface RunProjectCommand {
@@ -887,6 +910,8 @@ export interface UIWorkerRunFileMessage {
   projectUseOptions?: import('../worker-protocol.js').RunFileUseOptions
   projectName?: string
   testFilter?: string
+  /** Exact full names of the tests to run (UI mode's filtered Run all, PILOT-729). Omitted = every test the other filters pass. */
+  fullNames?: string[]
   /** The device already satisfies this file's policy (background preparation). */
   preparedFor?: import('../app-reset.js').PreparedState
 }

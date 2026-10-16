@@ -236,6 +236,7 @@ async function handleRunFile(
   projectUseOptions?: import('../worker-protocol.js').RunFileUseOptions,
   projectName?: string,
   testFilter?: string,
+  fullNames?: string[],
   preparedFor?: PreparedState,
 ): Promise<void> {
   const group = requireSessions();
@@ -318,7 +319,7 @@ async function handleRunFile(
   let suiteResult;
   try {
     suiteResult = await runFileWithRecovery(
-      filePath, reporterProxy, projectUseOptions, projectName, testFilter,
+      filePath, reporterProxy, projectUseOptions, projectName, { testFilter, fullNames },
       abortController.signal,
     );
   } finally {
@@ -375,7 +376,7 @@ async function runFileWithRecovery(
   reporterProxy: { onTestEnd(result: import('../runner.js').TestResult): void },
   projectUseOptions?: import('../worker-protocol.js').RunFileUseOptions,
   projectName?: string,
-  testFilter?: string,
+  selection?: { testFilter?: string; fullNames?: string[] },
   abortSignal?: AbortSignal,
 ): Promise<import('../runner.js').SuiteResult> {
   const group = requireSessions();
@@ -409,7 +410,8 @@ async function runFileWithRecovery(
         runMode: 'ui',
         projectUseOptions,
         projectName,
-        testFilter,
+        testFilter: selection?.testFilter,
+        fullNames: selection?.fullNames,
         onNetworkEntries: (entries, networkCaptureEnabled, networkCaptureRoute) => {
           for (const { entries: safe, bodies } of encodeBodies(entries)) {
             send({ type: 'network', workerId, entries: safe, bodies, bodyMode: 'patch', networkCaptureEnabled, networkCaptureRoute: networkCaptureRoute ?? null });
@@ -575,7 +577,7 @@ process.on('message', (msg: UIWorkerMessage) => {
       enqueue(() => handleInit(msg));
       break;
     case 'run-file':
-      enqueue(() => handleRunFile(msg.filePath, msg.projectUseOptions, msg.projectName, msg.testFilter, msg.preparedFor));
+      enqueue(() => handleRunFile(msg.filePath, msg.projectUseOptions, msg.projectName, msg.testFilter, msg.fullNames, msg.preparedFor));
       break;
     case 'prepare':
       enqueue(() => handlePrepare(msg));

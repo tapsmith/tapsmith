@@ -1205,6 +1205,12 @@ export interface RunOptions {
    */
   testFilter?: string;
   /**
+   * Run only tests whose fullName is exactly one of these — UI mode's Run all
+   * over a filtered tree sends the visible tests this way (PILOT-729). All
+   * other tests are left out of the run, unreported, as with `testFilter`.
+   */
+  fullNames?: readonly string[];
+  /**
    * Regular expressions matched against each test's fullName. When set, only
    * tests with a fullName matching at least one pattern are run; the rest are
    * left out of the run, unreported. Mirrors Playwright's `--grep` / `config.grep`.

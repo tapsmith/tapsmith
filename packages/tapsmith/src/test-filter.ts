@@ -14,6 +14,12 @@ export function matchesTestFilter(fullName: string, filter: string): boolean {
 /** The selection filters a test's full name must pass to run. */
 export interface SelectionFilters {
   testFilter?: string;
+  /**
+   * Run only tests whose full name is exactly one of these — an explicit
+   * selection, as UI mode's Run all sends for the tests visible in a filtered
+   * tree (PILOT-729). Intersected with every other filter.
+   */
+  fullNames?: readonly string[];
   grep?: RegExp[];
   /** Intersected with `grep`: a test must match both sets. */
   projectGrep?: RegExp[];
@@ -26,11 +32,13 @@ export interface SelectionFilters {
  * Whether a test's fully-qualified name passes every selection filter.
  *
  * - `testFilter`: case-insensitive substring (`matchesTestFilter`).
+ * - `fullNames`: exact full names; an empty list selects nothing.
  * - `grep` / `projectGrep`: each non-empty set needs at least one match.
  * - `grepInvert` / `projectGrepInvert`: no regex in either may match.
  */
 export function passesSelectionFilters(fullName: string, filters: SelectionFilters): boolean {
   if (filters.testFilter && !matchesTestFilter(fullName, filters.testFilter)) return false;
+  if (filters.fullNames && !filters.fullNames.includes(fullName)) return false;
   if (!matchesEverySet(fullName, filters.grep) || !matchesEverySet(fullName, filters.projectGrep)) return false;
   if (matchesAny(fullName, filters.grepInvert) || matchesAny(fullName, filters.projectGrepInvert)) return false;
   return true;

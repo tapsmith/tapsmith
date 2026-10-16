@@ -23,7 +23,9 @@ import { McpEventEmitter } from '../mcp/events.js';
 import { McpSessionRouter } from '../mcp/http-session-router.js';
 import { configureMcpConnection } from '../mcp/connection.js';
 import { matchRequestedFiles, fileFailureEntry } from '../mcp/headless-dispatcher.js';
-import { isLoadFailureNode, loadFailureFollowUp, loadFailureTreeNode, runFilterForFile, withoutLoadFailedFiles } from '../load-failure.js';
+import { fileLoadFailureTitle, isLoadFailureNode, loadFailureFollowUp, loadFailureTreeNode, runFilterForFile, withoutLoadFailedFiles } from '../load-failure.js';
+import { resolveRunSelection } from './run-selection.js';
+import { planRunAll } from './run-all-plan.js';
 import { pickResolvedDeviceName } from '../mcp/tools/device-target.js';
 
 import type { TestDispatcher, TestRunResult, TestResultEntry, TestTreeEntry, SessionInfo, DiscoveryError, DeviceTarget } from '../mcp/index.js';
@@ -63,6 +65,7 @@ import type {
   UIWorkerChildMessage,
   UIWorkerMessage,
   TestTreeUseOptions,
+  RunSelectionEntry,
 } from './ui-protocol.js';
 import { encodeScreenFrame, mirrorKey, type TestNodeStatus, type WorkerDeviceInfo } from './ui-protocol.js';
 import { deviceGroupSize, deviceGroupNames } from '../config.js';
@@ -238,6 +241,8 @@ interface TaggedFile {
   projectUseOptions?: RunFileUseOptions
   projectName?: string
   testFilter?: string
+  /** Exact full names to run — a filtered Run all's selection (PILOT-729). */
+  fullNames?: readonly string[]
   /**
    * Tests (fullName) a worker that died partway through this file already
    * reported this dispatch: they keep their result if the file is drained.
@@ -2329,7 +2334,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     };
     walk(roots.filter((n) => n.type === 'file' && n.filePath === file.filePath));
     const filter = file.testFilter?.toLowerCase();
-    return filter ? tests.filter((t) => t.fullName.toLowerCase().includes(filter)) : tests;
+    const narrowed = filter ? tests.filter((t) => t.fullName.toLowerCase().includes(filter)) : tests;
+    return file.fullNames ? narrowed.filter((t) => file.fullNames!.includes(t.fullName)) : narrowed;
   }
 
   /**
@@ -2624,6 +2630,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           projectUseOptions: next.projectUseOptions,
           projectName: next.projectName,
           testFilter: next.testFilter,
+          fullNames: next.fullNames ? [...next.fullNames] : undefined,
           preparedFor,
         };
         // A worker can die between exit-event delivery and this dispatch; an
@@ -2915,26 +2922,47 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     return { passed, failed, skipped, duration, anyFailed, failedProjectNames: failedProjectsInDispatch };
   }
 
-  async function runAllFilesParallel(): Promise<TestRunResult> {
+  async function runAllFilesParallel(
+    selection?: ReadonlyMap<string, readonly string[] | undefined>,
+    runDeps?: boolean,
+  ): Promise<TestRunResult> {
     if (isRunning) return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
     markRunStarted();
     clearRunBuffers();
     screenPollActive = true;
     parallelRunAborted = false;
 
-    broadcast({ type: 'run-start', fileCount: ctx.testFiles.length });
+    const plan = planRunAll({
+      testFiles: ctx.testFiles,
+      projectWaves: hasRealProjects ? ctx.projectWaves : undefined,
+      projectForFile: (f) => fileToProject.get(f),
+    }, selection, runDeps);
+    const planned: TaggedFile[] = 'waves' in plan ? plan.waves.flatMap((w) => w.flatMap((p) => p.files)) : plan.files;
+    broadcast({
+      type: 'run-start',
+      fileCount: selection ? planned.length : ctx.testFiles.length,
+      ...(selection
+        ? {
+            selection: planned.map((f): RunSelectionEntry => ({
+              filePath: f.filePath,
+              ...(f.projectName !== undefined ? { projectName: f.projectName } : {}),
+              ...(f.fullNames ? { tests: [...f.fullNames] } : {}),
+            })),
+          }
+        : {}),
+    });
 
     let totalPassed = 0, totalFailed = 0, totalSkipped = 0, totalDuration = 0;
 
     try {
-      if (hasRealProjects && ctx.projectWaves) {
+      if ('waves' in plan) {
         const failedProjects = new Set<string>();
 
-        for (const wave of ctx.projectWaves) {
+        for (const wave of plan.waves) {
           if (parallelRunAborted) break;
 
           const waveFiles: TaggedFile[] = [];
-          for (const project of wave) {
+          for (const { project, files } of wave) {
             const blockedBy = project.dependencies.find((d) => failedProjects.has(d));
             if (blockedBy) {
               broadcast({ type: 'error', message: `Skipping project "${project.name}" — dependency "${blockedBy}" failed` });
@@ -2942,14 +2970,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               failedProjects.add(project.name);
               continue;
             }
-
-            for (const file of project.testFiles) {
-              waveFiles.push({
-                filePath: file,
-                projectUseOptions: project.use as RunFileUseOptions | undefined,
-                projectName: projectLabel(project),
-              });
-            }
+            waveFiles.push(...files);
           }
 
           if (waveFiles.length > 0) {
@@ -2961,7 +2982,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
             // Track per-project failures using actual per-file results
             if (r.anyFailed) {
-              for (const project of wave) {
+              for (const { project } of wave) {
                 if (failedProjects.has(project.name)) continue;
                 if (r.failedProjectNames.has(project.name)) {
                   failedProjects.add(project.name);
@@ -2971,16 +2992,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           }
         }
       } else {
-        const allFiles: TaggedFile[] = ctx.testFiles.map((f) => {
-          const project = fileToProject.get(f);
-          return {
-            filePath: f,
-            projectUseOptions: project?.use as RunFileUseOptions | undefined,
-            projectName: projectLabel(project),
-          };
-        });
-
-        const r = await dispatchFilesParallel(allFiles);
+        const r = await dispatchFilesParallel(plan.files);
         totalPassed = r.passed;
         totalFailed = r.failed;
         totalSkipped = r.skipped;
@@ -3414,10 +3426,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }
   }
 
-  async function runAllFiles(): Promise<TestRunResult> {
+  async function runAllFiles(
+    selection?: ReadonlyMap<string, readonly string[] | undefined>,
+    runDeps?: boolean,
+  ): Promise<TestRunResult> {
     await ensureWorkersReady();
     if (!useParallel()) return reportNoWorkers();
-    return runAllFilesParallel();
+    return runAllFilesParallel(selection, runDeps);
   }
 
   async function runProject(projectName: string): Promise<void> {
@@ -4265,9 +4280,24 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         if (msg.runDeps) runFileWithDeps(msg.filePath, undefined, msg.projectName).catch(broadcastError);
         else runFile(msg.filePath, undefined, msg.projectName).catch(broadcastError);
         break;
-      case 'run-all':
-        runAllFiles().catch(broadcastError);
+      case 'run-all': {
+        if (msg.selection === undefined) {
+          runAllFiles().catch(broadcastError);
+          break;
+        }
+        // A filtered tree's Run all: only the tests the client shows (PILOT-729).
+        const selection = resolveRunSelection(msg.selection, {
+          testFiles: ctx.testFiles,
+          projects: hasRealProjects ? ctx.projects : undefined,
+          isWholeFileName: (filePath, fullName) => fullName === fileLoadFailureTitle(filePath),
+        });
+        if (selection.size === 0) {
+          if (!isRunning) broadcast({ type: 'error', message: 'Nothing to run: none of the visible tests are in the suite any more. Reload to refresh the test tree.' });
+          break;
+        }
+        runAllFiles(selection, msg.runDeps).catch(broadcastError);
         break;
+      }
       case 'run-failed': {
         const files = [...failedFiles];
         if (files.length > 0 && !isRunning) {
