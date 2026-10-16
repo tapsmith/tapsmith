@@ -197,10 +197,27 @@ describe('resolveInitPlan()', () => {
       const plan = resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, detect, tmp);
       expect(plan.platforms).toEqual(['android']);
       expect(plan.android).toMatchObject({ packageName: 'com.x' });
-      // Beside an ios/ directory, it adds Android rather than being dropped.
+      // With android/ too, it is simply the Android package.
+      fs.mkdirSync(path.join(tmp, 'android'));
       fs.mkdirSync(path.join(tmp, 'ios'));
       const both = resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, detect, tmp);
       expect(both.platforms).toEqual(['android', 'ios']);
+      expect(both.android?.packageName).toBe('com.x');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('does not add Android for a --package meant as an iOS bundle id, and says so (PILOT-721)', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-init-'));
+    try {
+      fs.mkdirSync(path.join(tmp, 'ios'));
+      const dirOnly = resolveInitPlan(initArgs({ yes: true, package: 'com.foo' }), baseEnv, detectStubs, tmp);
+      expect(dirOnly.platforms).toEqual(['ios']);
+      expect(dirOnly.warnings.join('\n')).toContain('--bundle-id');
+      const withApp = resolveInitPlan(initArgs({ yes: true, package: 'com.foo', app: 'ios/build/X.app' }), baseEnv, detectStubs, path.join(tmp, 'nowhere'));
+      expect(withApp.platforms).toEqual(['ios']);
+      expect(withApp.warnings.join('\n')).toContain("--package names an Android package");
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }

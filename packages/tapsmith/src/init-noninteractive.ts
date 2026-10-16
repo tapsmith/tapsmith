@@ -146,13 +146,17 @@ export function resolveInitPlan(
   // managed project has no android/ or ios/ — and adds to, rather than
   // replaces, what the directories imply, so `--apk` alone in a project with
   // both never drops iOS. `--package`, an Android package (installed already
-  // when there is no APK, PILOT-721), names Android the same way. `--app` off
+  // when there is no APK, PILOT-721), names Android too, unless something
+  // points at iOS (`--app`, an ios/ directory): the config's `package` key
+  // also holds the iOS bundle id, so it may be meant as one. `--app` off
   // macOS is an explicit iOS ask, refused below.
   let platforms = args.platforms;
   if (!platforms) {
     const inferred: Platform[] = [];
-    if (args.apk || args.packageName || fs.existsSync(path.join(cwd, 'android'))) inferred.push('android');
-    if (args.app || (env.isMacOS && fs.existsSync(path.join(cwd, 'ios')))) inferred.push('ios');
+    const iosDir = env.isMacOS && fs.existsSync(path.join(cwd, 'ios'));
+    const packageNamesAndroid = !!args.packageName && !args.app && !iosDir;
+    if (args.apk || packageNamesAndroid || fs.existsSync(path.join(cwd, 'android'))) inferred.push('android');
+    if (args.app || iosDir) inferred.push('ios');
     if (inferred.length === 0) {
       const expoProject = expo();
       if (expoProject) {
@@ -174,6 +178,10 @@ export function resolveInitPlan(
       const detectExpo = detect.detectExpoProject ?? detectDefaults.detectExpoProject;
       warnings.push(iosLeftOutNote(detectExpo(cwd, () => undefined), args.apk));
     }
+  }
+
+  if (args.packageName && !platforms.includes('android')) {
+    warnings.push(`--package names an Android package, so ${args.packageName} was not used: this setup has no Android. For the iOS bundle identifier, pass --bundle-id ${args.packageName}`);
   }
 
   if (platforms.includes('ios') && !env.isMacOS) {
