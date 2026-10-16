@@ -190,9 +190,9 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     expect(m.tap.mock.calls.length).toBe(3); // at 0, 1 and 2 s — none started at the deadline
     expect(err.elapsedMs).toBeGreaterThanOrEqual(3000);
     expect(err.message).toBe(
-      'Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 3000ms timeout: it may be off-screen, ' +
-        'or clipped by its list (for example behind a header). tap() does not scroll, so scroll it into view first with ' +
-        'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen), then tap() it.',
+      'Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 3000ms timeout: it may be clipped ' +
+        'by its list (for example behind a header). tap() does not scroll, so scroll it into view first with ' +
+        'scroll("up") on the list that holds it (scroll("down") if it is clipped at the bottom), then tap() it.',
     );
   });
 

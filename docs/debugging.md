@@ -284,8 +284,10 @@ Element getByText("Item 1", { exact: true }) is off-screen: it was found, but no
 A row that is on screen but clipped by its list, for example scrolled under a header above the list, fails the same way with a slightly different message:
 
 ```
-Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 30000ms timeout: it may be off-screen, or clipped by its list (for example behind a header). tap() does not scroll, so scroll it into view first with …
+Element getByText("Item 1", { exact: true }) was still not hittable by the end of the 30000ms timeout: it may be clipped by its list (for example behind a header). tap() does not scroll, so scroll it into view first with scroll("up") on the list that holds it (scroll("down") if it is clipped at the bottom), then tap() it.
 ```
+
+`scrollIntoView()` cannot help in this case: a clipped row counts as visible, so it returns at once. Move the list itself with `scroll()`.
 
 **Fix:** scroll to it first with `scrollIntoView()`, using the direction the error names, then tap. For an element in a horizontal list, scroll that list with `scroll()`.
 

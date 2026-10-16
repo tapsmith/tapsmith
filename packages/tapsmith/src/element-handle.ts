@@ -2262,8 +2262,10 @@ export class ElementHandle {
       errorType: NOT_HITTABLE_ERROR_TYPE,
       errorMessage:
         `Element ${this._describe()} was still not hittable by the end of the ${this._timeoutMs}ms timeout: ` +
-        'it may be off-screen, or clipped by its list (for example behind a header). ' +
-        scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)'),
+        'it may be clipped by its list (for example behind a header). ' +
+        // scrollIntoView() would not help: a clipped row counts as visible, so
+        // it returns at once. The list itself has to move.
+        scrollFirstAdvice(action, 'scroll("up") on the list that holds it (scroll("down") if it is clipped at the bottom)'),
     });
     let res = await dispatch(first);
     for (;;) {
