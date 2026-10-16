@@ -2182,20 +2182,13 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // where an edit can add the test the pattern is waiting for.
   if (selectionFilterActive && !args.ui && !args.watch) {
     const { discoverTestNames } = await import('./selection-preflight.js');
-    const { findSelectionMiss, noTestsMatchFilterMessage } = await import('./test-filter.js');
-    const rootGrep = normalizeGrep(config.grep);
-    const rootGrepInvert = normalizeGrep(config.grepInvert);
+    const { findSelectionMiss, grepFiltersFor, noTestsMatchFilterMessage } = await import('./test-filter.js');
     const names = await discoverTestNames([...new Set(unshardedFiles.flatMap(({ files }) => files))]);
     const miss = findSelectionMiss(
-      unshardedFiles.flatMap(({ project, files }) => files.map((file) => ({
-        file,
-        filters: {
-          grep: rootGrep,
-          grepInvert: rootGrepInvert,
-          projectGrep: normalizeGrep(project.grep),
-          projectGrepInvert: normalizeGrep(project.grepInvert),
-        },
-      }))),
+      unshardedFiles.flatMap(({ project, files }) => {
+        const filters = grepFiltersFor(config, project);
+        return files.map((file) => ({ file, filters }));
+      }),
       (file) => names.get(file),
     );
     if (miss) {

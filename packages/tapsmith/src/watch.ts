@@ -30,9 +30,12 @@ import {
   deserializeTestResult,
   deserializeSuiteResult,
   serializeConfig,
+  serializeGrepFilters,
   type SerializedConfig,
+  type SerializedGrepFilters,
   type RunFileUseOptions,
 } from './worker-protocol.js';
+import { grepFiltersFor } from './test-filter.js';
 import type { WatchRunMessage, WatchRunChildMessage } from './watch-run.js';
 import { isIgnoredWatchModePath } from './test-file-discovery.js';
 import { type DeviceGroupEntry } from './config.js';
@@ -240,6 +243,12 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
 
 
   const serializedConfig: SerializedConfig = serializeConfig(ctx.targetConfig);
+
+  /** The root's and the project's grep filters, for a file run under `projectName`. */
+  function grepFor(projectName: string | undefined): SerializedGrepFilters {
+    const project = projectName !== undefined ? ctx.projects?.find((p) => p.name === projectName) : undefined;
+    return serializeGrepFilters(grepFiltersFor(ctx.config, project));
+  }
 
   /** A worker's device group, primary first: its bucket's config, or the session's group. */
   function workerDeviceGroup(deviceSerial: string): DeviceGroupEntry[] {
@@ -654,6 +663,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
             filePath: next.filePath,
             projectUseOptions: next.projectUseOptions,
             projectName: next.projectName,
+            grep: grepFor(next.projectName),
           } satisfies UIWorkerMessage);
         }
 
@@ -1251,6 +1261,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
         screenshotDir: ctx.screenshotDir,
         projectUseOptions,
         projectName,
+        grep: grepFor(projectName),
         runMode: 'watch',
         resetCapabilities: ctx.resetCapabilities,
         ...(ctx.groupMembers && ctx.groupMembers.length > 0 ? {

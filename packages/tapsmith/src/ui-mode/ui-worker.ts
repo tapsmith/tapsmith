@@ -21,6 +21,7 @@ import {
   serializeSuiteResult,
   isRecoverableInfrastructureError,
   configFromSerialized,
+  deserializeGrepFilters,
 } from '../worker-protocol.js';
 import { ensureSessionReady, executeAppReset } from '../session-preflight.js';
 import type { PreparedState, ResetCapabilities } from '../app-reset.js';
@@ -44,6 +45,7 @@ import type {
   UIWorkerChildMessage,
   UIWorkerInitMessage,
   UIWorkerPrepareMessage,
+  UIWorkerRunFileMessage,
   UIWorkerTraceEventMessage,
 } from './ui-protocol.js';
 
@@ -231,12 +233,14 @@ function finishInit(): void {
 
 // ─── Run file handler ───
 
+/** Which of a file's tests a run selects. */
+type RunSelection = Pick<UIWorkerRunFileMessage, 'testFilter' | 'fullNames' | 'grep'>;
+
 async function handleRunFile(
   filePath: string,
-  projectUseOptions?: import('../worker-protocol.js').RunFileUseOptions,
-  projectName?: string,
-  testFilter?: string,
-  fullNames?: string[],
+  projectUseOptions: import('../worker-protocol.js').RunFileUseOptions | undefined,
+  projectName: string | undefined,
+  selection: RunSelection,
   preparedFor?: PreparedState,
 ): Promise<void> {
   const group = requireSessions();
@@ -319,7 +323,7 @@ async function handleRunFile(
   let suiteResult;
   try {
     suiteResult = await runFileWithRecovery(
-      filePath, reporterProxy, projectUseOptions, projectName, { testFilter, fullNames },
+      filePath, reporterProxy, projectUseOptions, projectName, selection,
       abortController.signal,
     );
   } finally {
@@ -374,9 +378,9 @@ function runDevices(projectUseOptions: import('../worker-protocol.js').RunFileUs
 async function runFileWithRecovery(
   filePath: string,
   reporterProxy: { onTestEnd(result: import('../runner.js').TestResult): void },
-  projectUseOptions?: import('../worker-protocol.js').RunFileUseOptions,
-  projectName?: string,
-  selection?: { testFilter?: string; fullNames?: string[] },
+  projectUseOptions: import('../worker-protocol.js').RunFileUseOptions | undefined,
+  projectName: string | undefined,
+  selection: RunSelection,
   abortSignal?: AbortSignal,
 ): Promise<import('../runner.js').SuiteResult> {
   const group = requireSessions();
@@ -410,8 +414,9 @@ async function runFileWithRecovery(
         runMode: 'ui',
         projectUseOptions,
         projectName,
-        testFilter: selection?.testFilter,
-        fullNames: selection?.fullNames,
+        testFilter: selection.testFilter,
+        fullNames: selection.fullNames,
+        ...deserializeGrepFilters(selection.grep),
         onNetworkEntries: (entries, networkCaptureEnabled, networkCaptureRoute) => {
           for (const { entries: safe, bodies } of encodeBodies(entries)) {
             send({ type: 'network', workerId, entries: safe, bodies, bodyMode: 'patch', networkCaptureEnabled, networkCaptureRoute: networkCaptureRoute ?? null });
@@ -577,7 +582,11 @@ process.on('message', (msg: UIWorkerMessage) => {
       enqueue(() => handleInit(msg));
       break;
     case 'run-file':
-      enqueue(() => handleRunFile(msg.filePath, msg.projectUseOptions, msg.projectName, msg.testFilter, msg.fullNames, msg.preparedFor));
+      enqueue(() => handleRunFile(
+        msg.filePath, msg.projectUseOptions, msg.projectName,
+        { testFilter: msg.testFilter, fullNames: msg.fullNames, grep: msg.grep },
+        msg.preparedFor,
+      ));
       break;
     case 'prepare':
       enqueue(() => handlePrepare(msg));

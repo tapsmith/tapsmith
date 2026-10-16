@@ -12,6 +12,7 @@ import {
   deserializeTestResult,
   deserializeSuiteResult,
   serializeConfig,
+  serializeGrepFilters,
   type SerializedConfig,
   type RunFileUseOptions,
 } from '../worker-protocol.js';
@@ -36,6 +37,8 @@ import { loadMcpConfig } from './config-loader.js';
 import { pickResolvedDeviceName } from './tools/device-target.js';
 
 import type { TestTreeNode, UIDiscoverMessage, UIDiscoverChildMessage } from '../ui-mode/ui-protocol.js';
+import { grepSelectsNothing, pruneTreeByGrep } from '../ui-mode/grep-tree.js';
+import { grepFiltersFor, type GrepFilters } from '../test-filter.js';
 
 /** Key for a session with no platform of its own (single-platform configs). */
 const DEFAULT_PLATFORM_KEY = 'default';
@@ -101,6 +104,8 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   private _projectWaves: ResolvedProject[][] = [];
   private _testFiles: string[] = [];
   private _testTree: TestTreeEntry[] = [];
+  /** Each discovered file's whole tree, before any grep prunes it. */
+  private _fileNodes = new Map<string, TestTreeNode>();
   private _testResults = new Map<string, TestResultEntry>();
   private _isRunning = false;
   private _stopRequested = false;
@@ -833,6 +838,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     this._projects = [];
     this._projectWaves = [];
     this._projectConfigs.clear();
+    this._fileNodes = new Map();
     // Including the load failures: `_discoverTestTree` clears them, but
     // `_initialize` only runs it when files were found. A second pass that
     // discovers none kept reporting "N test file(s) failed to load" for paths
@@ -1209,13 +1215,29 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       else this._discoveryErrors.set(file, error ?? 'Discovery failed (no result returned)');
     }
 
+    this._fileNodes = fileNodes;
+    this._rebuildTestTree();
+  }
+
+  /** `list_tests`'s tree, from the discovered files. */
+  private _rebuildTestTree(): void {
+    const fileNodes = this._fileNodes;
+    // A test the config's grep leaves out is not part of the suite, so
+    // `list_tests` does not list it, nor a file it selects nothing in
+    // (PILOT-730) — under each project by that project's own filters.
+    const pruned = (file: string, project: ResolvedProject | undefined): TestTreeEntry | undefined => {
+      const node = fileNodes.get(file);
+      const kept = node && pruneTreeByGrep(node, this._grepFiltersFor(this._realProjectName(project)));
+      return kept ? toTreeEntry(kept) : undefined;
+    };
+
     if (this._hasRealProjects()) {
       const trees: TestTreeEntry[] = [];
       for (const project of this._projects) {
         const children: TestTreeEntry[] = [];
         for (const file of project.testFiles) {
-          const node = fileNodes.get(file);
-          if (node) children.push(toTreeEntry(node));
+          const entry = pruned(file, project);
+          if (entry) children.push(entry);
         }
         if (children.length > 0) {
           trees.push({
@@ -1231,8 +1253,16 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       }
       this._testTree = trees;
     } else {
-      this._testTree = [...fileNodes.values()].map(toTreeEntry);
+      this._testTree = [...fileNodes.keys()]
+        .map((file) => pruned(file, undefined))
+        .filter((entry): entry is TestTreeEntry => entry !== undefined);
     }
+  }
+
+  /** The config's grep filters for a file run under `projectName` (root and project). */
+  private _grepFiltersFor(projectName: string | undefined): GrepFilters {
+    const project = projectName !== undefined ? this._projects.find((p) => p.name === projectName) : undefined;
+    return grepFiltersFor(this._config ?? {}, project);
   }
 
   // ─── Test execution ───
@@ -1245,6 +1275,13 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   ): Promise<RunFileChildResult> {
     if (!this._serializedConfig) {
       throw new Error('No Tapsmith config is loaded, so there is nothing to run against.');
+    }
+
+    // A file the config's grep selects no test in has nothing to run: no
+    // device, no child, no result — as `tapsmith test` leaves it out (PILOT-730).
+    const grep = this._grepFiltersFor(projectName);
+    if (grepSelectsNothing(this._fileNodes.get(filePath), grep)) {
+      return { results: [], suite: { name: '', tests: [], suites: [], durationMs: 0 } };
     }
 
     const target = await this._ensureTargetForProject(projectName);
@@ -1366,6 +1403,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
         projectUseOptions,
         projectName,
         testFilter,
+        grep: serializeGrepFilters(grep),
         // These runs are `tapsmith_run_tests`, not watch mode, whatever child
         // script they happen to share.
         label: 'Run',

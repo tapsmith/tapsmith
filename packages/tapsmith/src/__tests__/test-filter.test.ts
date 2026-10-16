@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { filterRanNothing, findSelectionMiss, matchesTestFilter, noTestsMatchFilterMessage, passesSelectionFilters } from '../test-filter.js';
+import { filterRanNothing, findSelectionMiss, grepFiltersFor, hasGrepFilter, matchesTestFilter, noTestsMatchFilterMessage, passesSelectionFilters } from '../test-filter.js';
 
 describe('matchesTestFilter', () => {
   const fullName = 'Login screen > submits the form';
@@ -161,5 +161,38 @@ describe('filterRanNothing', () => {
     expect(filterRanNothing(true, [{ status: 'skipped' }, { status: 'passed' }])).toBe(false);
     expect(filterRanNothing(true, [{ status: 'failed' }])).toBe(false);
     expect(filterRanNothing(false, [])).toBe(false);
+  });
+});
+
+// Every run path builds a test's grep filters the same way: the root's
+// grep / grepInvert and its project's, each normalized to an array.
+describe('grepFiltersFor', () => {
+  it('normalizes the root and the project filters', () => {
+    expect(grepFiltersFor({ grep: /a/, grepInvert: [/b/, /c/] }, { grep: [/d/] })).toEqual({
+      grep: [/a/],
+      grepInvert: [/b/, /c/],
+      projectGrep: [/d/],
+      projectGrepInvert: [],
+    });
+  });
+
+  it('is empty without any grep, and without a project', () => {
+    const none = grepFiltersFor({});
+    expect(none).toEqual({ grep: [], grepInvert: [], projectGrep: [], projectGrepInvert: [] });
+    expect(hasGrepFilter(none)).toBe(false);
+  });
+
+  it('selects as the CLI does: root and project grep intersect, grepInverts union', () => {
+    const filters = grepFiltersFor({ grep: /smoke/, grepInvert: /flaky/ }, { grep: /login/, grepInvert: /slow/ });
+    expect(hasGrepFilter(filters)).toBe(true);
+    expect(passesSelectionFilters('smoke > login works', filters)).toBe(true);
+    expect(passesSelectionFilters('smoke > logout works', filters)).toBe(false);
+    expect(passesSelectionFilters('login works', filters)).toBe(false);
+    expect(passesSelectionFilters('smoke > login is flaky', filters)).toBe(false);
+    expect(passesSelectionFilters('smoke > login is slow', filters)).toBe(false);
+  });
+
+  it('counts a project-only filter as a filter', () => {
+    expect(hasGrepFilter(grepFiltersFor({}, { grepInvert: /x/ }))).toBe(true);
   });
 });

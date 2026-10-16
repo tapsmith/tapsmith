@@ -912,6 +912,12 @@ export interface UIWorkerRunFileMessage {
   testFilter?: string
   /** Exact full names of the tests to run (UI mode's filtered Run all, PILOT-729). Omitted = every test the other filters pass. */
   fullNames?: string[]
+  /**
+   * The config's grep filters for this file's project (root and project).
+   * Required: the worker holds no projects, and without them it ran every
+   * test the config filters out (PILOT-730).
+   */
+  grep: import('../worker-protocol.js').SerializedGrepFilters
   /** The device already satisfies this file's policy (background preparation). */
   preparedFor?: import('../app-reset.js').PreparedState
 }

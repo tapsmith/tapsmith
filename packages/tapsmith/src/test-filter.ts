@@ -1,3 +1,5 @@
+import { normalizeGrep } from './config.js';
+
 /**
  * Whether a test's fully-qualified name (`describe > test`) matches a `test`
  * filter. Case-insensitive substring match — intentionally grep-like, so it
@@ -26,6 +28,40 @@ export interface SelectionFilters {
   grepInvert?: RegExp[];
   /** Unioned with `grepInvert`: matching either excludes the test. */
   projectGrepInvert?: RegExp[];
+}
+
+/** A run's grep filters, root and project, each empty when not set. */
+export interface GrepFilters {
+  grep: RegExp[];
+  grepInvert: RegExp[];
+  projectGrep: RegExp[];
+  projectGrepInvert: RegExp[];
+}
+
+/** Where `grep` / `grepInvert` are set: the root config, or one of its projects. */
+export interface GrepSource {
+  grep?: RegExp | RegExp[];
+  grepInvert?: RegExp | RegExp[];
+}
+
+/**
+ * The grep filters a test running under `project` must pass: the root's and
+ * the project's, as every run path applies them (root and project `grep`
+ * intersect, their `grepInvert`s union — see `passesSelectionFilters`).
+ */
+export function grepFiltersFor(root: GrepSource, project?: GrepSource): GrepFilters {
+  return {
+    grep: normalizeGrep(root.grep),
+    grepInvert: normalizeGrep(root.grepInvert),
+    projectGrep: normalizeGrep(project?.grep),
+    projectGrepInvert: normalizeGrep(project?.grepInvert),
+  };
+}
+
+/** Whether any of these grep filters is set. */
+export function hasGrepFilter(filters: GrepFilters): boolean {
+  return filters.grep.length > 0 || filters.grepInvert.length > 0
+    || filters.projectGrep.length > 0 || filters.projectGrepInvert.length > 0;
 }
 
 /**

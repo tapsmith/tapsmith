@@ -17,10 +17,11 @@ import { installActionProgressPrinter } from './action-progress-renderer.js';
 import {
   serializeTestResult,
   serializeSuiteResult,
-  deserializeRegExpArray,
+  deserializeGrepFilters,
   configFromSerialized,
   type SerializedConfig,
   type RunFileUseOptions,
+  type SerializedGrepFilters,
 } from './worker-protocol.js';
 import { closeDeviceSession, consumePrepared, openDeviceGroup, sessionsForRun } from './device-session.js';
 import { currentSession } from './device-claims.js';
@@ -66,6 +67,13 @@ export interface WatchRunMessage {
   projectName?: string
   /** Run only tests whose fullName matches this (case-insensitive substring). */
   testFilter?: string
+  /**
+   * The config's grep filters for this file's project, root and project.
+   * Required, not read from `config`: the root's alone left a project's
+   * `grep` / `grepInvert` unapplied in watch mode and headless MCP runs
+   * (PILOT-730).
+   */
+  grep: SerializedGrepFilters
   /**
    * What to call this run in preflight errors, e.g. "Watch" or "Run".
    *
@@ -241,8 +249,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       projectUseOptions: msg.projectUseOptions,
       projectName: msg.projectName,
       testFilter: msg.testFilter,
-      grep: deserializeRegExpArray(msg.config.grep),
-      grepInvert: deserializeRegExpArray(msg.config.grepInvert),
+      ...deserializeGrepFilters(msg.grep),
       abortSignal: abortController.signal,
     });
 

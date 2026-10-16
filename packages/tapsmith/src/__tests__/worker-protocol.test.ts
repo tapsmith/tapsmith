@@ -10,7 +10,10 @@ import {
   serializeConfig,
   configFromSerialized,
   isRetryableDeviceSelectionError,
+  serializeGrepFilters,
+  deserializeGrepFilters,
 } from '../worker-protocol.js';
+import { grepFiltersFor } from '../test-filter.js';
 import type { TapsmithConfig } from '../config.js';
 import type { TestResult, SuiteResult } from '../runner.js';
 
@@ -292,5 +295,24 @@ describe('isRetryableDeviceSelectionError', () => {
   it('still retries "not found", and not an unrelated error', () => {
     expect(isRetryableDeviceSelectionError(new Error('Device X not found. Run ListDevices first to refresh the device list.'))).toBe(true);
     expect(isRetryableDeviceSelectionError(new Error('Invalid serial'))).toBe(false);
+  });
+});
+
+describe('grep filters over IPC', () => {
+  it('round-trips the root and project filters, flags included', () => {
+    const filters = grepFiltersFor({ grep: /smoke/i, grepInvert: [/slow/, /flaky/g] }, { grep: /login/ });
+    const wire = JSON.parse(JSON.stringify(serializeGrepFilters(filters)));
+    expect(deserializeGrepFilters(wire)).toEqual({
+      grep: [/smoke/i],
+      grepInvert: [/slow/, /flaky/g],
+      projectGrep: [/login/],
+      projectGrepInvert: undefined,
+    });
+  });
+
+  it('reads empty sets as no filter', () => {
+    expect(deserializeGrepFilters(serializeGrepFilters(grepFiltersFor({})))).toEqual({
+      grep: undefined, grepInvert: undefined, projectGrep: undefined, projectGrepInvert: undefined,
+    });
   });
 });

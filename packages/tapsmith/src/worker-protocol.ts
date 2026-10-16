@@ -6,7 +6,8 @@
  * @see PILOT-106
  */
 
-import type { TestResult, SuiteResult } from './runner.js';
+import type { TestResult, SuiteResult, RunOptions } from './runner.js';
+import type { GrepFilters } from './test-filter.js';
 import { normalizeGrep, type AppResetMode, type AppResetScope, type TapsmithConfig } from './config.js';
 
 // ─── Main → Worker messages ───
@@ -461,6 +462,39 @@ export function serializeRegExpArray(values: RegExp[] | undefined): SerializedRe
 export function deserializeRegExpArray(values: SerializedRegExp[] | undefined): RegExp[] | undefined {
   if (!values || values.length === 0) return undefined;
   return values.map((v) => new RegExp(v.source, v.flags));
+}
+
+/**
+ * A file run's grep filters over IPC — the root's and its project's
+ * (`grepFiltersFor`). Required on the run messages of every child that runs
+ * a file for a parent which holds the projects (UI mode's workers, watch
+ * mode's), so an embedder that forgets them fails to compile instead of
+ * running tests the config filters out (PILOT-730).
+ */
+export interface SerializedGrepFilters {
+  grep: SerializedRegExp[]
+  grepInvert: SerializedRegExp[]
+  projectGrep: SerializedRegExp[]
+  projectGrepInvert: SerializedRegExp[]
+}
+
+export function serializeGrepFilters(filters: GrepFilters): SerializedGrepFilters {
+  return {
+    grep: filters.grep.map(serializeRegExp),
+    grepInvert: filters.grepInvert.map(serializeRegExp),
+    projectGrep: filters.projectGrep.map(serializeRegExp),
+    projectGrepInvert: filters.projectGrepInvert.map(serializeRegExp),
+  };
+}
+
+/** The filters as `runTestFile` takes them: an empty set is no filter. */
+export function deserializeGrepFilters(filters: SerializedGrepFilters): Pick<RunOptions, 'grep' | 'grepInvert' | 'projectGrep' | 'projectGrepInvert'> {
+  return {
+    grep: deserializeRegExpArray(filters.grep),
+    grepInvert: deserializeRegExpArray(filters.grepInvert),
+    projectGrep: deserializeRegExpArray(filters.projectGrep),
+    projectGrepInvert: deserializeRegExpArray(filters.projectGrepInvert),
+  };
 }
 
 /** TestResult with Error serialized to plain object for IPC. */
