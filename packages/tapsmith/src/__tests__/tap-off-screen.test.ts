@@ -336,6 +336,21 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
     }
   });
 
+  it('setChecked() stops retrying a refused tap once the switch is set, even if it then went off-screen', async () => {
+    let reads = 0;
+    const m = client(() => [row({ bounds: onScreen })]);
+    m.findElements.mockImplementation(async () => ({
+      requestId: '1',
+      elements: [++reads <= 1
+        ? row({ bounds: onScreen, checked: false })
+        : row({ visible: false, viewportRatio: 0, bounds: below, checked: true })],
+      errorMessage: '',
+    }));
+    m.tap.mockImplementation(async () => refusal());
+    await withFakeClock(30_000, () => new ElementHandle(m.c, _text('Item 1'), 3000).setChecked(true));
+    expect(m.tap).toHaveBeenCalledTimes(1);
+  });
+
   it('with timeout 0, returns the agent refusal as it is (no wait, no rewrite)', async () => {
     const m = client(() => [row({ bounds: onScreen })]);
     m.tap.mockImplementation(async () => refusal());

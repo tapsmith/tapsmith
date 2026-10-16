@@ -255,7 +255,7 @@ See [Environment Variables for Debugging](#environment-variables-for-debugging) 
 Element {"text":"Submit"} was not found after waiting 30000ms
 ```
 
-For a tap (`tap()`, `doubleTap()`, `longPress()`, `setChecked()`), the message goes on: `It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() …`.
+For a tap (`tap()`, `doubleTap()`, `longPress()`, `setChecked()`), the message usually goes on: `It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() …`. When an unnamed `getByRole()` misses a role that iOS shows only with a name, the message gives that more specific hint instead.
 
 **What happened:** Tapsmith polled the UI hierarchy for 30 seconds and never found an element matching your locator.
 
