@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { initArgsFromOptions, resolveInitPlan, executeInitPlan, assertConfigWritable, assertProjectWritable, InitError, type DetectFns } from '../init-noninteractive.js';
 import type { ExpoProject } from '../init-detect.js';
-import { needsSimulatorAgent } from '../init.js';
+import { generateConfig, needsSimulatorAgent } from '../init.js';
 import { simulatorChoices, type EnvScan } from '../env-scan.js';
 import type { InitCommandOptions } from '../cli-program.js';
 
@@ -169,12 +169,32 @@ describe('resolveInitPlan()', () => {
     expect(err.fix).toContain('--apk');
   });
 
-  it('errors NO_APK when nothing found', () => {
+  it('errors NO_APK when nothing found, offering --package for an installed app (PILOT-721)', () => {
     const detect = { ...detectStubs, findApkCandidates: () => [] };
-    expectInitError(
+    const err = expectInitError(
       () => resolveInitPlan(initArgs({ yes: true, platform: 'android' }), baseEnv, detect),
       'NO_APK',
     );
+    expect(err.fix).toContain('--apk <path>');
+    expect(err.fix).toContain('--package <id>');
+  });
+
+  it('with --package and no APK, plans a package-only config and says the app must be installed (PILOT-721)', () => {
+    const detect = { ...detectStubs, findApkCandidates: () => [] };
+    const plan = resolveInitPlan(initArgs({ yes: true, platform: 'android', package: 'com.x' }), baseEnv, detect);
+    expect(plan.android).toMatchObject({ packageName: 'com.x', useEmulators: true });
+    expect(plan.android?.apkPath).toBeUndefined();
+    expect(plan.warnings.join('\n')).toMatch(/No APK found.*com\.x.*install the app on the device/);
+    const config = generateConfig(plan.platforms, plan.android, plan.ios, false);
+    expect(config).toContain("package: 'com.x'");
+    expect(config).not.toContain('apk:');
+  });
+
+  it('with --package on an Expo project with no build, plans a package-only config too (PILOT-721)', () => {
+    const detect = { ...detectStubs, findApkCandidates: () => [], detectExpoProject: () => ({ hasAndroidDir: false, hasIosDir: false, androidPackage: 'com.expo' } as ExpoProject) };
+    const plan = resolveInitPlan(initArgs({ yes: true, platform: 'android', package: 'com.x' }), baseEnv, detect);
+    expect(plan.android?.packageName).toBe('com.x');
+    expect(plan.android?.apkPath).toBeUndefined();
   });
 
   it('infers platform from project layout when --platform omitted', () => {

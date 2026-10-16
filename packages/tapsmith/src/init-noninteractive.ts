@@ -186,15 +186,16 @@ export function resolveInitPlan(
     if (!apkPath) {
       const prefer = detect.preferDebugApk ?? detectDefaults.preferDebugApk;
       const candidates = prefer(detect.findApkCandidates(cwd));
-      if (candidates.length === 0) {
+      if (candidates.length === 0 && !args.packageName) {
+        const installed = 'or --package <id> if the app is already installed on the device (a dev client, say)';
         const expoProject = expo();
         if (expoProject) {
           throw new InitError('NO_APK', 'No Android APK found under android/**/build/outputs/apk/', {
-            fix: detectDefaults.expoBuildHint(['android'], expoProject, 'Or pass --apk <path>.'),
+            fix: detectDefaults.expoBuildHint(['android'], expoProject, `Or pass --apk <path>, ${installed}.`),
           });
         }
         throw new InitError('NO_APK', 'No Android APK found under android/**/build/outputs/apk/', {
-          fix: 'Build your app (e.g. cd android && ./gradlew assembleDebug; a React Native Debug build also needs Metro running, see https://tapsmith.dev/getting-started/#build-the-app-under-test), or pass --apk <path>',
+          fix: `Build your app (e.g. cd android && ./gradlew assembleDebug; a React Native Debug build also needs Metro running, see https://tapsmith.dev/getting-started/#build-the-app-under-test), or pass --apk <path>, ${installed}`,
         });
       }
       if (candidates.length > 1) {
@@ -206,20 +207,27 @@ export function resolveInitPlan(
       apkPath = candidates[0];
     }
 
-    const apkAbs = path.resolve(cwd, apkPath);
-    let packageName = args.packageName ?? detect.detectAndroidPackage(apkAbs);
-    // The app config's id stands in only for a build that exists: a missing
-    // APK still fails here, and a stand-in is said, since a build variant
-    // (applicationIdSuffix) can carry another id (PILOT-557).
-    const configPackage = !packageName && fs.existsSync(apkAbs) ? expo()?.androidPackage : undefined;
-    if (configPackage) {
-      packageName = configPackage;
-      warnings.push(`Could not read the package name from ${apkPath} (needs aapt2 from the Android SDK build-tools), so used ${configPackage} from the Expo app config — check it matches this build, or pass --package <id>`);
-    }
-    if (!packageName) {
-      throw new InitError('NO_PACKAGE', `Could not detect package name from ${apkPath} (aapt2 unavailable or APK missing)`, {
-        fix: 'Pass --package <id>',
-      });
+    let packageName = args.packageName;
+    if (apkPath === undefined) {
+      // `package` alone is a valid config (PILOT-721): Tapsmith launches and
+      // resets an app that is already installed, it just cannot install it.
+      warnings.push(`No APK found, so the config has no apk: Tapsmith will launch and reset ${packageName} but cannot install it — install the app on the device yourself, or add apk: '<path>' to tapsmith.config.ts`);
+    } else {
+      const apkAbs = path.resolve(cwd, apkPath);
+      packageName ??= detect.detectAndroidPackage(apkAbs);
+      // The app config's id stands in only for a build that exists: a missing
+      // APK still fails here, and a stand-in is said, since a build variant
+      // (applicationIdSuffix) can carry another id (PILOT-557).
+      const configPackage = !packageName && fs.existsSync(apkAbs) ? expo()?.androidPackage : undefined;
+      if (configPackage) {
+        packageName = configPackage;
+        warnings.push(`Could not read the package name from ${apkPath} (needs aapt2 from the Android SDK build-tools), so used ${configPackage} from the Expo app config — check it matches this build, or pass --package <id>`);
+      }
+      if (!packageName) {
+        throw new InitError('NO_PACKAGE', `Could not detect package name from ${apkPath} (aapt2 unavailable or APK missing)`, {
+          fix: 'Pass --package <id>',
+        });
+      }
     }
 
     const deviceType = args.deviceType ?? 'emulator';

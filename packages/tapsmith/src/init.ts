@@ -202,7 +202,8 @@ function orderApkCandidates(candidates: string[]): string[] {
 export type Platform = 'android' | 'ios';
 
 export interface AndroidConfig {
-  apkPath: string;
+  /** Unset for a package-only config: the app is installed already (PILOT-721). */
+  apkPath?: string;
   packageName?: string;
   useEmulators: boolean;
   usePhysicalDevices: boolean;
@@ -880,7 +881,7 @@ export function generateConfig(
 
   if (platforms.length === 1 && android) {
     if (android.packageName) lines.push(`  package: '${esc(android.packageName)}',`);
-    lines.push(`  apk: '${esc(android.apkPath)}',`);
+    if (android.apkPath) lines.push(`  apk: '${esc(android.apkPath)}',`);
     if (android.useEmulators && android.avd) {
       lines.push(`  avd: '${esc(android.avd)}',`);
     }
@@ -914,7 +915,7 @@ export function generateConfig(
     lines.push('      use: {');
     lines.push("        platform: 'android',");
     if (android.packageName) lines.push(`        package: '${esc(android.packageName)}',`);
-    lines.push(`        apk: '${esc(android.apkPath)}',`);
+    if (android.apkPath) lines.push(`        apk: '${esc(android.apkPath)}',`);
     if (android.useEmulators && android.avd) {
       lines.push(`        avd: '${esc(android.avd)}',`);
     }
