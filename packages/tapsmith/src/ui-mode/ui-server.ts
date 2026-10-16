@@ -2373,7 +2373,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     reported?: ReadonlySet<string>,
   ): number {
     const selected = treeTestsOf(file);
-    if (selected.length === 0 && grepExcludesRun(file)) {
+    // Only for a file no worker started: one a worker died running may have
+    // been running a test the tree, possibly stale, does not show.
+    if (reported === undefined && selected.length === 0 && grepExcludesRun(file)) {
       broadcastFileStatus(file.filePath, 'done', file.projectName);
       return 0;
     }
