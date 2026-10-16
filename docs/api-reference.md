@@ -2866,7 +2866,7 @@ Pass `--yes` or any setup flag below (every flag but `--json`) to run non-intera
 | Flag | Meaning |
 | --- | --- |
 | `-y`, `--yes` | Accept auto-detected defaults for anything not specified |
-| `--platform <list>` | `android`, `ios`, or `android,ios` (default: inferred — Android when `--apk` is given, there is an `android/` directory, or `--package` is given with nothing pointing at iOS (no `--app`, no `ios/` directory), iOS when `--app` is given or, on macOS, there is an `ios/` directory; in a React Native or Expo project on macOS that leaves iOS out, init warns, with how to add it) |
+| `--platform <list>` | `android`, `ios`, or `android,ios` (default: inferred — Android when `--apk` is given, there is an `android/` directory, or `--package` is given with nothing pointing at iOS (no `--app` or `--bundle-id`, no `ios/` directory), iOS when `--app` is given or, on macOS, there is an `ios/` directory; in a React Native or Expo project on macOS that leaves iOS out, init warns, with how to add it) |
 | `--apk <path>` | Android APK (default: auto-detected under `android/**/build/outputs/apk/`) |
 | `--package <id>` | Android package name (default: read from the APK, else, in an Expo project, `expo.android.package` from the app config, with a warning). With no APK found, `--package` alone writes a config without `apk`, for an app already installed on the device (a dev client, say): Tapsmith launches and resets it but does not install it, and init warns. In a setup with no Android, init ignores `--package` with a warning that names `--bundle-id`, the iOS flag |
 | `--app <path>` | iOS simulator `.app` bundle (default: auto-detected under `ios/`) |

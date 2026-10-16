@@ -215,6 +215,8 @@ describe('resolveInitPlan()', () => {
       const dirOnly = resolveInitPlan(initArgs({ yes: true, package: 'com.foo' }), baseEnv, detectStubs, tmp);
       expect(dirOnly.platforms).toEqual(['ios']);
       expect(dirOnly.warnings.join('\n')).toContain('--bundle-id');
+      // --bundle-id points at iOS too, rather than being dropped from an Android-only plan.
+      expectInitError(() => resolveInitPlan(initArgs({ yes: true, package: 'com.foo', bundleId: 'com.foo.ios' }), baseEnv, detectStubs, path.join(tmp, 'nowhere')), 'NO_PLATFORM');
       const withApp = resolveInitPlan(initArgs({ yes: true, package: 'com.foo', app: 'ios/build/X.app' }), baseEnv, detectStubs, path.join(tmp, 'nowhere'));
       expect(withApp.platforms).toEqual(['ios']);
       expect(withApp.warnings.join('\n')).toContain("--package names an Android package");
@@ -347,6 +349,18 @@ describe('resolveInitPlan()', () => {
       fs.mkdirSync(path.join(tmp, 'ios'));
       const rerun = resolveInitPlan(initArgs({ yes: true, force: true, apk: 'build/app.apk' }), baseEnv, detectStubs, tmp);
       expect(rerun.platforms).toEqual(['android', 'ios']);
+    }, false));
+
+    it('keeps Android in the re-run it gives when --package alone configured it (PILOT-721)', () => withProject({ expo: '54.0.0' }, (tmp) => {
+      const detect = { ...detectStubs, findApkCandidates: () => [], detectExpoProject: () => ({ ...managedExpo, hasAndroidDir: false }) };
+      const plan = resolveInitPlan(initArgs({ yes: true, package: 'com.x' }), baseEnv, detect, tmp);
+      expect(plan.platforms).toEqual(['android']);
+      // Once ios/ exists, --package alone would no longer name Android, so the re-run names both platforms.
+      expect(iosNote(plan.warnings)).toContain('`npx tapsmith init --force --platform android,ios`');
+      fs.mkdirSync(path.join(tmp, 'ios'));
+      const rerun = resolveInitPlan(initArgs({ yes: true, force: true, platform: 'android,ios', package: 'com.x' }), baseEnv, detect, tmp);
+      expect(rerun.platforms).toEqual(['android', 'ios']);
+      expect(rerun.android?.packageName).toBe('com.x');
     }, false));
 
     it('quotes an --apk path the shell would split', () => withProject({ 'react-native': '0.79.0' }, (tmp) => {

@@ -147,14 +147,14 @@ export function resolveInitPlan(
   // replaces, what the directories imply, so `--apk` alone in a project with
   // both never drops iOS. `--package`, an Android package (installed already
   // when there is no APK, PILOT-721), names Android too, unless something
-  // points at iOS (`--app`, an ios/ directory): the config's `package` key
-  // also holds the iOS bundle id, so it may be meant as one. `--app` off
-  // macOS is an explicit iOS ask, refused below.
+  // points at iOS (`--app`, `--bundle-id`, an ios/ directory): the config's
+  // `package` key also holds the iOS bundle id, so it may be meant as one.
+  // `--app` off macOS is an explicit iOS ask, refused below.
   let platforms = args.platforms;
   if (!platforms) {
     const inferred: Platform[] = [];
     const iosDir = env.isMacOS && fs.existsSync(path.join(cwd, 'ios'));
-    const packageNamesAndroid = !!args.packageName && !args.app && !iosDir;
+    const packageNamesAndroid = !!args.packageName && !args.app && !args.bundleId && !iosDir;
     if (args.apk || packageNamesAndroid || fs.existsSync(path.join(cwd, 'android'))) inferred.push('android');
     if (args.app || iosDir) inferred.push('ios');
     if (inferred.length === 0) {
@@ -176,7 +176,10 @@ export function resolveInitPlan(
       // The note needs only whether this is Expo, not the app config's ids,
       // so the config is not read: that would run the project's Expo CLI.
       const detectExpo = detect.detectExpoProject ?? detectDefaults.detectExpoProject;
-      warnings.push(iosLeftOutNote(detectExpo(cwd, () => undefined), args.apk));
+      // Once ios/ exists, --package alone no longer names Android, so a
+      // re-run it configured must name both platforms.
+      const packageOnly = packageNamesAndroid && !args.apk && !fs.existsSync(path.join(cwd, 'android'));
+      warnings.push(iosLeftOutNote(detectExpo(cwd, () => undefined), args.apk, packageOnly));
     }
   }
 
@@ -335,10 +338,11 @@ export function resolveInitPlan(
  * without one, a project whose APK is not under android/ would come back
  * iOS-only, its Android setup deleted by --force.
  */
-function iosLeftOutNote(expoProject: detectDefaults.ExpoProject | undefined, apk: string | undefined): string {
+function iosLeftOutNote(expoProject: detectDefaults.ExpoProject | undefined, apk: string | undefined, packageOnly = false): string {
   const reason = 'iOS left out of the config: this project has no ios/ directory yet, so there is no iOS app to test.';
   const apkFlag = apk ? ` --apk ${/^[\w./@:+=-]+$/.test(apk) ? apk : `'${apk.replace(/'/g, `'\\''`)}'`}` : '';
-  const rerun = `Then re-run \`npx tapsmith init --force${apkFlag}\` with any other flags you passed this time, adding \`--app <path>\` if the iOS build is outside ios/.`;
+  const platformFlag = packageOnly ? ' --platform android,ios' : '';
+  const rerun = `Then re-run \`npx tapsmith init --force${platformFlag}${apkFlag}\` with any other flags you passed this time, adding \`--app <path>\` if the iOS build is outside ios/.`;
   if (expoProject) return `${reason} To test iOS too: ${detectDefaults.expoBuildHint(['ios'], expoProject, rerun)}`;
   return `${reason} To test iOS too, generate the iOS project and build the app for the simulator. ${rerun}`;
 }
