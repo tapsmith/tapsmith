@@ -1472,9 +1472,10 @@ export async function projectPackageManager(dir: string): Promise<string> {
 
 /**
  * How the project at `dir` runs its own Tapsmith, for the commands init and
- * its hints print (PILOT-721): `pnpm exec tapsmith`, `yarn tapsmith`,
- * `bunx tapsmith`, else `npx tapsmith`. Not package-manager-detector's
- * `execute-local`, which gives Yarn 1 `yarn exec tapsmith --`.
+ * its hints print (PILOT-721): `pnpm exec tapsmith`, `yarn tapsmith` (Yarn
+ * 2+), `bunx tapsmith`, else `npx tapsmith`. Yarn 1 keeps npx, which finds
+ * the local bin in its node_modules: `yarn tapsmith` prints a banner on
+ * stdout, which breaks `mcp-server`'s stdio and `--json` output.
  */
 export async function tapsmithExecCommand(dir: string): Promise<string> {
   const agent = await projectPackageManager(dir);
@@ -1484,7 +1485,6 @@ export async function tapsmithExecCommand(dir: string): Promise<string> {
 const TAPSMITH_EXEC: Record<string, string> = {
   pnpm: 'pnpm exec tapsmith',
   'pnpm@6': 'pnpm exec tapsmith',
-  yarn: 'yarn tapsmith',
   'yarn@berry': 'yarn tapsmith',
   bun: 'bunx tapsmith',
 };

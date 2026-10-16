@@ -216,7 +216,8 @@ describe('tapsmithExecCommand() (PILOT-721)', () => {
   it.each([
     [undefined, 'npx tapsmith'],
     ['pnpm-lock.yaml', 'pnpm exec tapsmith'],
-    ['yarn.lock', 'yarn tapsmith'],
+    // Yarn 1 prints a banner on stdout, which would break mcp-server's stdio and --json.
+    ['yarn.lock', 'npx tapsmith'],
     ['bun.lock', 'bunx tapsmith'],
   ])('with lockfile %s runs Tapsmith as `%s`', async (lockfile, expected) => {
     write('package.json', '{}\n');
