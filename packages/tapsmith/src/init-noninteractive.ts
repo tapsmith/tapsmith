@@ -147,14 +147,15 @@ export function resolveInitPlan(
   // replaces, what the directories imply, so `--apk` alone in a project with
   // both never drops iOS. `--package`, an Android package (installed already
   // when there is no APK, PILOT-721), names Android too, unless something
-  // points at iOS (`--app`, `--bundle-id`, an ios/ directory): the config's
-  // `package` key also holds the iOS bundle id, so it may be meant as one.
-  // `--app` off macOS is an explicit iOS ask, refused below.
+  // points at iOS (`--app`, an ios/ directory): the config's `package` key
+  // also holds the iOS bundle id, so it may be meant as one. Beside
+  // `--bundle-id` it can only be the Android package. `--app` off macOS is
+  // an explicit iOS ask, refused below.
   let platforms = args.platforms;
   if (!platforms) {
     const inferred: Platform[] = [];
     const iosDir = env.isMacOS && fs.existsSync(path.join(cwd, 'ios'));
-    const packageNamesAndroid = !!args.packageName && !args.app && !args.bundleId && !iosDir;
+    const packageNamesAndroid = !!args.packageName && (!!args.bundleId || (!args.app && !iosDir));
     if (args.apk || packageNamesAndroid || fs.existsSync(path.join(cwd, 'android'))) inferred.push('android');
     if (args.app || iosDir) inferred.push('ios');
     if (inferred.length === 0) {
@@ -184,7 +185,11 @@ export function resolveInitPlan(
   }
 
   if (args.packageName && !platforms.includes('android')) {
-    warnings.push(`--package names an Android package, so ${args.packageName} was not used: this setup has no Android. For the iOS bundle identifier, pass --bundle-id ${args.packageName}`);
+    const forIos = args.bundleId ? '' : ` For the iOS bundle identifier, pass --bundle-id ${args.packageName}`;
+    warnings.push(`--package names an Android package, so ${args.packageName} was not used: this setup has no Android.${forIos}`);
+  }
+  if (args.bundleId && !platforms.includes('ios')) {
+    warnings.push(`--bundle-id names an iOS bundle identifier, so ${args.bundleId} was not used: this setup has no iOS`);
   }
 
   if (platforms.includes('ios') && !env.isMacOS) {

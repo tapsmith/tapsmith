@@ -215,8 +215,20 @@ describe('resolveInitPlan()', () => {
       const dirOnly = resolveInitPlan(initArgs({ yes: true, package: 'com.foo' }), baseEnv, detectStubs, tmp);
       expect(dirOnly.platforms).toEqual(['ios']);
       expect(dirOnly.warnings.join('\n')).toContain('--bundle-id');
-      // --bundle-id points at iOS too, rather than being dropped from an Android-only plan.
-      expectInitError(() => resolveInitPlan(initArgs({ yes: true, package: 'com.foo', bundleId: 'com.foo.ios' }), baseEnv, detectStubs, path.join(tmp, 'nowhere')), 'NO_PLATFORM');
+      // Beside --bundle-id, --package can only be the Android package: both platforms.
+      const bothIds = resolveInitPlan(initArgs({ yes: true, package: 'com.a.android', bundleId: 'com.a.ios' }), baseEnv, detectStubs, tmp);
+      expect(bothIds.platforms).toEqual(['android', 'ios']);
+      expect(bothIds.android?.packageName).toBe('com.a.android');
+      expect(bothIds.ios?.bundleId).toBe('com.a.ios');
+      // With no iOS in the plan, an unused --bundle-id is said, not dropped silently.
+      const noIos = resolveInitPlan(initArgs({ yes: true, package: 'com.a.android', bundleId: 'com.a.ios' }), baseEnv, detectStubs, path.join(tmp, 'nowhere'));
+      expect(noIos.platforms).toEqual(['android']);
+      expect(noIos.warnings.join('\n')).toContain('--bundle-id names an iOS bundle identifier, so com.a.ios was not used');
+      // An unused --package with --bundle-id given is not told to pass --bundle-id again.
+      const iosOnly = resolveInitPlan(initArgs({ yes: true, platform: 'ios', package: 'com.x', bundleId: 'com.y' }), baseEnv, detectStubs, tmp);
+      const pkgWarning = iosOnly.warnings.find((w) => w.startsWith('--package names'));
+      expect(pkgWarning).toBeDefined();
+      expect(pkgWarning).not.toContain('pass --bundle-id');
       const withApp = resolveInitPlan(initArgs({ yes: true, package: 'com.foo', app: 'ios/build/X.app' }), baseEnv, detectStubs, path.join(tmp, 'nowhere'));
       expect(withApp.platforms).toEqual(['ios']);
       expect(withApp.warnings.join('\n')).toContain("--package names an Android package");
