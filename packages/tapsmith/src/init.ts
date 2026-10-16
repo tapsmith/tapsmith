@@ -435,7 +435,8 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
   let simulator: string | undefined;
   let simulatorDeviceType: string | undefined;
   if (useSimulators) {
-    // Every simulator, a booted one first and selected (PILOT-562).
+    // Every simulator, stock names first, then a booted one, the first
+    // selected (PILOT-562, PILOT-721).
     const choices = simulatorChoices(env.simulators);
     if (choices.length > 0) {
       simulator = await ask<string>({
