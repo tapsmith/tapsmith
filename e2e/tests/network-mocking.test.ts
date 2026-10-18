@@ -272,3 +272,27 @@ describe("Network mocking", () => {
     await device.unrouteAll()
   })
 })
+
+// PILOT-775: mocking needs no trace config — with tracing off, the first
+// route() or network wait of a test starts the proxy on demand. Routes and
+// waits come first, before the screen that sends the request.
+describe("Network mocking without a trace (PILOT-775)", () => {
+  test.use({ trace: "off", timeout: 20_000 })
+
+  test("route() mocks a response with tracing off", async ({ device, apiCallsScreen }) => {
+    await device.route("**/posts*", async (route) => {
+      await route.fulfill({ json: [{ id: 7, title: "Mocked Without Trace", body: "b" }] })
+    })
+    await openScreen(device, "/api-calls")
+    await apiCallsScreen.fetchPostsButton.tap()
+    await expect(device.getByText("Mocked Without Trace")).toBeVisible({ timeout: 10_000 })
+  })
+
+  test("waitForResponse() sees a response with tracing off", async ({ device, apiCallsScreen }) => {
+    await device.route("**/posts*", (route) => route.fulfill({ json: [] }))
+    const response = device.waitForResponse("**/posts*", { timeout: 10_000 })
+    await openScreen(device, "/api-calls")
+    await apiCallsScreen.fetchPostsButton.tap()
+    expect((await response).status).toBe(200)
+  })
+})
