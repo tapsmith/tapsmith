@@ -373,12 +373,19 @@ export async function ensureSimulatorAgent(options: EnsureSimulatorAgentOptions 
     );
   }
 
-  const release = await acquireBuildLock(progress);
+  const { release, waitedSince } = await acquireBuildLock(progress);
+  const failureFile = path.join(CACHE_DIR, BUILD_FAILURE_FILE);
   try {
     // Whoever held the lock may just have built what this run needs.
     const other = findSimulatorXctestrun();
     const built = usableBuild(other, installedSdk);
     if (built) return built;
+    // ...or failed to, while this run waited: the same build would fail the
+    // same way, so report that instead of repeating it once per waiter.
+    if (waitedSince !== undefined) {
+      const failure = buildFailureSince(failureFile, waitedSince);
+      if (failure) throw new Error(failure);
+    }
 
     // A cache only another Tapsmith version built is never used (PILOT-485);
     // say that is why this run builds.
@@ -388,12 +395,16 @@ export async function ensureSimulatorAgent(options: EnsureSimulatorAgentOptions 
       ? `${reason}Building iOS agent for SDK ${installedSdk}... (cached for future runs)`
       : `No prebuilt iOS agent found. Building from source for SDK ${installedSdk}...`);
     try {
-      return await buildSimulatorAgent(installedSdk, buildOptions);
+      const xctestrun = await buildSimulatorAgent(installedSdk, buildOptions);
+      try { fs.rmSync(failureFile, { force: true }); } catch { /* best effort */ }
+      return xctestrun;
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
-      throw new Error(other
+      const message = other
         ? `Failed to rebuild the iOS simulator agent for SDK ${installedSdk}: ${detail}`
-        : `Failed to build iOS simulator agent from source: ${detail}`);
+        : `Failed to build iOS simulator agent from source: ${detail}`;
+      try { fs.writeFileSync(failureFile, message); } catch { /* best effort */ }
+      throw new Error(message);
     }
   } finally {
     await release();
@@ -411,12 +422,28 @@ function usableBuild(found: string | undefined, installedSdk: string | undefined
   return !foundSdk || foundSdk === installedSdk ? found : undefined;
 }
 
+/** The last failed build's error, in the cache directory, for the processes that waited on it. */
+const BUILD_FAILURE_FILE = '.build-failed';
+
+/** The error a build that ended after `since` failed with, if the last one failed. */
+function buildFailureSince(file: string, since: number): string | undefined {
+  try {
+    if (fs.statSync(file).mtimeMs < since) return undefined;
+    return fs.readFileSync(file, 'utf8') || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
- * Hold this version's build lock, waiting while another process builds. The
- * lock is refreshed while held, so a crashed builder's lock goes stale in
- * seconds rather than blocking every later run.
+ * Hold this version's build lock, waiting while another process builds;
+ * `waitedSince` says when the wait began, when there was one. The lock is
+ * refreshed while held, so a crashed builder's lock goes stale in seconds
+ * rather than blocking every later run.
  */
-async function acquireBuildLock(progress: (message: string) => void): Promise<() => Promise<void>> {
+async function acquireBuildLock(
+  progress: (message: string) => void,
+): Promise<{ release: () => Promise<void>; waitedSince?: number }> {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
   const options = {
     lockfilePath: path.join(path.dirname(CACHE_DIR), `.build-${path.basename(CACHE_DIR)}.lock`),
@@ -426,11 +453,13 @@ async function acquireBuildLock(progress: (message: string) => void): Promise<()
     // event loop) must not throw from a timer; the build is still valid.
     onCompromised: () => undefined,
   };
-  const deadline = Date.now() + BUILD_LOCK_WAIT_MS;
+  const started = Date.now();
+  const deadline = started + BUILD_LOCK_WAIT_MS;
   let announced = false;
   for (;;) {
     try {
-      return await lockfile.lock(CACHE_DIR, options);
+      const release = await lockfile.lock(CACHE_DIR, options);
+      return announced ? { release, waitedSince: started } : { release };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ELOCKED') throw err;
       if (Date.now() > deadline) {

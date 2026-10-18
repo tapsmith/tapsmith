@@ -109,11 +109,20 @@ describe('iosXctestrunForAgentStart', () => {
     vi.mocked(ensureSimulatorAgent).mockRejectedValueOnce(new Error('Failed to build iOS simulator agent from source: boom'));
     const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
-      await expect(iosXctestrunForAgentStart(config(), undefined)).resolves.toBeUndefined();
+      await expect(iosXctestrunForAgentStart(config(), 'SIM-1')).resolves.toBeUndefined();
       expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Failed to build iOS simulator agent from source: boom'));
     } finally {
       stderr.mockRestore();
     }
+  });
+
+  it('with no device known (it may be a phone), only looks — never builds and stalls discovery', async () => {
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    const { findSimulatorXctestrun } = await import('../ios-device-resolve.js');
+    vi.mocked(ensureSimulatorAgent).mockClear();
+    vi.mocked(findSimulatorXctestrun).mockReturnValueOnce('/cache/Sim_iphonesimulator27.0-arm64.xctestrun');
+    await expect(iosXctestrunForAgentStart(config(), undefined)).resolves.toBe('/cache/Sim_iphonesimulator27.0-arm64.xctestrun');
+    expect(ensureSimulatorAgent).not.toHaveBeenCalled();
   });
 
   it('a simulator with a hand-set path that exists gets it, checked', async () => {

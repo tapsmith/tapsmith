@@ -387,6 +387,24 @@ describe('ensureSimulatorAgent() options', () => {
     expect(lines).toContain('Waiting for another Tapsmith process to finish building the iOS simulator agent...');
   }, 30_000);
 
+  it('reports the build that failed while it waited, instead of repeating it once per worker', async () => {
+    const count = path.join(home, 'xcodebuild-count');
+    process.env.FAKE_XCB_COUNT = count;
+    process.env.FAKE_XCB_MODE = 'fail';
+    onTestFinished(() => { delete process.env.FAKE_XCB_COUNT; });
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    const results = await Promise.allSettled([1, 2, 3].map(() => ensureSimulatorAgent({ quiet: true })));
+    expect(fs.readFileSync(count, 'utf8').trim().split('\n')).toHaveLength(1);
+    for (const r of results) {
+      expect(r.status).toBe('rejected');
+      expect(String((r as PromiseRejectedResult).reason)).toContain('xcodebuild build-for-testing failed (exit code 65)');
+    }
+    // The next run (nobody building) tries again.
+    process.env.FAKE_XCB_MODE = 'big-ok';
+    expect(await ensureSimulatorAgent({ quiet: true })).toBe(path.join(cacheDir(), XCTESTRUN));
+    expect(fs.existsSync(path.join(cacheDir(), '.build-failed'))).toBe(false);
+  }, 30_000);
+
   it('hands its progress to onProgress instead of stdout', async () => {
     process.env.FAKE_XCB_MODE = 'big-ok';
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);

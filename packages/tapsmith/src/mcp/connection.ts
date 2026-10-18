@@ -2266,6 +2266,9 @@ async function startAgentFromConfig(
  * agent when nothing current exists (a first run, an upgrade — PILOT-485 —
  * or an Xcode update), with its progress logged to stderr: stdout is the
  * stdio MCP protocol channel. The build holds the tool call until it ends.
+ * With no device known (discovery recovering an orphaned daemon's agent,
+ * which may be a phone) it only looks: a build there would stall discovery
+ * for minutes, perhaps for nothing.
  */
 export async function iosXctestrunForAgentStart(
   config: TapsmithConfig,
@@ -2284,6 +2287,10 @@ export async function iosXctestrunForAgentStart(
   if (config.iosXctestrun) return path.resolve(config.rootDir, config.iosXctestrun);
   if (process.env.TAPSMITH_IOS_XCTESTRUN) return process.env.TAPSMITH_IOS_XCTESTRUN;
   try {
+    if (!serial) {
+      const { findSimulatorXctestrun } = await import('../ios-device-resolve.js');
+      return findSimulatorXctestrun();
+    }
     const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
     return await ensureSimulatorAgent({ onProgress: log });
   } catch (err) {
