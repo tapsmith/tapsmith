@@ -890,8 +890,10 @@ async function discover(): Promise<void> {
         //
         // Not for a config spanning platforms either: its root config is no
         // one platform's, and the daemon may be pointed at either. Each
-        // platform's target starts its own agent when it claims a daemon.
-        if (isOurs(source) && (sessionPlatform || !config)) {
+        // platform's target starts its own agent when it claims a daemon. Nor
+        // without a config, which says nothing of the platform and whose
+        // tools report its load error instead.
+        if (isOurs(source) && sessionPlatform) {
           const { agentConnected } = await client.ping();
           if (!agentConnected) await startAgentFromConfig(client, config);
         }
@@ -948,6 +950,10 @@ async function discover(): Promise<void> {
     // a daemon without `--platform` would pick any free device, including the
     // other platform's that a found daemon was just refused over.
     conn = await startDaemon(sessionPlatform);
+    // The connection keeps the config's own platform, unset included: device
+    // tools match a project to its device by that value, and a project that
+    // names no platform carries none.
+    if (conn) conn.platform = config?.platform;
   } catch (err) {
     _discoveryFailures.push(err instanceof Error ? err.message : String(err));
     return;

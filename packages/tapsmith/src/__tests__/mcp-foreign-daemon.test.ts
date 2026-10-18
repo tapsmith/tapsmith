@@ -56,7 +56,7 @@ vi.mock('../mcp/config-loader.js', async (importOriginal) => ({
 }));
 
 const {
-  closeAllClients, configureMcpConnection, ensureConnected, ensurePlatformTarget, getAllDaemonAddresses,
+  closeAllClients, configureMcpConnection, ensureConnected, ensurePlatformTarget, getAllDaemonAddresses, resolveDeviceTarget,
   otherPlatformReason, crossesPlatform, singlePlatformOf,
 } = await import('../mcp/connection.js');
 const { listDeviceClaims } = await import('../device-claims.js');
@@ -199,6 +199,24 @@ describe('a found daemon serving another platform', () => {
     await ensureConnected();
     const args = spawnMock.mock.calls[0]?.[1] as string[];
     expect(args.join(' ')).toContain('--platform android');
+  });
+
+  it('still routes a project that names no platform to the daemon it started for it', async () => {
+    mcpConfig = { ...baseConfig, projects: [{ name: 'e2e' }] };
+    readyAt = (address) => address !== FOREIGN && spawnMock.mock.calls.length > 0;
+    listDevices = () => Promise.resolve({ devices: [{ serial: 'emulator-5554', state: 'Discovered', platform: 'android' }] });
+
+    const target = await ensurePlatformTarget(mcpConfig as TapsmithConfig);
+    const routed = await resolveDeviceTarget({ project: { name: 'e2e' } });
+    expect(routed.device ?? target.deviceSerial).toBe('emulator-5554');
+  });
+
+  it('starts no agent on a found daemon when the config did not load', async () => {
+    mcpConfig = null;
+    listDevices = androidOnForeign;
+
+    await ensureConnected().catch(() => undefined);
+    expect(calls.filter((c) => c.startsWith(`startAgent ${FOREIGN}`))).toEqual([]);
   });
 
   it('is not moved across by a project of a mixed config that names no platform', async () => {
