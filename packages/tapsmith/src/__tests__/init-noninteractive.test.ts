@@ -8,10 +8,10 @@ import { generateConfig, needsSimulatorAgent } from '../init.js';
 import { simulatorChoices, type EnvScan } from '../env-scan.js';
 import type { InitCommandOptions } from '../cli-program.js';
 
-/** `tapsmith init` flags as the CLI hands them over: every boolean present, value flags only when given. */
+/** `tapsmith init` flags as the CLI hands them over: every boolean present, value flags (and --[no-]network-capture) only when given. */
 function initArgs(over: Partial<InitCommandOptions>) {
   return initArgsFromOptions({
-    yes: false, json: false, force: false, networkCapture: false, exampleTest: true, agentsMd: true, ...over,
+    yes: false, json: false, force: false, exampleTest: true, agentsMd: true, ...over,
   });
 }
 
@@ -83,6 +83,8 @@ describe('initArgsFromOptions()', () => {
     expect(initArgs({ force: true }).anySetupFlag).toBe(true);
     expect(initArgs({ exampleTest: false }).anySetupFlag).toBe(true);
     expect(initArgs({ networkCapture: true }).anySetupFlag).toBe(true);
+    expect(initArgs({ networkCapture: false }).anySetupFlag).toBe(true);
+    expect(initArgs({}).networkCapture).toBeUndefined();
   });
 });
 
@@ -644,10 +646,26 @@ describe('resolveInitPlan() AVD choice with network capture', () => {
   });
 
   it('prefers the capture-capable AVD when capture is off too, so route() mocking works later (PILOT-721)', () => {
-    const plan = resolveInitPlan(android(), studioEnv, detectStubs);
+    const plan = resolveInitPlan(android({ networkCapture: false }), studioEnv, detectStubs);
     expect(plan.android?.avd).toBe('Tapsmith_Phone_API_36');
     expect(plan.warnings).toEqual([]);
     expect(plan.captureAvdStep).toBeUndefined();
+  });
+
+  // PILOT-775: --yes takes the wizard's capture default instead of always off.
+  it('turns capture on by default, like the wizard, on a capture-capable setup', () => {
+    expect(resolveInitPlan(android(), studioEnv, detectStubs).networkCapture).toBe(true);
+    expect(resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), baseEnv, detectStubs).networkCapture).toBe(true);
+  });
+
+  it('leaves capture off by default, without the Play warning, when the only AVD is a Play image', () => {
+    const plan = resolveInitPlan(android(), playOnlyEnv, detectStubs);
+    expect(plan.networkCapture).toBe(false);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('honours --no-network-capture', () => {
+    expect(resolveInitPlan(android({ networkCapture: false }), studioEnv, detectStubs).networkCapture).toBe(false);
   });
 
   it('prefers an AVD whose image could not be read over a Play image (PILOT-721)', () => {

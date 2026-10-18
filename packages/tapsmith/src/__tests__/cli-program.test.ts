@@ -508,6 +508,9 @@ describe('commands', () => {
       networkCapture: true, exampleTest: false, agentsMd: false,
     }]]);
     expect((await run(['init', '-y', '--platform=android'])).calls[0]![1]).toMatchObject({ yes: true, platform: 'android' });
+    // Neither capture flag leaves the choice to init's default (PILOT-775).
+    expect((await run(['init', '-y'])).calls[0]![1]).not.toHaveProperty('networkCapture');
+    expect((await run(['init', '-y', '--no-network-capture'])).calls[0]![1]).toMatchObject({ networkCapture: false });
   });
 
   it('returns the handler\'s exit code', async () => {
