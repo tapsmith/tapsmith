@@ -215,7 +215,7 @@ Tapsmith Doctor
 
   iOS
   ✓ Xcode 26.0
-  ✓ iOS simulators available
+  ✓ iOS simulators available (3 iOS simulators)
   ✓ Simulator xctestrun found (auto-build cache, SDK 26.0)
 
   Network Capture

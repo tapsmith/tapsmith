@@ -349,6 +349,86 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
     expect(code).toBe(1);
   });
 
+  // PILOT-777: simctl exiting 0 said "iOS simulators available" with none listed.
+  describe('the simulator count', () => {
+    const SIMCTL_KEY = 'xcrun simctl list devices available -j';
+    function withSimulators(devices: Record<string, unknown[]>): void {
+      exec.table.set('xcodebuild -version', XCODE_VERSION);
+      exec.table.set(SIMCTL_KEY, JSON.stringify({ devices }));
+    }
+    const NO_SIM_FIX = /Xcode → Settings → Components.*xcodebuild -downloadPlatform iOS/;
+
+    it('passes with the number of iOS simulators', async () => {
+      withSimulators({
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [
+          { name: 'iPhone 17', udid: 'A', state: 'Shutdown' },
+          { name: 'iPhone 17 Pro', udid: 'B', state: 'Booted' },
+        ],
+      });
+      const { json } = await doctorJson();
+      expect(check(json, 'simctl')).toEqual({ id: 'simctl', status: 'pass', label: 'iOS simulators available', detail: '2 iOS simulators' });
+    });
+
+    it('with no config, none is a warning with the runtime install fix, not exit 1', async () => {
+      withAdb();
+      withSimulators({});
+      const { code, json } = await doctorJson();
+      expect(check(json, 'simctl')).toMatchObject({ status: 'warn', label: 'No iOS simulators available', fix: expect.stringMatching(NO_SIM_FIX) });
+      expect(code).toBe(0);
+    });
+
+    it('prints the warning and its fix in the text report', async () => {
+      withAdb();
+      withSimulators({});
+      const { text } = await doctorText();
+      expect(text).not.toContain('✓ iOS simulators available');
+      expect(text).toContain('No iOS simulators available');
+      expect(text).toMatch(NO_SIM_FIX);
+    });
+
+    it('does not count watchOS, tvOS or visionOS simulators, nor Tapsmith worker clones', async () => {
+      withAdb();
+      withSimulators({
+        'com.apple.CoreSimulator.SimRuntime.watchOS-11-0': [{ name: 'Apple Watch Series 10', udid: 'W', state: 'Shutdown' }],
+        'com.apple.CoreSimulator.SimRuntime.tvOS-18-0': [{ name: 'Apple TV', udid: 'T', state: 'Shutdown' }],
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [{ name: 'iPhone 17 (Tapsmith Worker 1)', udid: 'C', state: 'Shutdown' }],
+      });
+      const { json } = await doctorJson();
+      expect(check(json, 'simctl')).toMatchObject({ status: 'warn', label: 'No iOS simulators available' });
+    });
+
+    it('fails when the config names a simulator to run on', async () => {
+      withSimulators({ 'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [] });
+      writeConfig("export default { platform: 'ios', simulator: 'iPhone 17' }\n");
+      const { code, json } = await doctorJson();
+      expect(check(json, 'simctl')).toMatchObject({ status: 'fail', label: 'No iOS simulators available', fix: expect.stringMatching(NO_SIM_FIX) });
+      expect(code).toBe(1);
+    });
+
+    it('fails when one project of a mixed config names a simulator', async () => {
+      withAdb();
+      withSimulators({});
+      writeConfig("export default { projects: [{ name: 'a' }, { name: 'i', use: { platform: 'ios', simulator: 'iPhone 17' } }] }\n");
+      const { json } = await doctorJson();
+      expect(check(json, 'simctl')).toMatchObject({ status: 'fail' });
+    });
+
+    it('only warns for an iOS config that names no simulator, which may run on a physical device', async () => {
+      withSimulators({});
+      writeConfig("export default { platform: 'ios' }\n");
+      const { json } = await doctorJson();
+      expect(check(json, 'simctl')).toMatchObject({ status: 'warn', label: 'No iOS simulators available' });
+    });
+
+    it('warns that it could not read the list, rather than claiming none, when simctl prints something unexpected', async () => {
+      withAdb();
+      exec.table.set('xcodebuild -version', XCODE_VERSION);
+      exec.table.set(SIMCTL_KEY, 'not json');
+      const { json } = await doctorJson();
+      expect(check(json, 'simctl')).toMatchObject({ status: 'warn', label: expect.stringContaining('Could not read') });
+    });
+  });
+
   it('iOS-only fields without platform fail, as tapsmith test does', async () => {
     withXcode();
     writeConfig("export default { app: 'x.app', simulator: 'iPhone 16' }\n");
