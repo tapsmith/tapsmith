@@ -690,6 +690,31 @@ do {
     checkTrue("failure message says what to do", message.contains("device.pressKey(\"enter\")"), message)
 }
 
+// PILOT-622: when the keyboard-first step runs, and for how long.
+func checkGate(_ name: String, _ ok: Bool) {
+    if ok { print("ok   \(name)") } else { failures += 1; print("FAIL \(name)") }
+}
+let t0 = Date(timeIntervalSinceReferenceDate: 1_000)
+var gate = KeyboardFirstGate()
+checkGate("gate starts disarmed", !gate.isArmed)
+gate.arm(at: t0)
+gate.sawNoKeyboard(at: t0.addingTimeInterval(0.2))
+checkGate("no keyboard yet right after arming (still sliding in): stays armed", gate.isArmed)
+gate.sawNoKeyboard(at: t0.addingTimeInterval(KeyboardFirstGate.armGrace))
+checkGate("no keyboard after the grace: disarmed", !gate.isArmed)
+checkGate("plenty of time: the step gets its full length",
+          KeyboardFirstGate.stepDeadline(now: t0, readDeadline: t0.addingTimeInterval(35))
+              == t0.addingTimeInterval(KeyboardFirstGate.maxStep))
+checkGate("an MCP tap (5 s before the daemon gives up) still runs it, leaving the touch its reserve",
+          KeyboardFirstGate.stepDeadline(now: t0, readDeadline: t0.addingTimeInterval(4))
+              == t0.addingTimeInterval(4 - KeyboardFirstGate.touchReserve))
+checkGate("too little time: skipped",
+          KeyboardFirstGate.stepDeadline(now: t0, readDeadline: t0.addingTimeInterval(KeyboardFirstGate.minRemaining - 0.1)) == nil)
+checkGate("unknown daemon deadline: the full length",
+          KeyboardFirstGate.stepDeadline(now: t0, readDeadline: nil) == t0.addingTimeInterval(KeyboardFirstGate.maxStep))
+checkGate("the blank tap comes first (it scrolls nothing)",
+          KeyboardDismissPlanner.keyboardFirstStrategies.first == .blankTap)
+
 // PILOT-622: the keyboard-first step before a tap must never press the
 // return key — it submits the field, and the tap may be that submit.
 if KeyboardDismissPlanner.keyboardFirstStrategies.contains(.returnKey) {

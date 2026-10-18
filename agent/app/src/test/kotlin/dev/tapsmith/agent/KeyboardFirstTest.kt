@@ -199,6 +199,8 @@ class KeyboardFirstTest {
         )) {
             assertFalse(name ?: "null", KeyboardFirst.isScrollContainer(name))
         }
+        assertTrue(KeyboardFirst.isWebView("android.webkit.WebView"))
+        assertFalse(KeyboardFirst.isWebView("android.widget.ScrollView"))
     }
 
     // ─── A keyboard that will not go ───

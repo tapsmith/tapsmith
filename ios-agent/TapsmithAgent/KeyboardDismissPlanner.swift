@@ -29,6 +29,46 @@ import XCTest
 ///
 /// If none of them dismisses the keyboard, `hideKeyboard` fails with
 /// `failureMessage` instead of reporting success.
+/// When a touch's keyboard-first step (PILOT-622) is worth an app snapshot,
+/// and how long it may take.
+///
+/// Armed by the commands that focus a text input, so a tap pays for a
+/// snapshot only after typing. Disarmed once a check finds no keyboard —
+/// unless it was armed a moment ago, when the keyboard may still be sliding
+/// in (a tap on a field, then straight away a tap on a button).
+struct KeyboardFirstGate {
+    /// How long after arming a check that finds no keyboard does not disarm.
+    static let armGrace: TimeInterval = 1.5
+    /// Longest the step may take, so a screen whose keyboard does not go
+    /// costs little and still leaves the touch its time.
+    static let maxStep: TimeInterval = 2.5
+    /// Time kept back for the touch after the step.
+    static let touchReserve: TimeInterval = 2
+    /// Below this much time before the daemon gives up, the step is skipped.
+    static let minRemaining: TimeInterval = 3
+
+    private(set) var armedAt: Date?
+    var isArmed: Bool { armedAt != nil }
+
+    mutating func arm(at now: Date = Date()) { armedAt = now }
+    mutating func disarm() { armedAt = nil }
+
+    /// A check found no keyboard on screen.
+    mutating func sawNoKeyboard(at now: Date = Date()) {
+        guard let armed = armedAt, now.timeIntervalSince(armed) >= Self.armGrace else { return }
+        armedAt = nil
+    }
+
+    /// When the step must be over, or nil when there is no time for it.
+    /// `readDeadline` is when the daemon stops waiting (nil: unknown).
+    static func stepDeadline(now: Date, readDeadline: Date?) -> Date? {
+        guard let readDeadline else { return now.addingTimeInterval(maxStep) }
+        let available = readDeadline.timeIntervalSince(now)
+        guard available >= minRemaining else { return nil }
+        return now.addingTimeInterval(min(maxStep, available - touchReserve))
+    }
+}
+
 struct KeyboardDismissPlanner {
     typealias Node = OcclusionAnalyzer.Node
 
@@ -46,10 +86,12 @@ struct KeyboardDismissPlanner {
         }
     }
 
-    /// Strategies a touch's keyboard-first step may use (PILOT-622): never
-    /// the return key, which submits the field — the touch about to be made
-    /// may be that submit.
-    static let keyboardFirstStrategies: [Strategy] = [.scrollSwipe, .dismissKey, .blankTap]
+    /// Strategies a touch's keyboard-first step may use (PILOT-622), in
+    /// order. A blank tap first: it is what the user's own first tap would
+    /// have done on a React Native ScrollView, and it scrolls nothing. The
+    /// drag only when there is no blank spot. Never the return key, which
+    /// submits the field — the touch about to be made may be that submit.
+    static let keyboardFirstStrategies: [Strategy] = [.blankTap, .dismissKey, .scrollSwipe]
 
     /// What happened to a strategy: it ran and the keyboard stayed, or it was
     /// not possible on this screen (the reason says why).

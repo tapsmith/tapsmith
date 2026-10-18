@@ -65,6 +65,8 @@ export class LoginScreen {
   async login(email: string, password: string) {
     await this.emailField.clearAndType(email)
     await this.passwordField.clearAndType(password)
+    // The keyboard is still up: tap() puts it away first on a React Native
+    // ScrollView. Without one, hideKeyboard() first if it covers the button.
     await this.signInButton.tap()
   }
 }

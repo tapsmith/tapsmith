@@ -126,7 +126,9 @@ class OcclusionGuard(
                 var node = nodeInfoOf(element)?.parent
                 var depth = 0
                 while (node != null && depth++ < SCROLL_ANCESTOR_DEPTH) {
-                    if (KeyboardFirst.isScrollContainer(node.className?.toString())) return true
+                    val className = node.className?.toString()
+                    if (KeyboardFirst.isWebView(className)) return false
+                    if (KeyboardFirst.isScrollContainer(className)) return true
                     node = node.parent
                 }
                 return false

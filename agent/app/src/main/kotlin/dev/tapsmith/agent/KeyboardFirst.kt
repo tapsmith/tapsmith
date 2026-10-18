@@ -57,6 +57,10 @@ class KeyboardFirst(
                 "android.widget.HorizontalScrollView",
             )
 
+        /** Web content handles its own touches, even inside a scroll view. */
+        fun isWebView(className: String?): Boolean = className == "android.webkit.WebView"
+
+        /** Whether a view of [className] is a React Native scroll view. */
         fun isScrollContainer(className: String?): Boolean = className != null && className in SCROLL_CLASSES
     }
 

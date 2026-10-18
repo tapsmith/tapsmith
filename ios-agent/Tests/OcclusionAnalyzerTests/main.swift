@@ -428,6 +428,15 @@ checkKF("a native table row (a suggestion list) is touched with the keyboard up"
         analyzer(inTable + keyboardWindows).keyboardFirst(
             .init(frame: R(0, 160, 402, 44), elementType: .cell, label: "New York", identifier: "")),
         .touchAsIs)
+let webInScroll: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(0, 116, 402, 600)),
+    (3, .webView, "", "", R(0, 116, 402, 413)),
+    (4, .button, "Go", "", R(24, 360, 354, 48)),
+]
+checkKF("web content inside a scroll view: touched as is",
+        analyzer(webInScroll + keyboardWindows).keyboardFirst(button("Go", R(24, 360, 354, 48))), .touchAsIs)
 checkKF("a web view is not a React Native scroll view: touched as is",
         analyzer(inWebView + keyboardWindows).keyboardFirst(button("Go", R(24, 360, 354, 48))), .touchAsIs)
 
