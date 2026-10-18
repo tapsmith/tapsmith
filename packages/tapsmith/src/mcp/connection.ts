@@ -624,17 +624,23 @@ function giveBack(device: string, from?: DaemonConnection): void {
  */
 async function withoutOtherSessionsDaemons<T extends { client: TapsmithGrpcClient; address: string; source: DaemonSource; claimedDevice?: string }>(
   live: T[],
+  /** The config's platform, when it has one: a daemon serving another is not adopted. */
+  platform?: string,
 ): Promise<T[]> {
   const session = currentSession();
   const kept = await Promise.all(live.map(async (daemon) => {
-    let active: string | undefined;
+    let listed: DeviceInfoProto[] | undefined;
     let asked = false;
-    const activeDevice = async (): Promise<string | undefined> => {
+    const listedDevices = async (): Promise<DeviceInfoProto[] | undefined> => {
       if (!asked) {
         asked = true;
-        active = await daemon.client.listDevices().then(({ devices }) => activeDeviceOf(devices)).catch(() => undefined);
+        listed = await daemon.client.listDevices().then(({ devices }) => devices).catch(() => undefined);
       }
-      return active;
+      return listed;
+    };
+    const activeDevice = async (): Promise<string | undefined> => {
+      const devices = await listedDevices();
+      return devices ? activeDeviceOf(devices) : undefined;
     };
     const drop = (why: string): null => {
       log(`Ignoring ${daemon.address} — ${why}`);
@@ -643,6 +649,18 @@ async function withoutOtherSessionsDaemons<T extends { client: TapsmithGrpcClien
     };
     const holder = await daemonDriverElsewhere(daemon.address, activeDevice, session);
     if (holder) return drop(`another Tapsmith session is driving ${holder.device} through it`);
+    // A daemon found rather than started, serving another platform (PILOT-564).
+    // The claims above see only sessions that share this HOME and hold a
+    // claim right now; a session in its startup window, under another HOME, or
+    // a daemon driven by something else entirely is invisible to them. Adopting
+    // one for this config repointed it to our device and started our agent on
+    // it, so its owner's next action ran against the wrong platform — and it is
+    // no use to us anyway. A UI worker's platform is its session's, and one
+    // already pooled was judged when it joined.
+    if (platform && daemon.source !== 'ui' && !_connections.some((c) => c.address === daemon.address)) {
+      const why = otherPlatformReason(await listedDevices(), platform);
+      if (why) return drop(why);
+    }
     // UI workers' and peers' devices are their owners' to claim. A daemon
     // already pooled is re-listed by every discovery: what it serves was
     // claimed (or deliberately given back) when it was prepared.
@@ -655,6 +673,29 @@ async function withoutOtherSessionsDaemons<T extends { client: TapsmithGrpcClien
     return daemon;
   }));
   return kept.filter((d): d is Awaited<T> => d !== null);
+}
+
+/**
+ * Why a daemon that lists `devices` cannot serve `platform`, or null when it
+ * can (or when it cannot be told: no listing, no platforms reported).
+ *
+ * It cannot when the device it is pointed at is another platform's — taking it
+ * would move it off that device — or when it lists devices but none of this
+ * platform's, as a daemon started with `--platform` for the other one does.
+ *
+ * @internal — exported for unit testing.
+ */
+export function otherPlatformReason(devices: DeviceInfoProto[] | undefined, platform: string): string | null {
+  if (!devices) return null;
+  const active = devices.find((d) => d.state === 'Active');
+  if (active?.platform && active.platform !== platform) {
+    return `it is driving ${active.serial}, an ${active.platform} device, and this session's config is for ${platform}`;
+  }
+  const platforms = [...new Set(devices.map((d) => d.platform).filter(Boolean))];
+  if (platforms.length > 0 && !platforms.includes(platform)) {
+    return `it serves ${platforms.join(' and ')} devices only, and this session's config is for ${platform}`;
+  }
+  return null;
 }
 
 async function discover(): Promise<void> {
@@ -701,6 +742,29 @@ async function discover(): Promise<void> {
   }
   if (uiDaemons.deviceSerials.size > 0) {
     _sessionDevices = uiDaemons.deviceSerials;
+  }
+  // The UI server's endpoint drives that session's daemons and no others
+  // (PILOT-564). Its config names the address the session *asked* for, but a
+  // UI run that found another session on that port started on a free one —
+  // so the address in the config is then someone else's daemon, which this
+  // endpoint adopted, claimed a device on and repointed. The session's own
+  // primary daemon is what it publishes in `owned`.
+  const uiOwnsCandidates = _uiMode && uiDaemons.reachable;
+  if (uiOwnsCandidates) {
+    const owned = new Set(uiDaemons.owned.map(normalizeDaemonAddress));
+    for (const [address, source] of [...candidates]) {
+      if (source !== 'ui' && !owned.has(normalizeDaemonAddress(address))) {
+        log(`Ignoring ${address} — it is not one of this UI session's daemons`);
+        candidates.delete(address);
+      }
+    }
+    const known = new Set([...candidates.keys()].map(normalizeDaemonAddress));
+    for (const address of uiDaemons.owned) {
+      if (!known.has(normalizeDaemonAddress(address))) {
+        known.add(normalizeDaemonAddress(address));
+        addCandidate(address, 'configured');
+      }
+    }
   }
 
   // 4. Include existing connections so re-discovery doesn't spawn redundant daemons
@@ -759,7 +823,7 @@ async function discover(): Promise<void> {
     return results.filter((r): r is LiveDaemon => r !== null);
   };
 
-  let live = await withoutOtherSessionsDaemons(await probeAll([...candidates]));
+  let live = await withoutOtherSessionsDaemons(await probeAll([...candidates]), config?.platform);
 
   // 6. Default address — a last resort, and one judged on what answered rather
   // than on how many addresses we had. Skipping it whenever the candidate list
@@ -772,9 +836,9 @@ async function discover(): Promise<void> {
   // falling through to 50051 because theirs is briefly down would hand the
   // session an unrelated daemon, classified `configured` and so treated as ours
   // to repoint and install this config's agent artifacts on.
-  if (live.length === 0 && !pinned && !candidates.has(DEFAULT_ADDRESS)
+  if (live.length === 0 && !pinned && !uiOwnsCandidates && !candidates.has(DEFAULT_ADDRESS)
       && !_uiOwned.has(normalizeDaemonAddress(DEFAULT_ADDRESS))) {
-    live = await withoutOtherSessionsDaemons(await probeAll([[DEFAULT_ADDRESS, 'configured']]));
+    live = await withoutOtherSessionsDaemons(await probeAll([[DEFAULT_ADDRESS, 'configured']]), config?.platform);
   }
   // Probing is the liveness check, so this is the moment we know which
   // registered daemons are gone. Drop them rather than re-probing dead ports
@@ -1477,6 +1541,11 @@ async function findConnectionForPlatform(
     const choice = await pickDevice(conn, platform, wantedSerial, exclude);
     if (!choice) continue;
     if (conn.source === 'peer' && isRepointing(choice.activeSerial, choice.serial)) continue;
+    // A daemon this session did not start, pointed at another platform's
+    // device, is not moved across (PILOT-564): whoever pointed it there is
+    // likely still driving it. A multi-platform config keeps such a daemon at
+    // discovery for the platform it serves; this one starts its own.
+    if (conn.source !== 'started' && crossesPlatform(choice, platform)) continue;
     if (!takesClaimedDaemon(conn, choice.serial)) continue;
     return { conn, serial: choice.serial };
   }
@@ -1507,6 +1576,19 @@ interface DeviceChoice {
   serial: string
   /** The device it is pointed at now, whoever pointed it there. */
   activeSerial?: string
+  /** That device's platform, when the daemon reports one. */
+  activePlatform?: string
+}
+
+/**
+ * Whether taking `choice` moves its daemon off a device of a platform other
+ * than `platform`.
+ *
+ * @internal — exported for unit testing.
+ */
+export function crossesPlatform(choice: DeviceChoice, platform: string | undefined): boolean {
+  if (!platform || !choice.activePlatform || choice.activePlatform === platform) return false;
+  return isRepointing(choice.activeSerial, choice.serial);
 }
 
 /**
@@ -1555,6 +1637,7 @@ export function chooseDevice(
 ): DeviceChoice | undefined {
   const { platform, wantedSerial, exclude = [], heldByUi = new Set<string>() } = opts;
   const activeSerial = activeDeviceOf(devices);
+  const activePlatform = devices.find((d) => d.serial === activeSerial)?.platform || undefined;
   const candidates = (platform ? devices.filter((d) => d.platform === platform) : devices)
     .filter((d) => !exclude.includes(d.serial) && !heldByUi.has(d.serial));
   const serial = wantedSerial
@@ -1564,7 +1647,7 @@ export function chooseDevice(
         ?? candidates.find((d) => d.state === 'Discovered')
         ?? candidates[0]
       )?.serial;
-  return serial ? { serial, activeSerial } : undefined;
+  return serial ? { serial, activeSerial, activePlatform } : undefined;
 }
 
 /**
