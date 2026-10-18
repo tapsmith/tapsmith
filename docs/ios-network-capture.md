@@ -35,7 +35,7 @@ npx tapsmith ios network setup-simulator
 
 On a brand-new install it instead reports `○ Network Extension has not been registered yet`, explains what happens on the first run, and exits 0 — see below.
 
-From this point on, `npx tapsmith test` with iOS network capture enabled (the default when tracing is on) silently spawns the redirector and routes traffic through Tapsmith's MITM proxy.
+From this point on, whenever `npx tapsmith test` starts network capture — with each test when tracing records network (the default when tracing is on), otherwise on a test's first `device.route()`, `waitForRequest()` or `waitForResponse()` — it silently spawns the redirector and routes traffic through Tapsmith's MITM proxy.
 
 ### If the Network Extension isn't registered yet
 

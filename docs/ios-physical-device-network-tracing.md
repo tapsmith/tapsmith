@@ -27,7 +27,7 @@ export default defineConfig({
 });
 ```
 
-With `trace.mode` off, Tapsmith's daemon skips every network-capture code path — no proxy pre-start, no OCSP passthrough, nothing. Flipping `trace.mode` on is the switch that turns everything on this page from "dead code" to "active".
+With `trace.mode` off, Tapsmith starts no proxy until a test calls `device.route()`, `waitForRequest()` or `waitForResponse()`, which start it on demand. Turning `trace.mode` on starts it for every test, so the trace records each test's traffic.
 
 ## One-time device setup
 

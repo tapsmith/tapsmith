@@ -71,13 +71,13 @@ const codeTheme: CodeTheme = {
 const codeSnippet = `import { test, expect } from "tapsmith"
 
 test("user can complete checkout", async ({ device }) => {
-  await device.getByRole("button", { name: "Add to cart" }).tap()
-  await device.getByText("Checkout").tap()
-
   // mock the payment API
   await device.route("**/api/payment", async (route) => {
     await route.fulfill({ json: { status: "success" } })
   })
+
+  await device.getByRole("button", { name: "Add to cart" }).tap()
+  await device.getByText("Checkout").tap()
 
   await expect(device.getByText("Order Confirmed")).toBeVisible()
 })`
@@ -101,7 +101,7 @@ const snippets = {
 await device.getByRole("button", { name: "Sign in" }).tap()
 await device.getByLabel("Email").type("alex@tapsmith.dev")
 await device.getByText("Forgot password?").tap()`,
-  network: `// Mock any HTTP/HTTPS call. Tapsmith runs the proxy while tracing
+  network: `// Mock any HTTP/HTTPS call. The proxy starts on the first route()
 await device.route("**/api/feed", route =>
   route.fulfill({ json: fixtures.emptyFeed })
 )
@@ -143,7 +143,7 @@ const threeThings = [
   {
     n: '1',
     title: 'Mock the network without a mock server.',
-    body: 'In every other framework, mocking an API means a separate mock server, a proxy with certificate fiddling, or a special build of your app. In Tapsmith it’s <code>device.route("**/api/payment", r => r.fulfill({ json }))</code>. One line, inline, done, on the proxy Tapsmith runs itself while tracing is on.',
+    body: 'In every other framework, mocking an API means a separate mock server, a proxy with certificate fiddling, or a special build of your app. In Tapsmith it’s <code>device.route("**/api/payment", r => r.fulfill({ json }))</code>. One line, inline, done, on a proxy Tapsmith starts for you the moment a test mocks.',
   },
   {
     n: '2',

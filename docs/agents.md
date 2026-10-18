@@ -38,7 +38,7 @@ error code are in the [API reference](api-reference.md#json-output---json).
 
 Run `npx tapsmith init --help` for the full list: `--platform`, `--apk`, `--package`,
 `--app`, `--bundle-id`, `--avd`, `--simulator`, `--device-type`, `--network-capture`,
-`--no-example-test`, `--no-agents-md`, `--force`, `--json`, `--yes`.
+`--no-network-capture`, `--no-example-test`, `--no-agents-md`, `--force`, `--json`, `--yes`.
 
 iOS *physical* devices require the interactive wizard (code-signing preflight);
 everything else works unattended.

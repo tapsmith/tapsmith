@@ -676,7 +676,7 @@ Tapsmith supports Playwright-style network interception. Route handlers let you 
 
 #### `device.route(url, handler, options?): Promise<void>`
 
-Intercept network requests matching a URL pattern. Requires network tracing to be recording the test (a `trace` mode that records the attempt — `'on'` or a `'retain-on-…'` mode for every attempt; `'on-first-retry'` / `'on-all-retries'` start it only on retries — with `network: true`, which is the default). `trace` defaults to `'off'`, and without a running proxy route handlers never fire; Tapsmith then prints a warning at the end of the test that registered them (or, for a hook, the first test after it), naming it (see [Network prerequisites](network.md#prerequisites)). If capture was attempted and failed to start, `route()` throws `Network capture disabled: …` instead. Route handlers only see traffic Tapsmith can decrypt; hosts that are configured for passthrough, or dynamically tunneled because an HTTP/2-capable client rejects the generated MITM certificate, cannot be matched.
+Intercept network requests matching a URL pattern. Routes run on Tapsmith's network proxy, which needs no config: the test runner starts it on the first `route()`, `waitForRequest()` or `waitForResponse()` a test or hook makes (or with the test, when its trace records network), and keeps it up for the rest of the session. The proxy only sees connections the app opens after it starts, so register routes before the app sends the requests they mock — at the top of the test or in a `beforeEach`, before navigating. If the proxy cannot start, `route()` throws `Network capture disabled: …` with the reason. When a test's routes never fired and the capture shows why (HTTPS passed through uncaptured, or a proxy that only started mid-test), Tapsmith prints a warning naming the test; outside the test runner nothing starts the proxy, and the runner warns that the routes could not fire (see [Network prerequisites](network.md#prerequisites)). Route handlers only see traffic Tapsmith can decrypt; hosts that are configured for passthrough, or dynamically tunneled because an HTTP/2-capable client rejects the generated MITM certificate, cannot be matched.
 
 See also: [`device.unroute()`](#deviceunrouteurl-handler-promisevoid), [`device.unrouteAll()`](#deviceunrouteall-promisevoid).
 
@@ -702,14 +702,14 @@ Remove all registered route handlers, including those registered in `beforeAll`.
 
 #### `device.waitForRequest(urlOrPredicate, options?): Promise<TapsmithRequest>`
 
-Wait for a network request matching the pattern. Requires network tracing to be enabled (same prerequisite as `device.route()`).
+Wait for a network request matching the pattern. Starts the network proxy on demand, as `device.route()` does; start waiting before the action that sends the request. Rejects at once with `Network capture disabled: …` when the proxy cannot start, and a timeout says when no capture was running or the proxy only started with the wait.
 
 - `urlOrPredicate`: `string | RegExp | ((request: TapsmithRequest) => boolean)`
 - `options.timeout?`: `number` — timeout in ms (default: device timeout)
 
 #### `device.waitForResponse(urlOrPredicate, options?): Promise<NetworkResponseEventData>`
 
-Wait for a network response matching the pattern. Requires network tracing to be enabled (same prerequisite as `device.route()`).
+Wait for a network response matching the pattern. Starts the network proxy on demand and reports a failed start or a likely-capture timeout, as `device.waitForRequest()` does.
 
 A waiter belongs to the test that creates it. If the test ends first (say, a step before `await` fails), the waiter ends with it and can't time out later in another test. A waiter that times out while its test is still running, without being awaited, fails that test. Waiters created in a `beforeAll` hook last until the file ends.
 
@@ -2885,10 +2885,11 @@ Pass `--yes` or any setup flag below (every flag but `--json`) to run non-intera
 | `--package <id>` | Android package name (default: read from the APK, else, in an Expo project, `expo.android.package` from the app config, with a warning). With no APK found, `--package` alone writes a config without `apk`, for an app already installed on the device (a dev client, say): Tapsmith launches and resets it but does not install it, and init warns. In a setup with no Android, init ignores `--package` with a warning that names `--bundle-id`, the iOS flag (and an unused `--bundle-id` likewise) |
 | `--app <path>` | iOS simulator `.app` bundle (default: auto-detected under `ios/`) |
 | `--bundle-id <id>` | iOS bundle identifier (default: read from `Info.plist`, else, in an Expo project, `expo.ios.bundleIdentifier` from the app config, with a warning) |
-| `--avd <name>` | Android AVD to auto-launch (default: the first that supports HTTPS capture, else the first whose system image can't be read, else the first available — Google Play images don't support capture or `device.route()`, so with only those init suggests `create-avd`, and with `--network-capture` warns) |
+| `--avd <name>` | Android AVD to auto-launch (default: the first that supports HTTPS capture, else the first whose system image can't be read, else the first available — Google Play images don't support capture or `device.route()`, so with only those init suggests `create-avd`, and with capture on warns) |
 | `--simulator <name>` | iOS simulator name (default: a booted iOS simulator, else the newest available iPhone, preferring stock names such as `iPhone 16` to simulators you renamed; a renamed one exists only on your Mac, so when init writes one anyway, the config says so in a comment and init warns) |
 | `--device-type <type>` | `emulator`, `physical` or `both` (default: `emulator`) |
-| `--network-capture` | Enable HTTP(S) capture in traces |
+| `--network-capture` | Record HTTP(S) traffic in traces: writes `trace: { mode: 'retain-on-failure' }`. The default, as in the wizard, unless the only device set up is an Android emulator on a Google Play image |
+| `--no-network-capture` | Write no `trace` setting. Network mocking still works: the proxy starts on demand ([Network prerequisites](network.md#prerequisites)) |
 | `--no-example-test` | Skip scaffolding `tests/example.tapsmith.ts` |
 | `--no-agents-md` | Skip scaffolding the `AGENTS.md` section |
 | `--force` | Overwrite an existing `tapsmith.config.*` |

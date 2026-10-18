@@ -21,7 +21,7 @@ test("user can log in", async ({ device }) => {
 - **Auto-waiting** -- every action waits for the element to be visible, enabled, and stable. No manual sleeps.
 - **Accessible locators** -- find elements by role, text, label, placeholder, and description. An ESLint plugin steers you toward best practices.
 - **Trace viewer** -- step-by-step replay of every action with before/after screenshots, view hierarchy, console output, and network requests.
-- **Network interception** -- Playwright-style `device.route()` to mock, modify, or abort HTTP/HTTPS requests that trust Tapsmith's MITM CA, with passthrough markers for configured hosts and detected h2/gRPC cert rejects. Routes run on the network proxy, which Tapsmith starts for tests whose trace records network traffic, so turn tracing on (`trace: "retain-on-failure"`) to use them -- see [Network prerequisites](docs/network.md#prerequisites).
+- **Network interception** -- Playwright-style `device.route()` to mock, modify, or abort HTTP/HTTPS requests that trust Tapsmith's MITM CA, with passthrough markers for configured hosts and detected h2/gRPC cert rejects. Routes run on Tapsmith's network proxy, which starts on demand at a test's first route or network wait -- no config needed; see [Network prerequisites](docs/network.md#prerequisites).
 - **Video recording** -- continuous MP4 capture of the device screen, retained on failure or always.
 - **Parallel execution** -- run tests across multiple devices with work-stealing distribution. Tapsmith auto-provisions emulators and simulators.
 - **WebView testing** -- test hybrid apps by switching between native and WebView contexts with CSS selector-based interaction.
