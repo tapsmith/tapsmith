@@ -2286,19 +2286,18 @@ export async function iosXctestrunForAgentStart(
   // No device known (recovering an orphaned daemon's agent), or a simulator.
   if (config.iosXctestrun) return path.resolve(config.rootDir, config.iosXctestrun);
   if (process.env.TAPSMITH_IOS_XCTESTRUN) return process.env.TAPSMITH_IOS_XCTESTRUN;
-  try {
-    if (!serial) {
+  if (!serial) {
+    try {
       const { findSimulatorXctestrun } = await import('../ios-device-resolve.js');
       return findSimulatorXctestrun();
+    } catch {
+      return undefined; // not on macOS, or nothing built
     }
-    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
-    return await ensureSimulatorAgent({ onProgress: log });
-  } catch (err) {
-    // Not on macOS, no SDK, or the build failed: say why, and let the
-    // caller's agent start report the missing xctestrun.
-    log(err instanceof Error ? err.message : String(err));
-    return undefined;
   }
+  // Not on macOS, no SDK, or a failed build throws: startAgentFromConfig
+  // names the reason (and fails a required start with it).
+  const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+  return ensureSimulatorAgent({ onProgress: log });
 }
 
 // ─── Utilities ───

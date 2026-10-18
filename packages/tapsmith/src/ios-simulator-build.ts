@@ -407,7 +407,10 @@ export async function ensureSimulatorAgent(options: EnsureSimulatorAgentOptions 
       throw new Error(message);
     }
   } finally {
-    await release();
+    // A lock broken as stale while this process slept (and then taken by a
+    // waiter) rejects its release with ERELEASED; that must not turn a
+    // finished build into a failed run.
+    await release().catch(() => undefined);
   }
 }
 

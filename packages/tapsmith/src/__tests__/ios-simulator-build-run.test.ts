@@ -405,6 +405,26 @@ describe('ensureSimulatorAgent() options', () => {
     expect(fs.existsSync(path.join(cacheDir(), '.build-failed'))).toBe(false);
   }, 30_000);
 
+  it('keeps a finished build when its lock was broken as stale meanwhile (release rejects ERELEASED)', async () => {
+    const actual = await vi.importActual<typeof import('proper-lockfile')>('proper-lockfile');
+    vi.doMock('proper-lockfile', () => ({
+      default: {
+        ...actual,
+        lock: async (file: string, opts: object) => {
+          const release = await actual.lock(file, opts);
+          return async () => {
+            await release();
+            throw Object.assign(new Error('Lock is already released'), { code: 'ERELEASED' });
+          };
+        },
+      },
+    }));
+    onTestFinished(() => { vi.doUnmock('proper-lockfile'); });
+    process.env.FAKE_XCB_MODE = 'big-ok';
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    expect(await ensureSimulatorAgent({ quiet: true })).toBe(path.join(cacheDir(), XCTESTRUN));
+  }, 30_000);
+
   it('hands its progress to onProgress instead of stdout', async () => {
     process.env.FAKE_XCB_MODE = 'big-ok';
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);

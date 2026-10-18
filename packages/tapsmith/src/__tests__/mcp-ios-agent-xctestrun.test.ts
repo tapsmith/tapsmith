@@ -104,16 +104,11 @@ describe('iosXctestrunForAgentStart', () => {
     }
   });
 
-  it('a simulator whose agent cannot be built logs why and starts without an xctestrun', async () => {
+  it('a simulator whose agent cannot be built fails with the build\'s reason, for the agent start to report', async () => {
     const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
     vi.mocked(ensureSimulatorAgent).mockRejectedValueOnce(new Error('Failed to build iOS simulator agent from source: boom'));
-    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    try {
-      await expect(iosXctestrunForAgentStart(config(), 'SIM-1')).resolves.toBeUndefined();
-      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('Failed to build iOS simulator agent from source: boom'));
-    } finally {
-      stderr.mockRestore();
-    }
+    await expect(iosXctestrunForAgentStart(config(), 'SIM-1'))
+      .rejects.toThrow('Failed to build iOS simulator agent from source: boom');
   });
 
   it('with no device known (it may be a phone), only looks — never builds and stalls discovery', async () => {
