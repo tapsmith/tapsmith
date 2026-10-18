@@ -712,8 +712,10 @@ checkGate("too little time: skipped",
           KeyboardFirstGate.stepDeadline(now: t0, readDeadline: t0.addingTimeInterval(KeyboardFirstGate.minRemaining - 0.1)) == nil)
 checkGate("unknown daemon deadline: the full length",
           KeyboardFirstGate.stepDeadline(now: t0, readDeadline: nil) == t0.addingTimeInterval(KeyboardFirstGate.maxStep))
-checkGate("the blank tap comes first (it scrolls nothing)",
+checkGate("the blank tap comes first",
           KeyboardDismissPlanner.keyboardFirstStrategies.first == .blankTap)
+checkGate("no drag: it would scroll the content even when the keyboard stays",
+          !KeyboardDismissPlanner.keyboardFirstStrategies.contains(.scrollSwipe))
 
 // PILOT-622: the keyboard-first step before a tap must never press the
 // return key — it submits the field, and the tap may be that submit.

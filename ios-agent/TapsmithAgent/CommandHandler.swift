@@ -2294,12 +2294,19 @@ class CommandHandler {
         }
     }
 
-    /// `element` as the analyzer looks for it, from what was cached when it
-    /// was found — no live read.
+    /// `element` as the analyzer looks for it — no live read. Its frame is
+    /// the one it was just resolved with; the cached exact frame only stands
+    /// in for it when the two differ by rounding (the resolved bounds are
+    /// whole points), so a target that moved since it was first found is
+    /// still located.
     private func cachedTarget(_ element: ElementInfo) -> OcclusionAnalyzer.Target {
         let b = element.bounds
-        let frame = snapshotFinder.getBounds(element.elementId)
-            ?? CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
+        let resolved = CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
+        var frame = resolved
+        if let cached = snapshotFinder.getBounds(element.elementId),
+           OcclusionAnalyzer.framesMatch(cached, resolved) {
+            frame = cached
+        }
         let identity = snapshotFinder.getIdentity(element.elementId)
         return .init(
             frame: frame,

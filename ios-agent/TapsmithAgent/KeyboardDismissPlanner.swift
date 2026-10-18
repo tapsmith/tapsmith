@@ -87,11 +87,12 @@ struct KeyboardDismissPlanner {
     }
 
     /// Strategies a touch's keyboard-first step may use (PILOT-622), in
-    /// order. A blank tap first: it is what the user's own first tap would
-    /// have done on a React Native ScrollView, and it scrolls nothing. The
-    /// drag only when there is no blank spot. Never the return key, which
-    /// submits the field — the touch about to be made may be that submit.
-    static let keyboardFirstStrategies: [Strategy] = [.blankTap, .dismissKey, .scrollSwipe]
+    /// order. A blank tap: it is what the user's own first tap would have
+    /// done on a React Native ScrollView. Never the drag, which scrolls the
+    /// content even when the keyboard stays (then the touch would no longer
+    /// go ahead as before), and never the return key, which submits the
+    /// field — the touch about to be made may be that submit.
+    static let keyboardFirstStrategies: [Strategy] = [.blankTap, .dismissKey]
 
     /// What happened to a strategy: it ran and the keyboard stayed, or it was
     /// not possible on this screen (the reason says why).
