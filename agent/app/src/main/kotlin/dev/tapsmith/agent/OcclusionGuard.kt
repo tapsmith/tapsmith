@@ -38,6 +38,9 @@ class OcclusionGuard(
         /** Bounds on reading an unlabelled target's content (see [contentOf]). */
         private const val CONTENT_NODES_READ = 64
         private const val CONTENT_DEPTH = 4
+
+        /** How far up the tree [isInScrollView] looks for a scroll view. */
+        private const val SCROLL_ANCESTOR_DEPTH = 40
     }
 
     private val screen =
@@ -48,6 +51,30 @@ class OcclusionGuard(
         }
 
     private val planner = TouchPlanner(screen, SystemGuardClock) { Log.d(TAG, it) }
+
+    private val keyboard =
+        object : GuardKeyboard {
+            // The same check the daemon's isKeyboardShown/hideKeyboard use.
+            override fun isShown(): Boolean =
+                try {
+                    device.executeShellCommand("dumpsys input_method").contains("mInputShown=true")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not ask the input method whether the keyboard is shown", e)
+                    false
+                }
+
+            override fun dismiss() {
+                device.pressBack()
+            }
+        }
+
+    private val keyboardFirst = KeyboardFirst(screen, keyboard, SystemGuardClock) { Log.d(TAG, it) }
+
+    /** See [KeyboardFirst.putAwayIfItWouldEatTheTouch]. */
+    fun putKeyboardAwayFirst(
+        element: UiObject2,
+        budget: ActionBudget,
+    ): Boolean = keyboardFirst.putAwayIfItWouldEatTheTouch(targetOf(element), budget)
 
     /** See [TouchPlanner.plan]. */
     fun plan(
@@ -94,6 +121,16 @@ class OcclusionGuard(
             }
 
             override fun isFocused(): Boolean = nodeInfoOf(element)?.isFocused == true
+
+            override fun isInScrollView(): Boolean {
+                var node = nodeInfoOf(element)?.parent
+                var depth = 0
+                while (node != null && depth++ < SCROLL_ANCESTOR_DEPTH) {
+                    if (KeyboardFirst.isScrollContainer(node.className?.toString()) || node.isScrollable) return true
+                    node = node.parent
+                }
+                return false
+            }
         }
 
     /** The text and content descriptions inside [node], in tree order —

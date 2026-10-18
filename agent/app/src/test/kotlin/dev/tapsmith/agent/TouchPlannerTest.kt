@@ -78,6 +78,8 @@ class TouchPlannerTest {
         }
 
         override fun isFocused() = focused
+
+        override fun isInScrollView() = false
     }
 
     companion object {
