@@ -347,6 +347,30 @@ describe('the UI server\'s MCP endpoint', () => {
     expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps its UI workers, and starts nothing, when its own session\'s answer fails later', async () => {
+    const worker = '127.0.0.1:52001';
+    mcpConfig = { ...baseConfig, platform: 'android' };
+    readyAt = (address) => address === FOREIGN || address === worker;
+    listDevices = () => Promise.resolve({ devices: [{ serial: 'emulator-5556', state: 'Active', platform: 'android' }] });
+    ping = () => Promise.resolve({ version: 'test', agentConnected: true });
+    let fail = false;
+    configureMcpConnection({
+      uiMode: true,
+      uiDaemonPorts: () => {
+        if (fail) throw new Error('worker has no port');
+        return { daemons: [{ address: worker, deviceSerial: 'emulator-5556', platform: 'android' }], owned: [worker], devices: ['emulator-5556'] };
+      },
+    });
+
+    await ensureConnected();
+    expect(getAllDaemonAddresses()).toBe(worker);
+    fail = true;
+    const routed = await resolveDeviceTarget();
+    expect(routed.device).toBe('emulator-5556');
+    expect(getAllDaemonAddresses()).toBe(worker);
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it('keeps the config\'s address when it is the UI session\'s primary', async () => {
     mcpConfig = { ...baseConfig, platform: 'android' };
     await serveUi({ daemons: [], owned: ['127.0.0.1:50051'], devices: [] });

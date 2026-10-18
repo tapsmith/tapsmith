@@ -776,7 +776,9 @@ async function discover(): Promise<void> {
   // so the address in the config is then someone else's daemon, which this
   // endpoint adopted, claimed a device on and repointed. The session's own
   // primary daemon is what it publishes in `owned`.
-  const uiOwnsCandidates = _uiMode && uiDaemons.reachable;
+  // In-process, the UI server's answer is always this session's; a failure of
+  // it is no reason to adopt whatever answers on the configured port.
+  const uiOwnsCandidates = _uiMode && (uiDaemons.reachable || _uiDaemonPorts !== undefined);
   if (uiOwnsCandidates) {
     const owned = new Set(uiDaemons.owned.map(normalizeDaemonAddress));
     for (const [address, source] of [...candidates]) {
@@ -1871,11 +1873,10 @@ async function discoverFromUiServer(): Promise<UiDiscoveryResult> {
     try {
       return parseUiDaemonPorts(_uiDaemonPorts());
     } catch (err) {
-      // This server answering for itself cannot be "unreachable": treat a
-      // failure as owning nothing, so the endpoint starts its own daemon
-      // rather than falling back to whatever answers on the configured port.
+      // Unanswered, not "no workers": the pool keeps the workers it has. And
+      // discovery still adopts nothing found (see `uiOwnsCandidates`).
       log(`UI server discovery failed: ${err instanceof Error ? err.message : String(err)}`);
-      return { ...EMPTY_DISCOVERY, reachable: true };
+      return EMPTY_DISCOVERY;
     }
   }
   return queryUiServer();
