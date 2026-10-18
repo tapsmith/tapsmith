@@ -51,7 +51,7 @@ vi.mock('../ios-device-resolve.js', () => ({
   extractSdkVersion: () => '26.0',
   getInstalledSimulatorSdkVersion: () => '26.0',
   inspectSimulatorAgentCache: () => xctestrun.cache,
-  describeStaleSimulatorAgentCache: (c: { builtBy?: string }) => `the iOS simulator agent in ~/.tapsmith/ios-simulator-agent was built by Tapsmith ${c.builtBy} (this is 0.7.1)`,
+  describeStaleSimulatorAgentCache: (c: { builtBy?: string }) => `the cached iOS simulator agent in ~/.tapsmith/ios-simulator-agent was built by Tapsmith ${c.builtBy} (this is 0.7.1)`,
 }));
 
 // Node under Rosetta (PILOT-559): an x64 Node that sysctl says is translated.
@@ -762,7 +762,7 @@ describe('doctor fixes (PILOT-263 items 2, 3)', () => {
     const { code, json } = await doctorJson();
     expect(check(json, 'ios-sim-agent')).toMatchObject({
       status: 'warn',
-      label: expect.stringContaining('out of date: the iOS simulator agent in ~/.tapsmith/ios-simulator-agent was built by Tapsmith 0.7.0'),
+      label: expect.stringContaining('out of date: the cached iOS simulator agent in ~/.tapsmith/ios-simulator-agent was built by Tapsmith 0.7.0'),
       fix: expect.stringContaining('next iOS simulator test run rebuilds it'),
     });
     expect(code).toBe(0);

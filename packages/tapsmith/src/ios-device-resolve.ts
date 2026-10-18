@@ -185,66 +185,102 @@ function newestIphoneosXctestrun(productsDir: string): string | undefined {
 // ─── Simulator agent ───
 
 /**
- * `~/.tapsmith/ios-simulator-agent` — where Tapsmith builds the simulator
- * agent on demand (ios-simulator-build.ts).
+ * `~/.tapsmith/ios-simulator-agent` — the root of the simulator agent build
+ * cache. Builds live in a subdirectory per Tapsmith version
+ * ({@link simulatorAgentCacheDir}); releases before PILOT-485 built straight
+ * into the root, and still do.
  */
-export function simulatorAgentCacheDir(): string {
+export function simulatorAgentCacheRoot(): string {
   return path.join(os.homedir(), '.tapsmith', 'ios-simulator-agent');
 }
 
-/** Marker in {@link simulatorAgentCacheDir}: the simulator SDK the cached build targets. */
+/**
+ * Where this Tapsmith version builds the simulator agent on demand
+ * (ios-simulator-build.ts): a directory of its own, so a build is only ever
+ * used by the version whose agent source it was compiled from, two versions
+ * on one Mac never rebuild over each other, and a release that predates the
+ * per-version layout never writes into it (PILOT-485).
+ */
+export function simulatorAgentCacheDir(version: string = tapsmithPackageVersion()): string {
+  return path.join(simulatorAgentCacheRoot(), version);
+}
+
+/** Marker in a cache directory: the simulator SDK its build targets, written once the build is complete. */
 export const SIMULATOR_CACHE_SDK_MARKER = '.sdk-version';
-/** Marker in {@link simulatorAgentCacheDir}: the Tapsmith version whose agent source it was built from (PILOT-485). */
-export const SIMULATOR_CACHE_VERSION_MARKER = '.tapsmith-version';
 
 /** What the auto-build cache holds, and whether {@link findSimulatorXctestrun} may use it. */
 export interface SimulatorAgentCache {
   xctestrun: string
   /** The SDK it was built for; undefined when the build never finished. */
   sdk: string | undefined
-  /** The Tapsmith version that built it; undefined for a build made before versions were recorded. */
+  /**
+   * The Tapsmith version that built it; undefined for a build from a release
+   * before the per-version layout.
+   */
   builtBy: string | undefined
   /** This Tapsmith version. */
   current: string
   /**
    * Why it is not used, or undefined when it is: the build never finished
-   * (`incomplete`), it targets another simulator SDK (`sdk`), or another
-   * Tapsmith version built it from that version's agent source (`version`).
+   * (`incomplete`), it targets another simulator SDK (`sdk`), or only another
+   * Tapsmith version has a build, from that version's agent source (`version`).
    */
   stale?: 'incomplete' | 'sdk' | 'version'
 }
 
 /**
- * The auto-build cache's state, or undefined when it holds no runnable
- * build. A build is only as current as the agent source it was compiled
- * from: one made by another Tapsmith version runs that version's agent
- * against this version's SDK and daemon, so it is stale exactly like one
- * built for another SDK (PILOT-485). A build from before the version marker
- * existed counts as another version's.
+ * The auto-build cache's state: this version's build when it has one, else
+ * the newest build another version left (`stale: 'version'`), else
+ * undefined. A build is only as current as the agent source it was compiled
+ * from: another version's runs that version's agent against this version's
+ * SDK and daemon (PILOT-485).
  */
 export function inspectSimulatorAgentCache(
   installedSdk: string | undefined = getInstalledSimulatorSdkVersion(),
 ): SimulatorAgentCache | undefined {
-  const cacheDir = simulatorAgentCacheDir();
-  const xctestrun = newestSimulatorXctestrunIn(cacheDir);
-  if (!xctestrun) return undefined;
-  const sdk = readMarker(path.join(cacheDir, SIMULATOR_CACHE_SDK_MARKER));
-  const builtBy = readMarker(path.join(cacheDir, SIMULATOR_CACHE_VERSION_MARKER));
   const current = tapsmithPackageVersion();
-  const stale = !sdk
-    ? 'incomplete'
-    : installedSdk && sdk !== installedSdk
-      ? 'sdk'
-      : builtBy !== current
-        ? 'version'
-        : undefined;
-  return { xctestrun, sdk, builtBy, current, ...(stale ? { stale } : {}) };
+  const own = simulatorAgentCacheDir(current);
+  const xctestrun = newestSimulatorXctestrunIn(own);
+  if (xctestrun) {
+    const sdk = readMarker(path.join(own, SIMULATOR_CACHE_SDK_MARKER));
+    const stale = !sdk ? 'incomplete' : installedSdk && sdk !== installedSdk ? 'sdk' : undefined;
+    return { xctestrun, sdk, builtBy: current, current, ...(stale ? { stale } : {}) };
+  }
+  const other = newestOtherVersionBuild(current);
+  return other && { ...other, current, stale: 'version' };
+}
+
+/**
+ * The newest simulator build another Tapsmith version left in the cache: a
+ * pre-PILOT-485 one in the root, or another version's subdirectory.
+ */
+function newestOtherVersionBuild(current: string): { xctestrun: string; sdk: string | undefined; builtBy: string | undefined } | undefined {
+  const root = simulatorAgentCacheRoot();
+  const candidates: Array<{ dir: string; builtBy: string | undefined }> = [{ dir: root, builtBy: undefined }];
+  let entries: fs.Dirent[] = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { /* no cache */ }
+  for (const e of entries) {
+    if (e.isDirectory() && e.name !== current && /^\d/.test(e.name)) {
+      candidates.push({ dir: path.join(root, e.name), builtBy: e.name });
+    }
+  }
+  let best: { xctestrun: string; sdk: string | undefined; builtBy: string | undefined; mtime: number } | undefined;
+  for (const { dir, builtBy } of candidates) {
+    const xctestrun = newestSimulatorXctestrunIn(dir);
+    if (!xctestrun) continue;
+    let mtime = 0;
+    try { mtime = fs.statSync(xctestrun).mtimeMs; } catch { /* vanished */ }
+    if (!best || mtime > best.mtime) {
+      best = { xctestrun, sdk: readMarker(path.join(dir, SIMULATOR_CACHE_SDK_MARKER)), builtBy, mtime };
+    }
+  }
+  return best && { xctestrun: best.xctestrun, sdk: best.sdk, builtBy: best.builtBy };
 }
 
 /** Why a cache built by another Tapsmith version is not used, for messages. */
 export function describeStaleSimulatorAgentCache(cache: SimulatorAgentCache): string {
   const by = cache.builtBy ? `Tapsmith ${cache.builtBy}` : 'an earlier Tapsmith version';
-  return `the iOS simulator agent in ${displayPath(simulatorAgentCacheDir())} was built by ${by} (this is ${cache.current})`;
+  return `the cached iOS simulator agent in ${displayPath(simulatorAgentCacheRoot())} was built by ${by} (this is ${cache.current})`;
 }
 
 function readMarker(file: string): string | undefined {
@@ -310,9 +346,9 @@ function simulatorAgentPackageDir(): string | undefined {
  *      for exactly the installed simulator SDK — a release build of this
  *      version's agent. Ships with `__TAPSMITH_PKG__` path placeholders that
  *      the daemon resolves at runtime.
- *   2. Auto-build cache (`~/.tapsmith/ios-simulator-agent/`), when it was
- *      built for the installed SDK by this Tapsmith version
- *      ({@link inspectSimulatorAgentCache}).
+ *   2. This version's auto-build cache (`~/.tapsmith/ios-simulator-agent/<version>/`),
+ *      when it was built for the installed SDK ({@link inspectSimulatorAgentCache}).
+ *      Another version's build there is never used.
  *   3. The npm package's build for another SDK (newest first), or its flat
  *      layout (older packages). ensureSimulatorAgent rebuilds into the cache
  *      instead of running it, and step 2 then finds that build.
@@ -320,7 +356,7 @@ function simulatorAgentPackageDir(): string | undefined {
  *      and the monorepo's build dirs — local `xcodebuild build-for-testing` builds.
  *
  * Either version-drifted source (an npm package from another release, a
- * cache another version built) is skipped, never used.
+ * build another version cached) is skipped, never used.
  *
  * `.patched.xctestrun` files are excluded because the daemon rewrites
  * xctestrun at runtime and re-selecting a patched file stacks suffixes.

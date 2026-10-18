@@ -22,13 +22,22 @@ vi.mock('../build-ios-agent.js', () => ({
 const { existingBuild } = vi.hoisted(() => ({
   existingBuild: { path: undefined as string | undefined, sdk: '27.0' as string | undefined },
 }));
-// The cache inspection is the real one, reading the temp HOME.
-vi.mock('../ios-device-resolve.js', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../ios-device-resolve.js')>()),
-  findSimulatorXctestrun: () => existingBuild.path,
-  getInstalledSimulatorSdkVersion: () => existingBuild.sdk,
-  extractSdkVersion: (p: string) => /iphonesimulator(\d+\.\d+)/.exec(p)?.[1],
-}));
+// Without a hand-set existing build, the lookup finds what the real cache
+// inspection (reading the temp HOME) calls current — so a build one call
+// made is what the next call finds.
+vi.mock('../ios-device-resolve.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ios-device-resolve.js')>();
+  return {
+    ...actual,
+    findSimulatorXctestrun: () => {
+      if (existingBuild.path) return existingBuild.path;
+      const cache = actual.inspectSimulatorAgentCache(existingBuild.sdk);
+      return cache && !cache.stale ? cache.xctestrun : undefined;
+    },
+    getInstalledSimulatorSdkVersion: () => existingBuild.sdk,
+    extractSdkVersion: (p: string) => /iphonesimulator(\d+\.\d+)/.exec(p)?.[1],
+  };
+});
 
 // The machine's arch as host-arch.ts reports it: arm64 under Rosetta too.
 const { hostArch } = vi.hoisted(() => ({ hostArch: vi.fn(() => 'arm64') }));
@@ -41,16 +50,21 @@ const XCTESTRUN = 'TapsmithAgentUITests_TapsmithAgentUITests_iphonesimulator27.0
 
 const FAKE_XCODEBUILD = `#!/bin/sh
 [ -n "$FAKE_XCB_ARGS" ] && echo "$@" > "$FAKE_XCB_ARGS"
+[ -n "$FAKE_XCB_COUNT" ] && echo build >> "$FAKE_XCB_COUNT"
 dd=""
 while [ $# -gt 0 ]; do
   case "$1" in -derivedDataPath) dd="$2"; shift;; esac
   shift
 done
 products() {
-  mkdir -p "$dd/Build/Products/Debug-iphonesimulator/TapsmithAgentUITests-Runner.app"
+  mkdir -p "$dd/Build/Products/Debug-iphonesimulator/TapsmithAgentUITests-Runner.app/PlugIns/TapsmithAgentUITests.xctest"
   touch "$dd/Build/Products/${XCTESTRUN}"
 }
 case "$FAKE_XCB_MODE" in
+  slow-ok)
+    sleep 1
+    products
+    exit 0;;
   big-ok)
     # 12 MB: over both the old 1 MB (init) and 10 MB (runtime) buffers.
     yes 'CompileSwift normal arm64 /a/fairly/long/path/to/TapsmithAgent/Source.swift (in target TapsmithAgentUITests)' | head -c 12000000
@@ -138,7 +152,9 @@ afterEach(() => {
   existingBuild.sdk = '27.0';
 });
 
-const cacheDir = (): string => path.join(home, '.tapsmith', 'ios-simulator-agent');
+const cacheRoot = (): string => path.join(home, '.tapsmith', 'ios-simulator-agent');
+/** This version's cache (PILOT-485: one directory per Tapsmith version). */
+const cacheDir = (): string => path.join(cacheRoot(), tapsmithPackageVersion());
 const logPath = (): string => path.join(cacheDir(), `xcodebuild-${process.pid}.log`);
 
 async function build(mode: string, options?: { timeoutMs?: number }): Promise<string> {
@@ -170,8 +186,6 @@ describe('buildSimulatorAgent() xcodebuild output handling', () => {
     const xctestrun = await build('big-ok');
     expect(xctestrun).toBe(path.join(cacheDir(), XCTESTRUN));
     expect(fs.readFileSync(path.join(cacheDir(), '.sdk-version'), 'utf8')).toBe('27.0');
-    // PILOT-485: and which Tapsmith version's agent source it was built from.
-    expect(fs.readFileSync(path.join(cacheDir(), '.tapsmith-version'), 'utf8')).toBe(tapsmithPackageVersion());
     // Only a failed build leaves its log behind.
     expect(fs.readdirSync(cacheDir()).filter((f) => f.endsWith('.log'))).toEqual([]);
   }, 30_000);
@@ -332,35 +346,59 @@ describe('ensureSimulatorAgent() options', () => {
     }
   });
 
-  // PILOT-485: findSimulatorXctestrun skips a cache another version built, so
-  // the run rebuilds it — and says that is why.
-  it('rebuilds a cache another Tapsmith version built, says why, and records this version', async () => {
-    fs.mkdirSync(cacheDir(), { recursive: true });
-    fs.writeFileSync(path.join(cacheDir(), XCTESTRUN), '<plist/>');
-    fs.mkdirSync(path.join(cacheDir(), 'Debug-iphonesimulator', 'R.app', 'PlugIns', 'T.xctest'), { recursive: true });
-    fs.writeFileSync(path.join(cacheDir(), '.sdk-version'), '27.0');
-    fs.writeFileSync(path.join(cacheDir(), '.tapsmith-version'), '0.0.1-older');
+  // PILOT-485: another version's cached build is never used, so the run
+  // builds this version's own — says that is why — and leaves the other be.
+  it('builds its own agent when only another Tapsmith version has one cached, and says why', async () => {
+    const otherDir = path.join(cacheRoot(), '0.0.1-older');
+    fs.mkdirSync(path.join(otherDir, 'Debug-iphonesimulator', 'R.app', 'PlugIns', 'T.xctest'), { recursive: true });
+    fs.writeFileSync(path.join(otherDir, XCTESTRUN), '<plist/>');
+    fs.writeFileSync(path.join(otherDir, '.sdk-version'), '27.0');
     process.env.FAKE_XCB_MODE = 'big-ok';
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
       const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
       expect(await ensureSimulatorAgent()).toBe(path.join(cacheDir(), XCTESTRUN));
       expect(log).toHaveBeenCalledWith(expect.stringMatching(
-        /^The iOS simulator agent in .* was built by Tapsmith 0\.0\.1-older \(this is .*\)\. Rebuilding it for SDK 27\.0/,
+        /^The cached iOS simulator agent in .* was built by Tapsmith 0\.0\.1-older \(this is .*\)\. Building iOS agent for SDK 27\.0/,
       ));
-      expect(fs.readFileSync(path.join(cacheDir(), '.tapsmith-version'), 'utf8')).toBe(tapsmithPackageVersion());
+      expect(fs.existsSync(path.join(otherDir, XCTESTRUN))).toBe(true);
     } finally {
       log.mockRestore();
     }
   }, 30_000);
 
-  it('drops both markers while it rebuilds, so a failed rebuild leaves no current-looking cache', async () => {
+  it('drops the SDK marker while it builds, so a failed build leaves no current-looking cache', async () => {
     fs.mkdirSync(cacheDir(), { recursive: true });
     fs.writeFileSync(path.join(cacheDir(), '.sdk-version'), '27.0');
-    fs.writeFileSync(path.join(cacheDir(), '.tapsmith-version'), tapsmithPackageVersion());
     await buildError('fail');
     expect(fs.existsSync(path.join(cacheDir(), '.sdk-version'))).toBe(false);
-    expect(fs.existsSync(path.join(cacheDir(), '.tapsmith-version'))).toBe(false);
+  }, 30_000);
+
+  it('builds once when several workers need the agent at the same time', async () => {
+    const count = path.join(home, 'xcodebuild-count');
+    process.env.FAKE_XCB_COUNT = count;
+    process.env.FAKE_XCB_MODE = 'slow-ok';
+    onTestFinished(() => { delete process.env.FAKE_XCB_COUNT; });
+    const lines: string[] = [];
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    const results = await Promise.all([1, 2, 3].map(() => ensureSimulatorAgent({ onProgress: (m) => lines.push(m) })));
+    expect(results).toEqual(Array(3).fill(path.join(cacheDir(), XCTESTRUN)));
+    expect(fs.readFileSync(count, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(lines).toContain('Waiting for another Tapsmith process to finish building the iOS simulator agent...');
+  }, 30_000);
+
+  it('hands its progress to onProgress instead of stdout', async () => {
+    process.env.FAKE_XCB_MODE = 'big-ok';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const lines: string[] = [];
+    try {
+      const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+      await ensureSimulatorAgent({ onProgress: (m) => lines.push(m) });
+      expect(lines).toEqual([expect.stringContaining('Building from source for SDK 27.0')]);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
   }, 30_000);
 
   it('says macOS is needed when there is no SDK because this is not a Mac', async () => {

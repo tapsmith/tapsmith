@@ -2262,9 +2262,10 @@ async function startAgentFromConfig(
  * exactly like every test run path (`resolveAgentArtifacts`): a missing
  * hand-set file is refused, and a physical device gets the device build — a
  * checkout's or the npm install's — instead of a simulator one (PILOT-264).
- * A simulator with nothing set keeps the plain lookup: the shared path would
- * build the simulator agent on demand, which logs to stdout (the stdio MCP
- * protocol channel) and holds the tool call for the whole xcodebuild.
+ * A simulator with nothing set resolves like a test run too, building the
+ * agent when nothing current exists (a first run, an upgrade — PILOT-485 —
+ * or an Xcode update), with its progress logged to stderr: stdout is the
+ * stdio MCP protocol channel. The build holds the tool call until it ends.
  */
 export async function iosXctestrunForAgentStart(
   config: TapsmithConfig,
@@ -2283,20 +2284,13 @@ export async function iosXctestrunForAgentStart(
   if (config.iosXctestrun) return path.resolve(config.rootDir, config.iosXctestrun);
   if (process.env.TAPSMITH_IOS_XCTESTRUN) return process.env.TAPSMITH_IOS_XCTESTRUN;
   try {
-    const resolve = await import('../ios-device-resolve.js');
-    const found = resolve.findSimulatorXctestrun();
-    if (!found) {
-      // A cache another Tapsmith version built is never started (PILOT-485);
-      // without this the only clue is the daemon's "not configured".
-      const cache = resolve.inspectSimulatorAgentCache();
-      if (cache?.stale === 'version') {
-        log(`Not starting the cached iOS simulator agent: ${resolve.describeStaleSimulatorAgentCache(cache)}. `
-          + 'The next run_tests call (or `tapsmith test`) rebuilds it.');
-      }
-    }
-    return found;
-  } catch {
-    return undefined; // not on macOS, or nothing built
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    return await ensureSimulatorAgent({ onProgress: log });
+  } catch (err) {
+    // Not on macOS, no SDK, or the build failed: say why, and let the
+    // caller's agent start report the missing xctestrun.
+    log(err instanceof Error ? err.message : String(err));
+    return undefined;
   }
 }
 

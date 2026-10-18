@@ -66,7 +66,9 @@ afterEach(() => {
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
-const cacheDir = (): string => path.join(tmp, 'home', '.tapsmith', 'ios-simulator-agent');
+const cacheRoot = (): string => path.join(tmp, 'home', '.tapsmith', 'ios-simulator-agent');
+/** Where `version` builds (the root itself for a release before the per-version layout). */
+const cacheDir = (version: string | null = CURRENT): string => (version === null ? cacheRoot() : path.join(cacheRoot(), version));
 
 /** A complete simulator build (xctestrun + runner app + .xctest) in `dir`; returns the xctestrun. */
 function writeBuild(dir: string, sdk: string): string {
@@ -77,11 +79,10 @@ function writeBuild(dir: string, sdk: string): string {
   return xctestrun;
 }
 
-/** An auto-build cache for `sdk`, with the markers a build by `builtBy` leaves (none for `null`). */
+/** A complete auto-build cache for `sdk`, where a build by `builtBy` puts it (`null`: a pre-PILOT-485 release). */
 function writeCache(sdk: string, builtBy: string | null): string {
-  const xctestrun = writeBuild(cacheDir(), sdk);
-  fs.writeFileSync(path.join(cacheDir(), '.sdk-version'), sdk);
-  if (builtBy !== null) fs.writeFileSync(path.join(cacheDir(), '.tapsmith-version'), builtBy);
+  const xctestrun = writeBuild(cacheDir(builtBy), sdk);
+  fs.writeFileSync(path.join(cacheDir(builtBy), '.sdk-version'), sdk);
   return xctestrun;
 }
 
@@ -105,23 +106,33 @@ describe('findSimulatorXctestrun() and the auto-build cache (PILOT-485)', () => 
     expect((await resolve()).findSimulatorXctestrun()).toBe(cached);
   });
 
+  // Not `toBeUndefined()`: the lookup's last step also scans this checkout's
+  // own ios-agent build dirs, which a developer's machine may have.
   it('skips a cache another Tapsmith version built', async () => {
     const cached = writeCache('27.1', '0.0.1-older');
-    expect((await resolve()).findSimulatorXctestrun()).toBeUndefined();
-    expect(fs.existsSync(cached)).toBe(true); // left for the rebuild to replace
+    expect((await resolve()).findSimulatorXctestrun()).not.toBe(cached);
+    expect(fs.existsSync(cached)).toBe(true); // that version still uses it
   });
 
-  it('skips a cache built before the version was recorded', async () => {
-    writeCache('27.1', null);
-    expect((await resolve()).findSimulatorXctestrun()).toBeUndefined();
+  it('skips a cache a release before the per-version layout built', async () => {
+    const cached = writeCache('27.1', null);
+    expect((await resolve()).findSimulatorXctestrun()).not.toBe(cached);
   });
 
   it('skips a cache built for another SDK, and an unfinished one', async () => {
-    writeCache('27.0', CURRENT);
-    expect((await resolve()).findSimulatorXctestrun()).toBeUndefined();
+    const cached = writeCache('27.0', CURRENT);
+    expect((await resolve()).findSimulatorXctestrun()).not.toBe(cached);
     fs.rmSync(path.join(cacheDir(), '.sdk-version'));
     vi.resetModules();
-    expect((await resolve()).findSimulatorXctestrun()).toBeUndefined();
+    expect((await resolve()).findSimulatorXctestrun()).not.toBe(cached);
+  });
+
+  it('uses its own build when another version\'s (or an older release\'s) is newer', async () => {
+    const own = writeCache('27.1', CURRENT);
+    const later = new Date(Date.now() + 60_000);
+    fs.utimesSync(writeCache('27.1', '0.0.1-older'), later, later);
+    fs.utimesSync(writeCache('27.1', null), later, later);
+    expect((await resolve()).findSimulatorXctestrun()).toBe(own);
   });
 
   it('keeps a current cache when the SDK cannot be detected', async () => {
@@ -166,24 +177,30 @@ describe('inspectSimulatorAgentCache()', () => {
     expect((await resolve()).inspectSimulatorAgentCache('27.1')).toBeUndefined();
   });
 
-  it('says what the cache holds and why it is not used', async () => {
+  it('says what this version\'s cache holds and why it is not used', async () => {
     const { inspectSimulatorAgentCache } = await resolve();
     const xctestrun = writeCache('27.1', CURRENT);
     expect(inspectSimulatorAgentCache('27.1')).toEqual({ xctestrun, sdk: '27.1', builtBy: CURRENT, current: CURRENT });
     expect(inspectSimulatorAgentCache('27.2')).toMatchObject({ stale: 'sdk' });
-    fs.writeFileSync(path.join(cacheDir(), '.tapsmith-version'), '0.0.1-older');
-    expect(inspectSimulatorAgentCache('27.1')).toMatchObject({ builtBy: '0.0.1-older', stale: 'version' });
-    fs.rmSync(path.join(cacheDir(), '.tapsmith-version'));
-    expect(inspectSimulatorAgentCache('27.1')).toMatchObject({ builtBy: undefined, stale: 'version' });
     fs.rmSync(path.join(cacheDir(), '.sdk-version'));
     expect(inspectSimulatorAgentCache('27.1')).toMatchObject({ stale: 'incomplete' });
+  });
+
+  it('without a build of its own, names the newest build another version left', async () => {
+    const { inspectSimulatorAgentCache } = await resolve();
+    const legacy = writeCache('27.1', null);
+    expect(inspectSimulatorAgentCache('27.1')).toEqual({ xctestrun: legacy, sdk: '27.1', builtBy: undefined, current: CURRENT, stale: 'version' });
+    const later = new Date(Date.now() + 60_000);
+    const older = writeCache('26.5', '0.0.1-older');
+    fs.utimesSync(older, later, later);
+    expect(inspectSimulatorAgentCache('27.1')).toEqual({ xctestrun: older, sdk: '26.5', builtBy: '0.0.1-older', current: CURRENT, stale: 'version' });
   });
 
   it('names who built a stale cache', async () => {
     const { describeStaleSimulatorAgentCache } = await resolve();
     const base = { xctestrun: '/x', sdk: '27.1', current: '0.7.1', stale: 'version' as const };
     expect(describeStaleSimulatorAgentCache({ ...base, builtBy: '0.7.0' }))
-      .toBe('the iOS simulator agent in ~/.tapsmith/ios-simulator-agent was built by Tapsmith 0.7.0 (this is 0.7.1)');
+      .toBe('the cached iOS simulator agent in ~/.tapsmith/ios-simulator-agent was built by Tapsmith 0.7.0 (this is 0.7.1)');
     expect(describeStaleSimulatorAgentCache({ ...base, builtBy: undefined }))
       .toContain('was built by an earlier Tapsmith version (this is 0.7.1)');
   });
