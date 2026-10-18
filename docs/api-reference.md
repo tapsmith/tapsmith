@@ -715,7 +715,7 @@ A waiter belongs to the test that creates it. If the test ends first (say, a ste
 
 #### `device.on(event, handler): void`
 
-Subscribe to network events: `'request'` or `'response'`.
+Subscribe to network events: `'request'` or `'response'`. Starts the network proxy on demand, as `device.route()` does. A listener lasts as long as a route registered in the same place would ([Route lifetime](network.md#route-lifetime)).
 
 ```ts
 device.on('request', (req) => console.log(req.url))

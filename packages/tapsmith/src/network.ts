@@ -522,11 +522,12 @@ export class NetworkRouteManager {
   private _requestListeners: Set<(req: TapsmithRequest) => void> = new Set();
   private _responseListeners: Set<(resp: NetworkResponseEventData) => void> = new Set();
   /**
-   * Listeners a test (not a suite hook) added, removed when it ends like its
-   * routes (PILOT-775): the route manager now outlives the test whenever a
-   * proxy is running, traced or not.
+   * The route scope each request/response listener was added in (undefined
+   * for a test's own), so listeners end with their test or scope like routes
+   * do (PILOT-775): the route manager now outlives the test whenever a proxy
+   * is running, traced or not.
    */
-  private _testListeners: Set<unknown> = new Set();
+  private _listenerScopes: Map<unknown, RouteScope | undefined> = new Map();
   /**
    * Whether daemon network events are wanted (a listener, or network
    * capture's eager subscription). This is intent, kept across streams; the
@@ -881,40 +882,51 @@ export class NetworkRouteManager {
   /** Subscribe to request events. */
   addRequestListener(handler: (req: TapsmithRequest) => void): void {
     this._requestListeners.add(handler);
-    if (currentRouteScope() === undefined) this._testListeners.add(handler);
+    this._listenerScopes.set(handler, currentRouteScope());
     this.ensureEventsSubscribed();
   }
 
   /** Unsubscribe from request events. */
   removeRequestListener(handler: (req: TapsmithRequest) => void): void {
     this._requestListeners.delete(handler);
-    if (!this._responseListeners.has(handler as never)) this._testListeners.delete(handler);
+    if (!this._responseListeners.has(handler as never)) this._listenerScopes.delete(handler);
     this._unsubscribeIfUnused();
   }
 
   /** Subscribe to response events. */
   addResponseListener(handler: (resp: NetworkResponseEventData) => void): void {
     this._responseListeners.add(handler);
-    if (currentRouteScope() === undefined) this._testListeners.add(handler);
+    this._listenerScopes.set(handler, currentRouteScope());
     this.ensureEventsSubscribed();
   }
 
   /** Unsubscribe from response events. */
   removeResponseListener(handler: (resp: NetworkResponseEventData) => void): void {
     this._responseListeners.delete(handler);
-    if (!this._requestListeners.has(handler as never)) this._testListeners.delete(handler);
+    if (!this._requestListeners.has(handler as never)) this._listenerScopes.delete(handler);
     this._unsubscribeIfUnused();
   }
 
   /** Remove the request/response listeners the current test added (PILOT-775). */
   removeTestListeners(): void {
-    if (this._testListeners.size === 0) return;
-    for (const listener of this._testListeners) {
+    this._removeListenersWhere((scope) => scope === undefined);
+  }
+
+  /** Remove the listeners `scope`'s hooks or fixtures added, once it has ended (PILOT-775). */
+  removeScopeListeners(scope: RouteScope): void {
+    this._removeListenersWhere((s) => s === scope);
+  }
+
+  private _removeListenersWhere(match: (scope: RouteScope | undefined) => boolean): void {
+    let removed = false;
+    for (const [listener, scope] of [...this._listenerScopes]) {
+      if (!match(scope)) continue;
       this._requestListeners.delete(listener as (req: TapsmithRequest) => void);
       this._responseListeners.delete(listener as (resp: NetworkResponseEventData) => void);
+      this._listenerScopes.delete(listener);
+      removed = true;
     }
-    this._testListeners.clear();
-    this._unsubscribeIfUnused();
+    if (removed) this._unsubscribeIfUnused();
   }
 
   private _unsubscribeIfUnused(): void {
@@ -960,7 +972,7 @@ export class NetworkRouteManager {
     this._rejectPendingFetches('NetworkRouteManager disposed');
     this._requestListeners.clear();
     this._responseListeners.clear();
-    this._testListeners.clear();
+    this._listenerScopes.clear();
 
     if (this._stream) {
       this._stream.end();

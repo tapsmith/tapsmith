@@ -114,6 +114,42 @@ describe('runTestFile — on-demand network capture (PILOT-775)', () => {
     expect(stream.ended).toBe(false);
   });
 
+  it("keeps a worker fixture's routes and listeners for the whole file, then removes them", async () => {
+    const { device, stream } = makeDevice();
+    const seen: string[] = [];
+    const g = globalThis as { __pilot775?: { seen: string[]; emit: (msg: unknown) => void; routesLive: boolean[] } };
+    g.__pilot775 = { seen, emit: (msg) => stream.emit('data', msg), routesLive: [] };
+    const filePath = writeFile('w.test.mjs', `
+      const t = test.extend({
+        mocks: [async ({ device }, use) => {
+          await device.route('**/config', (route) => route.fulfill({ json: {} }));
+          device.on('request', (req) => globalThis.__pilot775.seen.push(req.url));
+          await use(1);
+        }, { scope: 'worker' }],
+      });
+      const probe = async (device, url) => {
+        globalThis.__pilot775.routesLive.push(device._routeManager.hasRoutes);
+        globalThis.__pilot775.emit({ requestEvent: { method: 'GET', url, headers: [], body: Buffer.alloc(0), isHttps: true } });
+        await new Promise((r) => setTimeout(r, 1));
+      };
+      t('first', async ({ mocks, device }) => { await probe(device, 'https://a.test/1'); });
+      t('second', async ({ mocks, device }) => { await probe(device, 'https://a.test/2'); });
+    `);
+    try {
+      const results = collectResults(await runTestFile(filePath, makeOpts(device)));
+
+      expect(results.map((r) => r.status)).toEqual(['passed', 'passed']);
+      expect(g.__pilot775.routesLive).toEqual([true, true]);
+      expect(seen).toEqual(['https://a.test/1', 'https://a.test/2']);
+      // Gone with the file, so the next file's worker fixtures start clean.
+      expect(device._routeManager?.hasRoutes).toBe(false);
+      stream.emit('data', { requestEvent: { method: 'GET', url: 'https://a.test/3', headers: [], body: Buffer.alloc(0), isHttps: true } });
+      expect(seen).toHaveLength(2);
+    } finally {
+      delete g.__pilot775;
+    }
+  });
+
   it('tries a failed start again on the retry attempt', async () => {
     const { device, startNetworkCapture } = makeDevice([{ success: false, errorMessage: 'proxy unavailable' }]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

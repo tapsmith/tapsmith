@@ -17,10 +17,11 @@ The startup `Config` line says which applies: `network: captured` when the trace
 
 **Register routes before the app sends the requests they mock.** The proxy only sees connections the app opens after it started. When the first route of a session starts it mid-test, the app may already hold a keep-alive connection to that server from an earlier request, and keeps using it — past the proxy — until the app is relaunched. Register routes (and start waits) at the top of the test, or in `beforeEach`/`beforeAll`, before navigating to the screen that fetches, as you would with Playwright's `page.route()` before `page.goto()`. A trace that records network (`trace: "retain-on-failure"`, which `tapsmith init` writes by default) starts the proxy with each test, so the app's connections go through it from the test's reset onwards.
 
-When a test fails and its routes were live but none of them fired, Tapsmith says why if the capture shows a reason, naming the test: `device.route() handlers never fired: "…" registered route handlers and none of them fired.` It follows that with either
+When a test fails and its routes were live but none of them fired, Tapsmith names the test and lists the possible reasons the capture shows: `device.route() handlers never fired: "…" registered route handlers and none of them fired. Possible reasons: …`. They are:
 
-- *HTTPS to `<hosts>` passed through the network proxy uncaptured* — the device cannot trust Tapsmith's CA (an Android emulator on a Google Play system image, see [Android emulator image requirements](#android-emulator-image-requirements)), the host is in `trace.networkPassthroughHosts`, or the app rejected Tapsmith's certificate; or
-- *The network proxy started on demand during this test or its hooks* — the case above.
+- *HTTPS to `<hosts>` passed through the network proxy uncaptured* — the device cannot trust Tapsmith's CA (an Android emulator on a Google Play system image, see [Android emulator image requirements](#android-emulator-image-requirements)), the host is in `trace.networkPassthroughHosts`, or the app rejected Tapsmith's certificate;
+- *the network proxy started on demand during this test or its hooks* — the case above;
+- *the app never sent a request matching the route patterns* — check the pattern.
 
 A `waitForRequest()`/`waitForResponse()` that times out says when no capture was running on the device, or when the proxy only started with that wait. If the proxy cannot start (on iOS, for example, the Network Extension is not approved yet — see [iOS Network Capture](ios-network-capture.md)), `device.route()` throws `Network capture disabled: …` with the reason, and a waiter rejects at once with it. A failed start is tried again once per test, not on every call.
 
@@ -429,6 +430,9 @@ You rarely need to remove routes yourself. Tapsmith ties each route to the scope
 
 - A route registered in a test, in `beforeEach` or `afterEach`, or in a test-scoped fixture is removed when that test ends.
 - A route registered in `beforeAll` stays for every test in its `describe` block (or, at the top level, the whole file), including nested `describe` blocks and retries, and is removed when that block ends, after its `afterAll` hooks. A route registered in `afterAll` is removed at the same point.
+- A route registered in a worker-scoped fixture stays for the whole file and is removed when the file ends.
+
+`device.on('request' | 'response')` listeners follow the same lifetimes.
 
 ```typescript
 import { test, describe, beforeAll } from "tapsmith"

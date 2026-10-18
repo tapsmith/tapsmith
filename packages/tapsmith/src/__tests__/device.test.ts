@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Device } from '../device.js';
+import { isTestEndedError, runInAttemptContext } from '../attempt-fence.js';
 import { selectorToProto } from '../selectors.js';
 import type { TapsmithGrpcClient, ActionResponse } from '../grpc-client.js';
 import { TraceCollector } from '../trace/trace-collector.js';
@@ -684,6 +685,26 @@ describe('Device.route()', () => {
       arm();
       await expect(device.route('**/a', async () => undefined)).resolves.toBeUndefined();
       expect(startNetworkCapture).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not register a route whose test ended while the on-demand start ran', async () => {
+      const stream = new FakeRouteStream();
+      const token = { closed: false };
+      const client = makeMockClient({
+        startNetworkCapture: vi.fn(async () => {
+          token.closed = true; // the test timed out meanwhile
+          return { requestId: '1', proxyPort: 1, success: true, errorMessage: '' };
+        }),
+        networkRouteStream: vi.fn(() => stream as unknown as ReturnType<TapsmithGrpcClient['networkRouteStream']>),
+      });
+      const device = new Device(client);
+      device._setOnDemandNetworkCapture(async () => { await device._startNetworkCapture(); });
+
+      const err = await runInAttemptContext(token, () => device.route('**/a', async () => undefined).then(() => undefined, (e: unknown) => e));
+
+      expect(isTestEndedError(err)).toBe(true);
+      expect(stream.writes.filter((m) => typeof m === 'object' && m !== null && 'registerRoute' in m)).toEqual([]);
+      expect(device._takeRouteRegistrations()).toBe(0);
     });
 
     it('starts capture on demand for device.on() too', async () => {

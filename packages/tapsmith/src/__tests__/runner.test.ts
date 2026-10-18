@@ -1225,7 +1225,8 @@ describe('runner execution', () => {
           const warnings = routeWarnings(warn);
           expect(warnings).toHaveLength(1);
           expect(warnings[0]).toContain('"mocks too late" registered route handlers and none of them fired');
-          expect(warnings[0]).toContain('The network proxy started on demand during this test or its hooks');
+          expect(warnings[0]).toContain('the network proxy started on demand during this test or its hooks');
+          expect(warnings[0]).toContain('the app never sent a request matching the route patterns');
         } finally {
           warn.mockRestore();
         }

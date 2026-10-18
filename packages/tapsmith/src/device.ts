@@ -1189,6 +1189,9 @@ export class Device {
     const stack = extractStack(new Error().stack ?? '');
     const source = stack[0];
     await this._ensureOnDemandNetworkCapture();
+    // The start can take seconds: a test that timed out meanwhile must not
+    // register its route into whatever test runs next.
+    if (isCurrentAttemptClosed()) return fencedRejection<void>('route()');
     if (!this._networkCaptureActive && this._networkCaptureError) {
       const error = `Network capture disabled: ${this._networkCaptureError}`;
       this._emitNetworkAction('route', formatPattern(url), start, false, error, source, stack);

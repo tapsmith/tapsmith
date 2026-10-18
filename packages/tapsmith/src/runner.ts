@@ -436,29 +436,32 @@ function _warnUnfiredRoutes(
   deviceName: string | undefined,
   reasons: { passthroughHosts: string[]; proxyStartedMidTest: boolean },
 ): void {
-  const who = deviceName ? `[${deviceName}] ` : '';
-  const prefix = `${who}"${fullName}" registered route handlers and none of them fired.`;
+  const possible: string[] = [];
   if (reasons.passthroughHosts.length > 0) {
     const hosts = reasons.passthroughHosts.slice(0, 5).join(', ') +
       (reasons.passthroughHosts.length > 5 ? `, and ${reasons.passthroughHosts.length - 5} more` : '');
-    _warnCaptureOnce(
-      'device.route() handlers never fired',
-      `${prefix} HTTPS to ${hosts} passed through the network proxy uncaptured, so routes could not see it: ` +
-        "the device cannot trust Tapsmith's CA (a Google Play emulator image has no adb root — use a " +
-        "Google APIs image), the host is in trace.networkPassthroughHosts, or the app rejected Tapsmith's certificate. " +
-        'See https://tapsmith.dev/guides/network/#prerequisites',
+    possible.push(
+      `HTTPS to ${hosts} passed through the network proxy uncaptured, where routes cannot see it ` +
+        "(the device cannot trust Tapsmith's CA — a Google Play emulator image has no adb root, so use a " +
+        "Google APIs image —, the host is in trace.networkPassthroughHosts, or the app rejected Tapsmith's certificate)",
     );
-    return;
   }
   if (reasons.proxyStartedMidTest) {
-    _warnCaptureOnce(
-      'device.route() handlers never fired',
-      `${prefix} The network proxy started on demand during this test or its hooks, and connections ` +
-        'the app had already opened may bypass it. Register routes before the app first talks to ' +
-        'that server (e.g. before launchApp(), or in beforeEach), or record network in the trace so ' +
-        'the proxy starts with each test. See https://tapsmith.dev/guides/network/#prerequisites',
+    possible.push(
+      'the network proxy started on demand during this test or its hooks, and connections the app had ' +
+        'already opened bypass it (register routes before the app first talks to that server, e.g. before ' +
+        'launchApp() or in beforeEach, or record network in the trace so the proxy starts with each test)',
     );
   }
+  if (possible.length === 0) return;
+  possible.push('the app never sent a request matching the route patterns');
+  const who = deviceName ? `[${deviceName}] ` : '';
+  _warnCaptureOnce(
+    'device.route() handlers never fired',
+    `${who}"${fullName}" registered route handlers and none of them fired. Possible reasons: ` +
+      possible.map((p, i) => `(${i + 1}) ${p}`).join('; ') +
+      '. See https://tapsmith.dev/guides/network/#prerequisites',
+  );
 }
 
 export type TestStatus = 'passed' | 'failed' | 'skipped';
@@ -1714,8 +1717,12 @@ async function runRetrySetup(
   // The old setup's routes go with it; the beforeAll hooks below register
   // theirs again.
   await forEachDeviceBestEffort(opts, async (d) => {
-    if (!d._routeManager?.hasRoutes) return;
-    for (const step of chain) await d._routeManager.removeScopeRoutes(step.routeScope);
+    const manager = d._routeManager;
+    if (!manager) return;
+    for (const step of chain) {
+      if (manager.hasRoutes) await manager.removeScopeRoutes(step.routeScope);
+      manager.removeScopeListeners?.(step.routeScope);
+    }
   });
   for (const step of chain) {
     if (step.resetPolicy) {
@@ -3426,6 +3433,8 @@ async function runSuiteContext(
     routeScope.ended = true;
     await forEachDeviceBestEffort(opts, async (d) => {
       if (d._routeManager?.hasRoutes) await d._routeManager.removeScopeRoutes(routeScope);
+      // Its hooks' device.on() listeners end with it too (PILOT-775).
+      d._routeManager?.removeScopeListeners?.(routeScope);
     });
     // Restore previous device timeouts when leaving this scope
     if (prevDeviceTimeouts) {
@@ -3668,12 +3677,15 @@ async function runTestFileOwned(
 
   // A file skipped by a top-level test.skip() runs no test, so it sets up no
   // worker fixture either, as in Playwright (PILOT-546).
+  // Routes and device.on() listeners a worker fixture sets up last for the
+  // whole file, not just its first test (PILOT-775).
+  const workerRouteScope: RouteScope = { label: `${filePath} (worker fixtures)` };
   if (!fileRegistry.isEmpty && !rootCtx.skipped) {
     try {
-      const resolved = await resolveFixtures(fileRegistry, 'worker', {
+      const resolved = await runInRouteScope(workerRouteScope, () => resolveFixtures(fileRegistry, 'worker', {
         ...baseFixtures,
         ...workerFixtures,
-      });
+      }));
       workerFixtures = resolved.fixtures;
       workerTeardown = resolved.teardown;
     } catch (err) {
@@ -3728,6 +3740,11 @@ async function runTestFileOwned(
         await workerTeardown();
       }
     } finally {
+      workerRouteScope.ended = true;
+      await forEachDeviceBestEffort(fileOpts, async (d) => {
+        if (d._routeManager?.hasRoutes) await d._routeManager.removeScopeRoutes(workerRouteScope);
+        d._routeManager?.removeScopeListeners?.(workerRouteScope);
+      });
       for (const d of allDevices(fileOpts)) {
       // Whether a trace or an on-demand start (PILOT-775) brought it up.
       const proxyRunning = d._networkProxyRunning === true;
