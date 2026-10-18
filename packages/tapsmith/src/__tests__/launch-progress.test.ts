@@ -122,12 +122,20 @@ describe('createUiLaunchSteps', () => {
   // PILOT-775: the Config line says how network capture runs.
   it('says on the Config line whether the trace captures network or the proxy starts on demand', () => {
     const detail = (config: Partial<TapsmithConfig>) =>
-      createUiLaunchSteps({ config: baseConfig(config), testFileCount: 1, workerCount: 1 })[0]!.detail;
+      createUiLaunchSteps({ config: baseConfig(config), testFileCount: 1, workerCount: 1, mode: 'test' })[0]!.detail;
     expect(detail({})).toContain('network: on demand');
     expect(detail({ trace: 'retain-on-failure' })).toContain('network: captured');
     expect(detail({ trace: { mode: 'on', network: false } })).toContain('network: on demand');
     // Records only retries, so a test's first attempt starts it on demand.
     expect(detail({ trace: 'on-first-retry' })).toContain('network: on demand');
+  });
+
+  it('says captured in UI mode, whose workers turn a missing or off trace on', () => {
+    const detail = (config: Partial<TapsmithConfig>) =>
+      createUiLaunchSteps({ config: baseConfig(config), testFileCount: 1, workerCount: 1, mode: 'ui' })[0]!.detail;
+    expect(detail({})).toContain('network: captured');
+    expect(detail({ trace: 'off' })).toContain('network: captured');
+    expect(detail({ trace: { mode: 'on', network: false } })).toContain('network: on demand');
   });
 
   it('lists each network state once across projects', () => {
@@ -140,6 +148,7 @@ describe('createUiLaunchSteps', () => {
       projects: [project('a', traced), project('b', baseConfig({})), project('c', traced)],
       testFileCount: 1,
       workerCount: 1,
+      mode: 'test',
     });
     expect(steps[0]!.detail).toContain('network: captured + on demand');
   });

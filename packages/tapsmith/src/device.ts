@@ -1363,9 +1363,9 @@ export class Device {
         'trace records network). See https://tapsmith.dev/guides/network/#prerequisites';
     }
     if (!proxyWasRunning) {
-      return '. The network proxy started with this wait, and connections the app opened before ' +
-        'it bypass the proxy: start waiting (or register a route) before the app first talks to ' +
-        'that server, e.g. before launchApp(). See https://tapsmith.dev/guides/network/#prerequisites';
+      return '. The network proxy started on demand with this wait, and connections the app had ' +
+        'already opened may bypass it: start waiting (or register a route) before the app first ' +
+        'talks to that server, e.g. before launchApp(). See https://tapsmith.dev/guides/network/#prerequisites';
     }
     return '';
   }
@@ -1387,6 +1387,9 @@ export class Device {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overload implementation
   on(event: string, handler: (...args: any[]) => void): void {
     const manager = this._ensureRouteManager();
+    // Events come through the proxy, which the runner starts on demand
+    // (PILOT-775); a failed start is reported by the runner's warning.
+    void this._ensureOnDemandNetworkCapture();
     if (event === 'request') {
       manager.addRequestListener(handler as (req: TapsmithRequest) => void);
     } else {

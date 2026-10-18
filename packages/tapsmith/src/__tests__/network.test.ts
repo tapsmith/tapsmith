@@ -500,6 +500,22 @@ describe('NetworkRouteManager route scopes', () => {
     expect(manager.takeHandlerCalls()).toBe(0);
   });
 
+  it('removes the listeners a test added at its end, keeping a suite hook\'s (PILOT-775)', async () => {
+    const { manager, stream } = makeManager();
+    const fromTest = vi.fn();
+    const fromHook = vi.fn();
+    manager.addRequestListener(fromTest);
+    await runInRouteScope({ label: 'Suite' }, async () => { manager.addResponseListener(fromHook); });
+
+    manager.removeTestListeners();
+    stream.emitData({ requestEvent: { method: 'GET', url: 'https://example.com/a', headers: [], body: Buffer.alloc(0), isHttps: true } });
+    stream.emitData({ responseEvent: { url: 'https://example.com/a', status: 200, headers: [], body: Buffer.alloc(0) } });
+    await new Promise((r) => setTimeout(r, 1));
+
+    expect(fromTest).not.toHaveBeenCalled();
+    expect(fromHook).toHaveBeenCalledTimes(1);
+  });
+
   it('removeAllRoutes (device.unrouteAll) still removes scoped routes', async () => {
     const { manager } = makeManager();
     await runInRouteScope({ label: 'Suite' }, () => manager.addRoute('**/a', () => {}));

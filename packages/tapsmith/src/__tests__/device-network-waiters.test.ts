@@ -156,7 +156,7 @@ describe('Device network waiters and on-demand capture (PILOT-775)', () => {
     expect(device._networkProxyRunning).toBe(true);
     expect(device._takeProxyStartedOnDemand()).toBe(true);
     expect(device._takeProxyStartedOnDemand()).toBe(false);
-    expect(err.message).toMatch(/^waitForResponse timed out after 500ms\. The network proxy started with this wait/);
+    expect(err.message).toMatch(/^waitForResponse timed out after 500ms\. The network proxy started on demand with this wait/);
   });
 
   it('resolves a wait whose request arrives after an on-demand start', async () => {

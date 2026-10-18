@@ -11,16 +11,16 @@ Both features share the same underlying MITM proxy infrastructure.
 
 ## Prerequisites
 
-Network interception runs on Tapsmith's MITM proxy, and mocking needs no config: the test runner starts the proxy on demand, on the first `device.route()`, `device.waitForRequest()` or `device.waitForResponse()` a test (or one of its hooks or fixtures) makes on a device. It then stays up for the rest of the session — drained after every test and released when the session ends — so later tests reuse it. A test whose trace records network traffic starts it at the beginning of the test instead (see [Network Capture in Traces](#network-capture-in-traces)).
+Network interception runs on Tapsmith's MITM proxy, and mocking needs no config: the test runner starts the proxy on demand, on the first `device.route()`, `device.waitForRequest()`, `device.waitForResponse()` or `device.on('request' | 'response')` a test (or one of its hooks or fixtures) makes on a device. It then stays up for the rest of the session — drained after every test and released when the session ends — so later tests reuse it. A test whose trace records network traffic starts it at the beginning of the test instead (see [Network Capture in Traces](#network-capture-in-traces)).
 
 The startup `Config` line says which applies: `network: captured` when the trace records network for every test, `network: on demand` otherwise.
 
 **Register routes before the app sends the requests they mock.** The proxy only sees connections the app opens after it started. When the first route of a session starts it mid-test, the app may already hold a keep-alive connection to that server from an earlier request, and keeps using it — past the proxy — until the app is relaunched. Register routes (and start waits) at the top of the test, or in `beforeEach`/`beforeAll`, before navigating to the screen that fetches, as you would with Playwright's `page.route()` before `page.goto()`. A trace that records network (`trace: "retain-on-failure"`, which `tapsmith init` writes by default) starts the proxy with each test, so the app's connections go through it from the test's reset onwards.
 
-When a test's routes were live but none of them fired, Tapsmith says why if the capture shows a reason, naming the test: `device.route() handlers never fired: "…" registered route handlers and none of them fired.` It follows that with either
+When a test fails and its routes were live but none of them fired, Tapsmith says why if the capture shows a reason, naming the test: `device.route() handlers never fired: "…" registered route handlers and none of them fired.` It follows that with either
 
 - *HTTPS to `<hosts>` passed through the network proxy uncaptured* — the device cannot trust Tapsmith's CA (an Android emulator on a Google Play system image, see [Android emulator image requirements](#android-emulator-image-requirements)), the host is in `trace.networkPassthroughHosts`, or the app rejected Tapsmith's certificate; or
-- *The network proxy started with the test's first route* — the case above.
+- *The network proxy started on demand during this test or its hooks* — the case above.
 
 A `waitForRequest()`/`waitForResponse()` that times out says when no capture was running on the device, or when the proxy only started with that wait. If the proxy cannot start (on iOS, for example, the Network Extension is not approved yet — see [iOS Network Capture](ios-network-capture.md)), `device.route()` throws `Network capture disabled: …` with the reason, and a waiter rejects at once with it. A failed start is tried again once per test, not on every call.
 

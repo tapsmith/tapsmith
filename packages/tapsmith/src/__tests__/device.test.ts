@@ -686,6 +686,14 @@ describe('Device.route()', () => {
       expect(startNetworkCapture).toHaveBeenCalledTimes(2);
     });
 
+    it('starts capture on demand for device.on() too', async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([]);
+      arm();
+      device.on('request', () => {});
+      await vi.waitFor(() => expect(device._networkProxyRunning).toBe(true));
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+    });
+
     it("does not retry on demand a trace's own start that failed in the same arm", async () => {
       const { device, startNetworkCapture, arm } = makeOnDemand([
         { success: false, errorMessage: 'proxy unavailable' },

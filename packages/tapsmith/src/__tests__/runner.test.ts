@@ -1212,15 +1212,20 @@ describe('runner execution', () => {
         expect(device._stopNetworkCapture).not.toHaveBeenCalled();
       });
 
-      it('says the proxy only came up mid-test when routes it started for never fire', async () => {
+      const failAfter = (fn: () => Promise<void>) => async () => {
+        await fn();
+        throw new Error('Order Confirmed not visible');
+      };
+
+      it('says the proxy only came up mid-test when a failed test\'s routes never fired', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const device = makeOnDemandDevice({ handled: 0 });
         try {
-          await runBody('mocks too late', () => device.route(), [{ name: 'device-1', device }]);
+          await runBody('mocks too late', failAfter(() => device.route()), [{ name: 'device-1', device }]);
           const warnings = routeWarnings(warn);
           expect(warnings).toHaveLength(1);
           expect(warnings[0]).toContain('"mocks too late" registered route handlers and none of them fired');
-          expect(warnings[0]).toContain("The network proxy started with the test's first route");
+          expect(warnings[0]).toContain('The network proxy started on demand during this test or its hooks');
         } finally {
           warn.mockRestore();
         }
@@ -1236,12 +1241,26 @@ describe('runner execution', () => {
           ],
         });
         try {
-          await runBody('mocks on a play image', () => device.route(), [{ name: 'device-1', device }]);
+          await runBody('mocks on a play image', failAfter(() => device.route()), [{ name: 'device-1', device }]);
           const warnings = routeWarnings(warn);
           expect(warnings).toHaveLength(1);
           expect(warnings[0]).toContain('HTTPS to api.example.com passed through the network proxy uncaptured');
           expect(warnings[0]).not.toContain('plain.example.com');
           expect(warnings[0]).toContain('Google Play emulator image');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('stays quiet about a passing test\'s unfired route, which the app just did not need', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [{ url: 'https://play.googleapis.com/', routeAction: 'passthrough', isHttps: true }],
+        });
+        try {
+          await runBody('defensive mock', () => device.route(), [{ name: 'device-1', device }]);
+          expect(routeWarnings(warn)).toEqual([]);
         } finally {
           warn.mockRestore();
         }

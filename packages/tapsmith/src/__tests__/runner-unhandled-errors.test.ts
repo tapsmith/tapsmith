@@ -391,7 +391,7 @@ describe('runTestFile — network waiters end with their test (PILOT-543)', () =
 
     expect(result.status).toBe('failed');
     // The proxy only came up with the wait itself (PILOT-775), so it says so.
-    expect(result.error!.message).toMatch(/^waitForResponse timed out after 20ms\. The network proxy started with this wait/);
+    expect(result.error!.message).toMatch(/^waitForResponse timed out after 20ms\. The network proxy started on demand with this wait/);
     // The stack points at the call in the test, for the reporter's code frame.
     expect(result.error!.stack).toContain('x.test.mjs');
   });

@@ -423,7 +423,7 @@ function armOnDemandNetworkCapture(opts: RunOptions): void {
 }
 
 /**
- * Warn that a test's routes never fired although the proxy was running, when
+ * Warn that a failed test's routes never fired although the proxy was running, when
  * the capture shows why (PILOT-775): the device passed HTTPS through
  * uncaptured (a Google Play emulator image cannot trust Tapsmith's CA; a
  * configured or certificate-rejecting host is tunneled), or the proxy only
@@ -453,10 +453,10 @@ function _warnUnfiredRoutes(
   if (reasons.proxyStartedMidTest) {
     _warnCaptureOnce(
       'device.route() handlers never fired',
-      `${prefix} The network proxy started with the test's first route, and connections the app had ` +
-        'already opened bypass it. Register routes before the app first talks to that server ' +
-        '(e.g. before launchApp(), or in beforeEach), or record network in the trace so the proxy ' +
-        'starts with each test. See https://tapsmith.dev/guides/network/#prerequisites',
+      `${prefix} The network proxy started on demand during this test or its hooks, and connections ` +
+        'the app had already opened may bypass it. Register routes before the app first talks to ' +
+        'that server (e.g. before launchApp(), or in beforeEach), or record network in the trace so ' +
+        'the proxy starts with each test. See https://tapsmith.dev/guides/network/#prerequisites',
     );
   }
 }
@@ -2837,6 +2837,8 @@ async function runSuiteContext(
           unfiredRouteDevices.set(d, startedOnDemand);
         }
         if (d._routeManager?.hasTestRoutes) await d._routeManager.removeTestRoutes();
+        // device.on() listeners the test added end with it too (PILOT-775).
+        d._routeManager?.removeTestListeners?.();
       });
 
       // An unhandled rejection raised during the
@@ -3081,9 +3083,11 @@ async function runSuiteContext(
         }
       }
 
-      // Routes that were live on a running proxy and still never fired: say
-      // why when the capture shows a likely reason (PILOT-775).
-      for (const [d, startedOnDemand] of unfiredRouteDevices) {
+      // A failed test whose routes were live on a running proxy and still
+      // never fired: say why when the capture shows a likely reason
+      // (PILOT-775). A passing test's unfired route is just a mock the app
+      // did not need.
+      for (const [d, startedOnDemand] of status === 'failed' ? unfiredRouteDevices : []) {
         _warnUnfiredRoutes(fullName, d._traceDeviceId, {
           passthroughHosts: [...(passthroughHosts.get(d) ?? [])],
           proxyStartedMidTest: startedOnDemand,

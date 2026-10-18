@@ -166,7 +166,8 @@ function platformSummary(
  */
 function networkSummary(
   config: TapsmithConfig,
-  projects?: ResolvedProject[],
+  projects: ResolvedProject[] | undefined,
+  mode: "ui" | "test",
 ): string {
   const configs =
     projects && projects.length > 0
@@ -174,7 +175,10 @@ function networkSummary(
       : [config];
   const modes = new Set(
     configs.map((c) => {
-      const trace = resolveTraceConfig(c.trace);
+      // UI mode's workers turn a missing or 'off' trace on (ui-worker.ts).
+      const trace = resolveTraceConfig(
+        mode === "ui" && (!c.trace || c.trace === "off") ? "on" : c.trace,
+      );
       return trace.network && shouldRecord(trace.mode, 0)
         ? "captured"
         : "on demand";
@@ -240,7 +244,7 @@ export function createUiLaunchSteps(input: UiLaunchPlanInput): LaunchStep[] {
     plural(input.testFileCount, "test file"),
     platformSummary(input.config, input.projects),
     projectCount > 0 ? plural(projectCount, "project") : undefined,
-    networkSummary(input.config, input.projects),
+    networkSummary(input.config, input.projects, input.mode ?? "ui"),
   ]
     .filter(Boolean)
     .join(" | ");
