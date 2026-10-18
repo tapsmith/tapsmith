@@ -20,9 +20,9 @@ the trace viewer) and rebuilds them for real devices, emulators and simulators.
 
 **[Website](https://tapsmith.dev)** · **[Get started](docs/getting-started.md)** · **[API reference](docs/api-reference.md)** · **[Changelog](https://tapsmith.dev/changelog/)**
 
-<a href="https://tapsmith.dev"><img src="website/public/promo-poster.jpg" alt="Watch the Tapsmith demo on tapsmith.dev" width="720"></a>
-
 </div>
+
+https://github.com/user-attachments/assets/53e3a414-a66e-4bbe-abed-ecfeba44b06e
 
 ---
 
