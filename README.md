@@ -1,51 +1,73 @@
-# Tapsmith
+<div align="center">
 
-**Playwright-level reliability for mobile app testing.**
+<a href="https://tapsmith.dev">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="website/public/logo-dark.png">
+    <img src="website/public/logo.png" alt="Tapsmith" width="320">
+  </picture>
+</a>
 
-Tapsmith is a mobile app testing framework that brings the developer experience of [Playwright](https://playwright.dev) to Android and iOS. Write tests in TypeScript, run them against real devices or emulators/simulators, and get deterministic results with auto-waiting, trace recording, and network interception.
+### Mobile tests that feel like web tests.
+
+Tapsmith is a test framework for native iOS and Android apps. It takes the parts of
+[Playwright](https://playwright.dev) that engineers love (the locators, the auto-waiting,
+the trace viewer) and rebuilds them for real devices, emulators and simulators.
+
+[![npm](https://img.shields.io/npm/v/tapsmith?color=e8914b&label=npm)](https://www.npmjs.com/package/tapsmith)
+[![CI](https://github.com/tapsmith/tapsmith/actions/workflows/ci.yml/badge.svg)](https://github.com/tapsmith/tapsmith/actions/workflows/ci.yml)
+[![Node](https://img.shields.io/badge/node-%E2%89%A522-339933)](https://nodejs.org)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
+**[Website](https://tapsmith.dev)** · **[Get started](docs/getting-started.md)** · **[API reference](docs/api-reference.md)** · **[Changelog](https://tapsmith.dev/changelog/)**
+
+<a href="https://tapsmith.dev"><img src="website/public/promo-poster.jpg" alt="Watch the Tapsmith demo on tapsmith.dev" width="720"></a>
+
+</div>
+
+---
 
 ```typescript
 import { test, expect } from "tapsmith";
 
-test("user can log in", async ({ device }) => {
-  await device.getByRole("textfield", { name: "Email" }).type("user@example.com");
-  await device.getByRole("textfield", { name: "Password" }).type("password123");
-  await device.getByRole("button", { name: "Sign In" }).tap();
+test("user can check out", async ({ device }) => {
+  // Mock the payment API: no mock server, no special build of the app
+  await device.route("**/api/payment", (route) =>
+    route.fulfill({ json: { status: "success" } }),
+  );
 
-  await expect(device.getByText("Welcome back")).toBeVisible();
+  await device.getByRole("button", { name: "Add to cart" }).tap();
+  await device.getByText("Checkout").tap();
+
+  await expect(device.getByText("Order confirmed")).toBeVisible();
 });
 ```
 
-## Key Features
+If you know Playwright, you already know most of Tapsmith: `test`, `describe`, `expect`,
+hooks, fixtures, `test.extend()`, projects, `--ui`, `--trace`. One test file runs on Android and
+iOS alike.
 
-- **Auto-waiting** -- every action waits for the element to be visible, enabled, and stable. No manual sleeps.
-- **Accessible locators** -- find elements by role, text, label, placeholder, and description. An ESLint plugin steers you toward best practices.
-- **Trace viewer** -- step-by-step replay of every action with before/after screenshots, view hierarchy, console output, and network requests.
-- **Network interception** -- Playwright-style `device.route()` to mock, modify, or abort HTTP/HTTPS requests that trust Tapsmith's MITM CA, with passthrough markers for configured hosts and detected h2/gRPC cert rejects. Routes run on the network proxy, which Tapsmith starts for tests whose trace records network traffic, so turn tracing on (`trace: "retain-on-failure"`) to use them -- see [Network prerequisites](docs/network.md#prerequisites).
-- **Video recording** -- continuous MP4 capture of the device screen, retained on failure or always.
-- **Parallel execution** -- run tests across multiple devices with work-stealing distribution. Tapsmith auto-provisions emulators and simulators.
-- **WebView testing** -- test hybrid apps by switching between native and WebView contexts with CSS selector-based interaction.
-- **MCP server** -- built-in MCP integration lets AI coding agents run tests, interact with devices, and inspect results.
-- **Cross-platform** -- Android (API 26+) and iOS (17+) from a single test suite. Use projects to target both platforms in one `tapsmith test` invocation.
-- **Familiar API** -- if you know Playwright, you already know Tapsmith. `test`, `describe`, `expect`, `beforeEach`, `test.extend()`, and hooks work the way you expect.
+## Why Tapsmith
 
-## Architecture
+|     |     |
+| --- | --- |
+| ⏳ **Auto-waiting, everywhere** | Every action waits for its element to be visible, enabled and stable, and every assertion retries until it passes. You never write a sleep. |
+| 🎯 **Accessible locators** | `getByRole`, `getByText`, `getByLabel` and `getByPlaceholder`, with strings or `RegExp`, the same on both platforms. A bundled ESLint plugin steers you toward the robust ones. |
+| 🌐 **Network mocking in one line** | `device.route()` mocks, modifies or aborts HTTP/HTTPS calls on a proxy Tapsmith runs itself. [Prerequisites](docs/network.md#prerequisites) |
+| 🎞️ **Trace viewer** | Replay a failure instead of reconstructing it: every action with before and after screenshots, the view hierarchy, logs and network traffic. |
+| 🧪 **UI and watch modes** | Pick locators on a live device, run tests one at a time and step through them, or re-run on save. |
+| ⚡ **Fast, isolated tests** | The app is reset to a clean state for every test file. React Native apps can [reset in-process in under a second](docs/warm-reset.md), and `saveAppState` lets you log in once and reuse the session. |
+| 📱 **Many devices at once** | Parallel workers across emulators and simulators that Tapsmith boots for you, CI sharding with merged reports, and [multi-device tests](docs/multi-device.md) where Alice messages Bob. |
+| 🧩 **Hybrid apps** | Switch into a WebView and drive it with CSS selectors and web roles. |
+| 🤖 **Built for AI agents** | A built-in [MCP server](docs/mcp-server.md), plus `--json` output for every setup command, so a coding agent can set up and run your suite on its own. |
+| 📦 **One npm install** | The daemon, the device agents and the trace viewer all ship in the package. There's no Appium server to start and no drivers to keep in step with Xcode. |
 
-```
-┌──────────────────┐      gRPC      ┌──────────────────┐  ADB/simctl/socket ┌─────────────────────────┐
-│  TypeScript SDK  │ ◄────────────► │  Rust Daemon     │ ◄────────────────► │  On-Device Agent        │
-│  (test runner,   │                │  (tapsmith-core) │                    │  Android: UIAutomator2  │
-│   CLI)           │                │                  │                    │  iOS: XCUITest          │
-└──────────────────┘                └──────────────────┘                    └─────────────────────────┘
-```
+<p align="center">
+  <img src="docs/images/trace-viewer.png" alt="The Tapsmith trace viewer replaying a test step by step" width="860">
+</p>
 
-The TypeScript SDK communicates with a Rust daemon over gRPC. The daemon manages device connections (ADB for Android, simctl/devicectl for iOS) and routes commands to a lightweight on-device agent.
+## Quick start
 
-## Quick Start
-
-### 1. Install
-
-Tapsmith requires **Node.js 22 or newer** — check with `node --version` first. On older Node, npm can install an old Tapsmith release whose commands don't match these docs, or none at all.
+**1. Install.** Tapsmith needs **Node.js 22 or newer**.
 
 ```bash
 npm install -D tapsmith    # or: yarn add -D tapsmith / pnpm add -D tapsmith
@@ -53,17 +75,18 @@ npm install -D tapsmith    # or: yarn add -D tapsmith / pnpm add -D tapsmith
 
 pnpm 11+ and Yarn Plug'n'Play each need one setting first: see [Installation](docs/getting-started.md#installation).
 
-### 2. Build your app and set up
-
-Tapsmith tests a build of your app: an `.apk` for Android, a simulator `.app` for iOS. See [Build the app under test](docs/getting-started.md#build-the-app-under-test) (including React Native and Expo, where a Debug build needs Metro running).
-
-The interactive wizard detects your environment and generates a config file:
+**2. Configure.** Tapsmith tests a build of your app: an `.apk` for Android, or a simulator `.app`
+for iOS ([how to build one](docs/getting-started.md#build-the-app-under-test), including React
+Native and Expo). The wizard finds your builds and devices and writes `tapsmith.config.ts`:
 
 ```bash
-npx tapsmith init
+npx tapsmith init      # interactive setup
+npx tapsmith doctor    # check the environment; every failing check suggests a fix
+npx tapsmith verify    # prove the whole loop works with one real test
 ```
 
-Or create `tapsmith.config.ts` manually:
+<details>
+<summary>Or write the config by hand</summary>
 
 ```typescript
 import { defineConfig } from "tapsmith";
@@ -84,131 +107,85 @@ export default defineConfig({
 });
 ```
 
-Check your environment, then prove the whole loop (daemon, device, app install, one real test) works:
+See [Configuration](docs/configuration.md) for every option, and [projects](docs/configuration.md#projects-with-per-device-targeting)
+to run Android and iOS from one `tapsmith test`.
 
-```bash
-npx tapsmith doctor
-npx tapsmith verify
-```
+</details>
 
-### 3. Write a test
-
-Create `tests/login.tapsmith.ts` (`tapsmith init` sets `testMatch` to `*.tapsmith.ts`, so your Jest or Vitest run leaves Tapsmith tests alone):
+**3. Write a test** in `tests/login.tapsmith.ts`. Each file starts from a freshly reset app:
 
 ```typescript
 import { test, describe, expect } from "tapsmith";
 
 describe("Login", () => {
-  // Tapsmith resets the app once per file by default, so tests in a file share
-  // its state. Both tests here need the login screen, so reset before each one.
-  test.use({ appResetScope: "test" });
-
   test("valid credentials", async ({ device }) => {
     await device.getByRole("textfield", { name: "Email" }).type("user@example.com");
     await device.getByRole("textfield", { name: "Password" }).type("password123");
     await device.getByRole("button", { name: "Sign In" }).tap();
-    await expect(device.getByText("Welcome back")).toBeVisible();
-  });
 
-  test("invalid credentials shows error", async ({ device }) => {
-    await device.getByRole("textfield", { name: "Email" }).type("bad@example.com");
-    await device.getByRole("textfield", { name: "Password" }).type("wrong");
-    await device.getByRole("button", { name: "Sign In" }).tap();
-    await expect(device.getByText("Invalid credentials")).toBeVisible();
+    await expect(device.getByText("Welcome back")).toBeVisible();
   });
 });
 ```
 
-### 4. Run
+**4. Run it.**
 
 ```bash
-npx tapsmith test
+npx tapsmith test                              # run the suite
+npx tapsmith test --workers 4                  # in parallel across 4 devices
+npx tapsmith test --trace retain-on-failure    # keep a trace of every failure
+npx tapsmith test --watch                      # re-run on save
+npx tapsmith test --ui                         # interactive UI mode
 ```
 
-Run in parallel across 4 devices:
-
-```bash
-npx tapsmith test --workers 4
-```
-
-Record traces for failed tests:
-
-```bash
-npx tapsmith test --trace retain-on-failure
-```
-
-Watch mode for fast iteration:
-
-```bash
-npx tapsmith test --watch
-```
-
-Interactive UI mode with MCP integration:
-
-```bash
-npx tapsmith test --ui
-```
+<p align="center">
+  <img src="docs/images/ui-mode.png" alt="Tapsmith UI mode with a live device mirror and the test list" width="860">
+</p>
 
 ## Requirements
 
-### Android
+|             | Android                        | iOS                                          |
+| ----------- | ------------------------------ | -------------------------------------------- |
+| **Host**    | macOS or Linux, Node.js 22+    | macOS, Node.js 22+                           |
+| **Tooling** | ADB on your `PATH`             | Xcode 15+                                    |
+| **Devices** | Emulator or device, API 26+    | Simulator or [physical device](docs/ios-physical-devices.md), iOS 17+ |
 
-- Node.js 22+
-- ADB installed and on PATH
-- Android device or emulator (API 26+)
+## How it works
 
-### iOS
+```
+┌──────────────────┐      gRPC      ┌──────────────────┐   ADB / simctl    ┌─────────────────────────┐
+│  TypeScript SDK  │ ◄────────────► │   Rust daemon    │ ◄───────────────► │  On-device agent        │
+│  test runner,    │                │  (tapsmith-core) │                   │  Android: UIAutomator2  │
+│  CLI, reporters  │                │                  │                   │  iOS: XCUITest          │
+└──────────────────┘                └──────────────────┘                   └─────────────────────────┘
+```
 
-- Node.js 22+
-- macOS with Xcode 15+
-- iOS Simulator (iOS 17+) or physical device
+Your tests run in Node. They talk over gRPC to a small Rust daemon, which manages devices (ADB on
+Android, simctl and devicectl on iOS) and forwards each command to an agent running on the device.
+All three ship prebuilt in the npm package.
 
 ## Documentation
 
-### Getting started
-- [Getting Started](docs/getting-started.md) -- installation, first test, running tests
-- [Writing Tests](docs/writing-tests.md) -- best practices, screen objects, test isolation, authentication patterns
+The full docs live at **[tapsmith.dev](https://tapsmith.dev)**. The same pages are in [`docs/`](docs/):
 
-### Guides
-- [Locators Guide](docs/locators.md) -- choosing the right locators, cross-platform considerations
-- [Network Interception](docs/network.md) -- mocking, modifying, and capturing HTTP traffic
-- [WebView Testing](docs/webview.md) -- testing hybrid apps with WebView contexts
-- [Trace Viewer](docs/trace-viewer.md) -- recording and inspecting step-by-step traces
-- [UI Mode](docs/ui-mode.md) -- interactive test authoring and debugging with `--ui`
-- [Watch Mode](docs/watch-mode.md) -- fast iteration with `--watch`
-- [Parallel Execution and Sharding](docs/parallel-and-sharding.md) -- multi-device parallelism and CI sharding
-- [Debugging](docs/debugging.md) -- diagnosing failures, common errors, flaky test mitigation
+**Start here.** [Getting started](docs/getting-started.md) · [Writing tests](docs/writing-tests.md) · [Locators](docs/locators.md) · [Debugging](docs/debugging.md)
 
-### Migrating
-- [From Maestro](docs/migrating-from-maestro.md) -- YAML flows to TypeScript tests
-- [From Detox](docs/migrating-from-detox.md) -- matchers, synchronization and `.detoxrc` to Tapsmith
-- [From Appium](docs/migrating-from-appium.md) -- capabilities, XPath and explicit waits to Tapsmith
+**Guides.** [Network interception](docs/network.md) · [Trace viewer](docs/trace-viewer.md) · [UI mode](docs/ui-mode.md) · [Watch mode](docs/watch-mode.md) · [WebViews](docs/webview.md) · [Parallel runs and sharding](docs/parallel-and-sharding.md) · [Multi-device tests](docs/multi-device.md) · [Warm app reset](docs/warm-reset.md) · [AI coding agents](docs/agents.md)
 
-### Reference
-- [API Reference](docs/api-reference.md) -- complete reference for all public APIs
-- [Configuration](docs/configuration.md) -- all config options with examples
-- [CLI Reference](docs/api-reference.md#cli) -- all commands and flags
-- [Environment Variables](docs/environment-variables.md) -- daemon, debugging, and CI variables
-- [Telemetry](docs/telemetry.md) -- what the anonymous usage data is, what it never includes, and how to opt out
-- [MCP Server](docs/mcp-server.md) -- AI agent integration via MCP
+**Moving from another framework.** [Maestro](docs/migrating-from-maestro.md) · [Detox](docs/migrating-from-detox.md) · [Appium](docs/migrating-from-appium.md)
 
-### Platform-specific
-- [CI Setup](docs/ci-setup.md) -- GitHub Actions workflows for Android and iOS
-- [iOS Physical Devices](docs/ios-physical-devices.md) -- testing on real iPhones/iPads
-- [iOS Network Capture](docs/ios-network-capture.md) -- HTTPS capture setup for simulators
-- [iOS Physical Device Network Capture](docs/ios-physical-device-network-tracing.md) -- HTTPS capture on real devices
+**CI and devices.** [CI setup](docs/ci-setup.md) · [iOS physical devices](docs/ios-physical-devices.md) · [iOS network capture](docs/ios-network-capture.md) · [Physical-device network capture](docs/ios-physical-device-network-tracing.md)
+
+**Reference.** [API](docs/api-reference.md) · [CLI](docs/api-reference.md#cli) · [Configuration](docs/configuration.md) · [Environment variables](docs/environment-variables.md) · [MCP server](docs/mcp-server.md) · [Trace format](docs/trace-format.md) · [Telemetry](docs/telemetry.md)
 
 ## Contributing
 
-Bug reports, documentation fixes and code are all welcome -- see
-[CONTRIBUTING.md](CONTRIBUTING.md) for development setup and conventions.
+Bug reports, docs fixes and code are all welcome. [CONTRIBUTING.md](CONTRIBUTING.md) covers the
+development setup and conventions.
 
-Commits need a [Developer Certificate of Origin](DCO) sign-off (`git commit -s`). It
-certifies you have the right to submit the patch; it is not a CLA, and you keep your
-copyright.
+Commits need a [Developer Certificate of Origin](DCO) sign-off (`git commit -s`). It certifies that
+you have the right to submit the patch. It is not a CLA, and you keep your copyright.
 
 ## License
 
-Apache-2.0
-
-Contributions are accepted under the same licence.
+[Apache-2.0](LICENSE). Contributions are accepted under the same licence.
