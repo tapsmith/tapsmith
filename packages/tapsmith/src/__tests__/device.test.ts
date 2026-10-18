@@ -657,8 +657,10 @@ describe('Device.route()', () => {
       expect(device._takeProxyStartedOnDemand()).toBe(true);
     });
 
-    it('does not count a start that found the proxy already running as a new one', async () => {
-      const { device, arm } = makeOnDemand([]);
+    it('uses a proxy kept from an earlier test as it is, without restarting it mid-test', async () => {
+      // A restart resets the daemon's capture state, including the hosts it
+      // learned to tunnel for clients that reject its certificate.
+      const { device, startNetworkCapture, arm } = makeOnDemand([]);
       arm();
       await device.route('**/a', async () => undefined);
       device._takeProxyStartedOnDemand();
@@ -667,6 +669,7 @@ describe('Device.route()', () => {
       arm();
       await device.route('**/b', async () => undefined);
 
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
       expect(device._takeProxyStartedOnDemand()).toBe(false);
     });
 

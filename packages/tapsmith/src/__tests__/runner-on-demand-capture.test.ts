@@ -150,6 +150,26 @@ describe('runTestFile — on-demand network capture (PILOT-775)', () => {
     }
   });
 
+  it("removes a worker fixture's routes and disarms on-demand capture when a later fixture throws", async () => {
+    const { device } = makeDevice();
+    const filePath = writeFile('x.test.mjs', `
+      const t = test.extend({
+        mocks: [async ({ device }, use) => {
+          await device.route('**/config', (route) => route.fulfill({ json: {} }));
+          await use(1);
+        }, { scope: 'worker' }],
+        broken: [async ({ mocks }, use) => { throw new Error('backend down'); }, { scope: 'worker' }],
+      });
+      t('never runs', async ({ broken }) => {});
+    `);
+
+    await runTestFile(filePath, makeOpts(device)).catch(() => undefined);
+
+    expect(device._networkProxyRunning).toBe(true);
+    expect(device._routeManager?.hasRoutes).toBe(false);
+    expect((device as unknown as { _onDemandCapture: unknown })._onDemandCapture).toBeNull();
+  });
+
   it('tries a failed start again on the retry attempt', async () => {
     const { device, startNetworkCapture } = makeDevice([{ success: false, errorMessage: 'proxy unavailable' }]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

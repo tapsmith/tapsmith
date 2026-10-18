@@ -2402,7 +2402,19 @@ async function runSuiteContext(
         for (const d of networkDrainDevices()) {
           try {
             const res = await d._stopNetworkCapture({ keepRunning: true });
-            if (res.success) notePassthrough(d, res.entries);
+            if (!res.success) continue;
+            notePassthrough(d, res.entries);
+            // Clients that rejected the MITM certificate (PILOT-712), once
+            // per run per host as on the traced path.
+            if (d._networkCaptureRoute === 'ios-system-proxy') continue;
+            const rejected = filterEntriesByHosts(
+              (res.tlsRejectedHosts ?? []).map((host) => ({ host, url: `https://${host}/` })),
+              { allow: traceConfig.networkHosts, deny: traceConfig.networkIgnoreHosts },
+            ).map((e) => e.host);
+            const fresh = _tlsRejectWarnings.takeNew(d._traceDeviceId ?? '', rejected);
+            if (fresh.length === 0) continue;
+            const who = devices.length > 1 && d._traceDeviceId ? `[${d._traceDeviceId}] ` : '';
+            console.warn(`[tapsmith] Network capture warning: ${who}${tlsRejectWarning(fresh)}`);
           } catch {
             // Best-effort: the next drain, or close(), clears it.
           }
@@ -3680,6 +3692,13 @@ async function runTestFileOwned(
   // Routes and device.on() listeners a worker fixture sets up last for the
   // whole file, not just its first test (PILOT-775).
   const workerRouteScope: RouteScope = { label: `${filePath} (worker fixtures)` };
+  const endWorkerRouteScope = async (): Promise<void> => {
+    workerRouteScope.ended = true;
+    await forEachDeviceBestEffort(opts, async (d) => {
+      if (d._routeManager?.hasRoutes) await d._routeManager.removeScopeRoutes(workerRouteScope);
+      d._routeManager?.removeScopeListeners?.(workerRouteScope);
+    });
+  };
   if (!fileRegistry.isEmpty && !rootCtx.skipped) {
     try {
       const resolved = await runInRouteScope(workerRouteScope, () => resolveFixtures(fileRegistry, 'worker', {
@@ -3689,6 +3708,10 @@ async function runTestFileOwned(
       workerFixtures = resolved.fixtures;
       workerTeardown = resolved.teardown;
     } catch (err) {
+      // What the fixtures set up before the throw goes, and nothing outside
+      // a test file starts capture on demand (PILOT-775).
+      await endWorkerRouteScope();
+      for (const d of allDevices(opts)) d._setOnDemandNetworkCapture?.(null);
       // Worker fixtures are set up for the whole file up front, not lazily per
       // test as in Playwright, so a skip here can't be scoped to the tests
       // that use the fixture: refuse it rather than skip the whole file.
@@ -3740,11 +3763,7 @@ async function runTestFileOwned(
         await workerTeardown();
       }
     } finally {
-      workerRouteScope.ended = true;
-      await forEachDeviceBestEffort(fileOpts, async (d) => {
-        if (d._routeManager?.hasRoutes) await d._routeManager.removeScopeRoutes(workerRouteScope);
-        d._routeManager?.removeScopeListeners?.(workerRouteScope);
-      });
+      await endWorkerRouteScope();
       for (const d of allDevices(fileOpts)) {
       // Whether a trace or an on-demand start (PILOT-775) brought it up.
       const proxyRunning = d._networkProxyRunning === true;

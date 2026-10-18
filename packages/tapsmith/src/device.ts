@@ -973,7 +973,10 @@ export class Device {
   private async _ensureOnDemandNetworkCapture(): Promise<void> {
     if (!this._onDemandStart) {
       const start = this._onDemandCapture;
-      if (this._networkCaptureActive || !start || this._onDemandTried) return;
+      // A proxy already up (from an earlier test) is used as it is: restarting
+      // it mid-test resets the daemon's capture state, including the hosts it
+      // has learned to tunnel for clients that reject its certificate.
+      if (this._networkCaptureActive || this._networkProxyRunning || !start || this._onDemandTried) return;
       this._onDemandTried = true;
       const wasRunning = this._networkProxyRunning;
       this._onDemandStart = start()

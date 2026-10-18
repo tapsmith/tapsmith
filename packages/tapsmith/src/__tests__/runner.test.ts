@@ -1151,6 +1151,7 @@ describe('runner execution', () => {
       const makeOnDemandDevice = (opts: {
         handled: number
         drained?: Array<{ url: string; routeAction: string; isHttps: boolean }>
+        tlsRejectedHosts?: string[]
         name?: string
       }) => {
         const base = makeRoutedDevice({ proxyRunning: false, registered: 0, name: opts.name });
@@ -1173,8 +1174,8 @@ describe('runner execution', () => {
         device._stopNetworkCapture = vi.fn(async () => {
           const entries = drained;
           drained = [];
-          return { success: true, entries, errorMessage: '' };
-        }) as typeof device._stopNetworkCapture;
+          return { success: true, entries, errorMessage: '', tlsRejectedHosts: opts.tlsRejectedHosts ?? [] };
+        }) as unknown as typeof device._stopNetworkCapture;
         return device;
       };
       const runBody = async (
@@ -1262,6 +1263,20 @@ describe('runner execution', () => {
         try {
           await runBody('defensive mock', () => device.route(), [{ name: 'device-1', device }]);
           expect(routeWarnings(warn)).toEqual([]);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('warns, once per run, about hosts whose client rejected the certificate when no trace records network', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const device = makeOnDemandDevice({ handled: 1, tlsRejectedHosts: ['pinned-pilot775.example.com'] });
+          await runBody('pinned host 1', () => device.route(), [{ name: 'device-1', device }]);
+          await runBody('pinned host 2', () => device.route(), [{ name: 'device-1', device }]);
+          const rejected = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('pinned-pilot775.example.com'));
+          expect(rejected).toHaveLength(1);
+          expect(rejected[0]).toContain('[tapsmith] Network capture warning:');
         } finally {
           warn.mockRestore();
         }
