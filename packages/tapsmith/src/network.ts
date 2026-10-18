@@ -534,6 +534,8 @@ export class NetworkRouteManager {
   private _reopenTimer: ReturnType<typeof setTimeout> | null = null;
   private _reopenDelayMs = REOPEN_INITIAL_DELAY_MS;
   private _disposed = false;
+  /** Requests handed to a route handler since the runner last took the count (PILOT-775). */
+  private _handlerCalls = 0;
 
   constructor(client: TapsmithGrpcClient) {
     this._client = client;
@@ -903,6 +905,17 @@ export class NetworkRouteManager {
     }
   }
 
+  /**
+   * How many intercepted requests reached a route handler since the last
+   * call, then reset. The runner reads it after each test to tell a route
+   * that never fired from one that did (PILOT-775).
+   */
+  takeHandlerCalls(): number {
+    const n = this._handlerCalls;
+    this._handlerCalls = 0;
+    return n;
+  }
+
   /** Whether any routes are registered. */
   get hasRoutes(): boolean {
     return this._routes.size > 0;
@@ -1013,6 +1026,7 @@ export class NetworkRouteManager {
     const route = new Route(msg.interceptId, request, sendDecision, awaitFetchedResponse);
 
     const startTime = Date.now();
+    this._handlerCalls++;
 
     // Run the handler. If it throws, rejects, or returns without calling
     // abort/continue/fulfill/fetch, continue the request (fail-open).

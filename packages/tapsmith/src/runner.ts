@@ -363,14 +363,102 @@ function _warnRoutesWithoutProxy(fullName: string, deviceName: string | undefine
     ? 'but network capture failed to start on this device (see the "Network capture" warning above), ' +
       'so no request could reach them.'
     : 'but network capture was not running, so no request could reach them. Routes go through the ' +
-      'network proxy, which Tapsmith starts only for a test whose trace records network traffic: set ' +
-      "trace: 'retain-on-failure' (or 'on') in your config, or pass --trace retain-on-failure, and " +
-      'leave trace `network` enabled.';
+      'network proxy, which the test runner starts on the first route(), waitForRequest() or ' +
+      'waitForResponse() of a test file, or for a test whose trace records network traffic.';
   _warnCaptureOnce(
     'device.route() handlers never fired',
     `${who}"${fullName}" registered route handlers, ${why} ` +
       'See https://tapsmith.dev/guides/network/#prerequisites',
   );
+}
+
+/**
+ * Start one device's network capture, warning (once per run) when it fails or
+ * the daemon reports something capture cannot do. Used for a trace that
+ * records network, and on demand otherwise (PILOT-775). Resolves whether the
+ * daemon confirmed capture.
+ */
+async function startNetworkCaptureOn(d: Device, multiDevice: boolean, httpPorts: number[] | undefined): Promise<boolean> {
+  const forDevice = (msg: string): string =>
+    multiDevice && d._traceDeviceId ? `[${d._traceDeviceId}] ${msg}` : msg;
+  try {
+    const res = await d._startNetworkCapture({ requireIsolation: multiDevice, httpPorts });
+    if (!res.success && res.errorMessage) {
+      _warnCaptureOnce('Network capture disabled', forDevice(res.errorMessage));
+    } else if (res.errorMessage) {
+      // The daemon joins independent warnings with newlines, and which ones
+      // appear varies between the first start and the per-test reuse of a
+      // running proxy; dedupe each on its own so a persistent one prints
+      // once per run.
+      for (const line of res.errorMessage.split('\n')) {
+        if (line.trim()) _warnCaptureOnce('Network capture warning', forDevice(line));
+      }
+    }
+    return res.success;
+  } catch (err) {
+    _warnCaptureOnce(
+      'Network capture failed to start',
+      forDevice(err instanceof Error ? err.message : String(err)),
+    );
+    return false;
+  }
+}
+
+/**
+ * Let every device start network capture on demand (PILOT-775): the first
+ * route(), waitForRequest() or waitForResponse() of a test or hook starts it
+ * when no trace already has, so mocking needs no config. The proxy then stays
+ * up like a traced one — drained after each test, released at close(). Armed
+ * for the file, and re-armed for each test attempt so a failed start is tried
+ * once more per test rather than on every call.
+ */
+function armOnDemandNetworkCapture(opts: RunOptions): void {
+  const devices = allDevices(opts);
+  const httpPorts = resolveTraceConfig(opts.config.trace).networkHttpPorts;
+  for (const d of devices) {
+    d._setOnDemandNetworkCapture?.(async () => {
+      await startNetworkCaptureOn(d, devices.length > 1, httpPorts);
+    });
+  }
+}
+
+/**
+ * Warn that a test's routes never fired although the proxy was running, when
+ * the capture shows why (PILOT-775): the device passed HTTPS through
+ * uncaptured (a Google Play emulator image cannot trust Tapsmith's CA; a
+ * configured or certificate-rejecting host is tunneled), or the proxy only
+ * came up with the test's first route, after the app may have opened the
+ * connections it went on using. Neither shows: nothing to say — the app may
+ * simply not have made the request.
+ */
+function _warnUnfiredRoutes(
+  fullName: string,
+  deviceName: string | undefined,
+  reasons: { passthroughHosts: string[]; proxyStartedMidTest: boolean },
+): void {
+  const who = deviceName ? `[${deviceName}] ` : '';
+  const prefix = `${who}"${fullName}" registered route handlers and none of them fired.`;
+  if (reasons.passthroughHosts.length > 0) {
+    const hosts = reasons.passthroughHosts.slice(0, 5).join(', ') +
+      (reasons.passthroughHosts.length > 5 ? `, and ${reasons.passthroughHosts.length - 5} more` : '');
+    _warnCaptureOnce(
+      'device.route() handlers never fired',
+      `${prefix} HTTPS to ${hosts} passed through the network proxy uncaptured, so routes could not see it: ` +
+        "the device cannot trust Tapsmith's CA (a Google Play emulator image has no adb root — use a " +
+        "Google APIs image), the host is in trace.networkPassthroughHosts, or the app rejected Tapsmith's certificate. " +
+        'See https://tapsmith.dev/guides/network/#prerequisites',
+    );
+    return;
+  }
+  if (reasons.proxyStartedMidTest) {
+    _warnCaptureOnce(
+      'device.route() handlers never fired',
+      `${prefix} The network proxy started with the test's first route, and connections the app had ` +
+        'already opened bypass it. Register routes before the app first talks to that server ' +
+        '(e.g. before launchApp(), or in beforeEach), or record network in the trace so the proxy ' +
+        'starts with each test. See https://tapsmith.dev/guides/network/#prerequisites',
+    );
+  }
 }
 
 export type TestStatus = 'passed' | 'failed' | 'skipped';
@@ -2283,6 +2371,42 @@ async function runSuiteContext(
         return primary && routed.has(primary) ? primary._networkCaptureRoute : undefined;
       };
 
+      // Devices where this test registered routes and none of them fired
+      // (true when the proxy came up on demand during the test), and the
+      // HTTPS hosts their proxy passed through uncaptured — the likely
+      // reasons (PILOT-775).
+      const unfiredRouteDevices = new Map<Device, boolean>();
+      const passthroughHosts = new Map<Device, Set<string>>();
+      const notePassthrough = (d: Device, entries: RawNetworkEntries): void => {
+        const tunneled = filterEntriesByHosts(
+          entries.filter((e) => e.routeAction === 'passthrough' && e.isHttps),
+          { allow: traceConfig.networkHosts, deny: traceConfig.networkIgnoreHosts },
+        );
+        if (tunneled.length === 0) return;
+        const hosts = passthroughHosts.get(d) ?? new Set<string>();
+        for (const e of tunneled) {
+          try { hosts.add(new URL(e.url).hostname); } catch { /* unparseable: nothing to name */ }
+        }
+        passthroughHosts.set(d, hosts);
+      };
+      // Drain the proxy of a device whose capture no trace records: its
+      // entries are only read for the reasons above, then dropped.
+      const drainUntracedCapture = async (): Promise<void> => {
+        for (const d of networkDrainDevices()) {
+          try {
+            const res = await d._stopNetworkCapture({ keepRunning: true });
+            if (res.success) notePassthrough(d, res.entries);
+          } catch {
+            // Best-effort: the next drain, or close(), clears it.
+          }
+        }
+      };
+
+      // Re-arm on-demand capture: a start that failed in an earlier test is
+      // tried once more in this one — or not at all when the trace's own
+      // start below is that try (PILOT-775).
+      armOnDemandNetworkCapture(opts);
+
       if (recording && primary) {
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-trace-'));
         // One collector per test, owned by the primary's Tracing; the other
@@ -2324,29 +2448,9 @@ async function runSuiteContext(
         // the capturing device's name, and the system-proxy fallback records
         // the whole Mac, so the daemon refuses it instead of mislabelling.
         if (traceConfig.network) {
-          const multiDevice = devices.length > 1;
-          const forDevice = (d: Device, msg: string): string =>
-            multiDevice && d._traceDeviceId ? `[${d._traceDeviceId}] ${msg}` : msg;
           for (const d of devices) {
-            try {
-              const res = await d._startNetworkCapture({ requireIsolation: multiDevice, httpPorts: traceConfig.networkHttpPorts });
-              if (res.success) networkCapturingDevices.add(d);
-              if (!res.success && res.errorMessage) {
-                _warnCaptureOnce('Network capture disabled', forDevice(d, res.errorMessage));
-              } else if (res.errorMessage) {
-                // The daemon joins independent warnings with newlines, and
-                // which ones appear varies between the first start and the
-                // per-test reuse of a running proxy; dedupe each on its own
-                // so a persistent one prints once per run.
-                for (const line of res.errorMessage.split('\n')) {
-                  if (line.trim()) _warnCaptureOnce('Network capture warning', forDevice(d, line));
-                }
-              }
-            } catch (err) {
-              _warnCaptureOnce(
-                'Network capture failed to start',
-                forDevice(d, err instanceof Error ? err.message : String(err)),
-              );
+            if (await startNetworkCaptureOn(d, devices.length > 1, traceConfig.networkHttpPorts)) {
+              networkCapturingDevices.add(d);
             }
           }
         }
@@ -2724,9 +2828,13 @@ async function runSuiteContext(
         // the routes this test registered — even ones it has since removed —
         // could never fire: say so instead of leaving the user guessing
         // (PILOT-517). Optional call: lifecycle mocks stand in for Device.
+        const startedOnDemand = d._takeProxyStartedOnDemand?.() ?? false;
         const registered = d._takeRouteRegistrations?.() ?? 0;
+        const handled = d._takeRouteHandlerCalls?.() ?? 0;
         if (registered > 0 && !d._networkProxyRunning) {
           _warnRoutesWithoutProxy(fullName, d._traceDeviceId, recording && traceConfig.network);
+        } else if (registered > 0 && handled === 0) {
+          unfiredRouteDevices.set(d, startedOnDemand);
         }
         if (d._routeManager?.hasTestRoutes) await d._routeManager.removeTestRoutes();
       });
@@ -2842,6 +2950,7 @@ async function runSuiteContext(
                   );
                 }
                 snapshotsFor(d).update(res.entries);
+                notePassthrough(d, res.entries);
               } else {
                 console.warn(`[tapsmith] Network capture stopped with error: ${res.errorMessage}`);
               }
@@ -2849,13 +2958,16 @@ async function runSuiteContext(
               console.warn(`[tapsmith] Failed to stop network capture: ${err instanceof Error ? err.message : err}`);
             }
           }
+        } else {
+          // A proxy started on demand (PILOT-775), now or in an earlier test.
+          await drainUntracedCapture();
         }
 
         for (const d of devices) {
           // Keep the route stream installed while network capture is being
           // reused across tests. Registered routes were removed above, and the
           // file-level hard teardown disposes the stream after stopping capture.
-          if (!traceConfig.network && d._disposeRouteManager && !keepsScopedRoutes(d)) {
+          if (!traceConfig.network && !d._networkProxyRunning && d._disposeRouteManager && !keepsScopedRoutes(d)) {
             await d._disposeRouteManager();
           }
           // Return to the native context but keep the WebView connection cached
@@ -2957,14 +3069,25 @@ async function runSuiteContext(
       } else {
         // No tracing — still need to clean up routes and reset the WebView
         // context (the connection itself stays cached across tests, see the
-        // traced path above / PILOT-288).
+        // traced path above / PILOT-288). A proxy started on demand
+        // (PILOT-775) is drained and keeps its route stream, as above.
+        await drainUntracedCapture();
         for (const d of devices) {
           if (!d._disposeRouteManager) continue;
-          if (!keepsScopedRoutes(d)) await d._disposeRouteManager();
+          if (!keepsScopedRoutes(d) && !d._networkProxyRunning) await d._disposeRouteManager();
           if (d._resetWebViewContext) {
             d._resetWebViewContext();
           }
         }
+      }
+
+      // Routes that were live on a running proxy and still never fired: say
+      // why when the capture shows a likely reason (PILOT-775).
+      for (const [d, startedOnDemand] of unfiredRouteDevices) {
+        _warnUnfiredRoutes(fullName, d._traceDeviceId, {
+          passthroughHosts: [...(passthroughHosts.get(d) ?? [])],
+          proxyStartedMidTest: startedOnDemand,
+        });
       }
 
       // Stop video recording and decide whether to keep the MP4 (PILOT-114).
@@ -3521,6 +3644,9 @@ async function runTestFileOwned(
   assertDeviceGroupMatches(opts, rootCtx.useOptions?.devices);
   const restoreDeviceNames = applyRunDeviceNames(opts, rootCtx.useOptions?.devices);
 
+  // Before the worker fixtures, which may register routes too (PILOT-775).
+  armOnDemandNetworkCapture(opts);
+
   let fileRegistry = new FixtureRegistry();
   for (const r of allEntryRegistries) {
     fileRegistry = fileRegistry.merge(r);
@@ -3587,6 +3713,8 @@ async function runTestFileOwned(
   } finally {
     for (const d of allDevices(fileOpts)) {
       d._client._setAbortSignal(undefined);
+      // Nothing outside a test file starts capture on demand.
+      d._setOnDemandNetworkCapture?.(null);
       // Waiters a beforeAll or afterAll hook left behind end with the file.
       d._cancelPendingWaiters?.();
     }
@@ -3596,9 +3724,10 @@ async function runTestFileOwned(
         await workerTeardown();
       }
     } finally {
-      const traceConfig = resolveTraceConfig(fileOpts.config.trace);
       for (const d of allDevices(fileOpts)) {
-      if (traceConfig.mode !== 'off' && traceConfig.network) {
+      // Whether a trace or an on-demand start (PILOT-775) brought it up.
+      const proxyRunning = d._networkProxyRunning === true;
+      if (proxyRunning) {
         try {
           // Keep the proxy (and its port) alive across files, draining only.
           // A warm reset keeps the app process between files, so its HTTP
@@ -3621,8 +3750,7 @@ async function runTestFileOwned(
       // assertion). Routes are already removed per-test, and Device.close()
       // disposes the manager for real. When network is off, dispose here as
       // before (nothing keeps it alive).
-      if (d._disposeRouteManager
-        && !(traceConfig.mode !== 'off' && traceConfig.network)) {
+      if (d._disposeRouteManager && !proxyRunning) {
         await d._disposeRouteManager();
       }
       // Hard teardown of the cross-test cached WebView connection (kept

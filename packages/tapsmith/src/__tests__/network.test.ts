@@ -477,6 +477,29 @@ describe('NetworkRouteManager route scopes', () => {
     expect(scopeInHandler).toBeUndefined();
   });
 
+  it('counts requests handed to a route handler, and resets when taken (PILOT-775)', async () => {
+    const { manager, stream } = makeManager();
+    await manager.addRoute('**/a', (route) => route.continue());
+    const register = stream.writes.find(
+      (m): m is { registerRoute: { routeId: string } } => typeof m === 'object' && m !== null && 'registerRoute' in m,
+    )!;
+    expect(manager.takeHandlerCalls()).toBe(0);
+    for (const interceptId of ['i1', 'i2']) {
+      stream.emitData({ interceptedRequest: {
+        interceptId, routeId: register.registerRoute.routeId, method: 'GET',
+        url: 'https://example.com/a', headers: [], body: Buffer.alloc(0), isHttps: true,
+      } });
+    }
+    // A request for a route already removed reaches no handler.
+    stream.emitData({ interceptedRequest: {
+      interceptId: 'i3', routeId: 'gone', method: 'GET',
+      url: 'https://example.com/a', headers: [], body: Buffer.alloc(0), isHttps: true,
+    } });
+    await new Promise((r) => setTimeout(r, 1));
+    expect(manager.takeHandlerCalls()).toBe(2);
+    expect(manager.takeHandlerCalls()).toBe(0);
+  });
+
   it('removeAllRoutes (device.unrouteAll) still removes scoped routes', async () => {
     const { manager } = makeManager();
     await runInRouteScope({ label: 'Suite' }, () => manager.addRoute('**/a', () => {}));

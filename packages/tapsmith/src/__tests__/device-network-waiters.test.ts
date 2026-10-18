@@ -10,7 +10,12 @@ import { isTestEndedError, runInAttemptContext } from '../attempt-fence.js';
 
 type Listener<T> = (event: T) => void;
 
-function makeDevice(): {
+function makeDevice(opts: {
+  /** A proxy already up from an earlier test (a trace or on-demand start). */
+  proxyRunning?: boolean
+  /** The daemon's answer to an on-demand start, when the runner armed one. */
+  onDemand?: { success: boolean; errorMessage?: string }
+} = { proxyRunning: true }): {
   device: Device
   emitRequest: (url: string) => void
   emitResponse: (url: string) => void
@@ -23,9 +28,25 @@ function makeDevice(): {
     removeRequestListener: (l: Listener<TapsmithRequest>) => requestListeners.delete(l),
     addResponseListener: (l: Listener<NetworkResponseEventData>) => responseListeners.add(l),
     removeResponseListener: (l: Listener<NetworkResponseEventData>) => responseListeners.delete(l),
+    ensureEventsSubscribed: () => {},
   };
-  const device = new Device({} as TapsmithGrpcClient, { timeout: 30_000 });
+  const client = {
+    startNetworkCapture: vi.fn(async () => ({
+      success: opts.onDemand?.success ?? false,
+      proxyPort: 1,
+      errorMessage: opts.onDemand?.errorMessage ?? '',
+    })),
+  };
+  const device = new Device(client as unknown as TapsmithGrpcClient, { timeout: 30_000 });
   device._routeManager = manager as unknown as NetworkRouteManager;
+  if (opts.proxyRunning) {
+    // As after a start in an earlier test: the proxy is up, this test's
+    // capture is not.
+    (device as unknown as { _networkCaptureEverStarted: boolean })._networkCaptureEverStarted = true;
+  }
+  if (opts.onDemand) {
+    device._setOnDemandNetworkCapture(async () => { await device._startNetworkCapture(); });
+  }
   return {
     device,
     emitRequest: (url) => { for (const l of [...requestListeners]) l({ url } as TapsmithRequest); },
@@ -105,6 +126,55 @@ describe('Device network waiters (PILOT-543)', () => {
     expect(err.message).toBe('waitForResponse timed out after 500ms');
     expect(err.stack!.split('\n')[0]).toBe('Error: waitForResponse timed out after 500ms');
     expect(err.stack).toContain('device-network-waiters.test.ts');
+    expect(listenerCount()).toBe(0);
+  });
+});
+
+// PILOT-775: the runner starts capture on a test's first network wait, and a
+// wait that could never see a request says why instead of only timing out.
+describe('Device network waiters and on-demand capture (PILOT-775)', () => {
+  it('says no capture was running when a wait times out with no proxy', async () => {
+    vi.useFakeTimers();
+    const { device } = makeDevice({ proxyRunning: false });
+    const settled = device.waitForRequest('**/products', { timeout: 500 }).then(() => new Error('resolved'), (e: unknown) => e as Error);
+
+    await vi.advanceTimersByTimeAsync(500);
+    const err = await settled;
+
+    expect(err.message).toMatch(/^waitForRequest timed out after 500ms\. No network capture was running on this device/);
+    expect(err.message).toContain('https://tapsmith.dev/guides/network/#prerequisites');
+  });
+
+  it('starts capture on demand, and says the proxy only started with the wait when it times out', async () => {
+    vi.useFakeTimers();
+    const { device } = makeDevice({ proxyRunning: false, onDemand: { success: true } });
+    const settled = device.waitForResponse('**/products', { timeout: 500 }).then(() => new Error('resolved'), (e: unknown) => e as Error);
+
+    await vi.advanceTimersByTimeAsync(500);
+    const err = await settled;
+
+    expect(device._networkProxyRunning).toBe(true);
+    expect(device._takeProxyStartedOnDemand()).toBe(true);
+    expect(device._takeProxyStartedOnDemand()).toBe(false);
+    expect(err.message).toMatch(/^waitForResponse timed out after 500ms\. The network proxy started with this wait/);
+  });
+
+  it('resolves a wait whose request arrives after an on-demand start', async () => {
+    const { device, emitRequest } = makeDevice({ proxyRunning: false, onDemand: { success: true } });
+    const p = device.waitForRequest('**/login');
+    await new Promise((r) => setTimeout(r, 0));
+    emitRequest('https://example.com/login');
+    await expect(p).resolves.toMatchObject({ url: 'https://example.com/login' });
+  });
+
+  it('rejects at once, with the reason, when the on-demand start fails', async () => {
+    const { device, listenerCount } = makeDevice({
+      proxyRunning: false,
+      onDemand: { success: false, errorMessage: 'Network Extension not approved' },
+    });
+    const err = await device.waitForResponse('**/products').then(() => new Error('resolved'), (e: unknown) => e as Error);
+
+    expect(err.message).toBe('waitForResponse() cannot see any request: Network capture disabled: Network Extension not approved');
     expect(listenerCount()).toBe(0);
   });
 

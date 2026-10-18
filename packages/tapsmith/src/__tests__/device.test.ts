@@ -625,6 +625,90 @@ describe('Device.route()', () => {
     expect(stream.writes).toHaveLength(1);
   });
 
+  // PILOT-775: mocking needs no trace config — the runner arms an on-demand
+  // start and the first route() makes it.
+  describe('on-demand network capture (PILOT-775)', () => {
+    const makeOnDemand = (results: Array<{ success: boolean; errorMessage: string }>) => {
+      const stream = new FakeRouteStream();
+      const startNetworkCapture = vi.fn(async () => ({ requestId: '1', proxyPort: 1, ...(results.shift() ?? { success: true, errorMessage: '' }) }));
+      const client = makeMockClient({
+        startNetworkCapture,
+        networkRouteStream: vi.fn(
+          () => stream as unknown as ReturnType<TapsmithGrpcClient['networkRouteStream']>,
+        ),
+      });
+      const device = new Device(client);
+      const arm = (): void => device._setOnDemandNetworkCapture(async () => { await device._startNetworkCapture(); });
+      return { device, startNetworkCapture, arm };
+    };
+
+    it('starts capture once for concurrent first calls, then not again while it runs', async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([]);
+      arm();
+      await Promise.all([
+        device.route('**/a', async () => undefined),
+        device.route('**/b', async () => undefined),
+      ]);
+      await device.route('**/c', async () => undefined);
+
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+      expect(device._networkProxyRunning).toBe(true);
+      expect(device._takeProxyStartedOnDemand()).toBe(true);
+    });
+
+    it('does not count a start that found the proxy already running as a new one', async () => {
+      const { device, arm } = makeOnDemand([]);
+      arm();
+      await device.route('**/a', async () => undefined);
+      device._takeProxyStartedOnDemand();
+      await device._stopNetworkCapture({ keepRunning: true });
+
+      arm();
+      await device.route('**/b', async () => undefined);
+
+      expect(device._takeProxyStartedOnDemand()).toBe(false);
+    });
+
+    it('fails route() with the reason, tries once per arm, and tries again once re-armed', async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([
+        { success: false, errorMessage: 'Network Extension not approved' },
+        { success: true, errorMessage: '' },
+      ]);
+      arm();
+      await expect(device.route('**/a', async () => undefined))
+        .rejects.toThrow('Network capture disabled: Network Extension not approved');
+      await expect(device.route('**/a', async () => undefined))
+        .rejects.toThrow('Network capture disabled: Network Extension not approved');
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+
+      arm();
+      await expect(device.route('**/a', async () => undefined)).resolves.toBeUndefined();
+      expect(startNetworkCapture).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not retry on demand a trace's own start that failed in the same arm", async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([
+        { success: false, errorMessage: 'proxy unavailable' },
+      ]);
+      arm();
+      await device._startNetworkCapture();
+      await expect(device.route('**/a', async () => undefined))
+        .rejects.toThrow('Network capture disabled: proxy unavailable');
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts nothing when the runner has not armed it, or cleared it', async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([]);
+      await device.route('**/a', async () => undefined);
+      arm();
+      device._setOnDemandNetworkCapture(null);
+      await device.route('**/b', async () => undefined);
+
+      expect(startNetworkCapture).not.toHaveBeenCalled();
+      expect(device._networkProxyRunning).toBe(false);
+    });
+  });
+
   it('counts successful registrations for the runner and resets when taken (PILOT-517)', async () => {
     const stream = new FakeRouteStream();
     const client = makeMockClient({

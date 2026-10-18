@@ -195,6 +195,18 @@ export class Device {
   private _networkCaptureError: string | undefined;
   /** Successful `route()` calls since the runner last took the count. */
   private _routeRegistrations = 0;
+  /**
+   * The runner's starter for network capture on demand (PILOT-775): a
+   * route(), waitForRequest() or waitForResponse() made while capture is not
+   * running calls it, so mocking needs no config. Null outside a test file.
+   */
+  private _onDemandCapture: (() => Promise<void>) | null = null;
+  /** Whether a capture start was tried since the last arm (one try per arm). */
+  private _onDemandTried = false;
+  /** The on-demand start in flight, shared by concurrent callers. */
+  private _onDemandStart: Promise<void> | null = null;
+  /** The proxy came up through an on-demand start since the runner last asked. */
+  private _proxyStartedOnDemand = false;
   /** waitForRequest/waitForResponse calls still waiting (PILOT-543). */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
   /**
@@ -902,6 +914,9 @@ export class Device {
     errorMessage: string
   }> {
     let res: Awaited<ReturnType<TapsmithGrpcClient['startNetworkCapture']>>;
+    // Any start is this arm's try: a trace's failed start is not retried on
+    // demand within the same test (PILOT-775).
+    this._onDemandTried = true;
     try {
       res = await this._client.startNetworkCapture(options);
     } catch (err) {
@@ -930,6 +945,56 @@ export class Device {
       success: res.success,
       errorMessage: res.errorMessage,
     };
+  }
+
+  /**
+   * @internal — Arm (or clear, with null) the runner's starter for network
+   * capture on demand (PILOT-775). Each arm allows one start: a start that
+   * failed is not retried on every later call — its error is what route()
+   * and the network waiters report — but the runner re-arms per test.
+   */
+  _setOnDemandNetworkCapture(start: (() => Promise<void>) | null): void {
+    this._onDemandCapture = start;
+    this._onDemandTried = false;
+  }
+
+  /**
+   * @internal — Whether the proxy came up through an on-demand start since
+   * the last call, then reset (PILOT-775). A route that never fires after
+   * such a start may have missed connections the app opened before it.
+   */
+  _takeProxyStartedOnDemand(): boolean {
+    const started = this._proxyStartedOnDemand;
+    this._proxyStartedOnDemand = false;
+    return started;
+  }
+
+  /** Start capture on demand if the runner allows it and it is not running. */
+  private async _ensureOnDemandNetworkCapture(): Promise<void> {
+    if (!this._onDemandStart) {
+      const start = this._onDemandCapture;
+      if (this._networkCaptureActive || !start || this._onDemandTried) return;
+      this._onDemandTried = true;
+      const wasRunning = this._networkProxyRunning;
+      this._onDemandStart = start()
+        .catch(() => {
+          // The starter reports its own failure; callers read
+          // `_networkCaptureError`.
+        })
+        .then(() => {
+          if (!wasRunning && this._networkProxyRunning) this._proxyStartedOnDemand = true;
+        })
+        .finally(() => { this._onDemandStart = null; });
+    }
+    await this._onDemandStart;
+  }
+
+  /**
+   * @internal — Requests that reached one of this device's route handlers
+   * since the last call, then reset (PILOT-775).
+   */
+  _takeRouteHandlerCalls(): number {
+    return this._routeManager?.takeHandlerCalls() ?? 0;
   }
 
   /**
@@ -1106,10 +1171,14 @@ export class Device {
    * `Route` object that can `abort()`, `continue()`, `fulfill()`, or `fetch()`
    * the request.
    *
-   * Requires the network proxy, which the runner starts for a test whose
-   * trace records network traffic (`trace` records the attempt and `network`
-   * is `true`, the default). Without it route handlers never fire, and the
-   * runner warns at the end of the test (PILOT-517).
+   * Routes run on Tapsmith's network proxy. The test runner starts it for a
+   * test whose trace records network traffic, and otherwise on the first
+   * `route()`, `waitForRequest()` or `waitForResponse()` of a test
+   * (PILOT-775); it then stays up for the rest of the session. Connections
+   * the app opened before the proxy started bypass it, so register routes
+   * before the app sends the requests they mock. Outside the test runner
+   * nothing starts the proxy, route handlers never fire, and the runner
+   * warns at the end of a test whose routes could not fire (PILOT-517).
    */
   async route(
     url: string | RegExp | ((url: URL) => boolean),
@@ -1119,6 +1188,7 @@ export class Device {
     const start = Date.now();
     const stack = extractStack(new Error().stack ?? '');
     const source = stack[0];
+    await this._ensureOnDemandNetworkCapture();
     if (!this._networkCaptureActive && this._networkCaptureError) {
       const error = `Network capture disabled: ${this._networkCaptureError}`;
       this._emitNetworkAction('route', formatPattern(url), start, false, error, source, stack);
@@ -1169,7 +1239,9 @@ export class Device {
   /**
    * Wait for a request matching the pattern.
    *
-   * Requires network tracing to be enabled (same prerequisite as `route()`).
+   * Sees traffic through the network proxy, which the test runner starts on
+   * demand as for `route()`. Start waiting before the action that sends the
+   * request. Rejects at once when network capture failed to start.
    */
   waitForRequest(
     urlOrPredicate: string | RegExp | ((request: TapsmithRequest) => boolean),
@@ -1193,7 +1265,9 @@ export class Device {
   /**
    * Wait for a response matching the pattern.
    *
-   * Requires network tracing to be enabled (same prerequisite as `route()`).
+   * Sees traffic through the network proxy, which the test runner starts on
+   * demand as for `route()`. Start waiting before the action that sends the
+   * request. Rejects at once when network capture failed to start.
    */
   waitForResponse(
     urlOrPredicate: string | RegExp | ((response: NetworkResponseEventData) => boolean),
@@ -1229,6 +1303,7 @@ export class Device {
     // A body that outlived its attempt must not leave a waiter in the next test.
     if (isCurrentAttemptClosed()) return fencedRejection<T>(`${method}()`);
     const manager = this._ensureRouteManager();
+    const proxyWasRunning = this._networkProxyRunning;
     const promise: Promise<T> = new Promise<T>((resolve, reject) => {
       let unsubscribe = (): void => {};
       const finish = (): void => {
@@ -1246,15 +1321,17 @@ export class Device {
           reject(new TestEndedError(`${method}()`));
         },
       };
-      const timer = setTimeout(() => {
+      const fail = (message: string): void => {
         finish();
-        const message = `${method} timed out after ${timeout}ms`;
         const err = new Error(message);
         // Point at the call, not this timer: the stack is what reporters
         // draw a code frame from.
         const frames = callSite.stack?.split('\n').slice(1).join('\n');
         if (frames) err.stack = `Error: ${message}\n${frames}`;
         reject(err);
+      };
+      const timer = setTimeout(() => {
+        fail(`${method} timed out after ${timeout}ms${this._networkWaiterHint(proxyWasRunning)}`);
       }, timeout);
       this._pendingWaiters.add(waiter);
       unsubscribe = subscribe(manager, (event) => {
@@ -1263,8 +1340,34 @@ export class Device {
           resolve(event);
         }
       });
+      // No request can arrive without capture: fail now, not at the timeout.
+      void this._ensureOnDemandNetworkCapture().then(() => {
+        if (this._pendingWaiters.has(waiter) && !this._networkCaptureActive && this._networkCaptureError) {
+          fail(`${method}() cannot see any request: Network capture disabled: ${this._networkCaptureError}`);
+        }
+      });
     });
     return promise;
+  }
+
+  /**
+   * Why a network waiter may have timed out, when that is down to capture
+   * rather than the app (PILOT-775): nothing was capturing, or the proxy only
+   * came up with this wait, after the app may have opened its connections.
+   */
+  private _networkWaiterHint(proxyWasRunning: boolean): string {
+    if (!this._networkProxyRunning) {
+      return '. No network capture was running on this device, so no request could be seen: ' +
+        'waitForRequest() and waitForResponse() see traffic only through Tapsmith\'s network proxy, ' +
+        'which the test runner starts for a test (on its first route() or network wait, or when its ' +
+        'trace records network). See https://tapsmith.dev/guides/network/#prerequisites';
+    }
+    if (!proxyWasRunning) {
+      return '. The network proxy started with this wait, and connections the app opened before ' +
+        'it bypass the proxy: start waiting (or register a route) before the app first talks to ' +
+        'that server, e.g. before launchApp(). See https://tapsmith.dev/guides/network/#prerequisites';
+    }
+    return '';
   }
 
   /**
