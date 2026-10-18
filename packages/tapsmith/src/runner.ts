@@ -2425,6 +2425,19 @@ async function runSuiteContext(
       // tried once more in this one — or not at all when the trace's own
       // start below is that try (PILOT-775).
       armOnDemandNetworkCapture(opts);
+      // Once a device's proxy is up, each later test starts capture at its
+      // beginning, as a trace does: that re-applies the device's routing
+      // (lost to an adb restart or a reboot, say) and re-subscribes events,
+      // where a start mid-test would reset what the proxy learned while the
+      // app is using it.
+      if (!(recording && primary && traceConfig.network)) {
+        for (const d of devices) {
+          if (!d._networkProxyRunning) continue;
+          if (await startNetworkCaptureOn(d, devices.length > 1, traceConfig.networkHttpPorts)) {
+            networkCapturingDevices.add(d);
+          }
+        }
+      }
 
       if (recording && primary) {
         const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-trace-'));

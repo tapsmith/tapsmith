@@ -11,6 +11,7 @@ import * as crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type * as grpc from '@grpc/grpc-js';
 import type { TapsmithGrpcClient } from './grpc-client.js';
+import { runOutsideAttempt } from './attempt-fence.js';
 import { getActiveTraceCollector, extractStack } from './trace/trace-collector.js';
 import type { SourceLocation } from './trace/types.js';
 
@@ -558,7 +559,10 @@ export class NetworkRouteManager {
     // may open it, and callbacks it drives (route handlers) must not inherit
     // that scope, or a route a handler registers mid-test would be kept as
     // the scope's instead of removed after the test (PILOT-534).
-    const stream = routeScopeStorage.exit(() => this._client.networkRouteStream());
+    // Outside any attempt context too: the stream outlives the test whose
+    // route() may open it, and its callbacks run in the context it was
+    // opened in (PILOT-775).
+    const stream = routeScopeStorage.exit(() => runOutsideAttempt(() => this._client.networkRouteStream()));
     this._stream = stream;
 
     // Route handlers run outside any route scope, whatever async context

@@ -11,7 +11,7 @@ Both features share the same underlying MITM proxy infrastructure.
 
 ## Prerequisites
 
-Network interception runs on Tapsmith's MITM proxy, and mocking needs no config: the test runner starts the proxy on demand, on the first `device.route()`, `device.waitForRequest()`, `device.waitForResponse()` or `device.on('request' | 'response')` a test (or one of its hooks or fixtures) makes on a device. It then stays up for the rest of the session — drained after every test and released when the session ends — so later tests reuse it. A test whose trace records network traffic starts it at the beginning of the test instead (see [Network Capture in Traces](#network-capture-in-traces)).
+Network interception runs on Tapsmith's MITM proxy, and mocking needs no config: the test runner starts the proxy on demand, on the first `device.route()`, `device.waitForRequest()`, `device.waitForResponse()` or `device.on('request' | 'response')` a test (or one of its hooks or fixtures) makes on a device. It then stays up for the rest of the session — drained after every test and released when the session ends — and every later test starts capture at its beginning, as a trace does. A test whose trace records network traffic starts it at the beginning of the test instead (see [Network Capture in Traces](#network-capture-in-traces)).
 
 The startup `Config` line says which applies: `network: captured` when the trace records network for every test, `network: on demand` otherwise.
 

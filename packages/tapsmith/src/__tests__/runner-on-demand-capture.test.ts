@@ -170,6 +170,33 @@ describe('runTestFile — on-demand network capture (PILOT-775)', () => {
     expect((device as unknown as { _onDemandCapture: unknown })._onDemandCapture).toBeNull();
   });
 
+  it('starts capture at the beginning of each later test once the proxy is up, not mid-test', async () => {
+    const { device, startNetworkCapture } = makeDevice();
+    const g = globalThis as { __pilot775starts?: number[]; __pilot775count?: () => number };
+    g.__pilot775starts = [];
+    g.__pilot775count = () => startNetworkCapture.mock.calls.length;
+    const filePath = writeFile('s.test.mjs', `
+      test('first mocks', async ({ device }) => {
+        await device.route('**/a', (route) => route.continue());
+      });
+      test('second mocks', async ({ device }) => {
+        globalThis.__pilot775starts.push(globalThis.__pilot775count());
+        await device.route('**/b', (route) => route.continue());
+        globalThis.__pilot775starts.push(globalThis.__pilot775count());
+      });
+    `);
+    try {
+      const results = collectResults(await runTestFile(filePath, makeOpts(device)));
+      expect(results.map((r) => r.status)).toEqual(['passed', 'passed']);
+      // Started on demand in the first test, then before the second's body,
+      // and not again by its route().
+      expect(g.__pilot775starts).toEqual([2, 2]);
+    } finally {
+      delete g.__pilot775starts;
+      delete g.__pilot775count;
+    }
+  });
+
   it('tries a failed start again on the retry attempt', async () => {
     const { device, startNetworkCapture } = makeDevice([{ success: false, errorMessage: 'proxy unavailable' }]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

@@ -5,6 +5,7 @@ import {
   matchUrlPattern, patternsEqual, runInRouteScope, currentRouteScope, type RouteScope,
 } from '../network.js';
 import type { TapsmithGrpcClient } from '../grpc-client.js';
+import { currentAttemptToken, runInAttemptContext } from '../attempt-fence.js';
 
 // ─── matchUrlPattern (glob matching) ───
 
@@ -514,6 +515,21 @@ describe('NetworkRouteManager route scopes', () => {
 
     expect(fromTest).not.toHaveBeenCalled();
     expect(fromHook).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the route stream outside the attempt of the test that first needs it (PILOT-775)', async () => {
+    // The stream outlives that test; its callbacks run in the context it was
+    // opened in, which would read as a closed attempt in every later test.
+    const stream = new AutoAckStream();
+    let tokenAtOpen: unknown = 'not opened';
+    const client = {
+      networkRouteStream: () => { tokenAtOpen = currentAttemptToken(); return stream; },
+    } as unknown as TapsmithGrpcClient;
+    const manager = new NetworkRouteManager(client);
+
+    await runInAttemptContext({ closed: false }, () => manager.addRoute('**/a', () => {}));
+
+    expect(tokenAtOpen).toBeUndefined();
   });
 
   it('removes the listeners a suite scope added once it ends (PILOT-775)', async () => {
