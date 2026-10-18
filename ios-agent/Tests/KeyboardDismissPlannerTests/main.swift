@@ -690,6 +690,15 @@ do {
     checkTrue("failure message says what to do", message.contains("device.pressKey(\"enter\")"), message)
 }
 
+// PILOT-622: the keyboard-first step before a tap must never press the
+// return key — it submits the field, and the tap may be that submit.
+if KeyboardDismissPlanner.keyboardFirstStrategies.contains(.returnKey) {
+    failures += 1
+    print("FAIL keyboard-first strategies include the return key")
+} else {
+    print("ok   keyboard-first strategies leave out the return key")
+}
+
 if failures > 0 {
     print("\(failures) KeyboardDismissPlanner test(s) failed")
     exit(1)

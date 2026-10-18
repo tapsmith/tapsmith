@@ -320,9 +320,11 @@ struct OcclusionAnalyzer {
         case putKeyboardAway
     }
 
-    /// Scroll views a React Native ScrollView or FlatList shows up as. A web
-    /// view is not one of them: its page sees the touch whatever the keyboard.
-    static let keyboardEatingScrollerTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView]
+    /// What a React Native ScrollView or FlatList shows up as. Native tables
+    /// and collection views do not eat a touch to close the keyboard (and
+    /// their rows may be suggestions that only show while it is up), and a
+    /// web view's page sees the touch whatever the keyboard.
+    static let keyboardEatingScrollerTypes: Set<XCUIElement.ElementType> = [.scrollView]
     static let textInputTypes: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .searchField, .textView]
 
     /// Whether a touch on `target` would be spent on closing the keyboard.

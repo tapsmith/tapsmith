@@ -173,11 +173,32 @@ class KeyboardFirstTest {
     }
 
     @Test
-    fun `no time left - touched as before`() {
+    fun `no time left before the daemon gives up - touched as before`() {
         val spent = budget(1_000)
-        clock.nowMs = 1_000
+        clock.nowMs = 6_000
         assertFalse(step.putAwayIfItWouldEatTheTouch(target, spent))
         assertEquals(0, keyboard.dismissals)
+    }
+
+    @Test
+    fun `a tap that may not wait for its element (timeout 0, as MCP sends) still puts the keyboard away`() {
+        assertTrue(step.putAwayIfItWouldEatTheTouch(target, budget(0)))
+        assertEquals(1, keyboard.dismissals)
+    }
+
+    @Test
+    fun `only React Native's scroll views count - native lists, pagers and web views do not`() {
+        assertTrue(KeyboardFirst.isScrollContainer("android.widget.ScrollView"))
+        assertTrue(KeyboardFirst.isScrollContainer("android.widget.HorizontalScrollView"))
+        for (name in listOf(
+            "android.widget.ListView",
+            "androidx.recyclerview.widget.RecyclerView",
+            "android.webkit.WebView",
+            "androidx.viewpager.widget.ViewPager",
+            null,
+        )) {
+            assertFalse(name ?: "null", KeyboardFirst.isScrollContainer(name))
+        }
     }
 
     // ─── A keyboard that will not go ───
@@ -193,10 +214,11 @@ class KeyboardFirstTest {
     }
 
     @Test
-    fun `the wait leaves at least half the remaining budget for the touch`() {
+    fun `the wait leaves at least half the daemon's remaining time for the touch`() {
         keyboard.leavesAfterMs = null
         val start = clock.nowMs
-        step.putAwayIfItWouldEatTheTouch(target, budget(1_000))
-        assertTrue(clock.nowMs - start <= 500 + KeyboardFirst.POLL_MS + KeyboardFirst.SETTLE_MS)
+        // Read deadline 1 s away: wait at most 500 ms.
+        step.putAwayIfItWouldEatTheTouch(target, ActionBudget(clock.now(), 0, clock.now() + 1_000, clock))
+        assertTrue(clock.nowMs - start <= 500 + KeyboardFirst.POLL_MS)
     }
 }

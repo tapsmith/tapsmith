@@ -46,6 +46,11 @@ struct KeyboardDismissPlanner {
         }
     }
 
+    /// Strategies a touch's keyboard-first step may use (PILOT-622): never
+    /// the return key, which submits the field — the touch about to be made
+    /// may be that submit.
+    static let keyboardFirstStrategies: [Strategy] = [.scrollSwipe, .dismissKey, .blankTap]
+
     /// What happened to a strategy: it ran and the keyboard stayed, or it was
     /// not possible on this screen (the reason says why).
     enum Outcome: Equatable {

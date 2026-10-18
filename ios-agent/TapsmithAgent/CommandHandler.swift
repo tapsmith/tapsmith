@@ -1332,6 +1332,8 @@ class CommandHandler {
             // think the field is already empty. The snapshot path's
             // role/type filter avoids this.
             let element = try resolveElement(params)
+            // The field may have focus already (no focusing tap below).
+            keyboardMayBeUp = true
             // Refuse to "clear" non-text elements. The backspace loop below
             // assumes `element.text` reflects the editable value; on a
             // wrapper / button / static text it would compare against the
@@ -2257,15 +2259,11 @@ class CommandHandler {
         keyboardMayBeUp = false
     }
 
-    /// Strategies the keyboard-first step may use: never the return key,
-    /// which submits the field — the touch about to be made may be the
-    /// submit itself.
-    private static let keyboardFirstStrategies: [KeyboardDismissPlanner.Strategy] = [.scrollSwipe, .dismissKey, .blankTap]
-
     /// Least time the daemon must still be waiting for the keyboard-first
-    /// step to be worth trying: its strategies can take a few seconds, and
-    /// the touch after it must still fit.
-    private static let keyboardFirstMinRemaining: TimeInterval = 8
+    /// step to be tried: what putting the keyboard away by a drag and the
+    /// touch after it take. A step that runs longer (no strategy works)
+    /// ends in a refused touch, not a swallowed one.
+    private static let keyboardFirstMinRemaining: TimeInterval = 4
 
     private static let textInputClassNames: Set<String> = Set(
         OcclusionAnalyzer.textInputTypes.map { RoleMapping.typeName(for: $0) }
@@ -2294,10 +2292,13 @@ class CommandHandler {
         }
         NSLog("[TapsmithCommand] \(element.elementId): the keyboard is up and the element is in a scroll view; putting the keyboard away first")
         do {
-            try dismissKeyboard(strategies: Self.keyboardFirstStrategies)
+            try dismissKeyboard(strategies: KeyboardDismissPlanner.keyboardFirstStrategies)
             settleAfterKeyboardDismissed()
         } catch {
             if touchedScreen { snapshotFinder.clearFocusedTextInputHint() }
+            // Not again for every tap on this screen: each try costs seconds.
+            // The next command that focuses a field arms it again.
+            keyboardMayBeUp = false
             NSLog("[TapsmithCommand] could not put the keyboard away first (\(error)); touching anyway")
         }
     }

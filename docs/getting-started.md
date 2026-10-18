@@ -452,8 +452,10 @@ describe("Login flow", () => {
   test("successful login", async ({ device }) => {
     await device.getByRole("textfield", { name: "Email" }).type("user@example.com");
     await device.getByRole("textfield", { name: "Password" }).type("password123");
-    // The keyboard is still up. tap() puts it away first when it would
-    // swallow the tap, as a React Native ScrollView's does by default.
+    // The keyboard is still up. On a React Native ScrollView, which by default
+    // spends the next tap on closing it, tap() puts it away first. On a screen
+    // without one, call device.hideKeyboard() first if the keyboard covers
+    // the button.
     await device.getByRole("button", { name: "Sign In" }).tap();
     await expect(device.getByText("Welcome back")).toBeVisible();
   });

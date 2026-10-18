@@ -46,18 +46,17 @@ class KeyboardFirst(
          *  keyboard closed and lay itself out again. */
         const val SETTLE_MS = 250L
 
-        /** Class names of the views React Native and Android scroll in. */
+        /** Class names React Native's ScrollView (and FlatList, which is one)
+         *  reports. Native lists, pagers and web views are left out: they do
+         *  not eat a touch to close the keyboard, and closing it first would
+         *  take away what only shows while it is up (an autocomplete
+         *  drop-down closes on BACK). */
         private val SCROLL_CLASSES =
             setOf(
                 "android.widget.ScrollView",
                 "android.widget.HorizontalScrollView",
-                "androidx.core.widget.NestedScrollView",
-                "androidx.recyclerview.widget.RecyclerView",
-                "android.widget.ListView",
-                "android.widget.GridView",
             )
 
-        /** Whether a view of [className] scrolls its content. */
         fun isScrollContainer(className: String?): Boolean = className != null && className in SCROLL_CLASSES
     }
 
@@ -76,7 +75,11 @@ class KeyboardFirst(
             screen.windows().firstOrNull {
                 it.kind == OcclusionAnalyzer.WindowKind.INPUT_METHOD && !it.bounds.isEmpty
             } ?: return false
-        if (!budget.hasTimeLeft) return false
+        // The time the touch still has: until the daemon stops waiting for
+        // the answer. The action timeout only bounds waiting for an element,
+        // and is 0 for a tap that must not wait (MCP).
+        val available = budget.readDeadlineMs?.let { it - clock.now() } ?: budget.remainingMs
+        if (available <= 0) return false
         val snapshot = target.read() ?: return false
         if (snapshot.isEditable || snapshot.windowId == keyboardWindow.id) return false
         if (!target.isInScrollView()) return false
@@ -84,7 +87,7 @@ class KeyboardFirst(
 
         log("the keyboard is up and the element is in a scroll view: putting the keyboard away first")
         keyboard.dismiss()
-        val deadline = clock.now() + minOf(MAX_WAIT_MS, budget.remainingMs / 2)
+        val deadline = clock.now() + minOf(MAX_WAIT_MS, available / 2)
         while (keyboardListed()) {
             if (clock.now() >= deadline) {
                 log("the keyboard is still up after Back; touching anyway")
