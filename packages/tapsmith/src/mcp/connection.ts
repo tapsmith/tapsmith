@@ -949,7 +949,7 @@ async function discover(): Promise<void> {
     // The session's one platform, Android included when the config names none:
     // a daemon without `--platform` would pick any free device, including the
     // other platform's that a found daemon was just refused over.
-    conn = await startDaemon(sessionPlatform);
+    conn = await startDaemon(sessionPlatform ?? config?.platform);
     // The connection keeps the config's own platform, unset included: device
     // tools match a project to its device by that value, and a project that
     // names no platform carries none.
@@ -1585,8 +1585,14 @@ async function findConnectionForPlatform(
     // device, is not moved across (PILOT-564): whoever pointed it there is
     // likely still driving it. A multi-platform config keeps such a daemon at
     // discovery for the platform it serves; this one starts its own.
-    // A project that names no platform runs on Android.
-    if (conn.source !== 'started' && crossesPlatform(choice, platform ?? 'android')) continue;
+    // A project that names no platform runs on Android. Nor is another
+    // platform's device taken on it: a project that names none picks from
+    // every device the daemon lists, the one it is driving first.
+    if (conn.source !== 'started') {
+      const effective = platform ?? 'android';
+      if (crossesPlatform(choice, effective)) continue;
+      if (choice.platform && choice.platform !== effective) continue;
+    }
     if (!takesClaimedDaemon(conn, choice.serial)) continue;
     return { conn, serial: choice.serial };
   }
@@ -1619,6 +1625,8 @@ interface DeviceChoice {
   activeSerial?: string
   /** That device's platform, when the daemon reports one. */
   activePlatform?: string
+  /** The platform of `serial`, when the daemon reports one. */
+  platform?: string
 }
 
 /**
@@ -1688,7 +1696,8 @@ export function chooseDevice(
         ?? candidates.find((d) => d.state === 'Discovered')
         ?? candidates[0]
       )?.serial;
-  return serial ? { serial, activeSerial, activePlatform } : undefined;
+  const chosenPlatform = devices.find((d) => d.serial === serial)?.platform || undefined;
+  return serial ? { serial, activeSerial, activePlatform, platform: chosenPlatform } : undefined;
 }
 
 /**
@@ -1862,8 +1871,11 @@ async function discoverFromUiServer(): Promise<UiDiscoveryResult> {
     try {
       return parseUiDaemonPorts(_uiDaemonPorts());
     } catch (err) {
+      // This server answering for itself cannot be "unreachable": treat a
+      // failure as owning nothing, so the endpoint starts its own daemon
+      // rather than falling back to whatever answers on the configured port.
       log(`UI server discovery failed: ${err instanceof Error ? err.message : String(err)}`);
-      return EMPTY_DISCOVERY;
+      return { ...EMPTY_DISCOVERY, reachable: true };
     }
   }
   return queryUiServer();

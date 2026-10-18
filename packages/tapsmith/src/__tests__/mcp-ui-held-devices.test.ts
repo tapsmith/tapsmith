@@ -33,7 +33,7 @@ describe('chooseDevice', () => {
 
   it('keeps excluding the group\'s other members, and still reports the daemon\'s active device', () => {
     const choice = chooseDevice(devices, { platform: 'android', exclude: ['emulator-5554'], heldByUi: new Set(['SIM-1']) });
-    expect(choice).toEqual({ serial: 'emulator-5556', activeSerial: 'emulator-5554', activePlatform: 'android' });
+    expect(choice).toEqual({ serial: 'emulator-5556', activeSerial: 'emulator-5554', activePlatform: 'android', platform: 'android' });
   });
 });
 

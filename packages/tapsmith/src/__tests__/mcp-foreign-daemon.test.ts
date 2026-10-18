@@ -236,6 +236,38 @@ describe('a found daemon serving another platform', () => {
     expect(calls.filter((c) => c.includes(FOREIGN))).toEqual([]);
   });
 
+  it('is not taken, unpinned, by a project of a mixed config that names no platform', async () => {
+    mcpConfig = {
+      ...baseConfig,
+      projects: [{ name: 'android' }, { name: 'ios', use: { platform: 'ios' } }],
+    };
+    listDevices = (address) => Promise.resolve({
+      devices: address === FOREIGN
+        ? [{ serial: 'SIM-9', state: 'Active', platform: 'ios' }]
+        : [{ serial: 'emulator-5554', state: 'Discovered', platform: 'android' }],
+    });
+
+    await ensureConnected();
+    const android = await ensurePlatformTarget(mcpConfig as TapsmithConfig);
+    expect(android).not.toMatchObject({ address: FOREIGN });
+    expect(android.deviceSerial).toBe('emulator-5554');
+    expect(calls.filter((c) => c.includes(FOREIGN))).toEqual([]);
+  });
+
+  it('starts its daemon for the root platform of a config whose projects span two', async () => {
+    mcpConfig = {
+      ...baseConfig,
+      platform: 'ios',
+      projects: [{ name: 'ios' }, { name: 'android', use: { platform: 'android' } }],
+    };
+    readyAt = (address) => address !== FOREIGN && spawnMock.mock.calls.length > 0;
+    listDevices = () => Promise.resolve({ devices: [] });
+
+    await ensureConnected();
+    const args = spawnMock.mock.calls[0]?.[1] as string[];
+    expect(args.join(' ')).toContain('--platform ios');
+  });
+
   it('stays in a multi-platform session for the platform it serves, and the other platform starts its own', async () => {
     mcpConfig = {
       ...baseConfig,
@@ -303,6 +335,16 @@ describe('the UI server\'s MCP endpoint', () => {
 
     await ensureConnected();
     expect(getAllDaemonAddresses()).toBe(FOREIGN);
+  });
+
+  it('adopts nothing found when its own session\'s answer fails', async () => {
+    mcpConfig = { ...baseConfig, platform: 'android' };
+    listDevices = () => Promise.resolve({ devices: [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }] });
+    configureMcpConnection({ uiMode: true, uiDaemonPorts: () => { throw new Error('worker has no port'); } });
+
+    await ensureConnected();
+    expect(getAllDaemonAddresses()).not.toContain('50051');
+    expect(spawnMock).toHaveBeenCalledTimes(1);
   });
 
   it('keeps the config\'s address when it is the UI session\'s primary', async () => {
