@@ -21,7 +21,7 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { McpEventEmitter } from '../mcp/events.js';
 import { McpSessionRouter } from '../mcp/http-session-router.js';
-import { configureMcpConnection } from '../mcp/connection.js';
+import { configureMcpConnection, type UiDaemonPorts } from '../mcp/connection.js';
 import { matchRequestedFiles, fileFailureEntry } from '../mcp/headless-dispatcher.js';
 import { fileLoadFailureTitle, isLoadFailureNode, loadFailureFollowUp, loadFailureTreeNode, runFilterForFile, withoutLoadFailedFiles } from '../load-failure.js';
 import { resolveRunSelection } from './run-selection.js';
@@ -1300,7 +1300,53 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   // one from the cwd. A daemon started for the MCP endpoint of
   // `tapsmith test --ui -c configs/ci.config.ts` would then get its device and
   // agent artifacts from whatever config the working directory happened to hold.
-  configureMcpConnection({ uiMode: true, configFile: ctx.configPath });
+  /**
+   * The daemons and devices this UI session drives, as `/api/daemon-ports`
+   * publishes them. This server's own MCP endpoint reads it directly
+   * (PILOT-564): over HTTP it would go through the per-project port file, which
+   * a second UI session in the same project overwrites — and the endpoint
+   * would then take that session's daemons for its own.
+   */
+  function uiDaemonPorts(): UiDaemonPorts {
+    const daemons = uiWorkers
+      .filter(w => !w.retired)
+      .flatMap(w => [
+        {
+          address: `127.0.0.1:${w.daemonPort}`,
+          deviceSerial: w.deviceSerial,
+          // Resolved, like every other consumer of a worker's platform: the raw
+          // field comes from the bucket config and is unset when that config
+          // declares no platform. An MCP session tags its connection from this,
+          // and an untagged one matches no project — so `tap({project: 'ios'})`
+          // would report no ios device with the worker sitting right there.
+          platform: resolveWorkerPlatform(ctx, w),
+        },
+        // Group members are this session's too — a headless MCP server must
+        // not claim their daemons.
+        ...w.members.map((m) => ({
+          address: `127.0.0.1:${m.daemonPort}`,
+          deviceSerial: m.deviceSerial,
+          platform: resolveWorkerPlatform(ctx, w),
+        })),
+      ]);
+    // Every daemon this session drives, workers *and* the primary one. A
+    // headless MCP server has to be able to tell that the daemon at the
+    // default address belongs to a UI run: it reaches that address through
+    // its own `daemonAddress`, where the `ui` and `peer` guards never apply,
+    // and would claim it, repoint it and start its own agent on it.
+    const owned = [
+      ...daemons.map((d) => d.address),
+      ctx.daemonAddress ?? ctx.config.daemonAddress,
+    ].filter(Boolean);
+    // Every device this session provisioned, not just those with a live
+    // worker: the primary before its worker spawns, and each group member.
+    // A headless MCP server refusing our daemons but then starting its own
+    // agent on these devices took them over just the same.
+    const devices = [...new Set([...workerGroups.flat(), ...daemons.map((d) => d.deviceSerial)].filter(Boolean))];
+    return { daemons, owned, devices };
+  }
+
+  configureMcpConnection({ uiMode: true, configFile: ctx.configPath, uiDaemonPorts });
 
   // PILOT-221: route MCP over per-session transports so dropped clients can
   // reconnect and multiple agents can attach to this one device session. The
@@ -4925,43 +4971,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
     // Daemon discovery for multi-daemon MCP connections
     if (url.pathname === '/api/daemon-ports' && req.method === 'GET') {
-      const daemons = uiWorkers
-        .filter(w => !w.retired)
-        .flatMap(w => [
-          {
-            address: `127.0.0.1:${w.daemonPort}`,
-            deviceSerial: w.deviceSerial,
-            // Resolved, like every other consumer of a worker's platform: the raw
-            // field comes from the bucket config and is unset when that config
-            // declares no platform. An MCP session tags its connection from this,
-            // and an untagged one matches no project — so `tap({project: 'ios'})`
-            // would report no ios device with the worker sitting right there.
-            platform: resolveWorkerPlatform(ctx, w),
-          },
-          // Group members are this session's too — a headless MCP server must
-          // not claim their daemons.
-          ...w.members.map((m) => ({
-            address: `127.0.0.1:${m.daemonPort}`,
-            deviceSerial: m.deviceSerial,
-            platform: resolveWorkerPlatform(ctx, w),
-          })),
-        ]);
-      // Every daemon this session drives, workers *and* the primary one. A
-      // headless MCP server has to be able to tell that the daemon at the
-      // default address belongs to a UI run: it reaches that address through
-      // its own `daemonAddress`, where the `ui` and `peer` guards never apply,
-      // and would claim it, repoint it and start its own agent on it.
-      const owned = [
-        ...daemons.map((d) => d.address),
-        ctx.daemonAddress ?? ctx.config.daemonAddress,
-      ].filter(Boolean);
-      // Every device this session provisioned, not just those with a live
-      // worker: the primary before its worker spawns, and each group member.
-      // A headless MCP server refusing our daemons but then starting its own
-      // agent on these devices took them over just the same.
-      const devices = [...new Set([...workerGroups.flat(), ...daemons.map((d) => d.deviceSerial)].filter(Boolean))];
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ daemons, owned, devices }));
+      res.end(JSON.stringify(uiDaemonPorts()));
       return;
     }
 

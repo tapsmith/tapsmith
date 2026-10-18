@@ -57,7 +57,7 @@ vi.mock('../mcp/config-loader.js', async (importOriginal) => ({
 
 const {
   closeAllClients, configureMcpConnection, ensureConnected, ensurePlatformTarget, getAllDaemonAddresses,
-  otherPlatformReason, crossesPlatform,
+  otherPlatformReason, crossesPlatform, singlePlatformOf,
 } = await import('../mcp/connection.js');
 const { listDeviceClaims } = await import('../device-claims.js');
 const { uiPortFilePath } = await import('../mcp/port-file.js');
@@ -176,8 +176,25 @@ describe('a found daemon serving another platform', () => {
     expect(getAllDaemonAddresses()).toBe(FOREIGN);
   });
 
-  it('stays in a multi-platform session for the platform it serves, and the other platform starts its own', async () => {
+  it('is not adopted by a config that names no platform, which runs on Android', async () => {
     mcpConfig = { ...baseConfig };
+    listDevices = (address) => Promise.resolve({
+      devices: address === FOREIGN
+        ? [{ serial: 'SIM-9', state: 'Active', platform: 'ios' }, { serial: 'emulator-5554', state: 'Discovered', platform: 'android' }]
+        : [{ serial: 'emulator-5554', state: 'Discovered', platform: 'android' }],
+    });
+
+    await ensureConnected();
+    expect(getAllDaemonAddresses()).not.toContain('50051');
+    expect(stderr).toContain(`Ignoring ${FOREIGN} — it is driving SIM-9, an ios device, and this session's config is for android`);
+    expect(calls.filter((c) => c.includes(FOREIGN))).toEqual([]);
+  });
+
+  it('stays in a multi-platform session for the platform it serves, and the other platform starts its own', async () => {
+    mcpConfig = {
+      ...baseConfig,
+      projects: [{ name: 'android', use: { platform: 'android' } }, { name: 'ios', use: { platform: 'ios' } }],
+    };
     listDevices = androidOnForeign;
 
     await ensureConnected();
@@ -226,6 +243,22 @@ describe('the UI server\'s MCP endpoint', () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it('reads its own session\'s daemons in-process, not another UI session\'s from the shared port file', async () => {
+    // A second UI session in this project started on a free port and now
+    // answers through the per-project port file.
+    mcpConfig = { ...baseConfig, platform: 'android' };
+    await serveUi({ daemons: [], owned: [uiPrimary], devices: ['emulator-5556'] });
+    readyAt = (address) => address === FOREIGN || address === uiPrimary;
+    listDevices = (address) => Promise.resolve({
+      devices: [{ serial: address === FOREIGN ? 'emulator-5554' : 'emulator-5556', state: 'Active', platform: 'android' }],
+    });
+    ping = () => Promise.resolve({ version: 'test', agentConnected: true });
+    configureMcpConnection({ uiMode: true, uiDaemonPorts: () => ({ daemons: [], owned: [FOREIGN], devices: ['emulator-5554'] }) });
+
+    await ensureConnected();
+    expect(getAllDaemonAddresses()).toBe(FOREIGN);
+  });
+
   it('keeps the config\'s address when it is the UI session\'s primary', async () => {
     mcpConfig = { ...baseConfig, platform: 'android' };
     await serveUi({ daemons: [], owned: ['127.0.0.1:50051'], devices: [] });
@@ -251,6 +284,16 @@ describe('otherPlatformReason', () => {
     ] as DeviceInfoProto[], 'ios')).toBeNull();
     // An old daemon that reports no platform is not refused on a guess.
     expect(otherPlatformReason([{ serial: 'e', state: 'Active', platform: '' } as DeviceInfoProto], 'ios')).toBeNull();
+  });
+});
+
+describe('singlePlatformOf', () => {
+  it('is the one platform every project runs on, Android when none is named', () => {
+    expect(singlePlatformOf({})).toBe('android');
+    expect(singlePlatformOf({ platform: 'ios' })).toBe('ios');
+    expect(singlePlatformOf({ platform: 'ios', projects: [{ name: 'a' }] })).toBe('ios');
+    expect(singlePlatformOf({ projects: [{ name: 'a', use: { platform: 'ios' } }] })).toBe('ios');
+    expect(singlePlatformOf({ projects: [{ name: 'a' }, { name: 'b', use: { platform: 'ios' } }] })).toBeUndefined();
   });
 });
 

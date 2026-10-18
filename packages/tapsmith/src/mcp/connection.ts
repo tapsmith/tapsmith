@@ -114,6 +114,8 @@ let _uiOwned: Set<string> = new Set();
  * A group config claimed one per member.
  */
 let _uiHeld: Set<string> = new Set();
+/** The UI server's in-process ownership answer; see `configureMcpConnection`. */
+let _uiDaemonPorts: (() => UiDaemonPorts) | undefined;
 
 /**
  * Configure the connection pool for the server that is about to use it.
@@ -124,9 +126,20 @@ let _uiHeld: Set<string> = new Set();
  * UI server asks the UI server what it is running. Both call sites state their
  * whole configuration; there is no merging of successive calls.
  */
-export function configureMcpConnection(options?: { configFile?: string; uiMode?: boolean }): void {
+export function configureMcpConnection(options?: {
+  configFile?: string
+  uiMode?: boolean
+  /**
+   * The UI server's own answer to "which daemons and devices are this
+   * session's", read in-process by its MCP endpoint (PILOT-564). Without it a
+   * UI-mode endpoint asks over HTTP via the per-project port file, which a
+   * second UI session in the project overwrites.
+   */
+  uiDaemonPorts?: () => UiDaemonPorts
+}): void {
   _configFile = options?.configFile;
   _uiMode = options?.uiMode ?? false;
+  _uiDaemonPorts = options?.uiDaemonPorts;
 }
 
 export function getSessionDeviceSerials(): Set<string> | null {
@@ -698,6 +711,19 @@ export function otherPlatformReason(devices: DeviceInfoProto[] | undefined, plat
   return null;
 }
 
+/**
+ * The one platform every project of `config` runs on, or undefined when they
+ * span two. A config that names none runs on Android, as everywhere else.
+ *
+ * @internal — exported for unit testing.
+ */
+export function singlePlatformOf(config: Pick<TapsmithConfig, 'platform' | 'projects'>): string | undefined {
+  const root = config.platform ?? 'android';
+  const platforms = new Set((config.projects ?? []).map((p) => p.use?.platform ?? root));
+  if (platforms.size === 0) platforms.add(root);
+  return platforms.size === 1 ? [...platforms][0] : undefined;
+}
+
 async function discover(): Promise<void> {
   const generation = _sessionGeneration;
   _discoveryFailures = [];
@@ -705,6 +731,7 @@ async function discover(): Promise<void> {
   // tools report the load error.
   const config = await loadMcpConfig(_configFile).then((result) => result.config).catch(() => null);
   _discoveredConfig = config;
+  const sessionPlatform = config ? singlePlatformOf(config) : undefined;
 
   // Collect candidate addresses from all sources, remembering where each came
   // from — provenance decides whether we may repoint that daemon later.
@@ -823,7 +850,7 @@ async function discover(): Promise<void> {
     return results.filter((r): r is LiveDaemon => r !== null);
   };
 
-  let live = await withoutOtherSessionsDaemons(await probeAll([...candidates]), config?.platform);
+  let live = await withoutOtherSessionsDaemons(await probeAll([...candidates]), sessionPlatform);
 
   // 6. Default address — a last resort, and one judged on what answered rather
   // than on how many addresses we had. Skipping it whenever the candidate list
@@ -838,7 +865,7 @@ async function discover(): Promise<void> {
   // to repoint and install this config's agent artifacts on.
   if (live.length === 0 && !pinned && !uiOwnsCandidates && !candidates.has(DEFAULT_ADDRESS)
       && !_uiOwned.has(normalizeDaemonAddress(DEFAULT_ADDRESS))) {
-    live = await withoutOtherSessionsDaemons(await probeAll([[DEFAULT_ADDRESS, 'configured']]), config?.platform);
+    live = await withoutOtherSessionsDaemons(await probeAll([[DEFAULT_ADDRESS, 'configured']]), sessionPlatform);
   }
   // Probing is the liveness check, so this is the moment we know which
   // registered daemons are gone. Drop them rather than re-probing dead ports
@@ -1740,7 +1767,7 @@ async function prepareTarget(
   _deviceIndex.set(serial, conn);
 }
 
-interface UiDaemonRecord {
+export interface UiDaemonRecord {
   address: string
   deviceSerial?: string
   platform?: string
@@ -1817,7 +1844,35 @@ async function discoverFromUiServer(): Promise<UiDiscoveryResult> {
   // UI run refused as ambiguous over devices belonging to someone else's run,
   // and a UI worker retiring changed what the headless session thought it had.
   if (!_uiMode) return EMPTY_DISCOVERY;
+  if (_uiDaemonPorts) {
+    try {
+      return parseUiDaemonPorts(_uiDaemonPorts());
+    } catch (err) {
+      log(`UI server discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      return EMPTY_DISCOVERY;
+    }
+  }
   return queryUiServer();
+}
+
+/** What a UI server publishes at `/api/daemon-ports`. */
+export interface UiDaemonPorts {
+  daemons?: UiDaemonRecord[]
+  owned?: string[]
+  devices?: string[]
+}
+
+function parseUiDaemonPorts(data: UiDaemonPorts): UiDiscoveryResult {
+  if (!Array.isArray(data.daemons)) return EMPTY_DISCOVERY;
+  const daemons = data.daemons.filter((d) => Boolean(d.address));
+  const workerSerials = daemons.map(d => d.deviceSerial).filter(Boolean) as string[];
+  return {
+    reachable: true,
+    daemons,
+    deviceSerials: new Set(workerSerials),
+    owned: Array.isArray(data.owned) ? data.owned.filter((a) => typeof a === 'string') : daemons.map((d) => d.address),
+    heldDevices: Array.isArray(data.devices) ? data.devices.filter((s) => typeof s === 'string') : workerSerials,
+  };
 }
 
 function queryUiServer(): Promise<UiDiscoveryResult> {
@@ -1841,17 +1896,7 @@ async function queryUiServerAt(portFile: string): Promise<UiDiscoveryResult> {
     // device does the ios project run on?" — the one question routing a device
     // tool by project needs. Headless knows it from `conn.platform`; this is
     // the same fact from the other transport.
-    const data = JSON.parse(json) as { daemons?: UiDaemonRecord[]; owned?: string[]; devices?: string[] };
-    if (!Array.isArray(data.daemons)) return EMPTY_DISCOVERY;
-    const daemons = data.daemons.filter((d) => Boolean(d.address));
-    const workerSerials = daemons.map(d => d.deviceSerial).filter(Boolean) as string[];
-    return {
-      reachable: true,
-      daemons,
-      deviceSerials: new Set(workerSerials),
-      owned: Array.isArray(data.owned) ? data.owned.filter((a) => typeof a === 'string') : daemons.map((d) => d.address),
-      heldDevices: Array.isArray(data.devices) ? data.devices.filter((s) => typeof s === 'string') : workerSerials,
-    };
+    return parseUiDaemonPorts(JSON.parse(json) as UiDaemonPorts);
   } catch (err) {
     log(`UI server discovery failed: ${err instanceof Error ? err.message : String(err)}`);
     return EMPTY_DISCOVERY;
