@@ -308,6 +308,43 @@ struct OcclusionAnalyzer {
         return CGRect(x: keyboard.minX, y: top, width: keyboard.width, height: keyboard.maxY - top)
     }
 
+    // MARK: - Keyboard first (PILOT-622)
+
+    /// What a touch on an element should do about the software keyboard.
+    enum KeyboardFirst: Equatable {
+        /// No keyboard on screen.
+        case noKeyboard
+        /// Touch the element with the keyboard up.
+        case touchAsIs
+        /// Put the keyboard away first: the touch would only close it.
+        case putKeyboardAway
+    }
+
+    /// Scroll views a React Native ScrollView or FlatList shows up as. A web
+    /// view is not one of them: its page sees the touch whatever the keyboard.
+    static let keyboardEatingScrollerTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView]
+    static let textInputTypes: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .searchField, .textView]
+
+    /// Whether a touch on `target` would be spent on closing the keyboard.
+    /// A React Native ScrollView with the default
+    /// `keyboardShouldPersistTaps="never"` closes the keyboard on the first
+    /// touch after typing and gives the touch to nothing else — so when the
+    /// keyboard is up and the target sits in a scroll view, the keyboard goes
+    /// first. A text input is touched as is (focus moves, keyboard and all),
+    /// and so is a key of the keyboard and anything not found in the tree.
+    func keyboardFirst(_ target: Target) -> KeyboardFirst {
+        let windows = keyboardWindows()
+        guard let region = keyboardRegion(keyboardWindows: windows),
+              !region.intersection(screen).isEmpty else { return .noKeyboard }
+        if let type = target.elementType, Self.textInputTypes.contains(type) { return .touchAsIs }
+        guard let t = locate(target) else { return .touchAsIs }
+        if Self.textInputTypes.contains(nodes[t].elementType) || isInKeyboard(t, keyboardWindows: windows) {
+            return .touchAsIs
+        }
+        let inScrollView = ancestors(of: t).contains { Self.keyboardEatingScrollerTypes.contains(nodes[$0].elementType) }
+        return inScrollView ? .putKeyboardAway : .touchAsIs
+    }
+
     // MARK: - Helpers
 
     static let barTypes: Set<XCUIElement.ElementType> = [.navigationBar, .tabBar, .toolbar]

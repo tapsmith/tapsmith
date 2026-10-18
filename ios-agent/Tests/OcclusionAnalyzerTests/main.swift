@@ -366,6 +366,61 @@ check("an alert over an unhittable target covers it",
       alertOver.isEmpty ? .offScreen : analyzer(alertOver).analyze(button("Covered action", covered), isHittable: false),
       .covered(by: "element \"Delete?\""))
 
+// ─── Keyboard first (PILOT-622) ───
+
+func checkKF(_ name: String, _ got: OcclusionAnalyzer.KeyboardFirst, _ want: OcclusionAnalyzer.KeyboardFirst) {
+    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got), want \(want)") }
+}
+
+/// The test app's login screen: a form inside a React Native ScrollView.
+func loginRows(scroll: Bool = true) -> [Row] {
+    let container: XCUIElement.ElementType = scroll ? .scrollView : .other
+    return [
+        (0, .application, "Tapsmith Test App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, container, "", "", R(0, 116, 402, 413)),
+        (4, .staticText, "Sign In", "", R(24, 140, 200, 34)),
+        (4, .textField, "Email", "email-input", R(24, 210, 354, 44)),
+        (4, .secureTextField, "Password", "password-input", R(24, 290, 354, 44)),
+        (4, .button, "Sign in", "", R(24, 360, 354, 48)),
+        (5, .staticText, "Sign in", "", R(170, 372, 62, 22)),
+        (3, .other, "", "", screen),
+    ]
+}
+let signIn = button("Sign in", R(24, 360, 354, 48))
+checkKF("keyboard up, a button in a scroll view: put the keyboard away first",
+        analyzer(loginRows() + keyboardWindows).keyboardFirst(signIn), .putKeyboardAway)
+checkKF("no keyboard: nothing to do",
+        analyzer(loginRows()).keyboardFirst(signIn), .noKeyboard)
+checkKF("a zero-sized keyboard element is no keyboard",
+        analyzer(loginRows() + [(1, .window, "", "", screen), (2, .keyboard, "", "", R(0, 874, 402, 0))]).keyboardFirst(signIn),
+        .noKeyboard)
+checkKF("another text field takes the focus with the keyboard up: touched as is",
+        analyzer(loginRows() + keyboardWindows).keyboardFirst(
+            .init(frame: R(24, 290, 354, 44), elementType: .secureTextField, label: "Password", identifier: "password-input")),
+        .touchAsIs)
+checkKF("a field found only by its frame is still a field",
+        analyzer(loginRows() + keyboardWindows).keyboardFirst(
+            .init(frame: R(24, 210, 354, 44), elementType: nil, label: nil, identifier: nil)),
+        .touchAsIs)
+checkKF("a button outside any scroll view: touched as is",
+        analyzer(loginRows(scroll: false) + keyboardWindows).keyboardFirst(signIn), .touchAsIs)
+checkKF("a key of the keyboard: touched as is",
+        analyzer(loginRows() + keyboardWindows).keyboardFirst(
+            .init(frame: R(182, 636, 39, 56), elementType: .key, label: "g", identifier: "")),
+        .touchAsIs)
+checkKF("a target not in the tree: touched as is",
+        analyzer(loginRows() + keyboardWindows).keyboardFirst(button("Gone", R(24, 700, 354, 48))), .touchAsIs)
+let inWebView: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .webView, "", "", R(0, 116, 402, 413)),
+    (3, .button, "Go", "", R(24, 360, 354, 48)),
+]
+checkKF("a web view is not a React Native scroll view: touched as is",
+        analyzer(inWebView + keyboardWindows).keyboardFirst(button("Go", R(24, 360, 354, 48))), .touchAsIs)
+
 // ─── Geometry ───
 
 check("off screen", analyzer(screenRows()).analyze(button("Gone", R(16, 900, 370, 56)), isHittable: false),
