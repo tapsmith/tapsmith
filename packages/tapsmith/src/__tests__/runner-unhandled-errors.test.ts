@@ -333,6 +333,9 @@ describe('runTestFile — network waiters end with their test (PILOT-543)', () =
     const client = {
       waitForIdle: async () => ({ success: true }),
       _setAbortSignal: () => {},
+      // The runner starts capture on a test's first network wait (PILOT-775).
+      startNetworkCapture: async () => ({ success: true, proxyPort: 1, errorMessage: '' }),
+      stopNetworkCapture: async () => ({ success: true, entries: [], errorMessage: '' }),
     } as unknown as TapsmithGrpcClient;
     const device = new Device(client, { timeout: 30_000 });
     device._routeManager = {
@@ -341,6 +344,8 @@ describe('runTestFile — network waiters end with their test (PILOT-543)', () =
       addResponseListener: () => {},
       removeResponseListener: () => {},
       hasRoutes: false,
+      ensureEventsSubscribed: () => {},
+      takeHandlerCalls: () => 0,
       dispose: async () => {},
     } as unknown as NetworkRouteManager;
     return device;
@@ -385,7 +390,8 @@ describe('runTestFile — network waiters end with their test (PILOT-543)', () =
     })));
 
     expect(result.status).toBe('failed');
-    expect(result.error!.message).toBe('waitForResponse timed out after 20ms');
+    // The proxy only came up with the wait itself (PILOT-775), so it says so.
+    expect(result.error!.message).toMatch(/^waitForResponse timed out after 20ms\. The network proxy started with this wait/);
     // The stack points at the call in the test, for the reporter's code frame.
     expect(result.error!.stack).toContain('x.test.mjs');
   });
