@@ -336,8 +336,12 @@ struct OcclusionAnalyzer {
     /// and so is a key of the keyboard and anything not found in the tree.
     func keyboardFirst(_ target: Target) -> KeyboardFirst {
         let windows = keyboardWindows()
-        guard let region = keyboardRegion(keyboardWindows: windows),
-              !region.intersection(screen).isEmpty else { return .noKeyboard }
+        // Any keyboard element with an on-screen part: a stale one left off
+        // screen by a keyboard-type switch can come before the real one.
+        let keyboardOnScreen = nodes.contains {
+            $0.elementType == .keyboard && !$0.frame.intersection(screen).isEmpty
+        }
+        guard keyboardOnScreen else { return .noKeyboard }
         if let type = target.elementType, Self.textInputTypes.contains(type) { return .touchAsIs }
         guard let t = locate(target) else { return .touchAsIs }
         if Self.textInputTypes.contains(nodes[t].elementType) || isInKeyboard(t, keyboardWindows: windows) {

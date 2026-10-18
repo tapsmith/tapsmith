@@ -391,6 +391,15 @@ func loginRows(scroll: Bool = true) -> [Row] {
 let signIn = button("Sign in", R(24, 360, 354, 48))
 checkKF("keyboard up, a button in a scroll view: put the keyboard away first",
         analyzer(loginRows() + keyboardWindows).keyboardFirst(signIn), .putKeyboardAway)
+let staleThenReal: [Row] = [
+    (1, .window, "", "", screen),
+    (2, .keyboard, "", "", R(0, 900, 402, 243)),
+] + keyboardWindows
+checkKF("a stale off-screen keyboard before the real one (keyboard-type switch): still a keyboard",
+        analyzer(loginRows() + staleThenReal).keyboardFirst(signIn), .putKeyboardAway)
+checkKF("only an off-screen keyboard element: no keyboard",
+        analyzer(loginRows() + [(1, .window, "", "", screen), (2, .keyboard, "", "", R(0, 900, 402, 243))]).keyboardFirst(signIn),
+        .noKeyboard)
 checkKF("no keyboard: nothing to do",
         analyzer(loginRows()).keyboardFirst(signIn), .noKeyboard)
 checkKF("a zero-sized keyboard element is no keyboard",
