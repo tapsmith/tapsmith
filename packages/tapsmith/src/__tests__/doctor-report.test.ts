@@ -405,12 +405,27 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
       expect(code).toBe(1);
     });
 
-    it('fails when one project of a mixed config names a simulator', async () => {
+    const MIXED = "export default { projects: [{ name: 'a' }, { name: 'i', use: { platform: 'ios', simulator: 'iPhone 17' } }] }\n";
+
+    it('only warns in a mixed config whose Android projects can run here, as for a missing Xcode', async () => {
       withAdb();
       withSimulators({});
-      writeConfig("export default { projects: [{ name: 'a' }, { name: 'i', use: { platform: 'ios', simulator: 'iPhone 17' } }] }\n");
-      const { json } = await doctorJson();
-      expect(check(json, 'simctl')).toMatchObject({ status: 'fail' });
+      writeConfig(MIXED);
+      const { code, json } = await doctorJson();
+      expect(check(json, 'simctl')).toMatchObject({
+        status: 'warn',
+        label: expect.stringContaining('No iOS simulators available'),
+        fix: expect.stringMatching(/xcodebuild -downloadPlatform iOS.*--project/),
+      });
+      expect(code).toBe(0);
+    });
+
+    it('fails in a mixed config when the Android projects cannot run here either', async () => {
+      withSimulators({});
+      writeConfig(MIXED);
+      const { code, json } = await doctorJson();
+      expect(check(json, 'simctl')).toMatchObject({ status: 'fail', label: 'No iOS simulators available' });
+      expect(code).toBe(1);
     });
 
     it('only warns for an iOS config that names no simulator, which may run on a physical device', async () => {

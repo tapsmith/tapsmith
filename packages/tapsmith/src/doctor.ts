@@ -548,11 +548,13 @@ const NO_SIMULATOR_FIX = 'Install the iOS simulator runtime: Xcode → Settings 
 
 /**
  * `required`: the config targets iOS, so a failing simctl is an error.
- * `needsSimulator`: an iOS scope names a `simulator`, so having none is an
- * error too; otherwise it is a warning, as an iOS config without one may run
- * on a physical device (docs/ios-physical-devices.md).
+ * `named`: whether an iOS scope names a `simulator` to run on, and if so
+ * whether this machine must run it (`planPlatform`'s `required`). Having no
+ * simulator is an error only then: an iOS config without one may run on a
+ * physical device (docs/ios-physical-devices.md), and a mixed config whose
+ * Android projects run here is let off as for a missing Xcode.
  */
-function checkSimctl(report: Reporter, required: boolean, needsSimulator: boolean): void {
+function checkSimctl(report: Reporter, required: boolean, named: 'required' | 'optional' | 'none'): void {
   const output = run(report, 'xcrun', ['simctl', 'list', 'devices', 'available', '-j']);
   if (output !== undefined) {
     const count = countIosSimulators(output);
@@ -560,8 +562,10 @@ function checkSimctl(report: Reporter, required: boolean, needsSimulator: boolea
       warn(report, 'simctl', 'Could not read the iOS simulator list', 'Run: xcrun simctl list devices available to see it');
     } else if (count > 0) {
       pass(report, 'simctl', 'iOS simulators available', `${count} iOS simulator${count === 1 ? '' : 's'}`);
-    } else if (needsSimulator) {
+    } else if (named === 'required') {
       fail(report, 'simctl', 'No iOS simulators available', NO_SIMULATOR_FIX);
+    } else if (named === 'optional') {
+      warn(report, 'simctl', 'No iOS simulators available — the config\'s iOS simulator projects cannot run on this machine', `${NO_SIMULATOR_FIX}. Meanwhile, select the other projects with --project`);
     } else {
       warn(report, 'simctl', 'No iOS simulators available', NO_SIMULATOR_FIX);
     }
@@ -1152,7 +1156,8 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
     iosChecked = true;
     if (checkXcode(report, iosPlan.required, !!targets)) {
       // With Xcode here, the config's iOS projects run on this machine.
-      checkSimctl(report, !!targets, !!targets && !!config && configNamesSimulator(config));
+      const named = !targets || !config || !configNamesSimulator(config) ? 'none' : iosPlan.required ? 'required' : 'optional';
+      checkSimctl(report, !!targets, named);
       await checkSimulatorXctestrun(report);
     } else {
       // A config that targets iOS still gets its capture guidance (mitmproxy,
