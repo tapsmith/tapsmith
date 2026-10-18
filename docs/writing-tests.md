@@ -65,7 +65,6 @@ export class LoginScreen {
   async login(email: string, password: string) {
     await this.emailField.clearAndType(email)
     await this.passwordField.clearAndType(password)
-    await this.device.hideKeyboard()
     await this.signInButton.tap()
   }
 }
