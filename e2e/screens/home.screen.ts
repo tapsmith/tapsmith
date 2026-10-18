@@ -5,6 +5,12 @@ export class HomeScreen {
 
   get header() { return this.device.getByText("Test Screens", { exact: true }) }
 
+  /**
+   * The screen-sized carrier `@tapsmith/react-native` renders on every screen;
+   * its text is the hooks marker (`tapsmith-hooks:1;epoch=…;nav=…`).
+   */
+  get hooksMarker() { return this.device.getByTestId("tapsmith-hooks") }
+
   // Navigation cards
   get loginCard() { return this.device.getByText("Login Form", { exact: true }) }
   get listCard() { return this.device.getByText("List", { exact: true }) }
