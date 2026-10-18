@@ -270,7 +270,15 @@ describe('findSimulatorXctestrun() SDK-aware resolution', () => {
 
   it('keeps an arm64 or universal cache on an arm64 host, and an x86_64 one on an Intel Mac', async () => {
     execFileSyncMock.mockReturnValue('26.0\n');
-    vi.mocked(fs.readFileSync).mockReturnValue('26.0');
+    // A cache this version built (PILOT-485) for the installed SDK.
+    vi.mocked(fs.readFileSync).mockImplementation(((file: string) => {
+      const f = String(file);
+      if (f.endsWith('.sdk-version')) return '26.0';
+      if (f.endsWith('.tapsmith-version')) return '9.9.9';
+      if (f.endsWith('package.json')) return JSON.stringify({ version: '9.9.9' });
+      throw new Error('ENOENT');
+    }// eslint-disable-next-line @typescript-eslint/no-explicit-any -- readFileSync overloads
+    ) as any);
     mockResolve.mockImplementation(() => { throw new Error('MODULE_NOT_FOUND'); });
     const cacheDir = path.join('/Users/test', '.tapsmith', 'ios-simulator-agent');
     statSync.mockReturnValue({ mtimeMs: Date.now() } as fs.Stats);

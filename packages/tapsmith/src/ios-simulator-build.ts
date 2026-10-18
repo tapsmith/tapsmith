@@ -4,7 +4,8 @@
  * When the prebuilt xctestrun's SDK version doesn't match the user's
  * installed Xcode SDK, we rebuild the agent from source and cache the
  * result in `~/.tapsmith/ios-simulator-agent/`. Subsequent runs skip
- * the build as long as the cached SDK version still matches.
+ * the build as long as the cached SDK version still matches and this
+ * Tapsmith version built it (PILOT-485: an upgrade brings new agent source).
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';
@@ -15,11 +16,21 @@ import { StringDecoder } from 'node:string_decoder';
 
 import { appleArch } from './host-arch.js';
 import { resolveIosAgentDir, stripDstRootPath } from './build-ios-agent.js';
-import { extractSdkVersion, findSimulatorXctestrun, getInstalledSimulatorSdkVersion } from './ios-device-resolve.js';
+import { tapsmithPackageVersion } from './ios-agent-paths.js';
+import {
+  SIMULATOR_CACHE_SDK_MARKER,
+  SIMULATOR_CACHE_VERSION_MARKER,
+  describeStaleSimulatorAgentCache,
+  extractSdkVersion,
+  findSimulatorXctestrun,
+  getInstalledSimulatorSdkVersion,
+  inspectSimulatorAgentCache,
+  simulatorAgentCacheDir,
+} from './ios-device-resolve.js';
 
 // ─── Build ──────────────────────────────────────────────────────────────
 
-const CACHE_DIR = path.join(os.homedir(), '.tapsmith', 'ios-simulator-agent');
+const CACHE_DIR = simulatorAgentCacheDir();
 
 // ─── xcodebuild runner ──────────────────────────────────────────────────
 
@@ -234,8 +245,12 @@ export async function buildSimulatorAgent(
 
   fs.mkdirSync(CACHE_DIR, { recursive: true });
   pruneStaleBuildLogs();
-  const sdkMarker = path.join(CACHE_DIR, '.sdk-version');
-  if (fs.existsSync(sdkMarker)) fs.rmSync(sdkMarker, { force: true });
+  // Both markers go before the build starts and come back only once it is
+  // complete, so an interrupted build is never taken for a current one.
+  const sdkMarker = path.join(CACHE_DIR, SIMULATOR_CACHE_SDK_MARKER);
+  const versionMarker = path.join(CACHE_DIR, SIMULATOR_CACHE_VERSION_MARKER);
+  fs.rmSync(sdkMarker, { force: true });
+  fs.rmSync(versionMarker, { force: true });
   const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-build-'));
 
   try {
@@ -298,7 +313,10 @@ export async function buildSimulatorAgent(
     // which fails on public devices/simulators.
     stripDstRootPath(xctestrunDest);
 
-    // Write the SDK version marker so future runs can skip the build.
+    // Record what this build is, so future runs can skip it. The SDK marker
+    // is written last: findSimulatorXctestrun treats a cache without it as
+    // an unfinished build.
+    fs.writeFileSync(versionMarker, tapsmithPackageVersion());
     fs.writeFileSync(sdkMarker, sdkVersion);
     try { fs.rmSync(logPath, { force: true }); } catch { /* best effort */ }
 
@@ -329,11 +347,19 @@ export async function ensureSimulatorAgent(
   const buildOptions = { timeoutMs: options.timeoutMs };
   const found = findSimulatorXctestrun();
   const installedSdk = getInstalledSimulatorSdkVersion();
+  // A cache another Tapsmith version built is never used (PILOT-485); when
+  // nothing else is current either, say that is why this run rebuilds.
+  const staleCache = inspectSimulatorAgentCache(installedSdk);
+  const rebuildReason = staleCache?.stale === 'version'
+    ? `${capitalize(describeStaleSimulatorAgentCache(staleCache))}. `
+    : '';
 
   if (!found) {
     if (installedSdk) {
       try {
-        progress(`No prebuilt iOS agent found. Building from source for SDK ${installedSdk}...`);
+        progress(rebuildReason
+          ? `${rebuildReason}Rebuilding it for SDK ${installedSdk}... (cached for future runs)`
+          : `No prebuilt iOS agent found. Building from source for SDK ${installedSdk}...`);
         return await buildSimulatorAgent(installedSdk, buildOptions);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
@@ -363,11 +389,15 @@ export async function ensureSimulatorAgent(
   }
 
   // SDK mismatch — rebuild.
-  progress(`Building iOS agent for SDK ${installedSdk}... (cached for future runs)`);
+  progress(`${rebuildReason}Building iOS agent for SDK ${installedSdk}... (cached for future runs)`);
   try {
     return await buildSimulatorAgent(installedSdk, buildOptions);
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to rebuild the iOS simulator agent for SDK ${installedSdk}: ${detail}`);
   }
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

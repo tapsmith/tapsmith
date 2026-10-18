@@ -91,6 +91,30 @@ describe('iosXctestrunForAgentStart', () => {
     expect(ensureSimulatorAgent).not.toHaveBeenCalled();
   });
 
+  // PILOT-485: findSimulatorXctestrun skips a cache another Tapsmith version
+  // built; the log says why no agent starts (the daemon only says "not configured").
+  it('a simulator whose only build is a stale cache says so on stderr, not stdout', async () => {
+    const { getInstalledSimulatorSdkVersion } = await import('../ios-device-resolve.js');
+    const cache = path.join(tmp, 'home', '.tapsmith', 'ios-simulator-agent');
+    const sdk = getInstalledSimulatorSdkVersion() ?? '27.0';
+    fs.mkdirSync(path.join(cache, 'Debug-iphonesimulator', 'R.app', 'PlugIns', 'T.xctest'), { recursive: true });
+    fs.writeFileSync(path.join(cache, `T_iphonesimulator${sdk}.xctestrun`), '<plist/>');
+    fs.writeFileSync(path.join(cache, '.sdk-version'), sdk);
+    fs.writeFileSync(path.join(cache, '.tapsmith-version'), '0.0.1-older');
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, 'write');
+    try {
+      await expect(iosXctestrunForAgentStart(config(), 'SIM-1')).resolves.toBeUndefined();
+      expect(stderr).toHaveBeenCalledWith(expect.stringMatching(
+        /Not starting the cached iOS simulator agent: .*built by Tapsmith 0\.0\.1-older .*next run_tests call/,
+      ));
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+  });
+
   it('a simulator with a hand-set path that exists gets it, checked', async () => {
     const file = path.join(tmp, 'project', 'Sim.xctestrun');
     fs.writeFileSync(file, '<plist/>');

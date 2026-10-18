@@ -42,11 +42,16 @@ vi.mock('../agent-resolve.js', async (importOriginal) => ({
   findAgentApk: () => agentApks.app,
   findAgentTestApk: () => agentApks.test,
 }));
-const xctestrun = vi.hoisted(() => ({ found: undefined as string | undefined }));
+const xctestrun = vi.hoisted(() => ({
+  found: undefined as string | undefined,
+  cache: undefined as { xctestrun: string; builtBy?: string; stale?: string } | undefined,
+}));
 vi.mock('../ios-device-resolve.js', () => ({
   findSimulatorXctestrun: () => xctestrun.found,
   extractSdkVersion: () => '26.0',
   getInstalledSimulatorSdkVersion: () => '26.0',
+  inspectSimulatorAgentCache: () => xctestrun.cache,
+  describeStaleSimulatorAgentCache: (c: { builtBy?: string }) => `the iOS simulator agent in ~/.tapsmith/ios-simulator-agent was built by Tapsmith ${c.builtBy} (this is 0.7.1)`,
 }));
 
 // Node under Rosetta (PILOT-559): an x64 Node that sysctl says is translated.
@@ -144,6 +149,7 @@ beforeEach(() => {
   exec.calls.length = 0;
   exec.timeouts.clear();
   xctestrun.found = '/h/.tapsmith/ios-simulator-agent/x_iphonesimulator26.0.xctestrun';
+  xctestrun.cache = undefined;
   rosetta.on = false;
   setPlatform('darwin');
 });
@@ -745,6 +751,37 @@ describe('doctor fixes (PILOT-263 items 2, 3)', () => {
     expect(c?.fix).not.toMatch(/init/);
     expect(c?.fix).toContain(`@tapsmith/agent-ios-simulator-${process.arch}`);
     expect(c?.fix).toMatch(/first iOS simulator test run/);
+  });
+
+  // PILOT-485: a cache another Tapsmith version built is skipped, never run.
+  it('says a stale auto-build cache will be rebuilt, and who built it', async () => {
+    withXcode();
+    xctestrun.found = undefined;
+    xctestrun.cache = { xctestrun: '/h/.tapsmith/ios-simulator-agent/x_iphonesimulator26.0.xctestrun', builtBy: '0.7.0', stale: 'version' };
+    writeConfig("export default { platform: 'ios' }\n");
+    const { code, json } = await doctorJson();
+    expect(check(json, 'ios-sim-agent')).toMatchObject({
+      status: 'warn',
+      label: expect.stringContaining('out of date: the iOS simulator agent in ~/.tapsmith/ios-simulator-agent was built by Tapsmith 0.7.0'),
+      fix: expect.stringContaining('next iOS simulator test run rebuilds it'),
+    });
+    expect(code).toBe(0);
+  });
+
+  it('names the version that built the cache in use, and a stale cache another build stands in for', async () => {
+    withXcode();
+    const cached = '/h/.tapsmith/ios-simulator-agent/x_iphonesimulator26.0.xctestrun';
+    xctestrun.found = cached;
+    xctestrun.cache = { xctestrun: cached, builtBy: '0.7.1' };
+    writeConfig("export default { platform: 'ios' }\n");
+    expect(check((await doctorJson()).json, 'ios-sim-agent')).toMatchObject({
+      status: 'pass', detail: 'auto-build cache, SDK 26.0, built by Tapsmith 0.7.1',
+    });
+
+    xctestrun.found = '/n/@tapsmith/agent-ios-simulator-arm64/sdk-26.0/x_iphonesimulator26.0.xctestrun';
+    xctestrun.cache = { xctestrun: cached, builtBy: '0.7.0', stale: 'version' };
+    const row = check((await doctorJson()).json, 'ios-sim-agent');
+    expect(row).toMatchObject({ status: 'pass', detail: expect.stringMatching(/^@tapsmith\/agent-ios-simulator, SDK 26\.0 \(not the auto-build cache: .*Tapsmith 0\.7\.0/) });
   });
 
   it('under Rosetta, warns about the x64 Node and does not suggest an npm install that cannot work', async () => {

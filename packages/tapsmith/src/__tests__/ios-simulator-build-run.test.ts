@@ -10,6 +10,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { tapsmithPackageVersion } from '../ios-agent-paths.js';
+
 vi.mock('../build-ios-agent.js', () => ({
   resolveIosAgentDir: () => process.env.FAKE_AGENT_DIR,
   stripDstRootPath: () => undefined,
@@ -20,7 +22,9 @@ vi.mock('../build-ios-agent.js', () => ({
 const { existingBuild } = vi.hoisted(() => ({
   existingBuild: { path: undefined as string | undefined, sdk: '27.0' as string | undefined },
 }));
-vi.mock('../ios-device-resolve.js', () => ({
+// The cache inspection is the real one, reading the temp HOME.
+vi.mock('../ios-device-resolve.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ios-device-resolve.js')>()),
   findSimulatorXctestrun: () => existingBuild.path,
   getInstalledSimulatorSdkVersion: () => existingBuild.sdk,
   extractSdkVersion: (p: string) => /iphonesimulator(\d+\.\d+)/.exec(p)?.[1],
@@ -166,6 +170,8 @@ describe('buildSimulatorAgent() xcodebuild output handling', () => {
     const xctestrun = await build('big-ok');
     expect(xctestrun).toBe(path.join(cacheDir(), XCTESTRUN));
     expect(fs.readFileSync(path.join(cacheDir(), '.sdk-version'), 'utf8')).toBe('27.0');
+    // PILOT-485: and which Tapsmith version's agent source it was built from.
+    expect(fs.readFileSync(path.join(cacheDir(), '.tapsmith-version'), 'utf8')).toBe(tapsmithPackageVersion());
     // Only a failed build leaves its log behind.
     expect(fs.readdirSync(cacheDir()).filter((f) => f.endsWith('.log'))).toEqual([]);
   }, 30_000);
@@ -325,6 +331,37 @@ describe('ensureSimulatorAgent() options', () => {
       log.mockRestore();
     }
   });
+
+  // PILOT-485: findSimulatorXctestrun skips a cache another version built, so
+  // the run rebuilds it — and says that is why.
+  it('rebuilds a cache another Tapsmith version built, says why, and records this version', async () => {
+    fs.mkdirSync(cacheDir(), { recursive: true });
+    fs.writeFileSync(path.join(cacheDir(), XCTESTRUN), '<plist/>');
+    fs.mkdirSync(path.join(cacheDir(), 'Debug-iphonesimulator', 'R.app', 'PlugIns', 'T.xctest'), { recursive: true });
+    fs.writeFileSync(path.join(cacheDir(), '.sdk-version'), '27.0');
+    fs.writeFileSync(path.join(cacheDir(), '.tapsmith-version'), '0.0.1-older');
+    process.env.FAKE_XCB_MODE = 'big-ok';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+      expect(await ensureSimulatorAgent()).toBe(path.join(cacheDir(), XCTESTRUN));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(
+        /^The iOS simulator agent in .* was built by Tapsmith 0\.0\.1-older \(this is .*\)\. Rebuilding it for SDK 27\.0/,
+      ));
+      expect(fs.readFileSync(path.join(cacheDir(), '.tapsmith-version'), 'utf8')).toBe(tapsmithPackageVersion());
+    } finally {
+      log.mockRestore();
+    }
+  }, 30_000);
+
+  it('drops both markers while it rebuilds, so a failed rebuild leaves no current-looking cache', async () => {
+    fs.mkdirSync(cacheDir(), { recursive: true });
+    fs.writeFileSync(path.join(cacheDir(), '.sdk-version'), '27.0');
+    fs.writeFileSync(path.join(cacheDir(), '.tapsmith-version'), tapsmithPackageVersion());
+    await buildError('fail');
+    expect(fs.existsSync(path.join(cacheDir(), '.sdk-version'))).toBe(false);
+    expect(fs.existsSync(path.join(cacheDir(), '.tapsmith-version'))).toBe(false);
+  }, 30_000);
 
   it('says macOS is needed when there is no SDK because this is not a Mac', async () => {
     existingBuild.sdk = undefined;

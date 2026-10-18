@@ -216,7 +216,7 @@ Tapsmith Doctor
   iOS
   ✓ Xcode 26.0
   ✓ iOS simulators available (3 iOS simulators)
-  ✓ Simulator xctestrun found (auto-build cache, SDK 26.0)
+  ✓ Simulator xctestrun found (auto-build cache, SDK 26.0, built by Tapsmith 0.7.1)
 
   Network Capture
   ✓ MITM CA exists (~/.tapsmith/ca.pem)

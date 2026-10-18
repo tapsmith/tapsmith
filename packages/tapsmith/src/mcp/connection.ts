@@ -2283,8 +2283,18 @@ export async function iosXctestrunForAgentStart(
   if (config.iosXctestrun) return path.resolve(config.rootDir, config.iosXctestrun);
   if (process.env.TAPSMITH_IOS_XCTESTRUN) return process.env.TAPSMITH_IOS_XCTESTRUN;
   try {
-    const { findSimulatorXctestrun } = await import('../ios-device-resolve.js');
-    return findSimulatorXctestrun();
+    const resolve = await import('../ios-device-resolve.js');
+    const found = resolve.findSimulatorXctestrun();
+    if (!found) {
+      // A cache another Tapsmith version built is never started (PILOT-485);
+      // without this the only clue is the daemon's "not configured".
+      const cache = resolve.inspectSimulatorAgentCache();
+      if (cache?.stale === 'version') {
+        log(`Not starting the cached iOS simulator agent: ${resolve.describeStaleSimulatorAgentCache(cache)}. `
+          + 'The next run_tests call (or `tapsmith test`) rebuilds it.');
+      }
+    }
+    return found;
   } catch {
     return undefined; // not on macOS, or nothing built
   }
