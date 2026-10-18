@@ -268,6 +268,17 @@ describe('a found daemon serving another platform', () => {
     expect(args.join(' ')).toContain('--platform ios');
   });
 
+  it('reuses its own daemon for the platform every project overrides the root one with', async () => {
+    mcpConfig = { ...baseConfig, platform: 'android', projects: [{ name: 'ios', use: { platform: 'ios' } }] };
+    readyAt = (address) => address !== FOREIGN && spawnMock.mock.calls.length > 0;
+    listDevices = () => Promise.resolve({ devices: [{ serial: 'SIM-1', state: 'Discovered', platform: 'ios' }] });
+
+    await ensureConnected();
+    await ensurePlatformTarget({ ...mcpConfig, platform: 'ios' } as TapsmithConfig);
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect((spawnMock.mock.calls[0]?.[1] as string[]).join(' ')).toContain('--platform ios');
+  });
+
   it('stays in a multi-platform session for the platform it serves, and the other platform starts its own', async () => {
     mcpConfig = {
       ...baseConfig,

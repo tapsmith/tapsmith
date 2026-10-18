@@ -724,6 +724,11 @@ export function singlePlatformOf(config: Pick<TapsmithConfig, 'platform' | 'proj
   return platforms.size === 1 ? [...platforms][0] : undefined;
 }
 
+/** Whether the config, or any of its projects, names a platform. */
+function namesAPlatform(config: Pick<TapsmithConfig, 'platform' | 'projects'> | null): boolean {
+  return Boolean(config?.platform || config?.projects?.some((p) => p.use?.platform));
+}
+
 async function discover(): Promise<void> {
   const generation = _sessionGeneration;
   _discoveryFailures = [];
@@ -952,10 +957,11 @@ async function discover(): Promise<void> {
     // a daemon without `--platform` would pick any free device, including the
     // other platform's that a found daemon was just refused over.
     conn = await startDaemon(sessionPlatform ?? config?.platform);
-    // The connection keeps the config's own platform, unset included: device
-    // tools match a project to its device by that value, and a project that
-    // names no platform carries none.
-    if (conn) conn.platform = config?.platform;
+    // Device tools match a project to its device by this label, and a project
+    // that names no platform carries none — so a config that names none
+    // leaves it unset. One that names one labels it with the platform the
+    // daemon was started for, which is what its projects resolve to.
+    if (conn) conn.platform = namesAPlatform(config) ? sessionPlatform ?? config?.platform : undefined;
   } catch (err) {
     _discoveryFailures.push(err instanceof Error ? err.message : String(err));
     return;
