@@ -7,8 +7,10 @@ import { test, describe, expect } from "../fixtures.js"
  * Under Fabric on Android a `color: 'transparent'` is dropped as "unset", and
  * the whole marker string drew in black across the top of the app.
  *
- * Android only: the bug is in Fabric's Android colour encoding, and on iOS the
- * status bar's clock sits in the strip this test reads.
+ * Android only: the bug is in Fabric's Android colour encoding. The strip this
+ * test reads lies under the status bar; on the test app's home screen the
+ * status icons draw white over a white header, so a clock tick between the two
+ * screenshots changes nothing there.
  *
  * The check is differential, so it needs no knowledge of what the app or the
  * status bar draw there: change the marker's text, and nothing in the strip
