@@ -122,17 +122,12 @@ class OcclusionGuard(
 
             override fun isFocused(): Boolean = nodeInfoOf(element)?.isFocused == true
 
-            override fun isInScrollView(): Boolean {
-                var node = nodeInfoOf(element)?.parent
-                var depth = 0
-                while (node != null && depth++ < SCROLL_ANCESTOR_DEPTH) {
-                    val className = node.className?.toString()
-                    if (KeyboardFirst.isWebView(className)) return false
-                    if (KeyboardFirst.isScrollContainer(className)) return true
-                    node = node.parent
-                }
-                return false
-            }
+            override fun isInScrollView(): Boolean =
+                KeyboardFirst.inScrollView(
+                    generateSequence(nodeInfoOf(element)?.parent) { it.parent }
+                        .take(SCROLL_ANCESTOR_DEPTH)
+                        .map { it.className?.toString() },
+                )
         }
 
     /** The text and content descriptions inside [node], in tree order —

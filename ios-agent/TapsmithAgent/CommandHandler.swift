@@ -2247,8 +2247,9 @@ class CommandHandler {
     /// later — give it that moment, so isKeyboardShown() (any keyboard
     /// element) agrees straight after (best effort: it is already off the
     /// screen). Then let the app's own animated relayout settle.
-    private func settleAfterKeyboardDismissed() {
-        let treeDeadline = Date(timeIntervalSinceNow: 1.0)
+    private func settleAfterKeyboardDismissed(by deadline: Date? = nil) {
+        var treeDeadline = Date(timeIntervalSinceNow: 1.0)
+        if let deadline { treeDeadline = min(treeDeadline, deadline) }
         while keyboardPresence() == .offScreen, Date() < treeDeadline {
             Thread.sleep(forTimeInterval: 0.1)
         }
@@ -2283,7 +2284,7 @@ class CommandHandler {
         NSLog("[TapsmithCommand] \(element.elementId): the keyboard is up and the element is in a scroll view; putting the keyboard away first")
         do {
             try dismissKeyboard(strategies: KeyboardDismissPlanner.keyboardFirstStrategies, deadline: stepDeadline)
-            settleAfterKeyboardDismissed()
+            settleAfterKeyboardDismissed(by: stepDeadline)
         } catch {
             if touchedScreen { snapshotFinder.clearFocusedTextInputHint() }
             // Not again for every tap on this screen: each try costs seconds.

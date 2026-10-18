@@ -203,6 +203,16 @@ class KeyboardFirstTest {
         assertFalse(KeyboardFirst.isWebView("android.widget.ScrollView"))
     }
 
+    @Test
+    fun `the nearest web view or scroll view up the tree decides`() {
+        val group = "android.view.ViewGroup"
+        assertTrue(KeyboardFirst.inScrollView(sequenceOf(group, group, "android.widget.ScrollView", null)))
+        // Web content inside a React Native ScrollView handles its own touches.
+        assertFalse(KeyboardFirst.inScrollView(sequenceOf(group, "android.webkit.WebView", "android.widget.ScrollView")))
+        assertFalse(KeyboardFirst.inScrollView(sequenceOf(group, "android.widget.ListView")))
+        assertFalse(KeyboardFirst.inScrollView(emptySequence()))
+    }
+
     // ─── A keyboard that will not go ───
 
     @Test

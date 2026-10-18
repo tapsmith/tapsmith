@@ -1,34 +1,5 @@
 import XCTest
 
-/// Decides how `hideKeyboard` may put the software keyboard away (PILOT-363),
-/// from one `app.snapshot()`.
-///
-/// XCUITest runs outside the app, so it cannot resign the first responder.
-/// All it can do is touch the screen the way a user would, and every touch
-/// can land on something. This type finds, for each way of dismissing, a
-/// place to touch that does nothing else:
-///
-/// 1. **Drag a scroll view** (`scrollSwipeStart`). A scroll view dismisses
-///    the keyboard when dragged (React Native's ScrollView also dismisses on
-///    any touch outside the focused field). Only the native scroll view the
-///    focused field is in, and only from a spot clear of its controls: the old unconditional drag at the screen centre pressed
-///    whatever control sat there, because a short fast drag stays inside a
-///    Pressable's press area. (A web view is not dragged: WKWebView does not
-///    dismiss on drag, and the page would see the gesture.)
-/// 2. **The keyboard's own dismiss key** (`dismissKey`) — the iPad keyboard
-///    has one; the iPhone keyboard does not.
-/// 3. **Tap a blank spot** (`blankPoint`): apps often dismiss on a tap
-///    outside the field. Only where every element under the point is a plain
-///    unlabeled container — no control, text, image, bar, or input — and in
-///    the nearest container of the focused field that has room, so the tap
-///    stays beside the field (inside a sheet, not on its backdrop).
-/// 4. **The return key** (`returnKey`), last because it also submits the
-///    field. Only for a single-line field (in a text view it types a new line)
-///    and only when the key reads "return" or "done": "go", "send", "search",
-///    "next"… name an app action.
-///
-/// If none of them dismisses the keyboard, `hideKeyboard` fails with
-/// `failureMessage` instead of reporting success.
 /// When a touch's keyboard-first step (PILOT-622) is worth an app snapshot,
 /// and how long it may take.
 ///
@@ -69,6 +40,35 @@ struct KeyboardFirstGate {
     }
 }
 
+/// Decides how `hideKeyboard` may put the software keyboard away (PILOT-363),
+/// from one `app.snapshot()`.
+///
+/// XCUITest runs outside the app, so it cannot resign the first responder.
+/// All it can do is touch the screen the way a user would, and every touch
+/// can land on something. This type finds, for each way of dismissing, a
+/// place to touch that does nothing else:
+///
+/// 1. **Drag a scroll view** (`scrollSwipeStart`). A scroll view dismisses
+///    the keyboard when dragged (React Native's ScrollView also dismisses on
+///    any touch outside the focused field). Only the native scroll view the
+///    focused field is in, and only from a spot clear of its controls: the old unconditional drag at the screen centre pressed
+///    whatever control sat there, because a short fast drag stays inside a
+///    Pressable's press area. (A web view is not dragged: WKWebView does not
+///    dismiss on drag, and the page would see the gesture.)
+/// 2. **The keyboard's own dismiss key** (`dismissKey`) — the iPad keyboard
+///    has one; the iPhone keyboard does not.
+/// 3. **Tap a blank spot** (`blankPoint`): apps often dismiss on a tap
+///    outside the field. Only where every element under the point is a plain
+///    unlabeled container — no control, text, image, bar, or input — and in
+///    the nearest container of the focused field that has room, so the tap
+///    stays beside the field (inside a sheet, not on its backdrop).
+/// 4. **The return key** (`returnKey`), last because it also submits the
+///    field. Only for a single-line field (in a text view it types a new line)
+///    and only when the key reads "return" or "done": "go", "send", "search",
+///    "next"… name an app action.
+///
+/// If none of them dismisses the keyboard, `hideKeyboard` fails with
+/// `failureMessage` instead of reporting success.
 struct KeyboardDismissPlanner {
     typealias Node = OcclusionAnalyzer.Node
 

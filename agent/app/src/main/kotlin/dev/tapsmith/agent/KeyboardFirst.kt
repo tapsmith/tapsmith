@@ -43,8 +43,11 @@ class KeyboardFirst(
         const val POLL_MS = 50L
 
         /** After the window has gone: time for the app to hear that the
-         *  keyboard closed and lay itself out again. */
-        const val SETTLE_MS = 250L
+         *  keyboard closed and lay itself out again. React Native stops
+         *  intercepting only once its JS thread has handled the event, which
+         *  nothing outside the app can see, so this leaves room for a busy
+         *  JS thread on a slow emulator. */
+        const val SETTLE_MS = 500L
 
         /** Class names React Native's ScrollView (and FlatList, which is one)
          *  reports. Native lists, pagers and web views are left out: they do
@@ -59,6 +62,17 @@ class KeyboardFirst(
 
         /** Web content handles its own touches, even inside a scroll view. */
         fun isWebView(className: String?): Boolean = className == "android.webkit.WebView"
+
+        /** Whether a target whose ancestors have [ancestorClassNames]
+         *  (nearest first) sits in a React Native scroll view: the nearest web
+         *  view or scroll view decides. */
+        fun inScrollView(ancestorClassNames: Sequence<String?>): Boolean {
+            for (name in ancestorClassNames) {
+                if (isWebView(name)) return false
+                if (isScrollContainer(name)) return true
+            }
+            return false
+        }
 
         /** Whether a view of [className] is a React Native scroll view. */
         fun isScrollContainer(className: String?): Boolean = className != null && className in SCROLL_CLASSES

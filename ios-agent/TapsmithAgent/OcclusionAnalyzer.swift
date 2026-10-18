@@ -346,6 +346,9 @@ struct OcclusionAnalyzer {
         // Web content handles its own touches, even inside a scroll view.
         let up = ancestors(of: t)
         if up.contains(where: { nodes[$0].elementType == .webView }) { return .touchAsIs }
+        // Part of a text input (its clear button): React Native leaves the
+        // keyboard up for a touch on the input, and blurring would hide it.
+        if up.contains(where: { Self.textInputTypes.contains(nodes[$0].elementType) }) { return .touchAsIs }
         let inScrollView = up.contains { Self.keyboardEatingScrollerTypes.contains(nodes[$0].elementType) }
         return inScrollView ? .putKeyboardAway : .touchAsIs
     }
