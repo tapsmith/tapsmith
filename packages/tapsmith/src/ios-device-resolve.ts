@@ -236,7 +236,9 @@ export interface SimulatorAgentCache {
  * SDK and daemon (PILOT-485).
  */
 export function inspectSimulatorAgentCache(
-  installedSdk: string | undefined = getInstalledSimulatorSdkVersion(),
+  // Required, not defaulted: an `undefined` (no SDK detected) the caller
+  // already has must not quietly trigger another detection.
+  installedSdk: string | undefined,
 ): SimulatorAgentCache | undefined {
   const current = tapsmithPackageVersion();
   const own = simulatorAgentCacheDir(current);
