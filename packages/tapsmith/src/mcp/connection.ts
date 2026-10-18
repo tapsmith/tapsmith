@@ -887,7 +887,11 @@ async function discover(): Promise<void> {
         // config's agent artifacts on its active device puts a different
         // platform's app on a device we do not own. An 'orphan' has no such
         // owner left, so recovering its agent here is exactly right.
-        if (isOurs(source)) {
+        //
+        // Not for a config spanning platforms either: its root config is no
+        // one platform's, and the daemon may be pointed at either. Each
+        // platform's target starts its own agent when it claims a daemon.
+        if (isOurs(source) && (sessionPlatform || !config)) {
           const { agentConnected } = await client.ping();
           if (!agentConnected) await startAgentFromConfig(client, config);
         }
@@ -940,7 +944,10 @@ async function discover(): Promise<void> {
   // 7. No usable daemon — start our own
   let conn: DaemonConnection | null;
   try {
-    conn = await startDaemon(config?.platform);
+    // The session's one platform, Android included when the config names none:
+    // a daemon without `--platform` would pick any free device, including the
+    // other platform's that a found daemon was just refused over.
+    conn = await startDaemon(sessionPlatform);
   } catch (err) {
     _discoveryFailures.push(err instanceof Error ? err.message : String(err));
     return;
@@ -1044,7 +1051,7 @@ export async function startDaemon(
 ): Promise<DaemonConnection | null> {
   const generation = _sessionGeneration;
   const sessionClosed = (): boolean => generation !== _sessionGeneration;
-  log(platform ? `Starting a ${platform} daemon...` : 'No daemon found, starting one...');
+  log(platform ? `Starting an ${platform} daemon...` : 'No daemon found, starting one...');
   const port = String(await pickUnissuedPort());
   // Its own agent port, like every other daemon we spawn (see dispatcher.ts
   // and ui-server.ts). Daemons default to a shared one, which was harmless
@@ -1087,7 +1094,7 @@ export async function startDaemon(
    */
   const startFailure = (outcome: DaemonStartFailed): Error => {
     const message = daemonStartFailure(
-      `Failed to start a ${platform ?? 'Tapsmith'} daemon${member ? ` for group member "${member}"` : ''}`,
+      `Failed to start ${platform ? `an ${platform}` : 'a Tapsmith'} daemon${member ? ` for group member "${member}"` : ''}`,
       {
         ...outcome,
         recentOutput: daemonLog ? readDaemonLogSince(daemonLog) : '',
@@ -1572,7 +1579,8 @@ async function findConnectionForPlatform(
     // device, is not moved across (PILOT-564): whoever pointed it there is
     // likely still driving it. A multi-platform config keeps such a daemon at
     // discovery for the platform it serves; this one starts its own.
-    if (conn.source !== 'started' && crossesPlatform(choice, platform)) continue;
+    // A project that names no platform runs on Android.
+    if (conn.source !== 'started' && crossesPlatform(choice, platform ?? 'android')) continue;
     if (!takesClaimedDaemon(conn, choice.serial)) continue;
     return { conn, serial: choice.serial };
   }

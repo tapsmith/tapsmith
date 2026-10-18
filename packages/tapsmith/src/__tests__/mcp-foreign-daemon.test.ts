@@ -190,6 +190,34 @@ describe('a found daemon serving another platform', () => {
     expect(calls.filter((c) => c.includes(FOREIGN))).toEqual([]);
   });
 
+  it('starts its own daemon for the platform a config names no platform for, never a platform-less one', async () => {
+    mcpConfig = { ...baseConfig };
+    listDevices = (address) => Promise.resolve({
+      devices: address === FOREIGN ? [{ serial: 'SIM-9', state: 'Active', platform: 'ios' }] : [],
+    });
+
+    await ensureConnected();
+    const args = spawnMock.mock.calls[0]?.[1] as string[];
+    expect(args.join(' ')).toContain('--platform android');
+  });
+
+  it('is not moved across by a project of a mixed config that names no platform', async () => {
+    mcpConfig = {
+      ...baseConfig,
+      projects: [{ name: 'android' }, { name: 'ios', use: { platform: 'ios' } }],
+    };
+    listDevices = (address) => Promise.resolve({
+      devices: address === FOREIGN
+        ? [{ serial: 'SIM-9', state: 'Active', platform: 'ios' }, { serial: 'emulator-5554', state: 'Discovered', platform: 'android' }]
+        : [{ serial: 'emulator-5554', state: 'Discovered', platform: 'android' }],
+    });
+
+    await ensureConnected();
+    const android = await ensurePlatformTarget({ ...mcpConfig, device: 'emulator-5554' } as TapsmithConfig);
+    expect(android.address).not.toBe(FOREIGN);
+    expect(calls.filter((c) => c.includes(FOREIGN))).toEqual([]);
+  });
+
   it('stays in a multi-platform session for the platform it serves, and the other platform starts its own', async () => {
     mcpConfig = {
       ...baseConfig,
