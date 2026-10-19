@@ -14,6 +14,7 @@ proto/tapsmith.proto      # gRPC contract (single proto file, buf for linting)
 npm-packages/             # Platform-specific npm packages (@tapsmith/core-{os}-{arch}) for daemon binary distribution
 docs/                     # User-facing documentation
 test-app/                 # React Native (Expo) test app for E2E testing
+native-ios-test-app/      # Plain SwiftUI fixture app (xcodegen; build.sh) — e2e/native-ios/*.native.ts, not in CI yet
 e2e/                      # E2E test suite run against the test app
 .claude/skills/           # Claude Code project skills (implement-ticket(s), review-loop, qa-this-branch); .claude/ otherwise git-ignored
 ```
