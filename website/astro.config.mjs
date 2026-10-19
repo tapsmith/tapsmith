@@ -15,6 +15,27 @@ export default defineConfig({
         dark: './src/assets/logo-dark.png',
         replacesTitle: true,
       },
+      // Starlight emits og:title/description per page but no image; this gives
+      // shared docs links the same preview card as the homepage
+      head: [
+        {
+          tag: 'meta',
+          attrs: { property: 'og:image', content: 'https://tapsmith.dev/og-image.jpg' },
+        },
+        { tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+        { tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+        {
+          tag: 'meta',
+          attrs: {
+            property: 'og:image:alt',
+            content: 'Tapsmith: the web testing experience, on mobile',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: { name: 'twitter:image', content: 'https://tapsmith.dev/og-image.jpg' },
+        },
+      ],
       social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/tapsmith/tapsmith' }],
       plugins: [starlightLinksValidator(), starlightImageZoom()],
       customCss: ['./src/styles/global.css'],
