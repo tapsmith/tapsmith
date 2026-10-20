@@ -143,10 +143,11 @@ jobs:
           path: agent/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 
   # ─── Build iOS simulator agent for arm64 and x64 ───
-  # One row per iOS Simulator SDK the packages ship. The SDK uses a prebuilt
-  # agent only when its `sdk-<version>/` matches the installed simulator SDK
-  # exactly (`xcrun --show-sdk-version --sdk iphonesimulator`); on any other
-  # SDK the first test run builds the agent from source (PILOT-773). So ship
+  # One row per iOS Simulator SDK the packages ship. A test run uses a
+  # prebuilt agent only when its `sdk-<version>/` matches the installed
+  # simulator SDK exactly (`xcrun --show-sdk-version --sdk iphonesimulator`);
+  # on any other SDK the first run builds the agent from source and doctor
+  # warns that it will (PILOT-773). So ship
   # the current stable Xcode, the previous release of its major, and the
   # newest Xcode of the previous major. Each row names its Xcode and checks the
   # SDK it reports, so a runner image change fails here rather than silently
