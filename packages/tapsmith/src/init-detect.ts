@@ -174,6 +174,21 @@ function projectDependencies(cwd: string): Record<string, unknown> | undefined {
   return { ...(isRecord(pkg['devDependencies']) ? pkg['devDependencies'] : {}), ...(isRecord(pkg['dependencies']) ? pkg['dependencies'] : {}) };
 }
 
+/**
+ * Whether the app that owns `dir` depends on `@tapsmith/react-native`. Walks
+ * up from `dir` (a Tapsmith config often sits in an `e2e/` folder with its own
+ * package.json) and stops at the first package.json that names the hooks
+ * package, `react-native` or `expo` — that one is the app's.
+ */
+export function appDependsOnTapsmithHooks(dir: string): boolean {
+  for (let current = path.resolve(dir); ; current = path.dirname(current)) {
+    const deps = projectDependencies(current);
+    if (deps && '@tapsmith/react-native' in deps) return true;
+    if (deps && ('react-native' in deps || 'expo' in deps)) return false;
+    if (path.dirname(current) === current) return false;
+  }
+}
+
 /** A React Native app (bare or Expo), which usually targets both platforms. */
 export function isReactNativeProject(cwd: string): boolean {
   const deps = projectDependencies(cwd);

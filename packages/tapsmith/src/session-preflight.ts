@@ -4,6 +4,7 @@ import { appResetAction, parseHooksMarker, satisfies, type AppResetPolicy, type 
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
 import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, isSystemDrawnDialog } from './emulator.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
+import { appDependsOnTapsmithHooks } from './init-detect.js';
 
 type SessionDevice = Pick<Device, 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
 type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
@@ -11,6 +12,9 @@ type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
 export interface SessionPreflightContext {
   label: string
   config: Pick<TapsmithConfig, 'package' | 'activity' | 'platform' | 'resetAppDeepLink' | 'resetAppWaitMs' | 'appReset' | 'appResetColdEvery' | 'device'>
+    // Only used to find the app's package.json for the missing-hooks warning;
+    // optional so a context built without a project (unit tests) skips it.
+    & Partial<Pick<TapsmithConfig, 'rootDir'>>
   device: SessionDevice
   client: SessionClient
   agentApkPath?: string
@@ -110,8 +114,38 @@ export async function probeResetCapabilities(
   // session that never saw the marker records false, and only on the
   // strength of a hierarchy it actually read: a run of failed reads leaves
   // the question open for the next probe.
-  if (readWithoutMarker) caps.hooksDetected ??= false;
+  if (readWithoutMarker && caps.hooksDetected === undefined) {
+    caps.hooksDetected = false;
+    warnIfHooksExpected(ctx);
+  }
   return caps;
+}
+
+let hooksWarningShown = false;
+
+/**
+ * Once per process: the app depends on `@tapsmith/react-native` but this
+ * session's first look found no hooks marker, so `appReset: 'auto'` will clear
+ * app data (seconds) instead of resetting warm. Almost always a Release build
+ * with the hooks off — Expo inlines `EXPO_PUBLIC_*` only in app code, never
+ * inside node_modules, so the package cannot read the flag itself. Only the
+ * first `undefined → false` transition warns: watch and MCP children are
+ * seeded with the parent's answer and stay quiet.
+ */
+function warnIfHooksExpected(ctx: SessionPreflightContext): void {
+  if (hooksWarningShown) return;
+  const appReset = ctx.config.appReset ?? 'auto';
+  if (appReset !== 'auto' || !ctx.config.rootDir) return;
+  if (!appDependsOnTapsmithHooks(ctx.config.rootDir)) return;
+  hooksWarningShown = true;
+  console.warn(
+    `[tapsmith] ${ctx.label}: @tapsmith/react-native is installed, but its reset hooks were not found in the app after launch, `
+    + 'so every app reset clears app data and relaunches (5-10 s) instead of resetting in-app (~1 s). '
+    + 'Most likely the hooks are switched off in this build: in a Release build they are on only when the app passes '
+    + '`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` itself and is built with EXPO_PUBLIC_TAPSMITH_HOOKS=1 '
+    + '(Expo does not inline EXPO_PUBLIC_* variables inside node_modules, so the package cannot read the flag). '
+    + 'See https://tapsmith.dev/guides/warm-reset/',
+  );
 }
 
 /** Marker poll cadence inside {@link probeResetCapabilities}. */
