@@ -709,7 +709,7 @@ Wait for a network request matching the pattern. Starts the network proxy on dem
 
 #### `device.waitForResponse(urlOrPredicate, options?): Promise<NetworkResponseEventData>`
 
-Wait for a network response matching the pattern. Starts the network proxy on demand and reports a failed start or a likely-capture timeout, as `device.waitForRequest()` does.
+Wait for a network response matching the pattern. Starts the network proxy on demand and reports a failed start, or a timeout that capture likely caused,, as `device.waitForRequest()` does.
 
 A waiter belongs to the test that creates it. If the test ends first (say, a step before `await` fails), the waiter ends with it and can't time out later in another test. A waiter that times out while its test is still running, without being awaited, fails that test. Waiters created in a `beforeAll` hook last until the file ends.
 
