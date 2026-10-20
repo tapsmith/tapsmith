@@ -3484,10 +3484,10 @@ An ESLint plugin with four rules: `prefer-role`, `no-bare-locator-xpath`, `prefe
 
 ### `eslintPlugin.configs.recommended`
 
-A flat config object that you can add to `eslint.config.mjs` unchanged, or list in `extends`. It contains:
+A flat config object. List it in `extends` next to your own `files`, as the [Locators Guide](locators.md#eslint-plugin) setup does. It contains:
 
 - `name`: `"tapsmith/recommended"`
-- `files`: every JavaScript and TypeScript extension (`**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}`). If you list the config in `extends`, ESLint combines this with your own `files`, so your `files` decides which files are linted.
+- `files`: every JavaScript and TypeScript extension (`**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}`). In `extends`, ESLint combines this with your own `files`, so your `files` decides which files are linted. If you add the config directly to the config array instead, it applies to every file in the project, including app code and unit tests that call Testing Library's `getByTestId()`.
 - `plugins`: `{ tapsmith: eslintPlugin }`
 - `rules`: each rule at its default level (`no-bare-locator-xpath` is an error, the other three are warnings)
 

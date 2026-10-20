@@ -326,6 +326,8 @@ Run it with `npx eslint tests/`. Change `files` to match where your tests are.
 
 The `.mjs` extension makes Node load the config as an ES module whether or not your `package.json` has `"type": "module"`.
 
+If your project already has an ESLint config, add the object to that config instead of creating a second file. ESLint reads only one config file, and it picks `eslint.config.js` before `eslint.config.mjs`, so the new file would be ignored. Expo's `npx expo lint` creates an `eslint.config.js`.
+
 ### Rules
 
 | Rule | Default | Description |
