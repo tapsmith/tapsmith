@@ -251,7 +251,10 @@ jobs:
   # ─── Publish platform-specific binary packages ───
   publish-platform-packages:
     name: Publish @tapsmith/core-*
-    needs: [build-daemon]
+    # Every publish job waits for every build, so a failing build (say, an
+    # Xcode a build-ios-simulator-agent row names that the runner image has
+    # since dropped) publishes nothing rather than half a release.
+    needs: [build-daemon, build-android-agent, build-ios-simulator-agent]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 1
@@ -351,7 +354,7 @@ jobs:
   # ─── Publish iOS simulator agent packages ───
   publish-ios-simulator-packages:
     name: Publish @tapsmith/agent-ios-simulator-*
-    needs: [build-ios-simulator-agent]
+    needs: [build-daemon, build-android-agent, build-ios-simulator-agent]
     runs-on: ubuntu-latest
     strategy:
       max-parallel: 1
@@ -515,7 +518,7 @@ jobs:
   # ─── Publish Android agent package ───
   publish-android-agent:
     name: Publish @tapsmith/agent-android
-    needs: [build-android-agent]
+    needs: [build-daemon, build-android-agent, build-ios-simulator-agent]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
