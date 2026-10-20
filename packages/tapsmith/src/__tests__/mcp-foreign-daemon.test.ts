@@ -40,6 +40,11 @@ vi.mock('../grpc-client.js', () => ({
 }));
 
 vi.mock('../daemon-bin.js', () => ({ findDaemonBin: () => '/fake/tapsmith-core' }));
+// A simulator's agent start resolves through the on-demand build (PILOT-485);
+// never run xcodebuild from a unit test.
+vi.mock('../ios-simulator-build.js', () => ({
+  ensureSimulatorAgent: async () => '/fake/Agent_iphonesimulator27.0-arm64.xctestrun',
+}));
 
 let nextPort = 43000;
 vi.mock('../port-utils.js', async (importOriginal) => ({
