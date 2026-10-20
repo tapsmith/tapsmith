@@ -1615,6 +1615,7 @@ describe('session-preflight', () => {
         expect(notices[0].message).toContain('node_modules');
         expect(notices[0].message).toContain('bare React Native');
         expect(notices[0].message).toContain('https://tapsmith.dev/guides/warm-reset/');
+        expect(notices[0].message).toContain("appReset: 'clear'");
       });
 
       it('looks again before blaming the build: a marker that appears within the budget upgrades instead', async () => {
@@ -1668,6 +1669,15 @@ describe('session-preflight', () => {
 
         expect(ctx.capabilities).toEqual({ hooksDetected: false });
         expect(hooksNotices(ctx)).toHaveLength(1);
+      });
+
+      it('stays quiet when resetAppDeepLink makes auto resolve warm without the hooks', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }), NO_MARKER, { resetAppDeepLink: 'app:///__reset' });
+        ctx.capabilities = {};
+
+        await launchConfiguredApp(ctx, 'startup launch', { freshInstall: true, hooksProbeMs: 0 });
+
+        expect(hooksNotices(ctx)).toEqual([]);
       });
 
       it('finds the app package.json above a config in a subfolder', async () => {

@@ -142,13 +142,15 @@ function appUsesTapsmithHooks(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | '
 }
 
 /**
- * Run {@link checkMissingHooks} when `appReset: 'auto'` is about to resolve
- * to clear because no marker has been seen: after the startup launch (a
+ * Run {@link checkMissingHooks} when `appReset: 'auto'` resolves to clear
+ * because no marker has been seen (and no `resetAppDeepLink` makes it warm):
+ * after the startup launch, after a child process adopts a session (a
  * single-file session never reaches an inline reset — the launch satisfies
- * its first one) and after each clear reset until the session is checked.
+ * its first one), and after each clear reset until the session is checked.
  */
-async function checkMissingHooksUnderAuto(ctx: SessionPreflightContext, pollMs: number): Promise<void> {
-  if ((ctx.config.appReset ?? 'auto') !== 'auto' || ctx.capabilities?.hooksDetected !== false) return;
+export async function checkMissingResetHooks(ctx: SessionPreflightContext, pollMs: number = HOOKS_PROBE_POLL_MS): Promise<void> {
+  if ((ctx.config.appReset ?? 'auto') !== 'auto' || ctx.config.resetAppDeepLink) return;
+  if (ctx.capabilities?.hooksDetected !== false) return;
   await checkMissingHooks(ctx, ctx.capabilities, pollMs);
 }
 
@@ -199,7 +201,8 @@ async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabi
       + 'Most likely the hooks are switched off in this build. A Release build has them only when the app passes `enabled` itself: '
       + 'in Expo, `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` in the root layout, built with EXPO_PUBLIC_TAPSMITH_HOOKS=1 '
       + '(Expo does not inline EXPO_PUBLIC_* variables inside node_modules, so the package cannot read the flag); '
-      + 'in bare React Native, a build-time flag of your own. See https://tapsmith.dev/guides/warm-reset/',
+      + 'in bare React Native, a build-time flag of your own. If this build is meant to have no hooks, set `appReset: \'clear\'` to silence this. '
+      + 'See https://tapsmith.dev/guides/warm-reset/',
     timestamp: Date.now(),
   });
 }
@@ -512,7 +515,7 @@ export async function launchConfiguredApp(
     await ensureSessionReady(ctx, phase, readinessAttempts);
     await waitForAppReady(ctx);
     await probeResetCapabilities(ctx, probe);
-    await checkMissingHooksUnderAuto(ctx, probe.pollMs);
+    await checkMissingResetHooks(ctx, probe.pollMs);
     return prepared();
   }
 
@@ -520,7 +523,7 @@ export async function launchConfiguredApp(
   await ensureSessionReady(ctx, phase, readinessAttempts);
   await waitForAppReady(ctx);
   await probeResetCapabilities(ctx, probe);
-  await checkMissingHooksUnderAuto(ctx, probe.pollMs);
+  await checkMissingResetHooks(ctx, probe.pollMs);
   return prepared();
 }
 
@@ -686,7 +689,7 @@ export async function executeAppReset(
     // upgrade path — the next scope resolves warm. A hookless app pays one
     // hierarchy read per clear reset; a hooked one upgrades on the first.
     await probeResetCapabilities(ctx, { pollMs: 0 });
-    if (action.kind === 'clear') await checkMissingHooksUnderAuto(ctx, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
+    if (action.kind === 'clear') await checkMissingResetHooks(ctx, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
   }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
 }

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
     ensureSessionReady: vi.fn(async () => {}),
     launchConfiguredApp: vi.fn(async () => ({ policy: { mode: 'clear', scope: 'file' }, preparedAt: 1, durationMs: 1, source: 'startup launch' })),
     probeResetCapabilities: vi.fn(async (ctx: { capabilities?: Record<string, unknown> }) => { (ctx.capabilities ??= {}).hooksDetected = true; return ctx.capabilities; }),
+    checkMissingResetHooks: vi.fn(async () => {}),
   },
   agentFailures: 0,
   /** Serials whose agent never starts (permanent failure). */
@@ -192,6 +193,7 @@ beforeEach(() => {
   mocks.preflight.ensureSessionReady.mockClear();
   mocks.preflight.launchConfiguredApp.mockClear();
   mocks.preflight.probeResetCapabilities.mockClear();
+  mocks.preflight.checkMissingResetHooks.mockClear();
 });
 
 describe('openDeviceSession', () => {
@@ -267,6 +269,8 @@ describe('openDeviceSession', () => {
     // Already known: nothing to probe for.
     expect(mocks.preflight.probeResetCapabilities).not.toHaveBeenCalled();
     expect(session.capabilities).toEqual({ hooksDetected: true });
+    // A child that adopts runs the missing-hooks check itself (PILOT-774).
+    expect(mocks.preflight.checkMissingResetHooks).toHaveBeenCalledWith(session.context);
     // Recovery still knows the agent artifacts.
     expect(session.context.agentApkPath).toBe('/agents/agent.apk');
   });
