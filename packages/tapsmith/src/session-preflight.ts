@@ -142,6 +142,17 @@ function appUsesTapsmithHooks(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | '
 }
 
 /**
+ * Run {@link checkMissingHooks} when `appReset: 'auto'` is about to resolve
+ * to clear because no marker has been seen: after the startup launch (a
+ * single-file session never reaches an inline reset — the launch satisfies
+ * its first one) and after each clear reset until the session is checked.
+ */
+async function checkMissingHooksUnderAuto(ctx: SessionPreflightContext, pollMs: number): Promise<void> {
+  if ((ctx.config.appReset ?? 'auto') !== 'auto' || ctx.capabilities?.hooksDetected !== false) return;
+  await checkMissingHooks(ctx, ctx.capabilities, pollMs);
+}
+
+/**
  * Sessions already checked for the missing-hooks warning, keyed by their
  * shared capabilities object: the runner hands {@link executeAppReset} a
  * fresh spread of the session context on every reset, so a flag on the
@@ -150,10 +161,10 @@ function appUsesTapsmithHooks(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | '
 const missingHooksChecked = new WeakSet<ResetCapabilities>();
 
 /**
- * Once per session, after an `appReset: 'auto'` clear reset whose re-read
- * still found no hooks marker: if the app depends on `@tapsmith/react-native`,
- * look again for the probe budget (the single re-read can land on a splash
- * before the React root mounts), and if a real hierarchy still has no marker,
+ * Once per session, after the startup probe or a clear reset's re-read found
+ * no hooks marker: if the app depends on `@tapsmith/react-native`, look again
+ * for the probe budget (a slow first mount, or a re-read that landed on a
+ * splash before the React root mounted), and if a real hierarchy still has no marker,
  * leave a notice the runner attaches to the next test result as a warning —
  * the one channel every run path, UI mode and MCP included, shows. Almost
  * always a Release build with the hooks off: Expo inlines `EXPO_PUBLIC_*` only
@@ -501,6 +512,7 @@ export async function launchConfiguredApp(
     await ensureSessionReady(ctx, phase, readinessAttempts);
     await waitForAppReady(ctx);
     await probeResetCapabilities(ctx, probe);
+    await checkMissingHooksUnderAuto(ctx, probe.pollMs);
     return prepared();
   }
 
@@ -508,6 +520,7 @@ export async function launchConfiguredApp(
   await ensureSessionReady(ctx, phase, readinessAttempts);
   await waitForAppReady(ctx);
   await probeResetCapabilities(ctx, probe);
+  await checkMissingHooksUnderAuto(ctx, probe.pollMs);
   return prepared();
 }
 
@@ -673,9 +686,7 @@ export async function executeAppReset(
     // upgrade path — the next scope resolves warm. A hookless app pays one
     // hierarchy read per clear reset; a hooked one upgrades on the first.
     await probeResetCapabilities(ctx, { pollMs: 0 });
-    if (action.kind === 'clear' && ctx.capabilities?.hooksDetected === false) {
-      await checkMissingHooks(ctx, ctx.capabilities, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
-    }
+    if (action.kind === 'clear') await checkMissingHooksUnderAuto(ctx, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
   }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
 }

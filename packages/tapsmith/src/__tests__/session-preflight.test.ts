@@ -1635,7 +1635,7 @@ describe('session-preflight', () => {
         expect(hooksNotices(ctx)).toEqual([]);
       });
 
-      it('stays quiet at the startup probe, and when the check could not read the app (asks again next reset)', async () => {
+      it('stays quiet on a bare probe, and when the check could not read the app (asks again next reset)', async () => {
         const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
         ctx.capabilities = {};
         await probeResetCapabilities(ctx, { pollMs: 0 });
@@ -1657,6 +1657,16 @@ describe('session-preflight', () => {
 
         vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' });
         await reset(ctx);
+        expect(hooksNotices(ctx)).toHaveLength(1);
+      });
+
+      it('checks after the startup launch too: a single-file session never reaches an inline reset', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
+        ctx.capabilities = {};
+
+        await launchConfiguredApp(ctx, 'startup launch', { freshInstall: true, hooksProbeMs: 0 });
+
+        expect(ctx.capabilities).toEqual({ hooksDetected: false });
         expect(hooksNotices(ctx)).toHaveLength(1);
       });
 

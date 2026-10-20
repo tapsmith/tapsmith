@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { detectExpoProject, expoBuildHint, parseExpoAppConfig, readExpoAppConfig, type ExpoProject } from '../init-detect.js';
+import { appDependsOnTapsmithHooks, detectExpoProject, expoBuildHint, parseExpoAppConfig, readExpoAppConfig, type ExpoProject } from '../init-detect.js';
 
 // ─── Fixtures ───
 
@@ -197,5 +197,28 @@ describe('expoBuildHint() (PILOT-557)', () => {
     expect(hint).toContain('@tapsmith/react-native');
     expect(hint).toContain('EXPO_PUBLIC_TAPSMITH_HOOKS=1');
     expect(hint).toContain('https://tapsmith.dev/guides/warm-reset/');
+  });
+});
+
+describe('appDependsOnTapsmithHooks (PILOT-774)', () => {
+  let root: string;
+  afterEach(() => { if (root) fs.rmSync(root, { recursive: true, force: true }); });
+  const pkg = (dir: string, deps: Record<string, string>) => {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: deps }));
+  };
+
+  it('walks up past a package.json that is not the app, to the app that lists the hooks', () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-dep-'));
+    pkg(root, { expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' });
+    pkg(path.join(root, 'e2e'), { tapsmith: '^0.7.1' });
+    expect(appDependsOnTapsmithHooks(path.join(root, 'e2e', 'tests'))).toBe(true);
+  });
+
+  it('stops at the nearest React Native app, so a workspace root listing the hooks does not count for it', () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-dep-'));
+    pkg(root, { '@tapsmith/react-native': '^0.7.1' });
+    pkg(path.join(root, 'apps', 'other'), { 'react-native': '0.88.0' });
+    expect(appDependsOnTapsmithHooks(path.join(root, 'apps', 'other', 'ios', 'build'))).toBe(false);
   });
 });
