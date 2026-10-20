@@ -1049,6 +1049,25 @@ describe('runner app reset (declared isolation)', () => {
       expect(opts.devices[0].sessionContext!.notices).toEqual([]);
     });
 
+    it('turns a missing-hooks notice into a warning on the next test (PILOT-774)', async () => {
+      const d = makeDevice();
+      pushContext();
+      tapsmithTest('one', async () => {});
+      tapsmithTest('two', async () => {});
+      const ctx = popContext();
+      const opts = makeOpts(d, makeConfig());
+      d.device._resetApp.mockImplementation(async () => {
+        opts.devices[0].sessionContext!.notices.push({ kind: 'hooks-missing', title: 'hooks not found', message: 'hooks never showed up', timestamp: Date.now() });
+        return { modeRequested: 'clear', modeUsed: 'clear', fellBack: false, coldLaunch: true, durationMs: 5, hooksDetected: false, steps: [] };
+      });
+
+      const result = await runSuiteContext(ctx, '', [], [], opts);
+
+      const [one, two] = collectResults(result);
+      expect(one.warnings).toEqual(['hooks never showed up']);
+      expect(two.warnings).toBeUndefined();
+    });
+
     it('keeps the warning when the preflight that closed the dialog then failed the test', async () => {
       const d = makeDevice();
       pushContext();

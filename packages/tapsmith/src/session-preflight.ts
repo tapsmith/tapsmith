@@ -50,16 +50,16 @@ export interface SessionPreflightContext {
    * reference, like `capabilities`.
    */
   notices: PreflightNotice[]
-  /** Set once this session has warned that `@tapsmith/react-native` is installed but its hooks never showed up. */
-  hooksWarningShown?: boolean
 }
 
-/** A system ANR/crash dialog the Android preflight dealt with. */
+/** A system ANR/crash dialog the Android preflight dealt with, or a session-level finding about the app. */
 export interface PreflightNotice {
   /** `app-dialog`: the app under test's own, or one whose owner could not be
    *  read (dismissed, session recovered; its test gets a warning).
-   *  `foreign-dialog`: another package's (dismissed; trace row only). */
-  kind: 'app-dialog' | 'foreign-dialog'
+   *  `foreign-dialog`: another package's (dismissed; trace row only).
+   *  `hooks-missing`: `@tapsmith/react-native` is installed but its hooks
+   *  never showed up (its test gets a warning; no trace row). */
+  kind: 'app-dialog' | 'foreign-dialog' | 'hooks-missing'
   /** The dialog's title, e.g. `Pixel Launcher isn't responding`. */
   title: string
   /** Owning process, when dumpsys named exactly one (or it is the app's). */
@@ -86,16 +86,8 @@ export async function probeResetCapabilities(
   const deadline = Date.now() + (options.pollMs ?? HOOKS_PROBE_POLL_MS);
   let readWithoutMarker = false;
   for (;;) {
-    let seen = false;
-    try {
-      const h = await ctx.client.getUiHierarchy();
-      const marker = parseHooksMarker(h.hierarchyXml);
-      seen = !!marker && marker.urlPrefix.length > 0;
-      if (!seen) readWithoutMarker = true;
-    } catch {
-      // A failed read says nothing about the app; it neither confirms nor
-      // rules out the hooks.
-    }
+    const seen = await readHooksMarker(ctx);
+    if (seen === false) readWithoutMarker = true;
     if (seen) {
       caps.hooksDetected = true;
       return caps;
@@ -121,26 +113,70 @@ export async function probeResetCapabilities(
 }
 
 /**
- * Once per session: `appReset: 'auto'` just ran a clear reset because no
- * hooks marker has been seen — not by the startup probe, and not by the read
- * of the freshly relaunched app after this reset — yet the app depends on
- * `@tapsmith/react-native`. Almost always a Release build with the hooks off:
- * Expo inlines `EXPO_PUBLIC_*` only in app code, never inside node_modules,
- * so the package cannot read the flag itself. Warning here rather than at the
- * startup probe keeps a slow first mount (which this read upgrades) quiet.
+ * One look at the hierarchy for a usable hooks marker: `true` seen, `false` a
+ * hierarchy read without one, `undefined` the read failed — which says
+ * nothing about the app, and neither confirms nor rules out the hooks.
  */
-function warnIfHooksExpected(ctx: SessionPreflightContext): void {
-  if (ctx.hooksWarningShown || !ctx.config.rootDir) return;
+async function readHooksMarker(ctx: SessionPreflightContext): Promise<boolean | undefined> {
+  try {
+    const h = await ctx.client.getUiHierarchy();
+    const marker = parseHooksMarker(h.hierarchyXml);
+    return !!marker && marker.urlPrefix.length > 0;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Sessions already checked for the missing-hooks warning, keyed by their
+ * shared capabilities object: the runner hands {@link executeAppReset} a
+ * fresh spread of the session context on every reset, so a flag on the
+ * context itself would not survive to the next one.
+ */
+const missingHooksChecked = new WeakSet<ResetCapabilities>();
+
+/**
+ * Once per session, after an `appReset: 'auto'` clear reset whose re-read
+ * still found no hooks marker: if the app depends on `@tapsmith/react-native`,
+ * look again for the probe budget (the single re-read can land on a splash
+ * before the React root mounts), and if a real hierarchy still has no marker,
+ * leave a notice the runner attaches to the next test result as a warning —
+ * the one channel every run path, UI mode and MCP included, shows. Almost
+ * always a Release build with the hooks off: Expo inlines `EXPO_PUBLIC_*` only
+ * in app code, never inside node_modules, so the package cannot read the flag.
+ */
+async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabilities, pollMs: number): Promise<void> {
+  if (missingHooksChecked.has(caps) || !ctx.config.rootDir) return;
+  missingHooksChecked.add(caps);
   if (!appDependsOnTapsmithHooks(ctx.config.rootDir)) return;
-  ctx.hooksWarningShown = true;
-  console.warn(
-    `[tapsmith] ${ctx.label}: @tapsmith/react-native is installed, but its reset hooks have not shown up in the app, `
-    + 'so app resets clear app data and relaunch (5-10 s) instead of resetting in-app (~1 s). '
-    + 'Most likely the hooks are switched off in this build: in a Release build they are on only when the app passes '
-    + '`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` itself and is built with EXPO_PUBLIC_TAPSMITH_HOOKS=1 '
-    + '(Expo does not inline EXPO_PUBLIC_* variables inside node_modules, so the package cannot read the flag). '
-    + 'See https://tapsmith.dev/guides/warm-reset/',
-  );
+  const deadline = Date.now() + pollMs;
+  let read = false;
+  for (;;) {
+    const seen = await readHooksMarker(ctx);
+    if (seen) {
+      caps.hooksDetected = true;
+      return;
+    }
+    if (seen === false) read = true;
+    if (Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+    await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
+  }
+  if (!read) {
+    // Nothing was actually read: no evidence either way, so ask again next reset.
+    missingHooksChecked.delete(caps);
+    return;
+  }
+  ctx.notices.push({
+    kind: 'hooks-missing',
+    title: '@tapsmith/react-native hooks not found',
+    message: '@tapsmith/react-native is installed, but its reset hooks have not shown up in the app, '
+      + 'so app resets clear app data and relaunch (5-10 s) instead of resetting in-app (~1 s). '
+      + 'Most likely the hooks are switched off in this build. A Release build has them only when the app passes `enabled` itself: '
+      + 'in Expo, `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` in the root layout, built with EXPO_PUBLIC_TAPSMITH_HOOKS=1 '
+      + '(Expo does not inline EXPO_PUBLIC_* variables inside node_modules, so the package cannot read the flag); '
+      + 'in bare React Native, a build-time flag of your own. See https://tapsmith.dev/guides/warm-reset/',
+    timestamp: Date.now(),
+  });
 }
 
 /** Marker poll cadence inside {@link probeResetCapabilities}. */
@@ -477,6 +513,8 @@ export interface ExecuteAppResetOptions {
    * check and the report says so (`origin: 'prepared'`).
    */
   prepared?: PreparedState
+  /** How long the missing-hooks check looks for the marker (default: the startup probe's budget). */
+  hooksProbeMs?: number
 }
 
 /**
@@ -621,7 +659,9 @@ export async function executeAppReset(
     // upgrade path — the next scope resolves warm. A hookless app pays one
     // hierarchy read per clear reset; a hooked one upgrades on the first.
     await probeResetCapabilities(ctx, { pollMs: 0 });
-    if (action.kind === 'clear' && ctx.capabilities?.hooksDetected === false) warnIfHooksExpected(ctx);
+    if (action.kind === 'clear' && ctx.capabilities?.hooksDetected === false) {
+      await checkMissingHooks(ctx, ctx.capabilities, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
+    }
   }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
 }

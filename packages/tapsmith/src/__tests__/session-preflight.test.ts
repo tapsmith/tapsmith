@@ -1573,8 +1573,8 @@ describe('session-preflight', () => {
     describe('warning when @tapsmith/react-native is installed but its hooks never show up (PILOT-774)', () => {
       const NO_MARKER = '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>';
       const MARKER = '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=exp://x/" /></hierarchy>';
+      const PROBE = { phase: 'file reset', hooksProbeMs: 0 };
       let tmp: string;
-      const warnings: string[] = [];
 
       function appDir(deps: Record<string, string>, devDeps: Record<string, string> = {}, dir = tmp): string {
         fs.mkdirSync(dir, { recursive: true });
@@ -1589,69 +1589,83 @@ describe('session-preflight', () => {
         vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: xml, errorMessage: '' });
         return ctx;
       }
-      const hooksWarnings = () => warnings.filter((m) => m.includes('@tapsmith/react-native'));
+      // The runner passes a fresh spread of the session context to every reset.
+      const reset = (ctx: ReturnType<typeof hookedContext>, opts = PROBE) => executeAppReset({ ...ctx }, CLEAR_FILE, opts);
+      const hooksNotices = (ctx: ReturnType<typeof hookedContext>) => ctx.notices.filter((n) => n.kind === 'hooks-missing');
 
-      beforeEach(() => {
-        tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-warn-'));
-        warnings.length = 0;
-        vi.spyOn(console, 'warn').mockImplementation((msg: unknown) => { warnings.push(String(msg)); });
-      });
-      afterEach(() => {
-        vi.mocked(console.warn).mockRestore();
-        fs.rmSync(tmp, { recursive: true, force: true });
-      });
+      beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-warn-')); });
+      afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
 
-      it('warns once per session after a clear reset still finds no marker, naming the cause and the fix', async () => {
+      it('leaves one notice per session after clear resets still find no marker, naming the cause and the fix', async () => {
         const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
 
-        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
-        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+        await reset(ctx);
+        await reset(ctx);
 
-        const messages = hooksWarnings();
-        expect(messages).toHaveLength(1);
-        expect(messages[0]).toContain('Worker 0 (emulator-5554)');
-        expect(messages[0]).toContain('enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}');
-        expect(messages[0]).toContain('node_modules');
-        expect(messages[0]).toContain('https://tapsmith.dev/guides/warm-reset/');
+        const notices = hooksNotices(ctx);
+        expect(notices).toHaveLength(1);
+        expect(notices[0].message).toContain('enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}');
+        expect(notices[0].message).toContain('node_modules');
+        expect(notices[0].message).toContain('bare React Native');
+        expect(notices[0].message).toContain('https://tapsmith.dev/guides/warm-reset/');
       });
 
-      it('stays quiet at the startup probe: a slow first mount is upgraded by the next reset', async () => {
+      it('looks again before blaming the build: a marker that appears within the budget upgrades instead', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce({ requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' })
+          .mockResolvedValue({ requestId: '1', hierarchyXml: MARKER, errorMessage: '' });
+
+        await reset(ctx, { phase: 'file reset', hooksProbeMs: 1_000 });
+
+        expect(ctx.capabilities?.hooksDetected).toBe(true);
+        expect(hooksNotices(ctx)).toEqual([]);
+      });
+
+      it('stays quiet at the startup probe, and when the check could not read the app (asks again next reset)', async () => {
         const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
         ctx.capabilities = {};
-
         await probeResetCapabilities(ctx, { pollMs: 0 });
         expect(ctx.capabilities).toEqual({ hooksDetected: false });
-        expect(hooksWarnings()).toEqual([]);
+        expect(hooksNotices(ctx)).toEqual([]);
 
-        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: MARKER, errorMessage: '' });
-        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+        // Only the check's own reads fail: everything up to and including the
+        // reset's single re-read (counted on a context without the dependency) succeeds.
+        const counter = hookedContext(appDir({ expo: '~58.0.0' }, {}, path.join(tmp, 'count')));
+        await reset(counter);
+        const readsBeforeCheck = vi.mocked(counter.client.getUiHierarchy).mock.calls.length;
+        let calls = 0;
+        vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => {
+          calls += 1;
+          if (calls > readsBeforeCheck) throw new Error('agent settling');
+          return { requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' };
+        });
+        await reset(ctx);
+        expect(calls).toBeGreaterThan(readsBeforeCheck);
+        expect(hooksNotices(ctx)).toEqual([]);
 
-        expect(ctx.capabilities.hooksDetected).toBe(true);
-        expect(hooksWarnings()).toEqual([]);
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' });
+        await reset(ctx);
+        expect(hooksNotices(ctx)).toHaveLength(1);
       });
 
       it('finds the app package.json above a config in a subfolder', async () => {
         appDir({ expo: '~58.0.0' }, { '@tapsmith/react-native': '^0.7.1' });
-        const e2e = appDir({ tapsmith: '^0.7.1' }, {}, path.join(tmp, 'e2e'));
+        const ctx = hookedContext(appDir({ tapsmith: '^0.7.1' }, {}, path.join(tmp, 'e2e')));
 
-        await executeAppReset(hookedContext(e2e), CLEAR_FILE, { phase: 'file reset' });
+        await reset(ctx);
 
-        expect(hooksWarnings()).toHaveLength(1);
+        expect(hooksNotices(ctx)).toHaveLength(1);
       });
 
-      it('stays quiet when the app does not depend on the package, or without a rootDir', async () => {
-        await executeAppReset(hookedContext(appDir({ expo: '~58.0.0' })), CLEAR_FILE, { phase: 'file reset' });
-        await executeAppReset(hookedContext(undefined), CLEAR_FILE, { phase: 'file reset' });
+      it('stays quiet when the app does not depend on the package, without a rootDir, or with an explicit appReset', async () => {
+        const plain = hookedContext(appDir({ expo: '~58.0.0' }));
+        const noRoot = hookedContext(undefined);
+        const explicit = hookedContext(appDir({ '@tapsmith/react-native': '^0.7.1' }, {}, path.join(tmp, 'x')), NO_MARKER, { appReset: 'clear' });
 
-        expect(hooksWarnings()).toEqual([]);
-      });
+        for (const ctx of [plain, noRoot, explicit]) await reset(ctx);
 
-      it('stays quiet when appReset is set explicitly', async () => {
-        const ctx = hookedContext(appDir({ '@tapsmith/react-native': '^0.7.1' }), NO_MARKER, { appReset: 'clear' });
-
-        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
-
-        expect(hooksWarnings()).toEqual([]);
+        expect([plain, noRoot, explicit].flatMap(hooksNotices)).toEqual([]);
       });
     });
 

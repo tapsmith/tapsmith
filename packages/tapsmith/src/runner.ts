@@ -145,9 +145,10 @@ async function forEachDeviceBestEffort(opts: RunOptions, fn: (device: Device) =>
 }
 
 /**
- * Take the system-dialog notices the Android preflight left on each device's
- * session context: a trace row for every one (when a trace is recording), and
- * a warning — held for the next test result — for the app under test's own.
+ * Take the notices the preflight left on each device's session context: for
+ * system dialogs a trace row for every one (when a trace is recording), and a
+ * warning — held for the next test result — for the app under test's own; for
+ * a missing-hooks notice, the warning alone.
  */
 function drainPreflightNotices(opts: RunOptions, collector: TraceCollector | null): void {
   const devices = resettableDevices(opts);
@@ -155,10 +156,12 @@ function drainPreflightNotices(opts: RunOptions, collector: TraceCollector | nul
     for (const notice of rd.sessionContext.notices.splice(0)) {
       // In a group, say whose app it was.
       const message = devices.length > 1 ? `[${rd.name}] ${notice.message}` : notice.message;
-      if (notice.kind === 'app-dialog') {
+      if (notice.kind !== 'foreign-dialog') {
         const pending = (opts._preflightWarnings ??= []);
         if (!pending.includes(message)) pending.push(message);
       }
+      // Not a dialog: the reset row already shows the clear it caused.
+      if (notice.kind === 'hooks-missing') continue;
       // Stamped now, not when the dialog was handled (possibly before this
       // trace began): rows keep their order on the timeline. The handling
       // time goes in the log.

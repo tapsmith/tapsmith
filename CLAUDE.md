@@ -205,8 +205,12 @@ silently (this class of bug has shipped more than once):
 
 A once-per-session warning about the app itself belongs in the shared session
 layer every path opens through (`device-session.ts` → `session-preflight.ts`),
-not in one embedder: the missing `@tapsmith/react-native` hooks warning
-(PILOT-774) lives in `executeAppReset` for that reason.
+not in one embedder, and should reach the user as a `PreflightNotice` (the runner
+turns it into a test-result warning, which every path shows) rather than
+`console.warn` (UI-mode and MCP children's stderr reaches no user). The missing
+`@tapsmith/react-native` hooks warning (PILOT-774) works this way. The runner
+passes `executeAppReset` a fresh spread of the session context per reset, so
+per-session state must live in a shared object, not a scalar on the context.
 
 When adding a per-session concern, prefer a **required** option on
 `runTestFile` over an optional one — a compile error in every embedder beats

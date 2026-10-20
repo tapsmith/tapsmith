@@ -58,7 +58,7 @@ That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'
 
 Release builds strip `__DEV__`. Set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` in the environment of the build that your tests run against (the repo's own e2e workflows do this). The `enabled` line in your root layout then turns the hooks on.
 
-The flag has to be read in your app's code, as `enabled` above, not left to the package. Expo inlines `EXPO_PUBLIC_*` variables only in app code, never inside `node_modules`, so the package cannot see the flag in a Release build. If the app depends on `@tapsmith/react-native` but a reset still finds no hooks in the freshly relaunched app, Tapsmith warns that resets are the slow kind, and names this as the likely cause. The warning appears once per device session, so a run with several workers prints one per worker.
+The flag has to be read in your app's code, as `enabled` above, not left to the package. Expo inlines `EXPO_PUBLIC_*` variables only in app code, never inside `node_modules`, so the package cannot see the flag in a Release build. If the app depends on `@tapsmith/react-native` but a reset still finds no hooks in the freshly relaunched app, Tapsmith adds a warning to the next test's result saying that resets are the slow kind, and names this as the likely cause. It does this once per device session, so a run with several workers can show it once per worker.
 
 In a bare React Native app, which does not inline `EXPO_PUBLIC_*` variables, pass `enabled` from a build-time flag of your own.
 
