@@ -294,3 +294,30 @@ describe('TapsmithGrpcClient bypassAbort', () => {
     await expect(p).rejects.not.toSatisfy(isAbortError);
   });
 });
+
+// ─── Capture start hold (PILOT-775) ───
+
+describe('TapsmithGrpcClient holds RPCs for an on-demand capture start', () => {
+  it('sends a call made while the start is in flight only once it settles', async () => {
+    const fakeMethod = vi.fn((_req: unknown, _opts: unknown, cb: UnaryCallback) => {
+      cb(null, { ok: true });
+      return { cancel: vi.fn() };
+    });
+    const client = makeClient(fakeMethod as unknown as FakeMethod);
+    let finishStart = (): void => {};
+    client._holdForCaptureStart(new Promise<void>((resolve) => { finishStart = resolve; }));
+
+    // e.g. the tap() after `const p = device.waitForRequest(...)` on a cold device
+    const call = invokeCall(client);
+    await new Promise((r) => setTimeout(r, 5));
+    expect(fakeMethod).not.toHaveBeenCalled();
+
+    finishStart();
+    await expect(call).resolves.toEqual({ ok: true });
+    expect(fakeMethod).toHaveBeenCalledTimes(1);
+
+    // Released: later calls go straight through.
+    await invokeCall(client);
+    expect(fakeMethod).toHaveBeenCalledTimes(2);
+  });
+});

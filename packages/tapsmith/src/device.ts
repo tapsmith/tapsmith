@@ -988,6 +988,7 @@ export class Device {
           if (!wasRunning && this._networkProxyRunning) this._proxyStartedOnDemand = true;
         })
         .finally(() => { this._onDemandStart = null; });
+      this._client._holdForCaptureStart?.(this._onDemandStart);
     }
     await this._onDemandStart;
   }

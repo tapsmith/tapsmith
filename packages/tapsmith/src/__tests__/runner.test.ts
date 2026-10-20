@@ -1282,6 +1282,25 @@ describe('runner execution', () => {
         }
       });
 
+      it('also explains a failed test that relied on routes a beforeAll keeps live', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [{ url: 'https://api-pilot775-scoped.example.com/', routeAction: 'passthrough', isHttps: true }],
+        });
+        try {
+          // No route registered by the test itself; the scope's route is live.
+          device._routeManager.hasRoutes = true;
+          device._networkProxyRunning = true;
+          await runBody('relies on a beforeAll mock', async () => { throw new Error('mock not applied'); }, [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('HTTPS to api-pilot775-scoped.example.com passed through');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
       it('requires isolation for a group member started on demand', async () => {
         const alice = makeOnDemandDevice({ handled: 1, name: 'alice' });
         const bob = makeOnDemandDevice({ handled: 1, name: 'bob' });

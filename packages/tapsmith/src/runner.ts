@@ -2865,7 +2865,9 @@ async function runSuiteContext(
         const handled = d._takeRouteHandlerCalls?.() ?? 0;
         if (registered > 0 && !d._networkProxyRunning) {
           _warnRoutesWithoutProxy(fullName, d._traceDeviceId, recording && traceConfig.network);
-        } else if (registered > 0 && handled === 0) {
+        } else if ((registered > 0 || d._routeManager?.hasRoutes) && handled === 0) {
+          // The test's own routes, or ones a beforeAll or worker fixture keeps
+          // live for it.
           unfiredRouteDevices.set(d, startedOnDemand);
         }
         if (d._routeManager?.hasTestRoutes) await d._routeManager.removeTestRoutes();
