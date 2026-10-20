@@ -143,65 +143,110 @@ jobs:
           path: agent/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
 
   # ─── Build iOS simulator agent for arm64 and x64 ───
+  # One row per iOS Simulator SDK the packages ship. The SDK uses a prebuilt
+  # agent only when its `sdk-<version>/` matches the installed simulator SDK
+  # exactly (`xcrun --show-sdk-version --sdk iphonesimulator`); on any other
+  # SDK the first test run builds the agent from source (PILOT-773). So ship
+  # the current stable Xcode, the previous release of its major, and the
+  # newest Xcode of the previous major. Each row names its Xcode and checks the
+  # SDK it reports, so a runner image change fails here rather than silently
+  # shipping a duplicate SDK (both rows of the old matrix built 26.5).
+  #
+  # When Apple ships a new Xcode, add or move a row: `xcode` is the
+  # `/Applications/Xcode_<xcode>.app` alias the image's README lists
+  # (actions/runner-images), `sdk` the iOS Simulator SDK that Xcode bundles.
+  # Never a beta: the release Xcode with the same SDK version would pick up
+  # its build. Both architectures cross-compile (`ARCHS`) on any runner, so
+  # one job per Xcode builds both packages.
   build-ios-simulator-agent:
-    name: Build iOS simulator agent (${{ matrix.arch }}, ${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: Build iOS simulator agent (Xcode ${{ matrix.xcode }}, SDK ${{ matrix.sdk }})
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: arm64
-            os: macos-latest
-            npm-pkg: agent-ios-simulator-arm64
-          - arch: arm64
-            os: macos-26
-            npm-pkg: agent-ios-simulator-arm64
-          - arch: x86_64
-            os: macos-latest
-            npm-pkg: agent-ios-simulator-x64
-          - arch: x86_64
-            os: macos-26
-            npm-pkg: agent-ios-simulator-x64
+          - runner: xcode-27
+            xcode: '27.1'
+            sdk: '27.1'
+          - runner: xcode-27
+            xcode: '27.0'
+            sdk: '27.0'
+          - runner: macos-26
+            xcode: '26.6'
+            sdk: '26.5'
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_${{ matrix.xcode }}.app/Contents/Developer
+      SDK_VERSION: ${{ matrix.sdk }}
     defaults:
       run:
         working-directory: ios-agent
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check the Xcode and its simulator SDK
+        run: |
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            echo "::error::$DEVELOPER_DIR is not on the ${{ matrix.runner }} image. Point this matrix row at an Xcode the image lists."
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          xcodebuild -version
+          FOUND_SDK="$(xcrun --show-sdk-version --sdk iphonesimulator)"
+          if [ "$FOUND_SDK" != "$SDK_VERSION" ]; then
+            echo "::error::Xcode ${{ matrix.xcode }} bundles iOS Simulator SDK $FOUND_SDK, but this matrix row says $SDK_VERSION. Update the row."
+            exit 1
+          fi
+
       - name: Build for testing
         run: |
-          xcodebuild build-for-testing \
-            -project TapsmithAgent.xcodeproj \
-            -scheme TapsmithAgentUITests \
-            -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath '.build-sim-${{ matrix.arch }}' \
-            ARCHS='${{ matrix.arch }}' ONLY_ACTIVE_ARCH=NO \
-            CODE_SIGNING_ALLOWED=NO
+          for ARCH in arm64 x86_64; do
+            xcodebuild build-for-testing \
+              -project TapsmithAgent.xcodeproj \
+              -scheme TapsmithAgentUITests \
+              -destination 'generic/platform=iOS Simulator' \
+              -derivedDataPath ".build-sim-${ARCH}" \
+              ARCHS="${ARCH}" ONLY_ACTIVE_ARCH=NO \
+              CODE_SIGNING_ALLOWED=NO
+          done
 
       - name: Stage package contents
         run: |
-          PRODUCTS=".build-sim-${{ matrix.arch }}/Build/Products"
-          PRODUCTS_ABS="$(cd "$PRODUCTS" && pwd)"
-          SDK_VERSION="$(xcrun --show-sdk-version --sdk iphonesimulator)"
-          STAGING="../npm-packages/${{ matrix.npm-pkg }}/sdk-${SDK_VERSION}"
-          mkdir -p "$STAGING"
+          stage() {
+            local arch="$1" pkg="$2"
+            local products=".build-sim-${arch}/Build/Products"
+            local products_abs
+            products_abs="$(cd "$products" && pwd)"
+            local staging="../npm-packages/${pkg}/sdk-${SDK_VERSION}"
+            mkdir -p "$staging"
 
-          # Copy xctestrun file(s) and the test runner app bundle
-          cp "$PRODUCTS"/*iphonesimulator*.xctestrun "$STAGING/"
-          cp -R "$PRODUCTS/Debug-iphonesimulator" "$STAGING/"
+            # Copy xctestrun file(s) and the test runner app bundle
+            cp "$products"/*iphonesimulator*.xctestrun "$staging/"
+            cp -R "$products/Debug-iphonesimulator" "$staging/"
 
-          # Replace absolute DerivedData paths with __TAPSMITH_PKG__ placeholder
-          for f in "$STAGING"/*.xctestrun; do
-            plutil -convert xml1 "$f"
-            sed -i '' "s|${PRODUCTS_ABS}|__TAPSMITH_PKG__|g" "$f"
-          done
+            # Replace absolute DerivedData paths with __TAPSMITH_PKG__ placeholder
+            for f in "$staging"/*.xctestrun; do
+              plutil -convert xml1 "$f"
+              sed -i '' "s|${products_abs}|__TAPSMITH_PKG__|g" "$f"
+            done
+          }
+          stage arm64 agent-ios-simulator-arm64
+          stage x86_64 agent-ios-simulator-x64
 
-      - name: Upload artifact
+      # The artifact name carries the SDK, so two rows that build the same SDK
+      # fail the second upload instead of one overwriting the other.
+      - name: Upload artifact (arm64)
         uses: actions/upload-artifact@v4
         with:
-          name: ios-sim-agent-${{ matrix.npm-pkg }}-${{ matrix.os }}
-          path: |
-            npm-packages/${{ matrix.npm-pkg }}/sdk-*/
+          name: ios-sim-agent-agent-ios-simulator-arm64-sdk-${{ matrix.sdk }}
+          path: npm-packages/agent-ios-simulator-arm64/sdk-*/
+          if-no-files-found: error
+
+      - name: Upload artifact (x64)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-sim-agent-agent-ios-simulator-x64-sdk-${{ matrix.sdk }}
+          path: npm-packages/agent-ios-simulator-x64/sdk-*/
+          if-no-files-found: error
 
   # ─── Publish platform-specific binary packages ───
   publish-platform-packages:
@@ -322,17 +367,12 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
-      - name: Download iOS simulator agent (macos-latest)
+      - name: Download iOS simulator agent builds (one per SDK)
         uses: actions/download-artifact@v4
         with:
-          name: ios-sim-agent-${{ matrix.pkg }}-macos-latest
+          pattern: ios-sim-agent-${{ matrix.pkg }}-sdk-*
           path: npm-packages/${{ matrix.pkg }}/
-
-      - name: Download iOS simulator agent (macos-26)
-        uses: actions/download-artifact@v4
-        with:
-          name: ios-sim-agent-${{ matrix.pkg }}-macos-26
-          path: npm-packages/${{ matrix.pkg }}/
+          merge-multiple: true
 
       - name: Set version from tag
         run: |
@@ -347,24 +387,33 @@ jobs:
 
       # Guard against the v0.1.3–v0.1.7 regression where the npm `files`
       # globs silently dropped the Debug-iphonesimulator app bundle and
-      # published xctestrun files that pointed at nothing.
+      # published xctestrun files that pointed at nothing. Checked per SDK:
+      # the SDK only uses `sdk-<v>/` when its xctestrun is named for that same
+      # SDK (`…_iphonesimulator<v>-<arch>.xctestrun`) and its bundle is there.
       - name: Verify package contents
         working-directory: npm-packages/${{ matrix.pkg }}
         run: |
           npm pack --dry-run --json > /tmp/pack.json
           node -e "
             const files = require('/tmp/pack.json')[0].files.map((f) => f.path);
+            const sdks = [...new Set(files.map((p) => p.match(/^sdk-([^/]+)\//)?.[1]).filter(Boolean))].sort();
             const missing = [];
-            if (!files.some((p) => p.endsWith('.xctestrun'))) missing.push('*.xctestrun');
-            if (!files.some((p) => /-iphonesimulator\/.*\.app\/PlugIns\/.*\.xctest\//.test(p))) {
-              missing.push('<products>/<Runner>.app/PlugIns/*.xctest');
+            if (!sdks.length) missing.push('sdk-<version>/');
+            for (const sdk of sdks) {
+              const inSdk = files.filter((p) => p.startsWith('sdk-' + sdk + '/'));
+              if (!inSdk.some((p) => p.endsWith('.xctestrun') && p.includes('_iphonesimulator' + sdk + '-'))) {
+                missing.push('sdk-' + sdk + '/*_iphonesimulator' + sdk + '-<arch>.xctestrun');
+              }
+              if (!inSdk.some((p) => /-iphonesimulator\/.*\.app\/PlugIns\/.*\.xctest\//.test(p))) {
+                missing.push('sdk-' + sdk + '/<products>/<Runner>.app/PlugIns/*.xctest');
+              }
             }
             if (missing.length) {
               console.error('Packed tarball is missing required contents: ' + missing.join(', '));
               console.error('Tarball files:\n  ' + files.join('\n  '));
               process.exit(1);
             }
-            console.log('Tarball OK: ' + files.length + ' files');
+            console.log('Tarball OK: ' + files.length + ' files, simulator SDKs ' + sdks.join(', '));
           "
 
       - name: Check if package version already exists

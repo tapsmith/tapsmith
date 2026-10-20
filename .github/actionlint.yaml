@@ -1,0 +1,7 @@
+# actionlint config. GitHub-hosted runner labels newer than actionlint's
+# built-in list go here, so `actionlint` does not report them as unknown.
+self-hosted-runner:
+  labels:
+    # The Xcode 27 macOS image (Apple silicon), GA since Oct 2026.
+    # release.yml builds the prebuilt iOS simulator agent on it (PILOT-773).
+    - xcode-27
