@@ -387,7 +387,7 @@ For elements that must be individually addressable on both platforms, use `getBy
 
 ### ESLint plugin
 
-Tapsmith ships an ESLint plugin that warns when tests use low-priority locators. Add it to your ESLint config to enforce accessible locator usage across your team. See [Locators Guide](locators.md) for full details.
+Tapsmith ships an ESLint plugin that warns when tests use low-priority locators. Add it to your ESLint config to enforce accessible locator usage across your team. The [Locators Guide](locators.md#eslint-plugin) has the setup, which also reports a missing `await`.
 
 ### Scoping with `.locator()`
 

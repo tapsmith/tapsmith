@@ -290,21 +290,41 @@ Tapsmith includes an ESLint plugin that enforces locator best practices in your 
 
 ### Setup
 
+Install ESLint (9.22 or later) and [typescript-eslint](https://typescript-eslint.io), which lets ESLint parse TypeScript:
+
+```bash
+npm install --save-dev eslint typescript-eslint
+```
+
+Then create `eslint.config.mjs` in your project root:
+
 ```javascript
-// eslint.config.js (flat config)
+// eslint.config.mjs
+import { defineConfig } from "eslint/config"
+import tseslint from "typescript-eslint"
 import { eslintPlugin } from "tapsmith"
 
-export default [
-  {
-    plugins: {
-      tapsmith: eslintPlugin,
-    },
-    rules: {
-      ...eslintPlugin.configs.recommended.rules,
-    },
+export default defineConfig({
+  // Where your Tapsmith tests and screen objects live
+  files: ["tests/**/*.ts"],
+  extends: [tseslint.configs.base, eslintPlugin.configs.recommended],
+  languageOptions: {
+    // Type information, so a missing `await` is caught
+    parserOptions: { projectService: true },
   },
-]
+  rules: {
+    "@typescript-eslint/no-floating-promises": "error",
+  },
+})
 ```
+
+Run it with `npx eslint tests/`. Change `files` to match where your tests are.
+
+- `tseslint.configs.base` sets the TypeScript parser. Without it, ESLint stops at the first type annotation with `Parsing error: Unexpected token :`.
+- `eslintPlugin.configs.recommended` registers the plugin and turns on its rules (below).
+- `@typescript-eslint/no-floating-promises` reports an action or assertion you forgot to `await`, such as `expect(item).toBeVisible()`. Without the `await`, the test does not wait for the action or assertion, so a failure can be missed or reported in the wrong test. This rule needs type information, so your `tsconfig.json` must include the test files. If ESLint reports a file "was not found by the project service", add that folder to the tsconfig's `include`.
+
+The `.mjs` extension makes Node load the config as an ES module whether or not your `package.json` has `"type": "module"`.
 
 ### Rules
 
