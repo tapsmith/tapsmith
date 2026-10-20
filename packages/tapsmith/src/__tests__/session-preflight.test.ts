@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { androidHierarchyHasRenderedContent, androidHierarchyHasText, describeHierarchyForDiagnostics, ensureSessionReady, executeAppReset, launchConfiguredApp, probeResetCapabilities } from '../session-preflight.js';
 import type { AppResetPolicy } from '../app-reset.js';
 import { onActionProgress, type ActionProgressEvent } from '../action-progress.js';
@@ -1566,6 +1568,91 @@ describe('session-preflight', () => {
       await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
 
       expect(ctx.capabilities.hooksDetected).toBe(true);
+    });
+
+    describe('warning when @tapsmith/react-native is installed but its hooks never show up (PILOT-774)', () => {
+      const NO_MARKER = '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>';
+      const MARKER = '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=exp://x/" /></hierarchy>';
+      let tmp: string;
+      const warnings: string[] = [];
+
+      function appDir(deps: Record<string, string>, devDeps: Record<string, string> = {}, dir = tmp): string {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: deps, devDependencies: devDeps }));
+        return dir;
+      }
+      function hookedContext(rootDir: string | undefined, xml = NO_MARKER, extra: Record<string, unknown> = {}) {
+        const ctx = makeContext({
+          config: { package: 'com.example.app', activity: '.MainActivity', platform: 'android', rootDir, ...extra },
+        });
+        ctx.capabilities = { hooksDetected: false };
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: xml, errorMessage: '' });
+        return ctx;
+      }
+      const hooksWarnings = () => warnings.filter((m) => m.includes('@tapsmith/react-native'));
+
+      beforeEach(() => {
+        tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-warn-'));
+        warnings.length = 0;
+        vi.spyOn(console, 'warn').mockImplementation((msg: unknown) => { warnings.push(String(msg)); });
+      });
+      afterEach(() => {
+        vi.mocked(console.warn).mockRestore();
+        fs.rmSync(tmp, { recursive: true, force: true });
+      });
+
+      it('warns once per session after a clear reset still finds no marker, naming the cause and the fix', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        const messages = hooksWarnings();
+        expect(messages).toHaveLength(1);
+        expect(messages[0]).toContain('Worker 0 (emulator-5554)');
+        expect(messages[0]).toContain('enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}');
+        expect(messages[0]).toContain('node_modules');
+        expect(messages[0]).toContain('https://tapsmith.dev/guides/warm-reset/');
+      });
+
+      it('stays quiet at the startup probe: a slow first mount is upgraded by the next reset', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
+        ctx.capabilities = {};
+
+        await probeResetCapabilities(ctx, { pollMs: 0 });
+        expect(ctx.capabilities).toEqual({ hooksDetected: false });
+        expect(hooksWarnings()).toEqual([]);
+
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: MARKER, errorMessage: '' });
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.capabilities.hooksDetected).toBe(true);
+        expect(hooksWarnings()).toEqual([]);
+      });
+
+      it('finds the app package.json above a config in a subfolder', async () => {
+        appDir({ expo: '~58.0.0' }, { '@tapsmith/react-native': '^0.7.1' });
+        const e2e = appDir({ tapsmith: '^0.7.1' }, {}, path.join(tmp, 'e2e'));
+
+        await executeAppReset(hookedContext(e2e), CLEAR_FILE, { phase: 'file reset' });
+
+        expect(hooksWarnings()).toHaveLength(1);
+      });
+
+      it('stays quiet when the app does not depend on the package, or without a rootDir', async () => {
+        await executeAppReset(hookedContext(appDir({ expo: '~58.0.0' })), CLEAR_FILE, { phase: 'file reset' });
+        await executeAppReset(hookedContext(undefined), CLEAR_FILE, { phase: 'file reset' });
+
+        expect(hooksWarnings()).toEqual([]);
+      });
+
+      it('stays quiet when appReset is set explicitly', async () => {
+        const ctx = hookedContext(appDir({ '@tapsmith/react-native': '^0.7.1' }), NO_MARKER, { appReset: 'clear' });
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(hooksWarnings()).toEqual([]);
+      });
     });
 
     it('an explicit appReset: clear does not spend a hierarchy read on hook detection', async () => {

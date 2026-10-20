@@ -50,6 +50,8 @@ export interface SessionPreflightContext {
    * reference, like `capabilities`.
    */
   notices: PreflightNotice[]
+  /** Set once this session has warned that `@tapsmith/react-native` is installed but its hooks never showed up. */
+  hooksWarningShown?: boolean
 }
 
 /** A system ANR/crash dialog the Android preflight dealt with. */
@@ -114,33 +116,26 @@ export async function probeResetCapabilities(
   // session that never saw the marker records false, and only on the
   // strength of a hierarchy it actually read: a run of failed reads leaves
   // the question open for the next probe.
-  if (readWithoutMarker && caps.hooksDetected === undefined) {
-    caps.hooksDetected = false;
-    warnIfHooksExpected(ctx);
-  }
+  if (readWithoutMarker) caps.hooksDetected ??= false;
   return caps;
 }
 
-let hooksWarningShown = false;
-
 /**
- * Once per process: the app depends on `@tapsmith/react-native` but this
- * session's first look found no hooks marker, so `appReset: 'auto'` will clear
- * app data (seconds) instead of resetting warm. Almost always a Release build
- * with the hooks off — Expo inlines `EXPO_PUBLIC_*` only in app code, never
- * inside node_modules, so the package cannot read the flag itself. Only the
- * first `undefined → false` transition warns: watch and MCP children are
- * seeded with the parent's answer and stay quiet.
+ * Once per session: `appReset: 'auto'` just ran a clear reset because no
+ * hooks marker has been seen — not by the startup probe, and not by the read
+ * of the freshly relaunched app after this reset — yet the app depends on
+ * `@tapsmith/react-native`. Almost always a Release build with the hooks off:
+ * Expo inlines `EXPO_PUBLIC_*` only in app code, never inside node_modules,
+ * so the package cannot read the flag itself. Warning here rather than at the
+ * startup probe keeps a slow first mount (which this read upgrades) quiet.
  */
 function warnIfHooksExpected(ctx: SessionPreflightContext): void {
-  if (hooksWarningShown) return;
-  const appReset = ctx.config.appReset ?? 'auto';
-  if (appReset !== 'auto' || !ctx.config.rootDir) return;
+  if (ctx.hooksWarningShown || !ctx.config.rootDir) return;
   if (!appDependsOnTapsmithHooks(ctx.config.rootDir)) return;
-  hooksWarningShown = true;
+  ctx.hooksWarningShown = true;
   console.warn(
-    `[tapsmith] ${ctx.label}: @tapsmith/react-native is installed, but its reset hooks were not found in the app after launch, `
-    + 'so every app reset clears app data and relaunches (5-10 s) instead of resetting in-app (~1 s). '
+    `[tapsmith] ${ctx.label}: @tapsmith/react-native is installed, but its reset hooks have not shown up in the app, `
+    + 'so app resets clear app data and relaunch (5-10 s) instead of resetting in-app (~1 s). '
     + 'Most likely the hooks are switched off in this build: in a Release build they are on only when the app passes '
     + '`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` itself and is built with EXPO_PUBLIC_TAPSMITH_HOOKS=1 '
     + '(Expo does not inline EXPO_PUBLIC_* variables inside node_modules, so the package cannot read the flag). '
@@ -626,6 +621,7 @@ export async function executeAppReset(
     // upgrade path — the next scope resolves warm. A hookless app pays one
     // hierarchy read per clear reset; a hooked one upgrades on the first.
     await probeResetCapabilities(ctx, { pollMs: 0 });
+    if (action.kind === 'clear' && ctx.capabilities?.hooksDetected === false) warnIfHooksExpected(ctx);
   }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
 }

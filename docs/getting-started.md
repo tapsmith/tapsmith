@@ -258,7 +258,7 @@ import { TapsmithTestHooks } from "@tapsmith/react-native"
 />
 ```
 
-See the [Warm app reset guide](warm-reset.md) — including why the hooks must only ever be compiled into test builds, never a store release.
+A warm reset re-navigates and runs your own reset, but it does not wipe stored data unless you pass the stores to `clear`, such as `clear={[AsyncStorage]}`. See the [Warm app reset guide](warm-reset.md) for that, and for why the hooks must only ever be compiled into test builds, never a store release.
 
 ## Manual Configuration
 
