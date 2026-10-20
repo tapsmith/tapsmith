@@ -11,7 +11,7 @@ npm install @tapsmith/react-native
 ```
 
 ```tsx
-// app/_layout.tsx (Expo Router) — or your root component
+// app/_layout.tsx or src/app/_layout.tsx (Expo Router) — or your root component
 import * as Linking from "expo-linking"
 import { Stack } from "expo-router"
 import { TapsmithTestHooks } from "@tapsmith/react-native"

@@ -196,13 +196,12 @@ async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabi
   ctx.notices.push({
     kind: 'hooks-missing',
     title: '@tapsmith/react-native hooks not found',
-    message: '@tapsmith/react-native is installed, but its reset hooks have not shown up in the app, '
-      + 'so app resets clear app data and relaunch (5-10 s) instead of resetting in-app (~1 s). '
-      + 'Most likely the hooks are switched off in this build. A Release build has them only when the app passes `enabled` itself: '
-      + 'in Expo, `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` in the root layout, built with EXPO_PUBLIC_TAPSMITH_HOOKS=1 '
-      + '(Expo does not inline EXPO_PUBLIC_* variables inside node_modules, so the package cannot read the flag); '
-      + 'in bare React Native, a build-time flag of your own. If this build is meant to have no hooks, set `appReset: \'clear\'` to silence this. '
-      + 'See https://tapsmith.dev/guides/warm-reset/',
+    // Kept under 500 characters: MCP clips each warning line there.
+    message: '@tapsmith/react-native is installed, but its reset hooks never showed up, so resets clear app data (5-10 s) '
+      + 'instead of resetting in-app (~1 s). In a Release build the app must pass `enabled` itself, because Expo does not inline '
+      + 'EXPO_PUBLIC_* inside node_modules: `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}`, built with '
+      + 'EXPO_PUBLIC_TAPSMITH_HOOKS=1 (bare React Native: your own flag). No hooks intended? Set `appReset: \'clear\'`. '
+      + 'https://tapsmith.dev/guides/warm-reset/',
     timestamp: Date.now(),
   });
 }

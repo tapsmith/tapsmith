@@ -3,7 +3,7 @@
 In-app reset hooks for [Tapsmith](https://tapsmith.dev). One line in your app's root turns Tapsmith's between-test app reset from a cold relaunch (7–13 s on an iOS simulator) into an acknowledged in-process reset (well under a second). Resets still happen once per test file by default; because they are now cheap, a file that needs a fresh app before **every test** can opt in with `test.use({ appResetScope: 'test' })`.
 
 ```tsx
-// app/_layout.tsx (Expo Router) — or your root component
+// app/_layout.tsx or src/app/_layout.tsx (Expo Router) — or your root component
 import * as Linking from 'expo-linking';
 import { Stack } from 'expo-router';
 import { TapsmithTestHooks } from '@tapsmith/react-native';

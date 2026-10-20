@@ -1616,6 +1616,8 @@ describe('session-preflight', () => {
         expect(notices[0].message).toContain('bare React Native');
         expect(notices[0].message).toContain('https://tapsmith.dev/guides/warm-reset/');
         expect(notices[0].message).toContain("appReset: 'clear'");
+        // MCP clips each warning line at 500 characters.
+        expect(notices[0].message.length).toBeLessThanOrEqual(500);
       });
 
       it('looks again before blaming the build: a marker that appears within the budget upgrades instead', async () => {
