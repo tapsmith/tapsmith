@@ -53,13 +53,17 @@ interface RuleContext {
     messageId: string;
     data?: Record<string, string>;
   }): void;
-  sourceCode?: SourceCode;
-  getSourceCode(): SourceCode;
+  // Typed loosely so ESLint's own RuleContext (whose `sourceCode` is generic
+  // over languages) is assignable to this one, which keeps the plugin
+  // assignable to ESLint's `Plugin` type in a typed eslint.config.ts.
+  // `getSourceCode()` is gone in ESLint 10; `sourceCode` exists since 8.40.
+  sourceCode?: object;
+  getSourceCode?(): object;
 }
 
 interface RuleModule {
   meta: {
-    type: string;
+    type: 'problem' | 'suggestion' | 'layout';
     docs: { description: string; recommended: boolean };
     messages: Record<string, string>;
     schema: unknown[];
@@ -176,7 +180,7 @@ const noBareLocatorXpath: RuleModule = {
         const arg = node.arguments?.[0];
         if (getObjectProperty(arg, 'xpath') === undefined) return;
 
-        const sourceCode = context.sourceCode ?? context.getSourceCode();
+        const sourceCode = (context.sourceCode ?? context.getSourceCode?.()) as SourceCode;
         const comments = sourceCode.getCommentsBefore(node);
         if (comments.length > 0) return;
 
@@ -337,15 +341,43 @@ const rules: Record<string, RuleModule> = {
   'prefer-app-reset-option': preferAppResetOption,
 };
 
-const recommendedConfig = {
-  plugins: ['tapsmith'] as const,
-  rules: {
-    'tapsmith/prefer-role': 'warn' as const,
-    'tapsmith/no-bare-locator-xpath': 'error' as const,
-    'tapsmith/prefer-accessible-locators': 'warn' as const,
-    'tapsmith/prefer-app-reset-option': 'warn' as const,
+const recommendedRules = {
+  'tapsmith/prefer-role': 'warn' as const,
+  'tapsmith/no-bare-locator-xpath': 'error' as const,
+  'tapsmith/prefer-accessible-locators': 'warn' as const,
+  'tapsmith/prefer-app-reset-option': 'warn' as const,
+};
+
+interface RecommendedConfig {
+  name: string;
+  files: string[];
+  plugins: { tapsmith: TapsmithPlugin };
+  rules: typeof recommendedRules;
+}
+
+interface TapsmithPlugin {
+  rules: Record<string, RuleModule>;
+  configs: { recommended: RecommendedConfig };
+}
+
+const plugin = { rules } as TapsmithPlugin;
+
+/**
+ * A flat config object, usable as-is in `eslint.config.mjs` (PILOT-776). Its
+ * `files` covers every JS and TS extension rather than a test-file glob:
+ * ESLint lints only `.js`/`.mjs`/`.cjs` unless some config's `files` matches
+ * the file, and `defineConfig`'s `extends` intersects an extended config's
+ * `files` with the extending object's, so a narrower glob here would silently
+ * drop files (screen objects) from a user's own `files`. TypeScript still
+ * needs a parser, which this config does not bring: see docs/locators.md.
+ */
+plugin.configs = {
+  recommended: {
+    name: 'tapsmith/recommended',
+    files: ['**/*.{js,mjs,cjs,jsx,ts,mts,cts,tsx}'],
+    plugins: { tapsmith: plugin },
+    rules: recommendedRules,
   },
 };
 
-export { rules, recommendedConfig as configs };
-export default { rules, configs: { recommended: recommendedConfig } };
+export default plugin;

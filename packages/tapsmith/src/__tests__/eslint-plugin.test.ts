@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import plugin from '../eslint-plugin/index.js';
+import { Linter, type ESLint } from 'eslint';
 import { ANDROID_ROLE_CLASSES, normalizeRole, unknownRoleMessage } from '../roles.js';
 
 // ─── Test helpers ───
@@ -486,5 +487,30 @@ describe('plugin exports', () => {
       'tapsmith/prefer-accessible-locators': 'warn',
       'tapsmith/prefer-app-reset-option': 'warn',
     });
+  });
+
+  // PILOT-776: `configs.recommended` is a ready-made flat config, so it can sit
+  // in `eslint.config.mjs` as-is, and it covers .ts files on its own.
+  describe('configs.recommended as a flat config', () => {
+    const linter = new Linter({ configType: 'flat' });
+    const lint = (code: string, filename: string) =>
+      linter.verify(code, [plugin.configs.recommended], filename);
+
+    it('registers the plugin itself and names the config', () => {
+      // Type-level too: a typed eslint.config.ts accepts both without a cast.
+      const asPlugin: ESLint.Plugin = plugin;
+      const asConfig: Linter.Config = plugin.configs.recommended;
+      expect(asConfig.plugins?.tapsmith).toBe(asPlugin);
+      expect(plugin.configs.recommended.name).toBe('tapsmith/recommended');
+      expect(plugin.configs.recommended.plugins.tapsmith).toBe(plugin);
+    });
+
+    it.each(['tests/login.tapsmith.ts', 'tests/login.test.ts', 'screens/login.mts', 'tests/login.test.tsx', 'tests/login.test.js'])(
+      'lints %s with the tapsmith rules',
+      (filename) => {
+        const messages = lint('device.getByTestId("submit");\n', filename);
+        expect(messages.map((m) => m.ruleId)).toEqual(['tapsmith/prefer-accessible-locators']);
+      },
+    );
   });
 });
