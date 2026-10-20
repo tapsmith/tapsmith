@@ -125,3 +125,56 @@ export class NativeAccessibilityScreen {
   get hidden() { return this.device.getByRole("text", { name: "Hidden from accessibility" }) }
   get hintTarget() { return this.device.getByText("Hint target", { exact: true }) }
 }
+
+// ─── UIKit counterparts (hosted view controllers) ───
+
+export class UIKitControlsScreen {
+  constructor(private device: Device) {}
+
+  /** A UISwitch with its own accessibilityLabel. */
+  get wifi() { return this.device.getByRole("switch", { name: "Wi-Fi" }) }
+  /** An unlabelled UISwitch beside a UILabel: the only switch with no name. */
+  get bluetooth() { return this.device.getByRole("switch").nth(1) }
+  status(text: string) { return this.device.getByText(text, { exact: true }) }
+  segment(name: string, options: { selected?: boolean } = {}) {
+    return this.device.getByRole("button", { name, exact: true, ...options })
+  }
+  get increment() { return this.device.getByRole("button", { name: "Increment" }) }
+  count(n: number) { return this.device.getByRole("text", { name: `Count: ${n}`, exact: true }) }
+  get submit() { return this.device.getByRole("button", { name: "Submit" }) }
+}
+
+export class UIKitTableScreen {
+  constructor(private device: Device) {}
+
+  row(n: number) { return this.device.getByRole("listitem").filter({ hasText: `Row ${n}` }).first() }
+  rowText(n: number) { return this.device.getByText(`Row ${n}`, { exact: true }) }
+  get selection() { return this.device.getByTestId("uikit-table-selection") }
+}
+
+export class UIKitDialogsScreen {
+  constructor(private device: Device) {}
+
+  get showAlert() { return this.device.getByRole("button", { name: "UIKit Alert" }) }
+  get showSheet() { return this.device.getByRole("button", { name: "UIKit Action Sheet" }) }
+  result(text: string) { return this.device.getByText(`Result: ${text}`, { exact: true }) }
+  get alert() { return this.device.getByRole("alert", { name: "Remove item?" }) }
+  get remove() { return this.device.getByRole("button", { name: "Remove" }) }
+  get exportPdf() { return this.device.getByRole("button", { name: "Export PDF" }) }
+}
+
+export class UIKitKeyboardScreen {
+  constructor(private device: Device) {}
+
+  get city() { return this.device.getByPlaceholder("City") }
+  entered(text: string) { return this.device.getByText(`Entered: ${text}`, { exact: true }) }
+  get notes() { return this.device.getByTestId("uikit-notes") }
+}
+
+export class UIKitGesturesScreen {
+  constructor(private device: Device) {}
+
+  status(text: string) { return this.device.getByText(`Status: ${text}`, { exact: true }) }
+  get doubleTapTarget() { return this.device.getByRole("button", { name: "Double tap me" }) }
+  get longPressTarget() { return this.device.getByRole("button", { name: "Long press me" }) }
+}

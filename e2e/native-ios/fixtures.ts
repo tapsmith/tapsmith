@@ -11,6 +11,11 @@ import {
   NativeSlowLoadScreen,
   NativeTabsScreen,
   NativeTogglesScreen,
+  UIKitControlsScreen,
+  UIKitDialogsScreen,
+  UIKitGesturesScreen,
+  UIKitKeyboardScreen,
+  UIKitTableScreen,
 } from "./screens/native-screens.js"
 
 type NativeFixtures = {
@@ -25,6 +30,11 @@ type NativeFixtures = {
   gestures: NativeGesturesScreen
   slowLoad: NativeSlowLoadScreen
   a11y: NativeAccessibilityScreen
+  uikitControls: UIKitControlsScreen
+  uikitTable: UIKitTableScreen
+  uikitDialogs: UIKitDialogsScreen
+  uikitKeyboard: UIKitKeyboardScreen
+  uikitGestures: UIKitGesturesScreen
 }
 
 export const test = base.extend<NativeFixtures>({
@@ -39,6 +49,11 @@ export const test = base.extend<NativeFixtures>({
   gestures: async ({ device }, use) => { await use(new NativeGesturesScreen(device)) },
   slowLoad: async ({ device }, use) => { await use(new NativeSlowLoadScreen(device)) },
   a11y: async ({ device }, use) => { await use(new NativeAccessibilityScreen(device)) },
+  uikitControls: async ({ device }, use) => { await use(new UIKitControlsScreen(device)) },
+  uikitTable: async ({ device }, use) => { await use(new UIKitTableScreen(device)) },
+  uikitDialogs: async ({ device }, use) => { await use(new UIKitDialogsScreen(device)) },
+  uikitKeyboard: async ({ device }, use) => { await use(new UIKitKeyboardScreen(device)) },
+  uikitGestures: async ({ device }, use) => { await use(new UIKitGesturesScreen(device)) },
 })
 
 export { describe, expect } from "tapsmith"

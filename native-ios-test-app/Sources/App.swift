@@ -24,6 +24,7 @@ struct TapsmithNativeTestApp: App {
 
 enum Screen: String, CaseIterable, Hashable {
     case login, toggles, list, dialogs, scroll, keyboard, tabs, gestures, slowload, accessibility
+    case uikitcontrols, uikittable, uikitdialogs, uikitkeyboard, uikitgestures
 
     var title: String {
         switch self {
@@ -37,6 +38,11 @@ enum Screen: String, CaseIterable, Hashable {
         case .gestures: "Gestures"
         case .slowload: "Slow Load"
         case .accessibility: "Accessibility"
+        case .uikitcontrols: "UIKit Controls"
+        case .uikittable: "UIKit Table"
+        case .uikitdialogs: "UIKit Dialogs"
+        case .uikitkeyboard: "UIKit Keyboard"
+        case .uikitgestures: "UIKit Gestures"
         }
     }
 
@@ -52,6 +58,11 @@ enum Screen: String, CaseIterable, Hashable {
         case .gestures: GesturesView()
         case .slowload: SlowLoadView()
         case .accessibility: AccessibilityView()
+        case .uikitcontrols: UIKitScreen { UIKitControlsViewController() }.navigationTitle(title)
+        case .uikittable: UIKitScreen { UIKitTableViewController() }.navigationTitle(title)
+        case .uikitdialogs: UIKitScreen { UIKitDialogsViewController() }.navigationTitle(title)
+        case .uikitkeyboard: UIKitScreen { UIKitKeyboardViewController() }.navigationTitle(title)
+        case .uikitgestures: UIKitScreen { UIKitGesturesViewController() }.navigationTitle(title)
         }
     }
 }
