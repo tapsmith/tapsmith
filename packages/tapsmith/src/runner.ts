@@ -156,6 +156,9 @@ function drainPreflightNotices(opts: RunOptions, collector: TraceCollector | nul
     for (const notice of rd.sessionContext.notices.splice(0)) {
       // In a group, say whose app it was.
       const message = devices.length > 1 ? `[${rd.name}] ${notice.message}` : notice.message;
+      // A missing-hooks notice the session has since disproved (a slow first
+      // mount the next read caught) would blame a build that is fine.
+      if (notice.kind === 'hooks-missing' && rd.sessionContext.capabilities?.hooksDetected) continue;
       if (notice.kind !== 'foreign-dialog') {
         const pending = (opts._preflightWarnings ??= []);
         if (!pending.includes(message)) pending.push(message);
