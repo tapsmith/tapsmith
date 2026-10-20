@@ -17,7 +17,7 @@ import { findDaemonBin } from './daemon-bin.js';
 import { findAgentApk, findAgentTestApk, missingAndroidAgentAdvice, type AndroidAgentAdvice } from './agent-resolve.js';
 import { formatJson, jsonError, stripAnsi, type JsonCheck } from './cli-json.js';
 import { PLAY_IMAGE_CAPTURE_EFFECT, avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
-import { parseSimctlDevicesJson, tryExec } from './env-scan.js';
+import { parseSimctlDevicesJson, simulatorChoices, tryExec } from './env-scan.js';
 import { androidUnusableDeviceFix, parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
 import { isTapsmithNotInstalledError, type TapsmithConfig } from './config.js';
 import { MIN_NODE_MAJOR, isSupportedNodeVersion } from './node-runtime.js';
@@ -521,9 +521,54 @@ function checkXcode(report: Reporter, required: boolean, targeted: boolean): boo
   return false;
 }
 
-function checkSimctl(report: Reporter, required: boolean): void {
-  if (run(report, 'xcrun', ['simctl', 'list', 'devices', 'available', '-j']) !== undefined) {
-    pass(report, 'simctl', 'iOS simulators available');
+/**
+ * The iOS simulators in `xcrun simctl list devices available -j` output,
+ * counted as init counts them (`simulatorChoices`: iOS runtimes only, no
+ * Tapsmith worker clones, one per name), so doctor and init agree on "none"
+ * (PILOT-777). Undefined when the output is not simctl's device JSON.
+ */
+function countIosSimulators(simctlJson: string): number | undefined {
+  let data: unknown;
+  try {
+    data = JSON.parse(simctlJson);
+  } catch {
+    return undefined;
+  }
+  const devices = typeof data === 'object' && data !== null ? (data as Record<string, unknown>)['devices'] : undefined;
+  if (typeof devices !== 'object' || devices === null || Array.isArray(devices)) return undefined;
+  return simulatorChoices(parseSimctlDevicesJson(simctlJson)).length;
+}
+
+/**
+ * Xcode 26+ installs without the iOS simulator runtime (a separate
+ * download), which leaves simctl working with nothing to boot.
+ */
+const NO_SIMULATOR_FIX = 'Install the iOS simulator runtime: Xcode → Settings → Components, or run: xcodebuild -downloadPlatform iOS. '
+  + 'If it is installed, create a simulator in Xcode → Window → Devices and Simulators';
+
+/**
+ * `required`: the config targets iOS, so a failing simctl is an error.
+ * `named`: whether an iOS scope names a `simulator` to run on, and if so
+ * whether this machine must run it (`planPlatform`'s `required`). Having no
+ * simulator is an error only then: an iOS config without one may run on a
+ * physical device (docs/ios-physical-devices.md), and a mixed config whose
+ * Android projects run here is let off as for a missing Xcode.
+ */
+function checkSimctl(report: Reporter, required: boolean, named: 'required' | 'optional' | 'none'): void {
+  const output = run(report, 'xcrun', ['simctl', 'list', 'devices', 'available', '-j']);
+  if (output !== undefined) {
+    const count = countIosSimulators(output);
+    if (count === undefined) {
+      warn(report, 'simctl', 'Could not read the iOS simulator list', 'Run: xcrun simctl list devices available to see it');
+    } else if (count > 0) {
+      pass(report, 'simctl', 'iOS simulators available', `${count} iOS simulator${count === 1 ? '' : 's'}`);
+    } else if (named === 'required') {
+      fail(report, 'simctl', 'No iOS simulators available', NO_SIMULATOR_FIX);
+    } else if (named === 'optional') {
+      warn(report, 'simctl', 'No iOS simulators available — the config\'s iOS simulator projects cannot run on this machine', `${NO_SIMULATOR_FIX}. Meanwhile, select the other projects with --project`);
+    } else {
+      warn(report, 'simctl', 'No iOS simulators available', NO_SIMULATOR_FIX);
+    }
     return;
   }
   // It fails for a missing command-line tools install, but also for a slow or
@@ -900,6 +945,11 @@ function scopePlatform(scope: PlatformScope): DoctorPlatform {
   return 'android';
 }
 
+/** Whether an iOS scope of the config names a `simulator` to run on. */
+function configNamesSimulator(config: PlatformConfig): boolean {
+  return platformScopes(config).some((s) => s.platform === 'ios' && s.scope.simulator != null);
+}
+
 /** The platforms a loaded config runs tests on. */
 export function configPlatformTargets(config: PlatformConfig): Set<DoctorPlatform> {
   return new Set(platformScopes(config).map((s) => s.platform));
@@ -1106,7 +1156,8 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
     iosChecked = true;
     if (checkXcode(report, iosPlan.required, !!targets)) {
       // With Xcode here, the config's iOS projects run on this machine.
-      checkSimctl(report, !!targets);
+      const named = !targets || !config || !configNamesSimulator(config) ? 'none' : iosPlan.required ? 'required' : 'optional';
+      checkSimctl(report, !!targets, named);
       await checkSimulatorXctestrun(report);
     } else {
       // A config that targets iOS still gets its capture guidance (mitmproxy,

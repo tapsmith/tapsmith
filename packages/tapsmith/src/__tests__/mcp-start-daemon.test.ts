@@ -147,7 +147,7 @@ describe('ensureConnected', () => {
     const err = await ensureConnected().then(() => undefined, (e: unknown) => e);
     const message = (err as Error).message;
     expect(message).toContain('Could not connect to the daemon at localhost:50051: 14 UNAVAILABLE: Connection dropped');
-    expect(message).toContain('Failed to start a Tapsmith daemon: tapsmith-core exited with code 1 before it answered');
+    expect(message).toContain('Failed to start an android daemon: tapsmith-core exited with code 1 before it answered');
     expect(message).toContain('Error: tapsmith-core refused to start: mitmproxy not found');
     expect(message).toContain(`Daemon log: ${mcpDaemonLogPath()}`);
     expect(message).not.toContain('installed');
@@ -216,7 +216,7 @@ describe('startDaemon', () => {
     const err = await startDaemon('ios').then(() => undefined, (e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).message.split('\n')).toEqual([
-      'Failed to start a ios daemon: tapsmith-core exited with code 1 before it answered',
+      'Failed to start an ios daemon: tapsmith-core exited with code 1 before it answered',
       '  Recent daemon output:',
       '    Error: address already in use',
       `  Daemon log: ${mcpDaemonLogPath()}`,
@@ -246,7 +246,7 @@ describe('startDaemon', () => {
 
     const err = await startDaemon('android').then(() => undefined, (e: unknown) => e);
     const lines = (err as Error).message.split('\n');
-    expect(lines[0]).toBe('Failed to start a android daemon: could not run tapsmith-core: /fake/tapsmith-core is not an executable for this machine (ENOEXEC)');
+    expect(lines[0]).toBe('Failed to start an android daemon: could not run tapsmith-core: /fake/tapsmith-core is not an executable for this machine (ENOEXEC)');
     expect(lines[1]).toContain(`than this Node (${process.platform}-${process.arch})`);
     expect(lines.at(-1)).toBe(`  Daemon log: ${mcpDaemonLogPath()}`);
     expect((err as Error).message).not.toContain('Is tapsmith-core installed?');

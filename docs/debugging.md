@@ -618,7 +618,7 @@ Tapsmith Doctor
 
   iOS
   ✓ Xcode 16.2
-  ✓ iOS simulators available
+  ✓ iOS simulators available (3 iOS simulators)
   ✓ Simulator xctestrun found (TapsmithAgentUITests.xctestrun)
 
   Network Capture

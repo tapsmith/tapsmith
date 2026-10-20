@@ -103,6 +103,10 @@ class ActionExecutor(
      * element under an overlay — that waits out the cover within [budget],
      * then fails with ELEMENT_COVERED (PILOT-362).
      *
+     * A keyboard that would eat the touch (a scroll view closing it on the
+     * first tap after typing) is put away first; see [KeyboardFirst]
+     * (PILOT-622). Long press and double tap do the same.
+     *
      * The tap itself is injected at coordinates rather than via
      * UiObject2.click(), which would re-fetch the accessibility node — one
      * more round-trip blocking on the app's main looper.
@@ -115,7 +119,10 @@ class ActionExecutor(
         followUpMs: Long = 0,
     ) {
         try {
-            val trusted = resolvedBounds?.takeIf { !it.isEmpty }
+            // Bounds from before the keyboard went away are stale: the screen
+            // lays itself out again without it.
+            val keyboardPutAway = occlusionGuard.putKeyboardAwayFirst(element, budget)
+            val trusted = resolvedBounds?.takeIf { !it.isEmpty && !keyboardPutAway }
             val stableStart = SystemClock.uptimeMillis()
             val bounds = trusted ?: waitForStableBounds(element)
             val stableMs = SystemClock.uptimeMillis() - stableStart
@@ -208,7 +215,13 @@ class ActionExecutor(
         expected: TargetIdentity?,
     ) {
         try {
-            val bounds = resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
+            val keyboardPutAway = occlusionGuard.putKeyboardAwayFirst(element, budget)
+            val bounds =
+                if (keyboardPutAway) {
+                    waitForStableBounds(element)
+                } else {
+                    resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
+                }
             // The cover wait and the hold together fit the timeout, as on iOS
             // and the daemon's HID route (long_press_resolve_budget).
             val point =
@@ -909,7 +922,13 @@ class ActionExecutor(
         expected: TargetIdentity?,
     ) {
         try {
-            val bounds = resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
+            val keyboardPutAway = occlusionGuard.putKeyboardAwayFirst(element, budget)
+            val bounds =
+                if (keyboardPutAway) {
+                    waitForStableBounds(element)
+                } else {
+                    resolvedBounds?.takeIf { !it.isEmpty } ?: element.visibleBounds
+                }
             // Both presses and the gap between them must finish before the
             // daemon gives up, or the second tap lands in the next step.
             val gestureMs = (if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS) + 2 * TAP_PRESS_MS

@@ -114,6 +114,15 @@ server (see [Several sessions on one machine](./parallel-and-sharding.md#several
 It picks a free device instead, and a pinned one that is held is refused with
 an error naming the session that holds it.
 
+A daemon the server finds rather than starts — on its `daemonAddress`, by
+default `localhost:50051` — is never moved to another platform: one that is
+driving an Android device, or serves only Android devices, is not used for
+iOS, and the other way round. An iOS config next to an Android `tapsmith test`
+starts its own daemon instead of taking that run's. The
+UI-mode endpoint only uses the UI session's own daemons, even when that
+session had to start on a free port because another session held the
+configured one.
+
 For a project that drives several devices per test (`use.devices`, see
 [Multi-device tests](./multi-device.md)), `device` also accepts a member's
 **name** — `device: "bob"`. Such a project is discoverable without reading the
