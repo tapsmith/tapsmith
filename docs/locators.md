@@ -330,19 +330,20 @@ The `.mjs` extension makes Node load the config as an ES module whether or not y
 
 If your project already has an ESLint config, add the object to that config instead of creating a second file. ESLint reads only one config file, and it picks `eslint.config.js` before `eslint.config.mjs`, so a new file would be ignored.
 
-Expo's `npx expo lint` creates an `eslint.config.js` that uses `require`. Add the imports as `require` calls, and add the object to the array passed to `defineConfig`:
+Expo's `npx expo lint` creates an `eslint.config.js` that uses `require`, and installs ESLint with `eslint-config-expo`, which already sets up typescript-eslint for `.ts` files. So in an Expo project, skip the install step above and add an object like this to the array passed to `defineConfig`:
 
 ```javascript
 // eslint.config.js
 const { defineConfig } = require("eslint/config")
-const tseslint = require("typescript-eslint")
+const expoConfig = require("eslint-config-expo/flat")
 const { eslintPlugin } = require("tapsmith")
 
 module.exports = defineConfig([
-  // ...the configs already in the file, such as Expo's `expoConfig`
+  expoConfig,
   {
     files: ["tests/**/*.ts"],
-    extends: [tseslint.configs.base, eslintPlugin.configs.recommended],
+    // No tseslint.configs.base: expoConfig already sets the TypeScript parser
+    extends: [eslintPlugin.configs.recommended],
     languageOptions: {
       parserOptions: { projectService: true, tsconfigRootDir: __dirname },
     },
@@ -352,6 +353,8 @@ module.exports = defineConfig([
   },
 ])
 ```
+
+The same applies to any config that already uses typescript-eslint: leave out `tseslint.configs.base`. If two copies of typescript-eslint's plugin are installed, registering both fails with `Cannot redefine plugin "@typescript-eslint"`.
 
 `require("tapsmith")` needs Node.js 22.12 or later. The object has to be inside `defineConfig()`, because a plain exported array does not accept the `extends` key.
 

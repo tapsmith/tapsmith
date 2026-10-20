@@ -93,6 +93,15 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('ESLint config samples in the do
       for (const dep of ['eslint', 'typescript-eslint', 'typescript']) {
         fs.symlinkSync(path.join(PKG_DIR, 'node_modules', dep), path.join(modules, dep), 'dir');
       }
+      // eslint-config-expo is not a dependency here. This stand-in does the one
+      // thing the Expo sample relies on: it sets up typescript-eslint (parser
+      // and plugin) for .ts files, as eslint-config-expo/flat does.
+      fs.mkdirSync(path.join(modules, 'eslint-config-expo'));
+      fs.writeFileSync(
+        path.join(modules, 'eslint-config-expo', 'flat.js'),
+        'const tseslint = require("typescript-eslint");\n'
+          + 'module.exports = [{ ...tseslint.configs.base, files: ["**/*.ts", "**/*.tsx", "**/*.d.ts"] }];\n',
+      );
 
       const run = spawnSync(
         process.execPath,
