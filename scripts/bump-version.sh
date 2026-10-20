@@ -38,7 +38,7 @@ done
 sed -i '' "s/v$CURRENT_VERSION/v$NEW_VERSION/g" "$ROOT/website/src/pages/index.astro"
 
 # 5. Regenerate lockfiles — only for packages whose manifests this script
-# changed. website/test-app/benchmark don't reference the tapsmith version,
+# changed. website and test-app don't reference the tapsmith version,
 # so regenerating their lockfiles can only pick up unrelated churn, and
 # doing it with a different npm than CI breaks `npm ci` there.
 #
