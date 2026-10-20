@@ -12,18 +12,35 @@ npm install @tapsmith/react-native
 
 ```tsx
 // app/_layout.tsx (Expo Router) — or your root component
-import AsyncStorage from "@react-native-async-storage/async-storage"
 import * as Linking from "expo-linking"
+import { Stack } from "expo-router"
 import { TapsmithTestHooks } from "@tapsmith/react-native"
 
 export default function RootLayout() {
   return (
     <>
       <Stack />
-      <TapsmithTestHooks urlPrefix={Linking.createURL("/")} clear={[AsyncStorage]} />
+      <TapsmithTestHooks
+        urlPrefix={Linking.createURL("/")}
+        enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
+      />
     </>
   )
 }
+```
+
+Keep the `enabled` line exactly as written, in your app's own code: it is what lets a Release build made for tests turn the hooks on (see [Release builds for e2e](#release-builds-for-e2e)).
+
+To wipe stored data on every reset, pass the stores your app keeps it in as `clear`. With AsyncStorage (`npx expo install @react-native-async-storage/async-storage`, which the stock Expo template does not include):
+
+```tsx
+import AsyncStorage from "@react-native-async-storage/async-storage"
+
+<TapsmithTestHooks
+  urlPrefix={Linking.createURL("/")}
+  enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
+  clear={[AsyncStorage]}
+/>
 ```
 
 That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'` detects the hooks in the app's accessibility tree and the file-entry reset switches from clear + relaunch (5-10 s) to a warm in-app reset (~1 s). Scopes whose tests need a fresh app before *every* test opt in with `test.use({ appResetScope: 'test' })` — each of those resets is warm too. Your existing `beforeEach` resets keep working (the lint rule `tapsmith/prefer-app-reset-option` will point out the ones that are now redundant).
@@ -33,13 +50,17 @@ That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'
 | `clear` | Stores to wipe on every reset — anything with `clear()` or `clearAll()`: AsyncStorage, MMKV, … |
 | `onReset` | Your own reset: sign out, drop in-memory caches, reset navigation. Receives `{ target, nonce }`. |
 | `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
-| `enabled` | Defaults to `__DEV__` **or** the build-time flag `EXPO_PUBLIC_TAPSMITH_HOOKS=1`. Production builds without the flag render nothing and register nothing. |
+| `enabled` | Whether the hooks are on. Pass `__DEV__ \|\| process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"`, as above. Left out, the package checks `__DEV__` and the flag itself, but Expo never inlines the flag inside `node_modules`, so an Expo Release build gets no hooks. When off, the component renders nothing and registers nothing. |
 
 `registerTapsmithReset(fn)` registers a handler from non-React code.
 
 ### Release builds for e2e
 
-Release builds strip `__DEV__`. Set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` in the environment of the build that your tests run against (the repo's own e2e workflows do this).
+Release builds strip `__DEV__`. Set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` in the environment of the build that your tests run against (the repo's own e2e workflows do this). The `enabled` line in your root layout then turns the hooks on.
+
+The flag has to be read in your app's code, as `enabled` above, not left to the package. Expo inlines `EXPO_PUBLIC_*` variables only in app code, never inside `node_modules`, so the package cannot see the flag in a Release build. If the app depends on `@tapsmith/react-native` but Tapsmith finds no hooks after launch, it warns once per run that resets will be the slow kind, and names this as the likely cause.
+
+In a bare React Native app, which does not inline `EXPO_PUBLIC_*` variables, pass `enabled` from a build-time flag of your own.
 
 > **Warning: never ship a build with the flag to users.** With the hooks compiled in, anything that can open your app's URL scheme — another app, a webpage — can wipe its local storage and navigate it. The flag is inlined at build time, so the only guard is the build pipeline itself: set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` only in the job that produces your test build, and make sure store/production release jobs never export it (a shared CI environment or `.env` file is the classic leak).
 

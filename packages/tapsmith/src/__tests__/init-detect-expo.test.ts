@@ -175,6 +175,12 @@ describe('expoBuildHint() (PILOT-557)', () => {
     expect(expoBuildHint(['android'], hooks)).toMatch(/test builds only, never for store builds/);
   });
 
+  it('with the hooks dependency, says the app must pass the flag to `enabled` itself (PILOT-774)', () => {
+    const hint = expoBuildHint(['android'], { ...managed, usesTapsmithHooks: true });
+    expect(hint).toContain('enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}');
+    expect(hint).toContain('node_modules');
+  });
+
   it('labels each platform and says the hooks note and docs link once for both, after the alternative', () => {
     const hint = expoBuildHint(['android', 'ios'], managed, 'Or pass --apk.');
     expect(hint).toMatch(/^Android: Build a release APK/);

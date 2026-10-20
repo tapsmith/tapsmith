@@ -12,11 +12,21 @@ import { AuthProvider, useAuth } from "./auth-context"
  * `resetAppDeepLink` configuration exercised by `tapsmith.config.ios-mixed.mjs`.
  *
  * Enabled in dev builds and in release builds made with
- * `EXPO_PUBLIC_TAPSMITH_HOOKS=1` (the e2e workflows set it).
+ * `EXPO_PUBLIC_TAPSMITH_HOOKS=1` (the e2e workflows set it). `enabled` is
+ * passed from app code exactly as the docs say: Expo inlines `EXPO_PUBLIC_*`
+ * only in app code, never inside node_modules, so a stock app that installs
+ * the package from npm cannot rely on the package reading the flag itself
+ * (this app links it with `file:`, which would hide that).
  */
 function TapsmithHooks() {
   const { resetAppState } = useAuth()
-  return <TapsmithTestHooks urlPrefix={Linking.createURL("/")} onReset={resetAppState} />
+  return (
+    <TapsmithTestHooks
+      urlPrefix={Linking.createURL("/")}
+      enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
+      onReset={resetAppState}
+    />
+  )
 }
 
 export default function RootLayout() {

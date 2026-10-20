@@ -27,8 +27,11 @@ export interface TapsmithTestHooksProps {
   /** Bare React Native shorthand for `urlPrefix={`${scheme}://`}`. */
   scheme?: string;
   /**
-   * Force the hooks on or off. Default: `__DEV__`, or
-   * `EXPO_PUBLIC_TAPSMITH_HOOKS=1` at build time (release builds for e2e).
+   * Whether the hooks are on. Pass
+   * `__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === '1'` from the app's
+   * own code: Expo inlines `EXPO_PUBLIC_*` only in app code, never inside
+   * node_modules, so the package's own fallback (the same check) cannot see
+   * the flag in an npm-installed Expo Release build.
    */
   enabled?: boolean;
 }

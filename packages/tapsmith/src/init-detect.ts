@@ -222,7 +222,9 @@ const HOOKS_FLAG = 'EXPO_PUBLIC_TAPSMITH_HOOKS=1';
 /** What the hooks flag means for this project's test build, said beside the build command. */
 function expoHooksNote(expo: ExpoProject): string {
   return expo.usesTapsmithHooks
-    ? `${HOOKS_FLAG} keeps @tapsmith/react-native's warm-reset hooks on in a release build: set it for test builds only, never for store builds.`
+    ? `${HOOKS_FLAG} keeps @tapsmith/react-native's warm-reset hooks on in a release build when the app passes `
+      + '`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` to <TapsmithTestHooks> '
+      + '(Expo does not inline EXPO_PUBLIC_* variables inside node_modules): set it for test builds only, never for store builds.'
     : `For sub-second resets between tests, mount @tapsmith/react-native and build test builds with ${HOOKS_FLAG} (https://tapsmith.dev/guides/warm-reset/).`;
 }
 

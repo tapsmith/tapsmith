@@ -203,6 +203,11 @@ silently (this class of bug has shipped more than once):
    `watch-run.ts` children (so 4 and 5 share child code but have separate
    parent-side state threading)
 
+A once-per-session warning about the app itself belongs in the shared session
+layer every path opens through (`device-session.ts` → `session-preflight.ts`),
+not in one embedder: the missing `@tapsmith/react-native` hooks warning
+(PILOT-774) lives in `probeResetCapabilities` for that reason.
+
 When adding a per-session concern, prefer a **required** option on
 `runTestFile` over an optional one — a compile error in every embedder beats
 a silent default (see `RunOptions.resetCapabilities` and `RunOptions.runMode`

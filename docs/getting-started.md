@@ -165,7 +165,7 @@ When a debug APK is also lying around, the wizard lists it first and `tapsmith i
 - `npx expo run:android --variant release` generates, builds and installs in one step, leaving the APK in `android/app/build/outputs/apk/release/`. `npx expo run:ios --configuration Release` does the same for iOS, but builds into Xcode's default DerivedData folder (the path above), where `tapsmith init` does not look: enter that path, or build with the `xcodebuild … -derivedDataPath build` command above after `expo prebuild`.
 - With EAS, use a build profile that produces simulator and installable builds, for example `"e2e": { "ios": { "simulator": true }, "android": { "buildType": "apk" } }` in `eas.json`, then `eas build --profile e2e --platform ios --local` (or download the build). An iOS simulator build arrives as a `.tar.gz`; extract it and point `app` at the `.app` inside.
 
-If the app mounts [`@tapsmith/react-native`](warm-reset.md), its reset hooks are on in Debug builds but switched off in Release builds unless you turn them on for your test build. In an Expo project, set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` at build time (Expo inlines `EXPO_PUBLIC_*` variables into the bundle). A bare React Native app does not inline that variable, so pass the hooks' `enabled` prop from a build-time flag of your own instead.
+If the app mounts [`@tapsmith/react-native`](warm-reset.md), its reset hooks are on in Debug builds but switched off in Release builds unless you turn them on for your test build. In an Expo project, mount it with `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` and set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` at build time. The check has to be in your app's code, because Expo inlines `EXPO_PUBLIC_*` variables only there, never inside `node_modules`. A bare React Native app does not inline that variable, so pass the hooks' `enabled` prop from a build-time flag of your own instead.
 
 ## Quick Setup (Recommended)
 
@@ -244,14 +244,18 @@ Jest and Vitest run every `*.test.ts` and `*.spec.ts` file in the project by def
 
 If you'd rather keep `*.test.ts` names, set `testMatch` in `tapsmith.config.ts` to `['tests/**/*.test.ts']` (or remove it to use the default, which also matches `*.test.ts` files outside `tests/`), and exclude the Tapsmith test directory from the unit-test runner: `testPathIgnorePatterns: ['/node_modules/', '<rootDir>/tests/']` in your Jest config, or `exclude: [...configDefaults.exclude, 'tests/**']` under `test` in your Vitest config (`configDefaults` comes from `vitest/config`). Re-running `tapsmith init` warns about any Tapsmith tests the new config's `testMatch` won't run.
 
-## Make runs faster (optional, one line)
+## Make runs faster (optional)
 
 Tapsmith resets your app between test files by wiping its data and cold-launching — several seconds per file. React Native / Expo apps can do far better: mount `@tapsmith/react-native` once at the root and Tapsmith resets the app **in-process, in well under a second** — no config changes. Files that need a fresh app before every test opt in with one more line: `test.use({ appResetScope: "test" })` — still warm, still sub-second.
 
 ```tsx
+import * as Linking from "expo-linking"
 import { TapsmithTestHooks } from "@tapsmith/react-native"
 // in your root layout:
-<TapsmithTestHooks urlPrefix={Linking.createURL("/")} clear={[AsyncStorage]} />
+<TapsmithTestHooks
+  urlPrefix={Linking.createURL("/")}
+  enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
+/>
 ```
 
 See the [Warm app reset guide](warm-reset.md) — including why the hooks must only ever be compiled into test builds, never a store release.

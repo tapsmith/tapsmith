@@ -1,16 +1,20 @@
 /**
- * Test hooks belong in test builds only. The default gate is `__DEV__` (dev
- * clients, Expo Go, `expo start`) or the explicit build-time flag
- * `EXPO_PUBLIC_TAPSMITH_HOOKS=1` (release builds made for e2e). Production
- * builds without the flag render nothing and register no listener.
+ * Test hooks belong in test builds only. The fallback gate, used when the app
+ * passes no `enabled` prop, is `__DEV__` (dev clients, Expo Go, `expo start`)
+ * or `EXPO_PUBLIC_TAPSMITH_HOOKS=1` inlined at build time.
  *
- * The env access must be the literal `process.env.EXPO_PUBLIC_TAPSMITH_HOOKS`
- * member expression: Expo's Babel preset inlines `process.env.EXPO_PUBLIC_*`
- * at bundle time and a dynamic lookup stays `undefined` in a release bundle.
- * Bare React Native builds inline the same variable through their own Babel
- * config (e.g. babel-plugin-transform-inline-environment-variables) — the
- * `EXPO_PUBLIC_` prefix is only Expo's allowlist convention, so this single
- * flag serves both toolchains and stays the one documented gate.
+ * The env read here only works where the bundler inlines it inside
+ * node_modules: a `file:`-linked package, or a bare React Native Babel config
+ * such as babel-plugin-transform-inline-environment-variables. Expo's Babel
+ * preset never inlines `EXPO_PUBLIC_*` inside node_modules, so in an
+ * npm-installed Expo app this stays `undefined` in a Release build. That is
+ * why the docs have the app pass
+ * `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` from
+ * its own code, where Expo does inline it (PILOT-774).
+ *
+ * The access must stay the literal `process.env.EXPO_PUBLIC_TAPSMITH_HOOKS`
+ * member expression: inliners match that shape, and a dynamic lookup is never
+ * replaced.
  */
 declare const __DEV__: boolean | undefined;
 // React Native provides a minimal `process.env`; declared here so the package needs no Node types.
