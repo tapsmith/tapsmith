@@ -1,3 +1,4 @@
+import * as path from 'node:path';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
 import { appResetAction, parseHooksMarker, satisfies, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
@@ -12,9 +13,10 @@ type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
 export interface SessionPreflightContext {
   label: string
   config: Pick<TapsmithConfig, 'package' | 'activity' | 'platform' | 'resetAppDeepLink' | 'resetAppWaitMs' | 'appReset' | 'appResetColdEvery' | 'device'>
-    // Only used to find the app's package.json for the missing-hooks warning;
+    // Only used to find the app's package.json for the missing-hooks warning
+    // (from the config's folder and from the app build's);
     // optional so a context built without a project (unit tests) skips it.
-    & Partial<Pick<TapsmithConfig, 'rootDir'>>
+    & Partial<Pick<TapsmithConfig, 'rootDir' | 'apk' | 'app'>>
   device: SessionDevice
   client: SessionClient
   agentApkPath?: string
@@ -128,6 +130,18 @@ async function readHooksMarker(ctx: SessionPreflightContext): Promise<boolean | 
 }
 
 /**
+ * Whether the app under test depends on `@tapsmith/react-native`, looking up
+ * from the config's folder and from the app build's (`apk`/`app`, relative to
+ * `rootDir`): in a monorepo the config often sits outside the app's folder,
+ * but the build lives inside it.
+ */
+function appUsesTapsmithHooks(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | 'app'>): boolean {
+  const builds = [config.apk, config.app].filter((p): p is string => !!p);
+  const starts = [config.rootDir, ...builds.map((p) => path.dirname(path.resolve(config.rootDir, p)))];
+  return starts.some((dir) => appDependsOnTapsmithHooks(dir));
+}
+
+/**
  * Sessions already checked for the missing-hooks warning, keyed by their
  * shared capabilities object: the runner hands {@link executeAppReset} a
  * fresh spread of the session context on every reset, so a flag on the
@@ -148,7 +162,7 @@ const missingHooksChecked = new WeakSet<ResetCapabilities>();
 async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabilities, pollMs: number): Promise<void> {
   if (missingHooksChecked.has(caps) || !ctx.config.rootDir) return;
   missingHooksChecked.add(caps);
-  if (!appDependsOnTapsmithHooks(ctx.config.rootDir)) return;
+  if (!appUsesTapsmithHooks({ rootDir: ctx.config.rootDir, apk: ctx.config.apk, app: ctx.config.app })) return;
   const deadline = Date.now() + pollMs;
   let read = false;
   for (;;) {

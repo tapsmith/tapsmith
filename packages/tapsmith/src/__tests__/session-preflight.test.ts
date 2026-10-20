@@ -1592,6 +1592,13 @@ describe('session-preflight', () => {
       // The runner passes a fresh spread of the session context to every reset.
       const reset = (ctx: ReturnType<typeof hookedContext>, opts = PROBE) => executeAppReset({ ...ctx }, CLEAR_FILE, opts);
       const hooksNotices = (ctx: ReturnType<typeof hookedContext>) => ctx.notices.filter((n) => n.kind === 'hooks-missing');
+      // Hierarchy reads a clear reset makes up to and including its single
+      // re-read, counted on an app without the dependency (no check follows).
+      async function countReadsBeforeCheck(): Promise<number> {
+        const counter = hookedContext(appDir({ expo: '~58.0.0' }, {}, path.join(tmp, 'count')));
+        await reset(counter);
+        return vi.mocked(counter.client.getUiHierarchy).mock.calls.length;
+      }
 
       beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-warn-')); });
       afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
@@ -1612,12 +1619,18 @@ describe('session-preflight', () => {
 
       it('looks again before blaming the build: a marker that appears within the budget upgrades instead', async () => {
         const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
-        vi.mocked(ctx.client.getUiHierarchy)
-          .mockResolvedValueOnce({ requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' })
-          .mockResolvedValue({ requestId: '1', hierarchyXml: MARKER, errorMessage: '' });
+        const readsBeforeCheck = await countReadsBeforeCheck();
+        let calls = 0;
+        vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => {
+          calls += 1;
+          // Every read up to the reset's own re-read misses; the check's second look sees it.
+          const xml = calls <= readsBeforeCheck + 1 ? NO_MARKER : MARKER;
+          return { requestId: '1', hierarchyXml: xml, errorMessage: '' };
+        });
 
         await reset(ctx, { phase: 'file reset', hooksProbeMs: 1_000 });
 
+        expect(calls).toBeGreaterThan(readsBeforeCheck + 1);
         expect(ctx.capabilities?.hooksDetected).toBe(true);
         expect(hooksNotices(ctx)).toEqual([]);
       });
@@ -1630,10 +1643,8 @@ describe('session-preflight', () => {
         expect(hooksNotices(ctx)).toEqual([]);
 
         // Only the check's own reads fail: everything up to and including the
-        // reset's single re-read (counted on a context without the dependency) succeeds.
-        const counter = hookedContext(appDir({ expo: '~58.0.0' }, {}, path.join(tmp, 'count')));
-        await reset(counter);
-        const readsBeforeCheck = vi.mocked(counter.client.getUiHierarchy).mock.calls.length;
+        // reset's single re-read succeeds.
+        const readsBeforeCheck = await countReadsBeforeCheck();
         let calls = 0;
         vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => {
           calls += 1;
@@ -1652,6 +1663,16 @@ describe('session-preflight', () => {
       it('finds the app package.json above a config in a subfolder', async () => {
         appDir({ expo: '~58.0.0' }, { '@tapsmith/react-native': '^0.7.1' });
         const ctx = hookedContext(appDir({ tapsmith: '^0.7.1' }, {}, path.join(tmp, 'e2e')));
+
+        await reset(ctx);
+
+        expect(hooksNotices(ctx)).toHaveLength(1);
+      });
+
+      it('finds the app from its build path when the config sits outside the app (monorepo)', async () => {
+        appDir({ private: 'true' });
+        appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }, {}, path.join(tmp, 'apps', 'mobile'));
+        const ctx = hookedContext(tmp, NO_MARKER, { apk: 'apps/mobile/android/app/build/outputs/apk/release/app-release.apk' });
 
         await reset(ctx);
 
