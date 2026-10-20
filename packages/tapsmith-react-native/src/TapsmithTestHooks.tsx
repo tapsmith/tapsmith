@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Linking, StyleSheet, Text, View } from 'react-native';
 import { formatMarker, parseResetRequest, resetDedupeKey, BOOT_TOKEN } from './protocol.js';
 import { publishResetEpoch } from './epoch.js';
+import { CARRIER_TEXT_COLOR } from './carrier-color.js';
 import { hooksEnabledByDefault } from './enabled.js';
 import { registeredHandlers, runResetPipeline, type Clearable, type ResetHandler } from './reset.js';
 
@@ -128,8 +129,9 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
 
         Something screen-sized always has a visible region left over whatever
         the system draws on top, so this node survives the dump. The text is
-        transparent, so nothing about the app's appearance changes, and the
-        wrapper is pointerEvents="none" so it swallows no touches.
+        invisible (CARRIER_TEXT_COLOR: not 'transparent', which Android draws
+        black), so nothing about the app's appearance changes, and the wrapper
+        is pointerEvents="none" so it swallows no touches.
       */}
       <View pointerEvents="none" style={styles.carrier} importantForAccessibility="yes">
         <Text testID="tapsmith-hooks" style={styles.carrierText}>
@@ -162,11 +164,11 @@ const styles = StyleSheet.create({
     top: 0,
   },
   // Fills the carrier, so the *text node itself* — the one the hierarchy dump
-  // reports — is screen-sized too, not just its parent. Transparent, so the
+  // reports — is screen-sized too, not just its parent. Invisible, so the
   // marker changes nothing on screen.
   carrierText: {
     bottom: 0,
-    color: 'transparent',
+    color: CARRIER_TEXT_COLOR,
     fontSize: 8,
     left: 0,
     position: 'absolute',

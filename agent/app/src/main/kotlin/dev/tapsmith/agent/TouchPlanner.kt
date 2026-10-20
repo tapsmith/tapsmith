@@ -62,6 +62,9 @@ interface GuardTarget {
 
     /** Whether it has input focus right now. */
     fun isFocused(): Boolean
+
+    /** Whether it sits inside a scroll view (PILOT-622, [KeyboardFirst]). */
+    fun isInScrollView(): Boolean
 }
 
 /** The display and the windows on it. */
