@@ -116,12 +116,16 @@ export async function probeResetCapabilities(
 
 /**
  * One look at the hierarchy for a usable hooks marker: `true` seen, `false` a
- * hierarchy read without one, `undefined` the read failed — which says
+ * hierarchy read without one, `undefined` the read failed (threw, or came back
+ * with an error and no hierarchy) — which says
  * nothing about the app, and neither confirms nor rules out the hooks.
  */
 async function readHooksMarker(ctx: SessionPreflightContext): Promise<boolean | undefined> {
   try {
     const h = await ctx.client.getUiHierarchy();
+    // The agent can answer a failed dump with an error and no hierarchy
+    // rather than throwing: that is no read either.
+    if (h.errorMessage || !h.hierarchyXml) return undefined;
     const marker = parseHooksMarker(h.hierarchyXml);
     return !!marker && marker.urlPrefix.length > 0;
   } catch {

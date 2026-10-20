@@ -1658,6 +1658,17 @@ describe('session-preflight', () => {
         expect(calls).toBeGreaterThan(readsBeforeCheck);
         expect(hooksNotices(ctx)).toEqual([]);
 
+        // The agent can also answer with an error and no hierarchy instead of throwing.
+        calls = 0;
+        vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => {
+          calls += 1;
+          if (calls > readsBeforeCheck) return { requestId: '1', hierarchyXml: '', errorMessage: 'Interrupting test' };
+          return { requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' };
+        });
+        await reset(ctx);
+        expect(calls).toBeGreaterThan(readsBeforeCheck);
+        expect(hooksNotices(ctx)).toEqual([]);
+
         vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' });
         await reset(ctx);
         expect(hooksNotices(ctx)).toHaveLength(1);
