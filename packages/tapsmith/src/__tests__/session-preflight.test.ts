@@ -1554,6 +1554,25 @@ describe('session-preflight', () => {
       expect(await probeResetCapabilities(ctx, { pollMs: 0 })).toEqual({ hooksDetected: false });
     });
 
+    it('a startup probe whose dumps all came back as errors still lets the next clear reset upgrade (PILOT-774)', async () => {
+      const ctx = makeContext({
+        config: { package: 'com.example.app', activity: '.MainActivity', platform: 'android' },
+      });
+      ctx.capabilities = {};
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: '', errorMessage: 'Interrupting test' });
+      await probeResetCapabilities(ctx, { pollMs: 0 });
+      expect(ctx.capabilities).toEqual({ hooksDetected: false });
+
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({
+        requestId: '1',
+        hierarchyXml: '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=exp://x/" /></hierarchy>',
+        errorMessage: '',
+      });
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(ctx.capabilities.hooksDetected).toBe(true);
+    });
+
     it('a clear reset under appReset auto re-reads the marker so a missed startup probe upgrades', async () => {
       const ctx = makeContext({
         config: { package: 'com.example.app', activity: '.MainActivity', platform: 'android' },

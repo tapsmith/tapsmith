@@ -116,16 +116,19 @@ export async function probeResetCapabilities(
 
 /**
  * One look at the hierarchy for a usable hooks marker: `true` seen, `false` a
- * hierarchy read without one, `undefined` the read failed (threw, or came back
- * with an error and no hierarchy) — which says
+ * hierarchy read without one, `undefined` the read failed (threw; with
+ * `strict`, also an error response with no hierarchy) — which says
  * nothing about the app, and neither confirms nor rules out the hooks.
  */
-async function readHooksMarker(ctx: SessionPreflightContext): Promise<boolean | undefined> {
+async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?: boolean } = {}): Promise<boolean | undefined> {
   try {
     const h = await ctx.client.getUiHierarchy();
-    // The agent can answer a failed dump with an error and no hierarchy
-    // rather than throwing: that is no read either.
-    if (h.errorMessage || !h.hierarchyXml) return undefined;
+    // The daemon answers a failed dump with an error and no hierarchy rather
+    // than throwing. Strict callers (the missing-hooks check) count that as
+    // no read. The probe keeps counting it as a read without the marker: its
+    // `false` is what lets the next clear reset re-read and upgrade a hooked
+    // app whose startup dumps all failed.
+    if (options.strict && (h.errorMessage || !h.hierarchyXml)) return undefined;
     const marker = parseHooksMarker(h.hierarchyXml);
     return !!marker && marker.urlPrefix.length > 0;
   } catch {
@@ -183,7 +186,7 @@ async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabi
   const deadline = Date.now() + pollMs;
   let read = false;
   for (;;) {
-    const seen = await readHooksMarker(ctx);
+    const seen = await readHooksMarker(ctx, { strict: true });
     if (seen) {
       caps.hooksDetected = true;
       return;
