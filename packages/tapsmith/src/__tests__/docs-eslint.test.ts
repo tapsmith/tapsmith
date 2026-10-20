@@ -1,5 +1,5 @@
 /**
- * Docs guard (PILOT-776): every `eslint.config.mjs` sample in the docs and
+ * Docs guard (PILOT-776): every `eslint.config.*` sample in the docs and
  * READMEs is run as written, by real ESLint and typescript-eslint, against a
  * TypeScript test with a missing `await` and a test-id locator, in a scratch
  * CommonJS project (no `"type": "module"`, the npm default) that imports the
@@ -29,11 +29,14 @@ if (!DIST_BUILT && !process.env.CI) {
 
 const JS_LANGS = new Set(['javascript', 'js', 'mjs']);
 
-/** The docs' ESLint config samples: JavaScript blocks headed `// eslint.config.mjs`. */
+/** A sample's first line names its file: `// eslint.config.mjs`, `// eslint.config.js`, … */
+const CONFIG_HEADER = /^\/\/\s*(eslint\.config\.[cm]?js)\b/;
+
+/** The docs' ESLint config samples: JavaScript blocks headed with a config file name. */
 function configSamples(): FencedBlock[] {
   return docFiles()
     .flatMap((rel) => fencedBlocksIn(rel, fs.readFileSync(path.join(REPO, rel), 'utf8')))
-    .filter((block) => JS_LANGS.has(block.lang) && /^\/\/\s*eslint\.config\.m?js\b/.test(block.code));
+    .filter((block) => JS_LANGS.has(block.lang) && CONFIG_HEADER.test(block.code));
 }
 
 /** A test with one problem for typescript-eslint and one for the tapsmith plugin. */
@@ -78,7 +81,8 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('ESLint config samples in the do
       fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({
         compilerOptions: { strict: true, module: 'esnext', moduleResolution: 'bundler', noEmit: true, skipLibCheck: true },
       }));
-      fs.writeFileSync(path.join(dir, 'eslint.config.mjs'), sample.code);
+      // Under the name the sample gives, so a `.js` sample loads as CommonJS.
+      fs.writeFileSync(path.join(dir, CONFIG_HEADER.exec(sample.code)![1]!), sample.code);
       fs.mkdirSync(path.join(dir, 'tests'));
       fs.writeFileSync(path.join(dir, 'tests', 'login.tapsmith.ts'), BAD_TEST);
       // What `npm install --save-dev eslint typescript-eslint` and an installed

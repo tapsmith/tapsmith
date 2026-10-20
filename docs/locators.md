@@ -310,7 +310,7 @@ export default defineConfig({
   extends: [tseslint.configs.base, eslintPlugin.configs.recommended],
   languageOptions: {
     // Type information, so a missing `await` is caught
-    parserOptions: { projectService: true },
+    parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
   },
   rules: {
     "@typescript-eslint/no-floating-promises": "error",
@@ -326,7 +326,34 @@ Run it with `npx eslint tests/`. Change `files` to match where your tests are.
 
 The `.mjs` extension makes Node load the config as an ES module whether or not your `package.json` has `"type": "module"`.
 
-If your project already has an ESLint config, add the object to that config instead of creating a second file. ESLint reads only one config file, and it picks `eslint.config.js` before `eslint.config.mjs`, so the new file would be ignored. Expo's `npx expo lint` creates an `eslint.config.js`.
+#### Adding it to an existing config
+
+If your project already has an ESLint config, add the object to that config instead of creating a second file. ESLint reads only one config file, and it picks `eslint.config.js` before `eslint.config.mjs`, so a new file would be ignored.
+
+Expo's `npx expo lint` creates an `eslint.config.js` that uses `require`. Add the imports as `require` calls, and add the object to the array passed to `defineConfig`:
+
+```javascript
+// eslint.config.js
+const { defineConfig } = require("eslint/config")
+const tseslint = require("typescript-eslint")
+const { eslintPlugin } = require("tapsmith")
+
+module.exports = defineConfig([
+  // ...the configs already in the file, such as Expo's `expoConfig`
+  {
+    files: ["tests/**/*.ts"],
+    extends: [tseslint.configs.base, eslintPlugin.configs.recommended],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: __dirname },
+    },
+    rules: {
+      "@typescript-eslint/no-floating-promises": "error",
+    },
+  },
+])
+```
+
+`require("tapsmith")` needs Node.js 22.12 or later. The object has to be inside `defineConfig()`, because a plain exported array does not accept the `extends` key.
 
 ### Rules
 
