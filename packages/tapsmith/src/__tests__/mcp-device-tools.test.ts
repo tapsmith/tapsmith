@@ -247,6 +247,24 @@ describe('tapsmith_snapshot', () => {
     expect(daemon.findElements).not.toHaveBeenCalled();
   });
 
+  it('says the screen may have changed when the agent resolves nothing to its element', async () => {
+    // The dump and the agent's check saw different screens (a transition):
+    // every candidate resolves elsewhere.
+    const moved = (sel: Selector) => signInAgent(sel).map((e) => ({ ...e, bounds: { ...e.bounds!, top: e.bounds!.top + 300, bottom: e.bounds!.bottom + 300 } }));
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: moved }).client;
+    const res = await callTool('tapsmith_snapshot');
+    expect(res.isError).toBeFalsy();
+    const out = text(res);
+    expect(out).toContain('button "Sign in"');
+    expect(out).not.toContain('## Suggested Locators');
+    expect(out).toContain('the screen may have been changing. Take the snapshot again.');
+  });
+
+  it('says nothing about refs when the screen has no element to suggest for', async () => {
+    hoisted.client = makeDaemon({ hierarchyXml: '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][10,10]" /></hierarchy>' }).client;
+    expect(text(await callTool('tapsmith_snapshot'))).not.toContain('No suggested locators');
+  });
+
   it('keeps the activity-feed count right when checking stopped partway', async () => {
     const daemon = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent });
     let calls = 0;
@@ -276,7 +294,7 @@ describe('tapsmith_snapshot', () => {
     const out = text(res);
     expect(out).toContain('button "Sign in"');
     expect(out).not.toContain('## Suggested Locators');
-    expect(out).toContain('(No suggested locators: the device agent could not check them: Unknown method: evaluateSelectors)');
+    expect(out).toContain('(No suggested locators: the device agent stopped checking them: Unknown method: evaluateSelectors)');
   });
 
   // The section heading is a literal in two places: emitted by snapshot.ts and

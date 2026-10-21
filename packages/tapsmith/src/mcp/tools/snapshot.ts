@@ -23,18 +23,24 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
       }
 
       const roots = parseHierarchyXml(hierarchyXml);
-      const { byNode, errorMessage: suggestError, stoppedAt } = await agentValidatedSuggestions(client, semanticNodes(roots));
+      const nodes = semanticNodes(roots);
+      const { byNode, errorMessage: suggestError, stoppedAt } = await agentValidatedSuggestions(client, nodes);
       const { tree, locators } = formatHierarchy(roots, byNode);
 
       // There is no other matcher to fall back to: say why refs are missing
       // rather than offer unchecked ones. The note goes before the locator
       // list, which the activity feed counts line by line.
-      const note = !suggestError ? ''
-        : stoppedAt === 'variants'
+      const note = suggestError
+        ? stoppedAt === 'variants'
           ? `(Some suggestions are pinned by position (.first()/.nth()/.last()) because the device agent stopped checking more specific ones: ${suggestError})`
           : byNode.size === 0
-            ? `(No suggested locators: the device agent could not check them: ${suggestError})`
-            : `(Some elements have no suggested locator: the device agent stopped checking them: ${suggestError})`;
+            ? `(No suggested locators: the device agent stopped checking them: ${suggestError})`
+            : `(Some elements have no suggested locator, and some suggestions may be pinned by position, because the device agent stopped checking them: ${suggestError})`
+        : byNode.size === 0 && nodes.length > 0
+          // The agent answered, but nothing resolved to the element it was
+          // suggested for: the screen changed between the two captures.
+          ? '(No suggested locators: none resolved to its element when the device agent checked them; the screen may have been changing. Take the snapshot again.)'
+          : '';
       const body = [tree || '(empty screen)', note].filter(Boolean).join('\n\n');
       const output = locators.length > 0
         ? `${body}\n\n## Suggested Locators\n${locators.join('\n')}`
