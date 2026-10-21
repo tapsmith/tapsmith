@@ -9,10 +9,6 @@ import { parseSelectorToInternal, formatBounds } from '../locator-helper.js';
 import { collapseSameTargetDuplicates } from '../../element-handle.js';
 import type { ElementInfo } from '../../grpc-client.js';
 
-/** Snapshot lookup — the agent's findElements does not auto-wait, so a short
- *  timeout keeps the tool responsive while covering daemon round-trip time. */
-const TEST_LOCATOR_TIMEOUT_MS = 1_000;
-
 const STRICT_HINT =
   'Actions and assertions on this locator will throw a strict mode violation at runtime. ' +
   'Disambiguate with { exact: true }, getByRole(role, { name, exact: true }), getByTestId(), or .first()/.nth()/.last().';
@@ -66,17 +62,20 @@ export function registerTestLocatorTool(server: McpServer, dispatcher?: TestDisp
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
       }
 
-      // Native locators resolve through the daemon/agent — the exact code
-      // path the test runner uses — so playground results can never diverge
-      // from runtime matching again (PILOT-226).
+      // Native locators resolve through the agent's own matching — the code
+      // a test resolves with — evaluated once against the current screen,
+      // without waiting, so results can't diverge from runtime matching
+      // (PILOT-226, PILOT-848).
       const { selector: sel, index } = parseSelectorToInternal(locator);
-      const res = await client.findElements(sel, TEST_LOCATOR_TIMEOUT_MS);
-      if (res.errorMessage) {
-        return { content: [{ type: 'text' as const, text: `Error: ${res.errorMessage}` }], isError: true };
+      const res = await client.evaluateSelectors([sel]);
+      const errorMessage = res.errorMessage || res.results[0]?.errorMessage
+        || (res.results.length === 1 ? '' : `agent returned ${res.results.length} results for 1 locator`);
+      if (errorMessage) {
+        return { content: [{ type: 'text' as const, text: `Error: ${errorMessage}` }], isError: true };
       }
       // Same duplicate-collapsing the runtime applies (iOS exposes some text
       // elements twice with identical label/bounds).
-      const all = collapseSameTargetDuplicates(res.elements ?? []);
+      const all = collapseSameTargetDuplicates(res.results[0].elements ?? []);
 
       // Apply a positional chain the same way the runtime does
       // (negative .nth() indices count from the end).

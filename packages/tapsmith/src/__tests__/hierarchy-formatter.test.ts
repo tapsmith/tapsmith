@@ -1,40 +1,39 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import type { GeneratedSelector } from '../trace-viewer/components/selector-generation.js';
+import { formatHierarchy, semanticNodes } from '../mcp/hierarchy-formatter.js';
 
-// Pin what validation says, so the test is about what formatHierarchy does
-// with a suggestion that failed it.
-const validated = vi.hoisted(() => ({ result: [] as GeneratedSelector[] }));
-vi.mock('../trace-viewer/components/selector-uniqueness.js', () => ({
-  disambiguateSelectors: () => validated.result,
-}));
+// The formatter renders whatever the agent validated (PILOT-848): it never
+// decides a match itself.
 
-const { formatHierarchy } = await import('../mcp/hierarchy-formatter.js');
-
-function button(): HierarchyNode {
-  return {
-    tagName: 'node',
-    attributes: new Map([['class', 'android.widget.Button'], ['text', 'Save'], ['clickable', 'true']]),
-    children: [],
-    depth: 0,
-  };
+function node(attrs: Record<string, string>, children: HierarchyNode[] = []): HierarchyNode {
+  return { tagName: 'node', attributes: new Map(Object.entries(attrs)), children, depth: 0 };
 }
 
-describe('formatHierarchy drops suggestions that failed validation (PILOT-659)', () => {
-  it('falls back to the next suggestion that resolves', () => {
-    validated.result = [
-      { code: 'device.getByDescription("Stale")', label: 'Description (may not match)', priority: 8, mayNotMatch: true },
-      { code: 'device.locator({ className: "android.widget.Button" })', label: 'Class name', priority: 9 },
-    ];
-    expect(formatHierarchy([button()]).locators).toEqual(['[1] device.locator({ className: "android.widget.Button" })']);
+const save = node({ class: 'android.widget.Button', text: 'Save', clickable: 'true' });
+const title = node({ class: 'android.widget.TextView', text: 'Settings' });
+const root = node({ class: 'android.widget.FrameLayout' }, [title, save]);
+
+const s = (code: string, priority = 1): GeneratedSelector => ({ code, label: 'x', priority });
+
+describe('formatHierarchy', () => {
+  it('refs each node with its best validated suggestion', () => {
+    const { tree, locators } = formatHierarchy([root], new Map([
+      [save, [s('device.getByRole("button", { name: "Save" })'), s('device.getByText("Save")', 6)]],
+    ]));
+    expect(locators).toEqual(['[1] device.getByRole("button", { name: "Save" })']);
+    expect(tree).toBe('- text "Settings"\n- [1] button "Save"');
   });
 
-  it('emits no ref at all when no suggestion resolves', () => {
-    validated.result = [
-      { code: 'device.getByDescription("Stale")', label: 'Description (may not match)', priority: 8, mayNotMatch: true },
-    ];
-    const { tree, locators } = formatHierarchy([button()]);
+  it('lists a node with no validated suggestion without a ref', () => {
+    const { tree, locators } = formatHierarchy([root], new Map());
     expect(locators).toEqual([]);
-    expect(tree).toBe('- button "Save"');
+    expect(tree).toBe('- text "Settings"\n- button "Save"');
+  });
+});
+
+describe('semanticNodes', () => {
+  it('returns the nodes the tree lists, in tree order', () => {
+    expect(semanticNodes([root])).toEqual([title, save]);
   });
 });

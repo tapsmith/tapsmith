@@ -4,7 +4,7 @@ import { generateSelectors } from '../trace-viewer/components/selector-generatio
 import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqueness.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
 import { handlePickFromScreenshot } from '../trace-viewer/components/selector-pick.js';
-import { formatHierarchy } from '../mcp/hierarchy-formatter.js';
+import { formatWithFixtureMatches } from './hierarchy-oracle.js';
 
 function makeNode(tagName: string, attrs: Record<string, string>, children: HierarchyNode[] = []): HierarchyNode {
   const node: HierarchyNode = {
@@ -106,7 +106,7 @@ describe('disambiguateSelectors (PILOT-226)', () => {
 describe('formatHierarchy suggested locators (PILOT-226)', () => {
   it('emits a uniquely resolving locator for every ref on the sign-in screen', () => {
     const { roots } = signInScreen();
-    const { locators } = formatHierarchy(roots);
+    const { locators } = formatWithFixtureMatches(roots);
     const buttonRef = locators.find((l) => l.includes('Sign in') && !l.includes('continue'));
     expect(buttonRef).toBeDefined();
     // Must NOT be the ambiguous substring locator that broke story-app
@@ -118,7 +118,7 @@ describe('formatHierarchy suggested locators (PILOT-226)', () => {
     const itemA = makeNode('node', { class: 'android.widget.TextView', text: 'Item', clickable: 'true' });
     const itemB = makeNode('node', { class: 'android.widget.TextView', text: 'Item', clickable: 'true' });
     const root = makeNode('node', { class: 'android.view.ViewGroup' }, [itemA, itemB]);
-    const { locators } = formatHierarchy([root]);
+    const { locators } = formatWithFixtureMatches([root]);
     expect(locators.length).toBeGreaterThanOrEqual(2);
     expect(locators[0]).toContain('.first()');
     expect(locators[1]).toContain('.last()');
@@ -481,7 +481,7 @@ describe('icon-glyph accessible names (PILOT-659)', () => {
 
   it('snapshot refs for icon tabs are copy-paste safe and resolve to exactly one element', () => {
     const { roots, tabs } = iconTabs();
-    const { locators, tree } = formatHierarchy(roots);
+    const { locators, tree } = formatWithFixtureMatches(roots);
     for (const line of [...locators, tree]) {
       expect(line).not.toMatch(/\p{Co}/u);
     }
@@ -559,7 +559,7 @@ describe('icon-glyph accessible names (PILOT-659)', () => {
 
   it('disambiguates glyph-free tab names that are substrings of each other', () => {
     const { roots, tabs } = iconTabs([[BOOK, 'Story'], [GEAR, 'Story list']]);
-    const locators = formatHierarchy(roots).locators.filter((l) => l.includes('"tab"'));
+    const locators = formatWithFixtureMatches(roots).locators.filter((l) => l.includes('"tab"'));
     expect(locators).toHaveLength(2);
     for (const [i, line] of locators.entries()) {
       const code = line.replace(/^\[\d+\] /, '');
@@ -629,7 +629,7 @@ describe('glyph-only names (PILOT-659)', () => {
       }));
       return { roots: [makeNode('android.widget.FrameLayout', { class: 'android.widget.FrameLayout' }, glyphs)] };
     })();
-    const { locators } = formatHierarchy(roots);
+    const { locators } = formatWithFixtureMatches(roots);
     expect(locators).toEqual([
       '[1] device.getByRole("text", { name: "\\uE865" })',
       '[2] device.getByRole("text", { name: "\\uE8B8" })',

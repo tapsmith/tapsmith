@@ -1,8 +1,7 @@
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { getNodeRole } from '../trace-viewer/components/hierarchy-utils.js';
-import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
+import type { GeneratedSelector } from '../trace-viewer/components/selector-generation.js';
 import { escapeJsString } from '../js-string-escape.js';
-import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqueness.js';
 
 interface FormattedResult {
   tree: string
@@ -51,11 +50,14 @@ function hasSemanticDescendant(node: HierarchyNode): boolean {
   return node.children.some(hasSemanticDescendant);
 }
 
+/** Each node's validated suggestions, best first (see agent-suggestions.ts). */
+type Suggestions = Map<HierarchyNode, GeneratedSelector[]>;
+
 function formatNode(
   node: HierarchyNode,
   depth: number,
   refs: RefEntry[],
-  roots: HierarchyNode[],
+  suggestions: Suggestions,
 ): string[] {
   const lines: string[] = [];
   const indent = '  '.repeat(depth);
@@ -67,12 +69,10 @@ function formatNode(
   const isSemantic = isSemanticNode(node);
 
   if (isSemantic) {
-    // Disambiguate against the full hierarchy (PILOT-226): a suggested
-    // locator that matches multiple elements would throw a strict mode
-    // violation the moment a test acts on it.
-    // A suggestion that failed validation (it does not resolve to this
-    // node) is never offered: fall back to the next one (PILOT-659).
-    const best = disambiguateSelectors(roots, node, generateSelectors(node)).find((s) => !s.mayNotMatch);
+    // Only suggestions the device agent resolved to exactly this node reach
+    // here (PILOT-848), so a ref never strict-mode-fails or names another
+    // element when a test acts on it.
+    const best = suggestions.get(node)?.[0];
     let refTag = '';
     if (best) {
       const ref = refs.length + 1;
@@ -95,7 +95,7 @@ function formatNode(
   const childDepth = isSemantic ? depth + 1 : depth;
   for (const child of node.children) {
     if (hasSemanticDescendant(child)) {
-      lines.push(...formatNode(child, childDepth, refs, roots));
+      lines.push(...formatNode(child, childDepth, refs, suggestions));
     }
   }
 
@@ -107,13 +107,24 @@ function truncate(s: string, max: number): string {
   return s.slice(0, max - 1) + '…';
 }
 
-export function formatHierarchy(roots: HierarchyNode[]): FormattedResult {
+/** The nodes the snapshot tree lists, in tree order: the ones that can get a ref. */
+export function semanticNodes(roots: HierarchyNode[]): HierarchyNode[] {
+  const out: HierarchyNode[] = [];
+  const walk = (node: HierarchyNode) => {
+    if (isSemanticNode(node)) out.push(node);
+    node.children.forEach(walk);
+  };
+  roots.forEach(walk);
+  return out;
+}
+
+export function formatHierarchy(roots: HierarchyNode[], suggestions: Suggestions): FormattedResult {
   const refs: RefEntry[] = [];
   const lines: string[] = [];
 
   for (const root of roots) {
     if (hasSemanticDescendant(root)) {
-      lines.push(...formatNode(root, 0, refs, roots));
+      lines.push(...formatNode(root, 0, refs, suggestions));
     }
   }
 

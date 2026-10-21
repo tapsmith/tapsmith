@@ -150,7 +150,7 @@ Get the current screen's accessibility tree with copy-paste-ready Tapsmith locat
 
 Returns a text representation of the accessibility tree with suggested locators like `device.getByRole("button", { name: "Login" })` for each interactive element.
 
-Each suggestion is checked against the snapshot to resolve to exactly one element, and one that fails the check is not offered. When nothing else singles an element out, its suggestion ends in `.first()`, `.nth(i)` or `.last()`, which depends on the order of the matching elements on screen. A character that does not survive copy-paste, such as the icon-font glyph in a React Navigation tab's name, is written as a `\uXXXX` escape: JavaScript and `tapsmith_test_locator` read it back to the same character.
+Each suggestion is checked by the device's automation agent, with the same matching a test resolves locators with, and is offered only when it resolves to exactly the element it is listed against. All of a screen's suggestions are checked in one pass over one capture of the screen. When nothing else singles an element out, its suggestion ends in `.first()`, `.nth(i)` or `.last()`, counted in the order the agent matches elements, so it depends on what else is on screen. If the agent cannot check the suggestions, the tree is still returned, without suggestions, followed by a note that says why. A character that does not survive copy-paste, such as the icon-font glyph in a React Navigation tab's name, is written as a `\uXXXX` escape: JavaScript and `tapsmith_test_locator` read it back to the same character.
 
 #### `tapsmith_screenshot`
 
@@ -164,7 +164,7 @@ Returns a base64-encoded PNG image.
 
 #### `tapsmith_test_locator`
 
-Test a Tapsmith locator against the current screen. Returns whether it matches, how many elements match, and details about each match. Use to validate locators before putting them in test code.
+Test a Tapsmith locator against the current screen, with the device agent's own matching (it does not wait for a match to appear). Returns whether it matches, how many elements match, and details about each match. Use to validate locators before putting them in test code.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

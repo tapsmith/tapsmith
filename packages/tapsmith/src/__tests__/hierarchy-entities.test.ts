@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { decodeXmlEntities } from '../xml-entities.js';
 import { parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
-import { formatHierarchy } from '../mcp/hierarchy-formatter.js';
+import { formatWithFixtureMatches } from './hierarchy-oracle.js';
 
 // PILOT-658: every hierarchy producer (stock UIAutomator dump, the Android and
 // iOS agents, the WebView DOM walker) XML-escapes attribute values. The shared
@@ -71,7 +71,7 @@ const SCREEN_XML = `<?xml version='1.0' encoding='UTF-8' standalone='yes' ?>
 
 describe('MCP snapshot formatter with XML-escaped text (PILOT-658)', () => {
   const roots = parseHierarchyXml(SCREEN_XML);
-  const { tree, locators } = formatHierarchy(roots);
+  const { tree, locators } = formatWithFixtureMatches(roots);
 
   it('shows decoded text in the tree, one line per node', () => {
     expect(tree).not.toMatch(/&(amp|lt|gt|quot|apos|#\d+|#x[0-9a-f]+);/i);
