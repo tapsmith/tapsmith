@@ -34,6 +34,17 @@ export interface AgentSuggestions {
    *  suggestion), or the variants that pin an ambiguous one (those fall back
    *  to a position, `.nth()`). */
   stoppedAt?: 'candidates' | 'variants'
+  /** Listed nodes that nothing the agent matched was at when it checked:
+   *  they were not on screen any more (the screen changed). */
+  notFound: number
+}
+
+export interface SuggestionOptions {
+  /** Selectors per evaluateSelectors call (default 40). An agent that takes
+   *  one capture per call regardless of size (iOS) is better asked in few,
+   *  large calls; one whose cost grows with every selector (Android below
+   *  API 34) in small ones, so a slow chunk loses little. */
+  chunkSize?: number
 }
 
 /** Demoted priority of a suggestion pinned by position (`.nth()`), as before. */
@@ -262,10 +273,10 @@ function decideAll(
   return byNode;
 }
 
-/** Selectors per evaluateSelectors call: each call is one capture, and a
- *  short one, so a slow device (Android below API 34 re-reads every node per
- *  selector) or a re-rendering screen costs one chunk, not the whole screen. */
-const CHUNK_SIZE = 40;
+/** Default selectors per evaluateSelectors call: each call is one capture,
+ *  and a short one, so a slow device (Android below API 34) or a re-rendering
+ *  screen costs one chunk, not the whole screen. */
+const DEFAULT_CHUNK_SIZE = 40;
 /** Wall-clock budget for checking one screen; later chunks are skipped. */
 const CHECK_BUDGET_MS = 20_000;
 
@@ -279,12 +290,13 @@ async function evaluateInChunks(
   selectorOf: Map<string, Selector>,
   results: Map<string, SelectorEvaluation>,
   deadline: number,
+  chunkSize: number,
 ): Promise<string | undefined> {
-  for (let start = 0; start < codes.length; start += CHUNK_SIZE) {
+  for (let start = 0; start < codes.length; start += chunkSize) {
     if (Date.now() >= deadline) {
       return `checking took longer than ${CHECK_BUDGET_MS / 1000} s; ${codes.length - start} candidate(s) were not checked`;
     }
-    const chunk = codes.slice(start, start + CHUNK_SIZE);
+    const chunk = codes.slice(start, start + chunkSize);
     let response: EvaluateSelectorsResponse;
     try {
       response = await evaluator.evaluateSelectors(chunk.map((code) => selectorOf.get(code)!));
@@ -313,7 +325,9 @@ async function evaluateInChunks(
 export async function agentValidatedSuggestions(
   evaluator: SelectorEvaluator,
   nodes: HierarchyNode[],
+  options: SuggestionOptions = {},
 ): Promise<AgentSuggestions> {
+  const chunkSize = Math.max(1, options.chunkSize ?? DEFAULT_CHUNK_SIZE);
   const { ladders, codes: selectorOf } = candidateLadders(nodes);
   const results = new Map<string, SelectorEvaluation>();
   const matchesOf = (code: string): ElementInfo[] | null => {
@@ -324,7 +338,7 @@ export async function agentValidatedSuggestions(
 
   const all = [...ladders.values()].flat();
   const bases = [...new Set([...all].sort((a, b) => a.base.priority - b.base.priority).map((l) => l.base.code))];
-  let errorMessage = await evaluateInChunks(evaluator, bases, selectorOf, results, deadline);
+  let errorMessage = await evaluateInChunks(evaluator, bases, selectorOf, results, deadline, chunkSize);
   let stoppedAt: AgentSuggestions['stoppedAt'] = errorMessage ? 'candidates' : undefined;
 
   if (!errorMessage) {
@@ -336,10 +350,24 @@ export async function agentValidatedSuggestions(
         for (const u of ladder.upgrades) if (!results.has(u.code)) upgrades.add(u.code);
       }
     }
-    errorMessage = await evaluateInChunks(evaluator, [...upgrades], selectorOf, results, deadline);
+    errorMessage = await evaluateInChunks(evaluator, [...upgrades], selectorOf, results, deadline, chunkSize);
     if (errorMessage) stoppedAt = 'variants';
   }
 
   const byNode = decideAll(ladders, matchesOf);
-  return errorMessage ? { byNode, errorMessage, stoppedAt } : { byNode };
+  // A node is gone when, among everything its checked candidates matched,
+  // nothing is at its bounds (and nothing was identified as it): it was no
+  // longer on screen when the agent looked. A node without real bounds can't
+  // be judged; one with an unchecked candidate isn't counted.
+  let notFound = 0;
+  for (const [node, nodeLadders] of ladders) {
+    const bounds = nodeBounds(node);
+    if (nodeLadders.length === 0 || byNode.has(node) || !bounds || bounds.right <= bounds.left || bounds.bottom <= bounds.top) continue;
+    const absent = nodeLadders.every((l) => {
+      const r = results.get(l.base.code);
+      return r !== undefined && !r.errorMessage && !(r.elements ?? []).some((m) => sameBounds(m.bounds, bounds));
+    });
+    if (absent) notFound++;
+  }
+  return errorMessage ? { byNode, errorMessage, stoppedAt, notFound } : { byNode, notFound };
 }

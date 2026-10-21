@@ -260,6 +260,25 @@ describe('tapsmith_snapshot', () => {
     expect(out).toContain('the screen may have been changing. Take the snapshot again.');
   });
 
+  it('says some listed elements were not on screen when the agent checked them (the screen changed)', async () => {
+    // The dump shows the sign-in screen; by the check the static text is gone.
+    const gone = (sel: Selector) => signInAgent(sel).filter((e) => e.text !== 'Sign in to continue to DreamSpinner');
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: gone }).client;
+    const out = text(await callTool('tapsmith_snapshot'));
+    expect(out).toContain('## Suggested Locators');
+    expect(out).toContain('(1 listed element was not on screen when the device agent checked it, so it has no suggested locator; the screen may have changed. Take the snapshot again.)');
+  });
+
+  it('checks a big iOS screen in one call (an iOS agent captures once per call)', async () => {
+    const rows = Array.from({ length: 30 }, (_, i) =>
+      `  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="Row ${i}" bounds="[0,${i * 50}][390,${i * 50 + 40}]" />`).join('\n');
+    // Shaped like the iOS agent's dump: wrapped in <hierarchy>, like Android's.
+    const daemon = makeDaemon({ hierarchyXml: `<?xml version="1.0" encoding="UTF-8"?>\n<hierarchy>\n<XCUIElementTypeApplication type="XCUIElementTypeApplication">\n${rows}\n</XCUIElementTypeApplication>\n</hierarchy>` });
+    hoisted.client = daemon.client;
+    await callTool('tapsmith_snapshot');
+    expect(daemon.evaluateSelectors.mock.calls[0][0].length).toBeGreaterThan(40);
+  });
+
   it('says nothing about refs when the screen has no element to suggest for', async () => {
     hoisted.client = makeDaemon({ hierarchyXml: '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][10,10]" /></hierarchy>' }).client;
     expect(text(await callTool('tapsmith_snapshot'))).not.toContain('No suggested locators');

@@ -233,6 +233,37 @@ describe('when checking stops', () => {
   });
 });
 
+describe('chunk size and missing elements', () => {
+  const rows = () => Array.from({ length: 30 }, (_, i) => node('android.widget.TextView', `Row ${i}`, B(0, i * 60, 100, i * 60 + 50)));
+
+  it('sends bigger chunks when asked (an agent that captures once per call)', async () => {
+    const a = agent(() => []);
+    await agentValidatedSuggestions(a, rows(), { chunkSize: 500 });
+    expect(a.evaluateSelectors).toHaveBeenCalledTimes(1);
+    expect(a.evaluateSelectors.mock.calls[0][0].length).toBeGreaterThan(40);
+  });
+
+  it('counts the listed elements nothing was matched at (not on screen when checked)', async () => {
+    const gone = node('android.widget.Button', 'Cancel', B(0, 300, 100, 350));
+    // On the new screen the class name still matches other buttons, elsewhere.
+    const elsewhere = el(B(0, 600, 100, 650), 'Next');
+    const a = agent((s) => (JSON.stringify(s).includes('Save') ? [el(saveBounds, 'Save')] : s.kind.type === 'className' ? [el(saveBounds, 'Save'), elsewhere] : []));
+    const { byNode, notFound } = await agentValidatedSuggestions(a, [save, gone]);
+    expect(byNode.has(save)).toBe(true);
+    expect(byNode.has(gone)).toBe(false);
+    expect(notFound).toBe(1);
+  });
+
+  it('does not count an element that is on screen but could not be pinned', async () => {
+    // A same-size wrapper/child pair: matches sit at the node's bounds.
+    const box: HierarchyNode = { tagName: 'node', attributes: new Map([['class', 'android.view.ViewGroup'], ['clickable', 'true'], ['bounds', fmt(B(0, 100, 400, 200))]]), children: [], depth: 0 };
+    const a = agent(() => [el(B(0, 100, 400, 200), 'A', 'android.view.ViewGroup'), el(B(0, 100, 400, 200), 'B', 'android.view.ViewGroup')]);
+    const { byNode, notFound } = await agentValidatedSuggestions(a, [box]);
+    expect(byNode.has(box)).toBe(false);
+    expect(notFound).toBe(0);
+  });
+});
+
 describe('which agent match is the node', () => {
   const row = node('android.widget.TextView', 'Wi-Fi', B(0, 100, 400, 200));
 

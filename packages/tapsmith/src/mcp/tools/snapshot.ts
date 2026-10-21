@@ -6,6 +6,9 @@ import { parseHierarchyXml } from '../../trace-viewer/components/hierarchy-utils
 import { formatHierarchy, semanticNodes } from '../hierarchy-formatter.js';
 import { agentValidatedSuggestions } from '../agent-suggestions.js';
 
+/** Selectors per agent call on iOS, where each call costs one snapshot. */
+const IOS_CHUNK_SIZE = 500;
+
 export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_snapshot',
@@ -24,7 +27,11 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
 
       const roots = parseHierarchyXml(hierarchyXml);
       const nodes = semanticNodes(roots);
-      const { byNode, errorMessage: suggestError, stoppedAt } = await agentValidatedSuggestions(client, nodes);
+      // The iOS agent takes one capture per call however many selectors it
+      // is sent, so a screen is checked in a few large calls there.
+      const ios = hierarchyXml.includes('<XCUIElementType');
+      const { byNode, errorMessage: suggestError, stoppedAt, notFound } =
+        await agentValidatedSuggestions(client, nodes, ios ? { chunkSize: IOS_CHUNK_SIZE } : {});
       const { tree, locators } = formatHierarchy(roots, byNode);
 
       // There is no other matcher to fall back to: say why refs are missing
@@ -40,7 +47,9 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
           // The agent answered, but nothing resolved to the element it was
           // suggested for: the screen changed between the two captures.
           ? '(No suggested locators: none resolved to its element when the device agent checked them; the screen may have been changing. Take the snapshot again.)'
-          : '';
+          : notFound > 0
+            ? `(${notFound === 1 ? '1 listed element was' : `${notFound} listed elements were`} not on screen when the device agent checked ${notFound === 1 ? 'it' : 'them'}, so ${notFound === 1 ? 'it has' : 'they have'} no suggested locator; the screen may have changed. Take the snapshot again.)`
+            : '';
       const body = [tree || '(empty screen)', note].filter(Boolean).join('\n\n');
       const output = locators.length > 0
         ? `${body}\n\n## Suggested Locators\n${locators.join('\n')}`
