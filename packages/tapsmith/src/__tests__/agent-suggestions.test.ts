@@ -233,6 +233,22 @@ describe('which agent match is the node', () => {
     expect(codes(byNode, row)).toContain('device.getByText("Wi-Fi").last()');
   });
 
+  it('takes a clipped container row whose name is its accessibility label, not its text', async () => {
+    // An RN Pressable row: the dump has its name in content-desc and no text;
+    // the agent reports it as contentDescription (its text aggregates children).
+    const pressable: HierarchyNode = {
+      tagName: 'node',
+      attributes: new Map([['class', 'android.view.ViewGroup'], ['text', ''], ['content-desc', 'Wi-Fi'],
+        ['clickable', 'true'], ['bounds', fmt(B(0, 100, 400, 200))]]),
+      children: [],
+      depth: 0,
+    };
+    const clipped = { ...el(B(0, 150, 400, 200), 'Wi-Fi On', 'android.view.ViewGroup'), contentDescription: 'Wi-Fi' } as ElementInfo;
+    const a = agent((s) => (JSON.stringify(s).includes('"Wi-Fi"') ? [clipped] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [pressable]);
+    expect(codes(byNode, pressable)).toContain('device.getByDescription("Wi-Fi")');
+  });
+
   it('never ties a node without real bounds to a match', async () => {
     const hidden = node('android.widget.TextView', 'Wi-Fi', B(0, 0, 0, 0));
     const a = agent((s) => (isText(s, 'Wi-Fi') ? [el(B(0, 0, 0, 0), 'Wi-Fi', 'android.widget.TextView')] : []));

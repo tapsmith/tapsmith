@@ -247,6 +247,23 @@ describe('tapsmith_snapshot', () => {
     expect(daemon.findElements).not.toHaveBeenCalled();
   });
 
+  it('keeps the activity-feed count right when checking stopped partway', async () => {
+    const daemon = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent });
+    let calls = 0;
+    const real = daemon.evaluateSelectors.getMockImplementation() as (selectors: Selector[]) => Promise<unknown>;
+    daemon.evaluateSelectors.mockImplementation(async (selectors: Selector[]) => {
+      calls++;
+      // The first chunk is answered; checking stops at the next one.
+      return calls === 1 ? real(selectors) : { requestId: '1', results: [], errorMessage: 'Agent command timed out' };
+    });
+    hoisted.client = daemon.client;
+    const out = text(await callTool('tapsmith_snapshot'));
+    expect(out).toContain('(Some elements have no suggested locator: the device agent stopped checking them: Agent command timed out)');
+    const refs = out.split('\n').filter((l) => /^\[\d+\] /.test(l)).length;
+    expect(refs).toBeGreaterThan(0);
+    expect(summarizeResult('tapsmith_snapshot', out)).toMatch(new RegExp(`, ${refs} locators$`));
+  });
+
   it('says why there are no refs when the agent cannot check them, and still shows the tree', async () => {
     const daemon = makeDaemon({ hierarchyXml: SIGN_IN_XML });
     daemon.evaluateSelectors.mockResolvedValue({ requestId: '1', results: [], errorMessage: 'Unknown method: evaluateSelectors' });

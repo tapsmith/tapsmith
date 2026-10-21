@@ -110,33 +110,35 @@ function within(a: ElementInfo['bounds'], b: Box): boolean {
     && a.left >= b.left && a.top >= b.top && a.right <= b.right && a.bottom <= b.bottom;
 }
 
-/** The node's text the way the agent reports an element's: text, else value, else label. */
-function nodeText(node: HierarchyNode): string {
-  return node.attributes.get('text') || node.attributes.get('value') || node.attributes.get('label') || '';
+/** The names a dump node carries: Android text and content-desc, iOS value and label. */
+function nodeNames(node: HierarchyNode): string[] {
+  return ['text', 'value', 'label', 'content-desc']
+    .map((key) => node.attributes.get(key) ?? '')
+    .filter(Boolean);
 }
 
 /**
  * Where the node is among the agent's matches, or -1 when none is it. A
  * match is the node when it has the node's bounds and either its class or
- * its text (the runtime's own same-target rule, which an iOS parent and its
- * inner text share). Android's dump clips bounds only to the display and the
+ * its name — text or accessibility label (the runtime treats same bounds and
+ * text as one target, which an iOS parent and its inner text share). Android's dump clips bounds only to the display and the
  * window while finds also clip to the first scrollable ancestor, so a row
  * partly scrolled out of a list is the node too when it lies within the
- * node's bounds with both its class and its text. The closest such match wins.
+ * node's bounds with both its class and its name. The closest such match wins.
  */
 function indexOfNode(matches: ElementInfo[], node: HierarchyNode): number {
   const bounds = parseBounds(node.attributes.get('bounds') ?? '');
   if (!bounds || bounds.right - bounds.left <= 0 || bounds.bottom - bounds.top <= 0) return -1;
   const className = node.attributes.get('class') || node.attributes.get('type') || '';
-  const text = nodeText(node);
+  const names = nodeNames(node);
   let best = -1;
   let bestRank = 0;
   for (const [i, m] of matches.entries()) {
     const sameClass = !!className && m.className === className;
-    const sameText = !!text && m.text === text;
+    const sameName = names.some((n) => n === m.text || n === m.contentDescription);
     const rank = sameBounds(m.bounds, bounds)
-      ? (sameClass ? 3 : sameText ? 2 : 0)
-      : (sameClass && sameText && within(m.bounds, bounds) ? 1 : 0);
+      ? (sameClass ? 3 : sameName ? 2 : 0)
+      : (sameClass && sameName && within(m.bounds, bounds) ? 1 : 0);
     if (rank > bestRank) {
       best = i;
       bestRank = rank;

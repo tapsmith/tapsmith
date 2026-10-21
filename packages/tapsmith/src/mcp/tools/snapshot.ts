@@ -26,16 +26,17 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
       const { byNode, errorMessage: suggestError } = await agentValidatedSuggestions(client, semanticNodes(roots));
       const { tree, locators } = formatHierarchy(roots, byNode);
 
-      let output = locators.length > 0
-        ? `${tree}\n\n## Suggested Locators\n${locators.join('\n')}`
-        : tree || '(empty screen)';
-      if (suggestError) {
-        // There is no other matcher to fall back to: say why refs are missing
-        // rather than offer unchecked ones.
-        output += byNode.size === 0
-          ? `\n\n(No suggested locators: the device agent could not check them: ${suggestError})`
-          : `\n\n(Some elements have no suggested locator: the device agent stopped checking them: ${suggestError})`;
-      }
+      // There is no other matcher to fall back to: say why refs are missing
+      // rather than offer unchecked ones. The note goes before the locator
+      // list, which the activity feed counts line by line.
+      const note = !suggestError ? ''
+        : byNode.size === 0
+          ? `(No suggested locators: the device agent could not check them: ${suggestError})`
+          : `(Some elements have no suggested locator: the device agent stopped checking them: ${suggestError})`;
+      const body = [tree || '(empty screen)', note].filter(Boolean).join('\n\n');
+      const output = locators.length > 0
+        ? `${body}\n\n## Suggested Locators\n${locators.join('\n')}`
+        : body;
 
       return { content: [{ type: 'text' as const, text: output }] };
     },
