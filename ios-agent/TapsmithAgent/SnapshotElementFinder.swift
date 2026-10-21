@@ -129,12 +129,48 @@ class SnapshotElementFinder {
 
     /// Find all elements from a pre-taken snapshot (avoids an extra IPC).
     func findElements(_ selector: ElementSelector, fromSnapshot resolvedSnapshot: XCUIElementSnapshot) throws -> [ElementInfo] {
+        var snapshotDict = matchableDict(of: resolvedSnapshot)
+        return try findElements(selector, in: &snapshotDict, register: true)
+    }
+
+    /// Evaluate several selectors against one snapshot (PILOT-848), by the
+    /// same match walk as `findElements`, so locator suggestions and match
+    /// counts are decided by the rules tests run with.
+    ///
+    /// - One snapshot and one dictionary conversion for the whole batch:
+    ///   the counts are consistent with each other.
+    /// - Never waits, and never registers a match (no element id, no cache
+    ///   entry, no live query), so evaluating a screen's worth of candidates
+    ///   can't evict the handles of a test running on the same agent.
+    /// - A selector that fails (an invalid RegExp) fails only its own entry.
+    func evaluateSelectors(_ selectors: [ElementSelector]) throws -> [Result<[ElementInfo], Error>] {
+        let snapshot = try takeSnapshot()
+        var snapshotDict = matchableDict(of: snapshot)
+        return selectors.map { selector in
+            Result { try findElements(selector, in: &snapshotDict, register: false) }
+        }
+    }
+
+    /// The snapshot as the string-keyed dictionary the match walk reads,
+    /// with accessibility traits annotated.
+    private func matchableDict(of snapshot: XCUIElementSnapshot) -> [String: Any] {
+        var snapshotDict = convertKeys(snapshot.dictionaryRepresentation)
+        Self.annotateTraits(dict: &snapshotDict, snapshot: snapshot)
+        return snapshotDict
+    }
+
+    /// The match walk over a converted snapshot. With `register`, each match
+    /// gets an element id, cache entries and a lazily built live query for
+    /// later actions; without it (evaluating), matches are only described
+    /// and `snapshotDict` is left as it was.
+    private func findElements(
+        _ selector: ElementSelector,
+        in snapshotDict: inout [String: Any],
+        register: Bool
+    ) throws -> [ElementInfo] {
         if let regexError = selector.regexError {
             throw AgentError.invalidSelector(regexError)
         }
-        // Convert to string-keyed dict for easier processing
-        var snapshotDict = convertKeys(resolvedSnapshot.dictionaryRepresentation)
-        SnapshotElementFinder.annotateTraits(dict: &snapshotDict, snapshot: resolvedSnapshot)
 
         // Check once if keyboard is visible (for focus detection).
         // Keyboard = elementType 56 (XCUIElement.ElementType.keyboard).
@@ -145,7 +181,7 @@ class SnapshotElementFinder {
         // by its index within the live query that finds it again
         // (cacheQueryElement, PILOT-549, PILOT-520, PILOT-522).
         var queryNodes: [QueryNode] = []
-        if selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel {
+        if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel) {
             SnapshotElementFinder.numberDescendants(of: &snapshotDict, into: &queryNodes)
         }
         var liveFocusedTextInputFetched = false
@@ -232,7 +268,7 @@ class SnapshotElementFinder {
                 bottom: Int(frame.origin.y + frame.height)
             )
 
-            let elementId = UUID().uuidString
+            let elementId = register ? UUID().uuidString : ""
             let label = nodeDict["label"] as? String ?? ""
             let title = nodeDict["title"] as? String ?? ""
             let identifier = nodeDict["identifier"] as? String ?? ""
@@ -254,26 +290,28 @@ class SnapshotElementFinder {
                 value: value,
                 selected: isSelected
             )
-            // Cache the snapshot bounds for fast coordinate-based actions.
-            lock.lock()
-            boundsCache[elementId] = frame
-            identityCache[elementId] = CachedIdentity(
-                elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar
-            )
-            // Every minted id takes part in eviction, with or without a live
-            // query — ids that get none (placeholder, className, …) would
-            // otherwise stay in the bounds and identity caches for the whole
-            // session.
-            cacheOrder.append(elementId)
-            lock.unlock()
+            if register {
+                // Cache the snapshot bounds for fast coordinate-based actions.
+                lock.lock()
+                boundsCache[elementId] = frame
+                identityCache[elementId] = CachedIdentity(
+                    elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar
+                )
+                // Every minted id takes part in eviction, with or without a live
+                // query — ids that get none (placeholder, className, …) would
+                // otherwise stay in the bounds and identity caches for the whole
+                // session.
+                cacheOrder.append(elementId)
+                lock.unlock()
 
-            // Lazily build an XCUIElement query for actions that need it (typeText, etc.).
-            // This is deferred — the query object is created but not evaluated until
-            // a property (like .isHittable) is accessed. Pass the snapshot node so the
-            // query can use element type + identifier for more precise matching.
-            cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, idIndex: idIndices[matchIndex],
-                labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict
-            )
+                // Lazily build an XCUIElement query for actions that need it (typeText, etc.).
+                // This is deferred — the query object is created but not evaluated until
+                // a property (like .isHittable) is accessed. Pass the snapshot node so the
+                // query can use element type + identifier for more precise matching.
+                cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, idIndex: idIndices[matchIndex],
+                    labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict
+                )
+            }
             // The snapshot's hasFocus is unreliable on Xcode 26 — it can
             // report false even when the text input is the first responder.
             // Use the snapshot when it reports true; otherwise fall back to
@@ -359,6 +397,7 @@ class SnapshotElementFinder {
         // from the batch we are about to return, or a large match set would
         // evict its own first elements before the SDK can act on them
         // (`.first()` acts on the oldest-appended id of the batch).
+        guard register else { return results }
         let currentBatch = Set(results.map { $0.elementId })
         lock.lock()
         pruneCacheLocked(protecting: currentBatch)

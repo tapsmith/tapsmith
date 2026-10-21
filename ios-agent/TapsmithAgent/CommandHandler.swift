@@ -1169,6 +1169,19 @@ class CommandHandler {
             let elements = try elementFinder.findElements(selector, parentId: parentId)
             return ["elements": elements.map { $0.toDict() }]
 
+        case "evaluateSelectors":
+            // PILOT-848: one snapshot, every selector matched by the walk
+            // findElements uses; a failing selector fails only its entry.
+            let raw = params["selectors"] as? [[String: Any]] ?? []
+            let results = try snapshotFinder.evaluateSelectors(raw.map { SelectorParser.parse($0) })
+            return ["results": results.map { result -> [String: Any] in
+                switch result {
+                case .success(let elements): return ["elements": elements.map { $0.toDict() }]
+                case .failure(let error as AgentError): return ["error": error.message]
+                case .failure(let error): return ["error": error.localizedDescription]
+                }
+            }]
+
         // ─── Tap Actions ───
 
         case "tap":

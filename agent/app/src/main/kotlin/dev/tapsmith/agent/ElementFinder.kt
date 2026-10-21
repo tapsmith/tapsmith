@@ -595,21 +595,12 @@ class ElementFinder(
         val candidates = enumerate(selector, parent)
         val enumeratedAt = SystemClock.uptimeMillis()
 
-        val matches = mutableListOf<ElementInfo>()
-        var examined = 0
         var extractMs = 0L
-        for (obj in candidates) {
-            if (matches.size >= limit) break
-            // Each candidate can cost an accessibility round-trip on a busy
-            // app: stop once the daemon has given up (PILOT-605).
-            CommandCancellation.checkpoint()
-            examined++
-            val node = snapshotOf(obj, fresh)
-            if (!matchesSelector(node, selector, fresh) || !matchesStateFilters(node, selector)) continue
-            val extractStart = SystemClock.uptimeMillis()
-            matches.add(cacheAndConvert(obj, node, fresh))
-            extractMs += SystemClock.uptimeMillis() - extractStart
-        }
+        val (matches, examined) =
+            matchCandidates(candidates, selector, fresh, limit) { obj, node ->
+                val extractStart = SystemClock.uptimeMillis()
+                cacheAndConvert(obj, node, fresh).also { extractMs += SystemClock.uptimeMillis() - extractStart }
+            }
         val doneAt = SystemClock.uptimeMillis()
         android.util.Log.d(
             FIND_LOG_TAG,
@@ -620,6 +611,96 @@ class ElementFinder(
                 (if (fresh) "" else " [cache not cleared: per-node refresh]"),
         )
         return matches
+    }
+
+    /**
+     * The match step of a find: every candidate the walk enumerated that the
+     * selector's non-native parts and state filters accept, in tree order,
+     * up to [limit]. Returns the matches and how many candidates were read.
+     */
+    private inline fun matchCandidates(
+        candidates: List<UiObject2>,
+        selector: ElementSelector,
+        fresh: Boolean,
+        limit: Int,
+        convert: (UiObject2, AccessibilityNodeInfo) -> ElementInfo,
+    ): Pair<List<ElementInfo>, Int> {
+        val matches = mutableListOf<ElementInfo>()
+        var examined = 0
+        for (obj in candidates) {
+            if (matches.size >= limit) break
+            // Each candidate can cost an accessibility round-trip on a busy
+            // app: stop once the daemon has given up (PILOT-605).
+            CommandCancellation.checkpoint()
+            examined++
+            val node = snapshotOf(obj, fresh)
+            if (!matchesSelector(node, selector, fresh) || !matchesStateFilters(node, selector)) continue
+            matches.add(convert(obj, node))
+        }
+        return matches to examined
+    }
+
+    /**
+     * Evaluate several selectors against one snapshot of the UI (PILOT-848),
+     * by the same enumerate-and-match steps as [findElements], so locator
+     * suggestions and match counts are decided by the rules tests run with.
+     *
+     * - One accessibility-cache clear for the whole batch: every selector
+     *   reads the same nodes, so the counts are consistent with each other.
+     * - Never waits, and never caches a match (the returned ids are empty),
+     *   so evaluating a screen's worth of candidates can't evict the handles
+     *   of a test running on the same agent.
+     * - A selector that fails (an invalid RegExp, a missing criterion) fails
+     *   only its own entry. A stale tree restarts the whole batch, so a
+     *   re-render never leaves half the results from each side of it.
+     */
+    fun evaluateSelectors(selectors: List<Result<ElementSelector>>): List<Result<List<ElementInfo>>> {
+        val maxAttempts = STALE_RETRY_ATTEMPTS.coerceAtLeast(1)
+        var lastStale: StaleObjectException? = null
+        for (attempt in 0 until maxAttempts) {
+            try {
+                return evaluateSelectorsOnce(selectors)
+            } catch (e: StaleObjectException) {
+                lastStale = e
+                if (attempt < maxAttempts - 1) {
+                    CommandCancellation.sleep(STALE_RETRY_DELAY_MS)
+                }
+            }
+        }
+        throw lastStale ?: error("evaluateSelectors retry loop ran zero attempts")
+    }
+
+    private fun evaluateSelectorsOnce(selectors: List<Result<ElementSelector>>): List<Result<List<ElementInfo>>> {
+        val startedAt = SystemClock.uptimeMillis()
+        val fresh = clearAccessibilityCache()
+        val results =
+            selectors.map { parsed ->
+                CommandCancellation.checkpoint()
+                val selector = parsed.getOrElse { return@map Result.failure(it) }
+                try {
+                    val matches =
+                        if (selector.xpath != null) {
+                            findByXPath(selector.xpath).map { it.copy(elementId = "") }
+                        } else {
+                            matchCandidates(enumerate(selector, null), selector, fresh, Int.MAX_VALUE) { obj, node ->
+                                toElementInfo(obj, node, "", fresh).first
+                            }.first
+                        }
+                    Result.success(matches)
+                } catch (e: StaleObjectException) {
+                    throw e
+                } catch (e: CommandCancelledException) {
+                    throw e
+                } catch (e: Exception) {
+                    Result.failure(e)
+                }
+            }
+        android.util.Log.d(
+            FIND_LOG_TAG,
+            "evaluateSelectors: ${selectors.size} selectors in ${SystemClock.uptimeMillis() - startedAt}ms" +
+                (if (fresh) "" else " [cache not cleared: per-node refresh]"),
+        )
+        return results
     }
 
     /**

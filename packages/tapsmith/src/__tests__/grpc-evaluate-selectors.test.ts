@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { TapsmithGrpcClient } from '../grpc-client.js';
-import { _text, _role, selectorToProto } from '../selectors.js';
+import { _text, _role, selectorToProto, withParent } from '../selectors.js';
 
 // PILOT-848: one batch RPC evaluates every candidate selector against the same
 // UI snapshot, so the request must carry them all, in order, as proto selectors.
@@ -33,5 +33,16 @@ describe('evaluateSelectors', () => {
     ]);
     expect(typeof capture.request?.requestId).toBe('string');
     expect(res.results).toEqual(results);
+  });
+
+  it('refuses a scoped selector instead of evaluating it unscoped', async () => {
+    // Agents scope a find by a resolved parent element id, not by a nested
+    // parent selector: sent as is, the parent would be silently ignored and
+    // the count would be the unscoped one.
+    const capture: { request?: Record<string, unknown> } = {};
+    const client = clientCapturing(capture, { requestId: 'r', results: [], errorMessage: '' });
+    await expect(client.evaluateSelectors([withParent(_text('Save'), _role('list'))]))
+      .rejects.toThrow(/scoped/);
+    expect(capture.request).toBeUndefined();
   });
 });

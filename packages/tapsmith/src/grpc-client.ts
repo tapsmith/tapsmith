@@ -554,6 +554,11 @@ export class TapsmithGrpcClient {
    * suggestions can't drift from what a test resolves.
    */
   async evaluateSelectors(selectors: Selector[]): Promise<EvaluateSelectorsResponse> {
+    // Agents scope a find by a resolved parent element id, never by a nested
+    // parent selector, so a scoped selector would be counted unscoped.
+    if (selectors.some((s) => s.parent)) {
+      throw new Error('evaluateSelectors does not support scoped selectors (a locator chained from another locator)');
+    }
     return this.call<EvaluateSelectorsResponse>('evaluateSelectors', {
       requestId: requestId(),
       selectors: selectors.map((s) => this.selectorProto(s)),
