@@ -356,7 +356,7 @@ export async function agentValidatedSuggestions(
 
   const byNode = decideAll(ladders, matchesOf);
   // A node is gone when, among everything its checked candidates matched,
-  // nothing is at its bounds (and nothing was identified as it): it was no
+  // nothing is at (or, clipped, inside) its bounds: it was no
   // longer on screen when the agent looked. A node without real bounds can't
   // be judged; one with an unchecked candidate isn't counted.
   let notFound = 0;
@@ -365,7 +365,11 @@ export async function agentValidatedSuggestions(
     if (nodeLadders.length === 0 || byNode.has(node) || !bounds || bounds.right <= bounds.left || bounds.bottom <= bounds.top) continue;
     const absent = nodeLadders.every((l) => {
       const r = results.get(l.base.code);
-      return r !== undefined && !r.errorMessage && !(r.elements ?? []).some((m) => sameBounds(m.bounds, bounds));
+      // At the node's bounds, or (an Android row clipped by its list) inside
+      // them with its class: still on screen, just not pinned down.
+      const className = node.attributes.get('class') || node.attributes.get('type') || '';
+      const here = (m: ElementInfo) => sameBounds(m.bounds, bounds) || (!!className && m.className === className && within(m.bounds, bounds));
+      return r !== undefined && !r.errorMessage && !(r.elements ?? []).some(here);
     });
     if (absent) notFound++;
   }

@@ -254,6 +254,18 @@ describe('chunk size and missing elements', () => {
     expect(notFound).toBe(1);
   });
 
+  it('does not count an unnamed row clipped by its list as gone', async () => {
+    // Android's dump clips only to the window; the agent also clips to the
+    // scrolling list, so the row's bounds differ, and with no name it can't
+    // be identified — but it is on screen.
+    const row: HierarchyNode = { tagName: 'node', attributes: new Map([['class', 'android.view.ViewGroup'], ['clickable', 'true'], ['bounds', fmt(B(0, 100, 400, 200))]]), children: [], depth: 0 };
+    const clipped = el(B(0, 150, 400, 200), '', 'android.view.ViewGroup');
+    const a = agent(() => [clipped]);
+    const { byNode, notFound } = await agentValidatedSuggestions(a, [row]);
+    expect(byNode.has(row)).toBe(false);
+    expect(notFound).toBe(0);
+  });
+
   it('does not count an element that is on screen but could not be pinned', async () => {
     // A same-size wrapper/child pair: matches sit at the node's bounds.
     const box: HierarchyNode = { tagName: 'node', attributes: new Map([['class', 'android.view.ViewGroup'], ['clickable', 'true'], ['bounds', fmt(B(0, 100, 400, 200))]]), children: [], depth: 0 };
