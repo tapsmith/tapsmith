@@ -31,6 +31,10 @@ export interface AgentSuggestions {
   byNode: Map<HierarchyNode, GeneratedSelector[]>
   /** Set when checking stopped early: only what was checked is offered. */
   errorMessage?: string
+  /** Which stage stopped: the candidates themselves (some nodes may have no
+   *  suggestion), or the variants that pin an ambiguous one (those fall back
+   *  to a position, `.nth()`). */
+  stoppedAt?: 'candidates' | 'variants'
 }
 
 /** Demoted priority of a suggestion pinned by position (`.nth()`), as before. */
@@ -124,7 +128,8 @@ function nodeNames(node: HierarchyNode): string[] {
  * text as one target, which an iOS parent and its inner text share). Android's dump clips bounds only to the display and the
  * window while finds also clip to the first scrollable ancestor, so a row
  * partly scrolled out of a list is the node too when it lies within the
- * node's bounds with both its class and its name. The closest such match wins.
+ * node's bounds with both its class and its name. The closest such match
+ * wins; a tie for closest identifies nothing.
  */
 function indexOfNode(matches: ElementInfo[], node: HierarchyNode): number {
   const bounds = parseBounds(node.attributes.get('bounds') ?? '');
@@ -133,18 +138,24 @@ function indexOfNode(matches: ElementInfo[], node: HierarchyNode): number {
   const names = nodeNames(node);
   let best = -1;
   let bestRank = 0;
+  let tied = false;
   for (const [i, m] of matches.entries()) {
     const sameClass = !!className && m.className === className;
     const sameName = names.some((n) => n === m.text || n === m.contentDescription);
     const rank = sameBounds(m.bounds, bounds)
-      ? (sameClass ? 3 : sameName ? 2 : 0)
+      ? (sameClass ? (sameName ? 4 : 3) : sameName ? 2 : 0)
       : (sameClass && sameName && within(m.bounds, bounds) ? 1 : 0);
     if (rank > bestRank) {
       best = i;
       bestRank = rank;
+      tied = false;
+    } else if (rank > 0 && rank === bestRank) {
+      tied = true;
     }
   }
-  return best;
+  // Two equally good candidates (a same-size wrapper and its child, neither
+  // named apart): which one is the node can't be told, so neither is.
+  return tied ? -1 : best;
 }
 
 // ─── Decision ───
@@ -305,6 +316,7 @@ export async function agentValidatedSuggestions(
   const all = [...ladders.values()].flat();
   const bases = [...new Set([...all].sort((a, b) => a.base.priority - b.base.priority).map((l) => l.base.code))];
   let errorMessage = await evaluateInChunks(evaluator, bases, selectorOf, results, deadline);
+  let stoppedAt: AgentSuggestions['stoppedAt'] = errorMessage ? 'candidates' : undefined;
 
   if (!errorMessage) {
     const upgrades = new Set<string>();
@@ -316,8 +328,9 @@ export async function agentValidatedSuggestions(
       }
     }
     errorMessage = await evaluateInChunks(evaluator, [...upgrades], selectorOf, results, deadline);
+    if (errorMessage) stoppedAt = 'variants';
   }
 
   const byNode = decideAll(ladders, matchesOf);
-  return errorMessage ? { byNode, errorMessage } : { byNode };
+  return errorMessage ? { byNode, errorMessage, stoppedAt } : { byNode };
 }

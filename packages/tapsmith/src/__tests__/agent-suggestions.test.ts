@@ -178,9 +178,10 @@ describe('agentValidatedSuggestions', () => {
         };
       }),
     };
-    const { byNode, errorMessage } = await agentValidatedSuggestions(a, rows);
+    const { byNode, errorMessage, stoppedAt } = await agentValidatedSuggestions(a, rows);
     expect(a.evaluateSelectors.mock.calls.length).toBeGreaterThan(1);
     expect(errorMessage).toBe('Agent command timed out');
+    expect(stoppedAt).toBe('candidates');
     // The best-ranked candidates went first, so rows still got suggestions.
     expect(byNode.size).toBeGreaterThan(0);
   });
@@ -190,6 +191,47 @@ function parseB(n: HierarchyNode): Bounds {
   const m = /^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/.exec(n.attributes.get('bounds')!)!;
   return B(+m[1], +m[2], +m[3], +m[4]);
 }
+
+describe('when checking stops', () => {
+  it('says the variants stage stopped when only the pinning variants were not checked', async () => {
+    const other = el(B(0, 100, 100, 150), 'Save draft');
+    let calls = 0;
+    const a = {
+      evaluateSelectors: vi.fn(async (selectors: Selector[]): Promise<EvaluateSelectorsResponse> => {
+        calls++;
+        if (calls > 1) return { requestId: 'r', results: [], errorMessage: 'timed out' };
+        return {
+          requestId: 'r',
+          errorMessage: '',
+          results: selectors.map((s) => ({ elements: isRole(s, 'Save') || isText(s, 'Save') ? [el(saveBounds, 'Save'), other] : [], errorMessage: '' })),
+        };
+      }),
+    };
+    const { byNode, stoppedAt } = await agentValidatedSuggestions(a, [save]);
+    expect(stoppedAt).toBe('variants');
+    // Still offered, pinned by the agent's order.
+    expect(codes(byNode, save)[0]).toBe('device.getByRole("button", { name: "Save" }).first()');
+  });
+
+  it('starts no new chunk once the budget is spent', async () => {
+    const rows = Array.from({ length: 30 }, (_, i) => node('android.widget.TextView', `Row ${i}`, B(0, i * 60, 100, i * 60 + 50)));
+    let now = 1_000_000;
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const a = agent(() => []);
+      a.evaluateSelectors.mockImplementationOnce(async (selectors: Selector[]) => {
+        now += 25_000; // the first chunk alone outlasts the 20 s budget
+        return { requestId: 'r', errorMessage: '', results: selectors.map(() => ({ elements: [], errorMessage: '' })) };
+      });
+      const { errorMessage, stoppedAt } = await agentValidatedSuggestions(a, rows);
+      expect(a.evaluateSelectors).toHaveBeenCalledTimes(1);
+      expect(stoppedAt).toBe('candidates');
+      expect(errorMessage).toMatch(/^checking took longer than 20 s; \d+ candidate\(s\) were not checked$/);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+});
 
 describe('which agent match is the node', () => {
   const row = node('android.widget.TextView', 'Wi-Fi', B(0, 100, 400, 200));
@@ -247,6 +289,30 @@ describe('which agent match is the node', () => {
     const a = agent((s) => (JSON.stringify(s).includes('"Wi-Fi"') ? [clipped] : []));
     const { byNode } = await agentValidatedSuggestions(a, [pressable]);
     expect(codes(byNode, pressable)).toContain('device.getByDescription("Wi-Fi")');
+  });
+
+  it('breaks a tie between same-size same-class matches on the name', async () => {
+    const outer = el(B(0, 100, 400, 200), 'Network', 'android.widget.TextView');
+    const self = el(B(0, 100, 400, 200), 'Wi-Fi', 'android.widget.TextView');
+    const a = agent((s) => (s.kind.type === 'className' ? [outer, self] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [row]);
+    expect(codes(byNode, row)).toEqual(['device.locator({ className: "android.widget.TextView" }).last()']);
+  });
+
+  it('identifies nothing when same-size same-class matches cannot be told apart', async () => {
+    // A clickable RN view wrapping another of the same size, neither named.
+    const box = (): HierarchyNode => ({
+      tagName: 'node',
+      attributes: new Map([['class', 'android.view.ViewGroup'], ['clickable', 'true'], ['bounds', fmt(B(0, 100, 400, 200))]]),
+      children: [],
+      depth: 0,
+    });
+    const inner = box();
+    const wrapper = el(B(0, 100, 400, 200), 'A', 'android.view.ViewGroup');
+    const child = el(B(0, 100, 400, 200), 'B', 'android.view.ViewGroup');
+    const a = agent(() => [wrapper, child]);
+    const { byNode } = await agentValidatedSuggestions(a, [inner]);
+    expect(codes(byNode, inner)).toEqual([]);
   });
 
   it('never ties a node without real bounds to a match', async () => {

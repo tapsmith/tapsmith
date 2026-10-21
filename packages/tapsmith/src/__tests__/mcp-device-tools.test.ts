@@ -258,7 +258,10 @@ describe('tapsmith_snapshot', () => {
     });
     hoisted.client = daemon.client;
     const out = text(await callTool('tapsmith_snapshot'));
-    expect(out).toContain('(Some elements have no suggested locator: the device agent stopped checking them: Agent command timed out)');
+    // The candidates were all checked; only the variants that would pin the
+    // ambiguous ones were not, so those fall back to a position.
+    expect(out).toContain('(Some suggestions are pinned by position (.first()/.nth()/.last()) because the device agent stopped checking more specific ones: Agent command timed out)');
+    expect(out).not.toContain('Some elements have no suggested locator');
     const refs = out.split('\n').filter((l) => /^\[\d+\] /.test(l)).length;
     expect(refs).toBeGreaterThan(0);
     expect(summarizeResult('tapsmith_snapshot', out)).toMatch(new RegExp(`, ${refs} locators$`));

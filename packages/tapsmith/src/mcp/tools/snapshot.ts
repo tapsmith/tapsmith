@@ -23,16 +23,18 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
       }
 
       const roots = parseHierarchyXml(hierarchyXml);
-      const { byNode, errorMessage: suggestError } = await agentValidatedSuggestions(client, semanticNodes(roots));
+      const { byNode, errorMessage: suggestError, stoppedAt } = await agentValidatedSuggestions(client, semanticNodes(roots));
       const { tree, locators } = formatHierarchy(roots, byNode);
 
       // There is no other matcher to fall back to: say why refs are missing
       // rather than offer unchecked ones. The note goes before the locator
       // list, which the activity feed counts line by line.
       const note = !suggestError ? ''
-        : byNode.size === 0
-          ? `(No suggested locators: the device agent could not check them: ${suggestError})`
-          : `(Some elements have no suggested locator: the device agent stopped checking them: ${suggestError})`;
+        : stoppedAt === 'variants'
+          ? `(Some suggestions are pinned by position (.first()/.nth()/.last()) because the device agent stopped checking more specific ones: ${suggestError})`
+          : byNode.size === 0
+            ? `(No suggested locators: the device agent could not check them: ${suggestError})`
+            : `(Some elements have no suggested locator: the device agent stopped checking them: ${suggestError})`;
       const body = [tree || '(empty screen)', note].filter(Boolean).join('\n\n');
       const output = locators.length > 0
         ? `${body}\n\n## Suggested Locators\n${locators.join('\n')}`
