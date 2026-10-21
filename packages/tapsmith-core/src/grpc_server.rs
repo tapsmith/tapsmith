@@ -45,8 +45,10 @@ const WEBVIEW_ADB_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const IOS_OPEN_URL_PROMPT_TIMEOUT: Duration = Duration::from_secs(28);
 const IOS_OPEN_DIALOG_ACCEPT_TIMEOUT_MS: u64 = 300;
 /// Budget for one `evaluateSelectors` batch. Evaluating never waits for a
-/// match, so this only bounds the agent's work on a large screen (a few
-/// hundred candidate selectors); the agent stops early once it is cancelled.
+/// match, so this only bounds the agent's work on a large batch; the SDK sends
+/// a screen's candidates in small chunks. The Android agent also stops early
+/// once the command is abandoned; the iOS agent matches in-process over one
+/// snapshot and finishes a chunk in well under a second.
 const EVALUATE_SELECTORS_TIMEOUT_MS: u64 = 15_000;
 // Must exceed the agent-side cold path's worst case — `waitForDeepLinkDestination`
 // (10s) followed by the hooks epoch/nav acknowledgement wait (8s) — plus gRPC

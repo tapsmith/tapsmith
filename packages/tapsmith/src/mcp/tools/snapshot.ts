@@ -30,9 +30,11 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
         ? `${tree}\n\n## Suggested Locators\n${locators.join('\n')}`
         : tree || '(empty screen)';
       if (suggestError) {
-        // There is no other matcher to fall back to: say why there are no
-        // refs rather than offer unchecked ones.
-        output += `\n\n(No suggested locators: the device agent could not check them: ${suggestError})`;
+        // There is no other matcher to fall back to: say why refs are missing
+        // rather than offer unchecked ones.
+        output += byNode.size === 0
+          ? `\n\n(No suggested locators: the device agent could not check them: ${suggestError})`
+          : `\n\n(Some elements have no suggested locator: the device agent stopped checking them: ${suggestError})`;
       }
 
       return { content: [{ type: 'text' as const, text: output }] };

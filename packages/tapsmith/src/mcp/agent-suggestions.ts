@@ -18,7 +18,7 @@ import { parseSelectorString } from '../trace-viewer/components/selector-matchin
 import { escapeJsString } from '../js-string-escape.js';
 import type { Selector } from '../selectors.js';
 import { collapseSameTargetDuplicates } from '../element-handle.js';
-import type { ElementInfo, EvaluateSelectorsResponse } from '../grpc-client.js';
+import type { ElementInfo, EvaluateSelectorsResponse, SelectorEvaluation } from '../grpc-client.js';
 import { parseSelectorToInternal } from './locator-helper.js';
 
 /** The one RPC this module needs (a TapsmithGrpcClient in production). */
@@ -29,7 +29,7 @@ export interface SelectorEvaluator {
 export interface AgentSuggestions {
   /** Each node's validated suggestions, best first; a node with none is absent. */
   byNode: Map<HierarchyNode, GeneratedSelector[]>
-  /** Set when the agent could not evaluate the batch: nothing is offered. */
+  /** Set when checking stopped early: only what was checked is offered. */
   errorMessage?: string
 }
 
@@ -99,26 +99,50 @@ function selectorFor(code: string): Selector | null {
 
 // ─── Node identity ───
 
-function sameBounds(a: ElementInfo['bounds'], b: ReturnType<typeof parseBounds>): boolean {
-  return !!a && !!b && a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+type Box = NonNullable<ReturnType<typeof parseBounds>>;
+
+function sameBounds(a: ElementInfo['bounds'], b: Box): boolean {
+  return !!a && a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
+}
+
+function within(a: ElementInfo['bounds'], b: Box): boolean {
+  return !!a && a.right > a.left && a.bottom > a.top
+    && a.left >= b.left && a.top >= b.top && a.right <= b.right && a.bottom <= b.bottom;
+}
+
+/** The node's text the way the agent reports an element's: text, else value, else label. */
+function nodeText(node: HierarchyNode): string {
+  return node.attributes.get('text') || node.attributes.get('value') || node.attributes.get('label') || '';
 }
 
 /**
- * Where the node is among the agent's matches: the match at the node's
- * (non-degenerate) bounds, preferring one of the node's own class when two
- * share them (a same-size wrapper and its child). -1 when none is the node.
+ * Where the node is among the agent's matches, or -1 when none is it. A
+ * match is the node when it has the node's bounds and either its class or
+ * its text (the runtime's own same-target rule, which an iOS parent and its
+ * inner text share). Android's dump clips bounds only to the display and the
+ * window while finds also clip to the first scrollable ancestor, so a row
+ * partly scrolled out of a list is the node too when it lies within the
+ * node's bounds with both its class and its text. The closest such match wins.
  */
 function indexOfNode(matches: ElementInfo[], node: HierarchyNode): number {
   const bounds = parseBounds(node.attributes.get('bounds') ?? '');
   if (!bounds || bounds.right - bounds.left <= 0 || bounds.bottom - bounds.top <= 0) return -1;
-  const className = node.attributes.get('class') ?? node.attributes.get('type') ?? '';
-  let first = -1;
+  const className = node.attributes.get('class') || node.attributes.get('type') || '';
+  const text = nodeText(node);
+  let best = -1;
+  let bestRank = 0;
   for (const [i, m] of matches.entries()) {
-    if (!sameBounds(m.bounds, bounds)) continue;
-    if (className && m.className === className) return i;
-    if (first === -1) first = i;
+    const sameClass = !!className && m.className === className;
+    const sameText = !!text && m.text === text;
+    const rank = sameBounds(m.bounds, bounds)
+      ? (sameClass ? 3 : sameText ? 2 : 0)
+      : (sameClass && sameText && within(m.bounds, bounds) ? 1 : 0);
+    if (rank > bestRank) {
+      best = i;
+      bestRank = rank;
+    }
   }
-  return first;
+  return best;
 }
 
 // ─── Decision ───
@@ -216,39 +240,82 @@ function decideAll(
   return byNode;
 }
 
+/** Selectors per evaluateSelectors call: each call is one capture, and a
+ *  short one, so a slow device (Android below API 34 re-reads every node per
+ *  selector) or a re-rendering screen costs one chunk, not the whole screen. */
+const CHUNK_SIZE = 40;
+/** Wall-clock budget for checking one screen; later chunks are skipped. */
+const CHECK_BUDGET_MS = 20_000;
+
 /**
- * Generate candidates for every node, have the agent evaluate all of them in
- * one batch, and keep, per node, the ones that resolve to exactly that node
- * (sorted best first). On a failed batch nothing is offered: there is no
- * other matcher to fall back to.
+ * Evaluate `codes` in chunks, in order, stopping at the first failed chunk or
+ * once the budget is spent. Returns what was evaluated and why it stopped.
+ */
+async function evaluateInChunks(
+  evaluator: SelectorEvaluator,
+  codes: string[],
+  selectorOf: Map<string, Selector>,
+  results: Map<string, SelectorEvaluation>,
+  deadline: number,
+): Promise<string | undefined> {
+  for (let start = 0; start < codes.length; start += CHUNK_SIZE) {
+    if (Date.now() >= deadline) {
+      return `checking took longer than ${CHECK_BUDGET_MS / 1000} s; ${codes.length - start} candidate(s) were not checked`;
+    }
+    const chunk = codes.slice(start, start + CHUNK_SIZE);
+    let response: EvaluateSelectorsResponse;
+    try {
+      response = await evaluator.evaluateSelectors(chunk.map((code) => selectorOf.get(code)!));
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+    if (response.errorMessage) return response.errorMessage;
+    if (response.results.length !== chunk.length) {
+      return `agent returned ${response.results.length} result(s) for ${chunk.length} selector(s)`;
+    }
+    chunk.forEach((code, i) => results.set(code, response.results[i]));
+  }
+  return undefined;
+}
+
+/**
+ * Generate candidates for every node, have the agent evaluate them, and keep,
+ * per node, the ones that resolve to exactly that node (sorted best first).
+ *
+ * Base candidates go first, best-ranked first; the variants that could pin an
+ * ambiguous one go second, and only for the candidates the agent found
+ * ambiguous. If checking stops early (an agent error, the budget), what was
+ * checked is still offered and `errorMessage` says why the rest is not: there
+ * is no other matcher to fall back to.
  */
 export async function agentValidatedSuggestions(
   evaluator: SelectorEvaluator,
   nodes: HierarchyNode[],
 ): Promise<AgentSuggestions> {
-  const { ladders, codes } = candidateLadders(nodes);
-  if (codes.size === 0) return { byNode: new Map() };
-
-  const selectors = [...codes.values()];
-  let response: EvaluateSelectorsResponse;
-  try {
-    response = await evaluator.evaluateSelectors(selectors);
-  } catch (err) {
-    return { byNode: new Map(), errorMessage: err instanceof Error ? err.message : String(err) };
-  }
-  if (response.errorMessage) return { byNode: new Map(), errorMessage: response.errorMessage };
-  if (response.results.length !== selectors.length) {
-    return {
-      byNode: new Map(),
-      errorMessage: `agent returned ${response.results.length} result(s) for ${selectors.length} selector(s)`,
-    };
-  }
-
-  const resultByCode = new Map([...codes.keys()].map((code, i) => [code, response.results[i]]));
-  return {
-    byNode: decideAll(ladders, (code) => {
-      const result = resultByCode.get(code);
-      return !result || result.errorMessage ? null : (result.elements ?? []);
-    }),
+  const { ladders, codes: selectorOf } = candidateLadders(nodes);
+  const results = new Map<string, SelectorEvaluation>();
+  const matchesOf = (code: string): ElementInfo[] | null => {
+    const result = results.get(code);
+    return !result || result.errorMessage ? null : collapseSameTargetDuplicates(result.elements ?? []);
   };
+  const deadline = Date.now() + CHECK_BUDGET_MS;
+
+  const all = [...ladders.values()].flat();
+  const bases = [...new Set([...all].sort((a, b) => a.base.priority - b.base.priority).map((l) => l.base.code))];
+  let errorMessage = await evaluateInChunks(evaluator, bases, selectorOf, results, deadline);
+
+  if (!errorMessage) {
+    const upgrades = new Set<string>();
+    for (const [node, nodeLadders] of ladders) {
+      for (const ladder of nodeLadders) {
+        const matches = matchesOf(ladder.base.code);
+        if (!matches || matches.length < 2 || indexOfNode(matches, node) === -1) continue;
+        for (const u of ladder.upgrades) if (!results.has(u.code)) upgrades.add(u.code);
+      }
+    }
+    errorMessage = await evaluateInChunks(evaluator, [...upgrades], selectorOf, results, deadline);
+  }
+
+  const byNode = decideAll(ladders, matchesOf);
+  return errorMessage ? { byNode, errorMessage } : { byNode };
 }

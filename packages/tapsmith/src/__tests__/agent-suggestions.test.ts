@@ -117,7 +117,7 @@ describe('agentValidatedSuggestions', () => {
     expect(codes(byNode, save)[0]).toBe('device.getByRole("button", { name: "Save" })');
   });
 
-  it('asks the agent once for the whole screen, each distinct selector once', async () => {
+  it('asks the agent once for an unambiguous screen, each distinct selector once', async () => {
     const other = node('android.widget.Button', 'Cancel', B(0, 100, 100, 150));
     const a = agent(() => []);
     await agentValidatedSuggestions(a, [save, other, save]);
@@ -146,5 +146,97 @@ describe('agentValidatedSuggestions', () => {
     const a = { evaluateSelectors: vi.fn(async () => { throw new Error('14 UNAVAILABLE: connection refused'); }) };
     const { errorMessage } = await agentValidatedSuggestions(a, [save]);
     expect(errorMessage).toContain('UNAVAILABLE');
+  });
+
+  it('evaluates the pinning variants only for candidates the agent found ambiguous, in a second call', async () => {
+    const other = el(B(0, 100, 100, 150), 'Save draft');
+    const a = agent((s) => (isRole(s, 'Save') || isText(s, 'Save') ? [el(saveBounds, 'Save'), other] : []));
+    const cancel = node('android.widget.Button', 'Cancel', B(0, 300, 100, 350));
+    await agentValidatedSuggestions(a, [save, cancel]);
+    expect(a.evaluateSelectors).toHaveBeenCalledTimes(2);
+    const second = a.evaluateSelectors.mock.calls[1][0];
+    expect(second.length).toBeGreaterThan(0);
+    // Only Save's ladders were ambiguous; Cancel's variants are never sent.
+    expect(second.every((s: Selector) => JSON.stringify(s).includes('Save'))).toBe(true);
+  });
+
+  it('checks a big screen in chunks, and keeps what was checked when a later chunk fails', async () => {
+    const rows = Array.from({ length: 30 }, (_, i) => node('android.widget.TextView', `Row ${i}`, B(0, i * 60, 100, i * 60 + 50)));
+    let calls = 0;
+    const a = {
+      evaluateSelectors: vi.fn(async (selectors: Selector[]): Promise<EvaluateSelectorsResponse> => {
+        calls++;
+        expect(selectors.length).toBeLessThanOrEqual(40);
+        if (calls > 1) return { requestId: 'r', results: [], errorMessage: 'Agent command timed out' };
+        return {
+          requestId: 'r',
+          errorMessage: '',
+          results: selectors.map((s) => {
+            const row = rows.find((r) => JSON.stringify(s).includes(`"${r.attributes.get('text')}"`));
+            return { elements: row ? [el(parseB(row), row.attributes.get('text')!, 'android.widget.TextView')] : [], errorMessage: '' };
+          }),
+        };
+      }),
+    };
+    const { byNode, errorMessage } = await agentValidatedSuggestions(a, rows);
+    expect(a.evaluateSelectors.mock.calls.length).toBeGreaterThan(1);
+    expect(errorMessage).toBe('Agent command timed out');
+    // The best-ranked candidates went first, so rows still got suggestions.
+    expect(byNode.size).toBeGreaterThan(0);
+  });
+});
+
+function parseB(n: HierarchyNode): Bounds {
+  const m = /^\[(\d+),(\d+)\]\[(\d+),(\d+)\]$/.exec(n.attributes.get('bounds')!)!;
+  return B(+m[1], +m[2], +m[3], +m[4]);
+}
+
+describe('which agent match is the node', () => {
+  const row = node('android.widget.TextView', 'Wi-Fi', B(0, 100, 400, 200));
+
+  it('takes a match clipped by a scrolling ancestor when class and text agree', async () => {
+    // Android's dump clips to the window only; finds also clip to the list.
+    const clipped = el(B(0, 150, 400, 200), 'Wi-Fi', 'android.widget.TextView');
+    const a = agent((s) => (isText(s, 'Wi-Fi') ? [clipped] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [row]);
+    expect(codes(byNode, row)).toContain('device.getByText("Wi-Fi")');
+  });
+
+  it('does not take a smaller element inside the node that only shares its class', async () => {
+    const inner = el(B(0, 150, 400, 200), 'Other text', 'android.widget.TextView');
+    const a = agent((s) => (isText(s, 'Wi-Fi') ? [inner] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [row]);
+    expect(codes(byNode, row)).toEqual([]);
+  });
+
+  it('does not take a same-bounds element of another class with other text', async () => {
+    const wrapper = el(B(0, 100, 400, 200), 'Settings row', 'android.view.ViewGroup');
+    const a = agent((s) => (isText(s, 'Wi-Fi') ? [wrapper] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [row]);
+    expect(codes(byNode, row)).toEqual([]);
+  });
+
+  it('takes a same-bounds element with the same text (the runtime\'s same target)', async () => {
+    const innerText = el(B(0, 100, 400, 200), 'Wi-Fi', 'android.widget.Button');
+    const a = agent((s) => (isText(s, 'Wi-Fi') ? [innerText] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [row]);
+    expect(codes(byNode, row)).toContain('device.getByText("Wi-Fi")');
+  });
+
+  it('prefers the match of the node\'s own class when two share its bounds', async () => {
+    const wrapper = el(B(0, 100, 400, 200), 'Wi-Fi', 'android.view.ViewGroup');
+    const self = el(B(0, 100, 400, 200), 'Wi-Fi!', 'android.widget.TextView');
+    // Both at the node's bounds: the one of the node's class is the node, so
+    // the positional suffix points at it (index 1), not the wrapper.
+    const a = agent((s) => (isText(s, 'Wi-Fi') ? [wrapper, self] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [row]);
+    expect(codes(byNode, row)).toContain('device.getByText("Wi-Fi").last()');
+  });
+
+  it('never ties a node without real bounds to a match', async () => {
+    const hidden = node('android.widget.TextView', 'Wi-Fi', B(0, 0, 0, 0));
+    const a = agent((s) => (isText(s, 'Wi-Fi') ? [el(B(0, 0, 0, 0), 'Wi-Fi', 'android.widget.TextView')] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [hidden]);
+    expect(codes(byNode, hidden)).toEqual([]);
   });
 });

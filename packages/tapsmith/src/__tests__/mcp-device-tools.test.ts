@@ -232,7 +232,7 @@ describe('tapsmith_snapshot', () => {
     expect(out).toContain('device.getByRole("button", { name: "Sign in" })');
   });
 
-  it('offers only what the agent resolves to that element, checked in one batch (PILOT-848)', async () => {
+  it('offers only what the agent resolves to that element (PILOT-848)', async () => {
     // The agent finds no button here (as on Compose, PILOT-833): the role
     // suggestion the hierarchy alone would make must not be offered.
     const daemon = makeDaemon({
@@ -244,7 +244,6 @@ describe('tapsmith_snapshot', () => {
     expect(out).not.toContain('getByRole("button"');
     // The ambiguous substring is upgraded to the exact text the agent resolves uniquely.
     expect(out).toContain('device.getByText("Sign in", { exact: true })');
-    expect(daemon.evaluateSelectors).toHaveBeenCalledTimes(1);
     expect(daemon.findElements).not.toHaveBeenCalled();
   });
 
