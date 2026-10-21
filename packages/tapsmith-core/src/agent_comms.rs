@@ -410,6 +410,11 @@ pub enum AgentCommand {
         selector: Value,
         timeout_ms: Option<u64>,
     },
+    /// Evaluate several selectors against one UI snapshot, without waiting
+    /// and without caching the matches (PILOT-848).
+    EvaluateSelectors {
+        selectors: Vec<Value>,
+    },
     Tap {
         selector: Value,
         timeout_ms: Option<u64>,
@@ -621,6 +626,7 @@ impl AgentCommand {
         match self {
             AgentCommand::FindElement { .. } => "findElement",
             AgentCommand::FindElements { .. } => "findElements",
+            AgentCommand::EvaluateSelectors { .. } => "evaluateSelectors",
             AgentCommand::Tap { .. } => "tap",
             AgentCommand::ResolveActionPoint { .. } => "resolveActionPoint",
             AgentCommand::LongPress { .. } => "longPress",
@@ -687,6 +693,9 @@ impl AgentCommand {
                     p["timeout"] = json!(t);
                 }
                 ("findElements", p)
+            }
+            AgentCommand::EvaluateSelectors { selectors } => {
+                ("evaluateSelectors", json!({ "selectors": selectors }))
             }
             AgentCommand::Tap {
                 selector,
@@ -2666,6 +2675,23 @@ mod tests {
         assert_eq!(j["params"]["screenshot"], true);
         assert_eq!(j["params"]["hierarchy"], true);
         assert_eq!(j["params"]["text"], "Login");
+    }
+
+    #[test]
+    fn to_json_evaluate_selectors() {
+        let cmd = AgentCommand::EvaluateSelectors {
+            selectors: vec![
+                json!({"text": "Login"}),
+                json!({"role": {"role": "button"}}),
+            ],
+        };
+        let j = cmd.to_json("ev1");
+        assert_eq!(j["method"], "evaluateSelectors");
+        assert_eq!(cmd.method_name(), "evaluateSelectors");
+        assert_eq!(j["params"]["selectors"][0]["text"], "Login");
+        assert_eq!(j["params"]["selectors"][1]["role"]["role"], "button");
+        // Evaluating never waits: no timeout is sent to the agent.
+        assert!(j["params"].get("timeout").is_none());
     }
 
     #[test]

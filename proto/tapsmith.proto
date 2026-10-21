@@ -7,6 +7,11 @@ package tapsmith;
 service TapsmithService {
   rpc FindElement(FindElementRequest) returns (FindElementResponse);
   rpc FindElements(FindElementsRequest) returns (FindElementsResponse);
+  // Evaluate several selectors against one UI snapshot, without waiting, so
+  // locator suggestions and match counts come from the agent's own matching
+  // (PILOT-848). Each selector gets its own result; one bad selector fails
+  // only its entry.
+  rpc EvaluateSelectors(EvaluateSelectorsRequest) returns (EvaluateSelectorsResponse);
   rpc Tap(TapRequest) returns (ActionResponse);
   rpc LongPress(LongPressRequest) returns (ActionResponse);
   rpc TypeText(TypeTextRequest) returns (ActionResponse);
@@ -230,6 +235,26 @@ message FindElementsRequest {
 message FindElementsResponse {
   string request_id = 1;
   repeated ElementInfo elements = 2;
+  string error_message = 3;
+}
+
+message EvaluateSelectorsRequest {
+  string request_id = 1;
+  repeated Selector selectors = 2;
+}
+
+// One selector's matches, in the agent's match order (the order `.nth()`
+// uses). `element_id` is left empty: evaluating never caches elements.
+message SelectorEvaluation {
+  repeated ElementInfo elements = 1;
+  string error_message = 2;
+}
+
+message EvaluateSelectorsResponse {
+  string request_id = 1;
+  // One entry per request selector, in request order. Empty when
+  // `error_message` is set.
+  repeated SelectorEvaluation results = 2;
   string error_message = 3;
 }
 

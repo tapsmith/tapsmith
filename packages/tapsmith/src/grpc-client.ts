@@ -58,6 +58,20 @@ export interface FindElementsResponse {
   errorMessage: string;
 }
 
+/** One selector's matches from {@link TapsmithGrpcClient.evaluateSelectors},
+ *  in the agent's match order. `elementId` is empty: nothing is cached. */
+export interface SelectorEvaluation {
+  elements: ElementInfo[];
+  errorMessage: string;
+}
+
+export interface EvaluateSelectorsResponse {
+  requestId: string;
+  /** One entry per requested selector, in request order; empty on error. */
+  results: SelectorEvaluation[];
+  errorMessage: string;
+}
+
 export interface ScreenshotResponse {
   requestId: string;
   success: boolean;
@@ -531,6 +545,18 @@ export class TapsmithGrpcClient {
       requestId: requestId(),
       selector: this.selectorProto(selector),
       timeoutMs: timeoutMs ?? 0,
+    });
+  }
+
+  /**
+   * Evaluate several selectors against one UI snapshot, without waiting
+   * (PILOT-848): the agent's own matching decides every count, so locator
+   * suggestions can't drift from what a test resolves.
+   */
+  async evaluateSelectors(selectors: Selector[]): Promise<EvaluateSelectorsResponse> {
+    return this.call<EvaluateSelectorsResponse>('evaluateSelectors', {
+      requestId: requestId(),
+      selectors: selectors.map((s) => this.selectorProto(s)),
     });
   }
 

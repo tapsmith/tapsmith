@@ -44,6 +44,10 @@ const KEYBOARD_STATE_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBVIEW_ADB_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const IOS_OPEN_URL_PROMPT_TIMEOUT: Duration = Duration::from_secs(28);
 const IOS_OPEN_DIALOG_ACCEPT_TIMEOUT_MS: u64 = 300;
+/// Budget for one `evaluateSelectors` batch. Evaluating never waits for a
+/// match, so this only bounds the agent's work on a large screen (a few
+/// hundred candidate selectors); the agent stops early once it is cancelled.
+const EVALUATE_SELECTORS_TIMEOUT_MS: u64 = 15_000;
 // Must exceed the agent-side cold path's worst case — `waitForDeepLinkDestination`
 // (10s) followed by the hooks epoch/nav acknowledgement wait (8s) — plus gRPC
 // round-trip, so each verify returns a verdict rather than tripping this
@@ -2351,6 +2355,52 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 elements: Vec::new(),
                 error_message: status.message().to_string(),
             })),
+        }
+    }
+
+    #[instrument(skip_all, fields(request_id))]
+    async fn evaluate_selectors(
+        &self,
+        request: Request<proto::EvaluateSelectorsRequest>,
+    ) -> Result<Response<proto::EvaluateSelectorsResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+        let error = |request_id: String, message: String| {
+            Ok(Response::new(proto::EvaluateSelectorsResponse {
+                request_id,
+                results: Vec::new(),
+                error_message: message,
+            }))
+        };
+
+        if req.selectors.is_empty() {
+            return Ok(Response::new(proto::EvaluateSelectorsResponse {
+                request_id,
+                results: Vec::new(),
+                error_message: String::new(),
+            }));
+        }
+
+        let command = AgentCommand::EvaluateSelectors {
+            selectors: req.selectors.iter().map(selector_to_json).collect(),
+        };
+
+        match self
+            .send_agent_command_with_timeout(&command, EVALUATE_SELECTORS_TIMEOUT_MS)
+            .await
+        {
+            Ok(resp) if resp.success => {
+                match parse_selector_evaluations(&resp.data, req.selectors.len()) {
+                    Ok(results) => Ok(Response::new(proto::EvaluateSelectorsResponse {
+                        request_id,
+                        results,
+                        error_message: String::new(),
+                    })),
+                    Err(message) => error(request_id, message),
+                }
+            }
+            Ok(resp) => error(request_id, resp.error.unwrap_or_default()),
+            Err(status) => error(request_id, status.message().to_string()),
         }
     }
 
@@ -5423,6 +5473,34 @@ pub(crate) fn parse_element_list(data: &Value) -> Vec<proto::ElementInfo> {
     arr.iter().filter_map(parse_element_info).collect()
 }
 
+/// One result per requested selector, in request order. A result list that
+/// doesn't line up with the request can't be attributed to selectors, so it
+/// is an error rather than a partial answer.
+pub(crate) fn parse_selector_evaluations(
+    data: &Value,
+    expected: usize,
+) -> Result<Vec<proto::SelectorEvaluation>, String> {
+    let arr = match data.get("results").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None if expected == 0 => return Ok(Vec::new()),
+        None => return Err("agent returned no results for evaluateSelectors".to_string()),
+    };
+    if arr.len() != expected {
+        return Err(format!(
+            "agent returned {} result(s) for {} selector(s)",
+            arr.len(),
+            expected
+        ));
+    }
+    Ok(arr
+        .iter()
+        .map(|entry| proto::SelectorEvaluation {
+            elements: parse_element_list(entry),
+            error_message: json_str(entry, "error"),
+        })
+        .collect())
+}
+
 pub(crate) fn parse_bounds(value: Option<&Value>) -> Option<proto::Bounds> {
     let b = value?;
     Some(proto::Bounds {
@@ -6687,6 +6765,43 @@ mod tests {
         assert_eq!(list[1].element_id, "b");
         assert_eq!(list[0].text, "First");
         assert_eq!(list[1].text, "Second");
+    }
+
+    #[test]
+    fn parse_selector_evaluations_per_entry() {
+        let data = json!({
+            "results": [
+                {"elements": [
+                    {"elementId": "", "text": "A", "bounds": {"left": 0, "top": 0, "right": 10, "bottom": 10}},
+                    {"text": "B"}
+                ]},
+                {"elements": []},
+                {"error": "Invalid regex: ("}
+            ]
+        });
+        let results = parse_selector_evaluations(&data, 3).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].elements.len(), 2);
+        assert_eq!(results[0].elements[0].text, "A");
+        assert_eq!(results[0].elements[0].bounds.as_ref().unwrap().right, 10);
+        assert_eq!(results[0].error_message, "");
+        assert!(results[1].elements.is_empty());
+        assert_eq!(results[2].error_message, "Invalid regex: (");
+        assert!(results[2].elements.is_empty());
+    }
+
+    #[test]
+    fn parse_selector_evaluations_count_mismatch_is_an_error() {
+        // A result list that doesn't line up with the request can't be
+        // attributed to selectors, so it must not be returned as if it did.
+        let data = json!({"results": [{"elements": []}]});
+        let err = parse_selector_evaluations(&data, 2).unwrap_err();
+        assert!(err.contains("1 result"), "{err}");
+        assert!(err.contains("2 selector"), "{err}");
+        assert!(parse_selector_evaluations(&json!({}), 1).is_err());
+        assert!(parse_selector_evaluations(&json!({}), 0)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
