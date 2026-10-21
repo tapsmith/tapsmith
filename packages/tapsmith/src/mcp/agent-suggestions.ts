@@ -11,7 +11,6 @@
  */
 
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
-import { parseBounds } from '../trace-viewer/components/hierarchy-utils.js';
 import type { GeneratedSelector } from '../trace-viewer/components/selector-generation.js';
 import { generateSelectors, glyphAware, roleNameFor } from '../trace-viewer/components/selector-generation.js';
 import { parseSelectorString } from '../trace-viewer/components/selector-matching.js';
@@ -103,7 +102,17 @@ function selectorFor(code: string): Selector | null {
 
 // ─── Node identity ───
 
-type Box = NonNullable<ReturnType<typeof parseBounds>>;
+interface Box { left: number; top: number; right: number; bottom: number }
+
+/**
+ * A dump node's bounds. Unlike the trace viewer's parseBounds, negative
+ * coordinates are kept: the iOS dump writes raw frames, which go negative
+ * for content scrolled above or left of the screen.
+ */
+function nodeBounds(node: HierarchyNode): Box | null {
+  const m = /^\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]$/.exec(node.attributes.get('bounds') ?? '');
+  return m ? { left: +m[1], top: +m[2], right: +m[3], bottom: +m[4] } : null;
+}
 
 function sameBounds(a: ElementInfo['bounds'], b: Box): boolean {
   return !!a && a.left === b.left && a.top === b.top && a.right === b.right && a.bottom === b.bottom;
@@ -132,7 +141,7 @@ function nodeNames(node: HierarchyNode): string[] {
  * wins; a tie for closest identifies nothing.
  */
 function indexOfNode(matches: ElementInfo[], node: HierarchyNode): number {
-  const bounds = parseBounds(node.attributes.get('bounds') ?? '');
+  const bounds = nodeBounds(node);
   if (!bounds || bounds.right - bounds.left <= 0 || bounds.bottom - bounds.top <= 0) return -1;
   const className = node.attributes.get('class') || node.attributes.get('type') || '';
   const names = nodeNames(node);

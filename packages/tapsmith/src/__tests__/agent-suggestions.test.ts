@@ -315,6 +315,18 @@ describe('which agent match is the node', () => {
     expect(codes(byNode, inner)).toEqual([]);
   });
 
+  it('identifies an iOS node scrolled partly above the screen (negative coordinates)', async () => {
+    const cell: HierarchyNode = {
+      tagName: 'XCUIElementTypeCell',
+      attributes: new Map([['type', 'XCUIElementTypeCell'], ['label', 'Inbox'], ['clickable', 'true'], ['bounds', '[0,-20][390,24]']]),
+      children: [],
+      depth: 0,
+    };
+    const a = agent((s) => (JSON.stringify(s).includes('"Inbox"') ? [el(B(0, -20, 390, 24), 'Inbox', 'XCUIElementTypeCell')] : []));
+    const { byNode } = await agentValidatedSuggestions(a, [cell]);
+    expect(codes(byNode, cell).length).toBeGreaterThan(0);
+  });
+
   it('never ties a node without real bounds to a match', async () => {
     const hidden = node('android.widget.TextView', 'Wi-Fi', B(0, 0, 0, 0));
     const a = agent((s) => (isText(s, 'Wi-Fi') ? [el(B(0, 0, 0, 0), 'Wi-Fi', 'android.widget.TextView')] : []));

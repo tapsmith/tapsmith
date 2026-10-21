@@ -1,8 +1,8 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
 
-// PILOT-848: locator suggestions and match counts in MCP and UI mode come from
-// the agent's evaluateSelectors batch, so it must match exactly what a test's
+// PILOT-848: MCP's locator suggestions and match counts come from the agent's
+// evaluateSelectors batch (UI mode's will too), so it must match exactly what a test's
 // own find resolves: the same elements, in the same order (the order `.nth()`
 // uses), for every kind of selector. The locators below are the subject under
 // test, so they are written inline.
