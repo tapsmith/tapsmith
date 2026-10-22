@@ -79,6 +79,7 @@ import { DeviceReadiness, toWireReadiness, type Candidate, type ReadinessCommand
 import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
+import { beginTestRun, endTestRun } from '../mcp/sdk-device.js';
 import {
   forkStdioForLaunchProgress,
   pipeForkOutputForLaunchProgress,
@@ -386,6 +387,8 @@ export async function startUIServer(
   const targetsRetriedThisRun = new Set<string>();
 
   function markRunStarted(): void {
+    // Release the MCP device tools' WebView before the run connects to it.
+    if (!isRunning) beginTestRun();
     isRunning = true;
     targetsRetriedThisRun.clear();
     runStartedAt = Date.now();
@@ -416,6 +419,7 @@ export async function startUIServer(
   }
 
   function markRunEnded(): void {
+    if (isRunning) endTestRun();
     isRunning = false;
     runStartedAt = 0;
     runningFiles.clear();

@@ -12,7 +12,7 @@ import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 import { summarizeResult } from '../mcp/events.js';
 import { formatToolArgs } from '../ui-mode/components/tool-args.js';
 import { Device } from '../device.js';
-import { closeMcpWebViews, sdkDeviceFor, WEBVIEW_IDLE_CLOSE_MS, withEvaluatedLocator } from '../mcp/sdk-device.js';
+import { _setWebViewIdleCloseMs, beginTestRun, closeMcpWebViews, endTestRun, sdkDeviceFor, WEBVIEW_IDLE_CLOSE_MS, withEvaluatedLocator } from '../mcp/sdk-device.js';
 import type { WebViewHandle } from '../webview-handle.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
@@ -761,6 +761,76 @@ describe('webview.* locators in the action tools', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('never closes the connection under a call still using it', async () => {
+    _setWebViewIdleCloseMs(40);
+    try {
+      hoisted.client = makeDaemon().client;
+      const { locator } = fakePage();
+      let release!: () => void;
+      const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+      await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' }); // arms the idle close
+      locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+      const slow = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' }); // in flight
+      await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 120));
+      expect(dispose).not.toHaveBeenCalled();
+      release();
+      await slow;
+      await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1));
+    } finally {
+      _setWebViewIdleCloseMs(WEBVIEW_IDLE_CLOSE_MS);
+    }
+  });
+
+  it('refuses webview locators while a test run is in progress, and closes what it held', async () => {
+    hoisted.client = makeDaemon().client;
+    const { webview } = fakePage();
+    const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    beginTestRun();
+    try {
+      await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1));
+      const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('test run is in progress');
+      expect(webview).toHaveBeenCalledTimes(1);
+    } finally {
+      endTestRun();
+    }
+    const after = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(after.isError).toBeFalsy();
+  });
+
+  it('refuses to switch apps under a call still using the old app\'s WebView', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { locator } = fakePage();
+    let release!: () => void;
+    locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    const slow = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(1));
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('still in use');
+    release();
+    await slow;
+  });
+
+  it('keeps a separate connection per Android device on one daemon client', async () => {
+    const client = makeDaemon().client;
+    (client as unknown as { listDevices: unknown }).listDevices = vi.fn(async () => ({
+      requestId: '1', unusable: [],
+      devices: ['e1', 'e2'].map((serial) => ({ serial, model: '', state: 'device', isEmulator: true, platform: 'android', osVersion: '' })),
+    }));
+    const { webview } = fakePage();
+    for (const serial of ['e1', 'e2']) {
+      const device = await sdkDeviceFor(client, serial);
+      await withEvaluatedLocator(device, client, 'webview.getByText("Go")', async () => {});
+    }
+    expect(webview.mock.contexts[1]).not.toBe(webview.mock.contexts[0]);
   });
 
   it('connects again when another app is current', async () => {

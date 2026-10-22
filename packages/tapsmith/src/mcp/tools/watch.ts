@@ -1,7 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
-import { closeMcpWebViews } from '../sdk-device.js';
 
 export function registerWatchTool(server: McpServer, dispatcher: TestDispatcher): void {
   server.tool(
@@ -13,9 +12,6 @@ export function registerWatchTool(server: McpServer, dispatcher: TestDispatcher)
       project: z.string().optional().describe('Project name to scope the watch to (optional)'),
     },
     async ({ file, test: testFilter, project }) => {
-      // A watched file runs tests: release the device tools' WebView first
-      // (PILOT-288).
-      await closeMcpWebViews();
       const { enabled } = dispatcher.toggleWatch(file, { testFilter, project });
       const scope = testFilter ? `test "${testFilter}"` : `file`;
       const proj = project ? ` [${project}]` : '';

@@ -34,6 +34,7 @@ import { HeadlessTestDispatcher } from './headless-dispatcher.js';
 import { boundThrownError, boundToolResult } from './response-limits.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { TestDispatcher } from './test-dispatcher.js';
+import { closeMcpWebViews } from './sdk-device.js';
 
 const GREEN = '\x1b[32m';
 const DIM = '\x1b[2m';
@@ -330,6 +331,7 @@ export async function runMcpServer(
     process.stdin.off('end', onClientGone);
     process.stdin.off('close', onClientGone);
     stopActivityMonitor();
+    void closeMcpWebViews();
     dispatcher.dispose();
     closeAllClients();
   }

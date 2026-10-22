@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -9,7 +9,6 @@ import { stdioTestArgs } from '../mcp/tools/run-tests.js';
 import { runCli, type CliHandlers, type TestCommandArgs } from '../cli-program.js';
 import type { TestDispatcher, TestFailureDetail, TestRunResult, TestTreeEntry } from '../mcp/test-dispatcher.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import * as sdkDevice from '../mcp/sdk-device.js';
 
 const FILE = '/proj/e2e/login.test.ts';
 
@@ -63,19 +62,6 @@ function text(res: CallToolResult): string {
 }
 
 describe('tapsmith_run_tests result handling', () => {
-  it('releases the device tools\' WebView before the run connects to the page (PILOT-288)', async () => {
-    const order: string[] = [];
-    const close = vi.spyOn(sdkDevice, 'closeMcpWebViews').mockImplementation(async () => { order.push('close'); });
-    try {
-      await callRunTests(makeDispatcher({
-        runFiles: async () => { order.push('run'); return { status: 'passed', passed: 1, failed: 0, skipped: 0, duration: 1 }; },
-      }), { files: [FILE] });
-      expect(order).toEqual(['close', 'run']);
-    } finally {
-      close.mockRestore();
-    }
-  });
-
   it('reports a passing run as success (not an error)', async () => {
     const result: TestRunResult = { status: 'passed', passed: 3, failed: 0, skipped: 0, duration: 100 };
     const res = await callRunTests(makeDispatcher({ runFiles: async () => result }), { files: [FILE] });
