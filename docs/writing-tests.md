@@ -391,7 +391,7 @@ Tapsmith ships an ESLint plugin that warns when tests use low-priority locators.
 
 ### Scoping with `.locator()`
 
-Narrow a search to descendants of a specific element using chained `getBy*` calls:
+Narrow a search to elements inside a specific element using chained `getBy*` calls (an element is inside when its centre lies within the parent's bounds; see [Chaining and Scoping](locators.md#chaining-and-scoping)):
 
 ```typescript
 const form = device.getByRole("button", { name: "Login Form" })

@@ -312,3 +312,16 @@ describe("matcher options are validated (PILOT-547)", () => {
     ).rejects.toThrow('toBeHidden() does not support the option "visible".');
   });
 });
+
+// ─── Chained getters (PILOT-850) ───
+
+describe("a chained getter's assertion message names its parent (PILOT-850)", () => {
+  it("shows the chain, not the child alone", async () => {
+    const client = {
+      findElements: vi.fn(async () => ({ requestId: "1", elements: [], errorMessage: "" })),
+    } as unknown as TapsmithGrpcClient;
+    const child = new ElementHandle(client, _text("Cart"), 50).getByText("Total");
+    const err = await tapsmithExpect(child).toBeVisible({ timeout: 50 }).catch((e: unknown) => e);
+    vitestExpect((err as Error).message).toContain('getByText("Cart", { exact: true }).getByText("Total")');
+  });
+});

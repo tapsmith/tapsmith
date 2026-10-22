@@ -173,6 +173,18 @@ describe('getBy* scoping', () => {
       expect(ids).toEqual(['i']);
     });
 
+    it('keeps a same-size wrapped child that differs from the parent only by test id', async () => {
+      // RN: <View testID="screen"><View testID="content" /></View>, both
+      // ViewGroups filling the same rect with no text of their own.
+      const rect = { left: 0, top: 0, right: 400, bottom: 800 };
+      const screen = makeElementInfo({ elementId: 's', className: 'android.view.ViewGroup', resourceId: 'screen', text: '', bounds: rect });
+      const content = makeElementInfo({ elementId: 'c', className: 'android.view.ViewGroup', resourceId: 'content', text: '', bounds: rect });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' && selector.kind.value === 'screen' ? [screen] : [content]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('screen'), 5000).getByTestId('content');
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['c']);
+    });
+
     it('never matches an element with no area', async () => {
       const clipped = makeElementInfo({ elementId: 'z', text: 'Row 50', bounds: { left: 0, top: 0, right: 0, bottom: 0 } });
       const origin = makeElementInfo({ elementId: 'O', role: 'list', bounds: { left: 0, top: 0, right: 400, bottom: 500 } });

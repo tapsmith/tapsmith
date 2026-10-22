@@ -128,10 +128,11 @@ interface ElementHandleOptions {
   orSelf?: ElementHandle;
   orHandle?: ElementHandle;
   /**
-   * Parent scope for a `getBy*`/`locator()` call made on a *modified* handle
-   * (e.g. `dialog.first().getByRole('button')`). The parent's modifiers can't
-   * be folded into a nested Selector, so it is resolved to concrete element(s)
-   * and the child is scoped to them by geometric containment (see _resolveAll).
+   * Parent scope for a `getBy*`/`locator()` call made on a handle (e.g.
+   * `list.getByText('Row')`, `dialog.first().getByRole('button')`). The
+   * parent is resolved to concrete element(s) and the child is kept when its
+   * centre lies inside one of them (see inScope, PILOT-850): the agents do
+   * not scope by a nested parent Selector.
    */
   scopeParent?: ElementHandle;
   /** Trace capture context, propagated from the Device. */
@@ -202,7 +203,9 @@ function inScope(parent: ElementInfo, child: ElementInfo): boolean {
   const c = child.bounds;
   if (!p || !c || !hasUsableGeometry(child)) return false;
   // The parent itself (the same element read again: its id differs per read).
-  if (sameTargetKey(child) === sameTargetKey(parent) && child.className === parent.className) return false;
+  // A same-size wrapper's child differs in its test id or description.
+  if (sameTargetKey(child) === sameTargetKey(parent) && child.className === parent.className
+    && child.resourceId === parent.resourceId && child.contentDescription === parent.contentDescription) return false;
   const cx = (c.left + c.right) / 2;
   const cy = (c.top + c.bottom) / 2;
   return cx >= p.left && cx <= p.right && cy >= p.top && cy <= p.bottom;
@@ -991,6 +994,11 @@ export class ElementHandle {
 
   // ── Internal resolution helpers ──
 
+  /** @internal — Whether this handle was chained off a parent (`parent.getBy*()`). */
+  _isScoped(): boolean {
+    return this._options.scopeParent !== undefined;
+  }
+
   /** @internal */
   private _hasModifiers(): boolean {
     return (
@@ -1305,7 +1313,8 @@ export class ElementHandle {
   }
 
   /** @internal — Build a human-readable description of this handle for error messages. */
-  private _describe(): string {
+  /** @internal — The locator as the code that built it, for messages. */
+  _describe(): string {
     const sel = formatSelector(this._selector);
     if (this._options.andHandle) {
       const left = this._options.andSelf?._describe() ?? sel;
