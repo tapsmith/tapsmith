@@ -1134,10 +1134,14 @@ export class ElementHandle {
       // Surface it instead of letting it read as an empty result.
       throw new Error(`findElements failed: ${res.errorMessage}`);
     }
-    let elements = collapseSameTargetDuplicates(res.elements ?? []);
+    let elements = res.elements ?? [];
+    // Scope first: a same-size child keys like its parent to the duplicate
+    // collapse (bounds + text) but not to scoping (id, class, description),
+    // so collapsing first could keep the parent and drop the child.
     if (parents) {
       elements = scopeToParents(parents, elements, this._options.platform === 'ios');
     }
+    elements = collapseSameTargetDuplicates(elements);
 
     if (this._options.filters) {
       for (const f of this._options.filters) {
