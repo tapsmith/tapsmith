@@ -837,6 +837,46 @@ describe('webview.* locators in the action tools', () => {
     expect(webview).toHaveBeenLastCalledWith('com.other');
   });
 
+  it('refuses to connect when a run starts while the previous app\'s WebView is closing', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { webview } = fakePage();
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    let finishClose!: () => void;
+    vi.spyOn(Device.prototype, '_disposeWebViewManager').mockImplementationOnce(() => new Promise<void>((r) => { finishClose = r; }));
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
+    const call = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await vi.waitFor(() => expect(finishClose).toBeDefined());
+    beginTestRun();
+    try {
+      finishClose();
+      const res = await call;
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('test run is in progress');
+      expect(webview).toHaveBeenCalledTimes(1);
+    } finally {
+      endTestRun();
+    }
+  });
+
+  it('reads the current app after waiting its turn', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { locator, webview } = fakePage();
+    let release!: () => void;
+    locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    const first = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(1));
+    const queued = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await new Promise((r) => setTimeout(r, 20));
+    // The first call's click opened another app before the queued one ran.
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
+    release();
+    await first;
+    await queued;
+    expect(webview).toHaveBeenLastCalledWith('com.other');
+  });
+
   it('refuses a queued WebView call once a test run has started', async () => {
     hoisted.client = makeDaemon().client;
     const { locator } = fakePage();

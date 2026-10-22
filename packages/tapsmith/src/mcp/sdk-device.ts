@@ -182,18 +182,23 @@ export async function withEvaluatedLocator<T>(
   const key = webViewKey(device);
   let used: OpenWebView | undefined;
   let release: (() => void) | undefined;
+  const refuseDuringRun = (): void => {
+    if (activeTestRuns > 0) {
+      throw new Error('A test run is in progress: webview locators are unavailable until it finishes, since a second connection to its page can stall it.');
+    }
+  };
   const webview = async (): Promise<WebViewHandle> => {
+    // One WebView call at a time per device, connect and action together:
+    // two calls connecting at once would open two sessions on the page.
+    release = await lockWebView(client, key);
+    refuseDuringRun();
+    // Read under the lock: a call queued behind one that switched apps acts
+    // on the app that is current now.
     const { packageName } = await client.getCurrentPackage();
     // Without the current app a WebView could be any app's (Chrome, Safari,
     // another debug app): both platforms fall back to the first one found.
     if (!packageName) {
       throw new Error('Could not tell which app is current, so its WebView could not be found. Set the app in the config, or try again once it is showing.');
-    }
-    // One WebView call at a time per device, connect and action together:
-    // two calls connecting at once would open two sessions on the page.
-    release = await lockWebView(client, key);
-    if (activeTestRuns > 0) {
-      throw new Error('A test run is in progress: webview locators are unavailable until it finishes, since a second connection to its page can stall it.');
     }
     let open = openWebViews.get(client)?.get(key);
     if (open && open.packageName !== packageName) {
@@ -201,6 +206,8 @@ export async function withEvaluatedLocator<T>(
       await closeWebView(client, key);
       open = undefined;
     }
+    // A run may have started during the awaits above.
+    refuseDuringRun();
     if (!open) {
       open = {
         holder: new Device(client, { platform: device.platform, simulator: simulators.get(device), timeout: WEBVIEW_CONNECT_TIMEOUT_MS }),
