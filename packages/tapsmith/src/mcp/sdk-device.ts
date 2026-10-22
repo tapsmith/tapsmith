@@ -4,8 +4,8 @@
  * MCP tools resolve and act on locators through the same Device /
  * ElementHandle / WebViewHandle code a test uses, so strict mode, positions,
  * filters, scoping and WebView locators behave as they do in a spec. One
- * Device per client and device; a WebView is connected for one tool call
- * and closed after it (withEvaluatedLocator).
+ * Device per client and device; a WebView connection is kept between tool
+ * calls and closed when idle or when a test run starts (withEvaluatedLocator).
  */
 
 import { Device } from '../device.js';
@@ -30,6 +30,15 @@ export const MCP_ACTION_RUN_TIMEOUT_MS = 30_000;
  * the action budget on its own.
  */
 const WEBVIEW_CONNECT_TIMEOUT_MS = 15_000;
+
+/**
+ * How long a WebView connection outlives the last tool call that used it.
+ * Reconnecting costs ~10 s on iOS (the inspector lists no pages for a while
+ * after a disconnect), so a burst of calls shares one connection; an idle
+ * one is closed, as a test connecting to the same page alongside it would
+ * wedge (PILOT-288).
+ */
+export const WEBVIEW_IDLE_CLOSE_MS = 15_000;
 
 const devices = new WeakMap<TapsmithGrpcClient, Map<string, Device>>();
 /** The simulator a Device's iOS WebView inspector is reached through. */
@@ -64,13 +73,59 @@ export async function sdkDeviceFor(client: TapsmithGrpcClient, serial: string | 
   return device;
 }
 
+/** A WebView connection kept for a tool device between calls. */
+interface OpenWebView {
+  /** The Device that holds the connection (its own connect budget). */
+  holder: Device
+  packageName: string
+  /** Tool calls using it now: it is never closed under one. */
+  inUse: number
+  idle?: ReturnType<typeof setTimeout>
+}
+
+/**
+ * Open connections by daemon client and target (platform and simulator): a
+ * tool Device is rebuilt each call while its platform is undetermined, so
+ * it cannot be the key.
+ */
+const openWebViews = new Map<TapsmithGrpcClient, Map<string, OpenWebView>>();
+
+function webViewKey(device: Device): string {
+  return `${device.platform}|${simulators.get(device) ?? ''}`;
+}
+
+async function closeWebView(client: TapsmithGrpcClient, key: string): Promise<void> {
+  const perClient = openWebViews.get(client);
+  const open = perClient?.get(key);
+  if (!perClient || !open) return;
+  perClient.delete(key);
+  if (perClient.size === 0) openWebViews.delete(client);
+  clearTimeout(open.idle);
+  await open.holder._disposeWebViewManager().catch(() => {});
+}
+
+function closeWhenIdle(client: TapsmithGrpcClient, key: string, open: OpenWebView): void {
+  clearTimeout(open.idle);
+  open.idle = setTimeout(() => {
+    if (open.inUse === 0 && openWebViews.get(client)?.get(key) === open) void closeWebView(client, key);
+  }, WEBVIEW_IDLE_CLOSE_MS);
+  open.idle.unref?.();
+}
+
+/**
+ * Close every WebView connection the MCP tools hold, before a test run
+ * connects to the same page (PILOT-288).
+ */
+export async function closeMcpWebViews(): Promise<void> {
+  await Promise.all([...openWebViews].flatMap(([client, perClient]) => [...perClient.keys()].map((key) => closeWebView(client, key))));
+}
+
 /**
  * Build `source` on the SDK's locator builder for `device` and hand the
- * result to `use`. A `webview.…` locator is connected, for this call only,
- * to the WebView of the app the daemon reports as current (on iOS, the
- * session's app) and closed afterwards: a WebView session left open by the
- * MCP server would wedge a test connecting to the same page (PILOT-288),
- * and could outlive the app or screen it was opened on.
+ * result to `use`. A `webview.…` locator is connected to the WebView of the
+ * app the daemon reports as current (on iOS, the session's app); the
+ * connection is kept for the next call, and closed once idle, when another
+ * app becomes current, or when a test run starts (closeMcpWebViews).
  */
 export async function withEvaluatedLocator<T>(
   device: Device,
@@ -78,7 +133,8 @@ export async function withEvaluatedLocator<T>(
   source: string,
   use: (evaluated: EvaluatedLocator) => Promise<T>,
 ): Promise<T> {
-  let webviewDevice: Device | undefined;
+  const key = webViewKey(device);
+  let used: OpenWebView | undefined;
   const webview = async (): Promise<WebViewHandle> => {
     const { packageName } = await client.getCurrentPackage();
     // Without the current app a WebView could be any app's (Chrome, Safari,
@@ -86,8 +142,26 @@ export async function withEvaluatedLocator<T>(
     if (!packageName) {
       throw new Error('Could not tell which app is current, so its WebView could not be found. Set the app in the config, or try again once it is showing.');
     }
-    webviewDevice = new Device(client, { platform: device.platform, simulator: simulators.get(device), timeout: WEBVIEW_CONNECT_TIMEOUT_MS });
-    const handle = await webviewDevice.webview(packageName);
+    let open = openWebViews.get(client)?.get(key);
+    if (open && open.packageName !== packageName && open.inUse === 0) {
+      await closeWebView(client, key);
+      open = undefined;
+    }
+    if (!open) {
+      open = {
+        holder: new Device(client, { platform: device.platform, simulator: simulators.get(device), timeout: WEBVIEW_CONNECT_TIMEOUT_MS }),
+        packageName,
+        inUse: 0,
+      };
+      let perClient = openWebViews.get(client);
+      if (!perClient) openWebViews.set(client, (perClient = new Map()));
+      perClient.set(key, open);
+    }
+    open.inUse++;
+    used = open;
+    clearTimeout(open.idle);
+    // Reuses the live connection, or connects again if it died.
+    const handle = await open.holder.webview(packageName);
     // The connect had its own budget; waits on the page get the action one.
     handle._setTimeoutMs(MCP_ACTION_TIMEOUT_MS);
     return handle;
@@ -95,6 +169,9 @@ export async function withEvaluatedLocator<T>(
   try {
     return await use(await evaluateLocator(source, { device, webview }));
   } finally {
-    await webviewDevice?._disposeWebViewManager().catch(() => {});
+    if (used) {
+      used.inUse--;
+      if (used.inUse === 0) closeWhenIdle(client, key, used);
+    }
   }
 }

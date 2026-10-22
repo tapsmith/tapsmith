@@ -12,7 +12,7 @@ import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 import { summarizeResult } from '../mcp/events.js';
 import { formatToolArgs } from '../ui-mode/components/tool-args.js';
 import { Device } from '../device.js';
-import { sdkDeviceFor, withEvaluatedLocator } from '../mcp/sdk-device.js';
+import { closeMcpWebViews, sdkDeviceFor, WEBVIEW_IDLE_CLOSE_MS, withEvaluatedLocator } from '../mcp/sdk-device.js';
 import type { WebViewHandle } from '../webview-handle.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
@@ -699,7 +699,10 @@ describe('sdkDeviceFor', () => {
 
 describe('webview.* locators in the action tools', () => {
   // The page side is the SDK's WebView code; the seam is device.webview().
-  afterEach(() => { vi.restoreAllMocks(); });
+  afterEach(async () => {
+    await closeMcpWebViews();
+    vi.restoreAllMocks();
+  });
   function fakePage(value = '') {
     const locator = { click: vi.fn(async () => {}), fill: vi.fn(async () => {}), inputValue: vi.fn(async () => value) };
     const page = { getByText: vi.fn(() => locator), getByPlaceholder: vi.fn(() => locator), _setTimeoutMs: vi.fn() };
@@ -730,27 +733,55 @@ describe('webview.* locators in the action tools', () => {
     expect(connectingDevice._simulatorUdid).toBe('SIM-1');
   });
 
-  it('connects a WebView for the call only, with its own connect budget, and closes it after', async () => {
-    // A session the MCP server kept open would wedge a test connecting to the
-    // same page (PILOT-288), and could outlive the app it was opened on.
+  it('keeps one WebView connection for a burst of calls, with its own connect budget', async () => {
+    // Reconnecting costs ~10 s on iOS, so calls in a row share a connection.
     hoisted.client = makeDaemon().client;
     const { page, webview } = fakePage();
     const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
     await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
     await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
-    expect(webview).toHaveBeenCalledTimes(2);
-    expect(dispose).toHaveBeenCalledTimes(2);
-    const connectingDevice = webview.mock.contexts[0] as unknown as { _defaultTimeoutMs: number };
-    expect(connectingDevice._defaultTimeoutMs).toBe(15_000);
+    expect(webview.mock.contexts[1]).toBe(webview.mock.contexts[0]);
+    expect(dispose).not.toHaveBeenCalled();
+    expect((webview.mock.contexts[0] as unknown as { _defaultTimeoutMs: number })._defaultTimeoutMs).toBe(15_000);
     expect(page._setTimeoutMs).toHaveBeenCalledWith(5_000);
   });
 
-  it('closes the WebView even when the action fails', async () => {
-    hoisted.client = makeDaemon().client;
-    const { locator } = fakePage();
-    locator.click.mockRejectedValueOnce(new Error('boom'));
+  it('closes an idle WebView connection, but never under a call still using it', async () => {
+    // An open session would wedge a test connecting to the same page (PILOT-288).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      hoisted.client = makeDaemon().client;
+      fakePage();
+      const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+      await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+      vi.advanceTimersByTime(WEBVIEW_IDLE_CLOSE_MS - 1);
+      expect(dispose).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('connects again when another app is current', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { webview } = fakePage();
     const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
     await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(webview.mock.contexts[1]).not.toBe(webview.mock.contexts[0]);
+    expect(webview).toHaveBeenLastCalledWith('com.other');
+  });
+
+  it('closes the device tools\' WebView before a test run starts', async () => {
+    hoisted.client = makeDaemon().client;
+    fakePage();
+    const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await closeMcpWebViews();
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 

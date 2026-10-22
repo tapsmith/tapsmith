@@ -8,6 +8,7 @@ import { readTraceSummary } from './trace-utils.js';
 import { getAllDaemonAddresses } from '../connection.js';
 import { matchesTestFilter } from '../../test-filter.js';
 import { getSessionResultsStore } from '../session-results.js';
+import { closeMcpWebViews } from '../sdk-device.js';
 import { clipText, MCP_IMAGE_BUDGET_BYTES, serializedTextBytes } from '../response-limits.js';
 
 /**
@@ -110,6 +111,9 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
         const store = getSessionResultsStore(dispatcher);
         store.merge(dispatcher.getResults());
 
+        // A WebView session the device tools hold would wedge the run's own
+        // connect to the same page (PILOT-288).
+        await closeMcpWebViews();
         sendProgress(`Started test run: ${files.length} file(s)`);
         const startedAt = Date.now();
         const heartbeat = setInterval(() => {
