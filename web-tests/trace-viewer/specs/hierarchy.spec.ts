@@ -117,6 +117,14 @@ test.describe("Locator playground", () => {
     await expect(locator.matchCount).toHaveText("1 match")
   })
 
+  test("says its counts come from the recorded hierarchy and are approximate", async ({ viewer, detailTabs, page }) => {
+    // A trace has no device to ask, so the playground matches with a
+    // re-implementation of the agents' rules (PILOT-848).
+    await viewer.open(SPEC)
+    await detailTabs.select("Locator")
+    await expect(page.getByTestId("locator-source-note")).toContainText("recorded hierarchy: approximate")
+  })
+
   test("counts a locator written without device. the same as with it", async ({
     viewer,
     detailTabs,
