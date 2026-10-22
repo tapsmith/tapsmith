@@ -31,8 +31,8 @@ on:
       - '!e2e/tapsmith.config.android*.mjs'
       - '!.github/**'
       - '.github/workflows/e2e-ios.yml'
+  # Every PR, whatever its base (stacked PRs; see ci.yml).
   pull_request:
-    branches: [ main ]
     types: [ opened, synchronize, reopened, ready_for_review ]
     paths:
       - '**'
