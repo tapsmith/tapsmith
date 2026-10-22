@@ -143,8 +143,9 @@ interface ElementHandleOptions {
   doubleTapInterval?: number;
   /**
    * The device's platform, for failure hints that only hold on one
-   * (`iosUnnamedRoleMissHint`, PILOT-718). Absent on handles built outside a
-   * Device; it only ever adds a hint, so a missing one costs nothing else.
+   * (`iosUnnamedRoleMissHint`, PILOT-718), and for a chained getter's iOS-only
+   * parent fallback (scopeToParents, PILOT-850). Absent on handles built
+   * outside a Device, which then get neither.
    */
   platform?: Platform;
 }
@@ -231,7 +232,8 @@ function isSameElement(parent: ElementInfo, child: ElementInfo): boolean {
  * the parent itself counts when nothing inside matches — on iOS an
  * accessible React Native container (any Pressable) is one element whose
  * children are not exposed, so `card.getByText("Title")` can only ever match
- * the card. Android exposes the children, so there the parent never matches.
+ * the card. Android exposes the children, so there (and on a handle with no
+ * platform) the parent never matches.
  */
 function scopeToParents(parents: ElementInfo[], elements: ElementInfo[], parentFallback: boolean): ElementInfo[] {
   const kept = new Set<ElementInfo>();
@@ -1129,7 +1131,7 @@ export class ElementHandle {
     }
     let elements = collapseSameTargetDuplicates(res.elements ?? []);
     if (parents) {
-      elements = scopeToParents(parents, elements, this._options.platform !== 'android');
+      elements = scopeToParents(parents, elements, this._options.platform === 'ios');
     }
 
     if (this._options.filters) {
