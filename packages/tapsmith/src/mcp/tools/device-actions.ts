@@ -3,7 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceClientFor, deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
 import { isLocatorError, type EvaluatedLocator } from '../locator-eval.js';
-import { sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
+import { MCP_ACTION_RUN_TIMEOUT_MS, sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
+import type { ElementHandle } from '../../element-handle.js';
 
 /** The tool result for a daemon action: its error, or "OK". */
 export function actionResult(success: boolean, errorMessage?: string) {
@@ -43,6 +44,17 @@ async function actOn(
   return actionResult(true);
 }
 
+/**
+ * `handle`, once its target is on screen, with a test's budget to act in.
+ * The wait keeps the 5 s an agent's wrong locator should fail within; the
+ * action itself (typing a long string on iOS, a slow emulator) gets as long
+ * as a test would give it.
+ */
+async function acting(handle: ElementHandle): Promise<ElementHandle> {
+  await handle.waitFor({ state: 'attached' });
+  return handle._withTimeout(MCP_ACTION_RUN_TIMEOUT_MS);
+}
+
 export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_tap',
@@ -56,7 +68,7 @@ export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDi
     // scoping and the enabled/hittable waits all behave as in a test.
     async ({ locator, device, project }) => actOn(locator, { device, project }, dispatcher, async (evaluated) => {
       if (evaluated.kind === 'webview') await evaluated.locator.click();
-      else await evaluated.handle.tap();
+      else await (await acting(evaluated.handle)).tap();
     }),
   );
 
@@ -80,9 +92,9 @@ export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDi
         // clearAndType resolves the field once: clearing first and then
         // typing would re-resolve a locator the clear itself can break
         // (getByText("old value")), leaving the field empty.
-        await evaluated.handle.clearAndType(text);
+        await (await acting(evaluated.handle)).clearAndType(text);
       } else {
-        await evaluated.handle.type(text);
+        await (await acting(evaluated.handle)).type(text);
       }
     }),
   );

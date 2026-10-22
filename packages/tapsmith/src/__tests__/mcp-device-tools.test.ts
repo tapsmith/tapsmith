@@ -12,7 +12,7 @@ import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 import { summarizeResult } from '../mcp/events.js';
 import { formatToolArgs } from '../ui-mode/components/tool-args.js';
 import { Device } from '../device.js';
-import { sdkDeviceFor } from '../mcp/sdk-device.js';
+import { sdkDeviceFor, withEvaluatedLocator } from '../mcp/sdk-device.js';
 import type { WebViewHandle } from '../webview-handle.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
@@ -530,6 +530,15 @@ describe('tapsmith_type', () => {
     expect(daemon.typeText.mock.calls[0][1]).toBe('sam@example.com');
   });
 
+  it('gives the action itself a test\'s budget once its element is there', async () => {
+    // Typing a long string on iOS outlasts 5 s; a wrong locator should not.
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Bio' })] });
+    hoisted.client = daemon.client;
+    await callTool('tapsmith_type', { locator: 'device.getByText("Bio")', text: 'x'.repeat(150) });
+    const budget = daemon.typeText.mock.calls[0][2] as number;
+    expect(budget).toBeGreaterThan(25_000);
+  });
+
   it('clears and types in one step when asked', async () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Email' })] });
     hoisted.client = daemon.client;
@@ -545,9 +554,9 @@ describe('tapsmith_type', () => {
   it('replaces a field found by its current text, resolving it once', async () => {
     // Clearing and then typing re-resolved the locator after the clear had
     // removed the very text it matched on, leaving the field empty.
-    let reads = 0;
+    // The field keeps "old value" until something clears it.
     const field = makeElement({ elementId: 'el-1', text: 'old value' });
-    const daemon = makeDaemon({ find: () => (reads++ === 0 ? [field] : []) });
+    const daemon = makeDaemon({ find: () => (daemon.calls.some((c) => c.startsWith('clear')) ? [] : [field]) });
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_type', { locator: 'device.getByText("old value")', text: 'new', clear: true });
     expect(text(res)).toBe('OK');
@@ -622,6 +631,20 @@ describe('sdkDeviceFor', () => {
 
   it('takes the platform of the resolved serial', async () => {
     expect(platformOf(await sdkDeviceFor(daemonListing(['android', 'ios']), 'd1'))).toBe('ios');
+  });
+
+  it('on iOS, connects WebViews through the serial even when it is not listed', async () => {
+    const client = daemonListing(['ios', 'ios']);
+    (client as unknown as { getCurrentPackage: () => Promise<unknown> }).getCurrentPackage = async () => ({ requestId: '1', packageName: 'com.example' });
+    const device = await sdkDeviceFor(client, 'SIM-B');
+    const page = { getByText: vi.fn(() => ({})), _setTimeoutMs: vi.fn() };
+    const webview = vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
+    try {
+      await withEvaluatedLocator(device, client, 'webview.getByText("x")', async () => {});
+      expect((webview.mock.contexts[0] as unknown as { _simulatorUdid?: string })._simulatorUdid).toBe('SIM-B');
+    } finally {
+      webview.mockRestore();
+    }
   });
 
   it('without a serial, takes the platform every listed device shares', async () => {

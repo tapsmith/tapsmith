@@ -1619,6 +1619,11 @@ export class ElementHandle {
    * per-tick budget instead of an operand's full timeout (e.g. 30s); the outer
    * poll loop owns the overall deadline.
    */
+  /** @internal — This locator with another timeout (MCP actions, PILOT-848). */
+  _withTimeout(timeoutMs: number): ElementHandle {
+    return ElementHandle._cloneWithTimeout(this, timeoutMs);
+  }
+
   private static _cloneWithTimeout(h: ElementHandle, timeoutMs: number): ElementHandle {
     return new ElementHandle(h._client, h._selector, timeoutMs, {
       ...h._options,

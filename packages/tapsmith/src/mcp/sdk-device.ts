@@ -18,6 +18,13 @@ import { evaluateLocator, type EvaluatedLocator } from './locator-eval.js';
 export const MCP_ACTION_TIMEOUT_MS = 5_000;
 
 /**
+ * How long a native action itself may take once its target is there — a
+ * test's default budget: typing a long string on iOS, or any action on a
+ * slow emulator, outlasts the 5 s wait.
+ */
+export const MCP_ACTION_RUN_TIMEOUT_MS = 30_000;
+
+/**
  * How long connecting to a WebView may take: a cold connect (an iOS
  * inspector handshake, Android discovery and port forwarding) can outlast
  * the action budget on its own.
@@ -41,10 +48,13 @@ export async function sdkDeviceFor(client: TapsmithGrpcClient, serial: string | 
   // Otherwise the device is unknown, but its platform is not when every
   // device the daemon sees shares one (two simulators, say).
   const platforms = new Set(listed.map((d) => d.platform));
-  const known = info?.platform ?? (platforms.size === 1 ? [...platforms][0] : undefined);
+  // An empty platform (a proto default) is as unknown as a missing one.
+  const known = info?.platform || (platforms.size === 1 ? [...platforms][0] || undefined : undefined);
   const platform: Platform = known === 'ios' ? 'ios' : 'android';
   const device = new Device(client, { platform, timeout: MCP_ACTION_TIMEOUT_MS });
-  if (platform === 'ios' && info) simulators.set(device, info.serial);
+  // On iOS the serial is the simulator's UDID, listed or not.
+  const simulator = info?.serial ?? serial;
+  if (platform === 'ios' && simulator) simulators.set(device, simulator);
   // An unknown platform is a guess: ask again next time rather than keep it
   // (the device may not be listed yet).
   if (known === undefined) return device;
