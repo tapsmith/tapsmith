@@ -3,9 +3,8 @@ name: E2E Android
 on:
   push:
     branches: [ main ]
+  # Every PR, whatever its base (stacked PRs; see ci.yml).
   pull_request:
-    # feat/pilot-848-**: the PILOT-848 stacked PRs (see ci.yml).
-    branches: [ main, 'feat/pilot-848-**' ]
 
 concurrency:
   group: e2e-android-${{ github.head_ref || github.run_id }}
