@@ -212,6 +212,8 @@ function App() {
   // and two tabs counting from 0 would take each other's answers.
   const evaluateRequestRef = useRef(Math.floor(Math.random() * 1e9));
   const suggestRequestRef = useRef(Math.floor(Math.random() * 1e9));
+  /** This tab, to the server's per-tab request queue. */
+  const clientIdRef = useRef(Math.random().toString(36).slice(2));
   // An evaluation is out and unanswered: screen refreshes do not re-ask until it is.
   const evaluationPendingRef = useRef(false);
   // The element the live suggestions are for (a trace pick has none).
@@ -714,6 +716,7 @@ function App() {
   useEffect(() => {
     setHierarchyHighlight(null);
     setHoverBounds(null);
+    fillFromSuggestionsRef.current = false;
     setSelectorSource('trace');
     setMirrorHoverBounds(null);
   }, [selectedIndex]);
@@ -1471,6 +1474,8 @@ function App() {
   // manual override. The selector text and picked node are kept — suggestions
   // are attribute-matched, so they re-validate against the new tree.
   const handleSelectorSourceChange = useCallback((source: 'trace' | 'live') => {
+    // Leaving Live: a live pick's answer must not fill the trace locator.
+    if (source === 'trace') fillFromSuggestionsRef.current = false;
     setSelectorSource(source);
     if (source === 'live' && !liveHierarchyXml) {
       send({ type: 'request-hierarchy', workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
@@ -1483,8 +1488,10 @@ function App() {
   const sendEvaluation = useCallback((locator: string) => {
     const requestId = ++evaluateRequestRef.current;
     evaluationPendingRef.current = true;
-    send({ type: 'evaluate-locator', requestId, locator, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
+    send({ type: 'evaluate-locator', requestId, clientId: clientIdRef.current, locator, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
   }, [mirrorWorkerId, mirrorDeviceIndex, send]);
+  const sendEvaluationRef = useRef(sendEvaluation);
+  sendEvaluationRef.current = sendEvaluation;
   useEffect(() => {
     evaluateRequestRef.current++;
     evaluationPendingRef.current = false;
@@ -1509,8 +1516,8 @@ function App() {
     const locator = now.selectorText.trim();
     if (now.selectorSource !== 'live' || !now.connected || !locator) return;
     if (evaluationPendingRef.current || !now.evaluation) return;
-    sendEvaluation(locator);
-  }, [liveRevision, sendEvaluation]);
+    sendEvaluationRef.current(locator);
+  }, [liveRevision]);
 
   // Refresh the live hierarchy every second while it's in use: during a pick
   // session (hover hit-testing must track a changing screen) and while the
@@ -1553,6 +1560,12 @@ function App() {
       setPickTarget((t) => t === 'mirror' ? null : t);
       setLiveHierarchyXml(null);
       setMirrorHoverBounds(null);
+      // A pick's answer is lost with the connection.
+      fillFromSuggestionsRef.current = false;
+      suggestRequestRef.current++;
+      setLiveAnswers((prev) => (prev.suggestions?.pending
+        ? { ...prev, suggestions: { suggestions: [], pending: false, note: 'Disconnected before the device answered; pick the element again.' } }
+        : prev));
     }
   }, [connected, clearPendingMirrorPick]);
   useEffect(() => {

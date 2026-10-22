@@ -61,6 +61,9 @@ test.describe("Live locators come from the device", () => {
     }
     expect(second.locator).toBe('device.getByText("Save")')
     expect(second.requestId).toBeGreaterThan(first.requestId)
+    // The server queues each tab's latest request on its own.
+    expect(typeof second.clientId).toBe("string")
+    expect(second.clientId).toBe(first.clientId)
 
     // The older request's answer arrives late: ignored.
     ui.send({ type: "locator-evaluation", requestId: first.requestId, count: 9, positional: false, bounds: [] })
@@ -145,5 +148,20 @@ test.describe("Live locators come from the device", () => {
     await expect(locator.matchCount).toHaveText("1 match")
     ui.send({ type: "hierarchy-update", xml: HIERARCHY, revision: 4, workerId: 0, deviceIndex: 0 })
     await expect.poll(() => ui.messagesOfType("evaluate-locator").length).toBe(2)
+  })
+
+  test("switching to the Trace source stops a pending pick from filling the locator", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    const ask = await livePick(ui, device)
+    await detailTabs.select("Locator")
+    await locator.sourceToggle.getByRole("button", { name: "Trace" }).click()
+    ui.send({
+      type: "locator-suggestions",
+      requestId: ask.requestId,
+      suggestions: [{ code: 'device.getByText("Save")', label: "Text" }],
+    })
+    await page.waitForTimeout(300)
+    await expect(locator.input).toHaveValue("")
   })
 })

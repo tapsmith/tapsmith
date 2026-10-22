@@ -628,6 +628,8 @@ export interface EvaluateLocatorCommand {
   type: 'evaluate-locator'
   /** Echoed in the `locator-evaluation` reply. */
   requestId: number
+  /** Identifies the asking tab: each tab's latest request is kept separately. */
+  clientId?: string
   locator: string
   workerId?: number
   deviceIndex?: number

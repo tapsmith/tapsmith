@@ -308,6 +308,18 @@ export class Device {
   }
 
   /**
+   * @internal — The live WebView connection this Device already holds (the
+   * test session's active one, else the inspection one UI mode's picker
+   * keeps), or null. Never connects: UI mode's live locators use it only
+   * once the picker's connection is up, so the page never gets a second
+   * inspector session (PILOT-288).
+   */
+  _connectedWebView(): WebViewHandle | null {
+    if (this._activeWebView) return this._activeWebView;
+    return this._cachedWebView?._isAlive() ? this._cachedWebView : null;
+  }
+
+  /**
    * @internal — Best-effort WebView DOM dump for the UI-mode live element
    * picker, so picking inside a WebView suggests `webview.*` locators even
    * when no test session has called `device.webview()`. Untraced (no
@@ -319,16 +331,6 @@ export class Device {
    * present but connecting/dumping failed (callers should back off — the
    * connect attempt spins until the configured timeout).
    */
-  /**
-   * @internal — The WebView connection this Device already uses for
-   * inspection (the test session's active one, else its cached one),
-   * connecting if needed. UI mode's live locators reuse it, so the page never
-   * gets a second inspector session (PILOT-288).
-   */
-  async _inspectionWebView(): Promise<WebViewHandle> {
-    return this._activeWebView ?? this._establishWebView();
-  }
-
   async _dumpWebViewDomForInspection(hierarchyXml: string): Promise<string | null | undefined> {
     const marker = this._platform === 'ios' ? 'XCUIElementTypeWebView' : 'android.webkit.WebView';
     if (!hierarchyXml.includes(marker)) return undefined;

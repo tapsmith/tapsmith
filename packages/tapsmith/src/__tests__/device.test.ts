@@ -394,6 +394,20 @@ describe('Device.webview()', () => {
     expect((forwardWebViewPort.mock.calls[0] as unknown[])[0]).toBe('webview_devtools_remote_app');
   });
 
+  it('hands UI mode only a WebView connection that is already up, never connecting for it', async () => {
+    // A second inspector session on the page would wedge it (PILOT-288): the
+    // picker's own connect is the only one.
+    const device = new Device(makeMockClient(), { timeout: 100, package: 'com.example.app' });
+    const establish = vi.spyOn(device as unknown as { _establishWebView: () => Promise<unknown> }, '_establishWebView');
+    expect(device._connectedWebView()).toBeNull();
+    expect(establish).not.toHaveBeenCalled();
+    const alive = { _isAlive: () => true } as unknown as WebViewHandle;
+    (device as unknown as { _cachedWebView: WebViewHandle })._cachedWebView = alive;
+    expect(device._connectedWebView()).toBe(alive);
+    (device as unknown as { _cachedWebView: WebViewHandle })._cachedWebView = { _isAlive: () => false } as unknown as WebViewHandle;
+    expect(device._connectedWebView()).toBeNull();
+  });
+
   it('gives a reused WebView connection the device timeout as it is now', async () => {
     // A later test's test.use({ timeout }) must reach the cached handle.
     const listWebViews = vi.fn(async () => ({ requestId: '1', webviews: [{ socketName: 'webview_devtools_remote_app', pid: 222, packageName: 'com.example.app', url: '', title: '' }], errorMessage: '' }));

@@ -3791,10 +3791,17 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     const client = worker ? deviceClientOf(worker, index) : undefined;
     if (!worker || !client) return undefined;
     const serial = index <= 0 ? worker.deviceSerial : worker.members[index - 1]?.deviceSerial;
-    // The primary device's WebView is the one the picker already holds a
-    // connection to: reuse it rather than open a second (PILOT-288).
+    // The primary device's WebView is the one the picker connects to: use
+    // that connection once it is up rather than open a second (PILOT-288).
+    // The live tab's hierarchy poll is what brings it up.
     const device = worker.adoptedPrimary && index === 0 ? ctx.device : undefined;
-    const webview = device ? () => device._inspectionWebView() : undefined;
+    const webview = device
+      ? async () => {
+        const handle = device._connectedWebView();
+        if (!handle) throw new Error('Connecting to the WebView; the count appears once the connection is up.');
+        return handle;
+      }
+      : undefined;
     return { workerId: id, deviceIndex: index, client, serial, webview };
   }
 
@@ -4570,7 +4577,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           break;
         }
         liveEvaluations.run(
-          `${target.workerId}:${target.deviceIndex}`,
+          // Per tab: a tab's waiting request must never be dropped for another's.
+          `${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`,
           () => evaluateLiveLocator(target.client, target.serial, msg.locator, target.webview),
           (result) => broadcast({ type: 'locator-evaluation', requestId, ...result }),
         );
