@@ -88,14 +88,15 @@ describe("Dialogs screen", () => {
     await expect(dialogsScreen.modal).not.toBeVisible()
   })
 
-  test("a chained getter matches its parent only when nothing inside does (PILOT-850)", async ({ dialogsScreen, device }) => {
+  test("a chained getter matches its parent only on iOS, when nothing inside does (PILOT-850)", async ({ dialogsScreen, device, platform }) => {
     await dialogsScreen.showModalButton.tap()
     await expect(dialogsScreen.modalTitle).toBeVisible()
     await expect(dialogsScreen.modalContainer).toHaveCount(1)
-    // Nothing inside the modal has its test id, so the modal itself is the
-    // match (as an iOS accessible container's own label is); the buttons
-    // inside it are matched without it.
-    await expect(device.getByTestId("modal").getByTestId("modal")).toHaveCount(1)
+    // Nothing inside the modal has its test id. On iOS the modal itself is
+    // then the match (as an accessible container's own label is, its
+    // children hidden); Android exposes children, so there it never is.
+    // The buttons inside it are matched without it on both.
+    await expect(device.getByTestId("modal").getByTestId("modal")).toHaveCount(platform === "ios" ? 1 : 0)
     await expect(device.getByTestId("modal").getByRole("button", { name: "Cancel" })).toHaveCount(1)
   })
 })

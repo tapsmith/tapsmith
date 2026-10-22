@@ -227,16 +227,18 @@ function isSameElement(parent: ElementInfo, child: ElementInfo): boolean {
 
 /**
  * The matches in scope of a chained getter's resolved parents, in match
- * order. Within each parent what lies inside it wins; the parent itself
- * counts only when nothing inside matches — on iOS an accessible React
- * Native container (any Pressable) is one element whose children are not
- * exposed, so `card.getByText("Title")` can only ever match the card.
+ * order. Within each parent what lies inside it wins; with `parentFallback`
+ * the parent itself counts when nothing inside matches — on iOS an
+ * accessible React Native container (any Pressable) is one element whose
+ * children are not exposed, so `card.getByText("Title")` can only ever match
+ * the card. Android exposes the children, so there the parent never matches.
  */
-function scopeToParents(parents: ElementInfo[], elements: ElementInfo[]): ElementInfo[] {
+function scopeToParents(parents: ElementInfo[], elements: ElementInfo[], parentFallback: boolean): ElementInfo[] {
   const kept = new Set<ElementInfo>();
   for (const p of parents) {
     const inside = elements.filter((c) => inScope(p, c) && !isSameElement(p, c));
-    for (const c of inside.length > 0 ? inside : elements.filter((e) => isSameElement(p, e))) kept.add(c);
+    const matches = inside.length > 0 || !parentFallback ? inside : elements.filter((e) => isSameElement(p, e));
+    for (const c of matches) kept.add(c);
   }
   return elements.filter((c) => kept.has(c));
 }
@@ -1127,7 +1129,7 @@ export class ElementHandle {
     }
     let elements = collapseSameTargetDuplicates(res.elements ?? []);
     if (parents) {
-      elements = scopeToParents(parents, elements);
+      elements = scopeToParents(parents, elements, this._options.platform !== 'android');
     }
 
     if (this._options.filters) {

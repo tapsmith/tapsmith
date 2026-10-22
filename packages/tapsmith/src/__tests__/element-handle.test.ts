@@ -200,8 +200,27 @@ describe('getBy* scoping', () => {
       const again = { ...card, elementId: 'C2' };
       const findElements = vi.fn(async (selector: Selector) =>
         makeFindElementsResponse(selector.kind.type === 'testId' ? [card] : [again]));
-      const child = new ElementHandle(makeMockClient({ findElements }), _testId('card'), 5000).getByText('Title');
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('card'), 5000, { platform: 'ios' } as never).getByText('Title');
       expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['C2']);
+    });
+
+    it('never matches the parent itself on Android, which exposes a container\'s children', async () => {
+      const row = makeElementInfo({ elementId: 'R', role: 'checkbox', bounds: { left: 0, top: 100, right: 400, bottom: 200 } });
+      const findElements = vi.fn(async () => makeFindElementsResponse([{ ...row, elementId: 'R2' }]));
+      const parent = new ElementHandle(makeMockClient({ findElements }), _role('checkbox'), 5000, { platform: 'android' } as never);
+      expect(await parent.getByRole('checkbox').count()).toBe(0);
+    });
+
+    it('decides the parent fallback per parent: one row\'s own match does not hide another row\'s', async () => {
+      // Row A has a "Buy" label inside it; row B is an accessible container
+      // whose only "Buy" match is itself.
+      const rowA = makeElementInfo({ elementId: 'A', resourceId: 'row', bounds: { left: 0, top: 0, right: 400, bottom: 100 } });
+      const rowB = makeElementInfo({ elementId: 'B', resourceId: 'row', text: 'Buy now', bounds: { left: 0, top: 100, right: 400, bottom: 200 } });
+      const buyA = makeElementInfo({ elementId: 'a', text: 'Buy', bounds: { left: 10, top: 10, right: 100, bottom: 90 } });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' ? [rowA, rowB] : [buyA, { ...rowB, elementId: 'B2' }]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('row'), 5000, { platform: 'ios' } as never).getByText('Buy');
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['a', 'B2']);
     });
 
     it('never matches an element with no area', async () => {
