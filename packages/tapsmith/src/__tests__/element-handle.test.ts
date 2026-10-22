@@ -185,6 +185,20 @@ describe('getBy* scoping', () => {
       expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['c']);
     });
 
+    it('keeps a same-size wrapped child that the child\'s selector matches together with the parent', async () => {
+      // Both ViewGroups match locator({ className }); the parent comes first.
+      // Same rect and text read as one target to the duplicate collapse, so
+      // scoping must tell them apart before it runs.
+      const rect = { left: 0, top: 0, right: 400, bottom: 800 };
+      const screen = makeElementInfo({ elementId: 's', className: 'android.view.ViewGroup', resourceId: 'screen', text: '', bounds: rect });
+      const content = makeElementInfo({ elementId: 'c', className: 'android.view.ViewGroup', resourceId: 'content', text: '', bounds: rect });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' ? [screen] : [screen, content]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('screen'), 5000)
+        .locator({ className: 'android.view.ViewGroup' });
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['c']);
+    });
+
     it('never matches a larger element enclosing the parent, such as a backdrop behind a dialog', async () => {
       const dialog = makeElementInfo({ elementId: 'D', resourceId: 'dialog', bounds: { left: 50, top: 300, right: 350, bottom: 500 } });
       const backdrop = makeElementInfo({ elementId: 'B', role: 'button', bounds: { left: 0, top: 0, right: 400, bottom: 800 } });
