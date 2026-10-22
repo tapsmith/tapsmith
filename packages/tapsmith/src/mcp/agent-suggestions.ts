@@ -17,8 +17,9 @@ import { parseSelectorString } from '../trace-viewer/components/selector-matchin
 import { escapeJsString } from '../js-string-escape.js';
 import type { Selector } from '../selectors.js';
 import { collapseSameTargetDuplicates } from '../element-handle.js';
-import type { ElementInfo, EvaluateSelectorsResponse, SelectorEvaluation } from '../grpc-client.js';
-import { parseSelectorToInternal } from './locator-helper.js';
+import type { ElementInfo, EvaluateSelectorsResponse, SelectorEvaluation, TapsmithGrpcClient } from '../grpc-client.js';
+import { Device } from '../device.js';
+import { nativeSelectorOf } from './locator-eval.js';
 
 /** The one RPC this module needs (a TapsmithGrpcClient in production). */
 export interface SelectorEvaluator {
@@ -98,15 +99,22 @@ function upgradesFor(s: GeneratedSelector, node: HierarchyNode): GeneratedSelect
   }));
 }
 
+/**
+ * Builds candidate codes on the SDK's own locator builder, so a suggestion's
+ * selector is the one a test writing it would send (PILOT-848). Building does
+ * no I/O; a client call from it would be a bug, so it throws.
+ */
+const builder = new Device(new Proxy({}, {
+  get: () => { throw new Error('internal: a snapshot candidate was resolved while being built'); },
+}) as unknown as TapsmithGrpcClient);
+
 /** The selector a candidate's code builds, or null when it can't be evaluated natively. */
 function selectorFor(code: string): Selector | null {
   try {
-    const { selector, index } = parseSelectorToInternal(code);
-    // Generated candidates carry no position; one that did would be
-    // evaluated without it.
-    return index === undefined ? selector : null;
+    // Generated candidates carry no position or chain; one that did, or a
+    // WebView (`webview.*`) candidate, has no plain selector to batch.
+    return nativeSelectorOf(code, builder);
   } catch {
-    // WebView (`webview.*`) candidates have no native selector.
     return null;
   }
 }

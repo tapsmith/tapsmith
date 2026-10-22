@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,8 @@ import type { DeviceInfoProto, ElementInfo, TapsmithGrpcClient } from '../grpc-c
 import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 import { summarizeResult } from '../mcp/events.js';
 import { formatToolArgs } from '../ui-mode/components/tool-args.js';
+import { Device } from '../device.js';
+import type { WebViewHandle } from '../webview-handle.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
 // swipe, press_key, launch_app, list_devices, test_locator, watch — had no
@@ -94,6 +96,8 @@ function makeDaemon(options: {
   findError?: string
   /** What the agent matches per selector when evaluating; default: `elements`. */
   evaluate?: (selector: Selector) => ElementInfo[] | Error
+  /** What findElements matches per selector; default: `elements`. */
+  find?: (selector: Selector) => ElementInfo[]
   screenshot?: Buffer
   screenshotError?: string
   actionError?: string
@@ -108,11 +112,13 @@ function makeDaemon(options: {
 
   const daemon = {
     calls,
-    findElements: vi.fn(async () => ({
+    findElements: vi.fn(async (selector: Selector) => ({
       requestId: '1',
-      elements: options.elements ?? [],
+      elements: options.find ? options.find(selector) : (options.elements ?? []),
       errorMessage: options.findError ?? '',
     })),
+    listDevices: vi.fn(async () => ({ requestId: '1', devices: [], unusable: [] })),
+    getCurrentPackage: vi.fn(async () => ({ requestId: '1', packageName: 'com.example' })),
     evaluateSelectors: vi.fn(async (selectors: Selector[]) => ({
       requestId: '1',
       errorMessage: options.findError ?? '',
@@ -452,12 +458,28 @@ describe('tapsmith_tap', () => {
     expect(elementId).toBe('el-2');
   });
 
-  it('refuses a chained locator rather than tapping the unscoped getter (PILOT-660)', async () => {
-    const daemon = makeDaemon({ elements: [makeElement({ text: 'Save' })] });
+  it('taps the match a .filter() chain narrows to, as a test would (PILOT-660, PILOT-848)', async () => {
+    // PILOT-660 refused chains because the parser dropped them; built by the
+    // SDK they narrow exactly as in a test, so the draft "Save" is tapped.
+    const daemon = makeDaemon({
+      elements: [
+        makeElement({ elementId: 'el-1', text: 'Save' }),
+        makeElement({ elementId: 'el-2', text: 'Save draft' }),
+      ],
+    });
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Save").filter({ hasText: "draft" })' });
+    expect(res.isError).toBeFalsy();
+    expect(daemon.tap).toHaveBeenCalledTimes(1);
+    expect(daemon.tap.mock.calls[0][2]).toBe('el-2');
+  });
+
+  it('refuses a string that is not a locator and taps nothing', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Save' })] });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Save").tap()' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toContain('unsupported chained call .filter()');
+    expect(text(res)).toContain('.tap()');
     expect(daemon.findElements).not.toHaveBeenCalled();
     expect(daemon.tap).not.toHaveBeenCalled();
   });
@@ -568,6 +590,49 @@ describe('tapsmith_type', () => {
     expect(res.isError).toBe(true);
     expect(daemon.typeText).not.toHaveBeenCalled();
     expect(daemon.clearText).not.toHaveBeenCalled();
+  });
+});
+
+// ─── WebView locators (PILOT-848) ───
+
+describe('webview.* locators in the action tools', () => {
+  // The page side is the SDK's WebView code; the seam is device.webview().
+  afterEach(() => { vi.restoreAllMocks(); });
+  function fakePage(value = '') {
+    const locator = { click: vi.fn(async () => {}), fill: vi.fn(async () => {}), inputValue: vi.fn(async () => value) };
+    const page = { getByText: vi.fn(() => locator), getByPlaceholder: vi.fn(() => locator) };
+    const webview = vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
+    return { locator, page, webview };
+  }
+
+  it('clicks a webview locator in the page, connecting to the app in the foreground', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { locator, page, webview } = fakePage();
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Submit", { exact: true })' });
+    expect(text(res)).toBe('OK');
+    expect(webview).toHaveBeenCalledWith('com.example');
+    expect(page.getByText).toHaveBeenCalledWith('Submit', { exact: true });
+    expect(locator.click).toHaveBeenCalledTimes(1);
+    expect(daemon.tap).not.toHaveBeenCalled();
+  });
+
+  it('types into a page field: appends without clear, replaces with it', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage('sam@');
+    await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'example.com' });
+    expect(locator.fill).toHaveBeenLastCalledWith('sam@example.com');
+    await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'new', clear: true });
+    expect(locator.fill).toHaveBeenLastCalledWith('new');
+  });
+
+  it('reports a page failure as an error, not OK', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage();
+    locator.click.mockRejectedValueOnce(new Error('strict mode violation: webview.getByText("Go") resolved to 2 elements'));
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('strict mode violation');
   });
 });
 
@@ -827,42 +892,52 @@ describe('tapsmith_test_locator', () => {
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_test_locator', { locator: 'device.getByRole("heading", { name: "A", level: 2 })' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toBe('Invalid locator: "device.getByRole("heading", { name: "A", level: 2 })": unsupported option "level".');
-    expect(daemon.evaluateSelectors).not.toHaveBeenCalled();
+    expect(text(res)).toContain('unsupported option "level" for .getByRole()');
+    expect(daemon.findElements).not.toHaveBeenCalled();
   });
 
-  it('refuses a chained call instead of counting the unscoped getter (PILOT-660)', async () => {
-    const daemon = makeDaemon({ elements: [makeElement({ role: 'list' }), makeElement({ elementId: 'el-2', role: 'list' })] });
+  it('resolves a chained call scoped to its parent, as a test would (PILOT-660, PILOT-848)', async () => {
+    const list = makeElement({ elementId: 'list', role: 'list', bounds: { left: 0, top: 0, right: 400, bottom: 500 } });
+    const inside = makeElement({ elementId: 'in', text: 'Row 2', bounds: { left: 0, top: 100, right: 400, bottom: 150 } });
+    const outside = makeElement({ elementId: 'out', text: 'Row 2', bounds: { left: 0, top: 700, right: 400, bottom: 750 } });
+    hoisted.client = makeDaemon({ find: (sel) => (sel.kind.type === 'role' ? [list] : [inside, outside]) }).client;
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByRole("list").getByText("Row 2")' })));
+    expect(result).toMatchObject({ matched: true, count: 1, elements: [{ text: 'Row 2', bounds: '[0,100][400,150]' }] });
+    expect(result.strictModeWarning).toBeUndefined();
+  });
+
+  it('applies .filter() as the SDK does', async () => {
+    const milk = makeElement({ elementId: 'a', role: 'listitem', text: 'Milk 2L' });
+    const bread = makeElement({ elementId: 'b', role: 'listitem', text: 'Bread' });
+    hoisted.client = makeDaemon({ find: () => [milk, bread] }).client;
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByRole("listitem").filter({ hasText: "Milk" })' })));
+    expect(result).toMatchObject({ matched: true, count: 1, elements: [{ text: 'Milk 2L' }] });
+  });
+
+  it('never runs a string that is not a locator', async () => {
+    const daemon = makeDaemon();
     hoisted.client = daemon.client;
-    const locator = 'device.getByRole("list").getByText("x")';
-    const res = await callTool('tapsmith_test_locator', { locator });
+    const res = await callTool('tapsmith_test_locator', { locator: 'device.constructor.constructor("return process")()' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toBe(`Invalid locator: "${locator}": unsupported chained call .getByText() — `
-      + 'a locator string here is one getter, optionally followed by .first(), .last() or .nth(n).');
-    expect(daemon.evaluateSelectors).not.toHaveBeenCalled();
+    expect(text(res)).toContain('constructor');
+    expect(daemon.findElements).not.toHaveBeenCalled();
   });
 
   it('surfaces a daemon error instead of reporting no match', async () => {
     hoisted.client = makeDaemon({ findError: 'agent not responding' }).client;
     const res = await callTool('tapsmith_test_locator', { locator: 'device.getByText("Sign in")' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toBe('Error: agent not responding');
+    expect(text(res)).toContain('agent not responding');
   });
 
-  it('asks the agent to evaluate the locator once, without waiting (PILOT-848)', async () => {
-    const daemon = makeDaemon({ elements: [makeElement({ text: 'Sign in' })] });
+  it('reads the matches once, without waiting for one to appear', async () => {
+    const daemon = makeDaemon();
     hoisted.client = daemon.client;
-    await callTool('tapsmith_test_locator', { locator: 'device.getByText("Sign in")' });
-    expect(daemon.evaluateSelectors).toHaveBeenCalledTimes(1);
-    expect(daemon.evaluateSelectors.mock.calls[0][0].map(selectorToProto)).toEqual([{ textContains: 'Sign in' }]);
-    expect(daemon.findElements).not.toHaveBeenCalled();
-  });
-
-  it('surfaces the agent rejecting the locator instead of reporting no match', async () => {
-    hoisted.client = makeDaemon({ evaluate: () => new Error('Invalid regex: look-behind is not supported') }).client;
-    const res = await callTool('tapsmith_test_locator', { locator: 'device.getByText(/(?<=a)b/)' });
-    expect(res.isError).toBe(true);
-    expect(text(res)).toBe('Error: Invalid regex: look-behind is not supported');
+    const started = Date.now();
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByText("Not here yet")' })));
+    expect(result).toMatchObject({ matched: false, count: 0 });
+    expect(daemon.findElements).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
 

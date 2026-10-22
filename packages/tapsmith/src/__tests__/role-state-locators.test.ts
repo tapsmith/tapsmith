@@ -1,14 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes, locatorStringError } from '../trace-viewer/components/selector-matching.js';
-import { parseSelectorToInternal, resolveActionTarget } from '../mcp/locator-helper.js';
-import { selectorToProto } from '../selectors.js';
-import type { Selector } from '../selectors.js';
-import type { TapsmithGrpcClient } from '../grpc-client.js';
 
 // getByRole's state options (checked / disabled / selected / expanded) in
-// locator strings — what tapsmith_test_locator, the MCP action tools and the
-// Locator Playground parse. They used to be dropped silently, so
+// locator strings, as the offline trace Locator Playground parses them (the
+// MCP tools build them with the SDK since PILOT-848). They used to be dropped silently, so
 // `selected: true` matched an unselected element (PILOT-655).
 
 function makeNode(tagName: string, attrs: Record<string, string>, children: HierarchyNode[] = []): HierarchyNode {
@@ -77,37 +73,6 @@ describe('parseSelectorString: getByRole state options', () => {
   });
 });
 
-// ─── MCP runtime selector ───
-
-describe('parseSelectorToInternal: states reach the runtime selector', () => {
-  it('sends selected, checked, disabled and expanded to the agent', () => {
-    const { selector } = parseSelectorToInternal(
-      'device.getByRole("button", { name: "Magical", exact: true, selected: true, checked: false, disabled: false, expanded: true })',
-    );
-    expect(selectorToProto(selector)).toEqual({
-      role: {
-        role: 'button', name: 'Magical', exact: true,
-        selected: true, checked: false, disabled: false, expanded: true,
-      },
-    });
-  });
-
-  it('sends selected: false (a false state is a filter, not an absent one)', () => {
-    const { selector } = parseSelectorToInternal('device.getByRole("button", { name: "Adventure", selected: false })');
-    expect(selectorToProto(selector)).toEqual({ role: { role: 'button', name: 'Adventure', selected: false } });
-  });
-
-  it('keeps the state with a RegExp name', () => {
-    const { selector } = parseSelectorToInternal('device.getByRole("tab", { name: /set/i, selected: true })');
-    expect(selectorToProto(selector)).toMatchObject({ role: { role: 'tab', selected: true } });
-  });
-
-  it('refuses an unknown option as an invalid locator, naming the option', () => {
-    expect(() => parseSelectorToInternal('device.getByRole("heading", { name: "A", level: 1 })'))
-      .toThrow('Invalid locator: "device.getByRole("heading", { name: "A", level: 1 })": unsupported option "level".');
-  });
-});
-
 describe('locatorStringError: why a locator\'s options are refused', () => {
   it('names an unknown option, a non-boolean value and an option the getter does not take', () => {
     expect(locatorStringError('device.getByRole("button", { includeHidden: true })')).toBe('unsupported option "includeHidden"');
@@ -139,21 +104,6 @@ describe('locatorStringError: why a locator\'s options are refused', () => {
     expect(locatorStringError('webview.getByTitle("Help", { exact: true })')).toBeNull();
   });
 
-  it('acts with the state filter, so a tap cannot land on the unselected card', async () => {
-    const findElements = vi.fn(async (_selector: Selector, _timeoutMs?: number) => ({
-      requestId: '1', errorMessage: '',
-      elements: [{
-        elementId: 'el-1', className: 'android.view.ViewGroup', text: '', contentDescription: 'Space',
-        resourceId: '', enabled: true, visible: true, clickable: true, focusable: true, scrollable: false,
-        hint: '', checked: false, selected: true, focused: false, role: 'button', viewportRatio: 1,
-      }],
-    }));
-    const client = { findElements } as unknown as TapsmithGrpcClient;
-    const target = await resolveActionTarget(client, 'device.getByRole("button", { name: "Space", exact: true, selected: true })');
-    expect(target.error).toBeUndefined();
-    expect(selectorToProto(target.selector)).toEqual({ role: { role: 'button', name: 'Space', exact: true, selected: true } });
-    expect(selectorToProto(findElements.mock.calls[0][0])).toMatchObject({ role: { selected: true } });
-  });
 });
 
 // ─── Locator Playground (hierarchy snapshot) ───
