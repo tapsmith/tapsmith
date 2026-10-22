@@ -139,6 +139,14 @@ describe('evaluateLocator — refuses anything that is not a locator', () => {
     await expect(refuse(source)).rejects.toThrow(message);
   });
 
+  it('refuses a bare webview root without connecting to the WebView', async () => {
+    for (const source of ['webview', 'this.webview', 'device']) {
+      const webview = vi.fn(async () => ({}) as unknown as WebViewHandle);
+      await expect(evaluateLocator(source, { device, webview })).rejects.toThrow(/names no element/);
+      expect(webview).not.toHaveBeenCalled();
+    }
+  });
+
   it('never evaluates a refused string', async () => {
     const before = (globalThis as { __pilot848?: number }).__pilot848;
     await expect(refuse('device.getByText((globalThis.__pilot848 = 1))')).rejects.toThrow();

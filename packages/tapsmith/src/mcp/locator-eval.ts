@@ -121,7 +121,7 @@ export async function evaluateLocator(source: string, roots: LocatorRoots): Prom
   // Check the whole string first, calling nothing: a refused locator never
   // reaches the SDK or connects to a WebView.
   const checked: Context = { source, device: roots.device, dry: true, usesWebview: false };
-  build(expression, checked);
+  located(build(expression, checked), source);
   const webview = checked.usesWebview ? await roots.webview() : undefined;
   return located(build(expression, { source, device: roots.device, webview, dry: false, usesWebview: false }), source);
 }
@@ -135,7 +135,7 @@ export async function evaluateLocator(source: string, roots: LocatorRoots): Prom
 export function nativeSelectorOf(source: string, device: Device): Selector | null {
   const expression = parseLocator(source);
   const checked: Context = { source, device, dry: true, usesWebview: false };
-  build(expression, checked);
+  located(build(expression, checked), source);
   if (checked.usesWebview) return null;
   const built = located(build(expression, { source, device, dry: false, usesWebview: false }), source);
   return built.kind === 'native' ? built.handle._plainSelector() ?? null : null;

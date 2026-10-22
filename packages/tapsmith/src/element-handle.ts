@@ -1290,16 +1290,15 @@ export class ElementHandle {
   }
 
   /**
-   * @internal — What this locator matches right now, read once without
-   * waiting, the way `count()` reads it (MCP `tapsmith_test_locator`,
+   * @internal — What this locator matches right now, without waiting for a
+   * match, read the way `count()` reads it (a stale snapshot is re-read) (MCP `tapsmith_test_locator`,
    * PILOT-848). `total` is the matches before a positional index narrowed
    * them (equal to `matches.length` without one); `positional` says whether
    * one did — such a locator is exempt from strict mode.
    */
   async _currentMatches(): Promise<{ matches: ElementInfo[]; total: number; positional: boolean }> {
-    const once = ElementHandle._cloneWithTimeout(this, 0);
-    const all = await once._resolveAll();
-    return { matches: await once._select(all), total: all.length, positional: this._options.nthIndex !== undefined };
+    const { all, matches } = await this._readMatchSet();
+    return { matches, total: all.length, positional: this._options.nthIndex !== undefined };
   }
 
   /**
@@ -1980,13 +1979,21 @@ export class ElementHandle {
    * whole timeout; anything else propagates at once.
    */
   private async _readMatches(): Promise<ElementInfo[]> {
-    if (this._timeoutMs === 0) return this._select(await this._resolveAll());
+    return (await this._readMatchSet()).matches;
+  }
+
+  /** {@link _readMatches}, also returning the matches before the positional index. */
+  private async _readMatchSet(): Promise<{ all: ElementInfo[]; matches: ElementInfo[] }> {
+    const read = async (h: ElementHandle) => {
+      const all = await h._resolveAll();
+      return { all, matches: await h._select(all) };
+    };
+    if (this._timeoutMs === 0) return read(this);
     const deadline = Date.now() + this._timeoutMs;
     let faultDeadline: number | undefined;
     while (true) {
       try {
-        const tick = ElementHandle._cloneWithTimeout(this, tickBudget(deadline));
-        return await tick._select(await tick._resolveAll());
+        return await read(ElementHandle._cloneWithTimeout(this, tickBudget(deadline)));
       } catch (err) {
         if (Date.now() >= deadline) throw err;
         if (isStaleSnapshotError(err) || isTransientAgentError(err)) {

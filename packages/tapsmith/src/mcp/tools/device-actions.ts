@@ -91,18 +91,12 @@ export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDi
         }
         return actionResult(true);
       }
-      const { handle } = evaluated;
-      if (clear) {
-        // Typing after a failed clear appends to the old text, so stop here.
-        try {
-          await handle.clear();
-        } catch (err) {
-          const reason = err instanceof Error ? err.message : String(err);
-          return actionResult(false, `could not clear the field before typing, so nothing was typed: ${reason}`);
-        }
-      }
       try {
-        await handle.type(text);
+        // clearAndType resolves the field once: clearing first and then
+        // typing would re-resolve a locator the clear itself can break
+        // (getByText("old value")), leaving the field empty.
+        if (clear) await evaluated.handle.clearAndType(text);
+        else await evaluated.handle.type(text);
       } catch (err) {
         return thrownResult(err);
       }

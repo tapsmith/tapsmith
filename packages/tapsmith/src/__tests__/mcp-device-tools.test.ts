@@ -12,6 +12,7 @@ import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 import { summarizeResult } from '../mcp/events.js';
 import { formatToolArgs } from '../ui-mode/components/tool-args.js';
 import { Device } from '../device.js';
+import { sdkDeviceFor } from '../mcp/sdk-device.js';
 import type { WebViewHandle } from '../webview-handle.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
@@ -76,6 +77,7 @@ interface FakeDaemon {
   tap: ReturnType<typeof vi.fn>
   typeText: ReturnType<typeof vi.fn>
   clearText: ReturnType<typeof vi.fn>
+  clearAndType: ReturnType<typeof vi.fn>
   swipe: ReturnType<typeof vi.fn>
   pressKey: ReturnType<typeof vi.fn>
   launchApp: ReturnType<typeof vi.fn>
@@ -130,6 +132,7 @@ function makeDaemon(options: {
     tap: action('tap'),
     typeText: action('typeText'),
     clearText: action('clearText'),
+    clearAndType: action('clearAndType'),
     swipe: action('swipe'),
     pressKey: action('pressKey'),
     launchApp: action('launchApp'),
@@ -525,7 +528,7 @@ describe('tapsmith_type', () => {
     expect(daemon.typeText.mock.calls[0][1]).toBe('sam@example.com');
   });
 
-  it('clears before typing when asked, in that order', async () => {
+  it('clears and types in one step when asked', async () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Email' })] });
     hoisted.client = daemon.client;
     await callTool('tapsmith_type', {
@@ -533,7 +536,20 @@ describe('tapsmith_type', () => {
       text: 'new',
       clear: true,
     });
-    expect(daemon.calls).toEqual(['clearText', 'typeText']);
+    expect(daemon.calls).toEqual(['clearAndType']);
+    expect(daemon.clearAndType.mock.calls[0][1]).toBe('new');
+  });
+
+  it('replaces a field found by its current text, resolving it once', async () => {
+    // Clearing and then typing re-resolved the locator after the clear had
+    // removed the very text it matched on, leaving the field empty.
+    let reads = 0;
+    const field = makeElement({ elementId: 'el-1', text: 'old value' });
+    const daemon = makeDaemon({ find: () => (reads++ === 0 ? [field] : []) });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_type', { locator: 'device.getByText("old value")', text: 'new', clear: true });
+    expect(text(res)).toBe('OK');
+    expect(daemon.clearAndType).toHaveBeenCalledTimes(1);
   });
 
   it('clears the same element it types into', async () => {
@@ -551,16 +567,15 @@ describe('tapsmith_type', () => {
       text: '2',
       clear: true,
     });
-    expect(daemon.clearText.mock.calls[0][0]).toBeUndefined();
-    expect(daemon.clearText.mock.calls[0][2]).toBe('el-2');
-    expect(daemon.typeText.mock.calls[0][4]).toBe('el-2');
+    expect(daemon.clearAndType.mock.calls[0][0]).toBeUndefined();
+    expect(daemon.clearAndType.mock.calls[0][4]).toBe('el-2');
   });
 
-  it('reports a clear that failed, and types nothing into the stale text', async () => {
+  it('reports a clear-and-type that failed, and types nothing separately', async () => {
     // Typing after a failed clear appends to the old value, and "OK" hid it:
     // the agent believed the field held exactly the new text (PILOT-267).
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Email' })] });
-    daemon.clearText.mockResolvedValueOnce({
+    daemon.clearAndType.mockResolvedValueOnce({
       requestId: '1', success: false, errorType: 'ACTION_FAILED', errorMessage: 'field is read-only',
     });
     hoisted.client = daemon.client;
@@ -570,7 +585,6 @@ describe('tapsmith_type', () => {
       clear: true,
     });
     expect(res.isError).toBe(true);
-    expect(text(res)).toContain('clear');
     expect(text(res)).toContain('field is read-only');
     expect(daemon.typeText).not.toHaveBeenCalled();
   });
@@ -590,6 +604,32 @@ describe('tapsmith_type', () => {
     expect(res.isError).toBe(true);
     expect(daemon.typeText).not.toHaveBeenCalled();
     expect(daemon.clearText).not.toHaveBeenCalled();
+  });
+});
+
+// ─── The SDK Device behind the tools (PILOT-848) ───
+
+describe('sdkDeviceFor', () => {
+  const daemonListing = (platforms: string[]) => ({
+    listDevices: vi.fn(async () => ({
+      requestId: '1', unusable: [],
+      devices: platforms.map((platform, i) => ({ serial: `d${i}`, model: '', state: 'device', isEmulator: true, platform, osVersion: '' })),
+    })),
+  }) as unknown as TapsmithGrpcClient;
+  const platformOf = (d: Device) => (d as unknown as { _platform: string })._platform;
+
+  it('takes the platform of the resolved serial', async () => {
+    expect(platformOf(await sdkDeviceFor(daemonListing(['android', 'ios']), 'd1'))).toBe('ios');
+  });
+
+  it('without a serial, takes the platform every listed device shares', async () => {
+    expect(platformOf(await sdkDeviceFor(daemonListing(['ios', 'ios']), undefined))).toBe('ios');
+    expect(platformOf(await sdkDeviceFor(daemonListing(['android', 'ios']), undefined))).toBe('android');
+  });
+
+  it('builds one Device per client and serial', async () => {
+    const client = daemonListing(['android']);
+    expect(await sdkDeviceFor(client, 'd0')).toBe(await sdkDeviceFor(client, 'd0'));
   });
 });
 
@@ -624,6 +664,15 @@ describe('webview.* locators in the action tools', () => {
     expect(locator.fill).toHaveBeenLastCalledWith('sam@example.com');
     await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'new', clear: true });
     expect(locator.fill).toHaveBeenLastCalledWith('new');
+  });
+
+  it('counts a webview locator in the page for tapsmith_test_locator', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage();
+    (locator as unknown as { count: () => Promise<number> }).count = vi.fn(async () => 2);
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'webview.getByText("Submit")' })));
+    expect(result).toMatchObject({ matched: true, count: 2 });
+    expect(result.strictModeWarning).toBeDefined();
   });
 
   it('reports a page failure as an error, not OK', async () => {
@@ -904,6 +953,18 @@ describe('tapsmith_test_locator', () => {
     const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByRole("list").getByText("Row 2")' })));
     expect(result).toMatchObject({ matched: true, count: 1, elements: [{ text: 'Row 2', bounds: '[0,100][400,150]' }] });
     expect(result.strictModeWarning).toBeUndefined();
+  });
+
+  it('re-reads a stale snapshot instead of reporting it, as count() does', async () => {
+    let reads = 0;
+    const row = makeElement({ elementId: 'r', text: 'Row' });
+    const daemon = makeDaemon();
+    daemon.findElements.mockImplementation(async () => (reads++ === 0
+      ? { requestId: '1', elements: [], errorMessage: 'element is stale (UI changed) during the read' }
+      : { requestId: '1', elements: [row], errorMessage: '' }));
+    hoisted.client = daemon.client;
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByText("Row")' })));
+    expect(result).toMatchObject({ matched: true, count: 1 });
   });
 
   it('applies .filter() as the SDK does', async () => {

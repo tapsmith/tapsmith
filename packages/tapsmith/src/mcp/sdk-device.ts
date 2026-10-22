@@ -27,7 +27,10 @@ export async function sdkDeviceFor(client: TapsmithGrpcClient, serial: string | 
 
   const { devices: listed } = await client.listDevices();
   const info = (serial ? listed.find((d) => d.serial === serial) : undefined) ?? (listed.length === 1 ? listed[0] : undefined);
-  const platform: Platform = info?.platform === 'ios' ? 'ios' : 'android';
+  // Without a serial the device is unknown, but its platform is not when
+  // every device the daemon sees shares one (two simulators, say).
+  const platforms = new Set(listed.map((d) => d.platform));
+  const platform: Platform = (info?.platform ?? (platforms.size === 1 ? [...platforms][0] : undefined)) === 'ios' ? 'ios' : 'android';
   const device = new Device(client, {
     platform,
     // The iOS WebView inspector is reached through the simulator.
