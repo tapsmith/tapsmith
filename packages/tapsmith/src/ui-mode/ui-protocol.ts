@@ -319,9 +319,9 @@ export interface LocatorEvaluationMessage {
   total?: number
   /** A position (.first()/.nth()/.last()) narrowed the matches. */
   positional?: boolean
-  /** Where the matches are (native locators only). */
+  /** Where the matches are on screen (a WebView match: the part inside the WebView, when it was found). */
   bounds: LocatorBounds[]
-  /** A webview.* locator, counted in the page (no bounds). */
+  /** A webview.* locator, counted in the page. */
   webview?: boolean
   error?: string
 }

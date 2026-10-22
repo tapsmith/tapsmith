@@ -31,7 +31,7 @@ export interface LiveLocatorEvaluation {
   total?: number
   /** Whether a position (.first()/.nth()/.last()) narrowed the matches. */
   positional?: boolean
-  /** Where the matches are (native locators; a WebView locator has none). */
+  /** Where the matches are on screen (a WebView match: the part inside the WebView, when it was found). */
   bounds: Bounds[]
   /** A webview.* locator, counted in the page. */
   webview?: boolean
