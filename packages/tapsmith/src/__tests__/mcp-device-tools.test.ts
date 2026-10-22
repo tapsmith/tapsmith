@@ -675,6 +675,11 @@ describe('sdkDeviceFor', () => {
     expect(await sdkDeviceFor(client, 'gone')).not.toBe(first);
   });
 
+  it('keeps no platform taken from other devices for an unlisted serial', async () => {
+    const client = daemonListing(['ios', 'ios']);
+    expect(await sdkDeviceFor(client, 'unlisted')).not.toBe(await sdkDeviceFor(client, 'unlisted'));
+  });
+
   it('builds one Device per client and serial', async () => {
     const client = daemonListing(['android']);
     expect(await sdkDeviceFor(client, 'd0')).toBe(await sdkDeviceFor(client, 'd0'));

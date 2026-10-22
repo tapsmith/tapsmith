@@ -1163,6 +1163,23 @@ describe('clearAndType()', () => {
     expect(clearAndType).toHaveBeenCalledWith(undefined, 'new value', expect.any(Number), 0, 'field-1');
   });
 
+  it('re-pins a stale field by id, never falling back to the selector', async () => {
+    // A trace capture between resolve and dispatch can invalidate the id; a
+    // selector retry would re-resolve getByText("old value") after the clear.
+    let reads = 0;
+    const clearAndType = vi.fn()
+      .mockResolvedValueOnce({ requestId: '1', success: false, errorType: 'ELEMENT_NOT_FOUND', errorMessage: 'Element el-1 is stale' })
+      .mockResolvedValue(successResponse());
+    const client = makeMockClient({
+      clearAndType,
+      findElements: vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: `field-${++reads}`, text: 'old value' })])),
+    });
+    await new ElementHandle(client, _text('old value'), 5000).clearAndType('new');
+    expect(clearAndType).toHaveBeenCalledTimes(2);
+    expect(clearAndType.mock.calls[1][0]).toBeUndefined();
+    expect(clearAndType.mock.calls[1][4]).toBe('field-2');
+  });
+
   it('throws on failure', async () => {
     const client = makeMockClient({
       clearAndType: vi.fn(async () => failureResponse()),

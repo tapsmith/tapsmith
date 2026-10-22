@@ -55,9 +55,10 @@ export async function sdkDeviceFor(client: TapsmithGrpcClient, serial: string | 
   // On iOS the serial is the simulator's UDID, listed or not.
   const simulator = info?.serial ?? serial;
   if (platform === 'ios' && simulator) simulators.set(device, simulator);
-  // An unknown platform is a guess: ask again next time rather than keep it
-  // (the device may not be listed yet).
-  if (known === undefined) return device;
+  // A platform that is unknown, or taken from other devices than the one
+  // asked for, is a guess: ask again next time rather than keep it (the
+  // device may not be listed yet).
+  if (known === undefined || (serial && !info)) return device;
   if (!perClient) devices.set(client, (perClient = new Map()));
   perClient.set(key, device);
   return device;
