@@ -736,11 +736,12 @@ function App() {
   }, [selectedIndex]);
   // Only choosing an action re-binds the tab, not hovering one on the way
   // past: a live pick still waiting for the device's answer must survive it.
-  useEffect(() => {
+  const bindToTrace = useCallback(() => {
     fillFromSuggestionsRef.current = false;
     clearPendingMirrorPick();
     setSelectorSource('trace');
-  }, [pinnedIndex, clearPendingMirrorPick]);
+  }, [clearPendingMirrorPick]);
+  useEffect(bindToTrace, [pinnedIndex, bindToTrace]);
 
   const handleMessage = useCallback((msg: ServerMessage) => {
     switch (msg.type) {
@@ -1752,7 +1753,10 @@ function App() {
 
   const handleActionPin = useCallback((index: number) => {
     setPinnedIndex(index);
-  }, []);
+    // Choosing the action already pinned changes no index, but still
+    // re-binds the tab to the trace.
+    bindToTrace();
+  }, [bindToTrace]);
 
   // ─── Keyboard shortcuts ───
 

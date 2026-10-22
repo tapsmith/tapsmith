@@ -279,4 +279,34 @@ test.describe("Live locators come from the device", () => {
     })
     await expect(locator.input).toHaveValue('device.getByText("Save")')
   })
+
+  test("choosing the action already pinned re-binds the tab to the trace and drops a pick waiting for the device", async ({ app, device, page, detailTabs, explorer, actions }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    const DOUBLE_TAP = "Gestures screen > double tap registers double tap gesture"
+    await explorer.expandAll()
+    ui.send({ type: "run-start", fileCount: 1 })
+    ui.send({ type: "test-start", fullName: DOUBLE_TAP, filePath: GESTURES_FILE })
+    ui.send(
+      ...action({ testFullName: DOUBLE_TAP, actionIndex: 0, action: "tap", selector: "getByRole('button')" }),
+      ...action({ testFullName: DOUBLE_TAP, actionIndex: 1, action: "doubleTap", selector: "getByTestId('tap-area')" }),
+    )
+    ui.send({ type: "test-status", fullName: DOUBLE_TAP, filePath: GESTURES_FILE, status: "passed", duration: 900 })
+    ui.send({ type: "run-end", status: "passed", duration: 900, passed: 1, failed: 0, skipped: 0 })
+    await explorer.node("double tap registers double tap gesture").click()
+    await expect(actions.items).toHaveCount(2)
+    await actions.items.nth(1).click()
+
+    const ask = await livePick(ui, device)
+    await detailTabs.select("Locator")
+    await actions.items.nth(1).click()
+    ui.send({
+      type: "locator-suggestions",
+      requestId: ask.requestId,
+      suggestions: [{ code: 'device.getByText("Save")', label: "Text" }],
+    })
+    await page.waitForTimeout(300)
+    await expect(locator.input).toHaveValue("")
+    await expect(page.getByTestId("locator-source-note")).toContainText("recorded hierarchy")
+  })
 })
