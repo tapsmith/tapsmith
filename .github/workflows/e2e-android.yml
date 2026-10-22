@@ -4,7 +4,8 @@ on:
   push:
     branches: [ main ]
   pull_request:
-    branches: [ main ]
+    # feat/pilot-848-**: the PILOT-848 stacked PRs (see ci.yml).
+    branches: [ main, 'feat/pilot-848-**' ]
 
 concurrency:
   group: e2e-android-${{ github.head_ref || github.run_id }}

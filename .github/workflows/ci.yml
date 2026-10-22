@@ -6,7 +6,10 @@ on:
     # gets CI — a GITHUB_TOKEN-authored PR does not trigger pull_request runs.
     branches: [main, 'release/**']
   pull_request:
-    branches: [main]
+    # feat/pilot-848-**: the PILOT-848 stacked PRs target each other's
+    # branches, not main, so they need CI on those bases too. Remove the
+    # pattern once that stack has landed.
+    branches: [main, 'feat/pilot-848-**']
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
