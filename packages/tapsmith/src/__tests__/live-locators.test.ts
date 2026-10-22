@@ -186,6 +186,16 @@ describe('suggestLiveLocators', () => {
     expect(note).toMatch(/finds only this element/);
   });
 
+  it('offers no position when a same-tag wrapper with the same box also looks like the pick', async () => {
+    const { page, matches } = fakePage();
+    const box = B(0, 100, 100, 150);
+    matches['locator:div'] = [domEl({ bounds: B(0, 0, 400, 800) }), domEl({ bounds: box }), domEl({ bounds: box })];
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    const inner = node({ webview: 'true', 'webview-tag': 'div', bounds: '[0,100][100,150]' });
+    const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', inner, { ios: false });
+    expect(suggestions).toEqual([]);
+  });
+
   it('stops checking a WebView pick\'s candidates once a newer pick replaced it', async () => {
     const { page, matches } = fakePage();
     matches['getByText:Submit'] = [domEl({ tag: 'button' })];

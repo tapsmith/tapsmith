@@ -115,7 +115,12 @@ export async function suggestLiveLocators(
       if (index < 0) continue;
       if (result.count === 1) {
         suggestions.push({ code: candidate.code, label: candidate.label });
-      } else if (pickedPlace && result.matches[index].bounds) {
+      } else if (
+        pickedPlace && result.matches[index].bounds
+        // Two matches that both look like the pick (a same-tag wrapper with
+        // the same box) leave its position ambiguous.
+        && result.matches.filter((m) => isPickedWebViewElement(m, node)).length === 1
+      ) {
         // Only a place tells same-tag matches apart; without one the
         // position could name another of them.
         positional.push({ code: `${candidate.code}.nth(${index})`, label: `${candidate.label} (position)` });
