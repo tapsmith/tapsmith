@@ -26,7 +26,7 @@ after its own gate (implement-ticket Phase 8); you never merge anything yourself
 | `auto` | never ask the user anything until the batch is finished: no checkpoint, no plan reviews, no question batches; every worker runs with `auto`, and dependent tickets are stacked instead of waiting for merges — see *Auto mode* | interactive |
 | `merge` | passed through: each worker squash-merges its PR once its gate passes; dependent tickets then wait for the real merge instead of stacking | a human merges |
 | `no-jira`, `leave-draft`, `max-qa=<n>` | passed through to every worker | worker defaults (Jira updates on) |
-| `base=<ref>` | base for every ticket, passed through to every worker. `CI` and `E2E Android` run on a PR to any base, but `E2E iOS` only on PRs to `main`, so on another base each worker ends `ready-stacked` until its PR targets `main` | `main` |
+| `base=<ref>` | base for every ticket, passed through to every worker. Every workflow runs on a PR to any base | `main` |
 
 ## Why the parallelism cap is low
 

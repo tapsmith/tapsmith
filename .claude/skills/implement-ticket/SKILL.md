@@ -41,7 +41,7 @@ plan (constraints, hints, "don't touch X").
 | `PILOT-123` (any `KEY-n`) | the ticket | required, unless resuming on a branch whose name carries it |
 | `also=<KEY>,…` | further tickets combined into this one change: each is read as an intent source (Phase 1), its ACs join the plan and QA's intent (pass `ticket=` the primary key and the others as focus), and the PR title and body carry every key. State, branch and leases stay keyed on the primary | none |
 | `auto` | never ask the user anything, at any point: every stop-and-ask becomes your own decision, disclosed in the PR, and the run ends only at a final result — see *Auto mode* | interactive |
-| `base=<ref>` | branch to build on and target. `CI` and `E2E Android` run on a PR to any base, but `E2E iOS` only on PRs to `main`, so on another base the gate stops after its first pass until the PR targets `main` (Phase 7) | `main` |
+| `base=<ref>` | branch to build on and target. Every workflow runs on a PR to any base, so the gate is the same as for `main` | `main` |
 | `after=<branch>` | stack on another ticket's unmerged branch: start from `origin/<branch>`, review and QA against it, PR still targets `<base>` — see *Stacked branches*. Used by `/implement-tickets` in auto mode for dependent tickets | off |
 | `no-jira` | make no Jira writes at all. By default the ticket moves to **In Progress** at the start, gets a comment with the PR link when the PR opens and one with the final result at the end, and is never moved to **Done** — that waits for the merge (Phase 7) | Jira updates on |
 | `leave-draft` | stop at the gate with the PR still a draft — so iOS E2E, which skips drafts, has not run (Phase 7) | mark it ready for review |
@@ -231,8 +231,8 @@ wake). Your final message is a report, not an offer: no "want me to…?".
 - `ready-to-merge` — the gate passed; the PR is marked ready (unless `leave-draft`).
 - `merged` — with `merge`: the gate passed and Phase 8 merged it.
 - `ready-stacked` — the gate's first pass (Phase 7) passed on a stacked branch
-  (`after=`), whose PR stays draft until its dependency merges (*Stacked branches*), or
-  on a PR whose base is not `main` (`base=`); either way iOS E2E has not run on it yet.
+  (`after=`); the PR stays draft until its dependency merges (*Stacked branches*), so
+  iOS E2E has not run on it yet.
 - `best-effort` — a PR exists but some gate item cannot be met without a human; it stays
   a **draft**, and the report and PR description list each unmet item and why.
 - `held` — nothing to build: the ticket is unreadable, already fixed on `<base>`, or a
@@ -473,10 +473,7 @@ checklist with evidence:
    head you expect to merge — mark the PR ready (`gh pr ready <n>`; a no-op once it is
    ready, after a pass-2 fix). With `leave-draft`, stop here
    instead: the PR stays a draft and the report lists iOS E2E as not run (it starts when
-   someone marks the PR ready). A `ready-stacked` or `best-effort` PR also stops here,
-   and so does a PR whose base is not `main` (`base=`): `E2E iOS` only runs on PRs to
-   `main`, so pass 2 waits until the PR is retargeted there (GitHub does that itself when
-   the base branch is merged and deleted) — report it as `ready-stacked`.
+   someone marks the PR ready). A `ready-stacked` or `best-effort` PR also stops here.
 2. **`E2E iOS` on head.** Wait for it (`references/pr-and-ci.md` §Waiting recipes, *E2E
    iOS after ready*). A red job is Phase 6 work as usual — the PR stays ready, and any fix
    re-opens pass 1 for what it touched. Marking ready may also trigger CodeRabbit's first
@@ -529,8 +526,8 @@ PR: <url or none>
 STATE: <absolute path to state.md>
 ```
 
-`best-effort` and `held` are `auto`-mode results (*Auto mode*), as is `ready-stacked`
-except for a PR on a non-`main` base; `auto` never returns `blocked` or `planned`. When `blocked`, follow with the question, written so it can be answered without reading
+`ready-stacked`, `best-effort` and `held` are `auto`-mode results (*Auto mode*); `auto`
+never returns `blocked` or `planned`. When `blocked`, follow with the question, written so it can be answered without reading
 anything else:
 
 ```

@@ -3,9 +3,8 @@
 Facts about this repo that shape every rule below:
 
 - **CI runs only on PRs** (and pushes to `main`/`release/**`). A pushed branch with no PR
-  gets no CI at all. `CI` and `E2E Android` run on a PR to any base, so a stacked PR that
-  targets the branch below it gets them; `E2E iOS`, `iOS Agent` and the other device
-  workflows run only on PRs to `main`.
+  gets no CI at all. Every workflow runs on a PR to any base, so a stacked PR that
+  targets the branch below it gets the full pipeline, `E2E iOS` included.
 - **Every push cancels the in-flight run** of each workflow (`cancel-in-progress: true`).
   The E2E workflows take tens of minutes; pushing in the middle throws that away.
 - **`E2E iOS` skips draft PRs** (its checks read *skipped*) and starts when the PR is

@@ -17,8 +17,8 @@ on:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
   workflow_dispatch:
+  # Every PR, whatever its base (stacked PRs; see ci.yml).
   pull_request:
-    branches: [ main ]
     paths:
       - ".github/workflows/e2e-android-hookless.yml"
       - "e2e/tapsmith.config.android-ci-hookless.mjs"
