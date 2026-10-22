@@ -1804,17 +1804,6 @@ export class ElementHandle {
    * @param preResolved - Resolved ElementInfo from the auto-wait step (avoids a
    *   redundant resolution round-trip).
    */
-  /**
-   * @internal — The resolved element by id, even for an unmodified handle
-   * (else as `_actionTarget`). clearAndType needs it: the agent clears and
-   * then types, and a selector re-resolved for the typing can no longer
-   * match a field found by the text the clear removed (getByText("old value")).
-   */
-  private async _pinnedTarget(preResolved?: ElementInfo): Promise<ActionTarget> {
-    const el = preResolved ?? await this._resolveOne();
-    return el.elementId ? { elementId: el.elementId } : this._actionTarget(el);
-  }
-
   private async _actionTarget(preResolved?: ElementInfo): Promise<ActionTarget> {
     if (!this._hasModifiers()) return { selector: this._selector };
     const el = preResolved ?? await this._resolveOne();
@@ -1841,15 +1830,11 @@ export class ElementHandle {
    * — stale errors are raised at agent-side resolution, before the action
    * runs, but a repeated partial execution would duplicate input rather than
    * merely re-tap, so those keep the conservative single retry.
-   *
-   * `retarget` finds the target again after a stale id (default
-   * `_actionTarget()`, which gives an unmodified handle its selector back).
    */
   private async _dispatchTargeted<R extends { success: boolean; errorMessage: string; errorType?: string }>(
     target: ActionTarget,
     call: (t: ActionTarget) => Promise<R>,
     maxStaleRetries = 3,
-    retarget: () => Promise<ActionTarget> = () => this._actionTarget(),
   ): Promise<R> {
     if (!('elementId' in target)) return call(target);
     let currentTarget: ActionTarget = target;
@@ -1866,7 +1851,7 @@ export class ElementHandle {
         if (isLast || !isStaleElementError(err instanceof Error ? err.message : String(err))) throw err;
       }
       try {
-        currentTarget = await retarget();
+        currentTarget = await this._actionTarget();
       } catch (err) {
         if (!isPollableNotFoundError(err)) throw err;
         const msg = err instanceof Error ? err.message : String(err);
@@ -2548,14 +2533,14 @@ export class ElementHandle {
   async clearAndType(text: string, options?: { delay?: number }): Promise<void> {
     const { target, remainingMs } = await this._tracedResolve('clearAndType', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
-      return { target: await this._pinnedTarget(element), remainingMs };
+      return { target: await this._actionTarget(element), remainingMs };
     });
     const delay = options?.delay ?? this._options.typingDelay ?? 0;
     const budget = actionBudget(remainingMs);
     return this._tracedAction('clearAndType', 'type',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
         ? this._client.clearAndType(undefined, text, budget(), delay, t.elementId)
-        : this._client.clearAndType(t.selector, text, budget(), delay), 3, () => this._pinnedTarget()),
+        : this._client.clearAndType(t.selector, text, budget(), delay)),
       'Clear and type failed', { inputValue: text });
   }
 

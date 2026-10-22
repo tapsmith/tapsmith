@@ -2206,6 +2206,87 @@ pub(crate) fn opt_timeout(ms: u64) -> Option<u64> {
 /// handles target the element they resolved); otherwise it finds by selector.
 /// At least one of the two must be provided.
 #[allow(clippy::result_large_err)] // Status is tonic's standard error type
+/// Clear a field and type into it as one action, reaching the same field for
+/// both (PILOT-848). The agent clears and types as two commands, and a
+/// selector re-resolved for the typing can miss a field it found by the
+/// text the clear removed (`getByText("old value")`), leaving it empty.
+///
+/// On Android the field is found once and both commands act on its element
+/// id (a live UiObject2 that survives the clear). iOS element ids are lazy
+/// queries (some selector shapes get none), so iOS keeps both commands on the
+/// selector; its agent cannot yet clear a field matched by its own value.
+///
+/// `send` delivers one agent command with its timeout.
+pub(crate) async fn run_clear_and_type<F, Fut>(
+    platform: Option<Platform>,
+    mut selector: Value,
+    mut element_id: Option<String>,
+    text: String,
+    timeout_ms: u64,
+    typing_delay_ms: Option<u32>,
+    mut send: F,
+) -> Result<AgentResponse, Status>
+where
+    F: FnMut(AgentCommand, u64) -> Fut,
+    Fut: std::future::Future<Output = Result<AgentResponse, Status>>,
+{
+    // The type phase uses only what is left of the budget, not the full
+    // timeout again (which would double the wall-clock).
+    let start = std::time::Instant::now();
+    let remaining = |start: std::time::Instant| {
+        timeout_ms
+            .saturating_sub(start.elapsed().as_millis() as u64)
+            .max(1000)
+    };
+
+    if element_id.is_none() && platform == Some(Platform::Android) {
+        let found = send(
+            AgentCommand::FindElement {
+                selector: selector.clone(),
+                timeout_ms: opt_timeout(timeout_ms),
+            },
+            timeout_ms,
+        )
+        .await?;
+        if !found.success {
+            return Ok(found);
+        }
+        if let Some(id) = parse_element_info(&found.data)
+            .map(|e| e.element_id)
+            .filter(|id| !id.is_empty())
+        {
+            element_id = Some(id);
+            selector = json!({});
+        }
+    }
+
+    let cleared = send(
+        AgentCommand::ClearText {
+            selector: selector.clone(),
+            timeout_ms: opt_timeout(remaining(start)),
+            element_id: element_id.clone(),
+        },
+        remaining(start),
+    )
+    .await?;
+    if !cleared.success {
+        return Ok(cleared);
+    }
+
+    let budget = remaining(start);
+    send(
+        AgentCommand::TypeText {
+            selector,
+            text,
+            timeout_ms: opt_timeout(budget),
+            typing_delay_ms,
+            element_id,
+        },
+        budget,
+    )
+    .await
+}
+
 pub(crate) fn action_target(
     selector: Option<&proto::Selector>,
     element_id: &str,
@@ -2534,50 +2615,26 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let request_id = Self::request_id(&req.request_id);
 
         let (sel_json, element_id) = action_target(req.selector.as_ref(), &req.element_id)?;
-
-        // Track elapsed time so the type phase uses only the remaining budget
-        // instead of the full user timeout (which would double the wall-clock).
-        let start = std::time::Instant::now();
-
-        // Clear first, then type
-        let clear_cmd = AgentCommand::ClearText {
-            selector: sel_json.clone(),
-            timeout_ms: opt_timeout(req.timeout_ms),
-            element_id: element_id.clone(),
-        };
-
-        let clear_result = self
-            .send_agent_command_with_timeout(&clear_cmd, req.timeout_ms)
-            .await;
-
-        if let Err(e) = &clear_result {
-            return self.make_action_response(request_id, Err(e.clone())).await;
-        }
-
-        if let Ok(ref resp) = clear_result {
-            if !resp.success {
-                return self.make_action_response(request_id, clear_result).await;
-            }
-        }
-
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-        let remaining_ms = req.timeout_ms.saturating_sub(elapsed_ms).max(1000);
-
-        let type_cmd = AgentCommand::TypeText {
-            selector: sel_json,
-            text: req.text,
-            timeout_ms: opt_timeout(remaining_ms),
-            typing_delay_ms: if req.typing_delay_ms > 0 {
-                Some(req.typing_delay_ms)
-            } else {
-                None
-            },
+        let platform = self
+            .device_manager
+            .read()
+            .await
+            .active_device()
+            .map(|d| d.platform);
+        let typing_delay_ms = (req.typing_delay_ms > 0).then_some(req.typing_delay_ms);
+        let result = run_clear_and_type(
+            platform,
+            sel_json,
             element_id,
-        };
-
-        let result = self
-            .send_agent_command_with_timeout(&type_cmd, remaining_ms)
-            .await;
+            req.text,
+            req.timeout_ms,
+            typing_delay_ms,
+            |command, timeout_ms| async move {
+                self.send_agent_command_with_timeout(&command, timeout_ms)
+                    .await
+            },
+        )
+        .await;
         self.make_action_response(request_id, result).await
     }
 
@@ -6767,6 +6824,144 @@ mod tests {
         assert_eq!(list[1].element_id, "b");
         assert_eq!(list[0].text, "First");
         assert_eq!(list[1].text, "Second");
+    }
+
+    // ─── run_clear_and_type (PILOT-848) ───
+
+    /// Run clear-and-type against a scripted agent; returns each command sent
+    /// as (method, params) and the result.
+    fn clear_and_type_with(
+        platform: Platform,
+        selector: Value,
+        element_id: Option<&str>,
+        replies: Vec<AgentResponse>,
+    ) -> (Vec<(String, Value)>, Result<AgentResponse, Status>) {
+        let sent = std::sync::Mutex::new(Vec::new());
+        let replies = std::sync::Mutex::new(std::collections::VecDeque::from(replies));
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_clear_and_type(
+                Some(platform),
+                selector,
+                element_id.map(String::from),
+                "new".to_string(),
+                5000,
+                None,
+                |command, _timeout| {
+                    let json = command.to_json("t");
+                    sent.lock().unwrap().push((
+                        json["method"].as_str().unwrap().to_string(),
+                        json["params"].clone(),
+                    ));
+                    let reply = replies
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("unscripted agent command");
+                    async move { Ok(reply) }
+                },
+            ));
+        (sent.into_inner().unwrap(), result)
+    }
+
+    fn ok(data: Value) -> AgentResponse {
+        AgentResponse {
+            success: true,
+            error: None,
+            error_type: None,
+            data,
+        }
+    }
+
+    fn evaluation(matches: usize) -> AgentResponse {
+        let elements: Vec<Value> = (0..matches)
+            .map(|i| json!({ "elementId": format!("m{i}") }))
+            .collect();
+        ok(json!({ "results": [{ "elements": elements }] }))
+    }
+
+    #[test]
+    fn clear_and_type_android_acts_on_the_field_it_found_once() {
+        // getByText("old value"): a selector re-resolved after the clear
+        // would miss the field.
+        let (sent, result) = clear_and_type_with(
+            Platform::Android,
+            json!({ "textContains": "old value" }),
+            None,
+            vec![
+                ok(json!({ "elementId": "field-1" })),
+                ok(Value::Null),
+                ok(Value::Null),
+            ],
+        );
+        assert!(result.unwrap().success);
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["findElement", "clearText", "typeText"]);
+        for (_, params) in &sent[1..] {
+            assert_eq!(params["elementId"], "field-1");
+            assert!(params.get("textContains").is_none());
+        }
+    }
+
+    #[test]
+    fn clear_and_type_android_reports_a_field_it_cannot_find() {
+        let missing = AgentResponse {
+            success: false,
+            error: Some("Element not found".into()),
+            error_type: None,
+            data: Value::Null,
+        };
+        let (sent, result) = clear_and_type_with(
+            Platform::Android,
+            json!({ "testId": "x" }),
+            None,
+            vec![missing],
+        );
+        assert!(!result.unwrap().success);
+        assert_eq!(sent.len(), 1);
+    }
+
+    #[test]
+    fn clear_and_type_by_element_id_needs_no_find() {
+        let (sent, _) = clear_and_type_with(
+            Platform::Android,
+            json!({}),
+            Some("e7"),
+            vec![ok(Value::Null), ok(Value::Null)],
+        );
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["clearText", "typeText"]);
+    }
+
+    #[test]
+    fn clear_and_type_ios_keeps_both_commands_on_the_selector() {
+        let (sent, _) = clear_and_type_with(
+            Platform::Ios,
+            json!({ "hint": "Email" }),
+            None,
+            vec![ok(Value::Null), ok(Value::Null)],
+        );
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["clearText", "typeText"]);
+        assert_eq!(sent[1].1["hint"], "Email");
+    }
+
+    #[test]
+    fn clear_and_type_types_nothing_after_a_failed_clear() {
+        let failed = AgentResponse {
+            success: false,
+            error: Some("read-only".into()),
+            error_type: None,
+            data: Value::Null,
+        };
+        let (sent, result) = clear_and_type_with(
+            Platform::Ios,
+            json!({ "hint": "Email" }),
+            None,
+            vec![failed],
+        );
+        assert!(!result.unwrap().success);
+        assert_eq!(sent.len(), 1);
     }
 
     #[test]

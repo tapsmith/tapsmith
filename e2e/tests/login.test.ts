@@ -60,6 +60,16 @@ describe("Login screen", () => {
     await expect(loginScreen.emailField).toContainText("wrong@email.com")
   })
 
+  // The field is found by the text the clear removes: the daemon clears and
+  // types as two agent commands, which must both reach this field (PILOT-848).
+  test("clearAndType() replaces a field found by its own text", async ({ device, loginScreen, platform }) => {
+    test.skip(platform !== "android", "the iOS agent's clear re-reads the field by its selector, which stops matching once the text shrinks")
+    await loginScreen.emailField.clearAndType("old@value.com")
+    await device.getByText("old@value.com").clearAndType("new@value.com")
+    await expect(loginScreen.emailField).toContainText("new@value.com")
+    await expect(loginScreen.emailField).not.toContainText("old@value.com")
+  })
+
   test("clear() empties the field", async ({ loginScreen }) => {
     await loginScreen.emailField.type("hello")
     await loginScreen.emailField.clear()

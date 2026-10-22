@@ -489,6 +489,15 @@ describe('tapsmith_tap', () => {
     expect(daemon.tap).not.toHaveBeenCalled();
   });
 
+  it('does not send an agent whose WebView connection failed to inspect the screen', async () => {
+    hoisted.client = makeDaemon().client;
+    vi.spyOn(Device.prototype, 'webview').mockRejectedValue(new Error('Timed out waiting for WebView (15000ms): no debuggable WebView'));
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).not.toContain('tapsmith_snapshot');
+    vi.restoreAllMocks();
+  });
+
   it('keeps a tap within the 5 s budget (only typing gets longer)', async () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Go' })] });
     hoisted.client = daemon.client;

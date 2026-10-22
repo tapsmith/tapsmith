@@ -40,8 +40,9 @@ async function actOn(
   } catch (err) {
     if (isLocatorError(err)) return { content: [{ type: 'text' as const, text: err.message }], isError: true };
     const message = err instanceof Error ? err.message : String(err);
-    // An agent that missed its target should look at the screen, as before.
-    return /not found|no elements? match|timed out|timeout/i.test(message)
+    // An agent that missed its target should look at the screen, as before
+    // (not one whose WebView or agent connection timed out).
+    return /not found|did not reach state|in WebView \(\d+ms\)/i.test(message)
       ? actionResult(false, `${message} Use tapsmith_snapshot or tapsmith_test_locator to inspect the current screen.`)
       : thrownResult(err);
   }

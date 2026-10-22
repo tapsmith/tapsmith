@@ -1149,35 +1149,13 @@ describe('type()', () => {
 });
 
 describe('clearAndType()', () => {
-  it('delegates to client.clearAndType, on the element it resolved', async () => {
-    // By id even for a plain locator: the agent clears, then types, and a
-    // selector re-resolved for the typing would miss a field found by the
-    // text the clear removed (getByText("old value")).
+  it('delegates to client.clearAndType', async () => {
     const clearAndType = vi.fn(async () => successResponse());
-    const client = makeMockClient({
-      clearAndType,
-      findElements: vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: 'field-1', text: 'old value' })])),
-    });
-    const handle = new ElementHandle(client, _text('old value'), 5000);
+    const client = makeMockClient({ clearAndType });
+    const sel = _text('Field');
+    const handle = new ElementHandle(client, sel, 5000);
     await handle.clearAndType('new value');
-    expect(clearAndType).toHaveBeenCalledWith(undefined, 'new value', expect.any(Number), 0, 'field-1');
-  });
-
-  it('re-pins a stale field by id, never falling back to the selector', async () => {
-    // A trace capture between resolve and dispatch can invalidate the id; a
-    // selector retry would re-resolve getByText("old value") after the clear.
-    let reads = 0;
-    const clearAndType = vi.fn()
-      .mockResolvedValueOnce({ requestId: '1', success: false, errorType: 'ELEMENT_NOT_FOUND', errorMessage: 'Element el-1 is stale' })
-      .mockResolvedValue(successResponse());
-    const client = makeMockClient({
-      clearAndType,
-      findElements: vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: `field-${++reads}`, text: 'old value' })])),
-    });
-    await new ElementHandle(client, _text('old value'), 5000).clearAndType('new');
-    expect(clearAndType).toHaveBeenCalledTimes(2);
-    expect(clearAndType.mock.calls[1][0]).toBeUndefined();
-    expect(clearAndType.mock.calls[1][4]).toBe('field-2');
+    expect(clearAndType).toHaveBeenCalledWith(sel, 'new value', expect.any(Number), 0);
   });
 
   it('throws on failure', async () => {
