@@ -8,8 +8,8 @@ on:
       - 'packages/tapsmith-core/src/ios/**'
       - 'packages/tapsmith-core/src/agent_comms.rs'
       - '.github/workflows/ios.yml'
+  # Every PR, whatever its base (stacked PRs; see ci.yml).
   pull_request:
-    branches: [main]
     paths:
       - 'ios-agent/**'
       - 'packages/tapsmith-core/src/ios/**'
