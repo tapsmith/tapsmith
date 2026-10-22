@@ -319,6 +319,16 @@ export class Device {
    * present but connecting/dumping failed (callers should back off — the
    * connect attempt spins until the configured timeout).
    */
+  /**
+   * @internal — The WebView connection this Device already uses for
+   * inspection (the test session's active one, else its cached one),
+   * connecting if needed. UI mode's live locators reuse it, so the page never
+   * gets a second inspector session (PILOT-288).
+   */
+  async _inspectionWebView(): Promise<WebViewHandle> {
+    return this._activeWebView ?? this._establishWebView();
+  }
+
   async _dumpWebViewDomForInspection(hierarchyXml: string): Promise<string | null | undefined> {
     const marker = this._platform === 'ios' ? 'XCUIElementTypeWebView' : 'android.webkit.WebView';
     if (!hierarchyXml.includes(marker)) return undefined;

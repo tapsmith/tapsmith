@@ -301,6 +301,11 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
         {liveAnswers?.suggestions?.pending && (
           <div class="st-pick-hint" data-testid="locator-suggestions-pending">Checking locators on the device…</div>
         )}
+        {liveAnswers && pickedNode && !liveAnswers.suggestions && (
+          <div class="st-pick-hint" data-testid="locator-live-pick-hint">
+            Pick the element on the device mirror for locators the device confirms.
+          </div>
+        )}
         {liveAnswers?.suggestions?.note && (
           <div class="st-pick-hint" data-testid="locator-suggestions-note">{liveAnswers.suggestions.note}</div>
         )}
@@ -316,4 +321,5 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
 
 // Pick/hover logic lives in selector-pick.ts (plain TS, unit-testable);
 // re-exported here for the UI entry points that import from this module.
-export { handlePickFromScreenshot, handleHoverFromScreenshot, isWebViewOverlayPending, pickNodeAt } from './selector-pick.js';
+export { handlePickFromScreenshot } from './selector-pick.js';
+export { handleHoverFromScreenshot, isWebViewOverlayPending, pickNodeAt } from './pick-node.js';

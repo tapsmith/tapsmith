@@ -5,7 +5,7 @@ import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.j
 import { Device } from '../device.js';
 import type { WebViewHandle } from '../webview-handle.js';
 import { closeMcpWebViews } from '../mcp/sdk-device.js';
-import { evaluateLiveLocator, suggestLiveLocators } from '../ui-mode/live-locators.js';
+import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, suggestLiveLocators } from '../ui-mode/live-locators.js';
 
 // PILOT-848: UI mode's live Locator tab and picker get their answers from the
 // device — the SDK builder plus the agent's matching — never from the
@@ -121,5 +121,86 @@ describe('suggestLiveLocators', () => {
     expect(suggestions.length).toBeGreaterThan(0);
     for (const s of suggestions) expect(s.code).toMatch(/^webview\./);
     expect(suggestions.map((s) => s.code)).toContain('webview.getByText("Submit")');
+  });
+});
+
+describe('live answers: notes, the picker\'s WebView, and request handling', () => {
+  it('says why a native pick has no locator the device confirms', async () => {
+    const save = node({ class: 'android.widget.Button', text: 'Save', clickable: 'true', bounds: '[0,0][100,50]' });
+    // The device finds something at the pick's place, but never this element.
+    const imposter = el({ className: 'android.widget.ImageView', text: '', bounds: B(0, 0, 100, 50) });
+    const { suggestions, note } = await suggestLiveLocators(fakeClient(() => [imposter]), 'emu', save, { ios: false });
+    expect(suggestions).toEqual([]);
+    expect(note).toMatch(/finds only this element/);
+  });
+
+  it('says why a WebView pick has no locator that finds only it', async () => {
+    const page = {
+      getByText: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
+      locator: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
+      getByRole: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
+      getByTestId: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
+      getByPlaceholder: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
+      getByLabel: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
+      _setTimeoutMs: vi.fn(),
+    };
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
+    const button = node({ webview: 'true', tag: 'button', text: 'Submit', bounds: '[0,0][100,50]' });
+    const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', button, { ios: false });
+    expect(suggestions).toEqual([]);
+    expect(note).toMatch(/finds only this element/);
+  });
+
+  it('uses the WebView connection UI mode already holds instead of opening another', async () => {
+    const page = { getByText: vi.fn(() => ({ count: vi.fn(async () => 1), _nthIndex: undefined })) };
+    const own = vi.spyOn(Device.prototype, 'webview');
+    const held = vi.fn(async () => page as unknown as WebViewHandle);
+    const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', held);
+    expect(r).toMatchObject({ count: 1, webview: true });
+    expect(held).toHaveBeenCalledTimes(1);
+    expect(own).not.toHaveBeenCalled();
+  });
+});
+
+describe('LiveHierarchyCache', () => {
+  it('keeps the last few captures per device, by revision', () => {
+    const cache = new LiveHierarchyCache(2);
+    const r1 = cache.remember(0, 0, 'a');
+    const r2 = cache.remember(0, 0, 'b');
+    const r3 = cache.remember(0, 0, 'c');
+    const other = cache.remember(0, 1, 'member');
+    expect(cache.at(0, 0, r1)).toBeUndefined();
+    expect(cache.at(0, 0, r2)).toBe('b');
+    expect(cache.at(0, 0, r3)).toBe('c');
+    expect(cache.at(0, 0, other)).toBeUndefined();
+    expect(cache.at(0, 1, other)).toBe('member');
+  });
+
+  it('forgets a retired worker, whose id another device may reuse', () => {
+    const cache = new LiveHierarchyCache();
+    const r = cache.remember(3, 0, 'old device');
+    const keep = cache.remember(4, 0, 'other worker');
+    cache.forgetWorker(3);
+    expect(cache.at(3, 0, r)).toBeUndefined();
+    expect(cache.at(4, 0, keep)).toBe('other worker');
+  });
+});
+
+describe('LatestOnlyRunner', () => {
+  it('runs one job per key at a time, and only the newest of those that waited', async () => {
+    const runner = new LatestOnlyRunner<string>();
+    const started: string[] = [];
+    const replies: string[] = [];
+    let finishFirst!: () => void;
+    runner.run('d', () => { started.push('1'); return new Promise<string>((r) => { finishFirst = () => r('one'); }); }, (v) => replies.push(`a:${v}`));
+    runner.run('d', async () => { started.push('2'); return 'two'; }, (v) => replies.push(`b:${v}`));
+    runner.run('d', async () => { started.push('3'); return 'three'; }, (v) => replies.push(`c:${v}`));
+    runner.run('other', async () => { started.push('x'); return 'x'; }, (v) => replies.push(`x:${v}`));
+    expect(started).toEqual(['1', 'x']);
+    finishFirst();
+    await vi.waitFor(() => expect(replies).toContain('c:three'));
+    expect(started).toEqual(['1', 'x', '3']);
+    expect(replies).toEqual(expect.arrayContaining(['a:one', 'c:three', 'x:x']));
+    expect(replies).not.toContain('b:two');
   });
 });

@@ -11,7 +11,7 @@ import { generateSelectors, generateBestSelector } from './selector-generation.j
 import { disambiguateSelectors } from './selector-uniqueness.js';
 import { pickNodeAt } from './pick-node.js';
 
-export { isWebViewOverlayPending, handleHoverFromScreenshot, pickNodeAt } from './pick-node.js';
+export { isWebViewOverlayPending, handleHoverFromScreenshot } from './pick-node.js';
 
 export function handlePickFromScreenshot(
   roots: HierarchyNode[],

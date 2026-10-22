@@ -178,7 +178,18 @@ export async function withEvaluatedLocator<T>(
   client: TapsmithGrpcClient,
   source: string,
   use: (evaluated: EvaluatedLocator) => Promise<T>,
+  options: {
+    /**
+     * A WebView connection the caller already holds to use instead of one
+     * of these tools' own (UI mode's picker connection, which a second one
+     * on the same page would wedge, PILOT-288).
+     */
+    webview?: () => Promise<WebViewHandle>
+  } = {},
 ): Promise<T> {
+  if (options.webview) {
+    return use(await evaluateLocator(source, { device, webview: options.webview }));
+  }
   const key = webViewKey(device);
   let used: OpenWebView | undefined;
   let release: (() => void) | undefined;

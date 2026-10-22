@@ -208,10 +208,28 @@ function App() {
   // the latest request's reply is kept.
   const [liveRevision, setLiveRevision] = useState<number | null>(null);
   const [liveAnswers, setLiveAnswers] = useState<LiveLocatorAnswers>({ evaluation: null, suggestions: null });
-  const evaluateRequestRef = useRef(0);
-  const suggestRequestRef = useRef(0);
+  // Ids start at a random base per tab: replies are broadcast to every tab,
+  // and two tabs counting from 0 would take each other's answers.
+  const evaluateRequestRef = useRef(Math.floor(Math.random() * 1e9));
+  const suggestRequestRef = useRef(Math.floor(Math.random() * 1e9));
+  // An evaluation is out and unanswered: screen refreshes do not re-ask until it is.
+  const evaluationPendingRef = useRef(false);
+  // The element the live suggestions are for (a trace pick has none).
+  const [livePickedNode, setLivePickedNode] = useState<HierarchyNode | null>(null);
   // Set by a live pick: the first suggestion that comes back fills the locator.
   const fillFromSuggestionsRef = useRef(false);
+  // Drop a live pick's suggestions, and any still on their way.
+  const resetLivePick = useCallback(() => {
+    suggestRequestRef.current++;
+    fillFromSuggestionsRef.current = false;
+    setLivePickedNode(null);
+    setLiveAnswers((prev) => (prev.suggestions ? { ...prev, suggestions: null } : prev));
+  }, []);
+  // Typing takes over the locator: a pick's suggestions must not replace it.
+  const handleLocatorInput = useCallback((text: string) => {
+    fillFromSuggestionsRef.current = false;
+    setSelectorText(text);
+  }, []);
 
   // Device pane state
   const [selectedWorkerId, setSelectedWorkerId] = useState(0);
@@ -663,20 +681,22 @@ function App() {
     if (pickTarget !== 'screenshot' || currentRoots.length === 0) return;
     const result = handlePickFromScreenshot(currentRoots, point.x / dpr, point.y / dpr);
     if (result) {
+      resetLivePick();
       setSelectorText(result.selector);
       setPickedNode(result.node);
       setPickTarget(null);
       setHoverBounds(null);
     }
-  }, [pickTarget, currentRoots, dpr]);
+  }, [pickTarget, currentRoots, dpr, resetLivePick]);
 
   const handlePickToggle = useCallback(() => {
     setPickTarget(t => t === 'screenshot' ? null : 'screenshot');
     setSelectorSource('trace');
     setPickedNode(null);
+    resetLivePick();
     setHoverBounds(null);
     setMirrorHoverBounds(null);
-  }, []);
+  }, [resetLivePick]);
 
   const handleScreenshotHover = useCallback((point: { x: number; y: number } | null) => {
     if (pickTarget !== 'screenshot' || currentRoots.length === 0 || !point) {
@@ -1252,6 +1272,7 @@ function App() {
         break;
       case 'locator-evaluation':
         if (msg.requestId === evaluateRequestRef.current) {
+          evaluationPendingRef.current = false;
           setLiveAnswers((prev) => ({ ...prev, evaluation: msg }));
         }
         break;
@@ -1369,12 +1390,13 @@ function App() {
       // Arming: bind the Locator tab to the live hierarchy and start fresh.
       setSelectorSource('live');
       setPickedNode(null);
+      resetLivePick();
       setSelectorText('');
       setHoverBounds(null);
       setPickTarget('mirror');
     }
     setMirrorHoverBounds(null);
-  }, [pickTarget, clearPendingMirrorPick]);
+  }, [pickTarget, clearPendingMirrorPick, resetLivePick]);
 
   const handleMirrorPickHover = useCallback((point: { x: number; y: number } | null) => {
     if (!point || liveRoots.length === 0) {
@@ -1390,6 +1412,7 @@ function App() {
     const path = result ? pathToNode(liveRoots, result.node) : undefined;
     if (result && path && liveRevision !== null) {
       setPickedNode(result.node);
+      setLivePickedNode(result.node);
       setPickTarget(null);
       setMirrorHoverBounds(null);
       // The device decides which locators find this element (PILOT-848);
@@ -1454,28 +1477,40 @@ function App() {
     }
   }, [liveHierarchyXml, mirrorWorkerId, mirrorDeviceIndex, send]);
 
-  // Ask the device what the locator matches (PILOT-848): shortly after typing
-  // stops, and again with each live hierarchy refresh so counts and
-  // highlights follow the screen.
+  // Ask the device what the locator matches (PILOT-848), shortly after typing
+  // stops. Any change of locator, source or device retires the request in
+  // flight at once, so its late reply can never stand for the new one.
+  const sendEvaluation = useCallback((locator: string) => {
+    const requestId = ++evaluateRequestRef.current;
+    evaluationPendingRef.current = true;
+    send({ type: 'evaluate-locator', requestId, locator, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
+  }, [mirrorWorkerId, mirrorDeviceIndex, send]);
   useEffect(() => {
+    evaluateRequestRef.current++;
+    evaluationPendingRef.current = false;
+    setLiveAnswers((prev) => (prev.evaluation ? { ...prev, evaluation: null } : prev));
     if (selectorSource !== 'live') return;
     const locator = selectorText.trim();
-    if (!locator || !connected) {
-      evaluateRequestRef.current++;
-      setLiveAnswers((prev) => (prev.evaluation ? { ...prev, evaluation: null } : prev));
+    if (!locator) return;
+    if (!connected) {
+      setLiveAnswers((prev) => ({ ...prev, evaluation: { error: 'No live device connected.' } }));
       return;
     }
-    const timer = setTimeout(() => {
-      const requestId = ++evaluateRequestRef.current;
-      send({ type: 'evaluate-locator', requestId, locator, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
-    }, 250);
+    const timer = setTimeout(() => sendEvaluation(locator), 250);
     return () => clearTimeout(timer);
-  }, [selectorSource, selectorText, liveRevision, connected, mirrorWorkerId, mirrorDeviceIndex, send]);
+  }, [selectorSource, selectorText, connected, sendEvaluation]);
 
-  // A new locator's count is unknown until the device answers.
+  // Follow the screen: re-ask with each live refresh once the last answer is
+  // in (a slow device is never re-asked faster than it answers).
+  const liveRefreshRef = useRef({ selectorSource, selectorText, connected, evaluation: liveAnswers.evaluation });
+  liveRefreshRef.current = { selectorSource, selectorText, connected, evaluation: liveAnswers.evaluation };
   useEffect(() => {
-    setLiveAnswers((prev) => (prev.evaluation ? { ...prev, evaluation: null } : prev));
-  }, [selectorText]);
+    const now = liveRefreshRef.current;
+    const locator = now.selectorText.trim();
+    if (now.selectorSource !== 'live' || !now.connected || !locator) return;
+    if (evaluationPendingRef.current || !now.evaluation) return;
+    sendEvaluation(locator);
+  }, [liveRevision, sendEvaluation]);
 
   // Refresh the live hierarchy every second while it's in use: during a pick
   // session (hover hit-testing must track a changing screen) and while the
@@ -1504,8 +1539,11 @@ function App() {
     prevMirrorRef.current = key;
     clearPendingMirrorPick();
     setLiveHierarchyXml(null);
+    setLiveRevision(null);
     setMirrorHoverBounds(null);
-  }, [mirrorWorkerId, mirrorDeviceIndex, clearPendingMirrorPick]);
+    // The previous device's pick and matches mean nothing on this one.
+    resetLivePick();
+  }, [mirrorWorkerId, mirrorDeviceIndex, clearPendingMirrorPick, resetLivePick]);
 
   // A disconnect or a dead mirrored worker ends the pick session — there is
   // no device to fetch a fresh hierarchy from.
@@ -2011,11 +2049,11 @@ function App() {
               hierarchyXml={selectorSource === 'live' ? (liveHierarchyXml ?? undefined) : currentHierarchyXml}
               pickedNode={pickedNode}
               selector={selectorText}
-              onSelectorChange={setSelectorText}
+              onSelectorChange={handleLocatorInput}
               source={selectorSource}
               onSourceChange={handleSelectorSourceChange}
               liveSourceAvailable={connected}
-              live={liveAnswers}
+              live={pickedNode && pickedNode === livePickedNode ? liveAnswers : { ...liveAnswers, suggestions: null }}
             />
           }
         />

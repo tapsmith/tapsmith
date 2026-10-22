@@ -9,6 +9,7 @@
  */
 
 import type { TapsmithGrpcClient } from '../grpc-client.js';
+import type { WebViewHandle } from '../webview-handle.js';
 import type { Bounds, HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
 import { agentValidatedSuggestions } from '../mcp/agent-suggestions.js';
@@ -37,6 +38,8 @@ export async function evaluateLiveLocator(
   client: TapsmithGrpcClient,
   serial: string | undefined,
   locator: string,
+  /** The WebView connection UI mode already holds to this device, if any. */
+  webview?: () => Promise<WebViewHandle>,
 ): Promise<LiveLocatorEvaluation> {
   try {
     const device = await sdkDeviceFor(client, serial);
@@ -52,7 +55,7 @@ export async function evaluateLiveLocator(
         positional,
         bounds: matches.flatMap((m) => (m.bounds ? [m.bounds] : [])),
       };
-    });
+    }, { webview });
   } catch (err) {
     return { bounds: [], error: err instanceof Error ? err.message : String(err) };
   }
@@ -74,21 +77,84 @@ export async function suggestLiveLocators(
   client: TapsmithGrpcClient,
   serial: string | undefined,
   node: HierarchyNode,
-  options: { ios: boolean },
+  options: { ios: boolean; webview?: () => Promise<WebViewHandle> },
 ): Promise<LiveLocatorSuggestions> {
   if (node.attributes.get('webview') === 'true') {
     const suggestions: LiveLocatorSuggestions['suggestions'] = [];
     let note: string | undefined;
     for (const candidate of generateSelectors(node).filter((s) => s.code.startsWith('webview.'))) {
-      const result = await evaluateLiveLocator(client, serial, candidate.code);
+      const result = await evaluateLiveLocator(client, serial, candidate.code, options.webview);
       if (result.error) { note = result.error; break; }
       if (result.count === 1) suggestions.push({ code: candidate.code, label: candidate.label });
+    }
+    if (!note && suggestions.length === 0) {
+      note = 'None of the page\'s locators finds only this element. Write one that does, or add .nth(i) to pick it by position.';
     }
     return { suggestions, note };
   }
   const checked = await agentValidatedSuggestions(client, [node], options.ios ? { chunkSize: IOS_CHUNK_SIZE } : {});
   const suggestions = (checked.byNode.get(node) ?? []).map((s) => ({ code: s.code, label: s.label }));
   const note = checked.errorMessage
-    ?? (checked.notFound > 0 ? 'The element was no longer on screen when the device checked; pick it again.' : undefined);
+    ?? (checked.notFound > 0 ? 'The element was no longer on screen when the device checked; pick it again.' : undefined)
+    ?? (suggestions.length === 0 ? 'No locator the device checked finds only this element; pick it again, or write one.' : undefined);
   return { suggestions, note };
+}
+
+/**
+ * The last few live hierarchy captures per device, so a pick made on one
+ * can still be resolved after newer captures arrived (PILOT-848).
+ */
+export class LiveHierarchyCache {
+  private readonly byDevice = new Map<string, Array<{ revision: number; xml: string }>>();
+  private revision = 0;
+
+  constructor(private readonly kept = 5) {}
+
+  /** Remember a capture of a device; returns its revision. */
+  remember(workerId: number, deviceIndex: number, xml: string): number {
+    const key = `${workerId}:${deviceIndex}`;
+    const revision = ++this.revision;
+    this.byDevice.set(key, [...(this.byDevice.get(key) ?? []), { revision, xml }].slice(-this.kept));
+    return revision;
+  }
+
+  /** The capture of that device with that revision, if still kept. */
+  at(workerId: number, deviceIndex: number, revision: number): string | undefined {
+    return this.byDevice.get(`${workerId}:${deviceIndex}`)?.find((h) => h.revision === revision)?.xml;
+  }
+
+  /** Forget a worker's captures (it retired; its id may be reused by another device). */
+  forgetWorker(workerId: number): void {
+    for (const key of [...this.byDevice.keys()]) {
+      if (key.startsWith(`${workerId}:`)) this.byDevice.delete(key);
+    }
+  }
+}
+
+/**
+ * Runs one evaluation per device at a time and, while one runs, keeps only
+ * the newest waiting request: the client re-asks with each screen refresh,
+ * and evaluations it has already superseded must not queue up on the device.
+ */
+export class LatestOnlyRunner<R> {
+  private readonly running = new Set<string>();
+  private readonly waiting = new Map<string, { job: () => Promise<R>; done: (result: R) => void }>();
+
+  run(key: string, job: () => Promise<R>, done: (result: R) => void): void {
+    if (this.running.has(key)) {
+      // A newer request replaces one that was still waiting; its reply is
+      // never sent, and the client has moved on from it.
+      this.waiting.set(key, { job, done });
+      return;
+    }
+    this.running.add(key);
+    void job().then(done, () => {}).finally(() => {
+      this.running.delete(key);
+      const next = this.waiting.get(key);
+      if (next) {
+        this.waiting.delete(key);
+        this.run(key, next.job, next.done);
+      }
+    });
+  }
 }

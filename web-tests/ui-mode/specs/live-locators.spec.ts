@@ -87,4 +87,63 @@ test.describe("Live locators come from the device", () => {
     await expect(locator.error).toContainText("`.tap()` is an action")
     await expect(locator.matchCount).toHaveText("")
   })
+
+  /** Live-pick an element so the Locator tab is bound to the device. */
+  async function livePick(ui: Parameters<Parameters<typeof test>[2]>[0]["app"], device: Parameters<Parameters<typeof test>[2]>[0]["device"]) {
+    ui.sendFrame(screenFrame(240, 500))
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({ type: "hierarchy-update", xml: HIERARCHY, revision: 1, workerId: 0, deviceIndex: 0 })
+    await device.tapMirrorAt(0.5, 0.5)
+    return ui.waitForMessage("suggest-locators")
+  }
+
+  test("an answer to a locator that was already edited is never shown, even before the new question goes out", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    await livePick(ui, device)
+    await detailTabs.select("Locator")
+    ui.clearReceived()
+    await locator.type('device.getByText("Sa")')
+    const old = await ui.waitForMessage("evaluate-locator")
+    // Edit, and let the old answer land inside the debounce, before the new
+    // evaluate-locator is sent.
+    await locator.type('device.getByText("Save")')
+    ui.send({ type: "locator-evaluation", requestId: old.requestId, count: 9, positional: false, bounds: [] })
+    await expect(locator.matchCount).toHaveText("Checking…")
+  })
+
+  test("typing while a pick's locators are on their way keeps what was typed", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    const ask = await livePick(ui, device)
+    await detailTabs.select("Locator")
+    await locator.type('device.getByTestId("mine")')
+    ui.send({
+      type: "locator-suggestions",
+      requestId: ask.requestId,
+      suggestions: [{ code: 'device.getByText("Save")', label: "Text" }],
+    })
+    await expect(locator.optionCodes).toHaveText(['device.getByText("Save")'])
+    await expect(locator.input).toHaveValue('device.getByTestId("mine")')
+  })
+
+  test("a screen refresh does not re-ask while the last question is unanswered", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    await livePick(ui, device)
+    await detailTabs.select("Locator")
+    ui.clearReceived()
+    await locator.type('device.getByText("Save")')
+    const first = await ui.waitForMessage("evaluate-locator")
+    ui.send({ type: "hierarchy-update", xml: HIERARCHY, revision: 2, workerId: 0, deviceIndex: 0 })
+    ui.send({ type: "hierarchy-update", xml: HIERARCHY, revision: 3, workerId: 0, deviceIndex: 0 })
+    await page.waitForTimeout(500)
+    expect(ui.messagesOfType("evaluate-locator").map((m) => m.requestId)).toEqual([first.requestId])
+    // Answered: the next refresh asks again.
+    ui.send({ type: "locator-evaluation", requestId: first.requestId, count: 1, total: 1, positional: false, bounds: [] })
+    await expect(locator.matchCount).toHaveText("1 match")
+    ui.send({ type: "hierarchy-update", xml: HIERARCHY, revision: 4, workerId: 0, deviceIndex: 0 })
+    await expect.poll(() => ui.messagesOfType("evaluate-locator").length).toBe(2)
+  })
 })
