@@ -70,13 +70,13 @@ export async function withEvaluatedLocator<T>(
   let webviewDevice: Device | undefined;
   const webview = async (): Promise<WebViewHandle> => {
     const { packageName } = await client.getCurrentPackage();
-    // Without the current package an Android WebView could be any app's
-    // (Chrome, another debug app). iOS finds the app's page itself.
-    if (!packageName && device.platform === 'android') {
-      throw new Error('Could not tell which app is in the foreground, so its WebView could not be found. Try again once the app is showing.');
+    // Without the current app a WebView could be any app's (Chrome, Safari,
+    // another debug app): both platforms fall back to the first one found.
+    if (!packageName) {
+      throw new Error('Could not tell which app is current, so its WebView could not be found. Set the app in the config, or try again once it is showing.');
     }
     webviewDevice = new Device(client, { platform: device.platform, simulator: simulators.get(device), timeout: WEBVIEW_CONNECT_TIMEOUT_MS });
-    const handle = await webviewDevice.webview(packageName || undefined);
+    const handle = await webviewDevice.webview(packageName);
     // The connect had its own budget; waits on the page get the action one.
     handle._setTimeoutMs(MCP_ACTION_TIMEOUT_MS);
     return handle;

@@ -79,6 +79,7 @@ interface FakeDaemon {
   clearText: ReturnType<typeof vi.fn>
   clearAndType: ReturnType<typeof vi.fn>
   getCurrentPackage: ReturnType<typeof vi.fn>
+  listDevices: ReturnType<typeof vi.fn>
   swipe: ReturnType<typeof vi.fn>
   pressKey: ReturnType<typeof vi.fn>
   launchApp: ReturnType<typeof vi.fn>
@@ -666,6 +667,17 @@ describe('webview.* locators in the action tools', () => {
     expect(daemon.tap).not.toHaveBeenCalled();
   });
 
+  it('connects an iOS WebView through the listed simulator', async () => {
+    const daemon = makeDaemon();
+    daemon.listDevices = vi.fn(async () => ({ requestId: '1', unusable: [], devices: [{ serial: 'SIM-1', model: '', state: 'Booted', isEmulator: true, platform: 'ios', osVersion: '' }] }));
+    hoisted.client = daemon.client;
+    const { webview } = fakePage();
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    const connectingDevice = webview.mock.contexts[0] as unknown as { _platform: string; _simulatorUdid?: string };
+    expect(connectingDevice._platform).toBe('ios');
+    expect(connectingDevice._simulatorUdid).toBe('SIM-1');
+  });
+
   it('connects a WebView for the call only, with its own connect budget, and closes it after', async () => {
     // A session the MCP server kept open would wedge a test connecting to the
     // same page (PILOT-288), and could outlive the app it was opened on.
@@ -708,14 +720,16 @@ describe('webview.* locators in the action tools', () => {
     expect(result.strictModeWarning).toBeDefined();
   });
 
-  it('refuses to guess an Android WebView when the foreground app is unknown', async () => {
+  it.each(['android', 'ios'])('refuses to guess a WebView when the current app is unknown (%s)', async (platform) => {
+    // Both platforms fall back to the first WebView found (Chrome, Safari).
     const daemon = makeDaemon();
     daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: '' }));
+    daemon.listDevices = vi.fn(async () => ({ requestId: '1', unusable: [], devices: [{ serial: 'd', model: '', state: 'device', isEmulator: true, platform, osVersion: '' }] }));
     hoisted.client = daemon.client;
     const webview = vi.spyOn(Device.prototype, 'webview');
     const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toContain('foreground');
+    expect(text(res)).toContain('current');
     expect(webview).not.toHaveBeenCalled();
   });
 
