@@ -732,11 +732,15 @@ function App() {
   useEffect(() => {
     setHierarchyHighlight(null);
     setHoverBounds(null);
+    setMirrorHoverBounds(null);
+  }, [selectedIndex]);
+  // Only choosing an action re-binds the tab, not hovering one on the way
+  // past: a live pick still waiting for the device's answer must survive it.
+  useEffect(() => {
     fillFromSuggestionsRef.current = false;
     clearPendingMirrorPick();
     setSelectorSource('trace');
-    setMirrorHoverBounds(null);
-  }, [selectedIndex, clearPendingMirrorPick]);
+  }, [pinnedIndex, clearPendingMirrorPick]);
 
   const handleMessage = useCallback((msg: ServerMessage) => {
     switch (msg.type) {
@@ -1431,7 +1435,7 @@ function App() {
       fillFromSuggestionsRef.current = true;
       const requestId = ++suggestRequestRef.current;
       setLiveAnswers((prev) => ({ ...prev, suggestions: { suggestions: [], pending: true } }));
-      send({ type: 'suggest-locators', requestId, revision: liveRevision, path, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
+      send({ type: 'suggest-locators', requestId, clientId: clientIdRef.current, revision: liveRevision, path, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
     }
   }, [liveRoots, liveRevision, mirrorWorkerId, mirrorDeviceIndex, send]);
   // Latest finalizer for the deadline timer (finalizeMirrorPick's identity

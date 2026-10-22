@@ -93,7 +93,12 @@ export async function suggestLiveLocators(
   client: TapsmithGrpcClient,
   serial: string | undefined,
   node: HierarchyNode,
-  options: { ios: boolean; webview?: () => Promise<WebViewHandle> },
+  options: {
+    ios: boolean
+    webview?: () => Promise<WebViewHandle>
+    /** True once a newer pick replaced this one: stop between candidates. */
+    superseded?: () => boolean
+  },
 ): Promise<LiveLocatorSuggestions> {
   if (node.attributes.get('webview') === 'true') {
     const suggestions: LiveLocatorSuggestions['suggestions'] = [];
@@ -101,14 +106,18 @@ export async function suggestLiveLocators(
     // Where no candidate finds only this element, a position among a
     // candidate's matches still does (as a native pick's variants do).
     const positional: LiveLocatorSuggestions['suggestions'] = [];
+    const pickedPlace = getNodeBounds(node);
     for (const candidate of generateSelectors(node).filter((s) => s.code.startsWith('webview.'))) {
+      if (options.superseded?.()) break;
       const result = await webViewMatchesOf(client, serial, candidate.code, options.webview);
       if (result.error) { note = result.error; break; }
       const index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
       if (index < 0) continue;
       if (result.count === 1) {
         suggestions.push({ code: candidate.code, label: candidate.label });
-      } else {
+      } else if (pickedPlace && result.matches[index].bounds) {
+        // Only a place tells same-tag matches apart; without one the
+        // position could name another of them.
         positional.push({ code: `${candidate.code}.nth(${index})`, label: `${candidate.label} (position)` });
       }
     }

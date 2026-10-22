@@ -176,6 +176,27 @@ describe('suggestLiveLocators', () => {
     expect(note).toBeUndefined();
   });
 
+  it('offers no position when the WebView\'s place is unknown, since same-tag matches cannot be told apart', async () => {
+    const { page, matches } = fakePage();
+    matches['getByText:Delete'] = [domEl({ tag: 'button' }), domEl({ tag: 'button' }), domEl({ tag: 'button' })];
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    const third = node({ webview: 'true', 'webview-tag': 'button', text: 'Delete', bounds: '[0,200][100,250]' });
+    const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', third, { ios: false });
+    expect(suggestions).toEqual([]);
+    expect(note).toMatch(/finds only this element/);
+  });
+
+  it('stops checking a WebView pick\'s candidates once a newer pick replaced it', async () => {
+    const { page, matches } = fakePage();
+    matches['getByText:Submit'] = [domEl({ tag: 'button' })];
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    let replaced = false;
+    const live = page as unknown as { _liveMatches: ReturnType<typeof vi.fn> };
+    live._liveMatches.mockImplementationOnce(async () => { replaced = true; return { count: 0, total: 0, matches: [] }; });
+    await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false, superseded: () => replaced });
+    expect(live._liveMatches).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a WebView candidate whose one match has the same tag but sits elsewhere', async () => {
     const { page, matches } = fakePage();
     matches['getByText:Total'] = [domEl({ tag: 'div', bounds: B(0, 400, 100, 450) })];

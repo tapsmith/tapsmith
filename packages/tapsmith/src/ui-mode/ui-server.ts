@@ -3778,6 +3778,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   const liveHierarchies = new LiveHierarchyCache();
   /** One live locator evaluation per device at a time; superseded ones never run. */
   const liveEvaluations = new LatestOnlyRunner<LiveLocatorEvaluation>();
+  /** The latest pick per device and tab, by a generation count. */
+  const latestPicks = new Map<string, number>();
 
   /** The device a live locator question is about, resolved as request-hierarchy resolves it. */
   function liveLocatorTarget(workerId: number | undefined, deviceIndex: number | undefined):
@@ -4606,8 +4608,14 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           });
           break;
         }
-        void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType'), webview: target.webview })
-          .then((result) => broadcast({ type: 'locator-suggestions', requestId, ...result }))
+        // A tab's newer pick on this device replaces this one: its check
+        // stops between candidates and its answer is never sent.
+        const pickKey = `${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`;
+        const generation = (latestPicks.get(pickKey) ?? 0) + 1;
+        latestPicks.set(pickKey, generation);
+        const superseded = () => latestPicks.get(pickKey) !== generation;
+        void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType'), webview: target.webview, superseded })
+          .then((result) => { if (!superseded()) broadcast({ type: 'locator-suggestions', requestId, ...result }); })
           .catch((err) => broadcast({
             type: 'locator-suggestions', requestId, suggestions: [],
             note: err instanceof Error ? err.message : String(err),

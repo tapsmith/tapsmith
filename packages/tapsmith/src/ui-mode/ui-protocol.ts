@@ -644,6 +644,8 @@ export interface SuggestLocatorsCommand {
   revision: number
   /** Child indices from the hierarchy's roots to the picked node. */
   path: number[]
+  /** The asking tab: its newer pick on the same device stops this one's check. */
+  clientId?: string
   workerId?: number
   deviceIndex?: number
 }
