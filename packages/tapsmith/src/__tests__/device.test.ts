@@ -394,6 +394,25 @@ describe('Device.webview()', () => {
     expect((forwardWebViewPort.mock.calls[0] as unknown[])[0]).toBe('webview_devtools_remote_app');
   });
 
+  it('gives a reused WebView connection the device timeout as it is now', async () => {
+    // A later test's test.use({ timeout }) must reach the cached handle.
+    const listWebViews = vi.fn(async () => ({ requestId: '1', webviews: [{ socketName: 'webview_devtools_remote_app', pid: 222, packageName: 'com.example.app', url: '', title: '' }], errorMessage: '' }));
+    const forwardWebViewPort = vi.fn(async () => ({ requestId: '1', success: true, localPort: 9222, errorMessage: '' }));
+    const connect = vi.spyOn(WebViewHandle.prototype, '_connect').mockResolvedValue(undefined);
+    const alive = vi.spyOn(WebViewHandle.prototype, '_isAlive').mockReturnValue(true);
+    try {
+      const device = new Device(makeMockClient({ listWebViews, forwardWebViewPort }), { timeout: 100, package: 'com.example.app' });
+      await device.webview();
+      (device as unknown as { _setDefaultTimeout(ms: number): void })._setDefaultTimeout(60_000);
+      const handle = await device.webview();
+      expect((handle as unknown as { _timeoutMs: number })._timeoutMs).toBe(60_000);
+      expect(connect).toHaveBeenCalledTimes(1);
+    } finally {
+      connect.mockRestore();
+      alive.mockRestore();
+    }
+  });
+
   it('stops an Android WebView connect at once when the WebViews are disposed mid-connect', async () => {
     // Retrying until the deadline kept opening CDP sessions on a page a
     // test run was connecting to.

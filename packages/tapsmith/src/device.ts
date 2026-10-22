@@ -1554,6 +1554,9 @@ export class Device {
   private async _establishWebView(packageName?: string, log?: string[]): Promise<WebViewHandle> {
     if (this._cachedWebView?._isAlive()) {
       appendWebViewConnectLog(log, 'Reusing cached WebView connection');
+      // The device timeout now, not the one it was connected under: a later
+      // test's test.use({ timeout }) applies to its waits too.
+      this._cachedWebView._setTimeoutMs(this._defaultTimeoutMs);
       this._applyTraceCtx(this._cachedWebView);
       return this._cachedWebView;
     }
