@@ -272,3 +272,28 @@ export function hitTest(roots: HierarchyNode[], x: number, y: number): Hierarchy
   }
   return best;
 }
+
+/** The node reached by `path` (child indices from the roots), if it exists. */
+export function nodeAtPath(roots: HierarchyNode[], path: number[]): HierarchyNode | undefined {
+  let nodes = roots;
+  let node: HierarchyNode | undefined;
+  for (const index of path) {
+    node = nodes[index];
+    if (!node) return undefined;
+    nodes = node.children;
+  }
+  return node;
+}
+
+/** Child indices from the roots to `target`, or undefined if it is not in the tree. */
+export function pathToNode(roots: HierarchyNode[], target: HierarchyNode): number[] | undefined {
+  const walk = (nodes: HierarchyNode[], prefix: number[]): number[] | undefined => {
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodes[i] === target) return [...prefix, i];
+      const found = walk(nodes[i].children, [...prefix, i]);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return walk(roots, []);
+}

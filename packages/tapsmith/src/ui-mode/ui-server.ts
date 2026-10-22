@@ -80,6 +80,8 @@ import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, 
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
 import { beginTestRun, endTestRun } from '../mcp/sdk-device.js';
+import { evaluateLiveLocator, suggestLiveLocators } from './live-locators.js';
+import { nodeAtPath, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import {
   forkStdioForLaunchProgress,
   pipeForkOutputForLaunchProgress,
@@ -3762,6 +3764,37 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     ];
   }
 
+  // ─── Live locators (PILOT-848) ───
+
+  /** Recent live hierarchy captures per device, so a pick can name the one it was made on. */
+  const liveHierarchies = new Map<string, Array<{ revision: number; xml: string }>>();
+  let liveHierarchyRevision = 0;
+  const LIVE_HIERARCHIES_KEPT = 5;
+
+  function rememberLiveHierarchy(workerId: number, deviceIndex: number, xml: string): number {
+    const key = `${workerId}:${deviceIndex}`;
+    const revision = ++liveHierarchyRevision;
+    const kept = [...(liveHierarchies.get(key) ?? []), { revision, xml }].slice(-LIVE_HIERARCHIES_KEPT);
+    liveHierarchies.set(key, kept);
+    return revision;
+  }
+
+  function liveHierarchyAt(workerId: number, deviceIndex: number, revision: number): string | undefined {
+    return liveHierarchies.get(`${workerId}:${deviceIndex}`)?.find((h) => h.revision === revision)?.xml;
+  }
+
+  /** The device a live locator question is about, resolved as request-hierarchy resolves it. */
+  function liveLocatorTarget(workerId: number | undefined, deviceIndex: number | undefined):
+    { workerId: number; deviceIndex: number; client: TapsmithGrpcClient; serial: string | undefined } | undefined {
+    const id = workerId ?? selectedWorkerId;
+    const index = deviceIndex ?? (id === selectedWorkerId ? selectedDeviceIndex : 0);
+    const worker = uiWorkers.find((w) => w.id === id && !w.retired);
+    const client = worker ? deviceClientOf(worker, index) : undefined;
+    if (!worker || !client) return undefined;
+    const serial = index <= 0 ? worker.deviceSerial : worker.members[index - 1]?.deviceSerial;
+    return { workerId: id, deviceIndex: index, client, serial };
+  }
+
   /** The gRPC client driving device `deviceIndex` of a worker's group (0 = primary). */
   function deviceClientOf(worker: UIWorkerHandle, deviceIndex: number): TapsmithGrpcClient | undefined {
     if (deviceIndex <= 0) return worker.screenClient;
@@ -4521,8 +4554,40 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               xml = xml.slice(0, lastClose) + webviewDom + '\n' + xml.slice(lastClose);
             }
           }
-          broadcast({ type: 'hierarchy-update', xml, workerId: hierWorkerId, deviceIndex: hierDeviceIndex });
+          const revision = rememberLiveHierarchy(hierWorkerId, hierDeviceIndex, xml);
+          broadcast({ type: 'hierarchy-update', xml, revision, workerId: hierWorkerId, deviceIndex: hierDeviceIndex });
         }).catch(() => {});
+        break;
+      }
+      case 'evaluate-locator': {
+        const target = liveLocatorTarget(msg.workerId, msg.deviceIndex);
+        const requestId = msg.requestId;
+        if (!target) {
+          broadcast({ type: 'locator-evaluation', requestId, bounds: [], error: 'No live device to check the locator on.' });
+          break;
+        }
+        void evaluateLiveLocator(target.client, target.serial, msg.locator)
+          .then((result) => broadcast({ type: 'locator-evaluation', requestId, ...result }));
+        break;
+      }
+      case 'suggest-locators': {
+        const target = liveLocatorTarget(msg.workerId, msg.deviceIndex);
+        const requestId = msg.requestId;
+        const xml = target ? liveHierarchyAt(target.workerId, target.deviceIndex, msg.revision) : undefined;
+        const node = xml ? nodeAtPath(parseHierarchyXml(xml), msg.path) : undefined;
+        if (!target || !node) {
+          broadcast({
+            type: 'locator-suggestions', requestId, suggestions: [],
+            note: target ? 'The screen has changed since that pick; pick the element again.' : 'No live device to check locators on.',
+          });
+          break;
+        }
+        void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType') })
+          .then((result) => broadcast({ type: 'locator-suggestions', requestId, ...result }))
+          .catch((err) => broadcast({
+            type: 'locator-suggestions', requestId, suggestions: [],
+            note: err instanceof Error ? err.message : String(err),
+          }));
         break;
       }
       case 'request-source':

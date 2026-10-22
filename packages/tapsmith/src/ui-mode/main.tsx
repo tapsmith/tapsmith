@@ -43,8 +43,8 @@ import { ScreenshotPanel } from '../trace-viewer/components/ScreenshotPanel.js';
 import { DetailTabs } from '../trace-viewer/components/DetailTabs.js';
 import { findTestDeclarationLine, findSuiteDeclarationLine } from '../trace-viewer/components/source-view-utils.js';
 import { TimelineFilmstrip } from '../trace-viewer/components/TimelineFilmstrip.js';
-import { LocatorTab, computeSelectorHighlights, handlePickFromScreenshot, handleHoverFromScreenshot, isWebViewOverlayPending } from '../trace-viewer/components/LocatorPlayground.js';
-import { parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
+import { LocatorTab, computeSelectorHighlights, handlePickFromScreenshot, handleHoverFromScreenshot, isWebViewOverlayPending, pickNodeAt, type LiveLocatorAnswers } from '../trace-viewer/components/LocatorPlayground.js';
+import { parseHierarchyXml, pathToNode } from '../trace-viewer/components/hierarchy-utils.js';
 import type { HierarchyNode, Bounds } from '../trace-viewer/components/hierarchy-utils.js';
 import { uiModeStyles } from './styles/ui-mode.css.js';
 import type { ContainerSummary } from '../trace-viewer/types.js';
@@ -202,6 +202,16 @@ function App() {
   // live-bound with a selector (see liveHierarchyInUse below).
   const [liveHierarchyXml, setLiveHierarchyXml] = useState<string | null>(null);
   const [mirrorHoverBounds, setMirrorHoverBounds] = useState<Bounds | null>(null);
+  // Live-source answers come from the device (PILOT-848): the server
+  // evaluates the locator and checks the pick's suggestions with the agent.
+  // Replies are broadcast, so each carries the request id it answers and only
+  // the latest request's reply is kept.
+  const [liveRevision, setLiveRevision] = useState<number | null>(null);
+  const [liveAnswers, setLiveAnswers] = useState<LiveLocatorAnswers>({ evaluation: null, suggestions: null });
+  const evaluateRequestRef = useRef(0);
+  const suggestRequestRef = useRef(0);
+  // Set by a live pick: the first suggestion that comes back fills the locator.
+  const fillFromSuggestionsRef = useRef(false);
 
   // Device pane state
   const [selectedWorkerId, setSelectedWorkerId] = useState(0);
@@ -641,9 +651,12 @@ function App() {
   // Match overlay bounds, derived from whichever hierarchy the Locator tab is
   // bound to. Derived rather than pushed up from LocatorTab so it stays
   // consistent with the tree even when the Locator tab isn't mounted.
+  // Live: the bounds the device matched; trace: the recorded hierarchy's.
   const selectorHighlights = useMemo(
-    () => computeSelectorHighlights(selectorSource === 'live' ? liveRoots : currentRoots, selectorText),
-    [selectorSource, liveRoots, currentRoots, selectorText],
+    () => (selectorSource === 'live'
+      ? (selectorText.trim() ? liveAnswers.evaluation?.bounds ?? [] : [])
+      : computeSelectorHighlights(currentRoots, selectorText)),
+    [selectorSource, liveAnswers, currentRoots, selectorText],
   );
 
   const handleScreenshotClick = useCallback((point: { x: number; y: number }) => {
@@ -1234,6 +1247,21 @@ function App() {
         if ((msg.workerId == null || msg.workerId === mirrorWorkerIdRef.current)
           && (msg.deviceIndex ?? 0) === mirrorDeviceIndexRef.current) {
           setLiveHierarchyXml(msg.xml);
+          setLiveRevision(msg.revision ?? null);
+        }
+        break;
+      case 'locator-evaluation':
+        if (msg.requestId === evaluateRequestRef.current) {
+          setLiveAnswers((prev) => ({ ...prev, evaluation: msg }));
+        }
+        break;
+      case 'locator-suggestions':
+        if (msg.requestId === suggestRequestRef.current) {
+          setLiveAnswers((prev) => ({ ...prev, suggestions: { suggestions: msg.suggestions, note: msg.note, pending: false } }));
+          if (fillFromSuggestionsRef.current) {
+            fillFromSuggestionsRef.current = false;
+            if (msg.suggestions[0]) setSelectorText(msg.suggestions[0].code);
+          }
         }
         break;
       case 'error':
@@ -1358,16 +1386,22 @@ function App() {
   }, [liveRoots]);
 
   const finalizeMirrorPick = useCallback((point: { x: number; y: number }) => {
-    const result = handlePickFromScreenshot(liveRoots, point.x, point.y);
-    if (result) {
-      setSelectorText(result.selector);
+    const result = pickNodeAt(liveRoots, point.x, point.y);
+    const path = result ? pathToNode(liveRoots, result.node) : undefined;
+    if (result && path && liveRevision !== null) {
       setPickedNode(result.node);
       setPickTarget(null);
       setMirrorHoverBounds(null);
-      // selectorSource stays 'live': the panel keeps matching against the
-      // live hierarchy and highlights render on the mirror.
+      // The device decides which locators find this element (PILOT-848);
+      // the first one it confirms fills the locator.
+      setSelectorText('');
+      fillFromSuggestionsRef.current = true;
+      const requestId = ++suggestRequestRef.current;
+      setLiveAnswers((prev) => ({ ...prev, suggestions: { suggestions: [], pending: true } }));
+      send({ type: 'suggest-locators', requestId, revision: liveRevision, path, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
+      // selectorSource stays 'live': highlights render on the mirror.
     }
-  }, [liveRoots]);
+  }, [liveRoots, liveRevision, mirrorWorkerId, mirrorDeviceIndex, send]);
   // Latest finalizer for the deadline timer (finalizeMirrorPick's identity
   // changes with every live snapshot).
   const finalizeMirrorPickRef = useRef(finalizeMirrorPick);
@@ -1419,6 +1453,29 @@ function App() {
       send({ type: 'request-hierarchy', workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
     }
   }, [liveHierarchyXml, mirrorWorkerId, mirrorDeviceIndex, send]);
+
+  // Ask the device what the locator matches (PILOT-848): shortly after typing
+  // stops, and again with each live hierarchy refresh so counts and
+  // highlights follow the screen.
+  useEffect(() => {
+    if (selectorSource !== 'live') return;
+    const locator = selectorText.trim();
+    if (!locator || !connected) {
+      evaluateRequestRef.current++;
+      setLiveAnswers((prev) => (prev.evaluation ? { ...prev, evaluation: null } : prev));
+      return;
+    }
+    const timer = setTimeout(() => {
+      const requestId = ++evaluateRequestRef.current;
+      send({ type: 'evaluate-locator', requestId, locator, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
+    }, 250);
+    return () => clearTimeout(timer);
+  }, [selectorSource, selectorText, liveRevision, connected, mirrorWorkerId, mirrorDeviceIndex, send]);
+
+  // A new locator's count is unknown until the device answers.
+  useEffect(() => {
+    setLiveAnswers((prev) => (prev.evaluation ? { ...prev, evaluation: null } : prev));
+  }, [selectorText]);
 
   // Refresh the live hierarchy every second while it's in use: during a pick
   // session (hover hit-testing must track a changing screen) and while the
@@ -1958,6 +2015,7 @@ function App() {
               source={selectorSource}
               onSourceChange={handleSelectorSourceChange}
               liveSourceAvailable={connected}
+              live={liveAnswers}
             />
           }
         />

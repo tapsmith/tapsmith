@@ -287,11 +287,52 @@ export interface TraceEventMessage {
 export interface HierarchyUpdateMessage {
   type: 'hierarchy-update'
   xml: string
+  /** Identifies this capture, so a pick on it can be resolved by the server
+   * (`suggest-locators`) even after a newer capture arrived. */
+  revision?: number
   /** Worker the hierarchy was captured from (0 in single-worker mode) so
    * clients can discard updates for a device they're no longer mirroring. */
   workerId?: number
   /** Which device of the worker's group (0 = primary). */
   deviceIndex?: number
+}
+
+/** Device-pixel (Android) or point (iOS) rectangle, as the hierarchy reports it. */
+export interface LocatorBounds {
+  left: number
+  top: number
+  right: number
+  bottom: number
+}
+
+/**
+ * What a live Locator tab locator matches on the device (PILOT-848), in
+ * answer to `evaluate-locator`. Broadcast; clients keep only the reply to
+ * their latest request.
+ */
+export interface LocatorEvaluationMessage {
+  type: 'locator-evaluation'
+  requestId: number
+  /** Matches now (after any position); absent with `error`. */
+  count?: number
+  /** Matches before a position picked one. */
+  total?: number
+  /** A position (.first()/.nth()/.last()) narrowed the matches. */
+  positional?: boolean
+  /** Where the matches are (native locators only). */
+  bounds: LocatorBounds[]
+  /** A webview.* locator, counted in the page (no bounds). */
+  webview?: boolean
+  error?: string
+}
+
+/** Locators the device resolves to exactly a picked element, in answer to `suggest-locators`. */
+export interface LocatorSuggestionsMessage {
+  type: 'locator-suggestions'
+  requestId: number
+  suggestions: Array<{ code: string; label: string }>
+  /** Why the list is short or empty, when there is a reason. */
+  note?: string
 }
 
 export interface WatchEventMessage {
@@ -483,6 +524,8 @@ export type ServerMessage =
   | FileStatusMessage
   | TraceEventMessage
   | HierarchyUpdateMessage
+  | LocatorEvaluationMessage
+  | LocatorSuggestionsMessage
   | WatchEventMessage
   | WorkerStatusMessage
   | WorkersInfoMessage
@@ -577,6 +620,29 @@ export interface RequestHierarchyCommand {
   /** Target worker (multi-worker mode). Defaults to the selected worker. */
   workerId?: number
   /** Which device of the worker's group (0 = primary). */
+  deviceIndex?: number
+}
+
+/** Evaluate a Locator tab locator on the live device (PILOT-848). */
+export interface EvaluateLocatorCommand {
+  type: 'evaluate-locator'
+  /** Echoed in the `locator-evaluation` reply. */
+  requestId: number
+  locator: string
+  workerId?: number
+  deviceIndex?: number
+}
+
+/** Suggest locators for an element picked on the live hierarchy (PILOT-848). */
+export interface SuggestLocatorsCommand {
+  type: 'suggest-locators'
+  /** Echoed in the `locator-suggestions` reply. */
+  requestId: number
+  /** The `hierarchy-update` revision the pick was made on. */
+  revision: number
+  /** Child indices from the hierarchy's roots to the picked node. */
+  path: number[]
+  workerId?: number
   deviceIndex?: number
 }
 
@@ -756,6 +822,8 @@ export type ClientMessage =
   | StopRunCommand
   | ToggleWatchCommand
   | RequestHierarchyCommand
+  | EvaluateLocatorCommand
+  | SuggestLocatorsCommand
   | RequestSourceCommand
   | MirrorTapCommand
   | MirrorLongPressCommand
