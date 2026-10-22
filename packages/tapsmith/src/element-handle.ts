@@ -804,21 +804,18 @@ export class ElementHandle {
     return this._scoped(locatorOptionsToSelector(options));
   }
 
-  /** @internal */
+  /**
+   * @internal — A child scoped to this handle: the parent is resolved to its
+   * concrete element(s) and only children contained within them are kept
+   * (Playwright-style subtree scoping, by geometry). Every parent goes this
+   * way, modified or not: the agents scope a find only by a resolved element,
+   * never by a nested parent selector, so a plain parent sent as one was
+   * silently ignored and the child matched across the whole screen
+   * (PILOT-850).
+   */
   private _scoped(child: Selector): ElementHandle {
-    if (this._hasModifiers()) {
-      // The parent carries modifiers (.first(), .filter(), .and(), or a prior
-      // scope) that can't be expressed as a nested Selector. Defer to runtime
-      // geometric scoping: resolve the parent to concrete element(s), then keep
-      // only children contained within them (Playwright-style subtree scoping).
-      return new ElementHandle(this._client, child, this._timeoutMs, {
-        scopeParent: this,
-        traceCapture: this._options.traceCapture,
-        platform: this._options.platform,
-      });
-    }
-    const scoped = withParent(child, this._selector);
-    return new ElementHandle(this._client, scoped, this._timeoutMs, {
+    return new ElementHandle(this._client, child, this._timeoutMs, {
+      scopeParent: this,
       traceCapture: this._options.traceCapture,
       platform: this._options.platform,
     });
@@ -1305,7 +1302,9 @@ export class ElementHandle {
       if (this._options.filters?.length) desc += `.filter(…×${this._options.filters.length})`;
       return desc + this._describePostIndex();
     }
-    let desc = this._options.scopeParent ? `${this._options.scopeParent._describe()} >> ${sel}` : sel;
+    // A scoped child reads as the chain that built it, e.g.
+    // getByRole("list").first().getByText("Row") — copy-pasteable code.
+    let desc = this._options.scopeParent ? `${this._options.scopeParent._describe()}.${sel}` : sel;
     if (this._options.filters?.length) desc += `.filter(…×${this._options.filters.length})`;
     return desc + this._describePostIndex();
   }

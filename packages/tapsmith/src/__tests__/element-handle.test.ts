@@ -119,39 +119,36 @@ describe('ElementHandle constructor', () => {
 // ─── getBy* scoping ───
 
 describe('getBy* scoping', () => {
-  it('creates a child handle with nested selector', () => {
+  it('creates a child handle scoped to its parent handle', () => {
     const client = makeMockClient();
     const parent = new ElementHandle(client, _role('list'), 5000);
 
     const child = parent.getByText('Item 1', { exact: true });
     expect(child._selector.kind.type).toBe('text');
-    expect(child._selector.parent).toBeDefined();
-    expect(child._selector.parent!.kind.type).toBe('role');
-  });
-
-  it('scoped selector serializes with parent', () => {
-    const client = makeMockClient();
-    const parent = new ElementHandle(
-      client,
-      _className('android.widget.ListView'),
-      5000,
-    );
-
-    const child = parent.getByText('Row', { exact: true });
-    expect(selectorToProto(child._selector)).toEqual({
-      text: 'Row',
-      parent: { className: 'android.widget.ListView' },
-    });
+    expect(child._selector.parent).toBeUndefined();
+    expect((child as unknown as { _options: { scopeParent?: ElementHandle } })._options.scopeParent).toBe(parent);
   });
 
   it('substring getByText (default) builds a textContains child', () => {
     const client = makeMockClient();
     const parent = new ElementHandle(client, _role('list'), 5000);
     const child = parent.getByText('partial');
-    expect(selectorToProto(child._selector)).toEqual({
-      textContains: 'partial',
-      parent: { role: { role: 'list', name: '' } },
-    });
+    expect(selectorToProto(child._selector)).toEqual({ textContains: 'partial' });
+  });
+
+  it('scopes a plain parent\'s child to the parent, not the whole screen (PILOT-850)', async () => {
+    // Agents never read a nested `parent` selector, so the parent must be
+    // resolved by the SDK, as a modified parent is.
+    const list = makeElementInfo({ elementId: 'list', role: 'list', bounds: { left: 0, top: 0, right: 400, bottom: 500 } });
+    const inside = makeElementInfo({ elementId: 'in', text: 'Row', bounds: { left: 0, top: 100, right: 400, bottom: 150 } });
+    const outside = makeElementInfo({ elementId: 'out', text: 'Row', bounds: { left: 0, top: 700, right: 400, bottom: 750 } });
+    const findElements = vi.fn(async (selector: Selector) =>
+      makeFindElementsResponse(selector.kind.type === 'role' ? [list] : [inside, outside]));
+    const child = new ElementHandle(makeMockClient({ findElements }), _role('list'), 5000).getByText('Row');
+    expect(await child.count()).toBe(1);
+    expect((await child.find()).elementId).toBe('in');
+    // The agent is never asked for a selector it would scope wrongly.
+    for (const [sel] of findElements.mock.calls) expect((sel as Selector).parent).toBeUndefined();
   });
 
   it('preserves client and timeout in child handle', () => {
@@ -173,9 +170,10 @@ describe('getBy* scoping', () => {
     const mid = root.getByRole('list');
     const leaf = mid.getByText('Label', { exact: true });
 
-    expect(leaf._selector.parent).toBeDefined();
-    expect(leaf._selector.parent!.parent).toBeDefined();
-    expect(leaf._selector.parent!.parent!.kind.type).toBe('role');
+    type Scoped = { _options: { scopeParent?: ElementHandle } };
+    expect((leaf as unknown as Scoped)._options.scopeParent).toBe(mid);
+    expect((mid as unknown as Scoped)._options.scopeParent).toBe(root);
+    expect(leaf._selector.parent).toBeUndefined();
   });
 
   it('getByDescription, getByPlaceholder, getByTestId, locator scope correctly', () => {
@@ -198,7 +196,7 @@ describe('getBy* scoping', () => {
       type: 'id',
       value: 'foo',
     });
-    expect(parent.locator({ id: 'foo' })._selector.parent).toBeDefined();
+    expect((parent.locator({ id: 'foo' }) as unknown as { _options: { scopeParent?: ElementHandle } })._options.scopeParent).toBe(parent);
   });
 
   describe('scoping off a modified handle (geometric containment)', () => {

@@ -804,7 +804,7 @@ An `ElementHandle` is a lazy reference to a UI element. It is returned by every 
 | `getByLabel(text)` | Input element by associated label text within the parent. |
 | `locator(options)` | Native id / xpath / className within the parent. |
 
-Scoping also works after a positional or filtering modifier (`.first()`, `.last()`, `.nth()`, `.filter()`, `.and()`, `.or()`), just like Playwright. When the parent carries such a modifier it is resolved to its concrete element(s) and the child is scoped to them by geometric containment, so the parent must report bounds. A positional parent (`.first()`/`.nth()`) scopes to its single selected element; a filtering parent scopes to every match it resolves to (a child contained in any of them is in scope).
+Scoping also works after a positional or filtering modifier (`.first()`, `.last()`, `.nth()`, `.filter()`, `.and()`, `.or()`), just like Playwright. The parent is resolved to its concrete element(s) and the child is scoped to them by geometric containment: a child is in scope when its bounds lie inside a parent's, so the parent must report bounds. A positional parent (`.first()`/`.nth()`) scopes to its single selected element; a plain or filtering parent scopes to every match it resolves to (a child contained in any of them is in scope).
 
 ```typescript
 const list = device.getByTestId("cart-list"); // e.g. a FlatList with testID="cart-list"
