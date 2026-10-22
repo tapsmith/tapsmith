@@ -4572,6 +4572,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
               xml = xml.slice(0, lastClose) + webviewDom + '\n' + xml.slice(lastClose);
             }
           }
+          // Retired meanwhile: its id may already name another device.
+          if (hierWorker?.retired) return;
           const revision = liveHierarchies.remember(hierWorkerId, hierDeviceIndex, xml);
           broadcast({ type: 'hierarchy-update', xml, revision, workerId: hierWorkerId, deviceIndex: hierDeviceIndex });
         }).catch(() => {});

@@ -182,4 +182,30 @@ test.describe("Live locators come from the device", () => {
     await page.waitForTimeout(300)
     await expect(locator.input).toHaveValue("")
   })
+
+  test("a click waiting for the WebView overlay is dropped on switching to the Trace source", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    const native = `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.webkit.WebView" bounds="[0,0][2000,2000]" />
+</hierarchy>`
+    const withOverlay = native.replace("</hierarchy>",
+      '  <node webview="true" webview-tag="button" text="Go" bounds="[0,0][2000,2000]" />\n</hierarchy>')
+    ui.sendFrame(screenFrame(240, 500))
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({ type: "hierarchy-update", xml: native, revision: 1, workerId: 0, deviceIndex: 0 })
+    ui.clearReceived()
+    // On web content with no overlay yet: the click waits for it.
+    await device.tapMirrorAt(0.5, 0.5)
+    await detailTabs.select("Locator")
+    await locator.sourceToggle.getByRole("button", { name: "Trace" }).click()
+    await locator.type('device.getByText("mine")')
+    // The overlay lands: the dropped click must not resolve now.
+    ui.send({ type: "hierarchy-update", xml: withOverlay, revision: 2, workerId: 0, deviceIndex: 0 })
+    await page.waitForTimeout(500)
+    expect(ui.messagesOfType("suggest-locators")).toEqual([])
+    await expect(locator.input).toHaveValue('device.getByText("mine")')
+  })
 })

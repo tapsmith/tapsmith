@@ -497,6 +497,8 @@ describe('WebView live matches (PILOT-848)', () => {
       async () => { throw new Error('agent busy'); },
       { total: 4, matches: [{ tag: 'li', id: '', testId: '', rect: rect(0, 0, 10, 10) }] },
     );
+    // A place cached by an earlier call is no evidence the WebView is still on screen.
+    (handle as unknown as { _webviewNativeBounds: unknown })._webviewNativeBounds = rect(0, 300, 1080, 2000);
     const r = await handle._liveMatches(handle.locator('li').last(), 5_000);
     expect(r).toEqual({ count: 1, total: 4, matches: [{ tag: 'li', id: '', testId: '', bounds: undefined }] });
     expect(evaluate.mock.calls[0][0]).toContain('const idx = els.length - 1;');

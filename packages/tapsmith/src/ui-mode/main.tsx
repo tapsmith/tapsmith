@@ -220,6 +220,19 @@ function App() {
   const [livePickedNode, setLivePickedNode] = useState<HierarchyNode | null>(null);
   // Set by a live pick: the first suggestion that comes back fills the locator.
   const fillFromSuggestionsRef = useRef(false);
+  // A pick inside a WebView whose DOM overlay hasn't arrived yet (the server
+  // connects to the WebView on demand — takes a moment) is held here instead
+  // of finalizing against the native web-content projection. Resolved when a
+  // snapshot with the overlay lands, or by the timer at the deadline — the
+  // timer matters because identical snapshots don't re-trigger the effect.
+  // Anything that ends a live pick drops a held one too.
+  const pendingMirrorPickRef = useRef<{ x: number; y: number; deadline: number } | null>(null);
+  const pendingPickTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const clearPendingMirrorPick = useCallback(() => {
+    pendingMirrorPickRef.current = null;
+    clearTimeout(pendingPickTimerRef.current);
+  }, []);
+  useEffect(() => () => clearTimeout(pendingPickTimerRef.current), []);
   // Drop a live pick's suggestions, and any still on their way.
   const resetLivePick = useCallback(() => {
     suggestRequestRef.current++;
@@ -683,22 +696,24 @@ function App() {
     if (pickTarget !== 'screenshot' || currentRoots.length === 0) return;
     const result = handlePickFromScreenshot(currentRoots, point.x / dpr, point.y / dpr);
     if (result) {
+      clearPendingMirrorPick();
       resetLivePick();
       setSelectorText(result.selector);
       setPickedNode(result.node);
       setPickTarget(null);
       setHoverBounds(null);
     }
-  }, [pickTarget, currentRoots, dpr, resetLivePick]);
+  }, [pickTarget, currentRoots, dpr, resetLivePick, clearPendingMirrorPick]);
 
   const handlePickToggle = useCallback(() => {
     setPickTarget(t => t === 'screenshot' ? null : 'screenshot');
     setSelectorSource('trace');
     setPickedNode(null);
+    clearPendingMirrorPick();
     resetLivePick();
     setHoverBounds(null);
     setMirrorHoverBounds(null);
-  }, [resetLivePick]);
+  }, [resetLivePick, clearPendingMirrorPick]);
 
   const handleScreenshotHover = useCallback((point: { x: number; y: number } | null) => {
     if (pickTarget !== 'screenshot' || currentRoots.length === 0 || !point) {
@@ -717,9 +732,10 @@ function App() {
     setHierarchyHighlight(null);
     setHoverBounds(null);
     fillFromSuggestionsRef.current = false;
+    clearPendingMirrorPick();
     setSelectorSource('trace');
     setMirrorHoverBounds(null);
-  }, [selectedIndex]);
+  }, [selectedIndex, clearPendingMirrorPick]);
 
   const handleMessage = useCallback((msg: ServerMessage) => {
     switch (msg.type) {
@@ -1372,19 +1388,6 @@ function App() {
     ?? mirrorWorker?.devicePixelRatio
     ?? deviceDpr ?? 1;
 
-  // A pick inside a WebView whose DOM overlay hasn't arrived yet (the server
-  // connects to the WebView on demand — takes a moment) is held here instead
-  // of finalizing against the native web-content projection. Resolved when a
-  // snapshot with the overlay lands, or by the timer at the deadline — the
-  // timer matters because identical snapshots don't re-trigger the effect.
-  const pendingMirrorPickRef = useRef<{ x: number; y: number; deadline: number } | null>(null);
-  const pendingPickTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const clearPendingMirrorPick = useCallback(() => {
-    pendingMirrorPickRef.current = null;
-    clearTimeout(pendingPickTimerRef.current);
-  }, []);
-  useEffect(() => () => clearTimeout(pendingPickTimerRef.current), []);
-
   const handleMirrorPickToggle = useCallback(() => {
     clearPendingMirrorPick();
     if (pickTarget === 'mirror') {
@@ -1475,12 +1478,15 @@ function App() {
   // are attribute-matched, so they re-validate against the new tree.
   const handleSelectorSourceChange = useCallback((source: 'trace' | 'live') => {
     // Leaving Live: a live pick's answer must not fill the trace locator.
-    if (source === 'trace') fillFromSuggestionsRef.current = false;
+    if (source === 'trace') {
+      fillFromSuggestionsRef.current = false;
+      clearPendingMirrorPick();
+    }
     setSelectorSource(source);
     if (source === 'live' && !liveHierarchyXml) {
       send({ type: 'request-hierarchy', workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
     }
-  }, [liveHierarchyXml, mirrorWorkerId, mirrorDeviceIndex, send]);
+  }, [liveHierarchyXml, mirrorWorkerId, mirrorDeviceIndex, send, clearPendingMirrorPick]);
 
   // Ask the device what the locator matches (PILOT-848), shortly after typing
   // stops. Any change of locator, source or device retires the request in

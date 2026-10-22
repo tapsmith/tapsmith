@@ -718,15 +718,17 @@ export class WebViewHandle {
         }),
       };
     })()`, timeoutMs) as { total: number; matches: Array<{ tag: string; id: string; testId: string; rect: { left: number; top: number; right: number; bottom: number } }> };
-    // Re-fetched each time: the WebView may have moved (as _getElementBounds).
+    // Found afresh each time: the WebView may have moved, or left the screen
+    // while its page stays loaded (a covered stack screen) — then a cached
+    // place would draw its matches over whatever is showing now.
+    let wb: { left: number; top: number; right: number; bottom: number } | undefined;
     try {
       const res = await this._client.findElement(
         { kind: { type: 'className', value: this._platform === 'ios' ? 'XCUIElementTypeWebView' : 'android.webkit.WebView' } },
         200,
       );
-      if (res.found && res.element?.bounds) this._webviewNativeBounds = res.element.bounds;
+      if (res.found && res.element?.bounds) wb = this._webviewNativeBounds = res.element.bounds;
     } catch { /* best-effort: bounds stay unknown */ }
-    const wb = this._webviewNativeBounds;
     const count = nth === undefined ? found.total : found.matches.length;
     return {
       count,
