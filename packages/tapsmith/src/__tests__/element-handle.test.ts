@@ -215,6 +215,15 @@ describe('getBy* scoping', () => {
       expect(opts.doubleTapInterval).toBe(120);
     });
 
+    it('describes a child of a positional parent with its position', async () => {
+      const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse([])) });
+      const rows = new ElementHandle(client, _role('listitem'), 300);
+      await expect(withFakeClock(5000, () => rows.nth(2).getByText('Price', { exact: true }).find()))
+        .rejects.toThrow('getByRole("listitem").nth(2).getByText("Price", { exact: true })');
+      await expect(withFakeClock(5000, () => rows.first().getByText('Price', { exact: true }).find()))
+        .rejects.toThrow('getByRole("listitem").first().getByText("Price", { exact: true })');
+    });
+
     it('describes a child of an and/or parent with the combination bracketed', async () => {
       const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse([])) });
       const a = new ElementHandle(client, _text('a'), 300);

@@ -198,6 +198,11 @@ function boundsContain(
  * no area has no centre on screen and never is. An element drawn over the
  * parent from elsewhere is in scope too; that is the price of bounds.
  */
+/** A positional index as the call that set it: `.first()`, `.last()` or `.nth(n)`. */
+function renderNth(n: number): string {
+  return n === 0 ? '.first()' : n === -1 ? '.last()' : `.nth(${n})`;
+}
+
 function inScope(parent: ElementInfo, child: ElementInfo): boolean {
   const p = parent.bounds;
   const c = child.bounds;
@@ -975,9 +980,9 @@ export class ElementHandle {
 
   /**
    * @internal — The xpath selector anywhere in this handle's shape: its own
-   * selector or a scoped ancestor (`locator({ xpath }).getByText(…)` nests the
-   * xpath as the selector's `parent`; a modified parent lives in
-   * `scopeParent`), or an operand of a nested and()/or().
+   * selector (or a nested `parent`, as filter({ has }) builds), a scoped
+   * ancestor (`locator({ xpath }).getByText(…)` keeps it in `scopeParent`),
+   * or an operand of a nested and()/or().
    */
   private static _findXpath(handle: ElementHandle): Selector | undefined {
     for (let sel: Selector | undefined = handle._selector; sel; sel = sel.parent) {
@@ -1277,7 +1282,6 @@ export class ElementHandle {
   private _describePostIndex(): string {
     const post = this._options.post;
     if (!post?.length) return '';
-    const renderNth = (n: number): string => (n === 0 ? '.first()' : n === -1 ? '.last()' : `.nth(${n})`);
     // `post` only exists alongside an index (nth()/filter() gate on it); if
     // that ever changes, render the steps alone rather than "undefined".
     let desc = this._options.nthIndex === undefined ? '' : renderNth(this._options.nthIndex);
@@ -1312,8 +1316,7 @@ export class ElementHandle {
     return hint && `.${hint}`;
   }
 
-  /** @internal — Build a human-readable description of this handle for error messages. */
-  /** @internal — The locator as the code that built it, for messages. */
+  /** @internal — The locator as the code that built it, for error and assertion messages. */
   _describe(): string {
     const sel = formatSelector(this._selector);
     if (this._options.andHandle) {
@@ -1335,7 +1338,11 @@ export class ElementHandle {
     let desc = sel;
     if (this._options.scopeParent) {
       const parent = this._options.scopeParent;
-      const parentDesc = parent._describe();
+      // A bare index is not rendered on its own (_describePostIndex), but as
+      // a scope it is what tells this row's child from every row's.
+      const { nthIndex, post } = parent._options;
+      const bareIndex = nthIndex !== undefined && !post?.length ? renderNth(nthIndex) : '';
+      const parentDesc = parent._describe() + bareIndex;
       // An and/or parent is bracketed, so the child reads as scoping the
       // whole combination, not its right operand.
       const combined = parent._options.andHandle !== undefined || parent._options.orHandle !== undefined;
