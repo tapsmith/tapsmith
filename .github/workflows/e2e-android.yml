@@ -3,8 +3,8 @@ name: E2E Android
 on:
   push:
     branches: [ main ]
+  # Every PR, whatever its base (stacked PRs; see ci.yml).
   pull_request:
-    branches: [ main ]
 
 concurrency:
   group: e2e-android-${{ github.head_ref || github.run_id }}
