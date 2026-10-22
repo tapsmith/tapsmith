@@ -164,18 +164,18 @@ Returns a base64-encoded PNG image.
 
 #### `tapsmith_test_locator`
 
-Test a Tapsmith locator against the current screen, with the device agent's own matching (it does not wait for a match to appear). Returns whether it matches, how many elements match, and details about each match. Use to validate locators before putting them in test code.
+Test a Tapsmith locator against the current screen, resolved exactly as a test resolves it: the same SDK locator code and the device agent's own matching (it does not wait for a match to appear). Returns whether it matches, how many elements match, and details about each match. Use to validate locators before putting them in test code.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `locator` | string | Yes | Tapsmith locator string, e.g. `device.getByRole("button", { name: "Login" })` |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
-Returns a JSON object with `matched` (boolean), `count` (number), and `elements` (array of matched elements with role, text, and bounds).
+Returns a JSON object with `matched` (boolean), `count` (number), and `elements` (array of matched elements with role, text, and bounds). With `.first()`, `.last()` or `.nth(n)`, `totalMatches` counts the matches before the position picked one; without one, `strictModeWarning` says when more than one element matches, which makes an action on the locator fail in a test. A `webview.*` locator is counted in the page (its matches have no `elements` list).
 
 #### `tapsmith_tap`
 
-Tap a UI element matching the given Tapsmith locator.
+Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` in a test would: it waits up to 5 seconds for the element, and a locator that matches more than one element is refused (strict mode) rather than tapping the first. A `webview.*` locator is clicked in the page.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -184,7 +184,7 @@ Tap a UI element matching the given Tapsmith locator.
 
 #### `tapsmith_type`
 
-Type text into an element matching the locator.
+Type text into an element matching the locator, as `locator.type(text)` in a test would (waiting and strict mode as for `tapsmith_tap`). A `webview.*` field is filled in the page; without `clear` its current value is kept and the text appended.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -420,9 +420,11 @@ device.getByRole("tab", { name: "Settings", selected: true })
 
 `getByRole` takes the same options as in test code: `name` (a string or a RegExp), `exact`, and the state filters `checked`, `disabled`, `selected` and `expanded`. A locator with an option the tools don't recognize is rejected as invalid instead of run without it.
 
-The `device.` is optional: `getByText("Welcome")`, a screen object's `this.device.getByText("Welcome")` and a Playwright-style `page.getByText("Welcome")` all read as `device.getByText("Welcome")`.
+The `device.` is optional: `getByText("Welcome")`, a screen object's `this.device.getByText("Welcome")` and a Playwright-style `page.getByText("Welcome")` or `this.page.getByText("Welcome")` all read as `device.getByText("Welcome")`; `this.webview.` reads as `webview.`.
 
-A locator string is one getter, optionally followed by `.first()`, `.last()` or `.nth(n)`. The tools don't take a chained call such as a scoped getter (`.getByRole("list").getByText("x")`), `.filter()`, `.and()` or `.or()`: a locator with one is rejected as invalid, with an error naming the call, instead of run without it. To single an element out, use a more specific getter, such as `getByRole` with a `name` or `getByTestId`, or a positional step.
+Chains work as in a test, because the string is built by the SDK's own locator code: scoped getters (`device.getByRole("list").getByText("Row 2")`), `.filter({ hasText, hasNotText, has, hasNot })`, `.and()`, `.or()`, and `.first()`, `.last()` or `.nth(n)`. WebView locators start at `webview.` (`webview.getByText("Submit")`, `webview.locator("#email")`) and resolve in the app's WebView in the foreground.
+
+The string is read, never run as code: only locator-building calls with literal arguments (strings, numbers, booleans, RegExp literals and option objects) are accepted. Anything else, such as an action (`.tap()`), `await`, a variable or an expression, is rejected as invalid with an error naming it.
 
 Use `tapsmith_snapshot` to see suggested locators for every interactive element on screen.
 
