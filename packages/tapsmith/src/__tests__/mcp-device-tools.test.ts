@@ -489,6 +489,21 @@ describe('tapsmith_tap', () => {
     expect(daemon.tap).not.toHaveBeenCalled();
   });
 
+  it('keeps a tap within the 5 s budget (only typing gets longer)', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Go' })] });
+    hoisted.client = daemon.client;
+    await callTool('tapsmith_tap', { locator: 'device.getByText("Go")' });
+    expect(daemon.tap.mock.calls[0][1] as number).toBeLessThanOrEqual(5_000);
+  });
+
+  it('points an agent that missed its target at the inspection tools', async () => {
+    const daemon = makeDaemon({ elements: [] });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Nope")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('tapsmith_snapshot');
+  }, 15_000);
+
   it('surfaces a daemon failure rather than reporting OK', async () => {
     hoisted.client = makeDaemon({
       elements: [makeElement({ text: 'Sign in' })],

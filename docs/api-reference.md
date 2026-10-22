@@ -1169,7 +1169,7 @@ await device.getByPlaceholder("OTP").type("123456", { delay: 50 });
 
 #### `elementHandle.clearAndType(text: string, options?: { delay?: number }): Promise<void>`
 
-Clear existing text and type new text.
+Clear existing text and type new text, both into the one field the locator resolved, so a locator that matches the field by its current text (`getByText("old value")`) still works.
 
 - `options.delay?`: `number` — delay in milliseconds between keystrokes. Same as `type()`.
 

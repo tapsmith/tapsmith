@@ -1149,13 +1149,18 @@ describe('type()', () => {
 });
 
 describe('clearAndType()', () => {
-  it('delegates to client.clearAndType', async () => {
+  it('delegates to client.clearAndType, on the element it resolved', async () => {
+    // By id even for a plain locator: the agent clears, then types, and a
+    // selector re-resolved for the typing would miss a field found by the
+    // text the clear removed (getByText("old value")).
     const clearAndType = vi.fn(async () => successResponse());
-    const client = makeMockClient({ clearAndType });
-    const sel = _text('Field');
-    const handle = new ElementHandle(client, sel, 5000);
+    const client = makeMockClient({
+      clearAndType,
+      findElements: vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: 'field-1', text: 'old value' })])),
+    });
+    const handle = new ElementHandle(client, _text('old value'), 5000);
     await handle.clearAndType('new value');
-    expect(clearAndType).toHaveBeenCalledWith(sel, 'new value', expect.any(Number), 0);
+    expect(clearAndType).toHaveBeenCalledWith(undefined, 'new value', expect.any(Number), 0, 'field-1');
   });
 
   it('throws on failure', async () => {

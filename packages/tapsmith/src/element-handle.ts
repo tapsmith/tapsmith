@@ -1612,6 +1612,11 @@ export class ElementHandle {
     }
   }
 
+  /** @internal — This locator with another timeout (MCP actions, PILOT-848). */
+  _withTimeout(timeoutMs: number): ElementHandle {
+    return ElementHandle._cloneWithTimeout(this, timeoutMs);
+  }
+
   /**
    * @internal — Deep-clone a handle tree, overriding the timeout at every
    * node (and/or operands carry their own, often long, timeouts). Used by
@@ -1619,11 +1624,6 @@ export class ElementHandle {
    * per-tick budget instead of an operand's full timeout (e.g. 30s); the outer
    * poll loop owns the overall deadline.
    */
-  /** @internal — This locator with another timeout (MCP actions, PILOT-848). */
-  _withTimeout(timeoutMs: number): ElementHandle {
-    return ElementHandle._cloneWithTimeout(this, timeoutMs);
-  }
-
   private static _cloneWithTimeout(h: ElementHandle, timeoutMs: number): ElementHandle {
     return new ElementHandle(h._client, h._selector, timeoutMs, {
       ...h._options,
@@ -2533,7 +2533,11 @@ export class ElementHandle {
   async clearAndType(text: string, options?: { delay?: number }): Promise<void> {
     const { target, remainingMs } = await this._tracedResolve('clearAndType', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
-      return { target: await this._actionTarget(element), remainingMs };
+      // Always the element resolved here, by id: the agent clears and then
+      // types, and a selector re-resolved for the typing can no longer match
+      // a field found by the text the clear removed (getByText("old value")).
+      const target: ActionTarget = element?.elementId ? { elementId: element.elementId } : await this._actionTarget(element);
+      return { target, remainingMs };
     });
     const delay = options?.delay ?? this._options.typingDelay ?? 0;
     const budget = actionBudget(remainingMs);

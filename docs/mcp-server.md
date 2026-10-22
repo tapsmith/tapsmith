@@ -184,7 +184,7 @@ Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` i
 
 #### `tapsmith_type`
 
-Type text into an element matching the locator, as `locator.type(text)` in a test would (waiting and strict mode as for `tapsmith_tap`). A `webview.*` field is filled in the page; without `clear` its current value is kept and the text appended.
+Type text into an element matching the locator, as `locator.type(text)` in a test would: it waits up to 5 seconds for the field, then gives the typing as long as a test would (a long string takes a while on iOS). A `webview.*` field is filled in the page; without `clear` its current value is kept and the text appended.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|

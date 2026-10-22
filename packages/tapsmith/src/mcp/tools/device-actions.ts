@@ -39,16 +39,20 @@ async function actOn(
     await withEvaluatedLocator(sdkDevice, client, locator, act);
   } catch (err) {
     if (isLocatorError(err)) return { content: [{ type: 'text' as const, text: err.message }], isError: true };
-    return thrownResult(err);
+    const message = err instanceof Error ? err.message : String(err);
+    // An agent that missed its target should look at the screen, as before.
+    return /not found|no elements? match|timed out|timeout/i.test(message)
+      ? actionResult(false, `${message} Use tapsmith_snapshot or tapsmith_test_locator to inspect the current screen.`)
+      : thrownResult(err);
   }
   return actionResult(true);
 }
 
 /**
- * `handle`, once its target is on screen, with a test's budget to act in.
- * The wait keeps the 5 s an agent's wrong locator should fail within; the
- * action itself (typing a long string on iOS, a slow emulator) gets as long
- * as a test would give it.
+ * `handle`, once its field is there, with a test's budget to type in. The
+ * wait keeps the 5 s an agent's wrong locator should fail within; typing a
+ * long string (on iOS, about ten characters a second) gets as long as a test
+ * would give it. A tap is quick once its target is there, and keeps 5 s.
  */
 async function acting(handle: ElementHandle): Promise<ElementHandle> {
   await handle.waitFor({ state: 'attached' });
@@ -68,7 +72,7 @@ export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDi
     // scoping and the enabled/hittable waits all behave as in a test.
     async ({ locator, device, project }) => actOn(locator, { device, project }, dispatcher, async (evaluated) => {
       if (evaluated.kind === 'webview') await evaluated.locator.click();
-      else await (await acting(evaluated.handle)).tap();
+      else await evaluated.handle.tap();
     }),
   );
 
