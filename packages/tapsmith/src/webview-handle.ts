@@ -696,6 +696,8 @@ export class WebViewHandle {
     count: number
     total: number
     matches: Array<{ tag: string; id: string; testId: string; bounds?: { left: number; top: number; right: number; bottom: number } }>
+    /** Where the WebView is on screen, when found: matches outside it are scrolled out of view. */
+    viewport?: { left: number; top: number; right: number; bottom: number }
   }> {
     const nth = loc._nthIndex;
     const idxJs = nth === undefined ? 'null' : nth >= 0 ? String(nth) : `els.length - ${-nth}`;
@@ -733,6 +735,7 @@ export class WebViewHandle {
     return {
       count,
       total: found.total,
+      viewport: wb,
       matches: found.matches.map(({ rect, ...m }) => ({
         ...m,
         bounds: wb

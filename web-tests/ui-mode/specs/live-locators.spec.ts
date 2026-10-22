@@ -14,6 +14,14 @@ const HIERARCHY = `<?xml version="1.0" encoding="UTF-8"?>
   </node>
 </hierarchy>`
 
+// Web content before and after the WebView DOM overlay arrives.
+const WEB_NO_OVERLAY = `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.webkit.WebView" bounds="[0,0][2000,2000]" />
+</hierarchy>`
+const WEB_WITH_OVERLAY = WEB_NO_OVERLAY.replace("</hierarchy>",
+  '  <node webview="true" webview-tag="button" text="Go" bounds="[0,0][2000,2000]" />\n</hierarchy>')
+
 test.describe("Live locators come from the device", () => {
   test("a pick asks the device for its locators, and the first one it confirms fills the locator", async ({ app, device, page }) => {
     const ui = app
@@ -186,16 +194,10 @@ test.describe("Live locators come from the device", () => {
   test("a click waiting for the WebView overlay is dropped on switching to the Trace source", async ({ app, device, page, detailTabs }) => {
     const ui = app
     const locator = new LocatorPane(page)
-    const native = `<?xml version="1.0" encoding="UTF-8"?>
-<hierarchy rotation="0">
-  <node class="android.webkit.WebView" bounds="[0,0][2000,2000]" />
-</hierarchy>`
-    const withOverlay = native.replace("</hierarchy>",
-      '  <node webview="true" webview-tag="button" text="Go" bounds="[0,0][2000,2000]" />\n</hierarchy>')
     ui.sendFrame(screenFrame(240, 500))
     await device.enablePickMode()
     await ui.waitForMessage("request-hierarchy")
-    ui.send({ type: "hierarchy-update", xml: native, revision: 1, workerId: 0, deviceIndex: 0 })
+    ui.send({ type: "hierarchy-update", xml: WEB_NO_OVERLAY, revision: 1, workerId: 0, deviceIndex: 0 })
     ui.clearReceived()
     // On web content with no overlay yet: the click waits for it.
     await device.tapMirrorAt(0.5, 0.5)
@@ -203,9 +205,47 @@ test.describe("Live locators come from the device", () => {
     await locator.sourceToggle.getByRole("button", { name: "Trace" }).click()
     await locator.type('device.getByText("mine")')
     // The overlay lands: the dropped click must not resolve now.
-    ui.send({ type: "hierarchy-update", xml: withOverlay, revision: 2, workerId: 0, deviceIndex: 0 })
+    ui.send({ type: "hierarchy-update", xml: WEB_WITH_OVERLAY, revision: 2, workerId: 0, deviceIndex: 0 })
     await page.waitForTimeout(500)
     expect(ui.messagesOfType("suggest-locators")).toEqual([])
     await expect(locator.input).toHaveValue('device.getByText("mine")')
+  })
+
+  test("typing drops a click still waiting for the WebView overlay", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    ui.sendFrame(screenFrame(240, 500))
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({ type: "hierarchy-update", xml: WEB_NO_OVERLAY, revision: 1, workerId: 0, deviceIndex: 0 })
+    ui.clearReceived()
+    await device.tapMirrorAt(0.5, 0.5)
+    await detailTabs.select("Locator")
+    await locator.type('device.getByText("mine")')
+    ui.send({ type: "hierarchy-update", xml: WEB_WITH_OVERLAY, revision: 2, workerId: 0, deviceIndex: 0 })
+    await page.waitForTimeout(500)
+    expect(ui.messagesOfType("suggest-locators")).toEqual([])
+    await expect(locator.input).toHaveValue('device.getByText("mine")')
+  })
+
+  test("a pick on the mirror binds the Locator tab to the device, even after a switch to Trace", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    ui.sendFrame(screenFrame(240, 500))
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({ type: "hierarchy-update", xml: HIERARCHY, revision: 1, workerId: 0, deviceIndex: 0 })
+    await detailTabs.select("Locator")
+    // The picker stays armed while the source goes to Trace.
+    await locator.sourceToggle.getByRole("button", { name: "Trace" }).click()
+    await device.tapMirrorAt(0.5, 0.5)
+    const ask = await ui.waitForMessage("suggest-locators")
+    ui.send({
+      type: "locator-suggestions",
+      requestId: ask.requestId,
+      suggestions: [{ code: 'device.getByText("Save")', label: "Text" }],
+    })
+    await expect(locator.input).toHaveValue('device.getByText("Save")')
+    await expect(page.getByTestId("locator-source-note")).toContainText("Matched by the device")
   })
 })

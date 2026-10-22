@@ -243,8 +243,9 @@ function App() {
   // Typing takes over the locator: a pick's suggestions must not replace it.
   const handleLocatorInput = useCallback((text: string) => {
     fillFromSuggestionsRef.current = false;
+    clearPendingMirrorPick();
     setSelectorText(text);
-  }, []);
+  }, [clearPendingMirrorPick]);
 
   // Device pane state
   const [selectedWorkerId, setSelectedWorkerId] = useState(0);
@@ -1419,6 +1420,9 @@ function App() {
     if (result && path && liveRevision !== null) {
       setPickedNode(result.node);
       setLivePickedNode(result.node);
+      // A pick on the device binds the tab to it, even if the source was
+      // switched to Trace while the picker stayed armed.
+      setSelectorSource('live');
       setPickTarget(null);
       setMirrorHoverBounds(null);
       // The device decides which locators find this element (PILOT-848);
@@ -1428,7 +1432,6 @@ function App() {
       const requestId = ++suggestRequestRef.current;
       setLiveAnswers((prev) => ({ ...prev, suggestions: { suggestions: [], pending: true } }));
       send({ type: 'suggest-locators', requestId, revision: liveRevision, path, workerId: mirrorWorkerId, deviceIndex: mirrorDeviceIndex });
-      // selectorSource stays 'live': highlights render on the mirror.
     }
   }, [liveRoots, liveRevision, mirrorWorkerId, mirrorDeviceIndex, send]);
   // Latest finalizer for the deadline timer (finalizeMirrorPick's identity
