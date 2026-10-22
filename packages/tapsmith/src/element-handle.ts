@@ -1277,6 +1277,32 @@ export class ElementHandle {
   }
 
   /**
+   * @internal — The Selector this locator sends the agent as it is, or
+   * undefined when it carries anything a Selector cannot hold (a position,
+   * filter, and/or, or a parent scope). MCP snapshot suggestions are checked
+   * by sending such selectors in one batch (PILOT-848).
+   */
+  _plainSelector(): Selector | undefined {
+    const o = this._options;
+    const modified = o.nthIndex !== undefined || !!o.filters?.length || !!o.post?.length
+      || !!o.andHandle || !!o.orHandle || !!o.scopeParent;
+    return modified ? undefined : this._selector;
+  }
+
+  /**
+   * @internal — What this locator matches right now, read once without
+   * waiting, the way `count()` reads it (MCP `tapsmith_test_locator`,
+   * PILOT-848). `total` is the matches before a positional index narrowed
+   * them (equal to `matches.length` without one); `positional` says whether
+   * one did — such a locator is exempt from strict mode.
+   */
+  async _currentMatches(): Promise<{ matches: ElementInfo[]; total: number; positional: boolean }> {
+    const once = ElementHandle._cloneWithTimeout(this, 0);
+    const all = await once._resolveAll();
+    return { matches: await once._select(all), total: all.length, positional: this._options.nthIndex !== undefined };
+  }
+
+  /**
    * @internal — Apply this handle's positional index and every modifier
    * chained after it, in call order, to its resolved matches (see
    * {@link PostIndexStep}). Filters chained before the index are applied by

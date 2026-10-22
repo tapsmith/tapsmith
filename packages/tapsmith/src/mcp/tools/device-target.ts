@@ -33,6 +33,14 @@ export async function deviceClientFor(
   request: DeviceRequest,
   dispatcher?: TestDispatcher,
 ): Promise<TapsmithGrpcClient> {
+  return (await deviceTargetFor(request, dispatcher)).client;
+}
+
+/** {@link deviceClientFor}, with the serial of the device it acts on when known. */
+export async function deviceTargetFor(
+  request: DeviceRequest,
+  dispatcher?: TestDispatcher,
+): Promise<{ client: TapsmithGrpcClient; device?: string }> {
   // Before anything asks what this session drives, not just on the `project`
   // branch. A multi-platform session spawns its per-platform daemons during
   // initialization; a device tool arriving first would otherwise see only the
@@ -76,8 +84,7 @@ export async function deviceClientFor(
     : undefined;
 
   try {
-    const { client } = await resolveDeviceTarget({ device, project });
-    return client;
+    return await resolveDeviceTarget({ device, project });
   } catch (err) {
     throw withGroupNames(err, request.device, dispatcher);
   }
