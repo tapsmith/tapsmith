@@ -166,7 +166,7 @@ describe('getBy* scoping', () => {
       expect(ids).toEqual(['h']);
     });
 
-    it('never matches the parent itself, read again', async () => {
+    it('prefers what is inside over the parent itself, read again', async () => {
       const again = { ...list, elementId: 'L-reread' };
       const inner = makeElementInfo({ elementId: 'i', role: 'list', className: 'android.widget.ListView', bounds: { left: 10, top: 110, right: 390, bottom: 490 } });
       const ids = (await scoped([again, inner]).getByTestId('list')._resolveAll()).map((e) => e.elementId);
@@ -183,6 +183,25 @@ describe('getBy* scoping', () => {
         makeFindElementsResponse(selector.kind.type === 'testId' && selector.kind.value === 'screen' ? [screen] : [content]));
       const child = new ElementHandle(makeMockClient({ findElements }), _testId('screen'), 5000).getByTestId('content');
       expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['c']);
+    });
+
+    it('never matches a larger element enclosing the parent, such as a backdrop behind a dialog', async () => {
+      const dialog = makeElementInfo({ elementId: 'D', resourceId: 'dialog', bounds: { left: 50, top: 300, right: 350, bottom: 500 } });
+      const backdrop = makeElementInfo({ elementId: 'B', role: 'button', bounds: { left: 0, top: 0, right: 400, bottom: 800 } });
+      const ok = makeElementInfo({ elementId: 'K', role: 'button', text: 'OK', bounds: { left: 100, top: 420, right: 300, bottom: 480 } });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' ? [dialog] : [backdrop, ok]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('dialog'), 5000).getByRole('button');
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['K']);
+    });
+
+    it('matches the parent itself only when nothing inside it does (an iOS accessible container hides its children)', async () => {
+      const card = makeElementInfo({ elementId: 'C', resourceId: 'card', role: 'button', text: 'Title, Subtitle', bounds: { left: 0, top: 100, right: 400, bottom: 200 } });
+      const again = { ...card, elementId: 'C2' };
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' ? [card] : [again]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('card'), 5000).getByText('Title');
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['C2']);
     });
 
     it('never matches an element with no area', async () => {

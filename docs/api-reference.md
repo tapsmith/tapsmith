@@ -139,7 +139,7 @@ device.locator({ xpath: "//android.widget.Button[@text='OK']" })
 | Option | Type | Description |
 |---|---|---|
 | `id` | `string` | Native resource id (Android `R.id.foo` or iOS `accessibilityIdentifier`). |
-| `xpath` | `string` | XPath expression. Android-only, and for use on its own. `and()`/`or()` refuse an xpath operand with an error (its text and bounds come from a different agent read and could never match the other side). Narrowing (`filter()`, `first()`/`nth()`) still queries, but actions through a narrowed xpath locator fail at the agent — it cannot act on an xpath match by id. |
+| `xpath` | `string` | XPath expression. Android-only, and for use on its own. `and()`/`or()` refuse an xpath operand with an error (its text and bounds come from a different agent read and could never match the other side). Narrowing (`filter()`, `first()`/`nth()`) and chaining it off another locator still query, but actions through such an xpath locator fail at the agent — it cannot act on an xpath match by id. |
 | `className` | `string` | Native widget class name. |
 
 > The `getBy*` methods and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to the elements inside it. See [ElementHandle Scoping](#scoping).
@@ -792,7 +792,7 @@ An `ElementHandle` is a lazy reference to a UI element. It is returned by every 
 
 ### Scoping
 
-`ElementHandle` exposes the same `getBy*` methods and `locator()` as `Device`. Calling any of them on an existing handle scopes the search to the elements inside it, like Playwright's `locator.locator(...)`. "Inside" means on screen: the child's centre lies within the parent's bounds, and the parent itself never matches. Bounds are used rather than the accessibility tree's parent/child links because the trees React Native produces often make a container's children its siblings (a modal's buttons are not children of its `testID` view). An element drawn over the parent from elsewhere (a toast, a floating button) is inside it too.
+`ElementHandle` exposes the same `getBy*` methods and `locator()` as `Device`. Calling any of them on an existing handle scopes the search to the elements inside it, like Playwright's `locator.locator(...)`. "Inside" means on screen: the child's centre lies within the parent's bounds, and it is not a larger element around the parent (an ancestor, a backdrop behind a dialog). The parent itself matches only when nothing inside it does: on iOS an accessible React Native container, such as a `Pressable`, is one element whose children are not exposed, so `card.getByText("Title")` can only match the card. Elements scrolled out of the parent's bounds are not inside it. Bounds are used rather than the accessibility tree's parent/child links because the trees React Native produces often make a container's children its siblings (a modal's buttons are not children of its `testID` view). An element drawn over the parent from elsewhere (a toast, a floating button) is inside it too.
 
 | Method | Description |
 |---|---|

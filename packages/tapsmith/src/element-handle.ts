@@ -184,10 +184,16 @@ function boundsContain(
   return contained ? 'contained' : 'not_contained';
 }
 
+/** A positional index as the call that set it: `.first()`, `.last()` or `.nth(n)`. */
+function renderNth(n: number): string {
+  return n === 0 ? '.first()' : n === -1 ? '.last()' : `.nth(${n})`;
+}
+
 /**
- * Whether `child` is in the scope of a chained getter's resolved `parent`
- * (`parent.getByText(…)`, PILOT-850): its centre lies inside the parent's
- * bounds, and it is not the parent itself.
+ * Whether `child` lies inside a chained getter's resolved `parent`
+ * (`parent.getByText(…)`, PILOT-850): its centre is within the parent's
+ * bounds, and it is not a larger element enclosing the parent (an ancestor,
+ * a full-screen backdrop behind a dialog).
  *
  * Scope is geometric, not the accessibility tree's parent/child links: the
  * trees React Native produces hoist a container's children to be its
@@ -198,22 +204,41 @@ function boundsContain(
  * no area has no centre on screen and never is. An element drawn over the
  * parent from elsewhere is in scope too; that is the price of bounds.
  */
-/** A positional index as the call that set it: `.first()`, `.last()` or `.nth(n)`. */
-function renderNth(n: number): string {
-  return n === 0 ? '.first()' : n === -1 ? '.last()' : `.nth(${n})`;
-}
-
 function inScope(parent: ElementInfo, child: ElementInfo): boolean {
   const p = parent.bounds;
   const c = child.bounds;
   if (!p || !c || !hasUsableGeometry(child)) return false;
-  // The parent itself (the same element read again: its id differs per read).
-  // A same-size wrapper's child differs in its test id or description.
-  if (sameTargetKey(child) === sameTargetKey(parent) && child.className === parent.className
-    && child.resourceId === parent.resourceId && child.contentDescription === parent.contentDescription) return false;
+  const encloses = c.left <= p.left && c.top <= p.top && c.right >= p.right && c.bottom >= p.bottom;
+  const sameRect = c.left === p.left && c.top === p.top && c.right === p.right && c.bottom === p.bottom;
+  if (encloses && !sameRect) return false;
   const cx = (c.left + c.right) / 2;
   const cy = (c.top + c.bottom) / 2;
   return cx >= p.left && cx <= p.right && cy >= p.top && cy <= p.bottom;
+}
+
+/**
+ * Whether `child` is `parent` read again (its id differs per read). A
+ * same-size wrapper's child differs in its test id or description.
+ */
+function isSameElement(parent: ElementInfo, child: ElementInfo): boolean {
+  return sameTargetKey(child) === sameTargetKey(parent) && child.className === parent.className
+    && child.resourceId === parent.resourceId && child.contentDescription === parent.contentDescription;
+}
+
+/**
+ * The matches in scope of a chained getter's resolved parents, in match
+ * order. Within each parent what lies inside it wins; the parent itself
+ * counts only when nothing inside matches — on iOS an accessible React
+ * Native container (any Pressable) is one element whose children are not
+ * exposed, so `card.getByText("Title")` can only ever match the card.
+ */
+function scopeToParents(parents: ElementInfo[], elements: ElementInfo[]): ElementInfo[] {
+  const kept = new Set<ElementInfo>();
+  for (const p of parents) {
+    const inside = elements.filter((c) => inScope(p, c) && !isSameElement(p, c));
+    for (const c of inside.length > 0 ? inside : elements.filter((e) => isSameElement(p, e))) kept.add(c);
+  }
+  return elements.filter((c) => kept.has(c));
 }
 
 /**
@@ -1102,7 +1127,7 @@ export class ElementHandle {
     }
     let elements = collapseSameTargetDuplicates(res.elements ?? []);
     if (parents) {
-      elements = elements.filter((child) => parents.some((p) => inScope(p, child)));
+      elements = scopeToParents(parents, elements);
     }
 
     if (this._options.filters) {

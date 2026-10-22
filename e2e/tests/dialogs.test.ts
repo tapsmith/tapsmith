@@ -88,10 +88,14 @@ describe("Dialogs screen", () => {
     await expect(dialogsScreen.modal).not.toBeVisible()
   })
 
-  test("a chained getter does not match its parent (PILOT-850)", async ({ dialogsScreen, device }) => {
+  test("a chained getter matches its parent only when nothing inside does (PILOT-850)", async ({ dialogsScreen, device }) => {
     await dialogsScreen.showModalButton.tap()
     await expect(dialogsScreen.modalTitle).toBeVisible()
     await expect(dialogsScreen.modalContainer).toHaveCount(1)
-    await expect(device.getByTestId("modal").getByTestId("modal")).toHaveCount(0)
+    // Nothing inside the modal has its test id, so the modal itself is the
+    // match (as an iOS accessible container's own label is); the buttons
+    // inside it are matched without it.
+    await expect(device.getByTestId("modal").getByTestId("modal")).toHaveCount(1)
+    await expect(device.getByTestId("modal").getByRole("button", { name: "Cancel" })).toHaveCount(1)
   })
 })

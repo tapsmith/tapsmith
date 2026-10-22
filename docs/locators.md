@@ -259,7 +259,7 @@ An XPath locator is for use on its own. `and()`/`or()` refuse an XPath operand w
 
 ## Chaining and Scoping
 
-`getBy*` and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to the elements inside it, like Playwright's `locator.locator(...)`: an element is inside when its centre lies within the parent's bounds (the parent itself never matches). Bounds rather than the accessibility tree decide, because React Native's trees often make a container's children its siblings; see [ElementHandle Scoping](api-reference.md#scoping).
+`getBy*` and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to the elements inside it, like Playwright's `locator.locator(...)`: an element is inside when its centre lies within the parent's bounds and it is not a larger element around the parent; the parent itself matches only when nothing inside it does (an iOS accessible container's children are not exposed). Bounds rather than the accessibility tree decide, because React Native's trees often make a container's children its siblings; see [ElementHandle Scoping](api-reference.md#scoping).
 
 ```typescript
 // Find "Item 3" inside a specific list (a FlatList with testID="cart-list")
