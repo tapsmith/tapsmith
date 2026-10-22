@@ -151,6 +151,67 @@ describe('getBy* scoping', () => {
     for (const [sel] of findElements.mock.calls) expect((sel as Selector).parent).toBeUndefined();
   });
 
+  describe('what is in a chained getter\'s scope (PILOT-850)', () => {
+    const list = makeElementInfo({ elementId: 'L', role: 'list', className: 'android.widget.ScrollView', text: '', bounds: { left: 0, top: 100, right: 400, bottom: 500 } });
+    const scoped = (children: ElementInfo[]) => {
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'role' ? [list] : children));
+      return new ElementHandle(makeMockClient({ findElements }), _role('list'), 5000);
+    };
+
+    it('keeps a row half-scrolled past the parent\'s edge when its centre is inside (iOS frames are not clipped)', async () => {
+      const half = makeElementInfo({ elementId: 'h', text: 'Row 1', bounds: { left: 0, top: 80, right: 400, bottom: 160 } });
+      const out = makeElementInfo({ elementId: 'o', text: 'Row 9', bounds: { left: 0, top: 480, right: 400, bottom: 600 } });
+      const ids = (await scoped([half, out]).getByText('Row')._resolveAll()).map((e) => e.elementId);
+      expect(ids).toEqual(['h']);
+    });
+
+    it('never matches the parent itself, read again', async () => {
+      const again = { ...list, elementId: 'L-reread' };
+      const inner = makeElementInfo({ elementId: 'i', role: 'list', className: 'android.widget.ListView', bounds: { left: 10, top: 110, right: 390, bottom: 490 } });
+      const ids = (await scoped([again, inner]).getByTestId('list')._resolveAll()).map((e) => e.elementId);
+      expect(ids).toEqual(['i']);
+    });
+
+    it('never matches an element with no area', async () => {
+      const clipped = makeElementInfo({ elementId: 'z', text: 'Row 50', bounds: { left: 0, top: 0, right: 0, bottom: 0 } });
+      const origin = makeElementInfo({ elementId: 'O', role: 'list', bounds: { left: 0, top: 0, right: 400, bottom: 500 } });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'role' ? [origin] : [clipped]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _role('list'), 5000).getByText('Row 50');
+      expect(await child.count()).toBe(0);
+    });
+
+    it('reads the parent and the child at the same time', async () => {
+      let pending = 0;
+      let overlapped = false;
+      const findElements = vi.fn(async (selector: Selector) => {
+        pending++;
+        if (pending > 1) overlapped = true;
+        await new Promise((r) => setTimeout(r, 5));
+        pending--;
+        return makeFindElementsResponse(selector.kind.type === 'role' ? [list] : []);
+      });
+      await new ElementHandle(makeMockClient({ findElements }), _role('list'), 5000).getByText('Row').count();
+      expect(overlapped).toBe(true);
+    });
+
+    it('carries typingDelay and doubleTapInterval to the scoped child', () => {
+      const parent = new ElementHandle(makeMockClient(), _role('list'), 5000, { typingDelay: 50, doubleTapInterval: 120 } as never);
+      const opts = (parent.getByPlaceholder('Email') as unknown as { _options: { typingDelay?: number; doubleTapInterval?: number } })._options;
+      expect(opts.typingDelay).toBe(50);
+      expect(opts.doubleTapInterval).toBe(120);
+    });
+
+    it('describes a child of an and/or parent with the combination bracketed', async () => {
+      const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse([])) });
+      const a = new ElementHandle(client, _text('a'), 300);
+      const b = new ElementHandle(client, _text('b'), 300);
+      await expect(withFakeClock(5000, () => a.or(b).getByText('Row', { exact: true }).find()))
+        .rejects.toThrow('(getByText("a", { exact: true }) OR getByText("b", { exact: true })).getByText("Row", { exact: true })');
+    });
+  });
+
   it('preserves client and timeout in child handle', () => {
     const client = makeMockClient();
     const parent = new ElementHandle(client, _role('list'), 7000);

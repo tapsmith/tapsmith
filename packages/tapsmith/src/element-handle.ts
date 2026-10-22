@@ -184,6 +184,31 @@ function boundsContain(
 }
 
 /**
+ * Whether `child` is in the scope of a chained getter's resolved `parent`
+ * (`parent.getByText(…)`, PILOT-850): its centre lies inside the parent's
+ * bounds, and it is not the parent itself.
+ *
+ * Scope is geometric, not the accessibility tree's parent/child links: the
+ * trees React Native produces hoist a container's children to be its
+ * siblings (a modal's buttons are not children of its `testID` view), so a
+ * tree search would find nothing where the user plainly sees the child. The
+ * centre, not the whole box, decides, so a row half-scrolled past its list's
+ * edge — iOS reports unclipped frames — is still in the list; an element with
+ * no area has no centre on screen and never is. An element drawn over the
+ * parent from elsewhere is in scope too; that is the price of bounds.
+ */
+function inScope(parent: ElementInfo, child: ElementInfo): boolean {
+  const p = parent.bounds;
+  const c = child.bounds;
+  if (!p || !c || !hasUsableGeometry(child)) return false;
+  // The parent itself (the same element read again: its id differs per read).
+  if (sameTargetKey(child) === sameTargetKey(parent) && child.className === parent.className) return false;
+  const cx = (c.left + c.right) / 2;
+  const cy = (c.top + c.bottom) / 2;
+  return cx >= p.left && cx <= p.right && cy >= p.top && cy <= p.bottom;
+}
+
+/**
  * Test whether an error thrown from `_resolveOne` / `_resolveAll` is a
  * "no match yet" signal that auto-wait loops should swallow and retry,
  * vs. a genuine infrastructure failure (gRPC error, daemon crash, etc.)
@@ -806,8 +831,8 @@ export class ElementHandle {
 
   /**
    * @internal — A child scoped to this handle: the parent is resolved to its
-   * concrete element(s) and only children contained within them are kept
-   * (Playwright-style subtree scoping, by geometry). Every parent goes this
+   * concrete element(s) and only children inside them are kept (see
+   * {@link inScope}). Every parent goes this
    * way, modified or not: the agents scope a find only by a resolved element,
    * never by a nested parent selector, so a plain parent sent as one was
    * silently ignored and the child matched across the whole screen
@@ -818,6 +843,8 @@ export class ElementHandle {
       scopeParent: this,
       traceCapture: this._options.traceCapture,
       platform: this._options.platform,
+      typingDelay: this._options.typingDelay,
+      doubleTapInterval: this._options.doubleTapInterval,
     });
   }
 
@@ -1048,19 +1075,21 @@ export class ElementHandle {
       return elements;
     }
 
-    // Base case: no and/or — resolve selector then apply filters
-    const res = await this._client.findElements(this._selector, this._timeoutMs);
+    // Base case: no and/or — resolve selector then apply filters. A scoped
+    // child's parent is read at the same time, not after (PILOT-850).
+    const scopeParent = this._options.scopeParent;
+    const [res, parents] = await Promise.all([
+      this._client.findElements(this._selector, this._timeoutMs),
+      scopeParent ? ElementHandle._resolveScope(scopeParent) : Promise.resolve(undefined),
+    ]);
     if (res.errorMessage) {
       // Daemon-level failure (agent dead, command error) — not "no match".
       // Surface it instead of letting it read as an empty result.
       throw new Error(`findElements failed: ${res.errorMessage}`);
     }
     let elements = collapseSameTargetDuplicates(res.elements ?? []);
-
-    // Scope to a modified parent (getBy*/locator() called on a modified handle):
-    // keep only matches geometrically contained within the resolved parent(s).
-    if (this._options.scopeParent) {
-      elements = await this._scopeToParent(elements, this._options.scopeParent);
+    if (parents) {
+      elements = elements.filter((child) => parents.some((p) => inScope(p, child)));
     }
 
     if (this._options.filters) {
@@ -1073,33 +1102,23 @@ export class ElementHandle {
   }
 
   /**
-   * @internal — Restrict `children` to those geometrically contained within the
-   * resolved parent handle, the same containment primitive used by
-   * `filter({ has })`. The parent's modifiers are honored: a positional parent
+   * @internal — The element(s) a scoped child is searched within (see
+   * {@link inScope}). The parent's modifiers are honored: a positional parent
    * (`.first()`, `.nth()`, an `all()` handle) resolves to its single selected
-   * element; a filter/and/or parent resolves to all of its matches, and a child
-   * contained within *any* of them is in scope.
+   * element; a plain, filter or and/or parent resolves to all of its matches,
+   * and a child inside *any* of them is in scope.
    *
-   * Requires bounds: a parent or child without bounds cannot be confirmed
-   * contained and is excluded (Add accessibility identifiers / ensure the
-   * container reports bounds if scoping returns nothing).
-   *
-   * A missing or out-of-range positional parent resolves to an empty scope
+   * A positional parent is resolved live by index, like every reader on it:
+   * re-identifying a previously seen row in a fresh read has no reliable key —
+   * element ids go stale, bounds move with any layout shift, text mutates and
+   * testIDs repeat — so every "smarter" match has a silent wrong-row failure
+   * (PILOT-346). A missing or out-of-range parent resolves to an empty scope
    * (no children in scope) rather than throwing — so `count()`/`exists()` and
    * absence assertions on a scoped handle report 0/false/empty like
    * Playwright, instead of surfacing the parent's "not found" error.
    */
-  private async _scopeToParent(children: ElementInfo[], parent: ElementHandle): Promise<ElementInfo[]> {
-    // A positional parent (`.nth(i)`, a handle from all()) is resolved live
-    // by index, like every reader on it: re-identifying a previously seen row
-    // in a fresh read has no reliable key — element ids go stale, bounds move
-    // with any layout shift, text mutates and testIDs repeat — so every
-    // "smarter" match has a silent wrong-row failure (PILOT-346).
-    const scopedParents = await parent._select(await parent._resolveAll());
-
-    return children.filter((child) =>
-      scopedParents.some((p) => boundsContain(p.bounds, child.bounds) === 'contained'),
-    );
+  private static async _resolveScope(parent: ElementHandle): Promise<ElementInfo[]> {
+    return parent._select(await parent._resolveAll());
   }
 
   /** @internal */
@@ -1304,7 +1323,15 @@ export class ElementHandle {
     }
     // A scoped child reads as the chain that built it, e.g.
     // getByRole("list").first().getByText("Row") — copy-pasteable code.
-    let desc = this._options.scopeParent ? `${this._options.scopeParent._describe()}.${sel}` : sel;
+    let desc = sel;
+    if (this._options.scopeParent) {
+      const parent = this._options.scopeParent;
+      const parentDesc = parent._describe();
+      // An and/or parent is bracketed, so the child reads as scoping the
+      // whole combination, not its right operand.
+      const combined = parent._options.andHandle !== undefined || parent._options.orHandle !== undefined;
+      desc = `${combined ? `(${parentDesc})` : parentDesc}.${sel}`;
+    }
     if (this._options.filters?.length) desc += `.filter(…×${this._options.filters.length})`;
     return desc + this._describePostIndex();
   }

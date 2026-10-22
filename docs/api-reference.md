@@ -142,7 +142,7 @@ device.locator({ xpath: "//android.widget.Button[@text='OK']" })
 | `xpath` | `string` | XPath expression. Android-only, and for use on its own. `and()`/`or()` refuse an xpath operand with an error (its text and bounds come from a different agent read and could never match the other side). Narrowing (`filter()`, `first()`/`nth()`) still queries, but actions through a narrowed xpath locator fail at the agent — it cannot act on an xpath match by id. |
 | `className` | `string` | Native widget class name. |
 
-> The `getBy*` methods and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to its descendants. See [ElementHandle Scoping](#scoping).
+> The `getBy*` methods and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to the elements inside it. See [ElementHandle Scoping](#scoping).
 
 > **iOS wrapper suppression.** When traversing the iOS accessibility tree, Tapsmith drops a matching `XCUIElementTypeOther` container if a descendant *also* matches the same locator and shares the wrapper's `accessibilityIdentifier` (or, when the wrapper's identifier is empty, its `accessibilityLabel`). This collapses the redundant wrappers React Native (and SwiftUI in some configurations) emit around interactive elements, so a `getByText("Submit")` resolves to the actual control rather than the surrounding container. The visible text of the wrapper and descendant is *not* compared — identifier/label match alone is enough. If your native iOS app deliberately exposes an `.other` container with the same identifier as a child you also want addressable, the outer wrapper will be silently suppressed in favour of the child — give the wrapper a unique `accessibilityIdentifier` (or use `device.locator({ id: ... })`) to address it directly.
 
@@ -792,7 +792,7 @@ An `ElementHandle` is a lazy reference to a UI element. It is returned by every 
 
 ### Scoping
 
-`ElementHandle` exposes the same `getBy*` methods and `locator()` as `Device`. Calling any of them on an existing handle scopes the search to its descendants — exactly like Playwright's `locator.locator(...)`.
+`ElementHandle` exposes the same `getBy*` methods and `locator()` as `Device`. Calling any of them on an existing handle scopes the search to the elements inside it, like Playwright's `locator.locator(...)`. "Inside" means on screen: the child's centre lies within the parent's bounds, and the parent itself never matches. Bounds are used rather than the accessibility tree's parent/child links because the trees React Native produces often make a container's children its siblings (a modal's buttons are not children of its `testID` view). An element drawn over the parent from elsewhere (a toast, a floating button) is inside it too.
 
 | Method | Description |
 |---|---|
@@ -804,7 +804,7 @@ An `ElementHandle` is a lazy reference to a UI element. It is returned by every 
 | `getByLabel(text)` | Input element by associated label text within the parent. |
 | `locator(options)` | Native id / xpath / className within the parent. |
 
-Scoping also works after a positional or filtering modifier (`.first()`, `.last()`, `.nth()`, `.filter()`, `.and()`, `.or()`), just like Playwright. The parent is resolved to its concrete element(s) and the child is scoped to them by geometric containment: a child is in scope when its bounds lie inside a parent's, so the parent must report bounds. A positional parent (`.first()`/`.nth()`) scopes to its single selected element; a plain or filtering parent scopes to every match it resolves to (a child contained in any of them is in scope).
+Scoping also works after a positional or filtering modifier (`.first()`, `.last()`, `.nth()`, `.filter()`, `.and()`, `.or()`), just like Playwright. The parent is resolved to its concrete element(s), which must report bounds. A positional parent (`.first()`/`.nth()`) scopes to its single selected element; a plain or filtering parent scopes to every match it resolves to (a child inside any of them is in scope).
 
 ```typescript
 const list = device.getByTestId("cart-list"); // e.g. a FlatList with testID="cart-list"

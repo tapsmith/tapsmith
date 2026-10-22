@@ -46,8 +46,9 @@ describe("Dialogs screen", () => {
   //
   // `getBy*`/`locator()` on a handle — plain or carrying a positional or
   // filtering modifier (`.first()`, `.filter()`, …) — resolves the parent to
-  // its concrete element(s) and scopes the child to them by geometric
-  // containment (PILOT-850).
+  // its concrete element(s) and keeps the children inside their bounds
+  // (PILOT-850). React Native's accessibility tree makes the modal's buttons
+  // siblings of its testID view, so bounds, not the tree, define "inside".
 
   test("scopes a child off a positional (.first()) parent and acts on it", async ({ dialogsScreen, device }) => {
     await dialogsScreen.showModalButton.tap()
@@ -85,5 +86,12 @@ describe("Dialogs screen", () => {
     await expect(cancel).toHaveCount(1)
     await cancel.tap()
     await expect(dialogsScreen.modal).not.toBeVisible()
+  })
+
+  test("a chained getter does not match its parent (PILOT-850)", async ({ dialogsScreen, device }) => {
+    await dialogsScreen.showModalButton.tap()
+    await expect(dialogsScreen.modalTitle).toBeVisible()
+    await expect(dialogsScreen.modalContainer).toHaveCount(1)
+    await expect(device.getByTestId("modal").getByTestId("modal")).toHaveCount(0)
   })
 })

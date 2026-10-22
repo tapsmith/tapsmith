@@ -125,8 +125,12 @@ describe("Locator & assertion regressions", () => {
   // reads, so the child matched across the whole screen.
   test("PILOT-850: a getter chained off a plain parent stays inside it", async ({ device }) => {
     await device.getByDescription("Toggles").tap()
+    const heading = device.getByRole("heading", { name: "Switches" })
+    // Both are on screen, so a 0 below is the scope working, not a parent
+    // that never resolved.
+    await expect(heading).toBeVisible()
     await expect(device.getByText("Dark Mode").first()).toBeVisible()
-    // A heading has no descendants: nothing is inside it.
-    await expect(device.getByRole("heading", { name: "Switches" }).getByText("Dark Mode")).toHaveCount(0)
+    // "Dark Mode" sits below the heading, not inside it.
+    await expect(heading.getByText("Dark Mode")).toHaveCount(0)
   })
 })
