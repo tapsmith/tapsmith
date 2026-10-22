@@ -649,7 +649,7 @@ describe('webview.* locators in the action tools', () => {
   afterEach(() => { vi.restoreAllMocks(); });
   function fakePage(value = '') {
     const locator = { click: vi.fn(async () => {}), fill: vi.fn(async () => {}), inputValue: vi.fn(async () => value) };
-    const page = { getByText: vi.fn(() => locator), getByPlaceholder: vi.fn(() => locator) };
+    const page = { getByText: vi.fn(() => locator), getByPlaceholder: vi.fn(() => locator), _setTimeoutMs: vi.fn() };
     const webview = vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
     return { locator, page, webview };
   }
@@ -664,6 +664,30 @@ describe('webview.* locators in the action tools', () => {
     expect(page.getByText).toHaveBeenCalledWith('Submit', { exact: true });
     expect(locator.click).toHaveBeenCalledTimes(1);
     expect(daemon.tap).not.toHaveBeenCalled();
+  });
+
+  it('connects a WebView for the call only, with its own connect budget, and closes it after', async () => {
+    // A session the MCP server kept open would wedge a test connecting to the
+    // same page (PILOT-288), and could outlive the app it was opened on.
+    hoisted.client = makeDaemon().client;
+    const { page, webview } = fakePage();
+    const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(webview).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    const connectingDevice = webview.mock.contexts[0] as unknown as { _defaultTimeoutMs: number };
+    expect(connectingDevice._defaultTimeoutMs).toBe(15_000);
+    expect(page._setTimeoutMs).toHaveBeenCalledWith(5_000);
+  });
+
+  it('closes the WebView even when the action fails', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage();
+    locator.click.mockRejectedValueOnce(new Error('boom'));
+    const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(dispose).toHaveBeenCalledTimes(1);
   });
 
   it('types into a page field: appends without clear, replaces with it', async () => {

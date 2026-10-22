@@ -422,7 +422,7 @@ device.getByRole("tab", { name: "Settings", selected: true })
 
 The `device.` is optional: `getByText("Welcome")`, a screen object's `this.device.getByText("Welcome")` and a Playwright-style `page.getByText("Welcome")` or `this.page.getByText("Welcome")` all read as `device.getByText("Welcome")`; `this.webview.` reads as `webview.`.
 
-Chains work as in a test, because the string is built by the SDK's own locator code: scoped getters (`device.getByRole("list").getByText("Row 2")`), `.filter({ hasText, hasNotText, has, hasNot })`, `.and()`, `.or()`, and `.first()`, `.last()` or `.nth(n)`. WebView locators start at `webview.` (`webview.getByText("Submit")`, `webview.locator("#email")`) and resolve in the app's WebView in the foreground.
+Chains work as in a test, because the string is built by the SDK's own locator code: scoped getters (`device.getByRole("list").getByText("Row 2")`), `.filter({ hasText, hasNotText, has, hasNot })`, `.and()`, `.or()`, and `.first()`, `.last()` or `.nth(n)`. `.filter({ has, hasNot })` takes a single getter, as it only reads that getter in a test too. WebView locators start at `webview.` (`webview.getByText("Submit")`, `webview.locator("#email")`) and resolve in the app's WebView in the foreground, connected for that call only.
 
 The string is read, never run as code: only locator-building calls with literal arguments (strings, numbers, booleans, RegExp literals and option objects) are accepted. Anything else, such as an action (`.tap()`), `await`, a variable or an expression, is rejected as invalid with an error naming it.
 

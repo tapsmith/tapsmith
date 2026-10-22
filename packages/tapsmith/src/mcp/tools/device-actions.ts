@@ -2,8 +2,8 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceClientFor, deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
-import { evaluateLocator, isLocatorError, type EvaluatedLocator } from '../locator-eval.js';
-import { locatorRoots, sdkDeviceFor } from '../sdk-device.js';
+import { isLocatorError, type EvaluatedLocator } from '../locator-eval.js';
+import { sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
 
 /** The tool result for a daemon action: its error, or "OK". */
 export function actionResult(success: boolean, errorMessage?: string) {
@@ -22,23 +22,25 @@ function thrownResult(err: unknown) {
 }
 
 /**
- * Build a tool's locator string with the SDK's own builder (PILOT-848), on
- * the target device. A string that is not a locator comes back as the error
- * result to return.
+ * Build a tool's locator string with the SDK's own builder (PILOT-848) on the
+ * target device and act on it. A string that is not a locator, or an action
+ * that throws, comes back as the error result.
  */
-async function evaluateFor(
+async function actOn(
   locator: string,
   target: { device?: string; project?: string },
   dispatcher: TestDispatcher | undefined,
-): Promise<{ evaluated: EvaluatedLocator } | { error: ReturnType<typeof actionResult> }> {
+  act: (evaluated: EvaluatedLocator) => Promise<void>,
+) {
   const { client, device } = await deviceTargetFor(target, dispatcher);
   const sdkDevice = await sdkDeviceFor(client, device);
   try {
-    return { evaluated: await evaluateLocator(locator, locatorRoots(sdkDevice, client)) };
+    await withEvaluatedLocator(sdkDevice, client, locator, act);
   } catch (err) {
-    if (isLocatorError(err)) return { error: { content: [{ type: 'text' as const, text: err.message }], isError: true } };
-    return { error: thrownResult(err) };
+    if (isLocatorError(err)) return { content: [{ type: 'text' as const, text: err.message }], isError: true };
+    return thrownResult(err);
   }
+  return actionResult(true);
 }
 
 export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDispatcher): void {
@@ -50,20 +52,12 @@ export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDi
       device: z.string().optional().describe(DEVICE_ARG_DESCRIPTION),
       project: z.string().optional().describe(PROJECT_ARG_DESCRIPTION),
     },
-    async ({ locator, device, project }) => {
-      const built = await evaluateFor(locator, { device, project }, dispatcher);
-      if ('error' in built) return built.error;
-      const { evaluated } = built;
-      try {
-        // The SDK's own tap (PILOT-848): strict mode (PILOT-226), positions,
-        // scoping and the enabled/hittable waits all behave as in a test.
-        if (evaluated.kind === 'webview') await evaluated.locator.click();
-        else await evaluated.handle.tap();
-      } catch (err) {
-        return thrownResult(err);
-      }
-      return actionResult(true);
-    },
+    // The SDK's own tap (PILOT-848): strict mode (PILOT-226), positions,
+    // scoping and the enabled/hittable waits all behave as in a test.
+    async ({ locator, device, project }) => actOn(locator, { device, project }, dispatcher, async (evaluated) => {
+      if (evaluated.kind === 'webview') await evaluated.locator.click();
+      else await evaluated.handle.tap();
+    }),
   );
 
   server.tool(
@@ -76,32 +70,21 @@ export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDi
       device: z.string().optional().describe(DEVICE_ARG_DESCRIPTION),
       project: z.string().optional().describe(PROJECT_ARG_DESCRIPTION),
     },
-    async ({ locator, text, clear, device, project }) => {
-      const built = await evaluateFor(locator, { device, project }, dispatcher);
-      if ('error' in built) return built.error;
-      const { evaluated } = built;
+    async ({ locator, text, clear, device, project }) => actOn(locator, { device, project }, dispatcher, async (evaluated) => {
       if (evaluated.kind === 'webview') {
-        try {
-          // A page field has no "type at the cursor": fill() replaces the
-          // value, so appending means filling with what is already there.
-          const current = clear ? '' : await evaluated.locator.inputValue();
-          await evaluated.locator.fill(current + text);
-        } catch (err) {
-          return thrownResult(err);
-        }
-        return actionResult(true);
-      }
-      try {
+        // A page field has no "type at the cursor": fill() replaces the
+        // value, so appending means filling with what is already there.
+        const current = clear ? '' : await evaluated.locator.inputValue();
+        await evaluated.locator.fill(current + text);
+      } else if (clear) {
         // clearAndType resolves the field once: clearing first and then
         // typing would re-resolve a locator the clear itself can break
         // (getByText("old value")), leaving the field empty.
-        if (clear) await evaluated.handle.clearAndType(text);
-        else await evaluated.handle.type(text);
-      } catch (err) {
-        return thrownResult(err);
+        await evaluated.handle.clearAndType(text);
+      } else {
+        await evaluated.handle.type(text);
       }
-      return actionResult(true);
-    },
+    }),
   );
 
   server.tool(

@@ -39,7 +39,7 @@ export type EvaluatedLocator =
 
 // ─── What may be called ───
 
-type ValueType = 'string' | 'textOrRegex' | 'integer' | 'boolean' | 'nativeLocator';
+type ValueType = 'string' | 'textOrRegex' | 'integer' | 'boolean' | 'nativeLocator' | 'plainNativeLocator';
 interface Param {
   type: ValueType | { options: Record<string, ValueType>; atLeastOne?: boolean }
   optional?: boolean
@@ -71,7 +71,7 @@ const POSITIONS: Record<string, Param[]> = {
 const NATIVE_LOCATOR_METHODS: Record<string, Param[]> = {
   ...NATIVE_GETTERS,
   ...POSITIONS,
-  filter: [{ type: { options: { hasText: 'textOrRegex', has: 'nativeLocator', hasNot: 'nativeLocator', hasNotText: 'textOrRegex' }, atLeastOne: true } }],
+  filter: [{ type: { options: { hasText: 'textOrRegex', has: 'plainNativeLocator', hasNot: 'plainNativeLocator', hasNotText: 'textOrRegex' }, atLeastOne: true } }],
   and: [{ type: 'nativeLocator' }],
   or: [{ type: 'nativeLocator' }],
 };
@@ -320,9 +320,14 @@ function options(
 }
 
 function value(node: Expr | Node, type: ValueType, what: string, ctx: Context): unknown {
-  if (type === 'nativeLocator') {
+  if (type === 'nativeLocator' || type === 'plainNativeLocator') {
     const built = build(node as Expression, ctx);
     if (built.kind !== 'native') refuse(ctx.source, `${what} must be a native locator (device.…)`);
+    // filter({ has }) reads only its operand's own getter (PILOT-361): one
+    // with a position, filter, scope or and/or would be checked without it.
+    if (type === 'plainNativeLocator' && !ctx.dry && !built.handle._plainSelector()) {
+      refuse(ctx.source, `${what} must be a single getter such as device.getByText("…"): .filter({ has }) does not apply a position, filter, scope, .and() or .or() on it`);
+    }
     return built.handle;
   }
   const literal = literalOf(node as Expression, ctx);

@@ -3,8 +3,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
 import { formatBounds } from '../locator-helper.js';
-import { evaluateLocator, isLocatorError } from '../locator-eval.js';
-import { locatorRoots, sdkDeviceFor } from '../sdk-device.js';
+import { isLocatorError } from '../locator-eval.js';
+import { sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
 import { WebViewLocator } from '../../webview-locator.js';
 
 const STRICT_HINT =
@@ -27,40 +27,34 @@ export function registerTestLocatorTool(server: McpServer, dispatcher?: TestDisp
     async ({ locator, device, project }) => {
       const target = await deviceTargetFor({ device, project }, dispatcher);
       const sdkDevice = await sdkDeviceFor(target.client, target.device);
-
-      let evaluated;
       try {
         // The string is built by the SDK's own locator builder (PILOT-848), so
         // what is counted here is what a test writing it would resolve.
-        evaluated = await evaluateLocator(locator, locatorRoots(sdkDevice, target.client));
-      } catch (err) {
-        return errorResult(isLocatorError(err) ? err.message : `Error: ${err instanceof Error ? err.message : String(err)}`);
-      }
-
-      try {
-        if (evaluated.kind === 'webview') {
-          const loc = evaluated.locator;
-          const count = await loc.count();
-          const result: Record<string, unknown> = { matched: count > 0, count, note: 'WebView locator — resolved in the page.' };
-          if (loc._nthIndex !== undefined) {
-            result.totalMatches = await new WebViewLocator(loc._handle, loc._selector, loc._timeoutMs, loc._finderAllJs).count();
-          } else if (count > 1) {
-            result.strictModeWarning = STRICT_HINT;
+        const result = await withEvaluatedLocator(sdkDevice, target.client, locator, async (evaluated) => {
+          if (evaluated.kind === 'webview') {
+            const loc = evaluated.locator;
+            const count = await loc.count();
+            const res: Record<string, unknown> = { matched: count > 0, count, note: 'WebView locator — resolved in the page.' };
+            if (loc._nthIndex !== undefined) {
+              res.totalMatches = await new WebViewLocator(loc._handle, loc._selector, loc._timeoutMs, loc._finderAllJs).count();
+            } else if (count > 1) {
+              res.strictModeWarning = STRICT_HINT;
+            }
+            return res;
           }
-          return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
-        }
-
-        const { matches, total, positional } = await evaluated.handle._currentMatches();
-        const result: Record<string, unknown> = {
-          matched: matches.length > 0,
-          count: matches.length,
-          elements: matches.map((el) => ({ role: el.role || el.className, text: el.text, bounds: formatBounds(el.bounds) })),
-        };
-        if (total !== matches.length) result.totalMatches = total;
-        if (!positional && matches.length > 1) result.strictModeWarning = STRICT_HINT;
+          const { matches, total, positional } = await evaluated.handle._currentMatches();
+          const res: Record<string, unknown> = {
+            matched: matches.length > 0,
+            count: matches.length,
+            elements: matches.map((el) => ({ role: el.role || el.className, text: el.text, bounds: formatBounds(el.bounds) })),
+          };
+          if (total !== matches.length) res.totalMatches = total;
+          if (!positional && matches.length > 1) res.strictModeWarning = STRICT_HINT;
+          return res;
+        });
         return { content: [{ type: 'text' as const, text: JSON.stringify(result, null, 2) }] };
       } catch (err) {
-        return errorResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
+        return errorResult(isLocatorError(err) ? err.message : `Error: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
   );

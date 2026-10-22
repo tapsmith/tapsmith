@@ -147,6 +147,9 @@ describe('evaluateLocator — refuses anything that is not a locator', () => {
     ['device.getByRole("listitem").filter({ has: webview.getByText("x") })', /native locator/],
     ['webview.getByText("x").filter({ hasText: "y" })', /`\.filter\(\)`/],
     ['device.getByText("x"', /Invalid locator syntax/],
+    ['device.getByRole("listitem").filter({ has: device.getByText("Milk").filter({ hasText: "2%" }) })', /single getter/],
+    ['device.getByRole("listitem").filter({ hasNot: device.getByText("Milk").first() })', /single getter/],
+    ['device.getByRole("listitem").filter({ has: device.getByRole("list").getByText("Milk") })', /single getter/],
     ['', /empty/],
   ])('%s', async (source, message) => {
     await expect(refuse(source)).rejects.toThrow(message);
