@@ -686,6 +686,66 @@ export class WebViewHandle {
   }
 
   /**
+   * @internal — A locator's current matches with their screen bounds, mapped
+   * as {@link _dumpDomHierarchy} maps its nodes, so UI mode's live Locator
+   * tab can draw them on the device mirror and tell a picked element from
+   * another (PILOT-848). Single tick; at most `max` matches are described.
+   * `bounds` is absent when the WebView's place on screen is not known.
+   */
+  async _liveMatches(loc: WebViewLocator, timeoutMs: number, max = 200): Promise<{
+    count: number
+    total: number
+    matches: Array<{ tag: string; id: string; testId: string; bounds?: { left: number; top: number; right: number; bottom: number } }>
+  }> {
+    const nth = loc._nthIndex;
+    const idxJs = nth === undefined ? 'null' : nth >= 0 ? String(nth) : `els.length - ${-nth}`;
+    const useDpr = this._platform === 'android';
+    const found = await this._evaluate(`(() => {
+      const els = (${loc._finderAllJs});
+      const idx = ${idxJs};
+      const picked = idx === null ? els.slice(0, ${max}) : (idx >= 0 && idx < els.length ? [els[idx]] : []);
+      const dpr = ${useDpr ? 'window.devicePixelRatio || 1' : '1'};
+      return {
+        total: els.length,
+        matches: picked.map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            tag: (el.tagName || '').toLowerCase(),
+            id: el.id || '',
+            testId: el.getAttribute('data-testid') || '',
+            rect: { left: r.left * dpr, top: r.top * dpr, right: r.right * dpr, bottom: r.bottom * dpr },
+          };
+        }),
+      };
+    })()`, timeoutMs) as { total: number; matches: Array<{ tag: string; id: string; testId: string; rect: { left: number; top: number; right: number; bottom: number } }> };
+    // Re-fetched each time: the WebView may have moved (as _getElementBounds).
+    try {
+      const res = await this._client.findElement(
+        { kind: { type: 'className', value: this._platform === 'ios' ? 'XCUIElementTypeWebView' : 'android.webkit.WebView' } },
+        200,
+      );
+      if (res.found && res.element?.bounds) this._webviewNativeBounds = res.element.bounds;
+    } catch { /* best-effort: bounds stay unknown */ }
+    const wb = this._webviewNativeBounds;
+    const count = nth === undefined ? found.total : found.matches.length;
+    return {
+      count,
+      total: found.total,
+      matches: found.matches.map(({ rect, ...m }) => ({
+        ...m,
+        bounds: wb
+          ? {
+            left: Math.round(wb.left + rect.left),
+            top: Math.round(wb.top + rect.top),
+            right: Math.round(wb.left + rect.right),
+            bottom: Math.round(wb.top + rect.bottom),
+          }
+          : undefined,
+      })),
+    };
+  }
+
+  /**
    * @internal — Single-tick strict value read for assertion polls (expect.ts).
    *
    * Resolves the target once — throwing a StrictModeViolationError on an

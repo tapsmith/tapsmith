@@ -9,14 +9,20 @@
  */
 
 import type { TapsmithGrpcClient } from '../grpc-client.js';
-import type { WebViewHandle, WebViewLocatorProbe } from '../webview-handle.js';
-import type { Bounds, HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
+import type { WebViewHandle } from '../webview-handle.js';
+import { getNodeBounds, type Bounds, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
 import { agentValidatedSuggestions } from '../mcp/agent-suggestions.js';
 import { sdkDeviceFor, withEvaluatedLocator } from '../mcp/sdk-device.js';
 
 /** iOS checks a batch in one XCUI snapshot, so it takes far more per call. */
 const IOS_CHUNK_SIZE = 500;
+
+/** One live WebView query's budget: a wedged page must not hold a tab's queue for the device timeout. */
+const LIVE_WEBVIEW_TIMEOUT_MS = 5_000;
+
+/** How far (px) a match may sit from the picked element's recorded bounds and still be it. */
+const SAME_ELEMENT_TOLERANCE_PX = 2;
 
 export interface LiveLocatorEvaluation {
   /** Matches now (after any position); absent with `error`. */
@@ -45,8 +51,14 @@ export async function evaluateLiveLocator(
     const device = await sdkDeviceFor(client, serial);
     return await withEvaluatedLocator(device, client, locator, async (evaluated) => {
       if (evaluated.kind === 'webview') {
-        const count = await evaluated.locator.count();
-        return { count, positional: evaluated.locator._nthIndex !== undefined, bounds: [], webview: true };
+        const { count, total, matches } = await evaluated.locator._handle._liveMatches(evaluated.locator, LIVE_WEBVIEW_TIMEOUT_MS);
+        return {
+          count,
+          total,
+          positional: evaluated.locator._nthIndex !== undefined,
+          bounds: matches.flatMap((m) => (m.bounds ? [m.bounds] : [])),
+          webview: true,
+        };
       }
       const { matches, total, positional } = await evaluated.handle._currentMatches();
       return {
@@ -102,7 +114,7 @@ export async function suggestLiveLocators(
   return { suggestions, note };
 }
 
-type WebViewMatch = WebViewLocatorProbe['sample'][number];
+type WebViewMatch = Awaited<ReturnType<WebViewHandle['_liveMatches']>>['matches'][number];
 
 /** The page's one match for a `webview.*` locator, or none when it matches 0 or several. */
 async function webViewOnlyMatch(
@@ -115,8 +127,8 @@ async function webViewOnlyMatch(
     const device = await sdkDeviceFor(client, serial);
     return await withEvaluatedLocator(device, client, locator, async (evaluated) => {
       if (evaluated.kind !== 'webview') return {};
-      const probe = await evaluated.locator._handle._probeLocator(evaluated.locator, undefined, { visibility: false });
-      return probe.count === 1 ? { only: probe.sample[0] } : {};
+      const { count, matches } = await evaluated.locator._handle._liveMatches(evaluated.locator, LIVE_WEBVIEW_TIMEOUT_MS, 1);
+      return count === 1 ? { only: matches[0] } : {};
     }, { webview });
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };
@@ -126,16 +138,24 @@ async function webViewOnlyMatch(
 /**
  * Whether the page's one match is the element picked in the overlay: a
  * role-only or tag-only candidate can find exactly one element that is a
- * different one (e.g. an `<a>` without href is no link to the page).
+ * different one (e.g. an `<a>` without href is no link to the page). Where
+ * both are known, the match must also sit where the picked element is.
  */
 function isPickedWebViewElement(match: WebViewMatch, node: HierarchyNode): boolean {
   const same = (attr: string, value: string) => {
     const expected = node.attributes.get(attr) ?? '';
     return expected === '' || expected === value;
   };
+  const picked = getNodeBounds(node);
+  const near = (a: number, b: number) => Math.abs(a - b) <= SAME_ELEMENT_TOLERANCE_PX;
+  const samePlace = !picked || !match.bounds || (
+    near(picked.left, match.bounds.left) && near(picked.top, match.bounds.top)
+    && near(picked.right, match.bounds.right) && near(picked.bottom, match.bounds.bottom)
+  );
   return match.tag === (node.attributes.get('webview-tag') ?? '').toLowerCase()
     && same('webview-id', match.id)
-    && same('webview-testid', match.testId);
+    && same('webview-testid', match.testId)
+    && samePlace;
 }
 
 /**

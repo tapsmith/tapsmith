@@ -3799,8 +3799,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       ? async () => {
         const handle = device._connectedWebView();
         if (handle) return handle;
-        const xml = liveHierarchies.latest(id, index) ?? '';
-        if (!xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
+        // No capture yet says nothing about the screen: treat it as connecting.
+        const xml = liveHierarchies.latest(id, index);
+        if (xml !== undefined && !xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
           throw new Error('No WebView on screen.');
         }
         if (Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {

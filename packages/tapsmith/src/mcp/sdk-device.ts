@@ -187,17 +187,19 @@ export async function withEvaluatedLocator<T>(
     webview?: () => Promise<WebViewHandle>
   } = {},
 ): Promise<T> {
-  if (options.webview) {
-    return use(await evaluateLocator(source, { device, webview: options.webview }));
-  }
-  const key = webViewKey(device);
-  let used: OpenWebView | undefined;
-  let release: (() => void) | undefined;
   const refuseDuringRun = (): void => {
     if (activeTestRuns > 0) {
       throw new Error('A test run is in progress: webview locators are unavailable until it finishes, since a second connection to its page can stall it.');
     }
   };
+  const held = options.webview;
+  if (held) {
+    // The caller's connection is shared with the page a run drives, too.
+    return use(await evaluateLocator(source, { device, webview: async () => { refuseDuringRun(); return held(); } }));
+  }
+  const key = webViewKey(device);
+  let used: OpenWebView | undefined;
+  let release: (() => void) | undefined;
   const webview = async (): Promise<WebViewHandle> => {
     // One WebView call at a time per device, connect and action together:
     // two calls connecting at once would open two sessions on the page.

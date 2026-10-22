@@ -471,3 +471,34 @@ describe('WebView hierarchy dump (PILOT-666)', () => {
     expect(xml).toMatch(/webview-id="search"[^>]*content-desc="Search"[^>]*webview-aria-label="Search"/);
   });
 });
+
+describe('WebView live matches (PILOT-848)', () => {
+  function liveHandle(findElement: () => Promise<unknown>, found: unknown) {
+    const handle = new WebViewHandle({ findElement: vi.fn(findElement) } as unknown as TapsmithGrpcClient, 0, TIMEOUT_MS);
+    handle._platform = 'android';
+    const evaluate = vi.spyOn(handle as unknown as { _evaluate: (js: string, t?: number) => Promise<unknown> }, '_evaluate').mockResolvedValue(found);
+    return { handle, evaluate };
+  }
+  const rect = (left: number, top: number, right: number, bottom: number) => ({ left, top, right, bottom });
+
+  it('maps each match into screen coordinates beside the WebView', async () => {
+    const { handle, evaluate } = liveHandle(
+      async () => ({ found: true, element: { bounds: rect(0, 300, 1080, 2000) } }),
+      { total: 2, matches: [{ tag: 'a', id: 'x', testId: '', rect: rect(10.4, 20, 110, 70) }, { tag: 'a', id: '', testId: '', rect: rect(0, 100, 50, 150) }] },
+    );
+    const r = await handle._liveMatches(handle.locator('a'), 5_000);
+    expect(r.count).toBe(2);
+    expect(r.matches[0]).toEqual({ tag: 'a', id: 'x', testId: '', bounds: rect(10, 320, 110, 370) });
+    expect(evaluate.mock.calls[0][1]).toBe(5_000);
+  });
+
+  it('counts a positional locator as its one target, and leaves bounds unknown without the WebView\'s place', async () => {
+    const { handle, evaluate } = liveHandle(
+      async () => { throw new Error('agent busy'); },
+      { total: 4, matches: [{ tag: 'li', id: '', testId: '', rect: rect(0, 0, 10, 10) }] },
+    );
+    const r = await handle._liveMatches(handle.locator('li').last(), 5_000);
+    expect(r).toEqual({ count: 1, total: 4, matches: [{ tag: 'li', id: '', testId: '', bounds: undefined }] });
+    expect(evaluate.mock.calls[0][0]).toContain('const idx = els.length - 1;');
+  });
+});

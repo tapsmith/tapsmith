@@ -4,7 +4,7 @@ import type { Selector } from '../selectors.js';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { Device } from '../device.js';
 import type { WebViewHandle } from '../webview-handle.js';
-import { closeMcpWebViews } from '../mcp/sdk-device.js';
+import { beginTestRun, closeMcpWebViews, endTestRun } from '../mcp/sdk-device.js';
 import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, suggestLiveLocators } from '../ui-mode/live-locators.js';
 
 // PILOT-848: UI mode's live Locator tab and picker get their answers from the
@@ -39,8 +39,8 @@ function node(attrs: Record<string, string>): HierarchyNode {
   return { tagName: 'node', attributes: new Map(Object.entries(attrs)), children: [], depth: 0 };
 }
 
-type DomEl = { tag: string; id: string; testId: string; ariaLabel: string; role: string; text: string; leaf: boolean };
-const domEl = (o: Partial<DomEl>): DomEl => ({ tag: 'div', id: '', testId: '', ariaLabel: '', role: '', text: '', leaf: true, ...o });
+type DomEl = { tag: string; id: string; testId: string; bounds?: Bounds };
+const domEl = (o: Partial<DomEl>): DomEl => ({ tag: 'div', id: '', testId: '', ...o });
 
 /** A WebView page whose locators match `matches[\`${method}:${firstArg}\`]` (none by default). */
 function fakePage(): { page: WebViewHandle; matches: Record<string, DomEl[]> } {
@@ -52,7 +52,10 @@ function fakePage(): { page: WebViewHandle; matches: Record<string, DomEl[]> } {
     count: vi.fn(async () => (matches[key] ?? []).length),
     _key: key,
   });
-  handle._probeLocator = vi.fn(async (l: { _key: string }) => ({ count: (matches[l._key] ?? []).length, anyVisible: false, targetVisible: false, sample: matches[l._key] ?? [] }));
+  handle._liveMatches = vi.fn(async (l: { _key: string }, _timeoutMs: number, max = 200) => {
+    const all = matches[l._key] ?? [];
+    return { count: all.length, total: all.length, matches: all.slice(0, max) };
+  });
   for (const method of ['getByText', 'getByRole', 'getByTestId', 'getByPlaceholder', 'getByLabel', 'locator']) {
     handle[method] = vi.fn((arg: string) => loc(`${method}:${arg}`));
   }
@@ -98,11 +101,12 @@ describe('evaluateLiveLocator', () => {
     expect(r.error).toMatch(/agent not responding/);
   });
 
-  it('counts a webview locator in the page', async () => {
-    const page = { getByText: vi.fn(() => ({ count: vi.fn(async () => 3), _nthIndex: undefined })), _setTimeoutMs: vi.fn() };
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
+  it('counts a webview locator in the page, and where its matches are on screen', async () => {
+    const { page, matches } = fakePage();
+    matches['getByText:Go'] = [domEl({ bounds: B(0, 100, 50, 120) }), domEl({ bounds: B(0, 200, 50, 220) }), domEl({})];
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
     const r = await evaluateLiveLocator(client(), 'emu', 'webview.getByText("Go")');
-    expect(r).toMatchObject({ count: 3, webview: true, bounds: [] });
+    expect(r).toMatchObject({ count: 3, total: 3, webview: true, bounds: [B(0, 100, 50, 120), B(0, 200, 50, 220)] });
   });
 });
 
@@ -127,7 +131,7 @@ describe('suggestLiveLocators', () => {
 
   it('checks a WebView element\'s candidates in the page, keeping those that find only it', async () => {
     const { page, matches } = fakePage();
-    matches['getByText:Submit'] = [domEl({ tag: 'button', text: 'Submit' })];
+    matches['getByText:Submit'] = [domEl({ tag: 'button' })];
     matches['getByRole:button'] = [domEl({ tag: 'button' }), domEl({ tag: 'button' })];
     vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
@@ -144,6 +148,16 @@ describe('suggestLiveLocators', () => {
     const anchor = node({ webview: 'true', 'webview-tag': 'a', 'webview-id': 'docs', text: 'Docs', bounds: '[0,0][100,50]' });
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', anchor, { ios: false });
     expect(suggestions.map((s) => s.code)).toEqual(['webview.getByText("Docs")']);
+  });
+
+  it('rejects a WebView candidate whose one match has the same tag but sits elsewhere', async () => {
+    const { page, matches } = fakePage();
+    matches['getByText:Total'] = [domEl({ tag: 'div', bounds: B(0, 400, 100, 450) })];
+    matches['locator:div.sum'] = [domEl({ tag: 'div', bounds: B(1, 0, 101, 50) })];
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    const total = node({ webview: 'true', 'webview-tag': 'div', 'webview-class': 'sum', text: 'Total', bounds: '[0,0][100,50]' });
+    const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', total, { ios: false });
+    expect(suggestions.map((s) => s.code)).toEqual(['webview.locator("div.sum")']);
   });
 });
 
@@ -167,13 +181,27 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
   });
 
   it('uses the WebView connection UI mode already holds instead of opening another', async () => {
-    const page = { getByText: vi.fn(() => ({ count: vi.fn(async () => 1), _nthIndex: undefined })) };
+    const { page, matches } = fakePage();
+    matches['getByText:Go'] = [domEl({})];
     const own = vi.spyOn(Device.prototype, 'webview');
-    const held = vi.fn(async () => page as unknown as WebViewHandle);
+    const held = vi.fn(async () => page);
     const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', held);
     expect(r).toMatchObject({ count: 1, webview: true });
     expect(held).toHaveBeenCalledTimes(1);
     expect(own).not.toHaveBeenCalled();
+  });
+
+  it('keeps off the held connection while a test run drives the page', async () => {
+    const { page } = fakePage();
+    const held = vi.fn(async () => page);
+    beginTestRun();
+    try {
+      const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', held);
+      expect(r.error).toMatch(/test run is in progress/);
+      expect(held).not.toHaveBeenCalled();
+    } finally {
+      endTestRun();
+    }
   });
 });
 
