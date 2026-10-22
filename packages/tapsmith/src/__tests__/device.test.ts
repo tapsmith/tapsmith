@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Device } from '../device.js';
+import { WebViewHandle } from '../webview-handle.js';
 import { isTestEndedError, runInAttemptContext } from '../attempt-fence.js';
 import { selectorToProto } from '../selectors.js';
 import type { TapsmithGrpcClient, ActionResponse } from '../grpc-client.js';
@@ -391,6 +392,24 @@ describe('Device.webview()', () => {
 
     expect(forwardWebViewPort).toHaveBeenCalled();
     expect((forwardWebViewPort.mock.calls[0] as unknown[])[0]).toBe('webview_devtools_remote_app');
+  });
+
+  it('gives a connected Android WebView the device timeout, not what the connect left', async () => {
+    // The connect is bounded by its attempt budget; a slow discovery used to
+    // leave the cached handle (and every later wait on it) with the remainder.
+    const listWebViews = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      return { requestId: '1', webviews: [{ socketName: 'webview_devtools_remote_app', pid: 222, packageName: 'com.example.app', url: '', title: '' }], errorMessage: '' };
+    });
+    const forwardWebViewPort = vi.fn(async () => ({ requestId: '1', success: true, localPort: 9222, errorMessage: '' }));
+    const connect = vi.spyOn(WebViewHandle.prototype, '_connect').mockResolvedValue(undefined);
+    try {
+      const device = new Device(makeMockClient({ listWebViews, forwardWebViewPort }), { timeout: 100, package: 'com.example.app' });
+      const handle = await device.webview();
+      expect((handle as unknown as { _timeoutMs: number })._timeoutMs).toBe(100);
+    } finally {
+      connect.mockRestore();
+    }
   });
 
   it('does not attach to another app when a package is configured', async () => {

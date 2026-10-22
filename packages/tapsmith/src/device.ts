@@ -1651,6 +1651,9 @@ export class Device {
           }
 
           appendWebViewConnectLog(log, `Connected to ${describeWebView(target)} on local port ${fwd.localPort}`);
+          // The connect had what was left of its budget; what the handle
+          // does from now on gets the device timeout, as on iOS.
+          handle._setTimeoutMs(this._defaultTimeoutMs);
           this._cachedWebView = handle;
           return handle;
         } catch (e) {

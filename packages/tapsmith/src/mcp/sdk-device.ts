@@ -26,17 +26,22 @@ export async function sdkDeviceFor(client: TapsmithGrpcClient, serial: string | 
   if (cached) return cached;
 
   const { devices: listed } = await client.listDevices();
-  const info = (serial ? listed.find((d) => d.serial === serial) : undefined) ?? (listed.length === 1 ? listed[0] : undefined);
-  // Without a serial the device is unknown, but its platform is not when
-  // every device the daemon sees shares one (two simulators, say).
+  // A serial names its device; without one, the only device listed is it.
+  const info = serial ? listed.find((d) => d.serial === serial) : listed.length === 1 ? listed[0] : undefined;
+  // Otherwise the device is unknown, but its platform is not when every
+  // device the daemon sees shares one (two simulators, say).
   const platforms = new Set(listed.map((d) => d.platform));
-  const platform: Platform = (info?.platform ?? (platforms.size === 1 ? [...platforms][0] : undefined)) === 'ios' ? 'ios' : 'android';
+  const known = info?.platform ?? (platforms.size === 1 ? [...platforms][0] : undefined);
+  const platform: Platform = known === 'ios' ? 'ios' : 'android';
   const device = new Device(client, {
     platform,
     // The iOS WebView inspector is reached through the simulator.
     simulator: platform === 'ios' ? info?.serial : undefined,
     timeout: MCP_ACTION_TIMEOUT_MS,
   });
+  // An unknown platform is a guess: ask again next time rather than keep it
+  // (the device may not be listed yet).
+  if (known === undefined) return device;
   if (!perClient) devices.set(client, (perClient = new Map()));
   perClient.set(key, device);
   return device;
@@ -51,6 +56,11 @@ export function locatorRoots(device: Device, client: TapsmithGrpcClient): Locato
     device,
     webview: async (): Promise<WebViewHandle> => {
       const { packageName } = await client.getCurrentPackage();
+      // Without the foreground package an Android WebView could be any app's
+      // (Chrome, another debug app). iOS finds the app's page itself.
+      if (!packageName && device.platform === 'android') {
+        throw new Error('Could not tell which app is in the foreground, so its WebView could not be found. Try again once the app is showing.');
+      }
       return device.webview(packageName || undefined);
     },
   };

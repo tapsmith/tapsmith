@@ -78,6 +78,7 @@ interface FakeDaemon {
   typeText: ReturnType<typeof vi.fn>
   clearText: ReturnType<typeof vi.fn>
   clearAndType: ReturnType<typeof vi.fn>
+  getCurrentPackage: ReturnType<typeof vi.fn>
   swipe: ReturnType<typeof vi.fn>
   pressKey: ReturnType<typeof vi.fn>
   launchApp: ReturnType<typeof vi.fn>
@@ -627,6 +628,14 @@ describe('sdkDeviceFor', () => {
     expect(platformOf(await sdkDeviceFor(daemonListing(['android', 'ios']), undefined))).toBe('android');
   });
 
+  it('never takes another device\'s identity for an unlisted serial, and keeps no guess', async () => {
+    const client = daemonListing(['android', 'ios']);
+    const first = await sdkDeviceFor(client, 'gone');
+    expect(platformOf(first)).toBe('android');
+    expect((first as unknown as { _simulatorUdid?: string })._simulatorUdid).toBeUndefined();
+    expect(await sdkDeviceFor(client, 'gone')).not.toBe(first);
+  });
+
   it('builds one Device per client and serial', async () => {
     const client = daemonListing(['android']);
     expect(await sdkDeviceFor(client, 'd0')).toBe(await sdkDeviceFor(client, 'd0'));
@@ -673,6 +682,17 @@ describe('webview.* locators in the action tools', () => {
     const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'webview.getByText("Submit")' })));
     expect(result).toMatchObject({ matched: true, count: 2 });
     expect(result.strictModeWarning).toBeDefined();
+  });
+
+  it('refuses to guess an Android WebView when the foreground app is unknown', async () => {
+    const daemon = makeDaemon();
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: '' }));
+    hoisted.client = daemon.client;
+    const webview = vi.spyOn(Device.prototype, 'webview');
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('foreground');
+    expect(webview).not.toHaveBeenCalled();
   });
 
   it('reports a page failure as an error, not OK', async () => {

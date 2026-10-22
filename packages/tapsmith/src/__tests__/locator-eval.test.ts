@@ -85,6 +85,19 @@ describe('evaluateLocator — the SDK builds the locator', () => {
     });
   });
 
+  it('has no plain selector for a chained, positional, filtered or webview locator (snapshot batching)', () => {
+    expect(nativeSelectorOf('device.getByText("Row")', device)).not.toBeNull();
+    for (const source of [
+      'device.getByRole("list").getByText("Row")',
+      'device.getByText("Row").first()',
+      'device.getByText("Row").filter({ hasText: "x" })',
+      'device.getByText("a").or(device.getByText("b"))',
+      'webview.getByText("Row")',
+    ]) {
+      expect(nativeSelectorOf(source, device), source).toBeNull();
+    }
+  });
+
   it('refuses a RegExp flag the agents cannot honour, with the SDK\'s message (PILOT-520)', async () => {
     await expect(native('device.getByText(/x/y)')).rejects.toThrow(/does not support the RegExp flag "y"/);
   });
@@ -139,10 +152,10 @@ describe('evaluateLocator — refuses anything that is not a locator', () => {
     await expect(refuse(source)).rejects.toThrow(message);
   });
 
-  it('refuses a bare webview root without connecting to the WebView', async () => {
-    for (const source of ['webview', 'this.webview', 'device']) {
+  it('refuses a webview locator without connecting to the WebView (no element, a bad index)', async () => {
+    for (const source of ['webview', 'this.webview', 'device', 'webview.getByText("x").nth(1.5)']) {
       const webview = vi.fn(async () => ({}) as unknown as WebViewHandle);
-      await expect(evaluateLocator(source, { device, webview })).rejects.toThrow(/names no element/);
+      await expect(evaluateLocator(source, { device, webview })).rejects.toThrow(/names no element|must be an integer/);
       expect(webview).not.toHaveBeenCalled();
     }
   });

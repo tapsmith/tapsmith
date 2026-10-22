@@ -39,7 +39,7 @@ export type EvaluatedLocator =
 
 // ─── What may be called ───
 
-type ValueType = 'string' | 'textOrRegex' | 'number' | 'boolean' | 'nativeLocator';
+type ValueType = 'string' | 'textOrRegex' | 'integer' | 'boolean' | 'nativeLocator';
 interface Param {
   type: ValueType | { options: Record<string, ValueType>; atLeastOne?: boolean }
   optional?: boolean
@@ -65,7 +65,7 @@ const NATIVE_GETTERS: Record<string, Param[]> = {
 const POSITIONS: Record<string, Param[]> = {
   first: [],
   last: [],
-  nth: [{ type: 'number' }],
+  nth: [{ type: 'integer' }],
 };
 
 const NATIVE_LOCATOR_METHODS: Record<string, Param[]> = {
@@ -329,10 +329,10 @@ function value(node: Expr | Node, type: ValueType, what: string, ctx: Context): 
   const ok =
     type === 'string' ? typeof literal === 'string'
       : type === 'textOrRegex' ? typeof literal === 'string' || literal instanceof RegExp
-        : type === 'number' ? typeof literal === 'number'
+        : type === 'integer' ? Number.isInteger(literal)
           : typeof literal === 'boolean';
   if (!ok) {
-    const expected = type === 'textOrRegex' ? 'a string or a RegExp literal' : `a ${type}`;
+    const expected = type === 'textOrRegex' ? 'a string or a RegExp literal' : type === 'integer' ? 'an integer' : `a ${type}`;
     refuse(ctx.source, `${what} must be ${expected}`);
   }
   return literal;

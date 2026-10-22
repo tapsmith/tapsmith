@@ -174,6 +174,11 @@ export class WebViewHandle {
     this._timeoutMs = timeoutMs;
   }
 
+  /** @internal — The timeout every later wait on this handle gets (set once connected). */
+  _setTimeoutMs(timeoutMs: number): void {
+    this._timeoutMs = timeoutMs;
+  }
+
   /** @internal — Create a WebViewHandle backed by WebKit Inspector (iOS). */
   static _createFromInspector(
     client: TapsmithGrpcClient,
