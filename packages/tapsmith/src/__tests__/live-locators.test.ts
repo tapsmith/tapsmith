@@ -39,6 +39,28 @@ function node(attrs: Record<string, string>): HierarchyNode {
   return { tagName: 'node', attributes: new Map(Object.entries(attrs)), children: [], depth: 0 };
 }
 
+type DomEl = { tag: string; id: string; testId: string; ariaLabel: string; role: string; text: string; leaf: boolean };
+const domEl = (o: Partial<DomEl>): DomEl => ({ tag: 'div', id: '', testId: '', ariaLabel: '', role: '', text: '', leaf: true, ...o });
+
+/** A WebView page whose locators match `matches[\`${method}:${firstArg}\`]` (none by default). */
+function fakePage(): { page: WebViewHandle; matches: Record<string, DomEl[]> } {
+  const matches: Record<string, DomEl[]> = {};
+  const handle: Record<string, unknown> = { _setTimeoutMs: vi.fn() };
+  const loc = (key: string) => ({
+    _nthIndex: undefined,
+    _handle: handle,
+    count: vi.fn(async () => (matches[key] ?? []).length),
+    _key: key,
+  });
+  handle._probeLocator = vi.fn(async (l: { _key: string }) => ({ count: (matches[l._key] ?? []).length, anyVisible: false, targetVisible: false, sample: matches[l._key] ?? [] }));
+  for (const method of ['getByText', 'getByRole', 'getByTestId', 'getByPlaceholder', 'getByLabel', 'locator']) {
+    handle[method] = vi.fn((arg: string) => loc(`${method}:${arg}`));
+  }
+  return { page: handle as unknown as WebViewHandle, matches };
+}
+
+const submit = node({ webview: 'true', 'webview-tag': 'button', text: 'Submit', bounds: '[0,0][100,50]' });
+
 afterEach(async () => {
   await closeMcpWebViews();
   vi.restoreAllMocks();
@@ -104,23 +126,24 @@ describe('suggestLiveLocators', () => {
   });
 
   it('checks a WebView element\'s candidates in the page, keeping those that find only it', async () => {
-    const counts: Record<string, number> = {};
-    const page = {
-      getByText: vi.fn((t: string) => ({ count: vi.fn(async () => counts[`text:${t}`] ?? 0), _nthIndex: undefined })),
-      locator: vi.fn((css: string) => ({ count: vi.fn(async () => counts[`css:${css}`] ?? 0), _nthIndex: undefined })),
-      getByRole: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
-      getByTestId: vi.fn(() => ({ count: vi.fn(async () => 0), _nthIndex: undefined })),
-      getByPlaceholder: vi.fn(() => ({ count: vi.fn(async () => 0), _nthIndex: undefined })),
-      getByLabel: vi.fn(() => ({ count: vi.fn(async () => 0), _nthIndex: undefined })),
-      _setTimeoutMs: vi.fn(),
-    };
-    counts['text:Submit'] = 1;
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
-    const button = node({ webview: 'true', tag: 'button', text: 'Submit', bounds: '[0,0][100,50]' });
-    const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', button, { ios: false });
-    expect(suggestions.length).toBeGreaterThan(0);
-    for (const s of suggestions) expect(s.code).toMatch(/^webview\./);
-    expect(suggestions.map((s) => s.code)).toContain('webview.getByText("Submit")');
+    const { page, matches } = fakePage();
+    matches['getByText:Submit'] = [domEl({ tag: 'button', text: 'Submit' })];
+    matches['getByRole:button'] = [domEl({ tag: 'button' }), domEl({ tag: 'button' })];
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
+    expect(suggestions.map((s) => s.code)).toEqual(['webview.getByText("Submit")']);
+  });
+
+  it('rejects a WebView candidate whose one match in the page is another element', async () => {
+    const { page, matches } = fakePage();
+    // An <a> without href is no link to the page; its one link is elsewhere.
+    matches['getByRole:link'] = [domEl({ tag: 'a', id: 'home' })];
+    matches['locator:a'] = [domEl({ tag: 'a', id: 'home' })];
+    matches['getByText:Docs'] = [domEl({ tag: 'a', id: 'docs' })];
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    const anchor = node({ webview: 'true', 'webview-tag': 'a', 'webview-id': 'docs', text: 'Docs', bounds: '[0,0][100,50]' });
+    const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', anchor, { ios: false });
+    expect(suggestions.map((s) => s.code)).toEqual(['webview.getByText("Docs")']);
   });
 });
 
@@ -135,18 +158,10 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
   });
 
   it('says why a WebView pick has no locator that finds only it', async () => {
-    const page = {
-      getByText: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
-      locator: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
-      getByRole: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
-      getByTestId: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
-      getByPlaceholder: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
-      getByLabel: vi.fn(() => ({ count: vi.fn(async () => 2), _nthIndex: undefined })),
-      _setTimeoutMs: vi.fn(),
-    };
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
-    const button = node({ webview: 'true', tag: 'button', text: 'Submit', bounds: '[0,0][100,50]' });
-    const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', button, { ios: false });
+    const { page, matches } = fakePage();
+    matches['getByText:Submit'] = [domEl({ tag: 'button' }), domEl({ tag: 'button' })];
+    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
     expect(suggestions).toEqual([]);
     expect(note).toMatch(/finds only this element/);
   });
@@ -174,6 +189,8 @@ describe('LiveHierarchyCache', () => {
     expect(cache.at(0, 0, r3)).toBe('c');
     expect(cache.at(0, 0, other)).toBeUndefined();
     expect(cache.at(0, 1, other)).toBe('member');
+    expect(cache.latest(0, 0)).toBe('c');
+    expect(cache.latest(9, 0)).toBeUndefined();
   });
 
   it('forgets a retired worker, whose id another device may reuse', () => {

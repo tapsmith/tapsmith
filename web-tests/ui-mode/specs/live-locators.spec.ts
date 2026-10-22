@@ -164,4 +164,22 @@ test.describe("Live locators come from the device", () => {
     await page.waitForTimeout(300)
     await expect(locator.input).toHaveValue("")
   })
+
+  test("a disconnect before the device answers a pick says so, and never fills the locator", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    const ask = await livePick(ui, device)
+    await detailTabs.select("Locator")
+    ui.drop()
+    await expect(page.getByTestId("locator-suggestions-note")).toContainText("Disconnected before the device answered")
+    // The lost pick's answer, should it still arrive on the new connection, is ignored.
+    await expect.poll(() => ui.connections, { timeout: 5000 }).toBe(2)
+    ui.send({
+      type: "locator-suggestions",
+      requestId: ask.requestId,
+      suggestions: [{ code: 'device.getByText("Save")', label: "Text" }],
+    })
+    await page.waitForTimeout(300)
+    await expect(locator.input).toHaveValue("")
+  })
 })

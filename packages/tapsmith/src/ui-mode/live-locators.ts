@@ -9,7 +9,7 @@
  */
 
 import type { TapsmithGrpcClient } from '../grpc-client.js';
-import type { WebViewHandle } from '../webview-handle.js';
+import type { WebViewHandle, WebViewLocatorProbe } from '../webview-handle.js';
 import type { Bounds, HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
 import { agentValidatedSuggestions } from '../mcp/agent-suggestions.js';
@@ -83,9 +83,11 @@ export async function suggestLiveLocators(
     const suggestions: LiveLocatorSuggestions['suggestions'] = [];
     let note: string | undefined;
     for (const candidate of generateSelectors(node).filter((s) => s.code.startsWith('webview.'))) {
-      const result = await evaluateLiveLocator(client, serial, candidate.code, options.webview);
+      const result = await webViewOnlyMatch(client, serial, candidate.code, options.webview);
       if (result.error) { note = result.error; break; }
-      if (result.count === 1) suggestions.push({ code: candidate.code, label: candidate.label });
+      if (result.only && isPickedWebViewElement(result.only, node)) {
+        suggestions.push({ code: candidate.code, label: candidate.label });
+      }
     }
     if (!note && suggestions.length === 0) {
       note = 'None of the page\'s locators finds only this element. Write one that does, or add .nth(i) to pick it by position.';
@@ -98,6 +100,42 @@ export async function suggestLiveLocators(
     ?? (checked.notFound > 0 ? 'The element was no longer on screen when the device checked; pick it again.' : undefined)
     ?? (suggestions.length === 0 ? 'No locator the device checked finds only this element; pick it again, or write one.' : undefined);
   return { suggestions, note };
+}
+
+type WebViewMatch = WebViewLocatorProbe['sample'][number];
+
+/** The page's one match for a `webview.*` locator, or none when it matches 0 or several. */
+async function webViewOnlyMatch(
+  client: TapsmithGrpcClient,
+  serial: string | undefined,
+  locator: string,
+  webview: (() => Promise<WebViewHandle>) | undefined,
+): Promise<{ only?: WebViewMatch; error?: string }> {
+  try {
+    const device = await sdkDeviceFor(client, serial);
+    return await withEvaluatedLocator(device, client, locator, async (evaluated) => {
+      if (evaluated.kind !== 'webview') return {};
+      const probe = await evaluated.locator._handle._probeLocator(evaluated.locator, undefined, { visibility: false });
+      return probe.count === 1 ? { only: probe.sample[0] } : {};
+    }, { webview });
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Whether the page's one match is the element picked in the overlay: a
+ * role-only or tag-only candidate can find exactly one element that is a
+ * different one (e.g. an `<a>` without href is no link to the page).
+ */
+function isPickedWebViewElement(match: WebViewMatch, node: HierarchyNode): boolean {
+  const same = (attr: string, value: string) => {
+    const expected = node.attributes.get(attr) ?? '';
+    return expected === '' || expected === value;
+  };
+  return match.tag === (node.attributes.get('webview-tag') ?? '').toLowerCase()
+    && same('webview-id', match.id)
+    && same('webview-testid', match.testId);
 }
 
 /**
@@ -121,6 +159,11 @@ export class LiveHierarchyCache {
   /** The capture of that device with that revision, if still kept. */
   at(workerId: number, deviceIndex: number, revision: number): string | undefined {
     return this.byDevice.get(`${workerId}:${deviceIndex}`)?.find((h) => h.revision === revision)?.xml;
+  }
+
+  /** The newest capture of that device, if any. */
+  latest(workerId: number, deviceIndex: number): string | undefined {
+    return this.byDevice.get(`${workerId}:${deviceIndex}`)?.at(-1)?.xml;
   }
 
   /** Forget a worker's captures (it retired; its id may be reused by another device). */

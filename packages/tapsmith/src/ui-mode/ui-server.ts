@@ -3798,8 +3798,15 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     const webview = device
       ? async () => {
         const handle = device._connectedWebView();
-        if (!handle) throw new Error('Connecting to the WebView; the count appears once the connection is up.');
-        return handle;
+        if (handle) return handle;
+        const xml = liveHierarchies.latest(id, index) ?? '';
+        if (!xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
+          throw new Error('No WebView on screen.');
+        }
+        if (Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
+          throw new Error('Could not connect to the WebView; retrying. Make sure it is debuggable (webviewDebuggingEnabled={true}, or WebView.setWebContentsDebuggingEnabled(true) on Android).');
+        }
+        throw new Error('Connecting to the WebView; the count appears once the connection is up.');
       }
       : undefined;
     return { workerId: id, deviceIndex: index, client, serial, webview };
