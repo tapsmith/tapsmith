@@ -1028,9 +1028,14 @@ export class ElementHandle {
 
   // ── Internal resolution helpers ──
 
-  /** @internal — Whether this handle was chained off a parent (`parent.getBy*()`). */
-  _isScoped(): boolean {
-    return this._options.scopeParent !== undefined;
+  /**
+   * @internal — Whether this handle's own Selector misnames it: chained off a
+   * parent (`parent.getBy*()`), or an and()/or() combination, whose Selector
+   * is only one operand's.
+   */
+  _isComposed(): boolean {
+    const o = this._options;
+    return o.scopeParent !== undefined || o.andHandle !== undefined || o.orHandle !== undefined;
   }
 
   /** @internal */

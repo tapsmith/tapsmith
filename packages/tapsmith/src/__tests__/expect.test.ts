@@ -1120,6 +1120,11 @@ describe("toHaveCount()", () => {
     await vitestExpect(
       tapsmithExpect(dialog.first().getByRole("button")).toHaveCount(2, { timeout: 100 }),
     ).rejects.toThrow("to have count 2, but found 1");
+    // Combined with and(), the scoped operand is still named by its chain.
+    const submit = new ElementHandle(client, _text("Submit"), 5000);
+    await vitestExpect(
+      tapsmithExpect(dialog.first().getByRole("button").and(submit)).toHaveCount(5, { timeout: 100 }),
+    ).rejects.toThrow('getByText("Dialog", { exact: true }).first().getByRole("button") AND getByText("Submit", { exact: true })');
   });
 
   it("on a handle from all() answers live by index, like count()", async () => {

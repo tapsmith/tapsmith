@@ -115,9 +115,10 @@ async function poll(
 }
 
 function selectorDescription(handle: ElementHandle): string {
-  // A chained getter's Selector no longer carries its parent (PILOT-850), so
-  // name it by the chain that built it.
-  return handle._isScoped() ? handle._describe() : formatSelector(handle._selector);
+  // A chained getter's Selector no longer carries its parent (PILOT-850), and
+  // an and()/or() handle's is one operand's, so name those by the code that
+  // built them.
+  return handle._isComposed() ? handle._describe() : formatSelector(handle._selector);
 }
 
 /**
