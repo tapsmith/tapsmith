@@ -1657,9 +1657,14 @@ export class Device {
           this._cachedWebView = handle;
           return handle;
         } catch (e) {
+          await handle.close();
+          // Disposed mid-connect (the session closed its WebViews): stop
+          // instead of reconnecting to the page until the deadline.
+          if (generation !== this._webviewGeneration) {
+            throw new Error('WebView connection was disposed before it completed');
+          }
           lastError = e instanceof Error ? e.message : String(e);
           appendWebViewConnectLog(log, `Connecting to ${target.socketName} failed: ${lastError}`);
-          await handle.close();
           continue;
         }
       }

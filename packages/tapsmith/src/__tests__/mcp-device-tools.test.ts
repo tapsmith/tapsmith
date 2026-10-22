@@ -803,20 +803,58 @@ describe('webview.* locators in the action tools', () => {
     expect(after.isError).toBeFalsy();
   });
 
-  it('refuses to switch apps under a call still using the old app\'s WebView', async () => {
+  it('runs WebView calls one at a time, so parallel calls never connect twice', async () => {
+    hoisted.client = makeDaemon().client;
+    let live = 0;
+    let most = 0;
+    const page = { getByText: vi.fn(() => ({ click: vi.fn(async () => {}) })), _setTimeoutMs: vi.fn() };
+    vi.spyOn(Device.prototype, 'webview').mockImplementation(async () => {
+      live++;
+      most = Math.max(most, live);
+      await new Promise((r) => setTimeout(r, 20));
+      live--;
+      return page as unknown as WebViewHandle;
+    });
+    await Promise.all([1, 2, 3].map(() => callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' })));
+    expect(most).toBe(1);
+  });
+
+  it('switches apps once the call using the old app\'s WebView finishes', async () => {
     const daemon = makeDaemon();
     hoisted.client = daemon.client;
-    const { locator } = fakePage();
+    const { locator, webview } = fakePage();
     let release!: () => void;
     locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
     const slow = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
     await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(1));
     daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
-    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
-    expect(res.isError).toBe(true);
-    expect(text(res)).toContain('still in use');
+    const next = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(webview).toHaveBeenCalledTimes(1); // waiting its turn
     release();
     await slow;
+    expect((await next).isError).toBeFalsy();
+    expect(webview).toHaveBeenLastCalledWith('com.other');
+  });
+
+  it('refuses a queued WebView call once a test run has started', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage();
+    let release!: () => void;
+    locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    const slow = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(1));
+    const queued = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    beginTestRun();
+    try {
+      release();
+      await slow;
+      const res = await queued;
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('test run is in progress');
+    } finally {
+      endTestRun();
+    }
   });
 
   it('keeps a separate connection per Android device on one daemon client', async () => {

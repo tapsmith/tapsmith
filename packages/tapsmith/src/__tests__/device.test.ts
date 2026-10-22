@@ -394,6 +394,27 @@ describe('Device.webview()', () => {
     expect((forwardWebViewPort.mock.calls[0] as unknown[])[0]).toBe('webview_devtools_remote_app');
   });
 
+  it('stops an Android WebView connect at once when the WebViews are disposed mid-connect', async () => {
+    // Retrying until the deadline kept opening CDP sessions on a page a
+    // test run was connecting to.
+    const listWebViews = vi.fn(async () => ({ requestId: '1', webviews: [{ socketName: 'webview_devtools_remote_app', pid: 222, packageName: 'com.example.app', url: '', title: '' }], errorMessage: '' }));
+    const forwardWebViewPort = vi.fn(async () => ({ requestId: '1', success: true, localPort: 9222, errorMessage: '' }));
+    let device!: Device;
+    const connect = vi.spyOn(WebViewHandle.prototype, '_connect').mockImplementation(async () => {
+      await device._disposeWebViewManager();
+      throw new Error('socket closed');
+    });
+    try {
+      device = new Device(makeMockClient({ listWebViews, forwardWebViewPort }), { timeout: 5_000, package: 'com.example.app' });
+      const started = Date.now();
+      await expect(device.webview()).rejects.toThrow(/disposed before it completed/);
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(connect).toHaveBeenCalledTimes(1);
+    } finally {
+      connect.mockRestore();
+    }
+  });
+
   it('gives a connected Android WebView the device timeout, not what the connect left', async () => {
     // The connect is bounded by its attempt budget; a slow discovery used to
     // leave the cached handle (and every later wait on it) with the remainder.

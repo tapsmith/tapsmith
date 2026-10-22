@@ -87,7 +87,7 @@ interface OpenWebView {
   /** The Device that holds the connection (its own connect budget). */
   holder: Device
   packageName: string
-  /** Tool calls using it now: it is never closed under one. */
+  /** Tool calls using it now (at most one: calls are serialized); never idle-closed under one. */
   inUse: number
   idle?: ReturnType<typeof setTimeout>
 }
@@ -110,8 +110,24 @@ export function endTestRun(): void {
   activeTestRuns = Math.max(0, activeTestRuns - 1);
 }
 
-/** Serializes finding or opening a connection, so two calls never race to replace it. */
-const acquiring = new WeakMap<TapsmithGrpcClient, Map<string, Promise<unknown>>>();
+/** The WebView call each (client, key) is waiting on, so calls run one at a time. */
+const webViewLocks = new WeakMap<TapsmithGrpcClient, Map<string, Promise<void>>>();
+
+/** Wait for the (client, key) WebView to be free; resolves with its release. */
+async function lockWebView(client: TapsmithGrpcClient, key: string): Promise<() => void> {
+  let locks = webViewLocks.get(client);
+  if (!locks) webViewLocks.set(client, (locks = new Map()));
+  const previous = locks.get(key) ?? Promise.resolve();
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  const tail = previous.then(() => held);
+  locks.set(key, tail);
+  await previous;
+  return () => {
+    release();
+    if (locks.get(key) === tail) locks.delete(key);
+  };
+}
 
 /**
  * Open connections by daemon client and target (platform and simulator): a
@@ -165,6 +181,7 @@ export async function withEvaluatedLocator<T>(
 ): Promise<T> {
   const key = webViewKey(device);
   let used: OpenWebView | undefined;
+  let release: (() => void) | undefined;
   const webview = async (): Promise<WebViewHandle> => {
     const { packageName } = await client.getCurrentPackage();
     // Without the current app a WebView could be any app's (Chrome, Safari,
@@ -172,42 +189,31 @@ export async function withEvaluatedLocator<T>(
     if (!packageName) {
       throw new Error('Could not tell which app is current, so its WebView could not be found. Set the app in the config, or try again once it is showing.');
     }
+    // One WebView call at a time per device, connect and action together:
+    // two calls connecting at once would open two sessions on the page.
+    release = await lockWebView(client, key);
     if (activeTestRuns > 0) {
       throw new Error('A test run is in progress: webview locators are unavailable until it finishes, since a second connection to its page can stall it.');
     }
-    let locks = acquiring.get(client);
-    if (!locks) acquiring.set(client, (locks = new Map()));
-    const previous = locks.get(key) ?? Promise.resolve();
-    const acquire = previous.catch(() => {}).then(async () => {
-      let open = openWebViews.get(client)?.get(key);
-      if (open && open.packageName !== packageName) {
-        // Another app is current. The old connection would act on its page.
-        if (open.inUse > 0) {
-          throw new Error(`The WebView of ${open.packageName} is still in use by another call; try again when it finishes.`);
-        }
-        await closeWebView(client, key);
-        open = undefined;
-      }
-      if (!open) {
-        open = {
-          holder: new Device(client, { platform: device.platform, simulator: simulators.get(device), timeout: WEBVIEW_CONNECT_TIMEOUT_MS }),
-          packageName,
-          inUse: 0,
-        };
-        let perClient = openWebViews.get(client);
-        if (!perClient) openWebViews.set(client, (perClient = new Map()));
-        perClient.set(key, open);
-      }
-      open.inUse++;
-      clearTimeout(open.idle);
-      return open;
-    });
-    locks.set(key, acquire);
-    void acquire.catch(() => {}).finally(() => {
-      if (locks.get(key) === acquire) locks.delete(key);
-    });
-    const open = await acquire;
+    let open = openWebViews.get(client)?.get(key);
+    if (open && open.packageName !== packageName) {
+      // Another app is current: the old connection would act on its page.
+      await closeWebView(client, key);
+      open = undefined;
+    }
+    if (!open) {
+      open = {
+        holder: new Device(client, { platform: device.platform, simulator: simulators.get(device), timeout: WEBVIEW_CONNECT_TIMEOUT_MS }),
+        packageName,
+        inUse: 0,
+      };
+      let perClient = openWebViews.get(client);
+      if (!perClient) openWebViews.set(client, (perClient = new Map()));
+      perClient.set(key, open);
+    }
+    open.inUse++;
     used = open;
+    clearTimeout(open.idle);
     // Reuses the live connection, or connects again if it died.
     const handle = await open.holder.webview(packageName);
     // The connect had its own budget; waits on the page get the action one.
@@ -221,5 +227,6 @@ export async function withEvaluatedLocator<T>(
       used.inUse--;
       if (used.inUse === 0) closeWhenIdle(client, key, used);
     }
+    release?.();
   }
 }

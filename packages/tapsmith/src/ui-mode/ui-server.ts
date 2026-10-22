@@ -1103,43 +1103,54 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     return matchRequestedFiles(files, ctx.testFiles, roots);
   }
 
+  async function runRequestedFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult> {
+    if (workersEnabled) await ensureWorkersReady();
+    const { testFilter, project } = options ?? {};
+    const validFiles = resolveRequested(files);
+    if (validFiles.length === 0) {
+      return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+    }
+    if (validFiles.length === 1) return withFailures(await runFile(validFiles[0], testFilter, project));
+    let totalPassed = 0, totalFailed = 0, totalSkipped = 0, totalDuration = 0;
+    let stopped = false;
+    // Each runFile() clears testResults at the start of its own run, so the
+    // map only ever holds the most recent file's results. Snapshot each
+    // file's results as it finishes and re-seed the union after the loop so
+    // getResults()/collectFailures() (and thus list_results) reflect the
+    // whole multi-file run, not just the last file.
+    const accumulated: UITestResultEntry[] = [];
+    for (const f of validFiles) {
+      const r = await runFile(f, testFilter, project);
+      accumulated.push(...testResults.values());
+      totalPassed += r.passed;
+      totalFailed += r.failed;
+      totalSkipped += r.skipped;
+      totalDuration += r.duration;
+      // Checked AFTER each file: a stop during file N must not start file
+      // N+1 (each runFile resets the flag when its run begins).
+      if (stopRequested || r.status === 'stopped') { stopped = true; break; }
+    }
+    testResults.clear();
+    for (const entry of accumulated) testResults.set(resultEntryKey(entry), entry);
+    return withFailures({
+      status: stopped ? 'stopped' : totalFailed > 0 ? 'failed' : 'passed',
+      passed: totalPassed,
+      failed: totalFailed,
+      skipped: totalSkipped,
+      duration: totalDuration,
+    });
+  }
+
   const testDispatcher: TestDispatcher = {
     async runFiles(files, options) {
-      if (workersEnabled) await ensureWorkersReady();
-      const { testFilter, project } = options ?? {};
-      const validFiles = resolveRequested(files);
-      if (validFiles.length === 0) {
-        return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+      // One run for the whole request: a file at a time ends each file's run,
+      // which would let the MCP tools' WebView connect between files.
+      beginTestRun();
+      try {
+        return await runRequestedFiles(files, options);
+      } finally {
+        endTestRun();
       }
-      if (validFiles.length === 1) return withFailures(await runFile(validFiles[0], testFilter, project));
-      let totalPassed = 0, totalFailed = 0, totalSkipped = 0, totalDuration = 0;
-      let stopped = false;
-      // Each runFile() clears testResults at the start of its own run, so the
-      // map only ever holds the most recent file's results. Snapshot each
-      // file's results as it finishes and re-seed the union after the loop so
-      // getResults()/collectFailures() (and thus list_results) reflect the
-      // whole multi-file run, not just the last file.
-      const accumulated: UITestResultEntry[] = [];
-      for (const f of validFiles) {
-        const r = await runFile(f, testFilter, project);
-        accumulated.push(...testResults.values());
-        totalPassed += r.passed;
-        totalFailed += r.failed;
-        totalSkipped += r.skipped;
-        totalDuration += r.duration;
-        // Checked AFTER each file: a stop during file N must not start file
-        // N+1 (each runFile resets the flag when its run begins).
-        if (stopRequested || r.status === 'stopped') { stopped = true; break; }
-      }
-      testResults.clear();
-      for (const entry of accumulated) testResults.set(resultEntryKey(entry), entry);
-      return withFailures({
-        status: stopped ? 'stopped' : totalFailed > 0 ? 'failed' : 'passed',
-        passed: totalPassed,
-        failed: totalFailed,
-        skipped: totalSkipped,
-        duration: totalDuration,
-      });
     },
     async runAll() {
       if (workersEnabled) await ensureWorkersReady();
