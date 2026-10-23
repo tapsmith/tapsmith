@@ -75,11 +75,16 @@ do {
                               className: "XCUIElementTypeSearchField", placeholder: "Search")
     expect("a search field that moved and narrowed on focus", verdict(search, before: nil, after: searchFocused) == .focused)
 
-    // Already focused, then lifted: the resolve-time frame is stale.
     let email = Input(frame: row, className: textField, placeholder: "Email")
     let emailLifted = Input(frame: row.offsetBy(dx: 0, dy: -200), className: textField, placeholder: "Email")
-    expect("an already-focused field that has moved since it was resolved",
-           verdict(email, before: emailLifted, after: emailLifted) == .focused)
+    expect("the field took focus and was lifted", verdict(email, before: nil, after: emailLifted) == .focused)
+
+    // Placeholders repeat: another "Required" row keeping the focus it had
+    // is not the target.
+    let required = Input(frame: row, className: textField, placeholder: "Required")
+    let otherRequired = Input(frame: row.offsetBy(dx: 0, dy: 88), className: textField, placeholder: "Required")
+    expect("another field with the same placeholder kept its focus",
+           verdict(required, before: otherRequired, after: otherRequired) == .notFocused)
 
     // Another same-sized field, moving while it keeps focus: not the target.
     let password = Input(frame: row.offsetBy(dx: 0, dy: 44), className: textField, placeholder: "Password")

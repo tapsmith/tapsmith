@@ -76,14 +76,15 @@ enum TypingFocus {
         if !element.identifier.isEmpty && !after.identifier.isEmpty {
             return element.identifier == after.identifier ? .focused : .notFocused
         }
+        // Below that, it must also be an input that took focus with this tap:
+        // one that already had it is another field keeping its focus
+        // (placeholders repeat: several "Required" rows).
+        let changed = focusedBefore.map { $0 != after } ?? true
         if !element.placeholder.isEmpty && !after.placeholder.isEmpty {
-            return element.placeholder == after.placeholder && element.className == after.className
+            return changed && element.placeholder == after.placeholder && element.className == after.className
                 ? .focused : .notFocused
         }
-        // Nothing to tell them apart by: an input of the element's kind that
-        // took focus with this tap. One that already had it is another field
-        // keeping its focus.
-        let changed = focusedBefore.map { $0 != after } ?? true
+        // Nothing else to tell them apart by: an input of the element's kind.
         return changed && element.className == after.className ? .focused : .notFocused
     }
 
