@@ -5,9 +5,11 @@ import { HOOKS_MARKER_PREFIX } from '../../hooks-marker.js';
 //
 // Not everything in a hierarchy dump is the app's. No user locator matches:
 //
-// - iOS: the application element (its label is the app's name) and anything
-//   inside the software keyboard (keys, and its return and globe buttons). An
-//   input accessory toolbar above the keyboard is the app's, and matches.
+// - iOS: the application element (its label is the app's name) and the
+//   software keyboard: the `.keyboard` element, and the keyboard UI around it
+//   the agent marks `tapsmith-non-app="true"` (the predictive bar, the emoji
+//   and dictation row). An input accessory toolbar above the keyboard is the
+//   app's, and matches.
 // - Android: the windows the agent marks `tapsmith-non-app="true"` — the
 //   input method, and System UI's bars (the status and navigation bars:
 //   bar-shaped System UI windows neither focused nor active; a pulled-down

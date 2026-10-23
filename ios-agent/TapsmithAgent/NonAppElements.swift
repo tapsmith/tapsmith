@@ -6,10 +6,14 @@ import Foundation
 ///
 /// - The application element. Its label is the app's name, so `getByText`
 ///   of any word in that name matched it.
-/// - Everything inside the software keyboard (`.keyboard`): its keys and its
-///   return, globe and dictation buttons, so a "Done" button next to an open
-///   keyboard is not ambiguous with the keyboard's Done key. An input
-///   accessory toolbar above the keyboard is the app's, and matches.
+/// - The software keyboard: everything inside the `.keyboard` element (its
+///   keys and return key), the predictive / input assistant bar above it
+///   (`SystemInputAssistantView`), and, in the keyboard's window, whatever
+///   sits from the keyboard's top edge down (the emoji and dictation row
+///   below the keys). So a "Done" button next to an open keyboard is not
+///   ambiguous with the keyboard's Done key, nor a typed word with its
+///   prediction. An input accessory toolbar above the keyboard is the app's,
+///   and matches.
 /// - The `@tapsmith/react-native` hooks marker, which exists only for
 ///   Tapsmith to read (CommandHandler's epoch wait, the daemon's dump parse).
 ///
@@ -46,9 +50,23 @@ enum NonAppElements {
         elementType == .application || isHooksMarker(label: label, title: title, value: value)
     }
 
+    /// The identifier of the predictive / input assistant bar the system
+    /// draws above the keys.
+    static let inputAssistantIdentifier = "SystemInputAssistantView"
+
     /// Whether no locator matches this node or anything inside it.
-    static func excludesSubtree(elementType: XCUIElement.ElementType) -> Bool {
-        elementType == .keyboard
+    /// `keyboardTop` is the top edge of a `.keyboard` that came earlier in
+    /// tree order within the same window (nil when there is none): the
+    /// keyboard's own row below the keys lies from there down.
+    static func excludesSubtree(
+        elementType: XCUIElement.ElementType,
+        identifier: String,
+        frame: CGRect,
+        keyboardTop: CGFloat?
+    ) -> Bool {
+        if elementType == .keyboard || identifier == inputAssistantIdentifier { return true }
+        guard let keyboardTop, elementType != .window, frame.height > 0 else { return false }
+        return frame.minY >= keyboardTop - 0.5
     }
 
     /// AND this into a live query so it never returns a hooks marker. Label

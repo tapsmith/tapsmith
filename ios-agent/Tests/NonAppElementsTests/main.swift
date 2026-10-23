@@ -35,11 +35,24 @@ check("a window is not (its descendants are the app)", excludes(.window), false)
 
 // ─── Subtrees ───
 
-check("the keyboard's subtree is excluded", NonAppElements.excludesSubtree(elementType: .keyboard), true)
-check("a key itself is inside it, not a subtree root", NonAppElements.excludesSubtree(elementType: .key), false)
-check("a toolbar (input accessory) is not", NonAppElements.excludesSubtree(elementType: .toolbar), false)
-check("the application is not a subtree exclusion",
-      NonAppElements.excludesSubtree(elementType: .application), false)
+func subtree(_ type: XCUIElement.ElementType, id: String = "", frame: CGRect = .zero, keyboardTop: CGFloat? = nil) -> Bool {
+    NonAppElements.excludesSubtree(elementType: type, identifier: id, frame: frame, keyboardTop: keyboardTop)
+}
+// The keyboard window measured on an iOS 18 simulator (402 x 874 points).
+let bottomRow = CGRect(x: 0, y: 583, width: 402, height: 291)
+let accessoryBar = CGRect(x: 0, y: 494, width: 402, height: 44)
+
+check("the keyboard's subtree is excluded", subtree(.keyboard), true)
+check("the predictive / assistant bar is excluded", subtree(.other, id: "SystemInputAssistantView"), true)
+check("the emoji / dictation row below the keys is excluded",
+      subtree(.other, frame: bottomRow, keyboardTop: 583), true)
+check("an input accessory toolbar above the keys is not", subtree(.toolbar, frame: accessoryBar, keyboardTop: 583), false)
+check("before the keyboard in tree order nothing is excluded by position",
+      subtree(.other, frame: bottomRow, keyboardTop: nil), false)
+check("a window is never excluded by position", subtree(.window, frame: bottomRow, keyboardTop: 0), false)
+check("an empty frame is not", subtree(.other, frame: CGRect(x: 0, y: 600, width: 0, height: 0), keyboardTop: 583), false)
+check("a key itself is inside it, not a subtree root", subtree(.key), false)
+check("the application is not a subtree exclusion", subtree(.application), false)
 
 // ─── Live queries ───
 

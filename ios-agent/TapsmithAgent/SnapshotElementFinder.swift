@@ -203,6 +203,7 @@ class SnapshotElementFinder {
         var otherAncestors: [WrapperAncestor] = []
         var suppressed = Set<Int>()
         var keyboardMatches: [UInt] = []
+        var keyboardTop: CGFloat?
         findMatches(
             in: snapshotDict,
             inTabBar: false,
@@ -211,6 +212,7 @@ class SnapshotElementFinder {
             otherAncestors: &otherAncestors,
             suppressed: &suppressed,
             keyboardMatches: &keyboardMatches,
+            keyboardTop: &keyboardTop,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
             focusedHint: focusedHint
@@ -1101,6 +1103,7 @@ class SnapshotElementFinder {
         otherAncestors: inout [WrapperAncestor],
         suppressed: inout Set<Int>,
         keyboardMatches: inout [UInt],
+        keyboardTop: inout CGFloat?,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
         focusedHint: FocusedTextInputHint?
@@ -1116,7 +1119,13 @@ class SnapshotElementFinder {
         // marker. Only matching skips them — numberDescendants still counts
         // them, as the live queries that re-resolve a match see them too.
         let nodeType = XCUIElement.ElementType(rawValue: parseUInt(nodeDict["elementType"]) ?? 0) ?? .other
-        if NonAppElements.excludesSubtree(elementType: nodeType) {
+        if NonAppElements.excludesSubtree(
+            elementType: nodeType,
+            identifier: nodeDict["identifier"] as? String ?? "",
+            frame: parseFrame(nodeDict),
+            keyboardTop: keyboardTop
+        ) {
+            if nodeType == .keyboard { keyboardTop = parseFrame(nodeDict).minY }
             // Not matches, but counted: a live query re-resolving a later
             // match by its position sees the keyboard's nodes that match too.
             keyboardMatches += matchingTypes(
@@ -1189,6 +1198,10 @@ class SnapshotElementFinder {
         if let children = nodeDict["children"] as? [[String: Any]] {
             let childrenInTabBar = inTabBar
                 || parseUInt(nodeDict["elementType"]) == XCUIElement.ElementType.tabBar.rawValue
+            // A keyboard's top edge only applies within its own window.
+            let outerKeyboardTop = keyboardTop
+            if nodeType == .window { keyboardTop = nil }
+            defer { if nodeType == .window { keyboardTop = outerKeyboardTop } }
             for child in children {
                 findMatches(
                     in: child,
@@ -1198,6 +1211,7 @@ class SnapshotElementFinder {
                     otherAncestors: &otherAncestors,
                     suppressed: &suppressed,
                     keyboardMatches: &keyboardMatches,
+                    keyboardTop: &keyboardTop,
                     keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
                     liveFocusedTextInput: liveFocusedTextInput,
                     focusedHint: focusedHint

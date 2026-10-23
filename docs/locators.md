@@ -57,7 +57,7 @@ On Android, `device.getByText("Text inputs, buttons, focus/blur, keyboard")` fin
 
 Some of what is on the screen, and in the hierarchy the trace viewer shows, is not the app's own content. No locator matches it, on either platform:
 
-- **The software keyboard.** Its keys and its return, globe and dictation buttons, so a *Done* button beside an open keyboard is not ambiguous with the keyboard's *Done* key. A toolbar the app shows above the keyboard (an input accessory view) is the app's, and matches.
+- **The software keyboard.** Its keys, its return, globe, emoji and dictation buttons, and the bar of typing predictions above it, so a *Done* button beside an open keyboard is not ambiguous with the keyboard's *Done* key. A toolbar the app shows above the keyboard (an input accessory view) is the app's, and matches.
 - **The iOS application element**, whose label is the app's name. `getByText("App")` does not match it in an app called *My App*.
 - **Android's status and navigation bars**: their clock, icons and *Back* / *Home* buttons.
 - **The `@tapsmith/react-native` hooks marker** ([warm reset](warm-reset.md)), which exists only for Tapsmith to read.

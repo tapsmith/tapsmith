@@ -21,6 +21,11 @@ describe("Locators match only the app's own elements", () => {
     const xml = await hierarchyXml(device)
     if (platform === "ios") {
       expect(xml).toMatch(/<XCUIElementType(Keyboard|\(19\))[\s>][\s\S]*label="done"/i)
+      // The row below the keys (emoji, dictation) is the keyboard's too,
+      // though it sits outside the keyboard element.
+      if (xml.includes('identifier="dictation"')) {
+        await expect(device.getByRole("button", { name: "Dictate" })).toHaveCount(0)
+      }
     } else {
       const ime = androidWindows(xml).find((w) => /^<node tapsmith-non-app="true"[^>]*package="[^"]*inputmethod/.test(w))
       expect(ime, "the input method's window is in the dump, marked as not the app's").toBeDefined()
