@@ -460,4 +460,18 @@ test.describe("Live locators come from the device", () => {
     expect(hover.width).toBeCloseTo(canvas.width * (50 / 240), 0)
     expect(hover.height).toBeCloseTo(canvas.height * (30 / 500), 0)
   })
+
+  test("a click on web content is picked at once on a device whose captures carry no WebView overlay", async ({ app, device }) => {
+    // Only the UI's adopted primary gets the overlay; on any other device
+    // waiting for it would only hold the click until the deadline.
+    const ui = app
+    ui.sendFrame(screenFrame(240, 500))
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({ type: "hierarchy-update", xml: WEB_NO_OVERLAY, revision: 1, workerId: 0, deviceIndex: 0, webviewOverlay: false })
+    ui.clearReceived()
+    await device.tapMirrorAt(0.5, 0.5)
+    const ask = await ui.waitForMessage("suggest-locators", { timeout: 2_000 })
+    expect(ask.revision).toBe(1)
+  })
 })

@@ -295,6 +295,10 @@ export interface HierarchyUpdateMessage {
   workerId?: number
   /** Which device of the worker's group (0 = primary). */
   deviceIndex?: number
+  /** Whether this device's captures carry the WebView DOM overlay (only the
+   * UI's adopted primary does): a pick on web content waits for the overlay
+   * only when one can come. Absent from older servers: treat as true. */
+  webviewOverlay?: boolean
 }
 
 /** Device-pixel (Android) or point (iOS) rectangle, as the hierarchy reports it. */

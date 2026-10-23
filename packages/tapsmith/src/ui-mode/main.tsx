@@ -227,6 +227,8 @@ function App() {
   // timer matters because identical snapshots don't re-trigger the effect.
   // Anything that ends a live pick drops a held one too.
   const pendingMirrorPickRef = useRef<{ x: number; y: number; deadline: number } | null>(null);
+  // Whether the mirrored device's captures carry the WebView DOM overlay.
+  const liveOverlayRef = useRef(true);
   const pendingPickTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const clearPendingMirrorPick = useCallback(() => {
     pendingMirrorPickRef.current = null;
@@ -1293,6 +1295,7 @@ function App() {
           && (msg.deviceIndex ?? 0) === mirrorDeviceIndexRef.current) {
           setLiveHierarchyXml(msg.xml);
           setLiveRevision(msg.revision ?? null);
+          liveOverlayRef.current = msg.webviewOverlay ?? true;
         }
         break;
       case 'locator-evaluation':
@@ -1455,7 +1458,10 @@ function App() {
 
   const handleMirrorPickPoint = useCallback((point: { x: number; y: number }) => {
     if (liveRoots.length === 0) return;
-    if (isWebViewOverlayPending(liveRoots, point.x, point.y)) {
+    // Wait for the WebView overlay only on a device whose captures carry it:
+    // elsewhere it never comes, and the click would only resolve at the
+    // deadline, on the same native element.
+    if (liveOverlayRef.current && isWebViewOverlayPending(liveRoots, point.x, point.y)) {
       // Pick mode stays armed; hierarchy polling continues. The deadline
       // timer guarantees the click resolves even if every subsequent
       // snapshot is identical (e.g. the WebView connect keeps failing).
