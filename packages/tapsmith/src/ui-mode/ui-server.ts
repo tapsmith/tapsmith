@@ -4398,6 +4398,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   // debuggable), from the first failure until one succeeds: no overlay can
   // come meanwhile, retries included.
   let webviewFailing = false;
+  // Bumped when a primary capture shows no WebView: a dump started before
+  // then was for a WebView that has gone, and its failure is not recorded.
+  let webviewScreenEpoch = 0;
   const debugWebview = (msg: string) => {
     if (process.env.TAPSMITH_DEBUG_WEBVIEW) console.error(`[webview-picker ${new Date().toISOString().slice(11, 23)}] ${msg}`);
   };
@@ -4421,14 +4424,19 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       return undefined;
     }
     const device = ctx.device;
+    const epoch = webviewScreenEpoch;
+    const failed = () => {
+      webviewEstablished = false;
+      if (epoch !== webviewScreenEpoch) return;
+      webviewInspectFailedAt = Date.now();
+      webviewFailing = true;
+    };
     debugWebview('starting dump');
     webviewDumpPromise = device._dumpWebViewDomForInspection(hierarchyXml)
       .then((dom) => {
         debugWebview(`dump resolved: ${dom === null ? 'FAILED' : dom === undefined ? 'no-webview' : `dom ${dom.length}b`}`);
         if (dom === null) {
-          webviewInspectFailedAt = Date.now();
-          webviewEstablished = false;
-          webviewFailing = true;
+          failed();
           return undefined;
         }
         if (dom !== undefined) webviewEstablished = true;
@@ -4442,9 +4450,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // _dumpWebViewDomForInspection shouldn't reject, but treat one as a
       // failure (cooldown) rather than trusting that contract.
       .catch(() => {
-        webviewInspectFailedAt = Date.now();
-        webviewEstablished = false;
-        webviewFailing = true;
+        failed();
         return undefined;
       })
       .finally(() => { webviewDumpPromise = null; });
@@ -4600,9 +4606,15 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           // instance can open a WebView connection to that device; other
           // workers' devices (and group members) have none.
           const primary = !!hierWorker?.adoptedPrimary && hierDeviceIndex === 0;
-          // A screen without a WebView: the one that failed is gone, whether
-          // or not a dump runs now (none does in the failure cooldown).
-          if (primary && !xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) webviewFailing = false;
+          // A screen without a WebView: the one that failed is gone. Its
+          // cooldown ends too, so the next WebView is dumped (and its overlay
+          // can come) at once, and a dump still settling for the old one
+          // records no failure.
+          if (primary && !xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
+            webviewFailing = false;
+            webviewInspectFailedAt = 0;
+            webviewScreenEpoch++;
+          }
           const webviewDom = primary ? await dumpWebViewDomForPicker(xml) : undefined;
           // Whether an overlay can come: not off the primary, nor while its
           // WebView dumps keep failing (a WebView that is not debuggable),
