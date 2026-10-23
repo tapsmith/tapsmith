@@ -168,6 +168,10 @@ pub struct TapsmithServiceImpl {
     proxy_http_ports: Arc<RwLock<Vec<u16>>>,
     /// On-device path of the installed CA cert (for cleanup, Android only).
     proxy_ca_cert_path: Arc<RwLock<Option<String>>>,
+    /// The device the selection-time CA install (`ensure_android_ca_installed`)
+    /// went to, so cleanup can remove a CA that no capture start took over:
+    /// a session that never captured has no `proxy_device_serial`.
+    preinstalled_ca_serial: Arc<RwLock<Option<String>>>,
     /// Whether iptables transparent redirect is active (Android only). Used
     /// to run targeted cleanup — only remove iptables rules when they were
     /// actually installed, and only reset the system HTTP proxy when it was set.
@@ -385,6 +389,7 @@ impl TapsmithServiceImpl {
             proxy_reverse_port: Arc::new(RwLock::new(None)),
             proxy_http_ports: Arc::new(RwLock::new(Vec::new())),
             proxy_ca_cert_path: Arc::new(RwLock::new(None)),
+            preinstalled_ca_serial: Arc::new(RwLock::new(None)),
             proxy_uses_iptables: Arc::new(RwLock::new(false)),
             #[cfg(target_os = "macos")]
             ios_redirect: Arc::new(RwLock::new(None)),
@@ -537,11 +542,12 @@ impl TapsmithServiceImpl {
             }
         };
         let ca_pem_path = mitm_ca.ca_pem_path().to_string_lossy().to_string();
-        let may_restart_adbd = !self.android_agent_running_on(serial).await;
-        match adb::install_ca_cert(serial, &ca_pem_path, &cert_filename, may_restart_adbd).await {
+        let daemon_agent = self.android_agent_started_on(serial).await;
+        match adb::install_ca_cert(serial, &ca_pem_path, &cert_filename, daemon_agent).await {
             Ok(path) => {
                 info!(%serial, "MITM CA pre-installed during device setup (before first app launch)");
                 *self.proxy_ca_cert_path.write().await = Some(path);
+                *self.preinstalled_ca_serial.write().await = Some(serial.to_string());
             }
             Err(e) => {
                 debug!(%serial, "CA pre-install during setup failed: {e} — will retry at capture start");
@@ -549,10 +555,12 @@ impl TapsmithServiceImpl {
         }
     }
 
-    /// Whether this daemon has an Android agent running on `serial`: started
-    /// it, or holds a connection to it. Restarting adbd (`adb root`) then would
-    /// end the agent's instrumentation and drop its forward (PILOT-831).
-    async fn android_agent_running_on(&self, serial: &str) -> bool {
+    /// Whether this daemon has started, or holds a connection to, an Android
+    /// agent on `serial`. Restarting adbd (`adb root`) under it would end the
+    /// agent's instrumentation and drop its forward (PILOT-831). The record
+    /// can outlive the agent (an emulator that restarted), so
+    /// `adb::install_ca_cert` confirms the process on the device.
+    async fn android_agent_started_on(&self, serial: &str) -> bool {
         if self
             .agent
             .read()
@@ -1525,6 +1533,7 @@ impl TapsmithServiceImpl {
         let platform = self.proxy_platform.write().await.take();
         let reverse_port = self.proxy_reverse_port.write().await.take();
         let ca_cert_path = self.proxy_ca_cert_path.write().await.take();
+        let preinstalled_ca_serial = self.preinstalled_ca_serial.write().await.take();
         self.proxy_http_ports.write().await.clear();
         let used_iptables = std::mem::replace(&mut *self.proxy_uses_iptables.write().await, false);
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
@@ -1534,6 +1543,23 @@ impl TapsmithServiceImpl {
         #[cfg(target_os = "macos")]
         if let Some(lease) = system_proxy {
             ios::system_proxy::release(lease).await;
+        }
+
+        // A CA put in when the device was selected, which no capture start
+        // took over (the session never captured): remove it the way a capture
+        // stop would.
+        if let (None, Some(cert_path), Some(ca_serial)) =
+            (&serial, &ca_cert_path, &preinstalled_ca_serial)
+        {
+            if let Err(e) = adb::shell_with_timeout(
+                ca_serial,
+                &format!("rm -f {cert_path}"),
+                ANDROID_PROXY_CLEANUP_TIMEOUT,
+            )
+            .await
+            {
+                warn!(serial = %ca_serial, "Failed to remove pre-installed CA cert on shutdown: {e}");
+            }
         }
 
         if let Some(serial) = &serial {
@@ -6156,8 +6182,8 @@ fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
                 "Could not install Tapsmith's CA certificate on the device: {cause}. \
                  HTTPS is passed through to its servers uncaptured, so device.route(), \
                  waitForRequest() and waitForResponse() cannot see it; plain HTTP is still \
-                 captured. Tapsmith roots the device and installs the CA when a session \
-                 selects it, before the agent starts, so the next run captures HTTPS"
+                 captured. Tapsmith roots the device when a session selects it, before \
+                 its agent starts: start a new session (or run `adb root` first) to capture HTTPS"
             ),
         );
     }
@@ -6295,10 +6321,8 @@ mod tests {
     fn refused_adbd_restart_tunnels_https_and_says_why() {
         let (tunnel, msg) = android_ca_install_failure(&adb::AdbdRestartRefused.into());
         assert!(tunnel);
-        assert!(
-            msg.contains("disconnect the running Tapsmith agent"),
-            "{msg}"
-        );
+        assert!(msg.contains("end the Tapsmith agent"), "{msg}");
+        assert!(msg.contains("start a new session"), "{msg}");
         assert!(msg.contains("passed through"), "{msg}");
         assert!(msg.contains("device.route()"), "{msg}");
     }

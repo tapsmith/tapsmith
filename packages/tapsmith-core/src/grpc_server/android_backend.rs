@@ -1129,8 +1129,8 @@ impl DeviceBackend for AndroidBackend<'_> {
         let cert_filename = mitm_ca
             .device_cert_filename()
             .map_err(|e| Status::internal(format!("Failed to compute CA cert hash: {e}")))?;
-        let may_restart_adbd = !self.svc.android_agent_running_on(&serial).await;
-        match adb::install_ca_cert(&serial, ca_pem_path, &cert_filename, may_restart_adbd).await {
+        let daemon_agent = self.svc.android_agent_started_on(&serial).await;
+        match adb::install_ca_cert(&serial, ca_pem_path, &cert_filename, daemon_agent).await {
             Ok(installed_path) => {
                 *self.svc.proxy_ca_cert_path.write().await = Some(installed_path);
             }

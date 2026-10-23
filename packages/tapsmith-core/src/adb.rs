@@ -673,35 +673,46 @@ fn is_retryable_adb_transport_error(message: &str) -> bool {
 /// Returns the on-device path where the cert was installed, so the caller
 /// can clean it up later.
 ///
-/// `may_restart_adbd` is false while an agent is running on the device: on a
-/// rootable build that is not root yet, `adb root` restarts adbd, which ends
-/// the agent's instrumentation and drops its port forward (PILOT-831). Then
-/// nothing is changed and the error is [`AdbdRestartRefused`].
+/// On a rootable build that is not root yet, `adb root` restarts adbd, which
+/// ends a running agent's instrumentation and drops its port forward
+/// (PILOT-831). `daemon_agent` says whether this daemon has started or holds
+/// an agent on the device; when it has and the agent's process is still alive,
+/// nothing is changed and the error is [`AdbdRestartRefused`]. An agent the
+/// daemon has not started yet (one an earlier session left running) is about
+/// to be replaced, so it does not stop the root.
 pub async fn install_ca_cert(
     serial: &str,
     ca_pem_path: &str,
     cert_filename: &str,
-    may_restart_adbd: bool,
+    daemon_agent: bool,
 ) -> Result<String> {
     // Check if already running as root (e.g. CLI called `adb root` during setup)
     let already_root = shell_lenient(serial, "id")
         .await
         .map(|out| out.contains("uid=0"))
         .unwrap_or(false);
-    // Only a rootable build restarts adbd on `adb root`; a production build
-    // refuses without a restart, so asking it stays safe under an agent.
-    let rootable = if already_root || may_restart_adbd {
-        false
+    // The daemon's own record outlives an agent that died with its emulator,
+    // so the device confirms it. Only a rootable build restarts adbd on
+    // `adb root`; a production build refuses without a restart, so asking it
+    // stays safe under an agent. A failed probe counts as the unsafe answer
+    // (agent alive, rootable), since guessing wrong the other way ends the
+    // agent.
+    let (agent_alive, rootable) = if already_root || !daemon_agent {
+        (false, true)
     } else {
-        shell_lenient(serial, "getprop ro.debuggable")
+        let alive = shell_lenient(serial, AGENT_ALIVE_PROBE)
             .await
-            .map(|out| out.trim() == "1")
-            // Unknown: assume rootable, since guessing wrong the other way
-            // disconnects the agent.
-            .unwrap_or(true)
+            .map(|out| parse_agent_alive(&out))
+            .unwrap_or(true);
+        let rootable = !alive
+            || shell_lenient(serial, "getprop ro.debuggable")
+                .await
+                .map(|out| parse_rootable(&out))
+                .unwrap_or(true);
+        (alive, rootable)
     };
 
-    match root_step(already_root, may_restart_adbd, rootable) {
+    match root_step(already_root, !agent_alive, rootable) {
         RootStep::AlreadyRoot => {
             debug!(%serial, "adb already running as root, skipping adb root");
         }
@@ -781,6 +792,22 @@ enum RootStep {
     Refuse,
 }
 
+/// Exits with an explicit marker, because `shell_lenient` returns whatever
+/// stdout it got even when adb itself failed.
+const AGENT_ALIVE_PROBE: &str = "pidof dev.tapsmith.agent >/dev/null 2>&1; echo rc=$?";
+
+/// Only pidof's "not found" exit means no agent; anything else (found, or no
+/// marker because adb failed) counts as alive.
+fn parse_agent_alive(out: &str) -> bool {
+    !out.lines().any(|l| l.trim() == "rc=1")
+}
+
+/// Production builds report `ro.debuggable` 0; anything else, including no
+/// answer, may restart adbd on `adb root`.
+fn parse_rootable(out: &str) -> bool {
+    out.trim() != "0"
+}
+
 fn root_step(already_root: bool, may_restart_adbd: bool, rootable: bool) -> RootStep {
     if already_root {
         RootStep::AlreadyRoot
@@ -827,7 +854,7 @@ impl std::fmt::Display for AdbdRestartRefused {
         write!(
             f,
             "adbd is not running as root, and switching it to root now would restart adbd \
-             and disconnect the running Tapsmith agent"
+             and end the Tapsmith agent running on the device"
         )
     }
 }
@@ -1827,6 +1854,22 @@ mod tests {
     #[test]
     fn root_step_still_asks_a_production_build_under_the_agent() {
         assert_eq!(root_step(false, false, false), RootStep::Restart);
+    }
+
+    #[test]
+    fn agent_probe_reads_only_pidof_not_found_as_no_agent() {
+        assert!(!parse_agent_alive("rc=1\n"));
+        assert!(parse_agent_alive("rc=0\n"));
+        // adb failed (device offline): no marker on stdout.
+        assert!(parse_agent_alive(""));
+    }
+
+    #[test]
+    fn only_a_debuggable_zero_reads_as_a_production_build() {
+        assert!(!parse_rootable("0\n"));
+        assert!(parse_rootable("1\n"));
+        // adb failed: no answer, so assume adbd may restart.
+        assert!(parse_rootable(""));
     }
 
     // ─── root_unavailable_hint ───
