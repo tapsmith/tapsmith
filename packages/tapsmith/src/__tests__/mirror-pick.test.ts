@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { mirrorPointToLogical, logicalBoundsToMirrorCss } from '../ui-mode/components/mirror-coords.js';
 import { parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
-import { handlePickFromScreenshot, isWebViewOverlayPending } from '../trace-viewer/components/selector-pick.js';
+import { handleHoverFromScreenshot, handlePickFromScreenshot, isWebViewOverlayPending } from '../trace-viewer/components/selector-pick.js';
 import { generateSelectors } from '../trace-viewer/components/selector-generation.js';
 import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqueness.js';
 
@@ -172,5 +172,28 @@ describe('live mirror pick end-to-end (pure)', () => {
     expect(result!.node.attributes.get('label')).toBe('Sign in');
     expect(result!.selector).toBe('device.getByRole("button", { name: "Sign in" })');
     expect(result!.bounds).toEqual({ left: 24, top: 700, right: 369, bottom: 752 });
+  });
+});
+
+describe('handleHoverFromScreenshot', () => {
+  // An unnamed row (no label, id or role) holding a named text: a click on
+  // the row picks the text, so the hover outlines the text.
+  const roots = parseHierarchyXml(`<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.view.ViewGroup" bounds="[0,0][240,100]">
+    <node class="android.widget.TextView" text="Notifications" bounds="[10,10][60,40]" />
+  </node>
+</hierarchy>`);
+
+  it('outlines the element a pick at the point takes, not the raw element under it', () => {
+    const picked = handlePickFromScreenshot(roots, 150, 50);
+    expect(picked?.node.attributes.get('text')).toBe('Notifications');
+    expect(handleHoverFromScreenshot(roots, 150, 50)).toEqual({ left: 10, top: 10, right: 60, bottom: 40 });
+    // Again on the same node (worked out once): the same outline.
+    expect(handleHoverFromScreenshot(roots, 200, 80)).toEqual({ left: 10, top: 10, right: 60, bottom: 40 });
+  });
+
+  it('outlines nothing off every element', () => {
+    expect(handleHoverFromScreenshot(roots, 239, 300)).toBeNull();
   });
 });

@@ -120,6 +120,13 @@ export function handleHoverFromScreenshot(
 ): Bounds | null {
   // What a click here picks, promotion included: a click on an unnamed row
   // picks the named text inside it, so the hover must show that text, not
-  // the row.
-  return pickNodeAt(roots, x, y)?.bounds ?? null;
+  // the row. The promotion depends only on the node under the pointer, so it
+  // is worked out once per node, not on every mousemove.
+  const hit = hitTest(roots, x, y);
+  if (!hit) return null;
+  if (!hoverPicks.has(hit)) hoverPicks.set(hit, pickNodeAt(roots, x, y)?.bounds ?? null);
+  return hoverPicks.get(hit) ?? null;
 }
+
+/** The bounds a pick takes, per node under the pointer (a tree's nodes are never mutated). */
+const hoverPicks = new WeakMap<HierarchyNode, Bounds | null>();
