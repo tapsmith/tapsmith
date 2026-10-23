@@ -266,6 +266,24 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
     expect(native).toMatchObject({ count: 1 });
   });
 
+  it('refuses at once while another call on the device is still connecting', async () => {
+    const { page, matches } = fakePage();
+    matches['getByText:Go'] = [domEl({})];
+    let connected!: () => void;
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockImplementation(() => new Promise((r) => { connected = () => r(page); }));
+    const client = fakeClient(() => []);
+    const slow = evaluateLiveLocator(client, 'emu', 'webview.getByText("Go")');
+    await vi.waitFor(() => expect(connected).toBeDefined());
+    const started = Date.now();
+    const refused = await evaluateLiveLocator(client, 'emu', 'webview.getByText("Go")', {
+      beforeConnect: () => { throw new Error('No WebView on screen.'); },
+    });
+    expect(refused.error).toBe('No WebView on screen.');
+    expect(Date.now() - started).toBeLessThan(500);
+    connected();
+    expect(await slow).toMatchObject({ count: 1 });
+  });
+
   it('keeps off the held connection while a test run drives the page', async () => {
     const { page } = fakePage();
     const held = vi.fn(async () => page);

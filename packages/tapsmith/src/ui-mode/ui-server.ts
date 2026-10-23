@@ -3798,13 +3798,14 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // that connection once it is up rather than open a second (PILOT-288).
     // The live tab's hierarchy poll is what brings it up.
     const device = worker.adoptedPrimary && index === 0 ? ctx.device : undefined;
-    // Any device: a capture with no WebView on screen refuses a webview.*
-    // locator before a connect that could only time out (and would hold
-    // the device's live answers for the connect budget). No capture yet
-    // says nothing about the screen.
+    // Any device: a webview.* locator connects only once a capture shows a
+    // WebView on screen. A connect that could only time out would hold the
+    // device's live answers for the connect budget. Before the first
+    // capture the screen is unknown: the re-ask that capture brings answers.
     const beforeConnect = () => {
       const xml = liveHierarchies.latest(id, index);
-      if (xml !== undefined && !xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
+      if (xml === undefined) throw new Error('Reading the screen…');
+      if (!xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
         throw new Error('No WebView on screen.');
       }
     };

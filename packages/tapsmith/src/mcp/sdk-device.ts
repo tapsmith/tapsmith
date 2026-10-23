@@ -208,6 +208,8 @@ export async function withEvaluatedLocator<T>(
   let used: OpenWebView | undefined;
   let release: (() => void) | undefined;
   const webview = async (): Promise<WebViewHandle> => {
+    // A refusal never waits for another call's connect to finish.
+    refuseConnect();
     // One WebView call at a time per device, connect and action together:
     // two calls connecting at once would open two sessions on the page.
     release = await lockWebView(client, key);
