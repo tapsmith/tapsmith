@@ -30,7 +30,10 @@ describe("Native: login form", () => {
   })
 
   test("type appends to a value that runs past the middle of the field", async ({ login }) => {
-    const long = "samuel.with.a.long.address@example.com"
+    // Past the middle of the row, short of its end: a tap at the centre
+    // would put the caret inside it. (A value as wide as the field leaves no
+    // spot after the text for any tap.)
+    const long = "samuel.long.name@example.com"
     await login.email.type(long)
     await login.password.type("secret")
     await login.email.type("Z")
