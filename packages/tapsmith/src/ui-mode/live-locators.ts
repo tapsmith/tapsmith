@@ -39,13 +39,20 @@ export interface LiveLocatorEvaluation {
   error?: string
 }
 
+/** How a live query may reach the device's WebView. */
+export interface WebViewAccess {
+  /** The WebView connection UI mode already holds to this device, if any. */
+  webview?: () => Promise<WebViewHandle>
+  /** Throws to refuse any WebView connection (e.g. none on screen). */
+  beforeConnect?: () => void
+}
+
 /** What `locator` matches on the device right now, as a test would resolve it. */
 export async function evaluateLiveLocator(
   client: TapsmithGrpcClient,
   serial: string | undefined,
   locator: string,
-  /** The WebView connection UI mode already holds to this device, if any. */
-  webview?: () => Promise<WebViewHandle>,
+  access: WebViewAccess = {},
 ): Promise<LiveLocatorEvaluation> {
   try {
     const device = await sdkDeviceFor(client, serial);
@@ -71,7 +78,7 @@ export async function evaluateLiveLocator(
         positional,
         bounds: matches.flatMap((m) => (m.bounds ? [m.bounds] : [])),
       };
-    }, { webview });
+    }, access);
   } catch (err) {
     return { bounds: [], error: err instanceof Error ? err.message : String(err) };
   }
@@ -93,9 +100,8 @@ export async function suggestLiveLocators(
   client: TapsmithGrpcClient,
   serial: string | undefined,
   node: HierarchyNode,
-  options: {
+  options: WebViewAccess & {
     ios: boolean
-    webview?: () => Promise<WebViewHandle>
     /** True once a newer pick replaced this one: stop between candidates. */
     superseded?: () => boolean
   },
@@ -109,7 +115,7 @@ export async function suggestLiveLocators(
     const pickedPlace = getNodeBounds(node);
     for (const candidate of generateSelectors(node).filter((s) => s.code.startsWith('webview.'))) {
       if (options.superseded?.()) break;
-      const result = await webViewMatchesOf(client, serial, candidate.code, options.webview);
+      const result = await webViewMatchesOf(client, serial, candidate.code, options);
       if (result.error) { note = result.error; break; }
       const index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
       if (index < 0) continue;
@@ -158,14 +164,14 @@ async function webViewMatchesOf(
   client: TapsmithGrpcClient,
   serial: string | undefined,
   locator: string,
-  webview: (() => Promise<WebViewHandle>) | undefined,
+  access: WebViewAccess,
 ): Promise<{ count: number; matches: WebViewMatch[]; error?: string }> {
   try {
     const device = await sdkDeviceFor(client, serial);
     return await withEvaluatedLocator(device, client, locator, async (evaluated) => {
       if (evaluated.kind !== 'webview') return { count: 0, matches: [] };
       return evaluated.locator._handle._liveMatches(evaluated.locator, LIVE_WEBVIEW_TIMEOUT_MS);
-    }, { webview });
+    }, access);
   } catch (err) {
     return { count: 0, matches: [], error: err instanceof Error ? err.message : String(err) };
   }

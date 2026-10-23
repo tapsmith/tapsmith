@@ -244,10 +244,26 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
     matches['getByText:Go'] = [domEl({})];
     const own = vi.spyOn(Device.prototype, '_webviewOfApp');
     const held = vi.fn(async () => page);
-    const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', held);
+    const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', { webview: held });
     expect(r).toMatchObject({ count: 1, webview: true });
     expect(held).toHaveBeenCalledTimes(1);
     expect(own).not.toHaveBeenCalled();
+  });
+
+  it('refuses a webview locator before any connect when no WebView is on screen, and leaves native locators alone', async () => {
+    const connect = vi.spyOn(Device.prototype, '_webviewOfApp');
+    const held = vi.fn(async () => fakePage().page);
+    const beforeConnect = () => { throw new Error('No WebView on screen.'); };
+    const started = Date.now();
+    for (const access of [{ beforeConnect }, { webview: held, beforeConnect }]) {
+      const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', access);
+      expect(r.error).toBe('No WebView on screen.');
+    }
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(connect).not.toHaveBeenCalled();
+    expect(held).not.toHaveBeenCalled();
+    const native = await evaluateLiveLocator(fakeClient(() => [el({ text: 'Go', bounds: B(0, 0, 10, 10) })]), 'emu', 'device.getByText("Go")', { beforeConnect });
+    expect(native).toMatchObject({ count: 1 });
   });
 
   it('keeps off the held connection while a test run drives the page', async () => {
@@ -255,7 +271,7 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
     const held = vi.fn(async () => page);
     beginTestRun();
     try {
-      const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', held);
+      const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', { webview: held });
       expect(r.error).toMatch(/test run is in progress/);
       expect(held).not.toHaveBeenCalled();
     } finally {

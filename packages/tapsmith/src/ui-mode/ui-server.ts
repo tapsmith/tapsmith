@@ -3786,6 +3786,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     {
       workerId: number; deviceIndex: number; client: TapsmithGrpcClient; serial: string | undefined
       webview: (() => Promise<import('../webview-handle.js').WebViewHandle>) | undefined
+      beforeConnect: () => void
     } | undefined {
     const id = workerId ?? selectedWorkerId;
     const index = deviceIndex ?? (id === selectedWorkerId ? selectedDeviceIndex : 0);
@@ -3797,22 +3798,27 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // that connection once it is up rather than open a second (PILOT-288).
     // The live tab's hierarchy poll is what brings it up.
     const device = worker.adoptedPrimary && index === 0 ? ctx.device : undefined;
+    // Any device: a capture with no WebView on screen refuses a webview.*
+    // locator before a connect that could only time out (and would hold
+    // the device's live answers for the connect budget). No capture yet
+    // says nothing about the screen.
+    const beforeConnect = () => {
+      const xml = liveHierarchies.latest(id, index);
+      if (xml !== undefined && !xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
+        throw new Error('No WebView on screen.');
+      }
+    };
     const webview = device
       ? async () => {
         const handle = device._connectedWebView();
         if (handle) return handle;
-        // No capture yet says nothing about the screen: treat it as connecting.
-        const xml = liveHierarchies.latest(id, index);
-        if (xml !== undefined && !xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
-          throw new Error('No WebView on screen.');
-        }
         if (Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
           throw new Error('Could not connect to the WebView; retrying. Make sure it is debuggable (webviewDebuggingEnabled={true}, or WebView.setWebContentsDebuggingEnabled(true) on Android).');
         }
         throw new Error('Connecting to the WebView; the count appears once the connection is up.');
       }
       : undefined;
-    return { workerId: id, deviceIndex: index, client, serial, webview };
+    return { workerId: id, deviceIndex: index, client, serial, webview, beforeConnect };
   }
 
   /** The gRPC client driving device `deviceIndex` of a worker's group (0 = primary). */
@@ -4591,7 +4597,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         liveEvaluations.run(
           // Per tab: a tab's waiting request must never be dropped for another's.
           `${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`,
-          () => evaluateLiveLocator(target.client, target.serial, msg.locator, target.webview),
+          () => evaluateLiveLocator(target.client, target.serial, msg.locator, { webview: target.webview, beforeConnect: target.beforeConnect }),
           (result) => broadcast({ type: 'locator-evaluation', requestId, ...result }),
         );
         break;
@@ -4614,7 +4620,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         const generation = (latestPicks.get(pickKey) ?? 0) + 1;
         latestPicks.set(pickKey, generation);
         const superseded = () => latestPicks.get(pickKey) !== generation;
-        void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType'), webview: target.webview, superseded })
+        void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType'), webview: target.webview, beforeConnect: target.beforeConnect, superseded })
           .then((result) => { if (!superseded()) broadcast({ type: 'locator-suggestions', requestId, ...result }); })
           .catch((err) => broadcast({
             type: 'locator-suggestions', requestId, suggestions: [],

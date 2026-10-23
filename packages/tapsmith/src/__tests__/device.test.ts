@@ -394,6 +394,38 @@ describe('Device.webview()', () => {
     expect((forwardWebViewPort.mock.calls[0] as unknown[])[0]).toBe('webview_devtools_remote_app');
   });
 
+  it('handles a WebView call\'s rejection even when the call starts after its deadline has passed', async () => {
+    // A forward started with no time left rejects; with nothing handling
+    // it, that rejection is fatal in the UI server.
+    const app = (socketName: string) => ({ socketName, pid: 222, packageName: 'com.example.app', url: '', title: '' });
+    const listWebViews = vi.fn(async () => ({ requestId: '1', webviews: [app('wv_a'), app('wv_b')], errorMessage: '' }));
+    let skew = 0;
+    const realNow = Date.now.bind(Date);
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+    const late = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('4 DEADLINE_EXCEEDED')), 5));
+    const then = late.then.bind(late);
+    let handled = false;
+    late.then = ((...args: Parameters<typeof then>) => { handled = true; return then(...args); }) as typeof late.then;
+    // A plain function, not vi.fn: a mock's result tracking would itself
+    // handle the promise it returns.
+    const forwarded: string[] = [];
+    const forwardWebViewPort = (socketName: string) => {
+      forwarded.push(socketName);
+      if (socketName === 'wv_b') return late;
+      skew = 60_000; // the device timeout goes by during the first forward
+      return Promise.resolve({ requestId: '1', success: false, localPort: 0, errorMessage: 'not forwarded' });
+    };
+    try {
+      const device = new Device(makeMockClient({ listWebViews, forwardWebViewPort }), { timeout: 5_000, package: 'com.example.app' });
+      await expect(device.webview()).rejects.toThrow(/Timed out waiting for WebView/);
+      expect(forwarded).toEqual(['wv_a', 'wv_b']);
+      expect(handled).toBe(true);
+    } finally {
+      now.mockRestore();
+      then(undefined, () => {});
+    }
+  });
+
   it('hands UI mode only a WebView connection that is already up, never connecting for it', async () => {
     // A second inspector session on the page would wedge it (PILOT-288): the
     // picker's own connect is the only one.

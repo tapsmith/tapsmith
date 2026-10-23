@@ -185,17 +185,24 @@ export async function withEvaluatedLocator<T>(
      * on the same page would wedge, PILOT-288).
      */
     webview?: () => Promise<WebViewHandle>
+    /**
+     * Runs before any WebView connection is used or made, and throws to
+     * refuse it (UI mode's live tab: no WebView on screen, so not worth a
+     * connect that can only time out).
+     */
+    beforeConnect?: () => void
   } = {},
 ): Promise<T> {
-  const refuseDuringRun = (): void => {
+  const refuseConnect = (): void => {
     if (activeTestRuns > 0) {
       throw new Error('A test run is in progress: webview locators are unavailable until it finishes, since a second connection to its page can stall it.');
     }
+    options.beforeConnect?.();
   };
   const held = options.webview;
   if (held) {
     // The caller's connection is shared with the page a run drives, too.
-    return use(await evaluateLocator(source, { device, webview: async () => { refuseDuringRun(); return held(); } }));
+    return use(await evaluateLocator(source, { device, webview: async () => { refuseConnect(); return held(); } }));
   }
   const key = webViewKey(device);
   let used: OpenWebView | undefined;
@@ -204,7 +211,7 @@ export async function withEvaluatedLocator<T>(
     // One WebView call at a time per device, connect and action together:
     // two calls connecting at once would open two sessions on the page.
     release = await lockWebView(client, key);
-    refuseDuringRun();
+    refuseConnect();
     // Read under the lock: a call queued behind one that switched apps acts
     // on the app that is current now.
     const { packageName } = await client.getCurrentPackage();
@@ -220,7 +227,7 @@ export async function withEvaluatedLocator<T>(
       open = undefined;
     }
     // A run may have started during the awaits above.
-    refuseDuringRun();
+    refuseConnect();
     if (!open) {
       open = {
         holder: new Device(client, { platform: device.platform, simulator: simulators.get(device), timeout: WEBVIEW_CONNECT_TIMEOUT_MS }),

@@ -97,13 +97,15 @@ async function sleepUpTo(ms: number, deadline: number): Promise<void> {
 }
 
 async function withDeadline<T>(promise: Promise<T>, deadline: number, label: string): Promise<T> {
+  // Handled first: the call is already under way, and a deadline that has
+  // passed must not leave its rejection unhandled (fatal in the UI server).
+  promise.catch(() => undefined);
   const timeoutMs = remainingMs(deadline);
   if (timeoutMs <= 0) {
     throw new Error(`${label} timed out`);
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-  promise.catch(() => undefined);
 
   try {
     return await Promise.race([
