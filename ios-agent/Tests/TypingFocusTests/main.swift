@@ -21,23 +21,34 @@ let textField = "XCUIElementTypeTextField"
 // The SwiftUI Form row from the ticket: frame [20,152][382,196] on iOS 18.
 let row = CGRect(x: 20, y: 152, width: 362, height: 44)
 
-func verdict(_ element: Input, before: Input?, after: Input?, keyboard: Bool = true) -> TypingFocus.Verdict {
-    TypingFocus.verdict(element: element, focusedBefore: before, focusedAfter: after, keyboardOnScreen: keyboard)
+func verdict(_ element: Input, tappedAt: CGPoint? = nil, before: Input?, after: Input?,
+             keyboard: Bool = true) -> TypingFocus.Verdict {
+    TypingFocus.verdict(element: element, tappedAt: tappedAt, focusedBefore: before, focusedAfter: after,
+                        keyboardOnScreen: keyboard)
 }
 
-// Tap points: trailing first (caret at the end of existing text), then the
-// centre, which lands inside a row-wide frame's text input.
+// Tap points: trailing first (caret at the end of existing text), then
+// further in past a Form row's padding, then the centre.
 do {
     let first = TypingFocus.trailingPoint(in: row)
     expect("first point is 12 pt in from the trailing edge", first == CGPoint(x: 370, y: 174))
-    expect("fallback is the centre", TypingFocus.fallbackPoint(in: row, after: first) == CGPoint(x: 201, y: 174))
+    let next = TypingFocus.fallbackPoints(in: row, after: first)
+    expect("then 40 pt in, inside the row's text input, then the centre",
+           next == [CGPoint(x: 342, y: 174), CGPoint(x: 201, y: 174)])
     let moved = row.offsetBy(dx: 0, dy: -100)
-    expect("fallback is the centre of the area planned again",
-           TypingFocus.fallbackPoint(in: moved, after: first) == CGPoint(x: 201, y: 74))
+    expect("fallbacks come from the area planned again",
+           TypingFocus.fallbackPoints(in: moved, after: first).first == CGPoint(x: 342, y: 74))
     let narrow = CGRect(x: 0, y: 0, width: 20, height: 30)
     let narrowFirst = TypingFocus.trailingPoint(in: narrow)
     expect("narrow first point stays inside the field", narrowFirst.x > 0 && narrowFirst.x < 20)
-    expect("no fallback next to the first tap", TypingFocus.fallbackPoint(in: narrow, after: narrowFirst) == nil)
+    expect("no fallback next to the first tap", TypingFocus.fallbackPoints(in: narrow, after: narrowFirst).isEmpty)
+    let medium = CGRect(x: 0, y: 0, width: 100, height: 30)
+    let mediumNext = TypingFocus.fallbackPoints(in: medium, after: TypingFocus.trailingPoint(in: medium))
+    expect("a medium field scales the inner inset to its width",
+           mediumNext == [CGPoint(x: 75, y: 15), CGPoint(x: 50, y: 15)])
+    let small = CGRect(x: 0, y: 0, width: 40, height: 30)
+    expect("a small field skips the inner point next to the first",
+           TypingFocus.fallbackPoints(in: small, after: TypingFocus.trailingPoint(in: small)) == [CGPoint(x: 20, y: 15)])
 }
 
 // No identity: frames and focus changes decide.
@@ -121,6 +132,21 @@ do {
     let other = Input(frame: row.offsetBy(dx: 0, dy: 300), className: textField)
     expect("a bounds-cache element while another input kept its focus",
            verdict(cached, before: other, after: other) == .notFocused)
+}
+
+// The tap point, planned from the element's live position, decides when
+// the resolve-time frame is stale.
+do {
+    let email = Input(frame: row, className: textField, placeholder: "Email")
+    let emailNow = Input(frame: row.offsetBy(dx: 0, dy: -60), className: textField, placeholder: "Email")
+    expect("an already-focused field whose resolve-time frame is stale (Form still scrolling)",
+           verdict(email, tappedAt: CGPoint(x: 370, y: 114), before: emailNow, after: emailNow) == .focused)
+    let qty = Input(frame: row, className: textField, identifier: "qty")
+    let otherQty = Input(frame: row.offsetBy(dx: 0, dy: -88), className: textField, identifier: "qty")
+    expect("another row sharing the testID kept its focus",
+           verdict(qty, tappedAt: CGPoint(x: 370, y: 174), before: otherQty, after: otherQty) == .notFocused)
+    expect("another row sharing the testID kept its focus (element tap, no point)",
+           verdict(qty, before: otherQty, after: otherQty) == .notFocused)
 }
 
 if failures > 0 {

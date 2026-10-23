@@ -972,10 +972,6 @@ class CommandHandler {
         case .offScreen:
             throw AgentError.actionFailed("Element is not hittable — cannot refocus it")
         }
-        // The point of refocusing is a caret at the end of the value, and a
-        // field that already had focus keeps its caret when the trailing tap
-        // lands outside its text input (a SwiftUI Form row, PILOT-829).
-        moveCaretToEnd()
     }
 
     /// Tap inside a text input, biased toward the trailing edge so refocusing
@@ -984,9 +980,9 @@ class CommandHandler {
     /// `area` (the element's uncovered part, from `focusTarget`). Without an
     /// area, XCUITest taps the element itself (refused when unhittable).
     ///
-    /// The tap is checked (PILOT-829): when no text input took focus from it
-    /// the centre is tried, and a field that still has no focus fails the
-    /// command instead of typing into nothing (`TypingFocus`).
+    /// The tap is checked (PILOT-829): when no text input took focus from it,
+    /// points further in are tried, and a field that still has no focus
+    /// fails the command instead of typing into nothing (`TypingFocus`).
     private func focusElementForTyping(
         _ element: ElementInfo,
         settleTime: TimeInterval,
@@ -1003,37 +999,38 @@ class CommandHandler {
             placeholder: element.hint ?? ""
         )
         let focusedBefore = snapshotFinder.liveFocusedTypingInput()
-        // A second tap on a field that did take focus moves its caret, so
-        // the first one gets at least this long to report focus, whatever the
+        // A further tap on a field that did take focus moves its caret, so
+        // each tap gets at least this long to report focus, whatever the
         // caller's settle time.
         let focusWait = max(settleTime, 0.5)
-        let tried: String
+        var tried: [CGPoint] = []
         if let area {
             let first = TypingFocus.trailingPoint(in: area)
             tapToFocus(element, at: first)
-            if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: focusWait, settleTime: settleTime) { return }
-            NSLog("[typeText] focus tap at \(Self.describe(first)) did not focus the field")
+            tried.append(first)
+            if waitForTypingFocus(target, tappedAt: first, focusedBefore: focusedBefore,
+                                  maxWait: focusWait, settleTime: settleTime) { return }
             // Planned again, one check and no waiting: the first tap can have
             // moved the field or raised a keyboard over its old spot.
             let plan = try? planTouch(element, timeoutMs: 0, preferElementTap: false)
-            // Focus may have been reported while that ran.
-            if typingFocusVerdict(target, focusedBefore: focusedBefore) == .focused {
-                waitForKeyboardAppearance(maxWait: settleTime)
-                return
+            var fallbacks: [CGPoint] = []
+            if case .point(_, let visible)? = plan {
+                fallbacks = TypingFocus.fallbackPoints(in: visible, after: first)
             }
-            guard case .point(_, let visible)? = plan,
-                  let fallback = TypingFocus.fallbackPoint(in: visible, after: first) else {
-                snapshotFinder.clearFocusedTextInputHint()
-                throw Self.notFocusedError(tried: Self.describe(first))
+            for point in fallbacks + [nil] {
+                let last = tried[tried.count - 1]
+                NSLog("[typeText] focus tap at \(Self.describe(last)) did not focus the field")
+                // Focus may have been reported since the last check.
+                if typingFocusVerdict(target, tappedAt: last, focusedBefore: focusedBefore) == .focused {
+                    waitForKeyboardAppearance(maxWait: settleTime)
+                    return
+                }
+                guard let point else { break }
+                tapToFocus(element, at: point)
+                tried.append(point)
+                if waitForTypingFocus(target, tappedAt: point, focusedBefore: focusedBefore,
+                                      maxWait: focusWait, settleTime: settleTime) { return }
             }
-            tapToFocus(element, at: fallback)
-            if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: focusWait, settleTime: settleTime) {
-                // That tap put the caret where it landed, possibly inside the
-                // existing value: type() appends, as after the trailing tap.
-                moveCaretToEnd()
-                return
-            }
-            tried = "\(Self.describe(first)) and \(Self.describe(fallback))"
         } else {
             let xcElem = try getXCUIElement(element.elementId)
             guard xcElem.isHittable else {
@@ -1041,19 +1038,13 @@ class CommandHandler {
             }
             xcElem.tap()
             snapshotFinder.recordFocusedTextInputHint(element)
-            if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: focusWait, settleTime: settleTime) { return }
-            tried = "the element"
+            if waitForTypingFocus(target, tappedAt: nil, focusedBefore: focusedBefore,
+                                  maxWait: focusWait, settleTime: settleTime) { return }
         }
         // The taps recorded the field as focused; it is not.
         snapshotFinder.clearFocusedTextInputHint()
-        throw Self.notFocusedError(tried: tried)
-    }
-
-    /// Cmd+Down: the end of the text, in single- and multi-line inputs.
-    private func moveCaretToEnd() {
-        if EventSynthesizer.keyPress(key: XCUIKeyboardKey.downArrow.rawValue, modifiers: .command) {
-            Thread.sleep(forTimeInterval: 0.05)
-        }
+        let at = tried.isEmpty ? "the element" : tried.map(Self.describe).joined(separator: ", ")
+        throw Self.notFocusedError(tried: at)
     }
 
     private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
@@ -1079,6 +1070,7 @@ class CommandHandler {
     /// its way out after a tap that removed focus.
     private func waitForTypingFocus(
         _ target: TypingFocus.Input,
+        tappedAt: CGPoint?,
         focusedBefore: TypingFocus.Input?,
         maxWait: TimeInterval,
         settleTime: TimeInterval
@@ -1086,7 +1078,7 @@ class CommandHandler {
         let start = CFAbsoluteTimeGetCurrent()
         let deadline = start + maxWait
         while true {
-            let verdict = typingFocusVerdict(target, focusedBefore: focusedBefore)
+            let verdict = typingFocusVerdict(target, tappedAt: tappedAt, focusedBefore: focusedBefore)
             if verdict == .focused {
                 waitForKeyboardAppearance(maxWait: max(0, start + settleTime - CFAbsoluteTimeGetCurrent()))
                 return true
@@ -1097,12 +1089,16 @@ class CommandHandler {
     }
 
     /// One check of whether `target` has keyboard focus now.
-    private func typingFocusVerdict(_ target: TypingFocus.Input, focusedBefore: TypingFocus.Input?) -> TypingFocus.Verdict {
+    private func typingFocusVerdict(
+        _ target: TypingFocus.Input,
+        tappedAt: CGPoint?,
+        focusedBefore: TypingFocus.Input?
+    ) -> TypingFocus.Verdict {
         let focused = snapshotFinder.liveFocusedTypingInput()
         // The keyboard only matters when no input reports focus; a tree that
         // cannot be read is no evidence the tap missed.
         let keyboard = focused == nil ? (keyboardPresence().map { $0 == .onScreen } ?? true) : false
-        return TypingFocus.verdict(element: target, focusedBefore: focusedBefore,
+        return TypingFocus.verdict(element: target, tappedAt: tappedAt, focusedBefore: focusedBefore,
                                    focusedAfter: focused, keyboardOnScreen: keyboard)
     }
 
