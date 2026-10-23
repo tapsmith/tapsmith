@@ -58,9 +58,9 @@ enum NonAppElements {
 
     /// Whether an element with `frame`, found by a live query, is part of the
     /// keyboard occupying `keyboardFrame`: its centre lies inside it. App
-    /// content the keyboard covers reads as inside too, so callers only use
-    /// this to decide to re-check through the snapshot walk, never to drop a
-    /// match outright.
+    /// content the keyboard covers reads as inside too: the wait engine
+    /// re-checks such a match through the snapshot walk, and scroll-to-target
+    /// skips it (it can't be tapped while covered anyway).
     static func liesInKeyboard(_ frame: CGRect, keyboardFrame: CGRect) -> Bool {
         guard !keyboardFrame.isEmpty, !frame.isNull else { return false }
         return keyboardFrame.contains(CGPoint(x: frame.midX, y: frame.midY))

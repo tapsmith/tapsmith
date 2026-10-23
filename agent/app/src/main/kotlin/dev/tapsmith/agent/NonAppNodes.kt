@@ -48,17 +48,18 @@ internal object NonAppNodes {
     /**
      * Whether no locator matches anything in a window of [type]
      * (AccessibilityWindowInfo.TYPE_*) that is or isn't [focused] / [active],
-     * whose root node belongs to [packageName].
+     * whose root node belongs to [packageName] — read only when it decides,
+     * as it costs a round-trip.
      */
     fun excludesWindow(
         type: Int,
         focused: Boolean,
         active: Boolean,
-        packageName: CharSequence?,
+        packageName: () -> CharSequence?,
     ): Boolean =
         when (type) {
             AccessibilityWindowInfo.TYPE_INPUT_METHOD -> true
-            AccessibilityWindowInfo.TYPE_SYSTEM -> !focused && !active && packageName?.toString() == SYSTEM_UI_PACKAGE
+            AccessibilityWindowInfo.TYPE_SYSTEM -> !focused && !active && packageName()?.toString() == SYSTEM_UI_PACKAGE
             else -> false
         }
 }

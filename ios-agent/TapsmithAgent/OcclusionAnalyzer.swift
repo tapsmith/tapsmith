@@ -393,7 +393,7 @@ struct OcclusionAnalyzer {
     /// be named the cover of all of them.
     func isTapsmithHooksMarker(_ node: Node) -> Bool {
         node.elementType == .staticText
-            && (node.identifier == "tapsmith-hooks" || node.label.hasPrefix("tapsmith-hooks:"))
+            && (node.identifier == "tapsmith-hooks" || NonAppElements.isHooksMarker(node.label))
     }
 
     /// A scroll view's indicator ("Vertical scroll bar, 2 pages"): drawn over

@@ -664,6 +664,8 @@ class ElementFinder(
     fun evaluateSelectors(selectors: List<Result<ElementSelector>>): List<Result<List<ElementInfo>>> {
         val startedAt = SystemClock.uptimeMillis()
         var fresh = clearAccessibilityCache()
+        // One window list for the batch, re-read with the tree on a retry.
+        var excludedWindows = nonAppWindowIds()
         val refreshed = HashMap<AccessibilityNodeInfo, AccessibilityNodeInfo>()
         val maxAttempts = STALE_RETRY_ATTEMPTS.coerceAtLeast(1)
         val results =
@@ -673,7 +675,7 @@ class ElementFinder(
                 var outcome: Result<List<ElementInfo>> = Result.failure(StaleObjectException())
                 for (attempt in 0 until maxAttempts) {
                     try {
-                        outcome = Result.success(evaluateOne(selector, fresh, refreshed))
+                        outcome = Result.success(evaluateOne(selector, fresh, refreshed, excludedWindows))
                         break
                     } catch (e: StaleObjectException) {
                         // Retry this selector against a re-read tree; the
@@ -682,6 +684,7 @@ class ElementFinder(
                         if (attempt < maxAttempts - 1) {
                             CommandCancellation.sleep(STALE_RETRY_DELAY_MS)
                             fresh = clearAccessibilityCache()
+                            excludedWindows = nonAppWindowIds()
                             refreshed.clear()
                         }
                     } catch (e: CommandCancelledException) {
@@ -705,11 +708,11 @@ class ElementFinder(
         selector: ElementSelector,
         fresh: Boolean,
         refreshed: MutableMap<AccessibilityNodeInfo, AccessibilityNodeInfo>,
+        excludedWindows: Set<Int>,
     ): List<ElementInfo> {
         if (selector.xpath != null) {
             return findByXPath(selector.xpath).map { it.copy(elementId = "") }
         }
-        val excludedWindows = nonAppWindowIds()
         return matchCandidates(enumerate(selector, null), selector, fresh, Int.MAX_VALUE, excludedWindows, refreshed) { obj, node ->
             toElementInfo(obj, node, "", fresh).first
         }.first
@@ -724,17 +727,16 @@ class ElementFinder(
     private fun nonAppWindowIds(): Set<Int> =
         try {
             instrumentation.uiAutomation.windows
-                .filter { NonAppNodes.excludesWindow(it.type, it.isFocused, it.isActive, rootPackageOf(it)) }
+                .filter { NonAppNodes.excludesWindow(it.type, it.isFocused, it.isActive) { rootPackageOf(it) } }
                 .mapTo(HashSet()) { it.id }
         } catch (e: Exception) {
             warnOnce("nonAppWindowIds", e)
             emptySet()
         }
 
-    /** The package of [window]'s root node, or null when it has none (only read for system windows). */
+    /** The package of [window]'s root node, or null when it has none. An accessibility round-trip. */
     @Suppress("DEPRECATION")
     private fun rootPackageOf(window: android.view.accessibility.AccessibilityWindowInfo): CharSequence? {
-        if (window.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM) return null
         val root = window.root ?: return null
         return try {
             root.packageName

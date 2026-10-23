@@ -1429,7 +1429,13 @@ class SnapshotElementFinder {
         // out — and `matchIndex 0` (`.first()`) is always correct. The
         // identifier path (above) is unaffected. Fully eliminating it would need
         // frame-based resolution, which XCUIElement predicates can't express.
-        func resolve(_ base: XCUIElementQuery) -> XCUIElement {
+        //
+        // The match set leaves out what isn't the app's (NonAppElements), so
+        // the query does too: it never counts the hooks marker. It can't leave
+        // out the keyboard, whose nodes come after the app's in tree order, so
+        // only a match in a window after an open keyboard's could shift.
+        func resolve(_ query: XCUIElementQuery) -> XCUIElement {
+            let base = query.excludingHooksMarker()
             if !nodeIdentifier.isEmpty {
                 // Narrow to the identifier, then index WITHIN that id group so a
                 // non-unique identifier still resolves positionally. For a unique
@@ -1462,10 +1468,12 @@ class SnapshotElementFinder {
         if let testId = selector.testId {
             element = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", testId))
+                .excludingHooksMarker()
                 .element(boundBy: matchIndex)
         } else if let id = selector.id {
             element = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", id))
+                .excludingHooksMarker()
                 .element(boundBy: matchIndex)
         } else if let text = selector.text {
             element = resolve(labelQuery(normalizedConcatenatedLabelPredicate(text)))

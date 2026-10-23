@@ -19,6 +19,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/OcclusionAnalyzerTests/main.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/occlusion-analyzer-tests"
@@ -42,6 +43,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   Tests/KeyboardDismissPlannerTests/main.swift \
   TapsmithAgent/KeyboardDismissPlanner.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/keyboard-dismiss-planner-tests"

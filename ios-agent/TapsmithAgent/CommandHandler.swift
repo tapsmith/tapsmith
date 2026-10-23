@@ -174,7 +174,7 @@ class CommandHandler {
     ) -> (epoch: UInt64, nav: UInt64?, boot: String?, err: String?)? {
         let candidates = [snapshot.label, snapshot.identifier, String(describing: snapshot.value ?? "")]
         for text in candidates {
-            guard let range = text.range(of: "tapsmith-hooks:") else { continue }
+            guard let range = text.range(of: NonAppElements.hooksMarkerPrefix) else { continue }
             let body = text[range.upperBound...]
             let fields = body.split(separator: ";")
             // A different protocol version has unknown semantics — treat it as
