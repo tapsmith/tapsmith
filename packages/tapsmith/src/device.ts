@@ -1563,7 +1563,7 @@ export class Device {
    * concurrently (the poll's multi-second connect resolving after the test's
    * would clobber the test's activation).
    */
-  private async _establishWebView(packageName?: string, log?: string[]): Promise<WebViewHandle> {
+  private async _establishWebView(packageName?: string, log?: string[], appOnly = false): Promise<WebViewHandle> {
     if (this._cachedWebView?._isAlive()) {
       appendWebViewConnectLog(log, 'Reusing cached WebView connection');
       // The device timeout now, not the one it was connected under: a later
@@ -1576,13 +1576,26 @@ export class Device {
     const generation = this._webviewGeneration;
 
     if (this._platform === 'ios') {
-      return this._webviewIos(packageName, generation, log);
+      return this._webviewIos(packageName, generation, log, appOnly);
     }
     return this._webviewAndroid(packageName, generation, log);
   }
 
   private async _connectWebView(packageName?: string, log?: string[]): Promise<WebViewHandle> {
     const handle = await this._establishWebView(packageName, log);
+    this._activeWebView = handle;
+    return handle;
+  }
+
+  /**
+   * @internal — Connect to `packageName`'s own WebView, never another app's.
+   * The MCP tools act on the app the daemon reports as current; iOS's
+   * connect otherwise falls back to any app with an inspectable page, which
+   * would point their taps and typing at a background app. (Android's
+   * connect already keeps to the package.)
+   */
+  async _webviewOfApp(packageName: string): Promise<WebViewHandle> {
+    const handle = await this._establishWebView(packageName, undefined, true);
     this._activeWebView = handle;
     return handle;
   }
@@ -1694,7 +1707,7 @@ export class Device {
     );
   }
 
-  private async _webviewIos(_packageName: string | undefined, generation: number, log?: string[]): Promise<WebViewHandle> {
+  private async _webviewIos(_packageName: string | undefined, generation: number, log?: string[], appOnly = false): Promise<WebViewHandle> {
     const { WebKitInspectorClient, findSimulatorInspectorSocket } = await import('./webkit-inspector.js');
 
     // Prefer the explicitly selected device serial (= simulator UDID) over
@@ -1782,13 +1795,15 @@ export class Device {
         // answering evaluates against their frozen DOM, so the responsiveness
         // probe below cannot reject them. The live page is the newest one:
         // probe apps newest-pid-first and pages newest-id-first.
-        const candidates = (matching.length > 0 ? matching : withPages)
+        const candidates = (matching.length > 0 || appOnly ? matching : withPages)
           .slice()
           .sort((a, b) => inspectorAppPid(b.appId) - inspectorAppPid(a.appId));
 
         if (candidates.length === 0) {
           lastPhase = 'waiting for an inspectable WebView page';
-          lastError = 'No inspectable WebView pages found';
+          lastError = appOnly && withPages.length > 0
+            ? `No inspectable WebView page in ${_packageName} (only in other apps)`
+            : 'No inspectable WebView pages found';
           appendWebViewConnectLog(log, lastError);
           await sleepUpTo(WEBVIEW_RETRY_INTERVAL_MS, deadline);
           continue;
