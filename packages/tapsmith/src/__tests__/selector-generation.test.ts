@@ -1,8 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
-import { getNodeRole, isLabelField, IOS_ROLE_DESCRIPTIONS } from '../trace-viewer/components/hierarchy-utils.js';
+import { getNodeRole, isLabelField } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors, generateBestSelector, findBetterDescendant, hasGoodSelectors } from '../trace-viewer/components/selector-generation.js';
 import { parseSelectorString, findMatchingNodes, hitTest, applyPositionalIndex, parsedSelectorError } from '../trace-viewer/components/selector-matching.js';
 
@@ -58,40 +56,27 @@ describe('getNodeRole with tapsmith-role', () => {
   });
 });
 
-// ─── getNodeRole — iOS roles React Native describes in the value (PILOT-608) ───
+// ─── iOS roles React Native describes in a generic view's value (PILOT-608) ───
 
-describe('getNodeRole for a generic iOS view whose value describes its role', () => {
-  const other = (value: string, type = 'XCUIElementTypeOther') => makeNode(type, { type, label: 'I agree to terms', value });
+describe('generateSelectors for a generic iOS view whose value describes its role', () => {
+  const other = (value: string, extra: Record<string, string> = {}) =>
+    makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther', label: 'I agree to terms', value, ...extra });
 
-  it('reads RN\'s role description from the start of the value', () => {
-    expect(getNodeRole(other('checkbox, unchecked'))).toBe('checkbox');
-    expect(getNodeRole(other('radio button, selected'))).toBe('radiobutton');
-    expect(getNodeRole(other('combo box'))).toBe('combobox');
-    expect(getNodeRole(other('Alert'))).toBe('alert');
-  });
-
-  it('reads only the first part: the app\'s own value text after it does not describe a role', () => {
-    expect(getNodeRole(other('radio button, Alert'))).toBe('radiobutton');
-    expect(getNodeRole(other('50%, checkbox'))).toBe('');
-  });
-
-  it('reads a static text\'s value as an alert only, and never a typed control\'s', () => {
-    expect(getNodeRole(other('alert', 'XCUIElementTypeStaticText'))).toBe('alert');
-    expect(getNodeRole(other('checkbox', 'XCUIElementTypeStaticText'))).toBe('text');
-    expect(getNodeRole(other('checkbox', 'XCUIElementTypeButton'))).toBe('button');
-  });
-
-  it('offers role + name for an RN checkbox picked on iOS', () => {
+  it('offers role + name first for an RN checkbox, as the agent\'s getByRole finds it', () => {
     const codes = generateSelectors(other('checkbox, unchecked')).map((s) => s.code);
     expect(codes[0]).toBe('device.getByRole("checkbox", { name: "I agree to terms" })');
+    expect(generateSelectors(other('radio button, selected')).map((s) => s.code)[0])
+      .toBe('device.getByRole("radiobutton", { name: "I agree to terms" })');
   });
 
-  it('holds the same descriptions as the iOS agent', () => {
-    const swift = readFileSync(fileURLToPath(new URL('../../../../ios-agent/TapsmithAgent/RoleMapping.swift', import.meta.url)), 'utf8');
-    const start = swift.indexOf('= [', swift.indexOf('static let otherRoleDescriptions'));
-    const table = swift.slice(start, swift.indexOf(']', start));
-    const agent = Object.fromEntries([...table.matchAll(/"([^"]+)":\s*"([^"]+)"/g)].map((m) => [m[1], m[2]]));
-    expect(agent).toEqual(IOS_ROLE_DESCRIPTIONS);
+  it('keeps the displayed role the agent reports back (none), so toHaveRole is not invited to fail', () => {
+    expect(getNodeRole(other('checkbox, unchecked'))).toBe('');
+  });
+
+  it('reads only the first part of the value, and lets a trait role stand', () => {
+    expect(generateSelectors(other('50%, checkbox')).some((s) => s.code.includes('getByRole'))).toBe(false);
+    expect(generateSelectors(other('checkbox, unchecked', { 'tapsmith-role': 'button' })).map((s) => s.code)[0])
+      .toBe('device.getByRole("button", { name: "I agree to terms" })');
   });
 });
 

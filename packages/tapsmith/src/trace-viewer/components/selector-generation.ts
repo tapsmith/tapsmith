@@ -1,6 +1,6 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
 import { getNodeRole, isLabelField, webViewAriaLabel, WEBVIEW_TAG_TO_ROLE, ANDROID_CLASS_TO_ROLE, IOS_TYPE_TO_ROLE } from './hierarchy-utils.js';
-import { unknownRoleMessage } from '../../roles.js';
+import { iosDescribedRole, unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
 
@@ -11,7 +11,13 @@ function isWebViewNode(node: HierarchyNode): boolean {
 }
 
 function getRole(node: HierarchyNode): string | null {
-  const role = getNodeRole(node);
+  // An RN checkbox (radio, alert, combobox) is a generic view on iOS that
+  // only its value's description marks; the agent's getByRole finds it by
+  // that (PILOT-608), so the playground offers the role too. Only generation
+  // reads it: the agent reports no role back for it (toHaveRole), so the
+  // displayed role stays getNodeRole's.
+  const role = getNodeRole(node)
+    || ((node.attributes.get('type') ?? node.tagName) === 'XCUIElementTypeOther' ? iosDescribedRole(node.attributes.get('value')) : '');
   // Never suggest a role getByRole rejects: Android reports any role
   // description an app publishes (a custom "carousel", a localized one) as
   // tapsmith-role (PILOT-556).

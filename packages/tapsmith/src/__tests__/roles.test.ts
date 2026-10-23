@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, ANDROID_TRAIT_ONLY_ROLES, IOS_OTHER_ROLE_DESCRIPTIONS, IOS_ROLE_TYPES, IOS_STATIC_TEXT_ROLES, IOS_UNDESCRIBED_OTHER_ROLES, NATIVE_ROLES, ROLE_ALIASES, assertKnownRole, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../roles.js';
+import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, ANDROID_TRAIT_ONLY_ROLES, IOS_OTHER_ROLE_DESCRIPTIONS, IOS_ROLE_TYPES, IOS_STATIC_TEXT_ROLES, IOS_UNDESCRIBED_OTHER_ROLES, NATIVE_ROLES, ROLE_ALIASES, assertKnownRole, iosDescribedRole, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../roles.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
 const read = (rel: string): string => fs.readFileSync(path.join(repoRoot, rel), 'utf8');
@@ -182,6 +182,17 @@ describe('role set parity with the agents', () => {
 });
 
 // ─── iOS generic views (mirrors RoleMapping.matches) ───
+
+describe('iosDescribedRole()', () => {
+  it('reads RN\'s description from the first part of the value only', () => {
+    expect(iosDescribedRole('checkbox, unchecked')).toBe('checkbox');
+    expect(iosDescribedRole(' Radio Button , selected')).toBe('radiobutton');
+    expect(iosDescribedRole('combo box')).toBe('combobox');
+    expect(iosDescribedRole('50%, checkbox')).toBe('');
+    expect(iosDescribedRole('')).toBe('');
+    expect(iosDescribedRole(undefined)).toBe('');
+  });
+});
 
 describe('iosGenericViewHasRole()', () => {
   const view = (value: string | undefined, opts: { traitRole?: string; named?: boolean } = {}) =>

@@ -303,9 +303,21 @@ export function iosGenericViewHasRole(
 ): boolean | undefined {
   const own = IOS_OTHER_ROLE_DESCRIPTIONS[role];
   if (own === undefined && !IOS_UNDESCRIBED_OTHER_ROLES.has(role)) return undefined;
-  const lead = view.value === undefined ? undefined : view.value.split(',')[0]!.trim().toLowerCase();
-  if (lead !== undefined && Object.values(IOS_OTHER_ROLE_DESCRIPTIONS).includes(lead)) return lead === own;
+  const described = iosDescribedRole(view.value);
+  if (described) return described === role;
   return view.named && view.traitRole === '';
+}
+
+/**
+ * The role an iOS generic view's accessibility value describes (`checkbox`
+ * for "checkbox, unchecked"), or '' — read as the agent reads it: only the
+ * first comma-separated part counts, since the states and the app's own
+ * value text follow it.
+ */
+export function iosDescribedRole(value: string | undefined): string {
+  if (value === undefined) return '';
+  const lead = value.split(',')[0]!.trim().toLowerCase();
+  return Object.entries(IOS_OTHER_ROLE_DESCRIPTIONS).find(([, description]) => description === lead)?.[0] ?? '';
 }
 
 /**

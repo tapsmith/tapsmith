@@ -167,37 +167,7 @@ export function getNodeRole(node: HierarchyNode): string {
   const className = node.attributes.get('class');
   if (className) return ANDROID_CLASS_TO_ROLE[className] ?? '';
   const iosType = node.attributes.get('type') ?? node.tagName;
-  const described = iosDescribedRole(iosType, node.attributes.get('value'));
-  if (described) return described;
   return IOS_TYPE_TO_ROLE[iosType] ?? '';
-}
-
-/**
- * The role descriptions React Native leads a generic iOS view's
- * accessibility value with ("checkbox, unchecked") for roles iOS has no
- * trait for, by role. Mirrors the iOS agent's RoleMapping
- * `otherRoleDescriptions` (PILOT-608), which is how it finds them.
- */
-export const IOS_ROLE_DESCRIPTIONS: Record<string, string> = {
-  checkbox: 'checkbox',
-  radiobutton: 'radio button',
-  alert: 'alert',
-  combobox: 'combo box',
-};
-
-/**
- * The role a generic iOS view's value describes, or '' — read as the agent
- * reads it: only the first comma-separated part counts (the states and the
- * app's own value text follow), and a static text only describes an alert.
- */
-function iosDescribedRole(iosType: string, value: string | undefined): string {
-  const generic = iosType === 'XCUIElementTypeOther';
-  if (!value || (!generic && iosType !== 'XCUIElementTypeStaticText')) return '';
-  const first = value.split(',')[0].trim().toLowerCase();
-  for (const [role, description] of Object.entries(IOS_ROLE_DESCRIPTIONS)) {
-    if (first === description && (generic || role === 'alert')) return role;
-  }
-  return '';
 }
 
 // ─── getByLabel Fields ───
