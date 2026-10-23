@@ -820,7 +820,19 @@ fn root_step(already_root: bool, may_restart_adbd: bool, rootable: bool) -> Root
 
 /// Restart adbd as root (required for writing to system dirs) and wait for the
 /// device to come back.
+///
+/// The restart drops every `adb reverse` and `adb forward` rule for the device
+/// — a dev build's `adb reverse tcp:8081 tcp:8081` to Metro among them — so the
+/// ones in place before it are put back afterwards.
 async fn root_adbd(serial: &str) -> Result<()> {
+    let reverses = run_adb_lenient(serial, &["reverse", "--list"])
+        .await
+        .map(|out| parse_port_rules(&String::from_utf8_lossy(&out), None))
+        .unwrap_or_default();
+    let forwards = list_forwards(DEFAULT_TIMEOUT)
+        .await
+        .map(|out| parse_port_rules(&out, Some(serial)))
+        .unwrap_or_default();
     match run_adb_lenient(serial, &["root"]).await {
         Ok(output) => {
             let msg = String::from_utf8_lossy(&output);
@@ -838,7 +850,33 @@ async fn root_adbd(serial: &str) -> Result<()> {
     }
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     let _ = run_adb(Some(serial), &["wait-for-device"], DEFAULT_TIMEOUT).await;
+    for (kind, rules) in [("reverse", &reverses), ("forward", &forwards)] {
+        for (from, to) in rules {
+            if let Err(e) = run_adb(Some(serial), &[kind, from, to], DEFAULT_TIMEOUT).await {
+                tracing::warn!(%serial, "Could not restore adb {kind} {from} {to} after adb root: {e}");
+            }
+        }
+    }
     Ok(())
+}
+
+/// The `(first, second)` specs of `adb reverse --list` (device side, host side)
+/// or `adb forward --list` (host side, device side) lines, in the order
+/// `adb reverse`/`adb forward` take them back. `serial` keeps only that
+/// device's lines of the host-wide forward list; reverse lines start with a
+/// transport name instead.
+fn parse_port_rules(out: &str, serial: Option<&str>) -> Vec<(String, String)> {
+    out.lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            match fields.as_slice() {
+                [owner, from, to] if serial.is_none_or(|s| s == *owner) => {
+                    Some(((*from).to_string(), (*to).to_string()))
+                }
+                _ => None,
+            }
+        })
+        .collect()
 }
 
 /// `install_ca_cert` left a rootable device's adbd unrooted because an agent
@@ -1870,6 +1908,30 @@ mod tests {
         assert!(parse_rootable("1\n"));
         // adb failed: no answer, so assume adbd may restart.
         assert!(parse_rootable(""));
+    }
+
+    #[test]
+    fn port_rules_parse_reverse_lines_whatever_the_transport_name() {
+        assert_eq!(
+            parse_port_rules(
+                "host-20 tcp:8081 tcp:8081\nUsbFfs localabstract:x tcp:9\n",
+                None
+            ),
+            vec![
+                ("tcp:8081".to_string(), "tcp:8081".to_string()),
+                ("localabstract:x".to_string(), "tcp:9".to_string()),
+            ]
+        );
+        assert!(parse_port_rules("", None).is_empty());
+    }
+
+    #[test]
+    fn port_rules_keep_only_the_devices_forwards() {
+        let out = "emulator-5554 tcp:51360 tcp:18700\nemulator-5556 tcp:1 tcp:2\n";
+        assert_eq!(
+            parse_port_rules(out, Some("emulator-5554")),
+            vec![("tcp:51360".to_string(), "tcp:18700".to_string())]
+        );
     }
 
     // ─── root_unavailable_hint ───

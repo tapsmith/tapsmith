@@ -1134,14 +1134,6 @@ impl DeviceBackend for AndroidBackend<'_> {
             Ok(installed_path) => {
                 *self.svc.proxy_ca_cert_path.write().await = Some(installed_path);
             }
-            // The CA went in when the device was selected, and adbd has lost
-            // root since: the device still trusts it, so capture is unchanged.
-            Err(e)
-                if e.downcast_ref::<adb::AdbdRestartRefused>().is_some()
-                    && self.svc.proxy_ca_cert_path.read().await.is_some() =>
-            {
-                debug!(%serial, "Skipping CA re-install: {e}");
-            }
             Err(e) => {
                 let (tunnel, msg) = android_ca_install_failure(&e);
                 if tunnel {

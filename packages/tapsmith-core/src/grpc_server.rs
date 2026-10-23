@@ -6182,8 +6182,9 @@ fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
                 "Could not install Tapsmith's CA certificate on the device: {cause}. \
                  HTTPS is passed through to its servers uncaptured, so device.route(), \
                  waitForRequest() and waitForResponse() cannot see it; plain HTTP is still \
-                 captured. Tapsmith roots the device when a session selects it, before \
-                 its agent starts: start a new session (or run `adb root` first) to capture HTTPS"
+                 captured. A Tapsmith daemon roots the device when it selects it, before \
+                 starting its agent: quit Tapsmith (UI mode, watch and MCP sessions too) \
+                 and start it again to capture HTTPS"
             ),
         );
     }
@@ -6322,9 +6323,39 @@ mod tests {
         let (tunnel, msg) = android_ca_install_failure(&adb::AdbdRestartRefused.into());
         assert!(tunnel);
         assert!(msg.contains("end the Tapsmith agent"), "{msg}");
-        assert!(msg.contains("start a new session"), "{msg}");
+        assert!(msg.contains("start it again"), "{msg}");
         assert!(msg.contains("passed through"), "{msg}");
         assert!(msg.contains("device.route()"), "{msg}");
+    }
+
+    fn test_service() -> TapsmithServiceImpl {
+        TapsmithServiceImpl::new(
+            Arc::new(RwLock::new(DeviceManager::new())),
+            Arc::new(RwLock::new(AgentConnection::new())),
+            crate::daemon_log_bus::DaemonLogBus::new(16),
+        )
+    }
+
+    fn started_on(serial: &str, platform: Platform) -> StartedAgentConfig {
+        StartedAgentConfig::from_start_agent_request(
+            serial,
+            platform,
+            &proto::StartAgentRequest::default(),
+        )
+    }
+
+    // PILOT-831: only an Android agent this daemon started on that serial
+    // stops the CA install from restarting adbd.
+    #[tokio::test]
+    async fn android_agent_started_on_matches_serial_and_platform() {
+        let svc = test_service();
+        assert!(!svc.android_agent_started_on("emulator-5554").await);
+        *svc.started_agent_config.write().await =
+            Some(started_on("emulator-5554", Platform::Android));
+        assert!(svc.android_agent_started_on("emulator-5554").await);
+        assert!(!svc.android_agent_started_on("emulator-5556").await);
+        *svc.started_agent_config.write().await = Some(started_on("emulator-5554", Platform::Ios));
+        assert!(!svc.android_agent_started_on("emulator-5554").await);
     }
 
     #[test]
