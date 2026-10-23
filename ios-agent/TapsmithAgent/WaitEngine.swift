@@ -80,7 +80,11 @@ class WaitEngine {
             // filters are applied by the snapshot finder. Never return the
             // coarse match directly, or negative state assertions become
             // false positives.
-            if !queryFullyRepresentsSelector {
+            //
+            // Nor a match inside the keyboard: a query can't leave the
+            // keyboard out, so `getByText("Done")` would find its Done key.
+            // The snapshot walk does (NonAppElements, PILOT-756).
+            if !queryFullyRepresentsSelector || isInKeyboard(element) {
                 return try resolveValidatedElement(
                     selector,
                     timeoutMs: timeoutMs,
@@ -184,9 +188,23 @@ class WaitEngine {
         }
     }
 
-    /// Build an XCUIElementQuery from a selector for use with waitForExistence.
-    /// Returns nil if the selector type cannot be expressed as a direct query.
+    /// Whether a live query's `element` is part of the software keyboard
+    /// (NonAppElements.liesInKeyboard). Costs a keyboard query, and two
+    /// frame reads when a keyboard is up — only on this wait path.
+    private func isInKeyboard(_ element: XCUIElement) -> Bool {
+        let keyboard = app.keyboards.firstMatch
+        guard keyboard.exists else { return false }
+        return NonAppElements.liesInKeyboard(element.frame, keyboardFrame: keyboard.frame)
+    }
+
+    /// Build an XCUIElementQuery from a selector for use with waitForExistence,
+    /// never returning the hooks marker (NonAppElements). Returns nil if the
+    /// selector type cannot be expressed as a direct query.
     private func buildWaitQuery(_ selector: ElementSelector) -> XCUIElementQuery? {
+        buildSelectorQuery(selector)?.excludingHooksMarker()
+    }
+
+    private func buildSelectorQuery(_ selector: ElementSelector) -> XCUIElementQuery? {
         if let text = selector.text {
             return app.descendants(matching: .any)
                 .matching(NSPredicate(format: "label MATCHES %@", TextMatch.exactPattern(text)))

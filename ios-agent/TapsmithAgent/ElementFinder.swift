@@ -320,8 +320,12 @@ class ElementFinder {
         return Float(min(max(intersectionArea / elementArea, 0), 1))
     }
 
-    /// Extract all concrete elements from an XCUIElementQuery.
+    /// Extract all concrete elements from an XCUIElementQuery, leaving out
+    /// the hooks marker (NonAppElements). A scoped find starts from an
+    /// element some locator found, which is never the application or the
+    /// keyboard, so the keyboard's keys are not under it.
     private func allElements(from query: XCUIElementQuery) -> [XCUIElement] {
+        let query = query.excludingHooksMarker()
         let count = query.count
         guard count > 0 else { return [] }
         var elements: [XCUIElement] = []

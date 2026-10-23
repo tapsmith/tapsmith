@@ -74,3 +74,10 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/label-match-tests"
 "$OUT/label-match-tests" "../packages/tapsmith/src/__tests__/fixtures/label-conformance.json"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/NonAppElementsTests/main.swift \
+  TapsmithAgent/NonAppElements.swift \
+  -o "$OUT/non-app-elements-tests"
+"$OUT/non-app-elements-tests"

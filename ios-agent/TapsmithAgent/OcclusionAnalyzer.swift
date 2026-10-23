@@ -386,10 +386,11 @@ struct OcclusionAnalyzer {
 
     /// `@tapsmith/react-native`'s test hooks marker: a screen-sized
     /// transparent text in a `pointerEvents="none"` wrapper, painted after all
-    /// content (plus a small visible copy in a corner). It exists to be seen
-    /// in the hierarchy and takes no touches — but on Xcode 26.6 it makes
-    /// XCUITest call every element under it unhittable, and as a labeled text
-    /// over every point it would otherwise be named the cover of all of them.
+    /// content (versions before PILOT-830 also drew a small visible copy in a
+    /// corner). It exists to be seen in the hierarchy and takes no touches —
+    /// but on Xcode 26.6 it makes XCUITest call every element under it
+    /// unhittable, and as a labeled text over every point it would otherwise
+    /// be named the cover of all of them.
     func isTapsmithHooksMarker(_ node: Node) -> Bool {
         node.elementType == .staticText
             && (node.identifier == "tapsmith-hooks" || node.label.hasPrefix("tapsmith-hooks:"))

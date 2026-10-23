@@ -173,7 +173,7 @@ class SnapshotElementFinder {
         }
 
         // Check once if keyboard is visible (for focus detection).
-        // Keyboard = elementType 56 (XCUIElement.ElementType.keyboard).
+        // Keyboard = elementType 19 (XCUIElement.ElementType.keyboard).
         let keyboardVisibleInSnapshot = hasKeyboardInTree(snapshotDict)
 
         // Number the app's descendants in pre-order (XCUIElementQuery order)
@@ -962,6 +962,12 @@ class SnapshotElementFinder {
         var parts: [String] = []
         if let children = node["children"] as? [[String: Any]] {
             for child in children {
+                // The hooks marker is no one's visible text (NonAppElements).
+                if NonAppElements.isHooksMarker(
+                    label: child["label"] as? String ?? "",
+                    title: child["title"] as? String ?? "",
+                    value: child["value"] as? String ?? ""
+                ) { continue }
                 let ownText: String?
                 if let v = child["value"] as? String, !v.isEmpty {
                     ownText = v
@@ -1037,8 +1043,21 @@ class SnapshotElementFinder {
         // reorder here. We use an ancestor stack to suppress RN-style
         // `.other` wrappers whose identifier/label matches a native
         // descendant in one linear pass.
+        //
+        // What isn't the app's never matches (NonAppElements): the keyboard
+        // and everything in it, the application element itself, the hooks
+        // marker. Only matching skips them — numberDescendants still counts
+        // them, as the live queries that re-resolve a match see them too.
+        let nodeType = XCUIElement.ElementType(rawValue: parseUInt(nodeDict["elementType"]) ?? 0) ?? .other
+        if NonAppElements.excludesSubtree(elementType: nodeType) { return }
+        let isAppNode = !NonAppElements.excludesNode(
+            elementType: nodeType,
+            label: nodeDict["label"] as? String ?? "",
+            title: nodeDict["title"] as? String ?? "",
+            value: nodeDict["value"] as? String ?? ""
+        )
         var pushedAncestor = false
-        if matchesSelector(
+        if isAppNode, matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
             selector: selector,

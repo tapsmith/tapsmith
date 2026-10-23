@@ -300,9 +300,17 @@ class ActionExecutor {
             return nil
         }
 
-        let query = app.descendants(matching: .any).matching(predicate)
-        let elem = query.firstMatch
-        return elem.exists ? elem : nil
+        // Never the hooks marker or a keyboard key (NonAppElements): the
+        // first match that lies outside the keyboard, among the first few.
+        let query = app.descendants(matching: .any).matching(predicate).excludingHooksMarker()
+        let keyboard = app.keyboards.firstMatch
+        let keyboardFrame = keyboard.exists ? keyboard.frame : .zero
+        for index in 0..<min(query.count, 10) {
+            let elem = query.element(boundBy: index)
+            guard elem.exists else { continue }
+            if !NonAppElements.liesInKeyboard(elem.frame, keyboardFrame: keyboardFrame) { return elem }
+        }
+        return nil
     }
 
     // MARK: - Drag and Drop
