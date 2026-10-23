@@ -100,11 +100,11 @@ jobs:
       agent-cached: ${{ steps.agent.outputs.cache-matched-key != '' }}
       test-app-cached: ${{ steps.test-app.outputs.cache-hit == 'true' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Look up daemon binaries
         id: daemon
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           lookup-only: true
           path: |
@@ -114,7 +114,7 @@ jobs:
 
       - name: Look up iOS agent build
         id: agent
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           lookup-only: true
           path: ios-agent/.build-sim
@@ -123,7 +123,7 @@ jobs:
 
       - name: Look up test app
         id: test-app
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           lookup-only: true
           path: e2e/fixtures/TapsmithTestApp.app
@@ -141,21 +141,21 @@ jobs:
     needs: gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # dist/ is platform-independent (tsc output, proto copy, iOS agent
       # sources, vite web bundles), so build it once here instead of in each
       # of the shard jobs and the report job.
       - name: Cache SDK build
         id: sdk-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: packages/tapsmith/dist
           key: sdk-dist-${{ hashFiles('packages/tapsmith/**', 'proto/tapsmith.proto',
             'ios-agent/TapsmithAgent/**', 'ios-agent/TapsmithAgent.xcodeproj/**',
             'ios-agent/create-xcode-project.sh', 'ios-agent/Package.swift') }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.sdk-cache.outputs.cache-hit != 'true'
         with:
           node-version: 24
@@ -167,7 +167,7 @@ jobs:
         working-directory: packages/tapsmith
         run: npm ci && npm run build
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sdk-dist
           retention-days: 1
@@ -186,20 +186,20 @@ jobs:
     if: needs.gate.outputs.daemon-cached != 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Must run before the Cargo cache restores target/ — hashFiles ignores
       # .gitignore, so a populated target/ would poison the key.
       - name: Cache daemon binaries
         id: daemon-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             packages/tapsmith-core/target/release/tapsmith-core
             packages/tapsmith-core/target/release/tapsmith-ios-hid
           key: ios-daemon-bin-${{ hashFiles('packages/tapsmith-core/**', 'proto/tapsmith.proto') }}
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         if: steps.daemon-cache.outputs.cache-hit != 'true'
 
       - name: Install protobuf compiler
@@ -208,7 +208,7 @@ jobs:
 
       - name: Cache Cargo
         if: steps.daemon-cache.outputs.cache-hit != 'true'
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -229,7 +229,7 @@ jobs:
       - name: Verify HID helper was built
         run: test -x packages/tapsmith-core/target/release/tapsmith-ios-hid
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: daemon-binary-macos
           retention-days: 1
@@ -246,7 +246,7 @@ jobs:
     if: needs.gate.outputs.agent-cached != 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
@@ -260,7 +260,7 @@ jobs:
 
       - name: Cache agent build
         id: agent-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ios-agent/.build-sim
           key: ios-agent-build-${{ hashFiles('ios-agent/**') }}-${{ steps.xcode.outputs.version }}
@@ -283,7 +283,7 @@ jobs:
             -derivedDataPath .build-sim \
             -quiet
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ios-agent-build
           retention-days: 1
@@ -296,11 +296,11 @@ jobs:
     if: needs.gate.outputs.test-app-cached != 'true'
     runs-on: macos-26
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Cache test app
         id: test-app-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: e2e/fixtures/TapsmithTestApp.app
           key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
@@ -310,7 +310,7 @@ jobs:
             'packages/tapsmith-react-native/package.json',
             'packages/tapsmith-react-native/tsconfig*.json') }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: steps.test-app-cache.outputs.cache-hit != 'true'
         with:
           node-version: 24
@@ -364,7 +364,7 @@ jobs:
       - name: Package test app
         run: tar czf test-app-ios.tar.gz -C e2e/fixtures TapsmithTestApp.app
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-app-ios
           retention-days: 1
@@ -389,9 +389,9 @@ jobs:
       matrix:
         shard: [ 1, 2, 3 ]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -441,7 +441,7 @@ jobs:
 
       - name: Restore daemon binaries from cache
         id: daemon-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             packages/tapsmith-core/target/release/tapsmith-core
@@ -450,21 +450,21 @@ jobs:
 
       - name: Download daemon binary
         if: steps.daemon-cache.outputs.cache-hit != 'true' && needs.build-daemon.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: daemon-binary-macos
           path: packages/tapsmith-core/target/release
 
       - name: Restore iOS agent from cache
         id: agent-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ios-agent/.build-sim
           key: ios-agent-build-${{ hashFiles('ios-agent/**') }}-${{ steps.xcode.outputs.version }}
 
       - name: Download iOS agent
         if: steps.agent-cache.outputs.cache-hit != 'true' && needs.build-agent.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ios-agent-build
           path: ios-agent/.build-sim
@@ -488,14 +488,14 @@ jobs:
       # Concurrent shards race to save the same key; the losers only warn.
       - name: Save iOS agent build to cache
         if: steps.agent-cache.outputs.cache-hit != 'true' && needs.build-agent.result != 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ios-agent/.build-sim
           key: ${{ steps.agent-cache.outputs.cache-primary-key }}
 
       - name: Restore test app from cache
         id: test-app-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: e2e/fixtures/TapsmithTestApp.app
           key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
@@ -507,7 +507,7 @@ jobs:
 
       - name: Download test app
         if: steps.test-app-cache.outputs.cache-hit != 'true' && needs.build-test-app.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: test-app-ios
           path: .
@@ -524,7 +524,7 @@ jobs:
       # the build has to land at that real path.
       - name: Restore SDK build from cache
         id: sdk-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: packages/tapsmith/dist
           key: sdk-dist-${{ hashFiles('packages/tapsmith/**', 'proto/tapsmith.proto',
@@ -533,7 +533,7 @@ jobs:
 
       - name: Download SDK build
         if: steps.sdk-cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sdk-dist
           path: packages/tapsmith/dist
@@ -592,7 +592,7 @@ jobs:
       # build must fall through to a fresh auth.setup run, never be reused.
       - name: Restore cached auth state
         id: auth-state-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.AUTH_STATE_ARCHIVE }}
           key: auth-state-ios-${{ env.AUTH_STATE_CACHE_VERSION }}-${{
@@ -696,7 +696,7 @@ jobs:
         if: >-
           success() && steps.auth-state-cache.outputs.cache-hit != 'true'
           && hashFiles(env.AUTH_STATE_ARCHIVE) != ''
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ${{ env.AUTH_STATE_ARCHIVE }}
           key: ${{ steps.auth-state-cache.outputs.cache-primary-key }}
@@ -743,7 +743,7 @@ jobs:
 
       - name: Upload timing log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ios-timing-${{ matrix.shard }}
           retention-days: 7
@@ -769,7 +769,7 @@ jobs:
 
       - name: Upload blob report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: blob-report-ios-${{ matrix.shard }}
           retention-days: 7
@@ -777,7 +777,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-results-ios-${{ matrix.shard }}
           retention-days: 7
@@ -816,9 +816,9 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -874,7 +874,7 @@ jobs:
 
       - name: Restore daemon binaries from cache
         id: daemon-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             packages/tapsmith-core/target/release/tapsmith-core
@@ -883,21 +883,21 @@ jobs:
 
       - name: Download daemon binary
         if: steps.daemon-cache.outputs.cache-hit != 'true' && needs.build-daemon.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: daemon-binary-macos
           path: packages/tapsmith-core/target/release
 
       - name: Restore iOS agent from cache
         id: agent-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ios-agent/.build-sim
           key: ios-agent-build-${{ hashFiles('ios-agent/**') }}-${{ steps.xcode.outputs.version }}
 
       - name: Download iOS agent
         if: steps.agent-cache.outputs.cache-hit != 'true' && needs.build-agent.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ios-agent-build
           path: ios-agent/.build-sim
@@ -921,14 +921,14 @@ jobs:
       # Concurrent shards race to save the same key; the losers only warn.
       - name: Save iOS agent build to cache
         if: steps.agent-cache.outputs.cache-hit != 'true' && needs.build-agent.result != 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ios-agent/.build-sim
           key: ${{ steps.agent-cache.outputs.cache-primary-key }}
 
       - name: Restore test app from cache
         id: test-app-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: e2e/fixtures/TapsmithTestApp.app
           key: test-app-ios-${{ hashFiles('test-app/app/**', 'test-app/assets/**',
@@ -940,7 +940,7 @@ jobs:
 
       - name: Download test app
         if: steps.test-app-cache.outputs.cache-hit != 'true' && needs.build-test-app.result == 'success'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: test-app-ios
           path: .
@@ -957,7 +957,7 @@ jobs:
       # the build has to land at that real path.
       - name: Restore SDK build from cache
         id: sdk-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: packages/tapsmith/dist
           key: sdk-dist-${{ hashFiles('packages/tapsmith/**', 'proto/tapsmith.proto',
@@ -966,7 +966,7 @@ jobs:
 
       - name: Download SDK build
         if: steps.sdk-cache.outputs.cache-hit != 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sdk-dist
           path: packages/tapsmith/dist
@@ -1069,7 +1069,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-results-ios-multi-device
           retention-days: 7
@@ -1085,9 +1085,9 @@ jobs:
     if: always() && needs.build-sdk.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           cache: npm
@@ -1100,7 +1100,7 @@ jobs:
         run: npm ci
 
       - name: Download SDK build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: sdk-dist
           path: packages/tapsmith/dist
@@ -1109,7 +1109,7 @@ jobs:
         run: chmod +x packages/tapsmith/dist/bin.js packages/tapsmith/dist/cli.js
 
       - name: Download all blob reports
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: blob-report-ios-*
           path: all-blob-reports
@@ -1128,7 +1128,7 @@ jobs:
       # still writes the report for the shards that did finish.
       - name: Upload HTML report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: e2e-ios-report
           retention-days: 30
