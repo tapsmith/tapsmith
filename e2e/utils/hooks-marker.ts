@@ -44,3 +44,25 @@ export function findHooksMarker(xml: string): HooksMarkerNode | undefined {
 export async function readHooksMarker(device: Device): Promise<HooksMarkerNode | undefined> {
   return findHooksMarker(await hierarchyXml(device))
 }
+
+/**
+ * The XML of each window in an Android dump: every top-level `<node>` (one
+ * per window) with its whole subtree, in dump order.
+ */
+export function androidWindows(xml: string): string[] {
+  const windows: string[] = []
+  let depth = 0
+  let start = -1
+  for (const m of xml.matchAll(/<(\/?)node\b[^>]*?(\/?)>/g)) {
+    if (m[1] === "/") {
+      depth--
+      if (depth === 0) windows.push(xml.slice(start, m.index! + m[0].length))
+      continue
+    }
+    if (depth === 0) start = m.index!
+    if (m[2] === "/") {
+      if (depth === 0) windows.push(m[0])
+    } else depth++
+  }
+  return windows
+}

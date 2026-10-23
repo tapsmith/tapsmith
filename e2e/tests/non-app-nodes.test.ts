@@ -1,6 +1,6 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
-import { hierarchyXml, readHooksMarker } from "../utils/hooks-marker.js"
+import { androidWindows, hierarchyXml, readHooksMarker } from "../utils/hooks-marker.js"
 
 // PILOT-756 / PILOT-830: a locator matches only the app's own elements — not
 // the software keyboard's keys, not the iOS application element (whose label
@@ -22,7 +22,9 @@ describe("Locators match only the app's own elements", () => {
     if (platform === "ios") {
       expect(xml).toMatch(/<XCUIElementType(Keyboard|\(19\))[\s>][\s\S]*label="done"/i)
     } else {
-      expect(xml).toMatch(/<node tapsmith-non-app="true"[^>]*package="[^"]*inputmethod[^"]*"[\s\S]*content-desc="Done"/)
+      const ime = androidWindows(xml).find((w) => /^<node tapsmith-non-app="true"[^>]*package="[^"]*inputmethod/.test(w))
+      expect(ime, "the input method's window is in the dump, marked as not the app's").toBeDefined()
+      expect(ime).toContain('content-desc="Done"')
     }
 
     await expect(keyboardScreen.doneText).toHaveCount(1)
