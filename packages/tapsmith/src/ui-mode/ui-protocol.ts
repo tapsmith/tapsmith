@@ -295,10 +295,9 @@ export interface HierarchyUpdateMessage {
   workerId?: number
   /** Which device of the worker's group (0 = primary). */
   deviceIndex?: number
-  /** Whether an overlay of the WebView's DOM can come in this device's
-   * captures (only the UI's adopted primary gets one, and not from a failed
-   * WebView dump until one succeeds): a pick on web content waits for it
-   * only then. Absent from older servers: treat as true. */
+  /** Whether this device's captures can carry the WebView DOM overlay (only
+   * the UI's adopted primary does): a pick on web content waits for the
+   * overlay only on such a device. Absent from older servers: treat as true. */
   webviewOverlay?: boolean
 }
 

@@ -3829,7 +3829,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       ? async () => {
         const handle = device._connectedWebView();
         if (handle) return handle;
-        if (webviewFailing || Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
+        if (Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
           throw new Error(`Could not connect to the WebView; retrying. ${DEBUGGABLE_HINT}`);
         }
         throw new Error('Connecting to the WebView; the count appears once the connection is up.');
@@ -4394,13 +4394,6 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   let webviewDumpPromise: Promise<string | undefined> | null = null;
   let webviewEstablished = false;
   let webviewInspectFailedAt = 0;
-  // The picker's WebView dumps keep failing (a WebView that is not
-  // debuggable), from the first failure until one succeeds: no overlay can
-  // come meanwhile, retries included.
-  let webviewFailing = false;
-  // Bumped when a primary capture shows no WebView: a dump started before
-  // then was for a WebView that has gone, and its failure is not recorded.
-  let webviewScreenEpoch = 0;
   const debugWebview = (msg: string) => {
     if (process.env.TAPSMITH_DEBUG_WEBVIEW) console.error(`[webview-picker ${new Date().toISOString().slice(11, 23)}] ${msg}`);
   };
@@ -4424,25 +4417,16 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       return undefined;
     }
     const device = ctx.device;
-    const epoch = webviewScreenEpoch;
-    const failed = () => {
-      webviewEstablished = false;
-      if (epoch !== webviewScreenEpoch) return;
-      webviewInspectFailedAt = Date.now();
-      webviewFailing = true;
-    };
     debugWebview('starting dump');
     webviewDumpPromise = device._dumpWebViewDomForInspection(hierarchyXml)
       .then((dom) => {
         debugWebview(`dump resolved: ${dom === null ? 'FAILED' : dom === undefined ? 'no-webview' : `dom ${dom.length}b`}`);
         if (dom === null) {
-          failed();
+          webviewInspectFailedAt = Date.now();
+          webviewEstablished = false;
           return undefined;
         }
         if (dom !== undefined) webviewEstablished = true;
-        // A DOM, or no WebView on screen at all: either way the WebView that
-        // failed is not what the next capture shows.
-        webviewFailing = false;
         return dom;
       })
       // The promise is deliberately left un-awaited until the connection is
@@ -4450,7 +4434,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // _dumpWebViewDomForInspection shouldn't reject, but treat one as a
       // failure (cooldown) rather than trusting that contract.
       .catch(() => {
-        failed();
+        webviewInspectFailedAt = Date.now();
+        webviewEstablished = false;
         return undefined;
       })
       .finally(() => { webviewDumpPromise = null; });
@@ -4605,21 +4590,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           // webview.* locators. Primary-device only — the server's Device
           // instance can open a WebView connection to that device; other
           // workers' devices (and group members) have none.
-          const primary = !!hierWorker?.adoptedPrimary && hierDeviceIndex === 0;
-          // A screen without a WebView: the one that failed is gone. Its
-          // cooldown ends too, so the next WebView is dumped (and its overlay
-          // can come) at once, and a dump still settling for the old one
-          // records no failure.
-          if (primary && !xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
-            webviewFailing = false;
-            webviewInspectFailedAt = 0;
-            webviewScreenEpoch++;
-          }
-          const webviewDom = primary ? await dumpWebViewDomForPicker(xml) : undefined;
-          // Whether an overlay can come: not off the primary, nor while its
-          // WebView dumps keep failing (a WebView that is not debuggable),
-          // when a held click would only wait out its deadline.
-          const webviewOverlay = primary && !webviewFailing;
+          const webviewOverlay = !!hierWorker?.adoptedPrimary && hierDeviceIndex === 0;
+          const webviewDom = webviewOverlay ? await dumpWebViewDomForPicker(xml) : undefined;
           if (webviewDom) {
             const lastClose = xml.lastIndexOf('</');
             if (lastClose !== -1) {
