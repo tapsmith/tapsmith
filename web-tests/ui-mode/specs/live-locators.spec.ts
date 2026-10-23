@@ -474,4 +474,21 @@ test.describe("Live locators come from the device", () => {
     const ask = await ui.waitForMessage("suggest-locators", { timeout: 2_000 })
     expect(ask.revision).toBe(1)
   })
+
+  test("a click held for the WebView overlay is picked as soon as a capture says none can come", async ({ app, device, page }) => {
+    // The primary's WebView connect fails (not debuggable): the next capture
+    // says no overlay can come, and the held click must not wait out 12 s.
+    const ui = app
+    ui.sendFrame(screenFrame(240, 500))
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({ type: "hierarchy-update", xml: WEB_NO_OVERLAY, revision: 1, workerId: 0, deviceIndex: 0, webviewOverlay: true })
+    ui.clearReceived()
+    await device.tapMirrorAt(0.5, 0.5)
+    await page.waitForTimeout(400)
+    expect(ui.messagesOfType("suggest-locators")).toEqual([])
+    ui.send({ type: "hierarchy-update", xml: WEB_NO_OVERLAY, revision: 2, workerId: 0, deviceIndex: 0, webviewOverlay: false })
+    const ask = await ui.waitForMessage("suggest-locators", { timeout: 2_000 })
+    expect(ask.revision).toBe(2)
+  })
 })

@@ -1485,7 +1485,8 @@ function App() {
   useEffect(() => {
     const pending = pendingMirrorPickRef.current;
     if (!pending || liveRoots.length === 0) return;
-    if (!isWebViewOverlayPending(liveRoots, pending.x, pending.y) || Date.now() > pending.deadline) {
+    // Resolve once the overlay is in, or once the device says none can come.
+    if (!liveOverlayRef.current || !isWebViewOverlayPending(liveRoots, pending.x, pending.y) || Date.now() > pending.deadline) {
       clearPendingMirrorPick();
       finalizeMirrorPick(pending);
     }

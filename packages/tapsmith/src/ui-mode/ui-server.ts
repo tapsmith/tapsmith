@@ -4590,8 +4590,12 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           // webview.* locators. Primary-device only — the server's Device
           // instance can open a WebView connection to that device; other
           // workers' devices (and group members) have none.
-          const webviewOverlay = !!hierWorker?.adoptedPrimary && hierDeviceIndex === 0;
-          const webviewDom = webviewOverlay ? await dumpWebViewDomForPicker(xml) : undefined;
+          const primary = !!hierWorker?.adoptedPrimary && hierDeviceIndex === 0;
+          const webviewDom = primary ? await dumpWebViewDomForPicker(xml) : undefined;
+          // Whether an overlay can come: not off the primary, nor while its
+          // WebView connect is in its failure cooldown (a WebView that is
+          // not debuggable), when a held click would only wait out its deadline.
+          const webviewOverlay = primary && Date.now() - webviewInspectFailedAt >= WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS;
           if (webviewDom) {
             const lastClose = xml.lastIndexOf('</');
             if (lastClose !== -1) {
