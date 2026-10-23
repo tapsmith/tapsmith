@@ -9,6 +9,7 @@
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
 import { getNodeBounds, hitTest } from './hierarchy-utils.js';
 import { findBetterDescendant, hasGoodSelectors } from './selector-generation.js';
+import { isHooksMarkerCarrier, isNonAppSubtree } from './non-app-nodes.js';
 
 function findParent(roots: HierarchyNode[], target: HierarchyNode): HierarchyNode | null {
   for (const root of roots) {
@@ -56,7 +57,8 @@ export function pickNodeAt(
       const parent = findParent(roots, hitNode);
       if (parent) {
         for (const sibling of parent.children) {
-          if (sibling === hitNode) continue;
+          // Never promote to what no locator matches (the hooks marker).
+          if (sibling === hitNode || isNonAppSubtree(sibling) || isHooksMarkerCarrier(sibling)) continue;
           const sb = getNodeBounds(sibling);
           if (sb && boundsOverlap(hitBounds, sb)) {
             const found = findBetterDescendant(sibling) ?? (hasGoodSelectors(sibling) ? sibling : null);

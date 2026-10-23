@@ -5,6 +5,7 @@ import { describe, it, expect } from 'vitest';
 import { parseHierarchyXml, hitTest } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
 import { findBetterDescendant } from '../trace-viewer/components/selector-generation.js';
+import { pickNodeAt } from '../trace-viewer/components/pick-node.js';
 import { HOOKS_MARKER_PREFIX } from '../hooks-marker.js';
 
 // PILOT-756 / PILOT-830: what no user locator matches — the iOS application
@@ -109,6 +110,16 @@ describe('iOS: the application element, the keyboard and the hooks marker never 
     ]) {
       expect(count(IOS, code), code).toBe(0);
     }
+  });
+
+  it('does not promote a pick on an unnamed leaf to the marker beside it', () => {
+    const roots = parseHierarchyXml(`<hierarchy>
+  <XCUIElementTypeWindow label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeWindow" bounds="[0,0][393,852]">
+    <XCUIElementTypeImage label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeImage" bounds="[10,300][60,350]" />
+    <XCUIElementTypeStaticText label="${MARKER}" identifier="tapsmith-hooks" value="" placeholderValue="" type="XCUIElementTypeStaticText" bounds="[0,0][393,852]" />
+  </XCUIElementTypeWindow>
+</hierarchy>`);
+    expect(pickNodeAt(roots, 30, 320)?.node.attributes.get('type')).toBe('XCUIElementTypeImage');
   });
 
   it('does not land a pick on the screen-sized marker', () => {

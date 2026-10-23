@@ -202,7 +202,7 @@ class SnapshotElementFinder {
         var matches: [([String: Any], CGRect)] = []
         var otherAncestors: [WrapperAncestor] = []
         var suppressed = Set<Int>()
-        var keyboardMatches = 0
+        var keyboardMatches: [UInt] = []
         findMatches(
             in: snapshotDict,
             inTabBar: false,
@@ -1030,30 +1030,34 @@ class SnapshotElementFinder {
     static let inTabBarKey = "tapsmithInTabBar"
 
     /// Key under which `findMatches` records, on a match after the keyboard
-    /// in tree order, how many of the keyboard's nodes match the selector:
-    /// a live query re-resolving the match by position counts them too.
+    /// in tree order, the element types of the keyboard's nodes that match
+    /// the selector: a live query re-resolving the match by position returns
+    /// those of its own type (or all, unscoped) too.
     static let keyboardMatchesKey = "tapsmithKeyboardMatches"
 
-    /// How many nodes of the subtree at `nodeDict` (itself included) match
-    /// the selector, ignoring NonAppElements — the keyboard's, which the live
-    /// queries see.
-    private func countMatches(
+    /// The element types of the nodes of the subtree at `nodeDict` (itself
+    /// included) that match the selector, ignoring NonAppElements — the
+    /// keyboard's, which the live queries see.
+    private func matchingTypes(
         in nodeDict: [String: Any],
         selector: ElementSelector,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
         focusedHint: FocusedTextInputHint?
-    ) -> Int {
-        var count = matchesSelector(
+    ) -> [UInt] {
+        var types: [UInt] = []
+        if matchesSelector(
             nodeDict,
             inTabBar: false,
             selector: selector,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
             focusedHint: focusedHint
-        ) ? 1 : 0
+        ) {
+            types.append(parseUInt(nodeDict["elementType"]) ?? 0)
+        }
         for child in nodeDict["children"] as? [[String: Any]] ?? [] {
-            count += countMatches(
+            types += matchingTypes(
                 in: child,
                 selector: selector,
                 keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
@@ -1061,7 +1065,7 @@ class SnapshotElementFinder {
                 focusedHint: focusedHint
             )
         }
-        return count
+        return types
     }
 
     private func findMatches(
@@ -1071,7 +1075,7 @@ class SnapshotElementFinder {
         results: inout [([String: Any], CGRect)],
         otherAncestors: inout [WrapperAncestor],
         suppressed: inout Set<Int>,
-        keyboardMatches: inout Int,
+        keyboardMatches: inout [UInt],
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
         focusedHint: FocusedTextInputHint?
@@ -1090,7 +1094,7 @@ class SnapshotElementFinder {
         if NonAppElements.excludesSubtree(elementType: nodeType) {
             // Not matches, but counted: a live query re-resolving a later
             // match by its position sees the keyboard's nodes that match too.
-            keyboardMatches += countMatches(
+            keyboardMatches += matchingTypes(
                 in: nodeDict,
                 selector: selector,
                 keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
@@ -1143,7 +1147,7 @@ class SnapshotElementFinder {
             let frame = parseFrame(nodeDict)
             var matched = nodeDict
             if inTabBar { matched[SnapshotElementFinder.inTabBarKey] = true }
-            if keyboardMatches > 0 { matched[SnapshotElementFinder.keyboardMatchesKey] = keyboardMatches }
+            if !keyboardMatches.isEmpty { matched[SnapshotElementFinder.keyboardMatchesKey] = keyboardMatches }
             results.append((matched, frame))
             let myIndex = results.count - 1
 
@@ -1486,7 +1490,14 @@ class SnapshotElementFinder {
         // out the keyboard, so a match after the keyboard in tree order (an
         // accessory toolbar, a later window) is indexed past the keyboard's
         // nodes that match the selector (`keyboardMatchesKey`).
-        let keyboardOffset = snapshotNode?[SnapshotElementFinder.keyboardMatchesKey] as? Int ?? 0
+        let keyboardTypes = snapshotNode?[SnapshotElementFinder.keyboardMatchesKey] as? [UInt] ?? []
+        let scopedToType = nodeElType.map { $0 != .other && $0 != .any } ?? false
+        // `resolve` re-finds by a query on the match's type when it is specific
+        // (`labelQuery`); the testId/id queries below are on any type.
+        let keyboardOffsetInScope = scopedToType
+            ? keyboardTypes.filter { $0 == nodeElTypeRaw }.count
+            : keyboardTypes.count
+        let keyboardOffset = keyboardTypes.count
         func resolve(_ query: XCUIElementQuery) -> XCUIElement? {
             let base = query.excludingHooksMarker()
             if !nodeIdentifier.isEmpty {
@@ -1496,7 +1507,7 @@ class SnapshotElementFinder {
                 return base.matching(NSPredicate(format: "identifier == %@", nodeIdentifier))
                     .element(boundBy: idIndex)
             }
-            return base.element(boundBy: matchIndex + keyboardOffset)
+            return base.element(boundBy: matchIndex + keyboardOffsetInScope)
         }
         // A label predicate scoped to the snapshot element's type when it is
         // specific (RN buttons surface as `.other`, so fall back to any type).
