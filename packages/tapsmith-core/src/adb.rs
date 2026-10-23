@@ -719,15 +719,12 @@ pub async fn install_ca_cert(
             tracing::warn!(%serial, "{err}");
             return Err(err.into());
         }
-        // A probe went unanswered (adb hiccup). Neither restarting adbd under
-        // the agent nor tunneling for the rest of the capture is safe on a
-        // guess; a plain error keeps MITM on, and the CA installed at
-        // selection (if any) keeps working.
+        // A probe went unanswered (adb hiccup). Restarting adbd under the
+        // agent on a guess is not safe, so leave it alone and install anyway:
+        // a root adbd takes the CA as before, and an unrooted one fails the
+        // install with a plain error, which keeps MITM on.
         RootStep::Unknown => {
-            bail!(
-                "could not tell whether adbd is root and the Tapsmith agent is running \
-                 (adb did not answer), so adbd was left alone"
-            );
+            debug!(%serial, "adb did not answer a root probe; installing the CA without adb root");
         }
         RootStep::Restart => {
             root_adbd(serial).await?;
