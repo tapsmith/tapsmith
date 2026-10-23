@@ -66,6 +66,11 @@ export class LocatorPane {
     return this.page.getByTestId("locator-suggestions-note")
   }
 
+  /** On the Live source, for a node picked on the trace: pick on the device mirror instead. */
+  get livePickHint() {
+    return this.page.getByTestId("locator-live-pick-hint")
+  }
+
   /** Trace vs Live hierarchy source, in UI mode only. */
   get sourceToggle() {
     return this.page.getByRole("group", { name: "Locator hierarchy source" })

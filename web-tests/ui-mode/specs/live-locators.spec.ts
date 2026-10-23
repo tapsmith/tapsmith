@@ -6,13 +6,23 @@
 import { test, expect } from "../fixtures.js"
 import { screenFrame } from "../messages/frames.js"
 import { GESTURES_FILE } from "../messages/scenarios.js"
-import { action } from "../messages/trace.js"
+import { action, actionCompleted, actionStarted } from "../messages/trace.js"
+import { solidPng } from "../../png.js"
 import { LocatorPane } from "../../panes/locator.pane.js"
+import { ScreenshotPane } from "../../panes/screenshot.pane.js"
 
 const HIERARCHY = `<?xml version="1.0" encoding="UTF-8"?>
 <hierarchy rotation="0">
   <node class="android.widget.FrameLayout" bounds="[0,0][2000,2000]">
     <node class="android.widget.Button" text="Save" clickable="true" bounds="[0,0][2000,2000]" />
+  </node>
+</hierarchy>`
+
+// A recorded screen for trace picks: a button filling the middle.
+const TRACE_HIERARCHY = `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][360,800]">
+    <node class="android.widget.Button" text="Tap area" clickable="true" bounds="[20,120][340,320]" />
   </node>
 </hierarchy>`
 
@@ -328,5 +338,43 @@ test.describe("Live locators come from the device", () => {
     await page.waitForTimeout(300)
     await expect(locator.optionCodes).toHaveText(['device.getByText("Save")'])
     await expect(locator.input).toHaveValue('device.getByText("Save")')
+  })
+
+  test("a node picked on the trace shows no device answers on the Live source, only a hint to pick on the mirror", async ({ app, device, page, detailTabs, explorer, actions }) => {
+    // Live suggestions belong to the element picked on the device; a trace
+    // pick's TypeScript-ranked suggestions must never pass for them.
+    const ui = app
+    const locator = new LocatorPane(page)
+    const DOUBLE_TAP = "Gestures screen > double tap registers double tap gesture"
+    const screen = { width: 360, height: 800 }
+    const traced = { testFullName: DOUBLE_TAP, actionIndex: 0, action: "tap", selector: "getByText('Save')" }
+    const png = solidPng(screen.width, screen.height, [30, 30, 40]).toString("base64")
+    const withTree = (m: ReturnType<typeof actionCompleted>) => ({
+      ...m,
+      event: { ...m.event, hasScreenshotAfter: true, hasHierarchyAfter: true },
+      screenshotAfter: png,
+      hierarchyAfter: TRACE_HIERARCHY,
+    })
+    await explorer.expandAll()
+    ui.send({ type: "run-start", fileCount: 1 })
+    ui.send({ type: "test-start", fullName: DOUBLE_TAP, filePath: GESTURES_FILE })
+    ui.send(actionStarted(traced), withTree(actionCompleted(traced)))
+    ui.send({ type: "test-status", fullName: DOUBLE_TAP, filePath: GESTURES_FILE, status: "passed", duration: 900 })
+    ui.send({ type: "run-end", status: "passed", duration: 900, passed: 1, failed: 0, skipped: 0 })
+    await explorer.node("double tap registers double tap gesture").click()
+    await actions.items.nth(0).click()
+    await detailTabs.select("Locator")
+
+    await page.getByRole("button", { name: "Pick", exact: true }).click()
+    const image = new ScreenshotPane(page).image
+    const box = (await image.boundingBox())!
+    await page.mouse.click(box.x + box.width * 0.5, box.y + box.height * (220 / screen.height))
+    await expect(locator.input).toHaveValue(/Tap area/)
+    await expect(locator.options.first()).toBeVisible()
+
+    ui.sendFrame(screenFrame(240, 500))
+    await locator.sourceToggle.getByRole("button", { name: "Live" }).click()
+    await expect(locator.livePickHint).toBeVisible()
+    await expect(locator.options).toHaveCount(0)
   })
 })
