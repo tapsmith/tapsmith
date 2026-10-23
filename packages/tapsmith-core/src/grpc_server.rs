@@ -537,7 +537,8 @@ impl TapsmithServiceImpl {
             }
         };
         let ca_pem_path = mitm_ca.ca_pem_path().to_string_lossy().to_string();
-        match adb::install_ca_cert(serial, &ca_pem_path, &cert_filename).await {
+        let may_restart_adbd = !self.android_agent_running_on(serial).await;
+        match adb::install_ca_cert(serial, &ca_pem_path, &cert_filename, may_restart_adbd).await {
             Ok(path) => {
                 info!(%serial, "MITM CA pre-installed during device setup (before first app launch)");
                 *self.proxy_ca_cert_path.write().await = Some(path);
@@ -546,6 +547,25 @@ impl TapsmithServiceImpl {
                 debug!(%serial, "CA pre-install during setup failed: {e} — will retry at capture start");
             }
         }
+    }
+
+    /// Whether this daemon has an Android agent running on `serial`: started
+    /// it, or holds a connection to it. Restarting adbd (`adb root`) then would
+    /// end the agent's instrumentation and drop its forward (PILOT-831).
+    async fn android_agent_running_on(&self, serial: &str) -> bool {
+        if self
+            .agent
+            .read()
+            .await
+            .connected_host_port_for(serial, false)
+            .is_some()
+        {
+            return true;
+        }
+        matches!(
+            self.started_agent_config.read().await.as_ref(),
+            Some(c) if c.serial == serial && c.platform == Platform::Android
+        )
     }
 
     fn request_id(provided: &str) -> String {
@@ -6127,6 +6147,20 @@ fn system_proxy_fallback_warning(serial: &str) -> String {
 fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
     let cause = err.to_string();
     let cause = cause.trim().trim_end_matches('.');
+    // The CA never went in, and the device is left alone so the agent keeps
+    // running (PILOT-831): tunnel, so the app's HTTPS still works.
+    if err.downcast_ref::<adb::AdbdRestartRefused>().is_some() {
+        return (
+            true,
+            format!(
+                "Could not install Tapsmith's CA certificate on the device: {cause}. \
+                 HTTPS is passed through to its servers uncaptured, so device.route(), \
+                 waitForRequest() and waitForResponse() cannot see it; plain HTTP is still \
+                 captured. Tapsmith roots the device and installs the CA when a session \
+                 selects it, before the agent starts, so the next run captures HTTPS"
+            ),
+        );
+    }
     match err.downcast_ref::<adb::AdbRootUnavailable>() {
         Some(root) if root.is_emulator => (
             true,
@@ -6253,6 +6287,20 @@ mod tests {
         assert!(!tunnel);
         assert!(msg.contains("adb push failed: device offline."), "{msg}");
         assert!(msg.contains("HTTPS is still intercepted"), "{msg}");
+    }
+
+    // PILOT-831: a capture start that would have to restart adbd under the
+    // running agent leaves the device alone, and tunnels so HTTPS still works.
+    #[test]
+    fn refused_adbd_restart_tunnels_https_and_says_why() {
+        let (tunnel, msg) = android_ca_install_failure(&adb::AdbdRestartRefused.into());
+        assert!(tunnel);
+        assert!(
+            msg.contains("disconnect the running Tapsmith agent"),
+            "{msg}"
+        );
+        assert!(msg.contains("passed through"), "{msg}");
+        assert!(msg.contains("device.route()"), "{msg}");
     }
 
     #[test]

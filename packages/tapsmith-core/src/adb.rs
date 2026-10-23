@@ -672,41 +672,47 @@ fn is_retryable_adb_transport_error(message: &str) -> bool {
 ///
 /// Returns the on-device path where the cert was installed, so the caller
 /// can clean it up later.
+///
+/// `may_restart_adbd` is false while an agent is running on the device: on a
+/// rootable build that is not root yet, `adb root` restarts adbd, which ends
+/// the agent's instrumentation and drops its port forward (PILOT-831). Then
+/// nothing is changed and the error is [`AdbdRestartRefused`].
 pub async fn install_ca_cert(
     serial: &str,
     ca_pem_path: &str,
     cert_filename: &str,
+    may_restart_adbd: bool,
 ) -> Result<String> {
     // Check if already running as root (e.g. CLI called `adb root` during setup)
     let already_root = shell_lenient(serial, "id")
         .await
         .map(|out| out.contains("uid=0"))
         .unwrap_or(false);
-
-    if already_root {
-        debug!(%serial, "adb already running as root, skipping adb root");
+    // Only a rootable build restarts adbd on `adb root`; a production build
+    // refuses without a restart, so asking it stays safe under an agent.
+    let rootable = if already_root || may_restart_adbd {
+        false
     } else {
-        // Attempt to restart adb as root — required for writing to system dirs
-        let root_result = run_adb_lenient(serial, &["root"]).await;
-        match root_result {
-            Ok(output) => {
-                let msg = String::from_utf8_lossy(&output);
-                if msg.contains("cannot run as root") || msg.contains("adbd cannot run as root") {
-                    let err = adb_root_unavailable(serial).await;
-                    tracing::warn!(%serial, "{err}");
-                    return Err(err.into());
-                }
-                debug!(%serial, "adb root succeeded, waiting for device");
-            }
-            Err(e) => {
-                tracing::warn!(%serial, "adb root failed: {e} — CA must be installed manually");
-                return Err(anyhow::anyhow!("adb root failed: {e}"));
-            }
-        }
+        shell_lenient(serial, "getprop ro.debuggable")
+            .await
+            .map(|out| out.trim() == "1")
+            // Unknown: assume rootable, since guessing wrong the other way
+            // disconnects the agent.
+            .unwrap_or(true)
+    };
 
-        // Wait for device to come back after root restart
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        let _ = run_adb(Some(serial), &["wait-for-device"], DEFAULT_TIMEOUT).await;
+    match root_step(already_root, may_restart_adbd, rootable) {
+        RootStep::AlreadyRoot => {
+            debug!(%serial, "adb already running as root, skipping adb root");
+        }
+        RootStep::Refuse => {
+            let err = AdbdRestartRefused;
+            tracing::warn!(%serial, "{err}");
+            return Err(err.into());
+        }
+        RootStep::Restart => {
+            root_adbd(serial).await?;
+        }
     }
 
     let tmp_cert = format!("/data/local/tmp/tapsmith-ca-{cert_filename}.pem");
@@ -763,6 +769,70 @@ pub async fn install_ca_cert(
 
     result
 }
+
+/// What `install_ca_cert` does about root before it writes the CA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RootStep {
+    AlreadyRoot,
+    /// Run `adb root`: restarts adbd on a rootable build, and is refused
+    /// without a restart on a production one.
+    Restart,
+    /// Leave adbd alone: restarting it would end the running agent.
+    Refuse,
+}
+
+fn root_step(already_root: bool, may_restart_adbd: bool, rootable: bool) -> RootStep {
+    if already_root {
+        RootStep::AlreadyRoot
+    } else if !may_restart_adbd && rootable {
+        RootStep::Refuse
+    } else {
+        RootStep::Restart
+    }
+}
+
+/// Restart adbd as root (required for writing to system dirs) and wait for the
+/// device to come back.
+async fn root_adbd(serial: &str) -> Result<()> {
+    match run_adb_lenient(serial, &["root"]).await {
+        Ok(output) => {
+            let msg = String::from_utf8_lossy(&output);
+            if msg.contains("cannot run as root") || msg.contains("adbd cannot run as root") {
+                let err = adb_root_unavailable(serial).await;
+                tracing::warn!(%serial, "{err}");
+                return Err(err.into());
+            }
+            debug!(%serial, "adb root succeeded, waiting for device");
+        }
+        Err(e) => {
+            tracing::warn!(%serial, "adb root failed: {e} — CA must be installed manually");
+            return Err(anyhow::anyhow!("adb root failed: {e}"));
+        }
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let _ = run_adb(Some(serial), &["wait-for-device"], DEFAULT_TIMEOUT).await;
+    Ok(())
+}
+
+/// `install_ca_cert` left a rootable device's adbd unrooted because an agent
+/// is running on it: `adb root` would restart adbd, which ends the agent's
+/// instrumentation and drops its port forward mid-session (PILOT-831). The
+/// session roots the device when it selects it, before the agent starts, so
+/// this only happens when that setup-time install could not root it.
+#[derive(Debug)]
+pub struct AdbdRestartRefused;
+
+impl std::fmt::Display for AdbdRestartRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "adbd is not running as root, and switching it to root now would restart adbd \
+             and disconnect the running Tapsmith agent"
+        )
+    }
+}
+
+impl std::error::Error for AdbdRestartRefused {}
 
 /// `install_ca_cert` failed because adbd cannot run as root — a production
 /// build (a Google Play emulator image, or a physical device) — so nothing can
@@ -1729,6 +1799,34 @@ mod tests {
             model: String::new(),
         };
         assert!(!dev.is_online());
+    }
+
+    // ─── root_step (PILOT-831) ───
+
+    #[test]
+    fn root_step_skips_root_when_adbd_already_is() {
+        assert_eq!(root_step(true, true, true), RootStep::AlreadyRoot);
+        assert_eq!(root_step(true, false, true), RootStep::AlreadyRoot);
+    }
+
+    #[test]
+    fn root_step_restarts_adbd_before_the_agent_runs() {
+        assert_eq!(root_step(false, true, true), RootStep::Restart);
+        assert_eq!(root_step(false, true, false), RootStep::Restart);
+    }
+
+    // A mid-session capture start must not restart a rootable device's adbd
+    // under the running agent: that ended the agent (PILOT-831).
+    #[test]
+    fn root_step_refuses_to_restart_a_rootable_adbd_under_the_agent() {
+        assert_eq!(root_step(false, false, true), RootStep::Refuse);
+    }
+
+    // A production build refuses `adb root` without restarting adbd, so it is
+    // still asked, and reports AdbRootUnavailable as before (PILOT-711).
+    #[test]
+    fn root_step_still_asks_a_production_build_under_the_agent() {
+        assert_eq!(root_step(false, false, false), RootStep::Restart);
     }
 
     // ─── root_unavailable_hint ───
