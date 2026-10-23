@@ -432,3 +432,25 @@ describe('Device.webview() on iOS — cached connection reuse', () => {
     expect(h.constructed).toHaveLength(2);
   });
 });
+
+describe('Device._webviewOfApp() on iOS — the current app only (MCP tools)', () => {
+  const other: MockTarget = { appId: 'PID:300', bundleId: 'com.example.other', name: 'Other', pages: [page(9)] };
+
+  it('never falls back to another app\'s page when the asked app has none', async () => {
+    const inspector = makeMockInspector({ listTargets: vi.fn(async (): Promise<MockTarget[]> => [other]) });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(300);
+    await expect(device._webviewOfApp('dev.tapsmith.testapp')).rejects.toThrow(/No inspectable WebView page in dev\.tapsmith\.testapp/);
+    expect(inspector.connectToPage).not.toHaveBeenCalled();
+  });
+
+  it('connects to the asked app\'s page when another app has one too', async () => {
+    const own: MockTarget = { appId: 'PID:100', bundleId: 'dev.tapsmith.testapp', name: 'TestApp', pages: [page(1)] };
+    const inspector = makeMockInspector({ listTargets: vi.fn(async (): Promise<MockTarget[]> => [other, own]) });
+    h.nextInspector = () => inspector;
+    const device = makeIosDevice(5_000);
+    await device._webviewOfApp('dev.tapsmith.testapp');
+    expect(inspector.connectToPage).toHaveBeenCalledWith('PID:100', 1);
+    expect(inspector.connectToPage).not.toHaveBeenCalledWith('PID:300', 9);
+  });
+});

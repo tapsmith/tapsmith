@@ -222,7 +222,7 @@ export async function withEvaluatedLocator<T>(
     used = open;
     clearTimeout(open.idle);
     // Reuses the live connection, or connects again if it died.
-    const handle = await open.holder.webview(packageName);
+    const handle = await open.holder._webviewOfApp(packageName);
     // The connect had its own budget; waits on the page get the action one.
     handle._setTimeoutMs(MCP_ACTION_TIMEOUT_MS);
     return handle;

@@ -491,7 +491,7 @@ describe('tapsmith_tap', () => {
 
   it('does not send an agent whose WebView connection failed to inspect the screen', async () => {
     hoisted.client = makeDaemon().client;
-    vi.spyOn(Device.prototype, 'webview').mockRejectedValue(new Error('Timed out waiting for WebView (15000ms): no debuggable WebView'));
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockRejectedValue(new Error('Timed out waiting for WebView (15000ms): no debuggable WebView'));
     const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
     expect(res.isError).toBe(true);
     expect(text(res)).not.toContain('tapsmith_snapshot');
@@ -662,7 +662,7 @@ describe('sdkDeviceFor', () => {
     (client as unknown as { getCurrentPackage: () => Promise<unknown> }).getCurrentPackage = async () => ({ requestId: '1', packageName: 'com.example' });
     const device = await sdkDeviceFor(client, 'SIM-B');
     const page = { getByText: vi.fn(() => ({})), _setTimeoutMs: vi.fn() };
-    const webview = vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
+    const webview = vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page as unknown as WebViewHandle);
     try {
       await withEvaluatedLocator(device, client, 'webview.getByText("x")', async () => {});
       expect((webview.mock.contexts[0] as unknown as { _simulatorUdid?: string })._simulatorUdid).toBe('SIM-B');
@@ -698,7 +698,7 @@ describe('sdkDeviceFor', () => {
 // ─── WebView locators (PILOT-848) ───
 
 describe('webview.* locators in the action tools', () => {
-  // The page side is the SDK's WebView code; the seam is device.webview().
+  // The page side is the SDK's WebView code; the seam is the device's connect (_webviewOfApp).
   afterEach(async () => {
     await closeMcpWebViews();
     vi.restoreAllMocks();
@@ -706,7 +706,7 @@ describe('webview.* locators in the action tools', () => {
   function fakePage(value = '') {
     const locator = { click: vi.fn(async () => {}), fill: vi.fn(async () => {}), inputValue: vi.fn(async () => value) };
     const page = { getByText: vi.fn(() => locator), getByPlaceholder: vi.fn(() => locator), _setTimeoutMs: vi.fn() };
-    const webview = vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page as unknown as WebViewHandle);
+    const webview = vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page as unknown as WebViewHandle);
     return { locator, page, webview };
   }
 
@@ -808,7 +808,7 @@ describe('webview.* locators in the action tools', () => {
     let live = 0;
     let most = 0;
     const page = { getByText: vi.fn(() => ({ click: vi.fn(async () => {}) })), _setTimeoutMs: vi.fn() };
-    vi.spyOn(Device.prototype, 'webview').mockImplementation(async () => {
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockImplementation(async () => {
       live++;
       most = Math.max(most, live);
       await new Promise((r) => setTimeout(r, 20));
@@ -957,7 +957,7 @@ describe('webview.* locators in the action tools', () => {
     daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: '' }));
     daemon.listDevices = vi.fn(async () => ({ requestId: '1', unusable: [], devices: [{ serial: 'd', model: '', state: 'device', isEmulator: true, platform, osVersion: '' }] }));
     hoisted.client = daemon.client;
-    const webview = vi.spyOn(Device.prototype, 'webview');
+    const webview = vi.spyOn(Device.prototype, '_webviewOfApp');
     const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
     expect(res.isError).toBe(true);
     expect(text(res)).toContain('current');
