@@ -62,7 +62,7 @@ A locator only finds the app's own elements. Some of what is on screen, and in t
 - **Android's status and navigation bars**: their clock, icons and *Back* / *Home* buttons, and a heads-up notification while it drops down over the app. A notification shade or quick settings panel you pull down (`device.openNotifications()`) is what is on screen then, and its contents match, notifications included. So do the app's own overlay windows, system dialogs, and other apps' windows the app opens, such as a permission dialog.
 - **The `@tapsmith/react-native` hooks marker** ([warm reset](warm-reset.md)), which exists only for Tapsmith to read.
 
-XPath (`locator({ xpath })`) is the exception: it evaluates the raw hierarchy dump.
+XPath (`locator({ xpath })`, Android only) is the exception: it evaluates the raw hierarchy dump.
 
 ## Priority 1 — Accessible Locators (Preferred)
 

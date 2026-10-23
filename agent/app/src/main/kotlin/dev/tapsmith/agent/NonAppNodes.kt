@@ -12,7 +12,7 @@ import android.view.accessibility.AccessibilityWindowInfo
  *   active: the status bar (its clock and icons), the navigation bar (its
  *   Back and Home), and a heads-up notification. A pulled-down notification
  *   shade or quick settings panel is focused and active (measured on API
- *   36), so it stays matchable after `device.openNotifications()`. Only
+ *   33 and 36), so it stays matchable after `device.openNotifications()`. Only
  *   windows System UI owns: the app's own overlay windows, the system's
  *   error dialogs (package `android`) and every other app's window — a
  *   permission dialog is the permission controller's — stay matchable.
