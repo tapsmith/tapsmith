@@ -640,12 +640,13 @@ class SnapshotElementFinder {
     /// The text input that has keyboard focus right now, as the typing
     /// focus check compares it (PILOT-829), from the same live query as
     /// `liveFocusedTextInputFrame`. One snapshot of the match reads every
-    /// attribute at once.
+    /// attribute at once; `exists` first, because a snapshot of no match
+    /// fails only after XCUITest's wait for one (seconds per call).
     func liveFocusedTypingInput() -> TypingFocus.Input? {
         let element = app.descendants(matching: .any)
             .matching(NSPredicate(format: "hasKeyboardFocus == true"))
             .firstMatch
-        guard let snap = try? element.snapshot() else { return nil }
+        guard element.exists, let snap = try? element.snapshot() else { return nil }
         let classNames: [XCUIElement.ElementType: String] = [
             .textField: "XCUIElementTypeTextField",
             .secureTextField: "XCUIElementTypeSecureTextField",

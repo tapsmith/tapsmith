@@ -100,6 +100,21 @@ do {
                                                    identifier: "password")) == .notFocused)
 }
 
+// Not a text input itself: a wrapper, or an element known only by its
+// cached bounds (no class, no identity). A focus change with the tap decides.
+do {
+    let wrapper = Input(frame: row, className: "XCUIElementTypeOther", identifier: "email-wrapper")
+    let innerLifted = Input(frame: CGRect(x: 40, y: 40, width: 322, height: 28), className: textField,
+                            identifier: "email-input")
+    expect("a wrapper whose input took focus and was lifted", verdict(wrapper, before: nil, after: innerLifted) == .focused)
+    let cached = Input(frame: row, className: "")
+    expect("a bounds-cache element whose input took focus and was lifted",
+           verdict(cached, before: nil, after: Input(frame: row.offsetBy(dx: 0, dy: -150), className: textField)) == .focused)
+    let other = Input(frame: row.offsetBy(dx: 0, dy: 300), className: textField)
+    expect("a bounds-cache element while another input kept its focus",
+           verdict(cached, before: other, after: other) == .notFocused)
+}
+
 if failures > 0 {
     print("\(failures) TypingFocus test(s) failed")
     exit(1)

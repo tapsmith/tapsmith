@@ -69,6 +69,15 @@ enum TypingFocus {
             || element.frame.insetBy(dx: -1.5, dy: -1.5).contains(after.frame) {
             return .focused
         }
+        // Below that, it must also be an input that took focus with this tap:
+        // one that already had it is another field keeping its focus
+        // (placeholders repeat: several "Required" rows).
+        let changed = focusedBefore.map { $0 != after } ?? true
+        // Not a text input itself (a wrapper around one, or an element known
+        // only by its cached bounds): nothing of its own to compare.
+        guard textInputClassNames.contains(element.className) else {
+            return changed ? .focused : .notFocused
+        }
         // Somewhere else: the element itself only if it moved or resized on
         // taking focus (a keyboard-avoiding layout lifts it; a search bar
         // slides up and narrows for Cancel). An identifier or placeholder on
@@ -76,10 +85,6 @@ enum TypingFocus {
         if !element.identifier.isEmpty && !after.identifier.isEmpty {
             return element.identifier == after.identifier ? .focused : .notFocused
         }
-        // Below that, it must also be an input that took focus with this tap:
-        // one that already had it is another field keeping its focus
-        // (placeholders repeat: several "Required" rows).
-        let changed = focusedBefore.map { $0 != after } ?? true
         if !element.placeholder.isEmpty && !after.placeholder.isEmpty {
             return changed && element.placeholder == after.placeholder && element.className == after.className
                 ? .focused : .notFocused
@@ -87,6 +92,11 @@ enum TypingFocus {
         // Nothing else to tell them apart by: an input of the element's kind.
         return changed && element.className == after.className ? .focused : .notFocused
     }
+
+    static let textInputClassNames: Set<String> = [
+        "XCUIElementTypeTextField", "XCUIElementTypeSecureTextField",
+        "XCUIElementTypeTextView", "XCUIElementTypeSearchField",
+    ]
 
     private static func framesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
         let tolerance: CGFloat = 1.5

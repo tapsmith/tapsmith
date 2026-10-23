@@ -972,6 +972,10 @@ class CommandHandler {
         case .offScreen:
             throw AgentError.actionFailed("Element is not hittable — cannot refocus it")
         }
+        // The point of refocusing is a caret at the end of the value, and a
+        // field that already had focus keeps its caret when the trailing tap
+        // lands outside its text input (a SwiftUI Form row, PILOT-829).
+        moveCaretToEnd()
     }
 
     /// Tap inside a text input, biased toward the trailing edge so refocusing
@@ -1019,11 +1023,16 @@ class CommandHandler {
             }
             guard case .point(_, let visible)? = plan,
                   let fallback = TypingFocus.fallbackPoint(in: visible, after: first) else {
-                tried = Self.describe(first)
-                throw Self.notFocusedError(tried: tried)
+                snapshotFinder.clearFocusedTextInputHint()
+                throw Self.notFocusedError(tried: Self.describe(first))
             }
             tapToFocus(element, at: fallback)
-            if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: focusWait, settleTime: settleTime) { return }
+            if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: focusWait, settleTime: settleTime) {
+                // That tap put the caret where it landed, possibly inside the
+                // existing value: type() appends, as after the trailing tap.
+                moveCaretToEnd()
+                return
+            }
             tried = "\(Self.describe(first)) and \(Self.describe(fallback))"
         } else {
             let xcElem = try getXCUIElement(element.elementId)
@@ -1035,7 +1044,16 @@ class CommandHandler {
             if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: focusWait, settleTime: settleTime) { return }
             tried = "the element"
         }
+        // The taps recorded the field as focused; it is not.
+        snapshotFinder.clearFocusedTextInputHint()
         throw Self.notFocusedError(tried: tried)
+    }
+
+    /// Cmd+Down: the end of the text, in single- and multi-line inputs.
+    private func moveCaretToEnd() {
+        if EventSynthesizer.keyPress(key: XCUIKeyboardKey.downArrow.rawValue, modifiers: .command) {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
     }
 
     private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {

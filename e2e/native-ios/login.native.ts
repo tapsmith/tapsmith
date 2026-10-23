@@ -29,6 +29,14 @@ describe("Native: login form", () => {
     await expect(login.email).toHaveValue("sam@example.com")
   })
 
+  test("type appends to a value that runs past the middle of the field", async ({ login }) => {
+    const long = "samuel.with.a.long.address@example.com"
+    await login.email.type(long)
+    await login.password.type("secret")
+    await login.email.type("Z")
+    await expect(login.email).toHaveValue(`${long}Z`)
+  })
+
   test("clearAndType replaces the field's text", async ({ login }) => {
     await login.email.type("wrong@example.com")
     await login.email.clearAndType("sam@example.com")
