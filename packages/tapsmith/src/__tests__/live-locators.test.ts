@@ -223,6 +223,16 @@ describe('suggestLiveLocators', () => {
     expect((await suggestLiveLocators(fakeClient(() => []), 'emu', byTestId, { ios: false })).suggestions).toEqual([]);
   });
 
+  it('tells a same-box wrapper with an id from the picked element without one', async () => {
+    const { page, matches } = fakePage();
+    const box = B(0, 100, 100, 150);
+    matches['locator:div'] = [domEl({ bounds: B(0, 0, 400, 800) }), domEl({ id: 'card', bounds: box }), domEl({ bounds: box })];
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
+    const inner = node({ webview: 'true', 'webview-tag': 'div', bounds: '[0,100][100,150]' });
+    const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', inner, { ios: false });
+    expect(suggestions.map((s) => s.code)).toEqual(['webview.locator("div").nth(2)']);
+  });
+
   it('finds a picked row past the first 200 matches', async () => {
     const { page, matches } = fakePage();
     const row = (i: number) => domEl({ tag: 'button', bounds: B(0, i * 10, 100, i * 10 + 10) });
