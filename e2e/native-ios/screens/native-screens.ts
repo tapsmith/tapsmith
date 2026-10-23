@@ -85,6 +85,7 @@ export class NativeKeyboardScreen {
   submitted(text: string) { return this.device.getByText(`Submitted: ${text}`, { exact: true }) }
   get notes() { return this.device.getByTestId("notes") }
   get saveNotes() { return this.device.getByRole("button", { name: "Save Notes" }) }
+  get notTappable() { return this.device.getByPlaceholder("Not tappable") }
 }
 
 export class NativeTabsScreen {

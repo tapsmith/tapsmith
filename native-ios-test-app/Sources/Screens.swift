@@ -142,6 +142,7 @@ struct KeyboardView: View {
     @State private var name = ""
     @State private var submitted = ""
     @State private var notes = ""
+    @State private var untappable = ""
 
     var body: some View {
         Form {
@@ -153,6 +154,10 @@ struct KeyboardView: View {
                 .frame(height: 100)
                 .accessibilityIdentifier("notes")
             Button("Save Notes") { submitted = "notes (\(notes.count) chars)" }
+            // An editable field that touches never reach: a tap to focus it
+            // focuses nothing (PILOT-829's failure, made certain).
+            TextField("Not tappable", text: $untappable)
+                .allowsHitTesting(false)
         }
         .navigationTitle("Keyboard")
     }

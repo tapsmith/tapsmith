@@ -979,27 +979,69 @@ class CommandHandler {
     /// value instead of moving it into the middle of existing text, inside
     /// `area` (the element's uncovered part, from `focusTarget`). Without an
     /// area, XCUITest taps the element itself (refused when unhittable).
+    ///
+    /// The tap is checked (PILOT-829): when no text input took focus from it
+    /// the centre is tried, and a field that still has no focus fails the
+    /// command instead of typing into nothing (`TypingFocus`).
     private func focusElementForTyping(
         _ element: ElementInfo,
         settleTime: TimeInterval,
         within area: CGRect?
     ) throws {
         keyboardFirstGate.arm()
+        let frame = CGRect(
+            x: element.bounds.left, y: element.bounds.top,
+            width: element.bounds.width, height: element.bounds.height
+        )
+        let focusedBefore = snapshotFinder.liveFocusedTextInputFrame()
+        var tried: [String] = []
         if let area {
-            let inset = min(12, max(1, area.width / 4))
-            let x = max(area.minX + 1, area.maxX - inset)
-            actionExecutor.tapCoordinates(x: Int(x.rounded()), y: Int(area.midY.rounded()))
+            for point in TypingFocus.tapPoints(in: area) {
+                actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
+                tried.append("(\(Int(point.x.rounded())), \(Int(point.y.rounded())))")
+                snapshotFinder.recordFocusedTextInputHint(element)
+                if waitForTypingFocus(frame, focusedBefore: focusedBefore, maxWait: settleTime) { return }
+                NSLog("[typeText] focus tap at \(tried.last ?? "") did not focus the field")
+            }
+        } else {
+            let xcElem = try getXCUIElement(element.elementId)
+            guard xcElem.isHittable else {
+                throw AgentError.actionFailed("Element is not hittable — cannot type text")
+            }
+            xcElem.tap()
+            tried.append("the element")
             snapshotFinder.recordFocusedTextInputHint(element)
-            waitForKeyboardAppearance(maxWait: settleTime)
-            return
+            if waitForTypingFocus(frame, focusedBefore: focusedBefore, maxWait: settleTime) { return }
         }
-        let xcElem = try getXCUIElement(element.elementId)
-        guard xcElem.isHittable else {
-            throw AgentError.actionFailed("Element is not hittable — cannot type text")
+        throw AgentError.actionFailed(
+            "Tapping the field at \(tried.joined(separator: " and ")) did not give it keyboard focus, " +
+                "so nothing was typed. The field may not accept text input there, or may not be editable."
+        )
+    }
+
+    /// Wait, up to `maxWait`, for a focusing tap on the element at `frame` to
+    /// take (`TypingFocus.verdict`), then for the keyboard in the rest of the
+    /// time. False when the element never took focus.
+    private func waitForTypingFocus(_ frame: CGRect, focusedBefore: CGRect?, maxWait: TimeInterval) -> Bool {
+        let deadline = CFAbsoluteTimeGetCurrent() + maxWait
+        while true {
+            let focused = snapshotFinder.liveFocusedTextInputFrame()
+            // The keyboard only matters when no input reports focus; a tree
+            // that cannot be read is no evidence the tap missed.
+            let keyboard = focused == nil ? (keyboardPresence().map { $0 == .onScreen } ?? true) : false
+            switch TypingFocus.verdict(element: frame, focusedBefore: focusedBefore,
+                                       focusedAfter: focused, keyboardOnScreen: keyboard) {
+            case .focused:
+                waitForKeyboardAppearance(maxWait: max(0, deadline - CFAbsoluteTimeGetCurrent()))
+                return true
+            case .unverifiable:
+                return true
+            case .notFocused:
+                break
+            }
+            if CFAbsoluteTimeGetCurrent() >= deadline { return false }
+            Thread.sleep(forTimeInterval: 0.1)
         }
-        xcElem.tap()
-        snapshotFinder.recordFocusedTextInputHint(element)
-        waitForKeyboardAppearance(maxWait: settleTime)
     }
 
     private func waitForKeyboardAppearance(maxWait: TimeInterval) {

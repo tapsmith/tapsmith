@@ -74,3 +74,9 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/label-match-tests"
 "$OUT/label-match-tests" "../packages/tapsmith/src/__tests__/fixtures/label-conformance.json"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/TypingFocusTests/main.swift \
+  TapsmithAgent/TypingFocus.swift \
+  -o "$OUT/typing-focus-tests"
+"$OUT/typing-focus-tests"

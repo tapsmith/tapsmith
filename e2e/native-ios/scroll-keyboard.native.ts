@@ -47,6 +47,12 @@ describe("Native: keyboard", () => {
     await expect(keyboard.notes).toHaveValue("hello world")
   })
 
+  test("type into a field no tap can focus fails instead of typing nowhere", async ({ keyboard }) => {
+    const error = await keyboard.notTappable.type("abc").then(() => undefined, (e: unknown) => e)
+    expect(String(error)).toContain("did not give it keyboard focus")
+    await expect(keyboard.notTappable).toHaveValue("")
+  })
+
   test("button tap after typing is not swallowed by the keyboard", async ({ keyboard }) => {
     await keyboard.notes.type("abc")
     await keyboard.saveNotes.tap()
