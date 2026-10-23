@@ -51,6 +51,21 @@ export class LocatorPane {
     return this.page.getByTestId("locator-strict-warning")
   }
 
+  /** Who answered: the device (Live) or the recorded hierarchy (approximate). */
+  get sourceNote() {
+    return this.page.getByTestId("locator-source-note")
+  }
+
+  /** Shown while the device checks a live pick's locators. */
+  get suggestionsPending() {
+    return this.page.getByTestId("locator-suggestions-pending")
+  }
+
+  /** Why a live pick's list is short or empty. */
+  get suggestionsNote() {
+    return this.page.getByTestId("locator-suggestions-note")
+  }
+
   /** Trace vs Live hierarchy source, in UI mode only. */
   get sourceToggle() {
     return this.page.getByRole("group", { name: "Locator hierarchy source" })

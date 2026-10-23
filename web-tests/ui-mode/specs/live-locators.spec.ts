@@ -37,7 +37,7 @@ test.describe("Live locators come from the device", () => {
     const ask = await ui.waitForMessage("suggest-locators")
     expect(ask.revision).toBe(7)
     expect(ask.path.length).toBeGreaterThan(0)
-    await expect(page.getByTestId("locator-suggestions-pending")).toBeVisible()
+    await expect(locator.suggestionsPending).toBeVisible()
 
     ui.send({
       type: "locator-suggestions",
@@ -46,7 +46,7 @@ test.describe("Live locators come from the device", () => {
     })
     await expect(locator.optionCodes).toHaveText(['device.getByRole("button", { name: "Save" })'])
     await expect(locator.input).toHaveValue('device.getByRole("button", { name: "Save" })')
-    await expect(page.getByTestId("locator-source-note")).toContainText("Matched by the device")
+    await expect(locator.sourceNote).toContainText("Matched by the device")
   })
 
   test("a typed locator is evaluated on the device, and only the latest answer counts", async ({ app, device, page, detailTabs }) => {
@@ -75,9 +75,11 @@ test.describe("Live locators come from the device", () => {
     expect(typeof second.clientId).toBe("string")
     expect(second.clientId).toBe(first.clientId)
 
-    // The older request's answer arrives late: ignored.
-    ui.send({ type: "locator-evaluation", requestId: first.requestId, count: 9, positional: false, bounds: [] })
+    // The older request's answer arrives after the newer one's: ignored.
     ui.send({ type: "locator-evaluation", requestId: second.requestId, count: 2, total: 2, positional: false, bounds: [] })
+    await expect(locator.matchCount).toHaveText("2 matches")
+    ui.send({ type: "locator-evaluation", requestId: first.requestId, count: 9, positional: false, bounds: [] })
+    await page.waitForTimeout(300)
     await expect(locator.matchCount).toHaveText("2 matches")
     await expect(locator.strictWarning).toBeVisible()
   })
@@ -181,7 +183,7 @@ test.describe("Live locators come from the device", () => {
     const ask = await livePick(ui, device)
     await detailTabs.select("Locator")
     ui.drop()
-    await expect(page.getByTestId("locator-suggestions-note")).toContainText("Disconnected before the device answered")
+    await expect(locator.suggestionsNote).toContainText("Disconnected before the device answered")
     // The lost pick's answer, should it still arrive on the new connection, is ignored.
     await expect.poll(() => ui.connections, { timeout: 5000 }).toBe(2)
     ui.send({
@@ -248,7 +250,7 @@ test.describe("Live locators come from the device", () => {
       suggestions: [{ code: 'device.getByText("Save")', label: "Text" }],
     })
     await expect(locator.input).toHaveValue('device.getByText("Save")')
-    await expect(page.getByTestId("locator-source-note")).toContainText("Matched by the device")
+    await expect(locator.sourceNote).toContainText("Matched by the device")
   })
 
   test("hovering an action on the way past keeps a pick waiting for the device", async ({ app, device, page, detailTabs, explorer, actions }) => {
@@ -307,6 +309,24 @@ test.describe("Live locators come from the device", () => {
     })
     await page.waitForTimeout(300)
     await expect(locator.input).toHaveValue("")
-    await expect(page.getByTestId("locator-source-note")).toContainText("recorded hierarchy")
+    await expect(locator.sourceNote).toContainText("recorded hierarchy")
+  })
+
+  test("a first pick's late answer never replaces a second pick's", async ({ app, device, page, detailTabs }) => {
+    const ui = app
+    const locator = new LocatorPane(page)
+    const first = await livePick(ui, device)
+    await detailTabs.select("Locator")
+    ui.clearReceived()
+    await device.enablePickMode()
+    await device.tapMirrorAt(0.5, 0.5)
+    const second = await ui.waitForMessage("suggest-locators")
+    expect(second.requestId).not.toBe(first.requestId)
+    ui.send({ type: "locator-suggestions", requestId: second.requestId, suggestions: [{ code: 'device.getByText("Save")', label: "Text" }] })
+    await expect(locator.input).toHaveValue('device.getByText("Save")')
+    ui.send({ type: "locator-suggestions", requestId: first.requestId, suggestions: [{ code: 'device.getByRole("button")', label: "Role" }] })
+    await page.waitForTimeout(300)
+    await expect(locator.optionCodes).toHaveText(['device.getByText("Save")'])
+    await expect(locator.input).toHaveValue('device.getByText("Save")')
   })
 })
