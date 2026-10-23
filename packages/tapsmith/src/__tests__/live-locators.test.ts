@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ElementInfo, EvaluateSelectorsResponse, TapsmithGrpcClient } from '../grpc-client.js';
 import type { Selector } from '../selectors.js';
-import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
+import { nodeAtPath, parseHierarchyXml, pathToNode, type HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
+import { pickNodeAt } from '../trace-viewer/components/pick-node.js';
 import { Device } from '../device.js';
 import type { WebViewHandle } from '../webview-handle.js';
 import { beginTestRun, closeMcpWebViews, endTestRun } from '../mcp/sdk-device.js';
@@ -260,6 +261,35 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
     } finally {
       endTestRun();
     }
+  });
+});
+
+describe('a live pick travels as a path', () => {
+  // The tab hit-tests its own parse of a capture and sends the path; the
+  // server resolves it in its own parse of the same capture.
+  it('names the same node on both sides, inside a merged WebView overlay too', () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][1000,2000]">
+    <node class="android.widget.TextView" text="Title" bounds="[0,0][1000,100]" />
+    <node class="android.webkit.WebView" bounds="[0,100][1000,2000]" />
+  </node>
+  <node webview="true" webview-tag="body" bounds="[0,100][1000,2000]">
+    <node webview="true" webview-tag="ul" bounds="[0,100][1000,600]">
+      <node webview="true" webview-tag="li" text="One" bounds="[0,100][1000,200]" />
+      <node webview="true" webview-tag="li" text="Two" bounds="[0,200][1000,300]" />
+    </node>
+  </node>
+</hierarchy>`;
+    for (const [x, y, expected] of [[500, 250, 'Two'], [500, 50, 'Title']] as const) {
+      const tab = parseHierarchyXml(xml);
+      const picked = pickNodeAt(tab, x, y)!.node;
+      const path = pathToNode(tab, picked)!;
+      const server = nodeAtPath(parseHierarchyXml(xml), path);
+      expect(server?.attributes.get('text')).toBe(expected);
+      expect(Object.fromEntries(server!.attributes)).toEqual(Object.fromEntries(picked.attributes));
+    }
+    expect(nodeAtPath(parseHierarchyXml(xml), [9, 0])).toBeUndefined();
   });
 });
 
