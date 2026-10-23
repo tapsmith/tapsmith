@@ -65,16 +65,19 @@ struct TogglesView: View {
 
 struct ItemListView: View {
     @State private var items = (1...100).map { "Item \($0)" }
+    @State private var query = ""
 
     var body: some View {
         List {
-            ForEach(items, id: \.self) { item in
+            ForEach(items.filter { query.isEmpty || $0 == query }, id: \.self) { item in
                 NavigationLink(item) {
                     Text("Detail for \(item)").navigationTitle(item)
                 }
             }
             .onDelete { items.remove(atOffsets: $0) }
         }
+        // A search field moves up and narrows when it takes focus.
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search items")
         .navigationTitle("List")
     }
 }
@@ -142,6 +145,7 @@ struct KeyboardView: View {
     @State private var name = ""
     @State private var submitted = ""
     @State private var notes = ""
+    @State private var untappable = ""
 
     var body: some View {
         Form {
@@ -153,6 +157,10 @@ struct KeyboardView: View {
                 .frame(height: 100)
                 .accessibilityIdentifier("notes")
             Button("Save Notes") { submitted = "notes (\(notes.count) chars)" }
+            // An editable field that touches never reach: a tap to focus it
+            // focuses nothing (PILOT-829's failure, made certain).
+            TextField("Not tappable", text: $untappable)
+                .allowsHitTesting(false)
         }
         .navigationTitle("Keyboard")
     }

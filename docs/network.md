@@ -999,7 +999,7 @@ Manually installing `~/.tapsmith/ca.pem` as a *user* CA does not help on a Play-
 
 ### When the app rejects Tapsmith's certificate
 
-Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time you capture. On rootable Android emulators it installs that CA into the device's system trust store when it first sets up capture on the device in a test session. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
+Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time a session selects an Android device or captures traffic. On rootable Android emulators it switches `adbd` to root and installs that CA into the device's system trust store when a test session selects the device, before the agent starts and the app launches. It does this whether or not the trace records network, since any test can start the proxy on demand. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
 
 When an HTTPS client on the device still refuses Tapsmith's certificate, those requests do not appear in the trace and `device.route()` cannot intercept them. Tapsmith then names the hosts in the run output, once per run, and adds the same warning to each affected test's trace as a daemon console message. Hosts excluded by `networkHosts` or `networkIgnoreHosts` are left out, and there is no warning on the iOS simulator's macOS system-proxy fallback, where other Mac processes' traffic reaches the proxy too:
 

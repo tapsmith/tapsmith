@@ -967,16 +967,23 @@ impl DeviceBackend for AndroidBackend<'_> {
     }
 
     async fn prearm_network_tracing(&self, req: &proto::SetDeviceRequest) {
-        // Symmetric to the iOS pre-arm: for Android with tracing
-        // enabled, install the MITM CA now — during setup, before the
-        // first app launch — so the app under test forks from a zygote
-        // that already trusts the cert (Android 14+ injects into the
-        // zygote mount namespace, which only future forks inherit). This
-        // is what spares the first HTTPS request on a freshly-booted
-        // device. See `ensure_android_ca_installed`.
-        if req.network_tracing_enabled {
-            self.svc.ensure_android_ca_installed(&req.serial).await;
-        }
+        // Install the MITM CA now — during setup, before the agent starts
+        // and before the first app launch — whether or not the trace
+        // records network: with tracing off the runner still starts
+        // capture on demand, on a test's first route() or network wait
+        // (PILOT-775). Two things depend on it happening here:
+        // - the install runs `adb root`, which restarts adbd on a rootable
+        //   image that is not root yet. Mid-session that ends the agent's
+        //   instrumentation and drops its forward (PILOT-831), so it must
+        //   come before the agent;
+        // - the app under test then forks from a zygote that already trusts
+        //   the cert (Android 14+ injects into the zygote mount namespace,
+        //   which only future forks inherit), which spares the first HTTPS
+        //   request on a freshly-booted device.
+        // Best-effort: a device that cannot take the CA (a Google Play
+        // image) is reported when capture starts, not here. See
+        // `ensure_android_ca_installed`.
+        self.svc.ensure_android_ca_installed(&req.serial).await;
     }
 
     fn check_start_agent(
@@ -1122,7 +1129,8 @@ impl DeviceBackend for AndroidBackend<'_> {
         let cert_filename = mitm_ca
             .device_cert_filename()
             .map_err(|e| Status::internal(format!("Failed to compute CA cert hash: {e}")))?;
-        match adb::install_ca_cert(&serial, ca_pem_path, &cert_filename).await {
+        let daemon_agent = self.svc.android_agent_started_on(&serial).await;
+        match adb::install_ca_cert(&serial, ca_pem_path, &cert_filename, daemon_agent).await {
             Ok(installed_path) => {
                 *self.svc.proxy_ca_cert_path.write().await = Some(installed_path);
             }

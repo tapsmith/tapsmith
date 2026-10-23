@@ -83,3 +83,9 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/NonAppElements.swift \
   -o "$OUT/non-app-elements-tests"
 "$OUT/non-app-elements-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/TypingFocusTests/main.swift \
+  TapsmithAgent/TypingFocus.swift \
+  -o "$OUT/typing-focus-tests"
+"$OUT/typing-focus-tests"

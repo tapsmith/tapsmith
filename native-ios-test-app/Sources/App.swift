@@ -4,9 +4,12 @@ import SwiftUI
 /// (the main test app is React Native). Every screen is reachable from the
 /// home list and by deep link: `tapsmithnative://<screen>` replaces the
 /// navigation stack with that screen, `tapsmithnative://` returns home.
+/// Every deep link builds the stack afresh, so a screen opened again starts
+/// with fresh state (tests share one app launch per file).
 @main
 struct TapsmithNativeTestApp: App {
     @State private var path: [Screen] = []
+    @State private var generation = 0
 
     var body: some Scene {
         WindowGroup {
@@ -14,8 +17,10 @@ struct TapsmithNativeTestApp: App {
                 HomeView()
                     .navigationDestination(for: Screen.self) { $0.view }
             }
+            .id(generation)
             .onOpenURL { url in
                 let name = url.host() ?? ""
+                generation += 1
                 path = Screen(rawValue: name).map { [$0] } ?? []
             }
         }

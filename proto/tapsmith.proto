@@ -454,7 +454,9 @@ message SetDeviceRequest {
   // minimal; the CLI sets this to true only when the user's tapsmith.config.ts
   // has tracing enabled (trace.mode !== 'off' && trace.network !== false).
   // The daemon stays agnostic of tapsmith.config.ts; the CLI is the single
-  // source of truth.
+  // source of truth. Android ignores it: the daemon installs its CA (and so
+  // roots adbd) at selection either way, because a test can start capture on
+  // demand and adbd must not restart under the running agent (PILOT-831).
   bool network_tracing_enabled = 3;
   // Host-glob allowlist for the PAC script served at /tapsmith.pac on
   // physical iOS. When empty, the PAC routes every host through the
