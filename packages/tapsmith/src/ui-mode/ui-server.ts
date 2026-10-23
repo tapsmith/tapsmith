@@ -3829,7 +3829,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       ? async () => {
         const handle = device._connectedWebView();
         if (handle) return handle;
-        if (Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
+        if (webviewFailing || Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
           throw new Error(`Could not connect to the WebView; retrying. ${DEBUGGABLE_HINT}`);
         }
         throw new Error('Connecting to the WebView; the count appears once the connection is up.');
@@ -4431,10 +4431,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           webviewFailing = true;
           return undefined;
         }
-        if (dom !== undefined) {
-          webviewEstablished = true;
-          webviewFailing = false;
-        }
+        if (dom !== undefined) webviewEstablished = true;
+        // A DOM, or no WebView on screen at all: either way the WebView that
+        // failed is not what the next capture shows.
+        webviewFailing = false;
         return dom;
       })
       // The promise is deliberately left un-awaited until the connection is
