@@ -72,7 +72,7 @@ enum TypingFocus {
         // Below that, it must also be an input that took focus with this tap:
         // one that already had it is another field keeping its focus
         // (placeholders repeat: several "Required" rows).
-        let changed = focusedBefore.map { $0 != after } ?? true
+        let changed = focusedBefore.map { !isSameInput($0, after) } ?? true
         // Not a text input itself (a wrapper around one, or an element known
         // only by its cached bounds): nothing of its own to compare.
         guard textInputClassNames.contains(element.className) else {
@@ -91,6 +91,14 @@ enum TypingFocus {
         }
         // Nothing else to tell them apart by: an input of the element's kind.
         return changed && element.className == after.className ? .focused : .notFocused
+    }
+
+    /// Whether two reads of the focused input are the same input: same kind,
+    /// identity and size. Position is left out, so a field that keeps its
+    /// focus while a layout moves it still counts as the same.
+    private static func isSameInput(_ a: Input, _ b: Input) -> Bool {
+        a.className == b.className && a.identifier == b.identifier && a.placeholder == b.placeholder
+            && abs(a.frame.width - b.frame.width) <= 1.5 && abs(a.frame.height - b.frame.height) <= 1.5
     }
 
     static let textInputClassNames: Set<String> = [

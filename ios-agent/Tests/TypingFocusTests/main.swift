@@ -57,7 +57,15 @@ do {
            verdict(field, before: other, after: other) == .notFocused)
     let lifted = Input(frame: row.offsetBy(dx: 0, dy: -120), className: textField)
     expect("the field took focus and moved", verdict(field, before: nil, after: lifted) == .focused)
-    expect("the field took focus from another and moved", verdict(field, before: other, after: lifted) == .focused)
+    // Nothing tells a same-sized field that took focus and moved from one
+    // that kept it and moved: the safe reading is "not focused" (a loud
+    // failure, never typing into the other field).
+    let otherMoved = Input(frame: CGRect(x: 20, y: 200, width: 362, height: 44), className: textField)
+    expect("another same-sized field moving while it keeps focus",
+           verdict(field, before: other, after: otherMoved) == .notFocused)
+    let smaller = Input(frame: CGRect(x: 20, y: 400, width: 200, height: 30), className: textField)
+    expect("the field took focus from a different-sized one and moved",
+           verdict(field, before: smaller, after: lifted) == .focused)
     let inner = Input(frame: CGRect(x: 40, y: 160, width: 322, height: 28), className: textField)
     expect("an input inside the element took focus", verdict(field, before: nil, after: inner) == .focused)
     expect("an input inside the element that already had focus", verdict(field, before: inner, after: inner) == .focused)
