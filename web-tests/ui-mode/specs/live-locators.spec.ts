@@ -435,4 +435,29 @@ test.describe("Live locators come from the device", () => {
     expect(ask.workerId).toBe(0)
     expect(ask.path).toEqual([0, 0, 1]) // hierarchy > FrameLayout > Bottom (Top would be [0, 0, 0])
   })
+
+  test("hovering an unnamed row outlines the element a click there picks, not the row", async ({ app, device, page }) => {
+    // A click on an unnamed container picks the named element inside it, so
+    // the hover must show that element, or the pick looks like it shrank.
+    const ui = app
+    ui.sendFrame(screenFrame(240, 500))
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({
+      type: "hierarchy-update", workerId: 0, deviceIndex: 0, revision: 1,
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.view.ViewGroup" bounds="[0,0][240,100]">
+    <node class="android.widget.TextView" text="Notifications" bounds="[10,10][60,40]" />
+  </node>
+</hierarchy>`,
+    })
+    const canvas = (await device.canvas.boundingBox())!
+    // (150, 50) in pixels: inside the row, away from its text.
+    await page.mouse.move(canvas.x + canvas.width * (150 / 240), canvas.y + canvas.height * (50 / 500))
+    await expect(device.pickHover).toBeVisible()
+    const hover = (await device.pickHover.boundingBox())!
+    expect(hover.width).toBeCloseTo(canvas.width * (50 / 240), 0)
+    expect(hover.height).toBeCloseTo(canvas.height * (30 / 500), 0)
+  })
 })

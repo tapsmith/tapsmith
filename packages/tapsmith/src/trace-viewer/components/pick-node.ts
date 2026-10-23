@@ -118,7 +118,8 @@ export function handleHoverFromScreenshot(
   x: number,
   y: number,
 ): Bounds | null {
-  const node = hitTest(roots, x, y);
-  if (!node) return null;
-  return getNodeBounds(node);
+  // What a click here picks, promotion included: a click on an unnamed row
+  // picks the named text inside it, so the hover must show that text, not
+  // the row.
+  return pickNodeAt(roots, x, y)?.bounds ?? null;
 }
