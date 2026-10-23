@@ -1390,9 +1390,14 @@ function App() {
   // viewed trace, which can be a different device in multi-worker mode). A
   // group worker's members each carry their own.
   const mirrorWorker = workers.find((w) => w.workerId === mirrorWorkerId);
-  const mirrorDpr = mirrorWorker?.devices?.find((d) => d.index === mirrorDeviceIndex)?.devicePixelRatio
-    ?? mirrorWorker?.devicePixelRatio
-    ?? deviceDpr ?? 1;
+  // A known worker without a ratio is one whose frames and hierarchy share
+  // pixels (Android): 1, never another device's ratio from the session-wide
+  // value (an iOS worker's 3 put every pick and highlight in the wrong place).
+  const mirrorDpr = mirrorWorker
+    ? mirrorWorker.devices?.find((d) => d.index === mirrorDeviceIndex)?.devicePixelRatio
+      ?? mirrorWorker.devicePixelRatio
+      ?? 1
+    : deviceDpr ?? 1;
 
   const handleMirrorPickToggle = useCallback(() => {
     clearPendingMirrorPick();

@@ -5,7 +5,7 @@
 
 import { test, expect } from "../fixtures.js"
 import { screenFrame } from "../messages/frames.js"
-import { GESTURES_FILE } from "../messages/scenarios.js"
+import { GESTURES_FILE, idleSeed, singleFileTree } from "../messages/scenarios.js"
 import { action, actionCompleted, actionStarted } from "../messages/trace.js"
 import { solidPng } from "../../png.js"
 import { LocatorPane } from "../../panes/locator.pane.js"
@@ -392,5 +392,47 @@ test.describe("Live locators come from the device", () => {
     await expect(locator.error).toContainText("Reading the screen")
     ui.send({ type: "hierarchy-update", xml: HIERARCHY, revision: 2, workerId: 0, deviceIndex: 0 })
     await expect.poll(() => ui.messagesOfType("evaluate-locator").length).toBe(2)
+  })
+
+  test("a pick on an Android mirror maps the pointer in pixels, whatever an iOS worker's ratio is", async ({ ui, device }) => {
+    // Mixed session: the iPhone reports a ratio of 3 (also as the session's
+    // device-info); the Android worker reports none, as its frames and
+    // hierarchy share pixels. Its pick must not use the iPhone's 3.
+    ui.seed([
+      ...idleSeed(singleFileTree()),
+      {
+        type: "workers-info",
+        workers: [
+          { workerId: 0, deviceSerial: "emulator-5560", displayName: "Pixel_A", platform: "android" },
+          { workerId: 1, deviceSerial: "SIM-1", displayName: "iPhone_B", platform: "ios", devicePixelRatio: 3 },
+        ],
+      },
+      { type: "device-info", serial: "iPhone_B", isEmulator: true, platform: "ios", devicePixelRatio: 3 },
+    ])
+    await ui.open()
+    await device.selectWorkerView("Pixel_A")
+    ui.sendFrame({ ...screenFrame(240, 500), workerId: 0 })
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({
+      type: "hierarchy-update",
+      workerId: 0,
+      deviceIndex: 0,
+      revision: 1,
+      xml: `<?xml version="1.0" encoding="UTF-8"?>
+<hierarchy rotation="0">
+  <node class="android.widget.FrameLayout" bounds="[0,0][240,500]">
+    <node class="android.widget.Button" text="Top" bounds="[0,0][100,150]" />
+    <node class="android.widget.Button" text="Bottom" bounds="[100,200][240,500]" />
+  </node>
+</hierarchy>`,
+    })
+    ui.clearReceived()
+    // (180, 350) in pixels: inside Bottom. Read at a ratio of 3 it would be
+    // (60, 117), inside Top.
+    await device.tapMirrorAt(0.75, 0.7)
+    const ask = await ui.waitForMessage("suggest-locators")
+    expect(ask.workerId).toBe(0)
+    expect(ask.path).toEqual([0, 0, 1]) // hierarchy > FrameLayout > Bottom (Top would be [0, 0, 0])
   })
 })
