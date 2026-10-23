@@ -223,6 +223,17 @@ describe('suggestLiveLocators', () => {
     expect((await suggestLiveLocators(fakeClient(() => []), 'emu', byTestId, { ios: false })).suggestions).toEqual([]);
   });
 
+  it('confirms nothing by a test id when the WebView\'s place is unknown', async () => {
+    // A test id need not be unique: the one match may be another element with it.
+    const { page, matches } = fakePage();
+    matches['getByTestId:save-btn'] = [domEl({ tag: 'button', testId: 'save-btn' })];
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
+    const byTestId = node({ webview: 'true', 'webview-tag': 'button', 'webview-testid': 'save-btn', bounds: '[0,0][100,50]' });
+    const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', byTestId, { ios: false });
+    expect(suggestions).toEqual([]);
+    expect(note).toMatch(/pick the element again/);
+  });
+
   it('tells a same-box wrapper with an id from the picked element without one', async () => {
     const { page, matches } = fakePage();
     const box = B(0, 100, 100, 150);

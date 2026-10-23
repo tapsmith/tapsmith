@@ -491,4 +491,38 @@ test.describe("Live locators come from the device", () => {
     const ask = await ui.waitForMessage("suggest-locators", { timeout: 2_000 })
     expect(ask.revision).toBe(2)
   })
+  test("a click held for the WebView overlay is dropped on switching the mirror to another device", async ({ ui, device, page }) => {
+    // The held click is a point on the first device's screen: the second
+    // device's capture must not pick whatever sits there.
+    ui.seed([
+      ...idleSeed(singleFileTree()),
+      {
+        type: "workers-info",
+        workers: [
+          { workerId: 0, deviceSerial: "emulator-5560", displayName: "Pixel_A", platform: "android" },
+          { workerId: 1, deviceSerial: "emulator-5562", displayName: "Pixel_B", platform: "android" },
+        ],
+      },
+    ])
+    await ui.open()
+    await device.selectWorkerView("Pixel_A")
+    // The tab marks its mirror loading after the click; a frame that lands
+    // first is overtaken, so resend until the mirror shows one.
+    await expect(async () => {
+      ui.sendFrame({ ...screenFrame(240, 500), workerId: 0 })
+      await expect(device.pickToggle).toBeEnabled({ timeout: 500 })
+    }).toPass()
+    await device.enablePickMode()
+    await ui.waitForMessage("request-hierarchy")
+    ui.send({ type: "hierarchy-update", xml: WEB_NO_OVERLAY, revision: 1, workerId: 0, deviceIndex: 0, webviewOverlay: true })
+    ui.clearReceived()
+    await device.tapMirrorAt(0.5, 0.5)
+    await page.waitForTimeout(400)
+    expect(ui.messagesOfType("suggest-locators")).toEqual([])
+    await device.selectWorkerView("Pixel_B")
+    ui.sendFrame({ ...screenFrame(240, 500), workerId: 1 })
+    ui.send({ type: "hierarchy-update", xml: WEB_NO_OVERLAY, revision: 2, workerId: 1, deviceIndex: 0, webviewOverlay: false })
+    await page.waitForTimeout(600)
+    expect(ui.messagesOfType("suggest-locators")).toEqual([])
+  })
 })

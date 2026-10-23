@@ -213,9 +213,9 @@ function isPickedWebViewElement(match: WebViewMatch, node: HierarchyNode): boole
     return near(picked.left, match.bounds.left) && near(picked.top, match.bounds.top)
       && near(picked.right, match.bounds.right) && near(picked.bottom, match.bounds.bottom);
   }
-  // Without both places, only a test id tells it from another element
-  // with the same tag.
-  return testId !== '';
+  // Without both places nothing tells it from another element with the
+  // same tag and test id: a test id need not be unique.
+  return false;
 }
 
 /**
