@@ -696,16 +696,10 @@ pub async fn install_ca_cert(
     let alive = if root == Some(true) || !daemon_agent {
         None
     } else {
-        shell_lenient(serial, AGENT_ALIVE_PROBE)
-            .await
-            .ok()
-            .and_then(|out| parse_agent_alive(&out))
+        probe(serial, AGENT_ALIVE_PROBE, parse_agent_alive).await
     };
     let rootable = if alive == Some(true) {
-        shell_lenient(serial, "getprop ro.debuggable")
-            .await
-            .ok()
-            .and_then(|out| parse_rootable(&out))
+        probe(serial, "getprop ro.debuggable", parse_rootable).await
     } else {
         None
     };
@@ -860,10 +854,25 @@ fn parse_adbd_root(out: &str) -> Option<bool> {
 }
 
 async fn adbd_is_root(serial: &str) -> Option<bool> {
-    shell_lenient(serial, "id")
-        .await
-        .ok()
-        .and_then(|out| parse_adbd_root(&out))
+    probe(serial, "id", parse_adbd_root).await
+}
+
+/// Run a device probe, asking once more after a short pause when it gets no
+/// answer: one adb hiccup should not decide what happens to adbd.
+async fn probe(serial: &str, command: &str, parse: fn(&str) -> Option<bool>) -> Option<bool> {
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        if let Some(answer) = shell_lenient(serial, command)
+            .await
+            .ok()
+            .and_then(|out| parse(&out))
+        {
+            return Some(answer);
+        }
+    }
+    None
 }
 
 /// Restart adbd as root (required for writing to system dirs) and wait for the
