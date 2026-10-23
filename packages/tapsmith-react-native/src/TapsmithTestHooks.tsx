@@ -37,10 +37,11 @@ export interface TapsmithTestHooksProps {
 }
 
 /**
- * Mount once at the root of the app. Renders a tiny, always-present marker in
- * the accessibility tree that tells Tapsmith the app can be reset in-process
- * (and acknowledges each reset by bumping an epoch), and listens for the
- * reset deep links Tapsmith opens.
+ * Mount once at the root of the app. Renders an invisible, always-present
+ * marker in the accessibility tree that tells Tapsmith the app can be reset
+ * in-process (and acknowledges each reset by bumping an epoch), and listens
+ * for the reset deep links Tapsmith opens. Tapsmith reads the marker from the
+ * hierarchy; no locator matches it (PILOT-830).
  *
  * Renders nothing and registers nothing when disabled (production).
  */
@@ -117,38 +118,31 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
 
   const marker = formatMarker({ epoch, nav, boot: BOOT_TOKEN, urlPrefix: prefix, error });
 
+  // The marker. Deliberately screen-sized rather than tucked into a corner: a
+  // platform's own UI can sit on top of a corner — Android's three-button
+  // navigation bar covers the bottom-right outright on an edge-to-edge app —
+  // and UIAutomator omits occluded nodes from its dump entirely (every node in
+  // a dump carries visible-to-user="true"). A corner marker therefore just
+  // vanishes, Tapsmith concludes the app has no hooks, and `appReset: 'auto'`
+  // silently resolves to clear instead of warm: ~5-10s per reset against ~1s,
+  // with a green suite and no warning.
+  //
+  // Something screen-sized always has a visible region left over whatever the
+  // system draws on top, so this node survives the dump. The text is
+  // invisible (CARRIER_TEXT_COLOR: not 'transparent', which Android draws
+  // black), so nothing about the app's appearance changes, and the wrapper is
+  // pointerEvents="none" so it swallows no touches.
+  //
+  // There is no visible copy: earlier versions also drew the string in small
+  // grey text in the bottom-right corner, which showed in every screenshot
+  // (PILOT-830). Tapsmith reads the marker from the hierarchy dump, and its
+  // locators never match it, so nothing on screen needs it.
   return (
-    <>
-      {/*
-        The readable marker, and the one `testID` points at. Deliberately
-        screen-sized rather than tucked into a corner: a platform's own UI can
-        sit on top of a corner — Android's three-button navigation bar covers
-        the bottom-right outright on an edge-to-edge app — and UIAutomator
-        omits occluded nodes from its dump entirely (every node in a dump
-        carries visible-to-user="true"). A corner marker therefore just
-        vanishes, Tapsmith concludes the app has no hooks, and `appReset:
-        'auto'` silently resolves to clear instead of warm: ~5-10s per reset
-        against ~1s, with a green suite and no warning.
-
-        Something screen-sized always has a visible region left over whatever
-        the system draws on top, so this node survives the dump. The text is
-        invisible (CARRIER_TEXT_COLOR: not 'transparent', which Android draws
-        black), so nothing about the app's appearance changes, and the wrapper
-        is pointerEvents="none" so it swallows no touches.
-      */}
-      <View pointerEvents="none" style={styles.carrier} importantForAccessibility="yes">
-        <Text testID="tapsmith-hooks" style={styles.carrierText}>
-          {marker}
-        </Text>
-      </View>
-      {/*
-        The same string, visible, for a human watching the screen. No testID:
-        it is the occludable one, so nothing may depend on finding it.
-      */}
-      <View pointerEvents="none" style={styles.marker} accessibilityElementsHidden={false} importantForAccessibility="yes">
-        <Text style={styles.text}>{marker}</Text>
-      </View>
-    </>
+    <View pointerEvents="none" style={styles.carrier} importantForAccessibility="yes">
+      <Text testID="tapsmith-hooks" style={styles.carrierText}>
+        {marker}
+      </Text>
+    </View>
   );
 }
 
@@ -177,14 +171,5 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 0,
     top: 0,
-  },
-  marker: {
-    bottom: 2,
-    position: 'absolute',
-    right: 4,
-  },
-  text: {
-    color: '#c7c7c7',
-    fontSize: 8,
   },
 });

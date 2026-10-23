@@ -1,5 +1,6 @@
 import { test, describe, expect } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
+import { readHooksMarker } from "../utils/hooks-marker.js"
 
 /**
  * The reset ladder against a build WITHOUT the in-app hooks — the
@@ -22,7 +23,9 @@ describe("App reset (no in-app hooks)", () => {
   test("the app renders no hooks marker", async ({ device }) => {
     await openScreen(device, "/")
     await expect(device.getByText("Test Screens", { exact: true })).toBeVisible()
-    await expect(device.getByTestId("tapsmith-hooks")).toBeHidden()
+    // No locator matches a marker even when there is one (PILOT-830), so
+    // look for it in the hierarchy, where Tapsmith itself looks.
+    expect(await readHooksMarker(device)).toBeUndefined()
   })
 
   test("a warm request reports no hooks and falls back to a cold relaunch", async ({ device }) => {

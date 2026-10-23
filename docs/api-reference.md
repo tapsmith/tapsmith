@@ -185,6 +185,8 @@ try {
 }
 ```
 
+> **Only the app's own elements match.** The software keyboard, the iOS application element, Android's status and navigation bars and the `@tapsmith/react-native` hooks marker are never matched, so they never make a locator ambiguous (see [what locators never match](locators.md#what-locators-never-match)).
+
 > **Accessibility-tree duplicates don't count.** Some platforms expose the same visual element twice — iOS in particular renders a React Native `<Text testID="...">` as a parent `StaticText` carrying the attributes plus an inner child with identical text and pixel-identical bounds. Matches with identical text **and** identical bounds are collapsed to one element (the attribute-carrying first occurrence) before the strict check, since acting on either taps the same point. This collapsing also applies to `count()`, `all()`, and `.nth()` indexing, so positional chains stay consistent with what you see on screen. Distinct elements that merely share text at different positions still violate.
 
 > **Transient duplicates:** if a screen briefly shows two elements matching the locator mid-transition, the violation throws at that moment (Playwright behaves the same way). Prefer locators that are unique at all times, or `.first()` when duplication is expected.

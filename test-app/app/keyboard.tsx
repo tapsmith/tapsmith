@@ -29,6 +29,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - "Centre action" fills the middle of the screen, where a dismiss gesture
 //   aimed at the screen centre would land. Nothing hideKeyboard() does may
 //   tap it.
+// - "Done input" has a "done" return key, and the app's own "Done" button
+//   sits beside it: with its keyboard up, the keyboard's Done key must not
+//   make the app's ambiguous (PILOT-756). Its taps are counted in "done".
 export default function KeyboardScreen() {
   const [plainText, setPlainText] = useState("")
   const [goText, setGoText] = useState("")
@@ -40,6 +43,8 @@ export default function KeyboardScreen() {
   const [plainSubmits, setPlainSubmits] = useState(0)
   const [goSubmits, setGoSubmits] = useState(0)
   const [backgroundTaps, setBackgroundTaps] = useState(0)
+  const [doneText, setDoneText] = useState("")
+  const [doneTaps, setDoneTaps] = useState(0)
 
   // A warm reset navigates here rather than remounting, so clear local state
   // explicitly when the epoch moves.
@@ -56,6 +61,8 @@ export default function KeyboardScreen() {
     setPlainSubmits(0)
     setGoSubmits(0)
     setBackgroundTaps(0)
+    setDoneText("")
+    setDoneTaps(0)
   }, [resetEpoch])
 
   const content = (
@@ -95,6 +102,29 @@ export default function KeyboardScreen() {
         accessibilityLabel="Multiline input"
         testID="keyboard-multiline-input"
       />
+
+      <View style={styles.row}>
+        <TextInput
+          style={[styles.input, styles.fill]}
+          value={doneText}
+          onChangeText={setDoneText}
+          returnKeyType="done"
+          placeholder="Done input"
+          autoCapitalize="none"
+          autoCorrect={false}
+          accessibilityLabel="Done input"
+          testID="keyboard-done-input"
+        />
+        <TouchableOpacity
+          style={styles.smallButton}
+          onPress={() => setDoneTaps((n) => n + 1)}
+          accessibilityRole="button"
+          accessibilityLabel="Done"
+        >
+          <Text style={styles.smallButtonText}>Done</Text>
+        </TouchableOpacity>
+      </View>
+      <Text testID="keyboard-done-taps">{`done=${doneTaps}`}</Text>
 
       <Text testID="keyboard-counts">
         {`centre=${centreTaps} plainSubmits=${plainSubmits} goSubmits=${goSubmits} background=${backgroundTaps}`}
@@ -169,6 +199,11 @@ export default function KeyboardScreen() {
 const styles = StyleSheet.create({
   fill: {
     flex: 1,
+  },
+  row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
   },
   container: {
     flex: 1,

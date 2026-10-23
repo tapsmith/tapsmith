@@ -53,6 +53,17 @@ On Android, `device.getByText("Text inputs, buttons, focus/blur, keyboard")` fin
    // ✓ await expect(device.locator({ id: "last-gesture" })).toHaveText("Last gesture: Long press")
    ```
 
+### What locators never match
+
+A locator only finds the app's own elements. Some of what is on screen, and in the hierarchy the trace viewer shows, is not the app's, and no locator matches it on either platform:
+
+- **The software keyboard.** Its keys and its return, globe and dictation buttons, so a *Done* button beside an open keyboard is not ambiguous with the keyboard's *Done* key. A toolbar the app shows above the keyboard (an input accessory view) is the app's, and matches.
+- **The iOS application element**, whose label is the app's name. `getByText("App")` does not match it in an app called *My App*.
+- **Android's status and navigation bars**: their clock, icons and *Back* / *Home* buttons. A notification shade or quick settings panel you pull down (`device.openNotifications()`) is what is on screen then, and its contents match. So do other apps' windows the app opens, such as a permission dialog.
+- **The `@tapsmith/react-native` hooks marker** ([warm reset](warm-reset.md)), which exists only for Tapsmith to read.
+
+XPath (`locator({ xpath })`) is the exception: it evaluates the raw hierarchy dump.
+
 ## Priority 1 — Accessible Locators (Preferred)
 
 These match what real users and assistive technologies see. They should be your default choice.
