@@ -3780,6 +3780,19 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   const liveEvaluations = new LatestOnlyRunner<LiveLocatorEvaluation>();
   /** The latest pick per device and tab, by a generation count. */
   const latestPicks = new Map<string, number>();
+  /**
+   * When a live WebView connect last failed per device (`worker:device`),
+   * off the adopted primary: re-asking every capture would otherwise spend
+   * the 15 s connect budget each time on a WebView that cannot be inspected.
+   */
+  const liveConnectFailedAt = new Map<string, number>();
+  const DEBUGGABLE_HINT = 'Make sure it is debuggable (webviewDebuggingEnabled={true}, or WebView.setWebContentsDebuggingEnabled(true) on Android).';
+  /** Notes a live answer's WebView connect failure, to hold off the next connects. */
+  function noteLiveConnect(workerId: number, deviceIndex: number, error: string | undefined): void {
+    if (error && /^(Timed out waiting for WebView|WebView connection setup timed out)/.test(error)) {
+      liveConnectFailedAt.set(`${workerId}:${deviceIndex}`, Date.now());
+    }
+  }
 
   /** The device a live locator question is about, resolved as request-hierarchy resolves it. */
   function liveLocatorTarget(workerId: number | undefined, deviceIndex: number | undefined):
@@ -3808,13 +3821,16 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       if (!xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
         throw new Error('No WebView on screen.');
       }
+      if (!device && Date.now() - (liveConnectFailedAt.get(`${id}:${index}`) ?? 0) < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
+        throw new Error(`Could not connect to the WebView; retrying. ${DEBUGGABLE_HINT}`);
+      }
     };
     const webview = device
       ? async () => {
         const handle = device._connectedWebView();
         if (handle) return handle;
         if (Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
-          throw new Error('Could not connect to the WebView; retrying. Make sure it is debuggable (webviewDebuggingEnabled={true}, or WebView.setWebContentsDebuggingEnabled(true) on Android).');
+          throw new Error(`Could not connect to the WebView; retrying. ${DEBUGGABLE_HINT}`);
         }
         throw new Error('Connecting to the WebView; the count appears once the connection is up.');
       }
@@ -4599,7 +4615,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           // Per tab: a tab's waiting request must never be dropped for another's.
           `${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`,
           () => evaluateLiveLocator(target.client, target.serial, msg.locator, { webview: target.webview, beforeConnect: target.beforeConnect }),
-          (result) => broadcast({ type: 'locator-evaluation', requestId, ...result }),
+          (result) => {
+            noteLiveConnect(target.workerId, target.deviceIndex, result.error);
+            broadcast({ type: 'locator-evaluation', requestId, ...result });
+          },
         );
         break;
       }
@@ -4622,7 +4641,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         latestPicks.set(pickKey, generation);
         const superseded = () => latestPicks.get(pickKey) !== generation;
         void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType'), webview: target.webview, beforeConnect: target.beforeConnect, superseded })
-          .then((result) => { if (!superseded()) broadcast({ type: 'locator-suggestions', requestId, ...result }); })
+          .then((result) => {
+            noteLiveConnect(target.workerId, target.deviceIndex, result.note);
+            if (!superseded()) broadcast({ type: 'locator-suggestions', requestId, ...result });
+          })
           .catch((err) => broadcast({
             type: 'locator-suggestions', requestId, suggestions: [],
             note: err instanceof Error ? err.message : String(err),

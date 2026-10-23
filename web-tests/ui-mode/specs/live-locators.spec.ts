@@ -377,4 +377,20 @@ test.describe("Live locators come from the device", () => {
     await expect(locator.livePickHint).toBeVisible()
     await expect(locator.options).toHaveCount(0)
   })
+
+  test("a device's refusal is asked again on the next screen refresh", async ({ app, device, page, detailTabs }) => {
+    // "Reading the screen…" (no capture yet) and "No WebView on screen."
+    // are answers too: the next capture must re-ask, or the tab sticks.
+    const ui = app
+    const locator = new LocatorPane(page)
+    await livePick(ui, device)
+    await detailTabs.select("Locator")
+    ui.clearReceived()
+    await locator.type('webview.getByText("Go")')
+    const first = await ui.waitForMessage("evaluate-locator")
+    ui.send({ type: "locator-evaluation", requestId: first.requestId, bounds: [], error: "Reading the screen…" })
+    await expect(locator.error).toContainText("Reading the screen")
+    ui.send({ type: "hierarchy-update", xml: HIERARCHY, revision: 2, workerId: 0, deviceIndex: 0 })
+    await expect.poll(() => ui.messagesOfType("evaluate-locator").length).toBe(2)
+  })
 })
