@@ -8,12 +8,14 @@ import android.view.accessibility.AccessibilityWindowInfo
  *
  * - The input method's window: the keyboard's keys, so a "Done" button
  *   beside an open keyboard is not ambiguous with its Done key.
- * - System UI windows that are neither focused nor active: the status bar
- *   (its clock and icons) and the navigation bar (its Back and Home). A
- *   pulled-down notification shade or quick settings panel is focused and
- *   active (measured on API 36), so it stays matchable after
- *   `device.openNotifications()`, as is every other app's window — a
- *   permission dialog is the permission controller's application window.
+ * - System UI's own system windows while they are neither focused nor
+ *   active: the status bar (its clock and icons), the navigation bar (its
+ *   Back and Home), and a heads-up notification. A pulled-down notification
+ *   shade or quick settings panel is focused and active (measured on API
+ *   36), so it stays matchable after `device.openNotifications()`. Only
+ *   windows System UI owns: the app's own overlay windows, the system's
+ *   error dialogs (package `android`) and every other app's window — a
+ *   permission dialog is the permission controller's — stay matchable.
  * - The `@tapsmith/react-native` hooks marker, which exists only for Tapsmith
  *   to read from the hierarchy dump.
  *
@@ -29,6 +31,9 @@ internal object NonAppNodes {
     /** `@tapsmith/react-native`'s marker prefix; pinned to the SDK's HOOKS_MARKER_PREFIX by non-app-nodes.test.ts. */
     const val HOOKS_MARKER_PREFIX = "tapsmith-hooks:"
 
+    /** The package that owns the status bar, navigation bar and notification windows. */
+    const val SYSTEM_UI_PACKAGE = "com.android.systemui"
+
     /** The dump attribute marking an excluded window's root node. */
     const val DUMP_ATTRIBUTE = "tapsmith-non-app"
 
@@ -42,16 +47,18 @@ internal object NonAppNodes {
 
     /**
      * Whether no locator matches anything in a window of [type]
-     * (AccessibilityWindowInfo.TYPE_*) that is or isn't [focused] / [active].
+     * (AccessibilityWindowInfo.TYPE_*) that is or isn't [focused] / [active],
+     * whose root node belongs to [packageName].
      */
     fun excludesWindow(
         type: Int,
         focused: Boolean,
         active: Boolean,
+        packageName: CharSequence?,
     ): Boolean =
         when (type) {
             AccessibilityWindowInfo.TYPE_INPUT_METHOD -> true
-            AccessibilityWindowInfo.TYPE_SYSTEM -> !focused && !active
+            AccessibilityWindowInfo.TYPE_SYSTEM -> !focused && !active && packageName?.toString() == SYSTEM_UI_PACKAGE
             else -> false
         }
 }

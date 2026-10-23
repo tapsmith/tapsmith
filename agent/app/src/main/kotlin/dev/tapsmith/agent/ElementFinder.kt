@@ -717,19 +717,31 @@ class ElementFinder(
 
     /**
      * The ids of the windows no locator searches ([NonAppNodes.excludesWindow]):
-     * the input method, and System UI bars. Read once per find, from the
+     * the input method, and System UI's bars and notifications. Read once per find, from the
      * window list the walk itself searches; empty (nothing excluded) if it
      * can't be read.
      */
     private fun nonAppWindowIds(): Set<Int> =
         try {
             instrumentation.uiAutomation.windows
-                .filter { NonAppNodes.excludesWindow(it.type, it.isFocused, it.isActive) }
+                .filter { NonAppNodes.excludesWindow(it.type, it.isFocused, it.isActive, rootPackageOf(it)) }
                 .mapTo(HashSet()) { it.id }
         } catch (e: Exception) {
             warnOnce("nonAppWindowIds", e)
             emptySet()
         }
+
+    /** The package of [window]'s root node, or null when it has none (only read for system windows). */
+    @Suppress("DEPRECATION")
+    private fun rootPackageOf(window: android.view.accessibility.AccessibilityWindowInfo): CharSequence? {
+        if (window.type != android.view.accessibility.AccessibilityWindowInfo.TYPE_SYSTEM) return null
+        val root = window.root ?: return null
+        return try {
+            root.packageName
+        } finally {
+            root.recycle()
+        }
+    }
 
     /**
      * Get a cached element by its stable ID.

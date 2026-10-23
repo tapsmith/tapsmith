@@ -1,6 +1,6 @@
 import { decodeXmlEntities } from '../../xml-entities.js';
 import { ANDROID_ROLE_CLASSES } from '../../roles.js';
-import { isHooksMarkerNode } from './non-app-nodes.js';
+import { isHooksMarkerCarrier } from './non-app-nodes.js';
 
 // ─── Types ───
 
@@ -248,8 +248,9 @@ export function hitTest(roots: HierarchyNode[], x: number, y: number): Hierarchy
 
   function walk(node: HierarchyNode) {
     const bounds = getNodeBounds(node);
-    // The hooks marker is screen-sized and invisible: never what a pick means.
-    if (bounds && boundsContains(bounds, x, y) && !isHooksMarkerNode(node)) {
+    // The hooks marker and its carrier are screen-sized and invisible: never
+    // what a pick means.
+    if (bounds && boundsContains(bounds, x, y) && !isHooksMarkerCarrier(node)) {
       const area = boundsArea(bounds);
       const isWv = node.attributes.get('webview') === 'true';
       // Prefer WebView DOM nodes over native nodes at similar coordinates —

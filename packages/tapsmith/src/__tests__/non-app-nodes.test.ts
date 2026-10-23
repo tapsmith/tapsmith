@@ -133,6 +133,19 @@ describe('Android: System UI bars, the IME and the hooks marker never match', ()
     expect(count(ANDROID, 'device.getByText("Allow", { exact: true })')).toBe(1);
   });
 
+  it('does not land a pick on the marker or the invisible view that carries it', () => {
+    const roots = parseHierarchyXml(`<hierarchy rotation="0">
+  <node index="0" text="" class="android.widget.FrameLayout" package="com.example.app" content-desc="" bounds="[0,0][1080,2400]">
+    <node index="0" text="Home" class="android.widget.TextView" package="com.example.app" content-desc="" bounds="[0,100][300,200]" />
+    <node index="1" text="" class="android.view.ViewGroup" package="com.example.app" content-desc="" bounds="[0,0][1080,2400]">
+      <node index="0" text="${MARKER}" resource-id="tapsmith-hooks" class="android.widget.TextView" package="com.example.app" content-desc="" bounds="[0,0][1080,2400]" />
+    </node>
+  </node>
+</hierarchy>`);
+    const hit = hitTest(roots, 500, 1500);
+    expect(hit?.attributes.get('class')).toBe('android.widget.FrameLayout');
+  });
+
   it('does not match the hooks marker, nor read it into a container name', () => {
     expect(count(ANDROID, 'device.getByText("nav")')).toBe(0);
     expect(count(ANDROID, 'device.getByTestId("tapsmith-hooks")')).toBe(0);

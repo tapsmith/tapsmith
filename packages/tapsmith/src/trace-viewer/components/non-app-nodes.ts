@@ -9,9 +9,9 @@ import { HOOKS_MARKER_PREFIX } from '../../hooks-marker.js';
 //   inside the software keyboard (keys, and its return and globe buttons). An
 //   input accessory toolbar above the keyboard is the app's, and matches.
 // - Android: the windows the agent marks `tapsmith-non-app="true"` — the
-//   input method, and System UI windows that are neither focused nor active
-//   (the status and navigation bars; a pulled-down notification shade is
-//   focused, so it matches).
+//   input method, and System UI's own windows while neither focused nor
+//   active (the status and navigation bars, a heads-up notification; a
+//   pulled-down notification shade is focused, so it matches).
 // - Both: the @tapsmith/react-native hooks marker, which exists only for
 //   Tapsmith to read from the dump.
 //
@@ -38,6 +38,18 @@ export function isHooksMarkerText(text: string | undefined): boolean {
 /** Whether the node is a hooks marker (either copy: older package versions also drew a visible one). */
 export function isHooksMarkerNode(node: HierarchyNode): boolean {
   return MARKER_TEXT_ATTRIBUTES.some((key) => isHooksMarkerText(node.attributes.get(key)));
+}
+
+/**
+ * Whether the node is a hooks marker or only wraps one: the screen-sized,
+ * invisible carrier view the package draws the marker in. Never what a pick
+ * on the screen means.
+ */
+export function isHooksMarkerCarrier(node: HierarchyNode): boolean {
+  if (isHooksMarkerNode(node)) return true;
+  if (node.children.length === 0) return false;
+  if (MARKER_TEXT_ATTRIBUTES.some((key) => node.attributes.get(key))) return false;
+  return node.children.every(isHooksMarkerCarrier);
 }
 
 /** Whether no locator matches this node itself (its descendants still can). */

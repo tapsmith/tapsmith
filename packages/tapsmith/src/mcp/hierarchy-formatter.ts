@@ -1,5 +1,6 @@
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { getNodeRole } from '../trace-viewer/components/hierarchy-utils.js';
+import { isNonAppNode, isNonAppSubtree } from '../trace-viewer/components/non-app-nodes.js';
 import type { GeneratedSelector } from '../trace-viewer/components/selector-generation.js';
 import { escapeJsString } from '../js-string-escape.js';
 
@@ -36,7 +37,14 @@ function getStates(node: HierarchyNode): string[] {
   return states;
 }
 
+/**
+ * Whether the tree lists the node. What no locator matches (non-app-nodes.ts:
+ * the keyboard, System UI bars, the hooks marker) is not listed: it could
+ * never get a ref, and the agent, which never finds it, would report it as
+ * gone from the screen.
+ */
 function isSemanticNode(node: HierarchyNode): boolean {
+  if (isNonAppNode(node)) return false;
   const role = getNodeRole(node);
   if (role) return true;
   const text = getText(node);
@@ -46,6 +54,7 @@ function isSemanticNode(node: HierarchyNode): boolean {
 }
 
 function hasSemanticDescendant(node: HierarchyNode): boolean {
+  if (isNonAppSubtree(node)) return false;
   if (isSemanticNode(node)) return true;
   return node.children.some(hasSemanticDescendant);
 }
@@ -111,6 +120,7 @@ function truncate(s: string, max: number): string {
 export function semanticNodes(roots: HierarchyNode[]): HierarchyNode[] {
   const out: HierarchyNode[] = [];
   const walk = (node: HierarchyNode) => {
+    if (isNonAppSubtree(node)) return;
     if (isSemanticNode(node)) out.push(node);
     node.children.forEach(walk);
   };

@@ -17,7 +17,7 @@ describe("Locators match only the app's own elements", () => {
     expect(await device.isKeyboardShown()).toBe(true)
     if (platform === "ios") {
       // The keyboard's return key is a "Done" button inside the keyboard.
-      expect(await hierarchyXml(device)).toMatch(/<XCUIElementType(Keyboard|\(19\))\b[\s\S]*label="Done"/)
+      expect(await hierarchyXml(device)).toMatch(/<XCUIElementType(Keyboard|\(19\))[\s>][\s\S]*label="Done"/)
     }
 
     await expect(keyboardScreen.doneText).toHaveCount(1)
@@ -41,7 +41,7 @@ describe("Locators match only the app's own elements", () => {
     await openScreen(device, "/")
     await expect(homeScreen.header).toBeVisible()
     if (platform === "ios") {
-      expect(await hierarchyXml(device)).toMatch(/<XCUIElementType(Application|\(2\))\b[^>]*label="Tapsmith Test App"/)
+      expect(await hierarchyXml(device)).toMatch(/<XCUIElementType(Application|\(2\))\s[^>]*label="Tapsmith Test App"/)
     }
     await expect(homeScreen.navigationTitle).toHaveCount(1)
   })
@@ -51,8 +51,11 @@ describe("Locators match only the app's own elements", () => {
     await openScreen(device, "/")
     await expect(homeScreen.header).toBeVisible()
     // The status bar's clock, e.g. "10:06" (the test app shows no times).
-    const clock = /text="(\d{1,2}:\d{2})"/.exec(await hierarchyXml(device))?.[1]
+    const xml = await hierarchyXml(device)
+    const clock = /text="(\d{1,2}:\d{2})"/.exec(xml)?.[1]
     expect(clock, "the status bar clock is in the hierarchy").toBeDefined()
+    // The dump marks the status bar's window so the trace viewer leaves it out too.
+    expect(xml).toMatch(/<node tapsmith-non-app="true"[^>]*package="com\.android\.systemui"/)
     await expect(device.getByText(clock!, { exact: true })).toHaveCount(0)
   })
 })

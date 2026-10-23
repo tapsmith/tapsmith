@@ -37,3 +37,22 @@ describe('semanticNodes', () => {
     expect(semanticNodes([root])).toEqual([title, save]);
   });
 });
+
+describe('non-app nodes (PILOT-756, PILOT-830)', () => {
+  // No locator matches these, so the snapshot neither lists them nor asks the
+  // agent about them — or every Android snapshot would report its status
+  // bar as "not on screen".
+  const clock = node({ class: 'android.widget.TextView', text: '10:06' });
+  const statusBar = node({ class: 'android.widget.FrameLayout', 'tapsmith-non-app': 'true' }, [clock]);
+  const marker = node({ class: 'android.widget.TextView', text: 'tapsmith-hooks:1;epoch=0;nav=1;url=app:///' });
+  const carrier = node({ class: 'android.view.ViewGroup' }, [marker]);
+  const app = node({ class: 'android.widget.FrameLayout' }, [title, save, carrier]);
+
+  it('leaves them out of the nodes offered for suggestions', () => {
+    expect(semanticNodes([statusBar, app])).toEqual([title, save]);
+  });
+
+  it('leaves them out of the tree', () => {
+    expect(formatHierarchy([statusBar, app], new Map()).tree).toBe('- text "Settings"\n- button "Save"');
+  });
+});
