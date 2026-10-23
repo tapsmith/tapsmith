@@ -592,12 +592,13 @@ class ElementFinder(
                 null
             }
 
+        val excludedWindows = nonAppWindowIds()
         val candidates = enumerate(selector, parent)
         val enumeratedAt = SystemClock.uptimeMillis()
 
         var extractMs = 0L
         val (matches, examined) =
-            matchCandidates(candidates, selector, fresh, limit) { obj, node ->
+            matchCandidates(candidates, selector, fresh, limit, excludedWindows) { obj, node ->
                 val extractStart = SystemClock.uptimeMillis()
                 cacheAndConvert(obj, node, fresh).also { extractMs += SystemClock.uptimeMillis() - extractStart }
             }
@@ -617,12 +618,15 @@ class ElementFinder(
      * The match step of a find: every candidate the walk enumerated that the
      * selector's non-native parts and state filters accept, in tree order,
      * up to [limit]. Returns the matches and how many candidates were read.
+     * A candidate that isn't the app's — in one of [excludedWindows], or the
+     * hooks marker — never matches ([NonAppNodes]).
      */
     private inline fun matchCandidates(
         candidates: List<UiObject2>,
         selector: ElementSelector,
         fresh: Boolean,
         limit: Int,
+        excludedWindows: Set<Int>,
         refreshed: MutableMap<AccessibilityNodeInfo, AccessibilityNodeInfo>? = null,
         convert: (UiObject2, AccessibilityNodeInfo) -> ElementInfo,
     ): Pair<List<ElementInfo>, Int> {
@@ -635,6 +639,7 @@ class ElementFinder(
             CommandCancellation.checkpoint()
             examined++
             val node = snapshotOf(obj, fresh, refreshed)
+            if (node.windowId in excludedWindows || NonAppNodes.isHooksMarker(node.text, node.contentDescription)) continue
             if (!matchesSelector(node, selector, fresh) || !matchesStateFilters(node, selector)) continue
             matches.add(convert(obj, node))
         }
@@ -704,10 +709,27 @@ class ElementFinder(
         if (selector.xpath != null) {
             return findByXPath(selector.xpath).map { it.copy(elementId = "") }
         }
-        return matchCandidates(enumerate(selector, null), selector, fresh, Int.MAX_VALUE, refreshed) { obj, node ->
+        val excludedWindows = nonAppWindowIds()
+        return matchCandidates(enumerate(selector, null), selector, fresh, Int.MAX_VALUE, excludedWindows, refreshed) { obj, node ->
             toElementInfo(obj, node, "", fresh).first
         }.first
     }
+
+    /**
+     * The ids of the windows no locator searches ([NonAppNodes.excludesWindow]):
+     * the input method, and System UI bars. Read once per find, from the
+     * window list the walk itself searches; empty (nothing excluded) if it
+     * can't be read.
+     */
+    private fun nonAppWindowIds(): Set<Int> =
+        try {
+            instrumentation.uiAutomation.windows
+                .filter { NonAppNodes.excludesWindow(it.type, it.isFocused, it.isActive) }
+                .mapTo(HashSet()) { it.id }
+        } catch (e: Exception) {
+            warnOnce("nonAppWindowIds", e)
+            emptySet()
+        }
 
     /**
      * Get a cached element by its stable ID.
@@ -1313,6 +1335,8 @@ class ElementFinder(
                 child.text?.toString()?.takeIf { it.isNotEmpty() }
                     ?: child.contentDescription?.toString()?.takeIf { it.isNotEmpty() }
             },
+            // The hooks marker is no one's visible text ([NonAppNodes]).
+            skip = { child -> NonAppNodes.isHooksMarker(child.text, child.contentDescription) },
             maxDepth = MAX_DESCENDANT_TEXT_DEPTH,
         ).joinToString(" ")
 
