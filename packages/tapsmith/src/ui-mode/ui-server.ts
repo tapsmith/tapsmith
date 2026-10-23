@@ -4600,6 +4600,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           // instance can open a WebView connection to that device; other
           // workers' devices (and group members) have none.
           const primary = !!hierWorker?.adoptedPrimary && hierDeviceIndex === 0;
+          // A screen without a WebView: the one that failed is gone, whether
+          // or not a dump runs now (none does in the failure cooldown).
+          if (primary && !xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) webviewFailing = false;
           const webviewDom = primary ? await dumpWebViewDomForPicker(xml) : undefined;
           // Whether an overlay can come: not off the primary, nor while its
           // WebView dumps keep failing (a WebView that is not debuggable),
