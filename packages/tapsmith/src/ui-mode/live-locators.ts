@@ -196,15 +196,19 @@ function isPickedWebViewElement(match: WebViewMatch, node: HierarchyNode): boole
   const testId = node.attributes.get('webview-testid') ?? '';
   if (match.tag !== (node.attributes.get('webview-tag') ?? '').toLowerCase()) return false;
   if ((id && id !== match.id) || (testId && testId !== match.testId)) return false;
+  // A DOM id names one element: the match is the picked one wherever it
+  // sits now (the page may have moved since the capture). A test id need
+  // not be unique, so it still needs the place.
+  if (id) return true;
   const picked = getNodeBounds(node);
   if (picked && match.bounds) {
     const near = (a: number, b: number) => Math.abs(a - b) <= SAME_ELEMENT_TOLERANCE_PX;
     return near(picked.left, match.bounds.left) && near(picked.top, match.bounds.top)
       && near(picked.right, match.bounds.right) && near(picked.bottom, match.bounds.bottom);
   }
-  // Without both places, only an id or test id tells it from another
-  // element with the same tag.
-  return id !== '' || testId !== '';
+  // Without both places, only a test id tells it from another element
+  // with the same tag.
+  return testId !== '';
 }
 
 /**

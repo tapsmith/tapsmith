@@ -210,6 +210,19 @@ describe('suggestLiveLocators', () => {
     expect(note).toMatch(/pick the element again/);
   });
 
+  it('confirms an element by its DOM id after the page moved, but not by a test id alone', async () => {
+    const { page, matches } = fakePage();
+    // The capture placed it at [0,0][100,50]; the page has since scrolled 300 px.
+    matches['locator:#save'] = [domEl({ tag: 'button', id: 'save', bounds: B(0, 300, 100, 350) })];
+    matches['getByTestId:save-btn'] = [domEl({ tag: 'button', testId: 'save-btn', bounds: B(0, 300, 100, 350) })];
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
+    const byId = node({ webview: 'true', 'webview-tag': 'button', 'webview-id': 'save', bounds: '[0,0][100,50]' });
+    expect((await suggestLiveLocators(fakeClient(() => []), 'emu', byId, { ios: false })).suggestions.map((s) => s.code))
+      .toContain('webview.locator("#save")');
+    const byTestId = node({ webview: 'true', 'webview-tag': 'button', 'webview-testid': 'save-btn', bounds: '[0,0][100,50]' });
+    expect((await suggestLiveLocators(fakeClient(() => []), 'emu', byTestId, { ios: false })).suggestions).toEqual([]);
+  });
+
   it('finds a picked row past the first 200 matches', async () => {
     const { page, matches } = fakePage();
     const row = (i: number) => domEl({ tag: 'button', bounds: B(0, i * 10, 100, i * 10 + 10) });
