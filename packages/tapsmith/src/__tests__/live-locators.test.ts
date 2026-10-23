@@ -105,7 +105,7 @@ describe('evaluateLiveLocator', () => {
   it('counts a webview locator in the page, and where its matches are on screen', async () => {
     const { page, matches } = fakePage(B(0, 0, 1000, 1000));
     matches['getByText:Go'] = [domEl({ bounds: B(0, 100, 50, 120) }), domEl({ bounds: B(0, 200, 50, 220) }), domEl({})];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const r = await evaluateLiveLocator(client(), 'emu', 'webview.getByText("Go")');
     expect(r).toMatchObject({ count: 3, total: 3, webview: true, bounds: [B(0, 100, 50, 120), B(0, 200, 50, 220)] });
   });
@@ -134,7 +134,7 @@ describe('suggestLiveLocators', () => {
     const { page, matches } = fakePage();
     matches['getByText:Submit'] = [domEl({ tag: 'button' })];
     matches['getByRole:button'] = [domEl({ tag: 'button' }), domEl({ tag: 'button' })];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
     expect(suggestions.map((s) => s.code)).toEqual(['webview.getByText("Submit")']);
   });
@@ -145,7 +145,7 @@ describe('suggestLiveLocators', () => {
     matches['getByRole:link'] = [domEl({ tag: 'a', id: 'home' })];
     matches['locator:a'] = [domEl({ tag: 'a', id: 'home' })];
     matches['getByText:Docs'] = [domEl({ tag: 'a', id: 'docs' })];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const anchor = node({ webview: 'true', 'webview-tag': 'a', 'webview-id': 'docs', text: 'Docs', bounds: '[0,0][100,50]' });
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', anchor, { ios: false });
     expect(suggestions.map((s) => s.code)).toEqual(['webview.getByText("Docs")']);
@@ -159,7 +159,7 @@ describe('suggestLiveLocators', () => {
       domEl({ bounds: B(0, 200, 0, 200) }), // display:none — no size
       domEl({ bounds: B(0, 400, 1000, 500) }),
     ];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByRole("listitem")');
     expect(r.count).toBe(4);
     expect(r.bounds).toEqual([B(0, 200, 1000, 300), B(0, 400, 1000, 500)]);
@@ -170,7 +170,7 @@ describe('suggestLiveLocators', () => {
     const row = (top: number) => domEl({ tag: 'button', bounds: B(0, top, 100, top + 50) });
     matches['getByText:Delete'] = [row(0), row(100), row(200)];
     matches['locator:button'] = [row(0), row(100), row(200), row(300)];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const second = node({ webview: 'true', 'webview-tag': 'button', text: 'Delete', bounds: '[0,100][100,150]' });
     const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', second, { ios: false });
     expect(suggestions.map((s) => s.code)).toEqual(['webview.getByText("Delete").nth(1)', 'webview.locator("button").nth(1)']);
@@ -180,7 +180,7 @@ describe('suggestLiveLocators', () => {
   it('offers no position when the WebView\'s place is unknown, since same-tag matches cannot be told apart', async () => {
     const { page, matches } = fakePage();
     matches['getByText:Delete'] = [domEl({ tag: 'button' }), domEl({ tag: 'button' }), domEl({ tag: 'button' })];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const third = node({ webview: 'true', 'webview-tag': 'button', text: 'Delete', bounds: '[0,200][100,250]' });
     const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', third, { ios: false });
     expect(suggestions).toEqual([]);
@@ -191,7 +191,7 @@ describe('suggestLiveLocators', () => {
     const { page, matches } = fakePage();
     const box = B(0, 100, 100, 150);
     matches['locator:div'] = [domEl({ bounds: B(0, 0, 400, 800) }), domEl({ bounds: box }), domEl({ bounds: box })];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const inner = node({ webview: 'true', 'webview-tag': 'div', bounds: '[0,100][100,150]' });
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', inner, { ios: false });
     expect(suggestions).toEqual([]);
@@ -200,7 +200,7 @@ describe('suggestLiveLocators', () => {
   it('stops checking a WebView pick\'s candidates once a newer pick replaced it', async () => {
     const { page, matches } = fakePage();
     matches['getByText:Submit'] = [domEl({ tag: 'button' })];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     let replaced = false;
     const live = page as unknown as { _liveMatches: ReturnType<typeof vi.fn> };
     live._liveMatches.mockImplementationOnce(async () => { replaced = true; return { count: 0, total: 0, matches: [] }; });
@@ -212,7 +212,7 @@ describe('suggestLiveLocators', () => {
     const { page, matches } = fakePage();
     matches['getByText:Total'] = [domEl({ tag: 'div', bounds: B(0, 400, 100, 450) })];
     matches['locator:div.sum'] = [domEl({ tag: 'div', bounds: B(1, 0, 101, 50) })];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const total = node({ webview: 'true', 'webview-tag': 'div', 'webview-class': 'sum', text: 'Total', bounds: '[0,0][100,50]' });
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', total, { ios: false });
     expect(suggestions.map((s) => s.code)).toEqual(['webview.locator("div.sum")']);
@@ -233,7 +233,7 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
     const { page, matches } = fakePage();
     // Two Submit buttons, neither where the picked one was.
     matches['getByText:Submit'] = [domEl({ tag: 'button', bounds: B(0, 300, 100, 350) }), domEl({ tag: 'button', bounds: B(0, 400, 100, 450) })];
-    vi.spyOn(Device.prototype, 'webview').mockResolvedValue(page);
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
     expect(suggestions).toEqual([]);
     expect(note).toMatch(/finds only this element/);
@@ -242,7 +242,7 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
   it('uses the WebView connection UI mode already holds instead of opening another', async () => {
     const { page, matches } = fakePage();
     matches['getByText:Go'] = [domEl({})];
-    const own = vi.spyOn(Device.prototype, 'webview');
+    const own = vi.spyOn(Device.prototype, '_webviewOfApp');
     const held = vi.fn(async () => page);
     const r = await evaluateLiveLocator(fakeClient(() => []), 'emu', 'webview.getByText("Go")', held);
     expect(r).toMatchObject({ count: 1, webview: true });
