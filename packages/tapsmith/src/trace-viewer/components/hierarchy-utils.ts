@@ -1,5 +1,6 @@
 import { decodeXmlEntities } from '../../xml-entities.js';
 import { ANDROID_ROLE_CLASSES } from '../../roles.js';
+import { isHooksMarkerNode } from './non-app-nodes.js';
 
 // ─── Types ───
 
@@ -30,7 +31,9 @@ export function parseHierarchyXml(xml: string): HierarchyNode[] {
   const roots: HierarchyNode[] = [];
   const stack: HierarchyNode[] = [];
 
-  const tagRe = /<(\/?)([a-zA-Z_][\w.]*)((?:\s+[\w:.-]+="[^"]*")*)\s*(\/?)>/g;
+  // A tag name may end in `(<n>)`: the iOS agent names an element type it
+  // has no name for by its raw value, e.g. `XCUIElementType(2)`.
+  const tagRe = /<(\/?)([a-zA-Z_][\w.]*(?:\(\d+\))?)((?:\s+[\w:.-]+="[^"]*")*)\s*(\/?)>/g;
   let match: RegExpExecArray | null;
 
   while ((match = tagRe.exec(xml)) !== null) {
@@ -245,7 +248,8 @@ export function hitTest(roots: HierarchyNode[], x: number, y: number): Hierarchy
 
   function walk(node: HierarchyNode) {
     const bounds = getNodeBounds(node);
-    if (bounds && boundsContains(bounds, x, y)) {
+    // The hooks marker is screen-sized and invisible: never what a pick means.
+    if (bounds && boundsContains(bounds, x, y) && !isHooksMarkerNode(node)) {
       const area = boundsArea(bounds);
       const isWv = node.attributes.get('webview') === 'true';
       // Prefer WebView DOM nodes over native nodes at similar coordinates —

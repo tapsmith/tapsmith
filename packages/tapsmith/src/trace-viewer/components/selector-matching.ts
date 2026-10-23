@@ -1,5 +1,6 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
 import { getNodeRole, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
+import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
@@ -458,11 +459,15 @@ const ANDROID_EDIT_TEXT_CLASSES = new Set([
 ]);
 const MAX_DESCENDANT_TEXT_DEPTH = 6;
 
-/** The Android agent's joined descendant text: each child's text, else its content-desc, else its own descendants'. */
+/**
+ * The Android agent's joined descendant text: each child's text, else its
+ * content-desc, else its own descendants'. A hooks marker gives none.
+ */
 function descendantText(node: HierarchyNode, depth = 0): string[] {
   if (depth >= MAX_DESCENDANT_TEXT_DEPTH) return [];
   const parts: string[] = [];
   for (const child of node.children) {
+    if (isHooksMarkerNode(child)) continue;
     const own = child.attributes.get('text') || child.attributes.get('content-desc');
     if (own) parts.push(own);
     else parts.push(...descendantText(child, depth + 1));
@@ -835,7 +840,9 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   const raw: HierarchyNode[] = [];
 
   function walk(node: HierarchyNode) {
-    if (nodeMatchesSelector(node, selector)) {
+    // What isn't the app's never matches (PILOT-756, non-app-nodes.ts).
+    if (isNonAppSubtree(node)) return;
+    if (!isNonAppNode(node) && nodeMatchesSelector(node, selector)) {
       raw.push(node);
     }
     for (const child of node.children) {

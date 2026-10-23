@@ -14,6 +14,7 @@
 import * as path from 'node:path';
 import type { AppResetMode, AppResetScope, TapsmithConfig } from './config.js';
 import { decodeXmlEntities } from './xml-entities.js';
+import { HOOKS_MARKER_PREFIX } from './hooks-marker.js';
 
 /** `appReset` with `'auto'` resolved away. */
 export type ResolvedAppResetMode = Exclude<AppResetMode, 'auto'>;
@@ -168,8 +169,6 @@ export function describeAction(policy: AppResetPolicy): string {
 }
 
 // ─── @tapsmith/react-native hooks marker ───
-
-export const HOOKS_MARKER_PREFIX = 'tapsmith-hooks:';
 
 export interface HooksMarker {
   version: number;
