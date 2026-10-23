@@ -4394,6 +4394,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   let webviewDumpPromise: Promise<string | undefined> | null = null;
   let webviewEstablished = false;
   let webviewInspectFailedAt = 0;
+  // The picker's WebView dumps keep failing (a WebView that is not
+  // debuggable), from the first failure until one succeeds: no overlay can
+  // come meanwhile, retries included.
+  let webviewFailing = false;
   const debugWebview = (msg: string) => {
     if (process.env.TAPSMITH_DEBUG_WEBVIEW) console.error(`[webview-picker ${new Date().toISOString().slice(11, 23)}] ${msg}`);
   };
@@ -4424,9 +4428,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         if (dom === null) {
           webviewInspectFailedAt = Date.now();
           webviewEstablished = false;
+          webviewFailing = true;
           return undefined;
         }
-        if (dom !== undefined) webviewEstablished = true;
+        if (dom !== undefined) {
+          webviewEstablished = true;
+          webviewFailing = false;
+        }
         return dom;
       })
       // The promise is deliberately left un-awaited until the connection is
@@ -4436,6 +4444,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       .catch(() => {
         webviewInspectFailedAt = Date.now();
         webviewEstablished = false;
+        webviewFailing = true;
         return undefined;
       })
       .finally(() => { webviewDumpPromise = null; });
@@ -4593,9 +4602,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           const primary = !!hierWorker?.adoptedPrimary && hierDeviceIndex === 0;
           const webviewDom = primary ? await dumpWebViewDomForPicker(xml) : undefined;
           // Whether an overlay can come: not off the primary, nor while its
-          // WebView connect is in its failure cooldown (a WebView that is
-          // not debuggable), when a held click would only wait out its deadline.
-          const webviewOverlay = primary && Date.now() - webviewInspectFailedAt >= WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS;
+          // WebView dumps keep failing (a WebView that is not debuggable),
+          // when a held click would only wait out its deadline.
+          const webviewOverlay = primary && !webviewFailing;
           if (webviewDom) {
             const lastClose = xml.lastIndexOf('</');
             if (lastClose !== -1) {
