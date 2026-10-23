@@ -27,6 +27,7 @@ describe("Locators match only the app's own elements", () => {
   })
 
   test("the hooks marker matches no locator", async ({ device, homeScreen }) => {
+    await openScreen(device, "/")
     await expect(homeScreen.header).toBeVisible()
     const marker = await readHooksMarker(device)
     expect(marker?.text).toMatch(/^tapsmith-hooks:1;epoch=\d+;nav=\d+;/)
@@ -37,6 +38,7 @@ describe("Locators match only the app's own elements", () => {
   })
 
   test("the app's name matches its title, not the application element", async ({ device, platform, homeScreen }) => {
+    await openScreen(device, "/")
     await expect(homeScreen.header).toBeVisible()
     if (platform === "ios") {
       expect(await hierarchyXml(device)).toMatch(/<XCUIElementType(Application|\(2\))\b[^>]*label="Tapsmith Test App"/)
@@ -46,6 +48,7 @@ describe("Locators match only the app's own elements", () => {
 
   test("the status bar matches no locator", async ({ device, platform, homeScreen }) => {
     test.skip(platform !== "android", "iOS's status bar is not in the app's accessibility tree")
+    await openScreen(device, "/")
     await expect(homeScreen.header).toBeVisible()
     // The status bar's clock, e.g. "10:06" (the test app shows no times).
     const clock = /text="(\d{1,2}:\d{2})"/.exec(await hierarchyXml(device))?.[1]
