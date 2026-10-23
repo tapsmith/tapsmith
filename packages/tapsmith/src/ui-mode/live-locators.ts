@@ -21,6 +21,9 @@ const IOS_CHUNK_SIZE = 500;
 /** One live WebView query's budget: a wedged page must not hold a tab's queue for the device timeout. */
 const LIVE_WEBVIEW_TIMEOUT_MS = 5_000;
 
+/** How many of a candidate's matches a pick's check looks through for the picked element. */
+const PICK_CHECK_MAX_MATCHES = 2_000;
+
 /** How far (px) a match may sit from the picked element's recorded bounds and still be it. */
 const SAME_ELEMENT_TOLERANCE_PX = 2;
 
@@ -113,10 +116,13 @@ export async function suggestLiveLocators(
     // candidate's matches still does (as a native pick's variants do).
     const positional: LiveLocatorSuggestions['suggestions'] = [];
     const pickedPlace = getNodeBounds(node);
+    // A match's place was unknown, so only an id could confirm the pick.
+    let unplaced = false;
     for (const candidate of generateSelectors(node).filter((s) => s.code.startsWith('webview.'))) {
       if (options.superseded?.()) break;
       const result = await webViewMatchesOf(client, serial, candidate.code, options);
       if (result.error) { note = result.error; break; }
+      if (result.count > 0 && !(pickedPlace && result.matches.every((m) => m.bounds))) unplaced = true;
       const index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
       if (index < 0) continue;
       if (result.count === 1) {
@@ -134,7 +140,9 @@ export async function suggestLiveLocators(
     }
     if (suggestions.length === 0) suggestions.push(...positional);
     if (!note && suggestions.length === 0) {
-      note = 'None of the page\'s locators finds only this element. Write one that does, or add .nth(i) to pick it by position.';
+      note = unplaced
+        ? 'Could not tell where the WebView is on screen to check the pick; pick the element again.'
+        : 'None of the page\'s locators finds only this element. Write one that does, or add .nth(i) to pick it by position.';
     }
     return { suggestions, note };
   }
@@ -170,7 +178,7 @@ async function webViewMatchesOf(
     const device = await sdkDeviceFor(client, serial);
     return await withEvaluatedLocator(device, client, locator, async (evaluated) => {
       if (evaluated.kind !== 'webview') return { count: 0, matches: [] };
-      return evaluated.locator._handle._liveMatches(evaluated.locator, LIVE_WEBVIEW_TIMEOUT_MS);
+      return evaluated.locator._handle._liveMatches(evaluated.locator, LIVE_WEBVIEW_TIMEOUT_MS, PICK_CHECK_MAX_MATCHES);
     }, access);
   } catch (err) {
     return { count: 0, matches: [], error: err instanceof Error ? err.message : String(err) };
@@ -184,20 +192,19 @@ async function webViewMatchesOf(
  * both are known, the match must also sit where the picked element is.
  */
 function isPickedWebViewElement(match: WebViewMatch, node: HierarchyNode): boolean {
-  const same = (attr: string, value: string) => {
-    const expected = node.attributes.get(attr) ?? '';
-    return expected === '' || expected === value;
-  };
+  const id = node.attributes.get('webview-id') ?? '';
+  const testId = node.attributes.get('webview-testid') ?? '';
+  if (match.tag !== (node.attributes.get('webview-tag') ?? '').toLowerCase()) return false;
+  if ((id && id !== match.id) || (testId && testId !== match.testId)) return false;
   const picked = getNodeBounds(node);
-  const near = (a: number, b: number) => Math.abs(a - b) <= SAME_ELEMENT_TOLERANCE_PX;
-  const samePlace = !picked || !match.bounds || (
-    near(picked.left, match.bounds.left) && near(picked.top, match.bounds.top)
-    && near(picked.right, match.bounds.right) && near(picked.bottom, match.bounds.bottom)
-  );
-  return match.tag === (node.attributes.get('webview-tag') ?? '').toLowerCase()
-    && same('webview-id', match.id)
-    && same('webview-testid', match.testId)
-    && samePlace;
+  if (picked && match.bounds) {
+    const near = (a: number, b: number) => Math.abs(a - b) <= SAME_ELEMENT_TOLERANCE_PX;
+    return near(picked.left, match.bounds.left) && near(picked.top, match.bounds.top)
+      && near(picked.right, match.bounds.right) && near(picked.bottom, match.bounds.bottom);
+  }
+  // Without both places, only an id or test id tells it from another
+  // element with the same tag.
+  return id !== '' || testId !== '';
 }
 
 /**

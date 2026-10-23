@@ -132,8 +132,8 @@ describe('suggestLiveLocators', () => {
 
   it('checks a WebView element\'s candidates in the page, keeping those that find only it', async () => {
     const { page, matches } = fakePage();
-    matches['getByText:Submit'] = [domEl({ tag: 'button' })];
-    matches['getByRole:button'] = [domEl({ tag: 'button' }), domEl({ tag: 'button' })];
+    matches['getByText:Submit'] = [domEl({ tag: 'button', bounds: B(0, 0, 100, 50) })];
+    matches['getByRole:button'] = [domEl({ tag: 'button', bounds: B(0, 0, 100, 50) }), domEl({ tag: 'button', bounds: B(0, 60, 100, 110) })];
     vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
     expect(suggestions.map((s) => s.code)).toEqual(['webview.getByText("Submit")']);
@@ -184,7 +184,7 @@ describe('suggestLiveLocators', () => {
     const third = node({ webview: 'true', 'webview-tag': 'button', text: 'Delete', bounds: '[0,200][100,250]' });
     const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', third, { ios: false });
     expect(suggestions).toEqual([]);
-    expect(note).toMatch(/finds only this element/);
+    expect(note).toMatch(/pick the element again/);
   });
 
   it('offers no position when a same-tag wrapper with the same box also looks like the pick', async () => {
@@ -195,6 +195,29 @@ describe('suggestLiveLocators', () => {
     const inner = node({ webview: 'true', 'webview-tag': 'div', bounds: '[0,100][100,150]' });
     const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', inner, { ios: false });
     expect(suggestions).toEqual([]);
+  });
+
+  it('confirms nothing by tag alone when the WebView\'s place is unknown and the element has no id', async () => {
+    // An <a> without href is no link to the page: role "link" finds the one
+    // real link, an <a> too. Without places nothing tells the two apart.
+    const { page, matches } = fakePage();
+    matches['getByRole:link'] = [domEl({ tag: 'a' })];
+    matches['locator:a'] = [domEl({ tag: 'a' })];
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
+    const anchor = node({ webview: 'true', 'webview-tag': 'a', text: 'Docs', bounds: '[0,0][100,50]' });
+    const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', anchor, { ios: false });
+    expect(suggestions).toEqual([]);
+    expect(note).toMatch(/pick the element again/);
+  });
+
+  it('finds a picked row past the first 200 matches', async () => {
+    const { page, matches } = fakePage();
+    const row = (i: number) => domEl({ tag: 'button', bounds: B(0, i * 10, 100, i * 10 + 10) });
+    matches['getByText:Delete'] = Array.from({ length: 300 }, (_, i) => row(i));
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
+    const picked = node({ webview: 'true', 'webview-tag': 'button', text: 'Delete', bounds: '[0,2500][100,2510]' });
+    const { suggestions } = await suggestLiveLocators(fakeClient(() => []), 'emu', picked, { ios: false });
+    expect(suggestions.map((s) => s.code)).toContain('webview.getByText("Delete").nth(250)');
   });
 
   it('stops checking a WebView pick\'s candidates once a newer pick replaced it', async () => {
