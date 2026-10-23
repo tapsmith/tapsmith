@@ -118,6 +118,8 @@ export async function suggestLiveLocators(
     const pickedPlace = getNodeBounds(node);
     // A match's place was unknown, so only an id could confirm the pick.
     let unplaced = false;
+    // Some candidate found the picked element (if none did, it has gone or moved).
+    let found = false;
     for (const candidate of generateSelectors(node).filter((s) => s.code.startsWith('webview.'))) {
       if (options.superseded?.()) break;
       const result = await webViewMatchesOf(client, serial, candidate.code, options);
@@ -125,6 +127,7 @@ export async function suggestLiveLocators(
       if (result.count > 0 && !(pickedPlace && result.matches.every((m) => m.bounds))) unplaced = true;
       const index = result.matches.findIndex((m) => isPickedWebViewElement(m, node));
       if (index < 0) continue;
+      found = true;
       if (result.count === 1) {
         suggestions.push({ code: candidate.code, label: candidate.label });
       } else if (
@@ -142,7 +145,9 @@ export async function suggestLiveLocators(
     if (!note && suggestions.length === 0) {
       note = unplaced
         ? 'Could not tell where the WebView is on screen to check the pick; pick the element again.'
-        : 'None of the page\'s locators finds only this element. Write one that does, or add .nth(i) to pick it by position.';
+        : !found
+          ? 'The element is no longer where it was picked (the page changed); pick it again.'
+          : 'None of the page\'s locators finds only this element. Write one that does, or add .nth(i) to pick it by position.';
     }
     return { suggestions, note };
   }

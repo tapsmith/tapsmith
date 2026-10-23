@@ -265,10 +265,20 @@ describe('live answers: notes, the picker\'s WebView, and request handling', () 
     expect(note).toMatch(/finds only this element/);
   });
 
-  it('says why a WebView pick has no locator that finds only it', async () => {
+  it('asks for a new pick when the picked WebView element is no longer where it was', async () => {
     const { page, matches } = fakePage();
-    // Two Submit buttons, neither where the picked one was.
+    // Two Submit buttons, neither where the picked one was: a position cannot name it.
     matches['getByText:Submit'] = [domEl({ tag: 'button', bounds: B(0, 300, 100, 350) }), domEl({ tag: 'button', bounds: B(0, 400, 100, 450) })];
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
+    const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
+    expect(suggestions).toEqual([]);
+    expect(note).toMatch(/no longer where it was picked/);
+  });
+
+  it('says no locator finds only the picked WebView element when it is there but cannot be told apart', async () => {
+    const { page, matches } = fakePage();
+    // A same-tag wrapper with the same box: found, but neither unique nor positionable.
+    matches['getByText:Submit'] = [domEl({ tag: 'button', bounds: B(0, 0, 100, 50) }), domEl({ tag: 'button', bounds: B(0, 0, 100, 50) })];
     vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page);
     const { suggestions, note } = await suggestLiveLocators(fakeClient(() => []), 'emu', submit, { ios: false });
     expect(suggestions).toEqual([]);
