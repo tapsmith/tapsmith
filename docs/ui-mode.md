@@ -47,7 +47,7 @@ These drive the same coordinate gestures exposed in the SDK (`device.tapXY`, `de
 The pick button (crosshair icon) in the mirror header turns the mirror into an element picker. While picking, clicks are **not** forwarded to the device -- instead:
 
 - **Hover** highlights the element under the cursor.
-- **Click** selects the element and opens the **Locator** tab with suggested locators (role, text, test ID, ...). The device checks each suggestion and only those that find exactly the picked element are listed; the first fills the locator, and match highlights draw directly on the mirror.
+- **Click** selects the element and opens the **Locator** tab with suggested locators (role, text, test ID, ...). The device checks each suggestion and only those that find exactly the picked element are listed; for an element inside a WebView that no locator finds on its own, position variants (`.nth(i)`) that find it are listed instead. The first fills the locator, and match highlights draw directly on the mirror.
 - Editing the locator in the Locator tab updates the match count and highlights, so you can refine a locator against the real app state without running a test. With the Live source the device answers, resolving the locator exactly as a test would: chains (`.getByText()` on another locator, `.filter()`, `.and()`, `.or()`), positions and `webview.` locators work, and a WebView locator is counted in the page, its matches highlighted where they show inside the WebView. `device.` is optional (`this.device.` and `page.` read the same).
 
 ![Pick mode in the live device mirror: the picked element is highlighted on the device and the Locator tab lists suggested locators with match counts](images/ui-mode-pick-locator.png)
