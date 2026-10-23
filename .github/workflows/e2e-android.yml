@@ -470,6 +470,37 @@ jobs:
             -c tapsmith.config.android-ci.mjs \
             --device "$SERIAL"
 
+      # Network mocking with no trace config on an emulator whose adbd is not
+      # root yet — a fresh CI emulator, as android-emulator-runner boots one
+      # (PILOT-831). The shard run above rooted it, so `adb unroot` puts it
+      # back. The first route() starts the proxy on demand (PILOT-775); the CA
+      # install behind it roots adbd, and a root that lands mid-session ends
+      # the running agent. The session recovers and passes the retry, so a
+      # recovery fails the step too.
+      - name: Verify on-demand mocking from an unrooted adbd
+        if: matrix.shard == 1
+        working-directory: e2e
+        env:
+          TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-android-1-untraced.log
+        run: |
+          SERIAL=$(adb devices | grep -w device | head -1 | awk '{print $1}')
+          adb -s "$SERIAL" unroot
+          adb -s "$SERIAL" wait-for-device
+          for _ in $(seq 1 30); do
+            adb -s "$SERIAL" shell id | grep -q 'uid=2000' && break
+            sleep 1
+          done
+          adb -s "$SERIAL" shell id | grep -q 'uid=2000' \
+            || { echo "::error::adbd is still root after adb unroot"; exit 1; }
+          npx tapsmith test -c tapsmith.config.android-ci-untraced.mjs \
+            --grep "tracing off" --device "$SERIAL" 2>&1 | tee /tmp/untraced-run.txt
+          STATUS=${PIPESTATUS[0]}
+          if grep -qE 'Recovering session|[0-9]+ flaky' /tmp/untraced-run.txt; then
+            echo "::error::On-demand mocking from an unrooted adbd needed a session recovery (PILOT-831)"
+            exit 1
+          fi
+          exit "$STATUS"
+
       # The daemon log, the agent's `am instrument` output and a logcat dump
       # are the only record of an agent that died before the first test ran
       # (the shard then has no results at all). Copied into tapsmith-results
