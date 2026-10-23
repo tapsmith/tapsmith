@@ -720,14 +720,25 @@ class ElementFinder(
 
     /**
      * The ids of the windows no locator searches ([NonAppNodes.excludesWindow]):
-     * the input method, and System UI's bars and notifications. Read once per find, from the
+     * the input method, and System UI's status and navigation bars. Read once per find, from the
      * window list the walk itself searches; empty (nothing excluded) if it
      * can't be read.
      */
     private fun nonAppWindowIds(): Set<Int> =
         try {
             instrumentation.uiAutomation.windows
-                .filter { NonAppNodes.excludesWindow(it.type, it.isFocused, it.isActive) { rootPackageOf(it) } }
+                .filter { window ->
+                    val rect = Rect()
+                    window.getBoundsInScreen(rect)
+                    NonAppNodes.excludesWindow(
+                        window.type,
+                        window.isFocused,
+                        window.isActive,
+                        HierarchyAttributes.Box(rect.left, rect.top, rect.right, rect.bottom),
+                        device.displayWidth,
+                        device.displayHeight,
+                    ) { rootPackageOf(window) }
+                }
                 .mapTo(HashSet()) { it.id }
         } catch (e: Exception) {
             warnOnce("nonAppWindowIds", e)

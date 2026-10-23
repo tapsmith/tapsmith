@@ -9,9 +9,9 @@ import { HOOKS_MARKER_PREFIX } from '../../hooks-marker.js';
 //   inside the software keyboard (keys, and its return and globe buttons). An
 //   input accessory toolbar above the keyboard is the app's, and matches.
 // - Android: the windows the agent marks `tapsmith-non-app="true"` — the
-//   input method, and System UI's own windows while neither focused nor
-//   active (the status and navigation bars, a heads-up notification; a
-//   pulled-down notification shade is focused, so it matches).
+//   input method, and System UI's bars (the status and navigation bars:
+//   bar-shaped System UI windows neither focused nor active; a pulled-down
+//   notification shade and a heads-up notification match).
 // - Both: the @tapsmith/react-native hooks marker, which exists only for
 //   Tapsmith to read from the dump.
 //

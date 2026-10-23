@@ -15,13 +15,19 @@ describe("Locators match only the app's own elements", () => {
     await expect(keyboardScreen.counts).toBeVisible()
     await keyboardScreen.openKeyboard("done")
     expect(await device.isKeyboardShown()).toBe(true)
+    // The keyboard has a Done key of its own: iOS's return key is a "Done"
+    // button inside the keyboard, Gboard's a key described "Done" in the
+    // input method's window (which the dump marks as not the app's).
+    const xml = await hierarchyXml(device)
     if (platform === "ios") {
-      // The keyboard's return key is a "Done" button inside the keyboard.
-      expect(await hierarchyXml(device)).toMatch(/<XCUIElementType(Keyboard|\(19\))[\s>][\s\S]*label="Done"/)
+      expect(xml).toMatch(/<XCUIElementType(Keyboard|\(19\))[\s>][\s\S]*label="done"/i)
+    } else {
+      expect(xml).toMatch(/<node tapsmith-non-app="true"[^>]*package="[^"]*inputmethod[^"]*"[\s\S]*content-desc="Done"/)
     }
 
     await expect(keyboardScreen.doneText).toHaveCount(1)
     await expect(keyboardScreen.doneButton).toHaveCount(1)
+    await expect(keyboardScreen.doneDescription).toHaveCount(1)
     await keyboardScreen.doneButton.tap()
     await expect(keyboardScreen.doneTaps).toHaveText("done=1")
   })

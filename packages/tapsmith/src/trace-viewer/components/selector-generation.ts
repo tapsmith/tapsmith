@@ -3,6 +3,7 @@ import { getNodeRole, isLabelField, webViewAriaLabel, WEBVIEW_TAG_TO_ROLE, ANDRO
 import { iosDescribedRole, unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
+import { isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 
 // ─── Attribute Helpers ───
 
@@ -415,11 +416,13 @@ export function hasGoodSelectors(node: HierarchyNode): boolean {
  */
 export function findBetterDescendant(node: HierarchyNode): HierarchyNode | null {
   if (hasGoodSelectors(node)) return null;
-  // BFS to find the shallowest descendant with good selectors.
+  // BFS to find the shallowest descendant with good selectors — never one
+  // no locator matches (non-app-nodes.ts), such as the hooks marker.
   const queue: HierarchyNode[] = [...node.children];
   while (queue.length > 0) {
     const current = queue.shift()!;
-    if (hasGoodSelectors(current)) return current;
+    if (isNonAppSubtree(current)) continue;
+    if (!isNonAppNode(current) && hasGoodSelectors(current)) return current;
     queue.push(...current.children);
   }
   return null;

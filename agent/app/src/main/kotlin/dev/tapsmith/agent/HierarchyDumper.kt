@@ -115,7 +115,15 @@ class HierarchyDumper(
                     window.getBoundsInScreen(windowRect)
                     val windowBox = HierarchyAttributes.Box(windowRect.left, windowRect.top, windowRect.right, windowRect.bottom)
                     val clip = DumpClip(displayWidth, displayHeight, windowBox)
-                    if (NonAppNodes.excludesWindow(window.type, window.isFocused, window.isActive) { root.packageName }) {
+                    if (NonAppNodes.excludesWindow(
+                            window.type,
+                            window.isFocused,
+                            window.isActive,
+                            windowBox,
+                            displayWidth,
+                            displayHeight,
+                        ) { root.packageName }
+                    ) {
                         val rootRect = Rect()
                         root.getBoundsInScreen(rootRect)
                         val rootBounds =

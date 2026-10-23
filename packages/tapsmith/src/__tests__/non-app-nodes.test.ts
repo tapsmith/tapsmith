@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, it, expect } from 'vitest';
 import { parseHierarchyXml, hitTest } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
+import { findBetterDescendant } from '../trace-viewer/components/selector-generation.js';
 import { HOOKS_MARKER_PREFIX } from '../hooks-marker.js';
 
 // PILOT-756 / PILOT-830: what no user locator matches — the iOS application
@@ -144,6 +145,20 @@ describe('Android: System UI bars, the IME and the hooks marker never match', ()
 </hierarchy>`);
     const hit = hitTest(roots, 500, 1500);
     expect(hit?.attributes.get('class')).toBe('android.widget.FrameLayout');
+  });
+
+  it('does not promote a pick on the app root to the marker inside it', () => {
+    const root = parseHierarchyXml(`<hierarchy rotation="0">
+  <node index="0" text="" class="android.widget.FrameLayout" package="com.example.app" content-desc="" bounds="[0,0][1080,2400]">
+    <node index="0" text="" class="android.view.ViewGroup" package="com.example.app" content-desc="" bounds="[0,0][1080,2400]">
+      <node index="0" text="${MARKER}" resource-id="tapsmith-hooks" class="android.widget.TextView" package="com.example.app" content-desc="" bounds="[0,0][1080,2400]" />
+    </node>
+    <node index="1" text="" class="android.view.ViewGroup" package="com.example.app" content-desc="" bounds="[0,100][1080,300]">
+      <node index="0" text="Home" class="android.widget.TextView" package="com.example.app" content-desc="" bounds="[0,100][300,200]" />
+    </node>
+  </node>
+</hierarchy>`)[0].children[0];
+    expect(findBetterDescendant(root)?.attributes.get('text')).toBe('Home');
   });
 
   it('does not match the hooks marker, nor read it into a container name', () => {

@@ -11,6 +11,7 @@ export class KeyboardScreen {
   get doneInput() { return this.device.getByRole("textfield", { name: "Done input" }) }
   get doneButton() { return this.device.getByRole("button", { name: "Done", exact: true }) }
   get doneText() { return this.device.getByText("Done", { exact: true }) }
+  get doneDescription() { return this.device.getByDescription("Done") }
   /** How many times the app's "Done" button was tapped (`done=<n>`). */
   get doneTaps() { return this.device.getByTestId("keyboard-done-taps") }
   get counts() { return this.device.getByTestId("keyboard-counts") }

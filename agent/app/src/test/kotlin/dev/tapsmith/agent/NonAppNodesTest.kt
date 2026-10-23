@@ -1,6 +1,7 @@
 package dev.tapsmith.agent
 
 import android.view.accessibility.AccessibilityWindowInfo
+import dev.tapsmith.agent.HierarchyAttributes.Box
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -9,71 +10,68 @@ class NonAppNodesTest {
     private val systemUi = NonAppNodes.SYSTEM_UI_PACKAGE
     private val marker = "tapsmith-hooks:1;epoch=3;nav=2;boot=c0ffee42;url=myapp:///"
 
+    // A 1080 x 2400 portrait display, and windows on it (measured on API 36).
+    private val statusBar = Box(0, 0, 1080, 63)
+    private val navBar = Box(0, 2274, 1080, 2400)
+    private val landscapeNavBar = Box(2274, 0, 2400, 1080)
+    private val fullScreen = Box(0, 0, 1080, 2400)
+    private val keyboard = Box(0, 1517, 1080, 2400)
+
+    private fun excludes(
+        type: Int,
+        bounds: Box,
+        focused: Boolean = false,
+        active: Boolean = false,
+        packageName: String? = systemUi,
+        displayWidth: Int = 1080,
+        displayHeight: Int = 2400,
+    ) = NonAppNodes.excludesWindow(type, focused, active, bounds, displayWidth, displayHeight) { packageName }
+
     @Test
     fun `the input method window never matches, focused or not`() {
         assertEquals(
             true,
-            NonAppNodes.excludesWindow(
-                AccessibilityWindowInfo.TYPE_INPUT_METHOD,
-                focused = false,
-                active = false,
-                packageName = { systemUi },
-            ),
+            excludes(AccessibilityWindowInfo.TYPE_INPUT_METHOD, keyboard, packageName = "com.google.android.inputmethod.latin"),
         )
-        assertEquals(
-            true,
-            NonAppNodes.excludesWindow(
-                AccessibilityWindowInfo.TYPE_INPUT_METHOD,
-                focused = true,
-                active = true,
-                packageName = { systemUi },
-            ),
-        )
+        assertEquals(true, excludes(AccessibilityWindowInfo.TYPE_INPUT_METHOD, keyboard, focused = true, active = true))
     }
 
     @Test
-    fun `the status and navigation bars (unfocused, inactive system windows) never match`() {
-        assertEquals(
-            true,
-            NonAppNodes.excludesWindow(AccessibilityWindowInfo.TYPE_SYSTEM, focused = false, active = false, packageName = { systemUi }),
-        )
+    fun `the status and navigation bars never match`() {
+        assertEquals(true, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, statusBar))
+        assertEquals(true, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, navBar))
+        assertEquals(true, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, landscapeNavBar, displayWidth = 2400, displayHeight = 1080))
     }
 
     @Test
     fun `a pulled-down notification shade (a focused, active system window) matches`() {
-        assertEquals(
-            false,
-            NonAppNodes.excludesWindow(AccessibilityWindowInfo.TYPE_SYSTEM, focused = true, active = true, packageName = { systemUi }),
-        )
-        assertEquals(
-            false,
-            NonAppNodes.excludesWindow(AccessibilityWindowInfo.TYPE_SYSTEM, focused = false, active = true, packageName = { systemUi }),
-        )
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, fullScreen, focused = true, active = true))
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, fullScreen, active = true))
+    }
+
+    @Test
+    fun `a heads-up notification (System UI, unfocused, not a bar) matches`() {
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, fullScreen))
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, Box(0, 63, 1080, 700)))
     }
 
     @Test
     fun `application windows match, the app's own and another package's (a permission dialog)`() {
-        assertEquals(
-            false,
-            NonAppNodes.excludesWindow(
-                AccessibilityWindowInfo.TYPE_APPLICATION,
-                focused = false,
-                active = false,
-                packageName = { systemUi },
-            ),
-        )
-        assertEquals(
-            false,
-            NonAppNodes.excludesWindow(AccessibilityWindowInfo.TYPE_APPLICATION, focused = true, active = true, packageName = { systemUi }),
-        )
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_APPLICATION, fullScreen, packageName = "com.example.app"))
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_APPLICATION, statusBar))
     }
 
     @Test
-    fun `system windows System UI does not own match - the app's overlay, the system's error dialogs`() {
-        val type = AccessibilityWindowInfo.TYPE_SYSTEM
-        assertEquals(false, NonAppNodes.excludesWindow(type, focused = false, active = false, packageName = { "com.example.app" }))
-        assertEquals(false, NonAppNodes.excludesWindow(type, focused = false, active = false, packageName = { "android" }))
-        assertEquals(false, NonAppNodes.excludesWindow(type, focused = false, active = false, packageName = { null }))
+    fun `bar-shaped system windows System UI does not own match - the app's overlay, the system's error dialogs`() {
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, statusBar, packageName = "com.example.app"))
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, statusBar, packageName = "android"))
+        assertEquals(false, excludes(AccessibilityWindowInfo.TYPE_SYSTEM, statusBar, packageName = null))
+    }
+
+    @Test
+    fun `a window with no size or an unknown display is not a bar`() {
+        assertEquals(false, NonAppNodes.isBar(Box(0, 0, 0, 0), 1080, 2400))
+        assertEquals(false, NonAppNodes.isBar(statusBar, 0, 0))
     }
 
     @Test

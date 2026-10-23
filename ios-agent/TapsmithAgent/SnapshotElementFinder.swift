@@ -202,6 +202,7 @@ class SnapshotElementFinder {
         var matches: [([String: Any], CGRect)] = []
         var otherAncestors: [WrapperAncestor] = []
         var suppressed = Set<Int>()
+        var passedKeyboard = false
         findMatches(
             in: snapshotDict,
             inTabBar: false,
@@ -209,6 +210,7 @@ class SnapshotElementFinder {
             results: &matches,
             otherAncestors: &otherAncestors,
             suppressed: &suppressed,
+            passedKeyboard: &passedKeyboard,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
             focusedHint: focusedHint
@@ -1027,6 +1029,11 @@ class SnapshotElementFinder {
     /// `.tabBar` ancestor (RoleMapping.isTabBarItem, PILOT-514).
     static let inTabBarKey = "tapsmithInTabBar"
 
+    /// Key under which `findMatches` marks a match that comes after the
+    /// keyboard in tree order: a live query still counts the keyboard's
+    /// nodes, so its position among the matches is not its live index.
+    static let afterKeyboardKey = "tapsmithAfterKeyboard"
+
     private func findMatches(
         in nodeDict: [String: Any],
         inTabBar: Bool,
@@ -1034,6 +1041,7 @@ class SnapshotElementFinder {
         results: inout [([String: Any], CGRect)],
         otherAncestors: inout [WrapperAncestor],
         suppressed: inout Set<Int>,
+        passedKeyboard: inout Bool,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
         focusedHint: FocusedTextInputHint?
@@ -1049,7 +1057,10 @@ class SnapshotElementFinder {
         // marker. Only matching skips them — numberDescendants still counts
         // them, as the live queries that re-resolve a match see them too.
         let nodeType = XCUIElement.ElementType(rawValue: parseUInt(nodeDict["elementType"]) ?? 0) ?? .other
-        if NonAppElements.excludesSubtree(elementType: nodeType) { return }
+        if NonAppElements.excludesSubtree(elementType: nodeType) {
+            passedKeyboard = true
+            return
+        }
         let isAppNode = !NonAppElements.excludesNode(
             elementType: nodeType,
             label: nodeDict["label"] as? String ?? "",
@@ -1094,6 +1105,7 @@ class SnapshotElementFinder {
             let frame = parseFrame(nodeDict)
             var matched = nodeDict
             if inTabBar { matched[SnapshotElementFinder.inTabBarKey] = true }
+            if passedKeyboard { matched[SnapshotElementFinder.afterKeyboardKey] = true }
             results.append((matched, frame))
             let myIndex = results.count - 1
 
@@ -1118,6 +1130,7 @@ class SnapshotElementFinder {
                     results: &results,
                     otherAncestors: &otherAncestors,
                     suppressed: &suppressed,
+                    passedKeyboard: &passedKeyboard,
                     keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
                     liveFocusedTextInput: liveFocusedTextInput,
                     focusedHint: focusedHint
@@ -1432,9 +1445,12 @@ class SnapshotElementFinder {
         //
         // The match set leaves out what isn't the app's (NonAppElements), so
         // the query does too: it never counts the hooks marker. It can't leave
-        // out the keyboard, whose nodes come after the app's in tree order, so
-        // only a match in a window after an open keyboard's could shift.
-        func resolve(_ query: XCUIElementQuery) -> XCUIElement {
+        // out the keyboard, so a match after the keyboard in tree order (an
+        // accessory toolbar, a later window) gets no positional query at all:
+        // its actions go by its snapshot bounds, and the ones that need a live
+        // element fail loudly instead of landing on a key.
+        let afterKeyboard = snapshotNode?[SnapshotElementFinder.afterKeyboardKey] as? Bool ?? false
+        func resolve(_ query: XCUIElementQuery) -> XCUIElement? {
             let base = query.excludingHooksMarker()
             if !nodeIdentifier.isEmpty {
                 // Narrow to the identifier, then index WITHIN that id group so a
@@ -1443,7 +1459,7 @@ class SnapshotElementFinder {
                 return base.matching(NSPredicate(format: "identifier == %@", nodeIdentifier))
                     .element(boundBy: idIndex)
             }
-            return base.element(boundBy: matchIndex)
+            return afterKeyboard ? nil : base.element(boundBy: matchIndex)
         }
         // A label predicate scoped to the snapshot element's type when it is
         // specific (RN buttons surface as `.other`, so fall back to any type).
