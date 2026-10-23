@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native"
 import { useTapsmithResetEpoch } from "@tapsmith/react-native"
+import { useLocalSearchParams } from "expo-router"
 
 // device.hideKeyboard() on a screen with no scroll view (PILOT-363). On iOS
 // the keyboard can't be dismissed by dragging a scroll view here, so what
@@ -29,9 +30,11 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - "Centre action" fills the middle of the screen, where a dismiss gesture
 //   aimed at the screen centre would land. Nothing hideKeyboard() does may
 //   tap it.
-// - "Done input" has a "done" return key, and the app's own "Done" button
-//   sits beside it: with its keyboard up, the keyboard's Done key must not
-//   make the app's ambiguous (PILOT-756). Its taps are counted in "done".
+// - With `?done=1`, a "Done input" with a "done" return key, and the app's
+//   own "Done" button beside it: with its keyboard up, the keyboard's Done
+//   key must not make the app's ambiguous (PILOT-756). Its taps are counted
+//   in "done". Only on request, so the row does not push "Centre action"
+//   off the screen centre the hideKeyboard() checks above rely on.
 export default function KeyboardScreen() {
   const [plainText, setPlainText] = useState("")
   const [goText, setGoText] = useState("")
@@ -45,6 +48,7 @@ export default function KeyboardScreen() {
   const [backgroundTaps, setBackgroundTaps] = useState(0)
   const [doneText, setDoneText] = useState("")
   const [doneTaps, setDoneTaps] = useState(0)
+  const showDone = useLocalSearchParams<{ done?: string }>().done === "1"
 
   // A warm reset navigates here rather than remounting, so clear local state
   // explicitly when the epoch moves.
@@ -103,28 +107,30 @@ export default function KeyboardScreen() {
         testID="keyboard-multiline-input"
       />
 
-      <View style={styles.row}>
-        <TextInput
-          style={[styles.input, styles.fill]}
-          value={doneText}
-          onChangeText={setDoneText}
-          returnKeyType="done"
-          placeholder="Done input"
-          autoCapitalize="none"
-          autoCorrect={false}
-          accessibilityLabel="Done input"
-          testID="keyboard-done-input"
-        />
-        <TouchableOpacity
-          style={styles.smallButton}
-          onPress={() => setDoneTaps((n) => n + 1)}
-          accessibilityRole="button"
-          accessibilityLabel="Done"
-        >
-          <Text style={styles.smallButtonText}>Done</Text>
-        </TouchableOpacity>
-      </View>
-      <Text testID="keyboard-done-taps">{`done=${doneTaps}`}</Text>
+      {showDone && (
+        <View style={styles.row}>
+          <TextInput
+            style={[styles.input, styles.fill]}
+            value={doneText}
+            onChangeText={setDoneText}
+            returnKeyType="done"
+            placeholder="Done input"
+            autoCapitalize="none"
+            autoCorrect={false}
+            accessibilityLabel="Done input"
+            testID="keyboard-done-input"
+          />
+          <TouchableOpacity
+            style={styles.smallButton}
+            onPress={() => setDoneTaps((n) => n + 1)}
+            accessibilityRole="button"
+            accessibilityLabel="Done"
+          >
+            <Text style={styles.smallButtonText}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+      {showDone && <Text testID="keyboard-done-taps">{`done=${doneTaps}`}</Text>}
 
       <Text testID="keyboard-counts">
         {`centre=${centreTaps} plainSubmits=${plainSubmits} goSubmits=${goSubmits} background=${backgroundTaps}`}

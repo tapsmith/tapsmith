@@ -11,8 +11,9 @@ import { androidWindows, hierarchyXml, readHooksMarker } from "../utils/hooks-ma
 
 describe("Locators match only the app's own elements", () => {
   test("the keyboard's Done key does not make the app's Done button ambiguous", async ({ device, platform, keyboardScreen }) => {
-    await openScreen(device, "/keyboard")
-    await expect(keyboardScreen.counts).toBeVisible()
+    // The Done row is shown on request (it would move the screen's centre target).
+    await openScreen(device, "/keyboard?done=1")
+    await expect(keyboardScreen.doneTaps).toBeVisible()
     await keyboardScreen.openKeyboard("done")
     expect(await device.isKeyboardShown()).toBe(true)
     // The keyboard has a Done key of its own: iOS's return key is a "Done"
