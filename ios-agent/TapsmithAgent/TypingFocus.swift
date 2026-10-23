@@ -12,15 +12,31 @@ import CoreGraphics
 /// end of existing text) is checked, followed by one at the centre if it did
 /// not take, and a field that never takes focus fails the command.
 enum TypingFocus {
-    /// Points to try inside `area` (the element's uncovered part), in order:
-    /// near the trailing edge, then the centre. One point when the two are
-    /// next to each other (a narrow field).
-    static func tapPoints(in area: CGRect) -> [CGPoint] {
+    /// A text input as the focus check sees it: the target element (from its
+    /// resolve) or the input that has keyboard focus (from a live query).
+    struct Input: Equatable {
+        var frame: CGRect
+        /// `XCUIElementType…` class name.
+        var className: String
+        /// Accessibility identifier, "" when none.
+        var identifier: String = ""
+        /// Placeholder, "" when none.
+        var placeholder: String = ""
+    }
+
+    /// The first point to try inside `area` (the element's uncovered part):
+    /// near the trailing edge, so the caret goes after existing text.
+    static func trailingPoint(in area: CGRect) -> CGPoint {
         let inset = min(12, max(1, area.width / 4))
-        let trailing = CGPoint(x: max(area.minX + 1, area.maxX - inset), y: area.midY)
+        return CGPoint(x: max(area.minX + 1, area.maxX - inset), y: area.midY)
+    }
+
+    /// The fallback point inside `area` (planned again after the first tap,
+    /// which can have moved the field), or nil when it is next to the first
+    /// tap (a narrow field: the same tap again would not do better).
+    static func fallbackPoint(in area: CGRect, after first: CGPoint) -> CGPoint? {
         let centre = CGPoint(x: area.midX, y: area.midY)
-        if abs(trailing.x - centre.x) < 8 { return [trailing] }
-        return [trailing, centre]
+        return abs(centre.x - first.x) < 8 && abs(centre.y - first.y) < 8 ? nil : centre
     }
 
     enum Verdict: Equatable {
@@ -35,36 +51,45 @@ enum TypingFocus {
         case unverifiable
     }
 
-    /// Whether a focusing tap on the element at `element` took.
-    /// `focusedBefore` / `focusedAfter` are the frames of the text input with
-    /// keyboard focus before and after the tap (nil: none).
+    /// Whether a focusing tap on `element` took. `focusedBefore` /
+    /// `focusedAfter` are the text input with keyboard focus before and
+    /// after the tap (nil: none).
     static func verdict(
-        element: CGRect,
-        focusedBefore: CGRect?,
-        focusedAfter: CGRect?,
+        element: Input,
+        focusedBefore: Input?,
+        focusedAfter: Input?,
         keyboardOnScreen: Bool
     ) -> Verdict {
         guard let after = focusedAfter else {
             return keyboardOnScreen ? .unverifiable : .notFocused
         }
-        // Bounds are integer-truncated.
-        if framesMatch(after, element, tolerance: 1.5) { return .focused }
-        // An input inside the element (type() on a field's wrapper).
-        if element.insetBy(dx: -1.5, dy: -1.5).contains(after) { return .focused }
-        // Focus moved with the tap to an input the size of this element: the
-        // element itself, moved by taking focus (a keyboard-avoiding layout
-        // lifts it). Unmoved focus on a same-sized input is another field
-        // keeping the focus it had.
-        let moved = focusedBefore.map { !framesMatch($0, after, tolerance: 1.5) } ?? true
-        return moved && sizesMatch(after, element) ? .focused : .notFocused
+        // Where the element was resolved, or an input inside it (type() on a
+        // field's wrapper). Bounds are integer-truncated.
+        if framesMatch(after.frame, element.frame)
+            || element.frame.insetBy(dx: -1.5, dy: -1.5).contains(after.frame) {
+            return .focused
+        }
+        // Somewhere else: the element itself only if it moved or resized on
+        // taking focus (a keyboard-avoiding layout lifts it; a search bar
+        // slides up and narrows for Cancel). An identifier or placeholder on
+        // both sides decides which input it is.
+        if !element.identifier.isEmpty && !after.identifier.isEmpty {
+            return element.identifier == after.identifier ? .focused : .notFocused
+        }
+        if !element.placeholder.isEmpty && !after.placeholder.isEmpty {
+            return element.placeholder == after.placeholder && element.className == after.className
+                ? .focused : .notFocused
+        }
+        // Nothing to tell them apart by: an input of the element's kind that
+        // took focus with this tap. One that already had it is another field
+        // keeping its focus.
+        let changed = focusedBefore.map { $0 != after } ?? true
+        return changed && element.className == after.className ? .focused : .notFocused
     }
 
-    private static func framesMatch(_ a: CGRect, _ b: CGRect, tolerance: CGFloat) -> Bool {
-        abs(a.minX - b.minX) <= tolerance && abs(a.minY - b.minY) <= tolerance
+    private static func framesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
+        let tolerance: CGFloat = 1.5
+        return abs(a.minX - b.minX) <= tolerance && abs(a.minY - b.minY) <= tolerance
             && abs(a.width - b.width) <= tolerance && abs(a.height - b.height) <= tolerance
-    }
-
-    private static func sizesMatch(_ a: CGRect, _ b: CGRect) -> Bool {
-        abs(a.width - b.width) <= 1.5 && abs(a.height - b.height) <= 1.5
     }
 }

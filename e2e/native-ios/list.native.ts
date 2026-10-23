@@ -11,6 +11,12 @@ describe("Native: List", () => {
     expect(await list.cells.count()).toBeGreaterThan(5)
   })
 
+  test("typing into the .searchable field filters the list", async ({ list }) => {
+    await list.search.type("Item 42")
+    await expect(list.item(42)).toBeVisible()
+    await expect(list.item(1)).toBeHidden()
+  })
+
   test("tapping a row pushes its detail", async ({ list }) => {
     await list.item(3).tap()
     await expect(list.detail(3)).toBeVisible()

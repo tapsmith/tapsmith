@@ -65,16 +65,19 @@ struct TogglesView: View {
 
 struct ItemListView: View {
     @State private var items = (1...100).map { "Item \($0)" }
+    @State private var query = ""
 
     var body: some View {
         List {
-            ForEach(items, id: \.self) { item in
+            ForEach(items.filter { query.isEmpty || $0 == query }, id: \.self) { item in
                 NavigationLink(item) {
                     Text("Detail for \(item)").navigationTitle(item)
                 }
             }
             .onDelete { items.remove(atOffsets: $0) }
         }
+        // A search field moves up and narrows when it takes focus.
+        .searchable(text: $query, placement: .navigationBarDrawer(displayMode: .always), prompt: "Search items")
         .navigationTitle("List")
     }
 }

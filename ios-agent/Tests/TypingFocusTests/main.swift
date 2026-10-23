@@ -15,49 +15,84 @@ func expect(_ name: String, _ ok: Bool) {
     }
 }
 
+typealias Input = TypingFocus.Input
+let textField = "XCUIElementTypeTextField"
+
 // The SwiftUI Form row from the ticket: frame [20,152][382,196] on iOS 18.
 let row = CGRect(x: 20, y: 152, width: 362, height: 44)
+
+func verdict(_ element: Input, before: Input?, after: Input?, keyboard: Bool = true) -> TypingFocus.Verdict {
+    TypingFocus.verdict(element: element, focusedBefore: before, focusedAfter: after, keyboardOnScreen: keyboard)
+}
 
 // Tap points: trailing first (caret at the end of existing text), then the
 // centre, which lands inside a row-wide frame's text input.
 do {
-    let points = TypingFocus.tapPoints(in: row)
-    expect("two points for a wide field", points.count == 2)
-    expect("first point is 12 pt in from the trailing edge", points.first == CGPoint(x: 370, y: 174))
-    expect("second point is the centre", points.last == CGPoint(x: 201, y: 174))
-    let narrow = TypingFocus.tapPoints(in: CGRect(x: 0, y: 0, width: 20, height: 30))
-    expect("one point for a narrow field", narrow.count == 1)
-    expect("narrow point stays inside the field", narrow[0].x > 0 && narrow[0].x < 20)
+    let first = TypingFocus.trailingPoint(in: row)
+    expect("first point is 12 pt in from the trailing edge", first == CGPoint(x: 370, y: 174))
+    expect("fallback is the centre", TypingFocus.fallbackPoint(in: row, after: first) == CGPoint(x: 201, y: 174))
+    let moved = row.offsetBy(dx: 0, dy: -100)
+    expect("fallback is the centre of the area planned again",
+           TypingFocus.fallbackPoint(in: moved, after: first) == CGPoint(x: 201, y: 74))
+    let narrow = CGRect(x: 0, y: 0, width: 20, height: 30)
+    let narrowFirst = TypingFocus.trailingPoint(in: narrow)
+    expect("narrow first point stays inside the field", narrowFirst.x > 0 && narrowFirst.x < 20)
+    expect("no fallback next to the first tap", TypingFocus.fallbackPoint(in: narrow, after: narrowFirst) == nil)
 }
 
-// Verdicts.
+// No identity: frames and focus changes decide.
 do {
-    expect("the element itself has focus",
-           TypingFocus.verdict(element: row, focusedBefore: nil, focusedAfter: row, keyboardOnScreen: true) == .focused)
+    let field = Input(frame: row, className: textField)
+    expect("the element itself has focus", verdict(field, before: nil, after: field) == .focused)
     expect("integer-truncated bounds still match",
-           TypingFocus.verdict(element: row, focusedBefore: nil,
-                               focusedAfter: row.offsetBy(dx: 0.6, dy: 0.4), keyboardOnScreen: false) == .focused)
+           verdict(field, before: nil, after: Input(frame: row.offsetBy(dx: 0.6, dy: 0.4), className: textField),
+                   keyboard: false) == .focused)
     expect("nothing focused and no keyboard: the tap missed (the ticket's bug)",
-           TypingFocus.verdict(element: row, focusedBefore: nil, focusedAfter: nil, keyboardOnScreen: false) == .notFocused)
-    expect("nothing reports focus but a keyboard is up: unverifiable, type anyway",
-           TypingFocus.verdict(element: row, focusedBefore: nil, focusedAfter: nil, keyboardOnScreen: true) == .unverifiable)
+           verdict(field, before: nil, after: nil, keyboard: false) == .notFocused)
+    expect("nothing reports focus but a keyboard is up: unverifiable",
+           verdict(field, before: nil, after: nil, keyboard: true) == .unverifiable)
 
-    let other = CGRect(x: 20, y: 240, width: 362, height: 44) // same size, another row
+    let other = Input(frame: CGRect(x: 20, y: 240, width: 362, height: 44), className: textField)
     expect("another field kept the focus it had before the tap",
-           TypingFocus.verdict(element: row, focusedBefore: other, focusedAfter: other, keyboardOnScreen: true) == .notFocused)
-    let lifted = row.offsetBy(dx: 0, dy: -120) // a keyboard-avoiding layout moved it
-    expect("the field took focus and moved: same size, focus changed",
-           TypingFocus.verdict(element: row, focusedBefore: nil, focusedAfter: lifted, keyboardOnScreen: true) == .focused)
-    expect("the field took focus from another and moved",
-           TypingFocus.verdict(element: row, focusedBefore: other, focusedAfter: lifted, keyboardOnScreen: true) == .focused)
-    let inner = CGRect(x: 40, y: 160, width: 322, height: 28)
-    expect("an input inside the element took focus",
-           TypingFocus.verdict(element: row, focusedBefore: nil, focusedAfter: inner, keyboardOnScreen: true) == .focused)
-    expect("an input inside the element that already had focus counts too",
-           TypingFocus.verdict(element: row, focusedBefore: inner, focusedAfter: inner, keyboardOnScreen: true) == .focused)
-    let elsewhere = CGRect(x: 20, y: 600, width: 100, height: 30)
-    expect("a different-sized input elsewhere took focus: not this element",
-           TypingFocus.verdict(element: row, focusedBefore: nil, focusedAfter: elsewhere, keyboardOnScreen: true) == .notFocused)
+           verdict(field, before: other, after: other) == .notFocused)
+    let lifted = Input(frame: row.offsetBy(dx: 0, dy: -120), className: textField)
+    expect("the field took focus and moved", verdict(field, before: nil, after: lifted) == .focused)
+    expect("the field took focus from another and moved", verdict(field, before: other, after: lifted) == .focused)
+    let inner = Input(frame: CGRect(x: 40, y: 160, width: 322, height: 28), className: textField)
+    expect("an input inside the element took focus", verdict(field, before: nil, after: inner) == .focused)
+    expect("an input inside the element that already had focus", verdict(field, before: inner, after: inner) == .focused)
+    let secure = Input(frame: CGRect(x: 20, y: 600, width: 100, height: 30), className: "XCUIElementTypeSecureTextField")
+    expect("an input of another kind elsewhere took focus: not this element",
+           verdict(field, before: nil, after: secure) == .notFocused)
+}
+
+// Identity: an identifier or placeholder on both sides decides.
+do {
+    // A search bar slides up and narrows for Cancel when it takes focus.
+    let search = Input(frame: CGRect(x: 16, y: 110, width: 370, height: 36),
+                       className: "XCUIElementTypeSearchField", placeholder: "Search")
+    let searchFocused = Input(frame: CGRect(x: 16, y: 60, width: 300, height: 36),
+                              className: "XCUIElementTypeSearchField", placeholder: "Search")
+    expect("a search field that moved and narrowed on focus", verdict(search, before: nil, after: searchFocused) == .focused)
+
+    // Already focused, then lifted: the resolve-time frame is stale.
+    let email = Input(frame: row, className: textField, placeholder: "Email")
+    let emailLifted = Input(frame: row.offsetBy(dx: 0, dy: -200), className: textField, placeholder: "Email")
+    expect("an already-focused field that has moved since it was resolved",
+           verdict(email, before: emailLifted, after: emailLifted) == .focused)
+
+    // Another same-sized field, moving while it keeps focus: not the target.
+    let password = Input(frame: row.offsetBy(dx: 0, dy: 44), className: textField, placeholder: "Password")
+    let passwordMoved = Input(frame: row.offsetBy(dx: 0, dy: 20), className: textField, placeholder: "Password")
+    expect("another field moving while it keeps focus", verdict(email, before: password, after: passwordMoved) == .notFocused)
+
+    let byId = Input(frame: row, className: textField, identifier: "email")
+    expect("same identifier elsewhere: the element moved",
+           verdict(byId, before: nil, after: Input(frame: row.offsetBy(dx: 0, dy: -80), className: textField,
+                                                   identifier: "email")) == .focused)
+    expect("different identifier elsewhere: another field",
+           verdict(byId, before: nil, after: Input(frame: row.offsetBy(dx: 0, dy: -80), className: textField,
+                                                   identifier: "password")) == .notFocused)
 }
 
 if failures > 0 {

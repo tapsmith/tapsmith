@@ -989,57 +989,84 @@ class CommandHandler {
         within area: CGRect?
     ) throws {
         keyboardFirstGate.arm()
-        let frame = CGRect(
-            x: element.bounds.left, y: element.bounds.top,
-            width: element.bounds.width, height: element.bounds.height
+        let target = TypingFocus.Input(
+            frame: CGRect(
+                x: element.bounds.left, y: element.bounds.top,
+                width: element.bounds.width, height: element.bounds.height
+            ),
+            className: element.className,
+            identifier: element.resourceId ?? "",
+            placeholder: element.hint ?? ""
         )
-        let focusedBefore = snapshotFinder.liveFocusedTextInputFrame()
-        var tried: [String] = []
+        let focusedBefore = snapshotFinder.liveFocusedTypingInput()
+        let tried: String
         if let area {
-            for point in TypingFocus.tapPoints(in: area) {
-                actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
-                tried.append("(\(Int(point.x.rounded())), \(Int(point.y.rounded())))")
-                snapshotFinder.recordFocusedTextInputHint(element)
-                if waitForTypingFocus(frame, focusedBefore: focusedBefore, maxWait: settleTime) { return }
-                NSLog("[typeText] focus tap at \(tried.last ?? "") did not focus the field")
+            let first = TypingFocus.trailingPoint(in: area)
+            tapToFocus(element, at: first)
+            if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: settleTime) { return }
+            NSLog("[typeText] focus tap at \(Self.describe(first)) did not focus the field")
+            // Planned again, one check and no waiting: the first tap can have
+            // moved the field or raised a keyboard over its old spot.
+            guard case .point(_, let visible)? = try? planTouch(element, timeoutMs: 0, preferElementTap: false),
+                  let fallback = TypingFocus.fallbackPoint(in: visible, after: first) else {
+                tried = Self.describe(first)
+                throw Self.notFocusedError(tried: tried)
             }
+            tapToFocus(element, at: fallback)
+            if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: settleTime) { return }
+            tried = "\(Self.describe(first)) and \(Self.describe(fallback))"
         } else {
             let xcElem = try getXCUIElement(element.elementId)
             guard xcElem.isHittable else {
                 throw AgentError.actionFailed("Element is not hittable — cannot type text")
             }
             xcElem.tap()
-            tried.append("the element")
             snapshotFinder.recordFocusedTextInputHint(element)
-            if waitForTypingFocus(frame, focusedBefore: focusedBefore, maxWait: settleTime) { return }
+            if waitForTypingFocus(target, focusedBefore: focusedBefore, maxWait: settleTime) { return }
+            tried = "the element"
         }
-        throw AgentError.actionFailed(
-            "Tapping the field at \(tried.joined(separator: " and ")) did not give it keyboard focus, " +
-                "so nothing was typed. The field may not accept text input there, or may not be editable."
+        throw Self.notFocusedError(tried: tried)
+    }
+
+    private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
+        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
+        snapshotFinder.recordFocusedTextInputHint(element)
+    }
+
+    private static func describe(_ point: CGPoint) -> String {
+        "(\(Int(point.x.rounded())), \(Int(point.y.rounded())))"
+    }
+
+    private static func notFocusedError(tried: String) -> AgentError {
+        .actionFailed(
+            "Tapping the field at \(tried) did not give it keyboard focus, so nothing was typed. " +
+                "The field may not accept text input there, or may not be editable."
         )
     }
 
-    /// Wait, up to `maxWait`, for a focusing tap on the element at `frame` to
-    /// take (`TypingFocus.verdict`), then for the keyboard in the rest of the
-    /// time. False when the element never took focus.
-    private func waitForTypingFocus(_ frame: CGRect, focusedBefore: CGRect?, maxWait: TimeInterval) -> Bool {
+    /// Wait, up to `maxWait`, for a focusing tap on `target` to take
+    /// (`TypingFocus.verdict`), then for the keyboard in the rest of the
+    /// time. False when it never took focus. An unverifiable result counts
+    /// only if it still holds at the deadline: a keyboard can be on its way
+    /// out after a tap that removed focus.
+    private func waitForTypingFocus(
+        _ target: TypingFocus.Input,
+        focusedBefore: TypingFocus.Input?,
+        maxWait: TimeInterval
+    ) -> Bool {
         let deadline = CFAbsoluteTimeGetCurrent() + maxWait
         while true {
-            let focused = snapshotFinder.liveFocusedTextInputFrame()
+            let focused = snapshotFinder.liveFocusedTypingInput()
             // The keyboard only matters when no input reports focus; a tree
             // that cannot be read is no evidence the tap missed.
             let keyboard = focused == nil ? (keyboardPresence().map { $0 == .onScreen } ?? true) : false
-            switch TypingFocus.verdict(element: frame, focusedBefore: focusedBefore,
-                                       focusedAfter: focused, keyboardOnScreen: keyboard) {
-            case .focused:
+            let verdict = TypingFocus.verdict(element: target, focusedBefore: focusedBefore,
+                                              focusedAfter: focused, keyboardOnScreen: keyboard)
+            if verdict == .focused {
                 waitForKeyboardAppearance(maxWait: max(0, deadline - CFAbsoluteTimeGetCurrent()))
                 return true
-            case .unverifiable:
-                return true
-            case .notFocused:
-                break
             }
-            if CFAbsoluteTimeGetCurrent() >= deadline { return false }
+            if CFAbsoluteTimeGetCurrent() >= deadline { return verdict == .unverifiable }
             Thread.sleep(forTimeInterval: 0.1)
         }
     }

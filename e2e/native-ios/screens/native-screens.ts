@@ -50,6 +50,7 @@ export class NativeListScreen {
   item(n: number) { return this.device.getByRole("button", { name: `Item ${n}`, exact: true }) }
   get cells() { return this.device.getByRole("listitem") }
   detail(n: number) { return this.device.getByText(`Detail for Item ${n}`, { exact: true }) }
+  get search() { return this.device.getByPlaceholder("Search items") }
 }
 
 export class NativeDialogsScreen {
