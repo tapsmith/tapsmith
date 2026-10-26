@@ -101,6 +101,15 @@ export function checkTimeout(method: string, timeout: unknown): number | undefin
       `${method}: timeout must be a positive, finite number of milliseconds, but got ${describeValue(timeout)}.${hint}`,
     );
   }
+  // Under 1 ms reaches the daemon as 0 (a whole-millisecond field), which
+  // means its 30 s default: the reverse of what a tiny timeout asks for.
+  // Most likely the value is in seconds.
+  if (timeout < 1) {
+    throw new TypeError(
+      `${method}: timeout is in milliseconds and must be at least 1, but got ${describeValue(timeout)}` +
+      ` (for ${timeout} seconds, pass ${Math.round(timeout * 1000)}).`,
+    );
+  }
   return timeout;
 }
 

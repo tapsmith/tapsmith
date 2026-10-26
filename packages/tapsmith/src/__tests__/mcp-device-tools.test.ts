@@ -517,7 +517,7 @@ describe('tapsmith_tap', () => {
   it('refuses a timeout that is not a positive number of milliseconds, and taps nothing (PILOT-840)', async () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Go' })] });
     hoisted.client = daemon.client;
-    for (const timeout of [0, -1, '5000', 10 * 60_000]) {
+    for (const timeout of [0, -1, 0.5, '5000', 10 * 60_000]) {
       const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Go")', timeout });
       expect(res.isError).toBe(true);
       expect(text(res)).toContain('timeout');

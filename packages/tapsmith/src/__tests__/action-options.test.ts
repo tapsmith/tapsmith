@@ -262,6 +262,7 @@ describe('wrong options throw at the call instead of being ignored (PILOT-840)',
     ['a NaN timeout', { timeout: NaN }, /but got NaN/],
     ['an infinite timeout', { timeout: Infinity }, /but got Infinity \(a number\)\. In Playwright 0 means no limit; Tapsmith needs one/],
     ['a string timeout', { timeout: '5000' }, /but got "5000" \(a string\)/],
+    ['a timeout in seconds', { timeout: 0.5 }, /tap\(\): timeout is in milliseconds and must be at least 1, but got 0\.5 \(a number\) \(for 0\.5 seconds, pass 500\)\./],
   ];
 
   it.each(bad)('tap() given %s throws a TypeError before touching the device', async (_what, options, message) => {

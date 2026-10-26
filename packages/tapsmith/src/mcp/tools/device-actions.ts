@@ -65,7 +65,7 @@ async function acting(handle: ElementHandle, timeout: number | undefined): Promi
 const MAX_TOOL_TIMEOUT_MS = 120_000;
 
 /** The `timeout` argument tapsmith_tap and tapsmith_type share (PILOT-840). */
-const timeoutArg = z.number().positive().max(MAX_TOOL_TIMEOUT_MS).optional().describe(
+const timeoutArg = z.number().min(1).max(MAX_TOOL_TIMEOUT_MS).optional().describe(
   `How long to wait for the element, in milliseconds (default ${MCP_ACTION_TIMEOUT_MS}, at most ${MAX_TOOL_TIMEOUT_MS}), ` +
   'as the action\'s { timeout } option does in a test. Raise it for an element that takes a while to appear.',
 );
