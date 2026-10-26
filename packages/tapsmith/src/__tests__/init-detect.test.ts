@@ -396,3 +396,20 @@ describe('DerivedData workspace preference is per project (PILOT-832)', () => {
     expect(findDerivedDataApps(project, ['Main.xcworkspace', 'Sample.xcodeproj'], 'iphonesimulator', dd)).toEqual(apps);
   }));
 });
+
+describe('a native repository\'s Android/ Gradle project (PILOT-832)', () => {
+  it('detects Android/ beside iOS/ when it is a Gradle project, and finds its APK', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'Android', 'settings.gradle'));
+    touch(path.join(tmp, 'Android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
+    fs.mkdirSync(path.join(tmp, 'iOS', 'App.xcodeproj'), { recursive: true });
+    const layout = detectProjectLayout(tmp);
+    expect(layout).toEqual({ androidRoot: 'Android', iosProjects: ['iOS/App.xcodeproj'], hasIosDir: false });
+    expect(findApkCandidates(tmp)).toEqual(['Android/app/build/outputs/apk/debug/app-debug.apk']);
+    expect(nativeBuildHint('android', layout, false)).toContain('`cd Android && ./gradlew assembleDebug`');
+  }));
+
+  it('does not take an Android/ folder of sources for a Gradle project', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'Android', 'Notes.md'));
+    expect(detectProjectLayout(tmp).androidRoot).toBeUndefined();
+  }));
+});

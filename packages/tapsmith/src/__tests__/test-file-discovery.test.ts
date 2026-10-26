@@ -88,6 +88,15 @@ describe('test-file-discovery helpers', () => {
       'build/Build/Products/Debug-iphonesimulator/App.app',
       'build/SourcePackages/checkouts/swift-collections/x.test.ts',
       'build/Index.noindex/DataStore',
+      'build/ModuleCache.noindex/x',
+      'build/CompilationCache.noindex/x',
+      'build/Logs/Build/x.xcactivitylog',
+      'build/SDKExplicitPrecompiledModules/x',
+      'composeApp/build/bin/iosSimulatorArm64/debugFramework',
+      'app/build/classes/kotlin/main',
+      'app/build/reports/tests/x.html',
+      'app/build/kspCaches/debug',
+      'shared/build/xcode-frameworks/Debug',
     ]) {
       expect(matchesTestIgnore(ignored), ignored).toBe(true);
     }

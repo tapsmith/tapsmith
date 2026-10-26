@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import { globSync, type IgnoreLike } from 'glob';
 import { androidSdkRoots } from './emulator.js';
 import { tryExec } from './env-scan.js';
+import { decodeXmlEntities } from './xml-entities.js';
 
 // ─── Project layout (PILOT-832) ───
 
@@ -23,8 +24,11 @@ import { tryExec } from './env-scan.js';
  * Gradle project (Kotlin Multiplatform's `iosApp/`).
  */
 export interface ProjectLayout {
-  /** The Gradle project's directory: `android` (React Native) or `.` (a native project at the root). */
-  androidRoot: 'android' | '.' | undefined;
+  /**
+   * The Gradle project's directory: `android` (React Native, or a native
+   * repository's `Android/` Gradle project) or `.` (a native project at the root).
+   */
+  androidRoot: string | undefined;
   /** Project-relative Xcode workspaces and projects, workspaces first within a folder. */
   iosProjects: string[];
   /** An `ios/` directory exists (React Native), with or without an Xcode project in it yet. */
@@ -86,14 +90,32 @@ function hasDirNamed(dir: string, name: string): boolean {
   return entries.includes(name) && isDir(path.join(dir, name));
 }
 
+const GRADLE_ROOT_FILES = ['settings.gradle.kts', 'settings.gradle', 'gradlew'];
+
+/**
+ * React Native's `android/`, or another case of it (a native repository's
+ * `Android/` beside `iOS/`) when that folder is a Gradle project itself.
+ */
+function androidDir(cwd: string): string | undefined {
+  if (hasDirNamed(cwd, 'android')) return 'android';
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(cwd);
+  } catch {
+    return undefined;
+  }
+  return entries.find((e) => e.toLowerCase() === 'android' && isDir(path.join(cwd, e))
+    && GRADLE_ROOT_FILES.some((f) => fs.existsSync(path.join(cwd, e, f))));
+}
+
 export function detectProjectLayout(cwd: string): ProjectLayout {
-  const hasAndroidDir = hasDirNamed(cwd, 'android');
-  const rootGradle = ['settings.gradle.kts', 'settings.gradle'].some((f) => fs.existsSync(path.join(cwd, f)));
+  const android = androidDir(cwd);
+  const rootGradle = GRADLE_ROOT_FILES.slice(0, 2).some((f) => fs.existsSync(path.join(cwd, f)));
   const hasIosDir = hasDirNamed(cwd, 'ios');
   const iosProjects = hasIosDir
     ? xcodeProjectsIn(cwd, ['ios/*.xcworkspace', 'ios/*.xcodeproj', 'ios/*/*.xcworkspace', 'ios/*/*.xcodeproj'])
     : xcodeProjectsIn(cwd, ['*.xcworkspace', '*.xcodeproj', '*/*.xcworkspace', '*/*.xcodeproj']);
-  return { androidRoot: hasAndroidDir ? 'android' : rootGradle ? '.' : undefined, iosProjects, hasIosDir };
+  return { androidRoot: android ?? (rootGradle ? '.' : undefined), iosProjects, hasIosDir };
 }
 
 /** The layout has an Android project. */
@@ -245,7 +267,7 @@ function derivedDataWorkspace(dir: string): string | undefined {
     return undefined;
   }
   const match = /<key>WorkspacePath<\/key>\s*<string>([^<]+)<\/string>/.exec(xml);
-  return match?.[1].replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'");
+  return match ? decodeXmlEntities(match[1]) : undefined;
 }
 
 /**
@@ -343,7 +365,7 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
     if (layout.androidRoot === '.') {
       return `Build one with \`./gradlew assembleDebug\`, which writes app/build/outputs/apk/debug/app-debug.apk (<module>/build/outputs/apk/ for a module not named app; see ${BUILD_DOCS})`;
     }
-    const where = layout.androidRoot === 'android' ? 'cd android && ' : '';
+    const where = layout.androidRoot === undefined ? '' : `cd ${shellArg(layout.androidRoot)} && `;
     return `Build one first (e.g. \`${where}./gradlew assembleDebug\`${metro}; see ${BUILD_DOCS})`;
   }
   const target = xcodeBuildTarget(layout);
