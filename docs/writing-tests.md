@@ -113,9 +113,9 @@ describe("Login screen", () => {
 
 ## Test isolation
 
-Tapsmith resets the app for you, but by default only **once per test file**, not before every test. The tests in a file share the app: the second test starts on whatever screen the first one left, with any state it created, such as a signed-in user. This differs from Playwright, where every test gets a fresh browser context. A file whose tests each need a fresh app opts in with `test.use({ appResetScope: "test" })` ([Declaring the reset policy](#declaring-the-reset-policy) below).
+Tapsmith resets the app for you, but by default only **once per test file**, not before every test. The tests in a file share the app: the second test starts on whatever screen the first one left, with any state it created, such as a signed-in user. The exception is a failure: the test after a failed one starts from a fresh app ([A failure starts the rest of the file fresh](#a-failure-starts-the-rest-of-the-file-fresh)). This differs from Playwright, where every test gets a fresh browser context. A file whose tests each need a fresh app opts in with `test.use({ appResetScope: "test" })` ([Declaring the reset policy](#declaring-the-reset-policy) below).
 
-So with the default, each test should bring the app to the state it needs itself (a deep link, say), rather than assume a fresh app or rely on where the previous test left off. A test that assumes a fresh app passes on its own and fails after another test, and one failure then cascades through the rest of the file. A test that relies on the previous one fails whenever it runs without it: a `--grep` or a single test run from UI mode starts it from a reset app. With the default policy, each file does start from a reset app, as long as the config sets `package` (as `tapsmith init` does).
+So with the default, each test should bring the app to the state it needs itself (a deep link, say), rather than assume a fresh app or rely on where the previous test left off. A test that assumes a fresh app passes on its own and fails after another test that passed. A test that relies on the previous one fails whenever it runs without it: a `--grep` or a single test run from UI mode starts it from a reset app. With the default policy, each file does start from a reset app, as long as the config sets `package` (as `tapsmith init` does).
 
 The reset is **declared**, not written by hand: it runs as fixture setup, appears in the trace in its own **APP RESET** section just before **BEFORE ALL** (per-file) or **BEFORE EACH** (per-test) — so the hook sections contain only your code — and its time counts toward the test's duration so slow isolation is visible rather than hidden.
 
@@ -201,6 +201,16 @@ With `retries` set, a failed test is retried from the state its first attempt st
 - **Exceptions.** A test whose own scope has `appReset: "none"`, and a test in a [serial group](api-reference.md#testdescribeserialname-fn--testdescribeserialonlyname-fn), retry in place, without a reset or a replay of the setup in their trace. A serial group's later tests depend on the state its earlier tests built, which a reset would wipe.
 
 A retry's trace shows only what ran before that attempt: under per-file scope, the **APP RESET** and **BEFORE ALL** sections it just ran; under per-test scope, its own reset. A retry in place shows neither, since nothing ran. Worker-scoped fixtures are set up once per file and are not set up again for a retry.
+
+### A failure starts the rest of the file fresh
+
+When a test fails for the last time (after any retries), the test after it does not start on the screen the failure left. Playwright discards its worker after a failure and runs the rest of the file in a new one; Tapsmith does the same with the app, so one failure does not turn into a run of unrelated ones:
+
+- **The next test in the same `describe`** starts the way a retry does ([above](#retries-start-from-a-fresh-app)): the `afterAll` hooks of every enclosing `describe` run (innermost first), then each scope's reset (cold-launched on iOS simulators) and its `beforeAll` hooks (outermost first). Its trace shows that reset and those hooks in its **APP RESET** and **BEFORE ALL** sections.
+- **A `describe` that starts after the failure** gets the same fresh start from the scopes around it before its own reset and `beforeAll` hooks run, so they never run on the failed test's screen.
+- **A failing `beforeAll`** fails its scope's tests as before, and what runs after that scope starts fresh too.
+
+A test that passes, or passes on a retry, leaves nothing to redo, and a failure in a file's last test costs nothing extra (the next file starts from its own reset). The same exceptions as for retries apply: a scope with `appReset: "none"` runs on as it is, a per-test scope already resets before each test, and inside a serial group the tests after a failure are skipped. Worker-scoped fixtures are not set up again.
 
 ### Manual resets inside a test
 
