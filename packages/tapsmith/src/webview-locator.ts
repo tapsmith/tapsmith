@@ -1,7 +1,7 @@
 import type { WebViewHandle } from './webview-handle.js';
 import { checkNoArguments, checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
 
-const COUNT_HINT = 'It reads the page as it is now; to wait for the matches, use expect(locator).toHaveCount(n, { timeout }).';
+const COUNT_HINT = 'It reads the page as it is now; to wait for a number of matches, use expect.poll(() => locator.count(), { timeout }).toBe(n).';
 
 /**
  * Lazy reference to an element within a WebView.

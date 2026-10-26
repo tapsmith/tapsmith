@@ -405,7 +405,7 @@ describe('WebView { timeout } (PILOT-840)', () => {
 
   it('webview count()/all() refuse an argument, as native ones do', async () => {
     const loc = emptyWebView().locator('li');
-    await expect((loc.count as (...a: unknown[]) => Promise<number>)({ timeout: 5000 })).rejects.toThrow(/count\(\) takes no arguments.*toHaveCount/);
+    await expect((loc.count as (...a: unknown[]) => Promise<number>)({ timeout: 5000 })).rejects.toThrow(/count\(\) takes no arguments.*expect\.poll\(\(\) => locator\.count\(\), \{ timeout \}\)\.toBe\(n\)/);
     await expect((loc.all as (...a: unknown[]) => Promise<unknown>)({ timeout: 5000 })).rejects.toThrow(/all\(\) takes no arguments/);
   });
 
