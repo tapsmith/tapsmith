@@ -196,8 +196,12 @@ describe('per-call { timeout } (PILOT-840)', () => {
     await expect(handle.longPress(2000, { timeout: 300 })).rejects.toThrow(/300ms/);
     expect(Date.now() - start).toBeLessThan(5_000);
     await expect(handle.longPress(2000, { timout: 300 } as { timeout?: number })).rejects.toThrow('longPress(): unknown option "timout"');
-    await expect(handle.longPress({ duration: 2000 }, { timeout: 300 }))
-      .rejects.toThrow('longPress(): a second argument goes only with a duration given as a number');
+    await expect((handle.longPress as (...a: unknown[]) => Promise<void>)({ duration: 2000 }, { timeout: 300 }))
+      .rejects.toThrow('longPress(): a second argument goes only after a duration given as a number');
+    // No duration (a helper's optional ms) with a timeout: the agent's default hold, bounded by the timeout.
+    const start2 = Date.now();
+    await expect(handle.longPress(undefined, { timeout: 300 })).rejects.toThrow(/300ms/);
+    expect(Date.now() - start2).toBeLessThan(5_000);
   });
 
   it('setChecked({ timeout }) waits for the state change only until that timeout', async () => {

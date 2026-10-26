@@ -895,7 +895,7 @@ await acceptButton.tap();
 
 #### `elementHandle.find(options?): Promise<ElementInfo>`
 
-Resolve the handle to an `ElementInfo` object. Throws if the element is not found within the timeout.
+Resolve the handle to an `ElementInfo` object. Throws if the element is not found within the timeout: the device timeout, or the [per-call timeout](#per-call-timeout) (`find({ timeout: 2000 })`).
 
 The `ElementInfo` object contains:
 

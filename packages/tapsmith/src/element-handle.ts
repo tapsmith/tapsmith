@@ -2572,24 +2572,25 @@ export class ElementHandle {
   /**
    * Long-press this element, once it is enabled and nothing covers it.
    *
-   * @param options - How long to hold, in milliseconds (the agent's default
-   *   when omitted), either as a number or as `{ duration }`, plus an optional
-   *   `timeout` in milliseconds for the whole call (defaults to the device
-   *   timeout).
-   * @param timeoutOptions - With the number form, the `{ timeout }` for the
-   *   call: `longPress(2000, { timeout: 5000 })`.
+   * Takes either `(duration?, { timeout }?)` — `longPress(2000)`,
+   * `longPress(2000, { timeout: 5000 })` — or one options object,
+   * `longPress({ duration: 2000, timeout: 5000 })`. `duration` is how long to
+   * hold, in milliseconds (the agent's default when omitted); `timeout` bounds
+   * the whole call (defaults to the device timeout).
    */
+  longPress(duration?: number, options?: TimeoutOptions): Promise<void>;
+  longPress(options: TimeoutOptions & { duration?: number }): Promise<void>;
   async longPress(
     options?: number | (TimeoutOptions & { duration?: number }),
     timeoutOptions?: TimeoutOptions,
   ): Promise<void> {
-    if (typeof options === 'number') {
+    if (typeof options === 'number' || (options === undefined && timeoutOptions !== undefined)) {
       const timeout = checkOptions('longPress()', timeoutOptions, ['timeout'])?.timeout;
       return this.longPress({ duration: options, timeout });
     }
     if (timeoutOptions !== undefined) {
       throw new TypeError(
-        'longPress(): a second argument goes only with a duration given as a number, as in longPress(2000, { timeout: 5000 }). ' +
+        'longPress(): a second argument goes only after a duration given as a number, as in longPress(2000, { timeout: 5000 }). ' +
         'With an options object, put the timeout in it: longPress({ duration: 2000, timeout: 5000 }).',
       );
     }

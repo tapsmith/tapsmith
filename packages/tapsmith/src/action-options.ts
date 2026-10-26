@@ -13,9 +13,11 @@
 /** The per-call timeout every locator action and waiting reader accepts. */
 export interface TimeoutOptions {
   /**
-   * Maximum time in milliseconds for the whole call: the auto-wait for the
-   * element and the action itself. Must be a positive number. Defaults to the
-   * device timeout (the config's `timeout`, 30 s by default).
+   * Time in milliseconds for the whole call: the auto-wait for the element and
+   * the action itself. An element found just before the timeout still gets up
+   * to a second for the action, so a call can end shortly after it. Must be a
+   * positive, finite number. Defaults to the device timeout (the config's
+   * `timeout`, 30 s by default).
    */
   timeout?: number;
 }
