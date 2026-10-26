@@ -358,7 +358,7 @@ export function platformPrompt(
 export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = 'npx tapsmith'): Promise<AndroidConfig> {
   console.log(`  ${bold('Android')}`);
   if (!env.adbVersion) {
-    console.log(`  ${YELLOW}⚠${RESET} ADB not found — Tapsmith cannot reach Android devices or emulators until it is on PATH`);
+    console.log(`  ${YELLOW}⚠${RESET} ${env.adbOffPath ? 'ADB is not on PATH' : 'ADB not found'} — Tapsmith cannot reach Android devices or emulators until it is on PATH`);
     console.log(dim(`    ${adbMissingFix()}`));
   }
 

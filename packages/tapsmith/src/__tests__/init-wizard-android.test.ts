@@ -216,12 +216,15 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
     script([[/Where is your Android APK/, DEBUG_APK]]);
     try {
       vi.stubEnv('ANDROID_HOME', sdk);
-      await configureAndroid({ ...env, adbVersion: undefined, androidHome: sdk });
+      await configureAndroid({ ...env, adbVersion: undefined, adbOffPath: platformTools, androidHome: sdk });
     } finally {
       fs.rmSync(sdk, { recursive: true, force: true });
     }
 
     const out = logged.join('\n');
+    // Says adb is off PATH, as the environment block does, not missing (PILOT-832).
+    expect(out).toContain('ADB is not on PATH — Tapsmith cannot reach');
+    expect(out).not.toContain('ADB not found');
     expect(out).toContain(`adb is in ${platformTools} but not on PATH`);
     expect(out).toContain(`export PATH="${platformTools}:$PATH"`);
     expect(out).not.toMatch(/Install Android platform-tools/);
