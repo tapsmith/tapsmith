@@ -893,7 +893,7 @@ await acceptButton.tap();
 
 ### Queries
 
-#### `elementHandle.find(): Promise<ElementInfo>`
+#### `elementHandle.find(options?): Promise<ElementInfo>`
 
 Resolve the handle to an `ElementInfo` object. Throws if the element is not found within the timeout.
 
@@ -1100,7 +1100,7 @@ Unknown options and states throw a `TypeError`, as for [actions](#per-call-timeo
 
 #### Per-call timeout
 
-Every action except `scrollIntoView()` (bounded by its `maxScrolls`) and `highlight()`, and every reader that waits for its element (`getText()`, `inputValue()`, `isEnabled()`, `isChecked()`, `isEditable()`, `boundingBox()`), takes a `timeout` option in milliseconds, as Playwright's do. The options type is exported as `TimeoutOptions` (`import type { TimeoutOptions } from "tapsmith"`). It bounds the whole call — the auto-wait for the element and the action itself — and overrides the device timeout (the config's `timeout`, 30 s by default) for that call only. It may be shorter or longer than the device timeout.
+Every action except `scrollIntoView()` (bounded by its `maxScrolls`) and `highlight()`, and every reader that waits for its element (`find()`, `getText()`, `inputValue()`, `isEnabled()`, `isChecked()`, `isEditable()`, `boundingBox()`), takes a `timeout` option in milliseconds, as Playwright's do. The options type is exported as `TimeoutOptions` (`import type { TimeoutOptions } from "tapsmith"`). It bounds the whole call — the auto-wait for the element and the action itself — and overrides the device timeout (the config's `timeout`, 30 s by default) for that call only. It may be shorter or longer than the device timeout. As with the device timeout, an element found just before the timeout still gets up to a second for the action itself (and `setChecked()` up to a second to see its state change), so a call can end shortly after the timeout rather than give up on an element it has found.
 
 ```typescript
 await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });

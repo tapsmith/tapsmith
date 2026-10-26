@@ -180,7 +180,7 @@ Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` i
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `locator` | string | Yes | Tapsmith locator, e.g. `device.getByRole("button", { name: "Login" })` |
-| `timeout` | number | No | How long the tap may take, waiting for the element included, in milliseconds (default 5000, at most 120000), as `tap({ timeout })` in a test. |
+| `timeout` | number | No | How long the tap may take, waiting for the element included, in milliseconds (default 5000, at most 120000), as `tap({ timeout })` in a test (a tap on an element found just before it still gets up to a second). |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
 #### `tapsmith_type`

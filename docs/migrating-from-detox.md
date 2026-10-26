@@ -43,7 +43,7 @@ This guide is for teams with a Detox suite who want to move it to Tapsmith. Of t
 | `by.text("Delete").withAncestor(by.id("row-5"))` | [`device.getByTestId("row-5").getByText("Delete", { exact: true })`](api-reference.md#scoping) (scoping) |
 | `by.id("a").and(by.text("b"))` | [`device.getByTestId("a").and(device.getByText("b"))`](api-reference.md#elementhandleandother-elementhandle-elementhandle) |
 | `.atIndex(2)` | [`.nth(2)`](api-reference.md#elementhandlenthindex-number-elementhandle), `.first()`, `.last()` |
-| `element(…).getAttributes()` | [`locator.find()`](api-reference.md#elementhandlefind-promiseelementinfo), or `getText()`, `isEnabled()`, `boundingBox()`, … |
+| `element(…).getAttributes()` | [`locator.find()`](api-reference.md#elementhandlefindoptions-promiseelementinfo), or `getText()`, `isEnabled()`, `boundingBox()`, … |
 
 ### Actions
 

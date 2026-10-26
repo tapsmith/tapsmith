@@ -1898,8 +1898,13 @@ export class ElementHandle {
    * present (up to the handle's timeout) and throws if it never appears —
    * on every handle shape, modified (`.first()`, `.nth()`, `.filter()`,
    * `.and()`/`.or()`, scoped chains) or not.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the device timeout.
    */
-  async find(): Promise<ElementInfo> {
+  async find(options?: TimeoutOptions): Promise<ElementInfo> {
+    const call = this._forCall('find()', options, ['timeout']);
+    if (call !== this) return call.find();
     this._emitQueryStarted('find');
     const start = Date.now();
     try {
@@ -2712,13 +2717,16 @@ export class ElementHandle {
   private async _dragTo(target: ElementHandle, shareBudget: boolean): Promise<void> {
     const { sourceTarget, targetTarget, remainingMs, dest } = await this._tracedResolve('dragTo', 'swipe', async () => {
       const deadline = Date.now() + this._timeoutMs;
+      // What is left of the shared budget, floored as every action's budget
+      // is (see _strictResolve), so a late find still gets a usable wait and drag.
+      const left = () => Math.min(this._timeoutMs, Math.max(deadline - Date.now(), MIN_ACTION_BUDGET_MS));
       const source = await this._strictResolve();
-      const dest = shareBudget ? target._withTimeout(Math.max(1, deadline - Date.now())) : target;
+      const dest = shareBudget ? target._withTimeout(left()) : target;
       const targetRes = await dest._strictResolve();
       return {
         sourceTarget: await this._actionTarget(source.element),
         targetTarget: await dest._actionTarget(targetRes.element),
-        remainingMs: shareBudget ? Math.max(1, deadline - Date.now()) : source.remainingMs,
+        remainingMs: shareBudget ? left() : source.remainingMs,
         dest,
       };
     });

@@ -65,6 +65,7 @@ const TIMED_CALLS: [string, (h: ElementHandle, options: { timeout?: number }) =>
   ['focus', (h, o) => h.focus(o)],
   ['blur', (h, o) => h.blur(o)],
   ['boundingBox', (h, o) => h.boundingBox(o)],
+  ['find', (h, o) => h.find(o)],
   ['getText', (h, o) => h.getText(o)],
   ['inputValue', (h, o) => h.inputValue(o)],
   ['isEnabled', (h, o) => h.isEnabled(o)],
@@ -141,8 +142,10 @@ describe('per-call { timeout } (PILOT-840)', () => {
     const source = new ElementHandle(c, _text('Card'), DEVICE_TIMEOUT);
     await source.dragTo(new ElementHandle(c, _text('Bin'), DEVICE_TIMEOUT), { timeout: 2_000 });
     const budget = (vi.mocked(c.dragAndDrop).mock.calls[0] as unknown[])[2] as number;
-    // What is left of the 2 s, not a fresh 2 s after the target wait.
-    expect(budget).toBeLessThanOrEqual(2_000 - 1_400);
+    // What is left of the 2 s (floored at the 1 s every action's drag or tap
+    // gets), not a fresh 2 s after the target wait, and never a useless few ms.
+    expect(budget).toBeLessThanOrEqual(1_000);
+    expect(budget).toBeGreaterThanOrEqual(900);
   });
 
   it('keeps the other options when a timeout is given', async () => {
