@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { detectProjectLayout, findDerivedDataApps, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
+import { detectProjectLayout, findDerivedDataApps, nativeBuildHint, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
 
 describe('parseAapt2Badging()', () => {
   it('extracts the package name', () => {
@@ -271,5 +271,30 @@ describe('searching a project in a folder with a skipped name (PILOT-832)', () =
     touch(path.join(project, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
     expect(detectProjectLayout(project).iosProjects).toEqual(['App.xcodeproj']);
     expect(findApkCandidates(project)).toEqual(['app/build/outputs/apk/debug/app-debug.apk']);
+  }));
+});
+
+describe('names with spaces and nested iOS projects (PILOT-832)', () => {
+  it('quotes a project, scheme or folder with a space in the xcodebuild hint', () => {
+    const hint = nativeBuildHint('ios', { androidRoot: undefined, iosProjects: ['My Apps/My App.xcodeproj'], hasIosDir: false }, false);
+    expect(hint).toContain("`cd 'My Apps' && xcodebuild -project 'My App.xcodeproj' -scheme 'My App' -configuration Debug");
+    expect(hint).toContain('under My Apps/build/Build/Products/Debug-iphonesimulator/');
+  });
+
+  it('finds a DerivedData build of a project whose name has a space (Xcode writes My_App-<hash>)', () => withTmp((tmp) => {
+    const project = path.join(tmp, 'proj');
+    fs.mkdirSync(path.join(project, 'My App.xcodeproj'), { recursive: true });
+    const dir = path.join(tmp, 'DerivedData', 'My_App-abcdefghijklmnopqrstuvwxyzab');
+    fs.mkdirSync(path.join(dir, 'Build', 'Products', 'Debug-iphonesimulator', 'My App.app'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'info.plist'), `<plist version="1.0"><dict><key>WorkspacePath</key><string>${path.join(project, 'My App.xcodeproj')}</string></dict></plist>`);
+    expect(findDerivedDataApps(project, ['My App.xcodeproj'], 'iphonesimulator', path.join(tmp, 'DerivedData')))
+      .toEqual([path.join(dir, 'Build', 'Products', 'Debug-iphonesimulator', 'My App.app')]);
+  }));
+
+  it('finds an Xcode project one folder down inside ios/ (Capacitor\'s ios/App/App.xcworkspace)', () => withTmp((tmp) => {
+    fs.mkdirSync(path.join(tmp, 'ios', 'App', 'App.xcworkspace'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'ios', 'App', 'App.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'ios', 'App', 'Pods', 'Pods.xcodeproj'), { recursive: true });
+    expect(detectProjectLayout(tmp).iosProjects).toEqual(['ios/App/App.xcworkspace', 'ios/App/App.xcodeproj']);
   }));
 });

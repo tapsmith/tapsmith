@@ -450,8 +450,10 @@ describe('configureIos() with builds in Xcode\'s DerivedData (PILOT-832)', () =>
     simCandidates = [];
     deviceCandidates = [];
     derivedDataApps = { iphonesimulator: [DD_SIM], iphoneos: [DD_DEVICE] };
-    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    printed = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { printed.push(args.join(' ')); });
   });
+  let printed: string[] = [];
 
   it('offers them, marked this Mac only, when the project has no build of its own', async () => {
     bundleIds.set(DD_SIM, 'com.example.sim');
@@ -467,6 +469,11 @@ describe('configureIos() with builds in Xcode\'s DerivedData (PILOT-832)', () =>
     expect(device?.choices?.[0]).toMatchObject({ name: DD_DEVICE, hint: 'Xcode DerivedData: this Mac only' });
     expect(ios.appPath).toBe(DD_SIM);
     expect(ios.deviceAppPath).toBe(DD_DEVICE);
+    // Picking one says what init --yes says: this Mac only, and how to build into the project.
+    const out = printed.join('\n');
+    expect(out).toContain(`Using ${DD_SIM} from Xcode's DerivedData: only this Mac has that path`);
+    expect(out).toContain('-derivedDataPath build');
+    expect(out).toContain(`Using ${DD_DEVICE} from Xcode's DerivedData`);
   });
 
   it('leaves them out when the project has a build', async () => {

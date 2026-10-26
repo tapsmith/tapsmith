@@ -76,7 +76,7 @@ export function detectProjectLayout(cwd: string): ProjectLayout {
   const rootGradle = ['settings.gradle.kts', 'settings.gradle'].some((f) => fs.existsSync(path.join(cwd, f)));
   const hasIosDir = isDir(path.join(cwd, 'ios'));
   const iosProjects = hasIosDir
-    ? xcodeProjectsIn(cwd, ['ios/*.xcworkspace', 'ios/*.xcodeproj'])
+    ? xcodeProjectsIn(cwd, ['ios/*.xcworkspace', 'ios/*.xcodeproj', 'ios/*/*.xcworkspace', 'ios/*/*.xcodeproj'])
     : xcodeProjectsIn(cwd, ['*.xcworkspace', '*.xcodeproj', '*/*.xcworkspace', '*/*.xcodeproj']);
   return { androidRoot: hasAndroidDir ? 'android' : rootGradle ? '.' : undefined, iosProjects, hasIosDir };
 }
@@ -226,10 +226,10 @@ function derivedDataWorkspace(dir: string): string | undefined {
 }
 
 /**
- * This project's builds in Xcode's DerivedData (absolute paths): the folders
- * named after one of its Xcode projects (`<Name>-<hash>`) whose `info.plist`
- * says they belong to that very project, not another checkout of a project
- * with the same name (PILOT-832). These paths are specific to this Mac, so
+ * This project's builds in Xcode's DerivedData (absolute paths): the
+ * `<Name>-<hash>` folders whose `info.plist` says they belong to one of its
+ * Xcode projects, not another checkout of a project with the same name
+ * (PILOT-832). These paths are specific to this Mac, so
  * init offers them only when the project holds no build of its own.
  */
 export function findDerivedDataApps(
@@ -245,12 +245,12 @@ export function findDerivedDataApps(
   } catch {
     return [];
   }
-  const wanted = new Map(xcodeProjects.map((p) => [realpathOr(path.resolve(cwd, p)), path.basename(p).replace(/\.(xcodeproj|xcworkspace)$/, '')]));
-  const names = new Set(wanted.values());
+  // Matched by WorkspacePath alone, not the folder name: Xcode rewrites the
+  // name (`My App` becomes `My_App-<hash>`).
+  const wanted = new Set(xcodeProjects.map((p) => realpathOr(path.resolve(cwd, p))));
   const apps: string[] = [];
   for (const entry of entries.sort()) {
-    const dash = entry.lastIndexOf('-');
-    if (dash <= 0 || !names.has(entry.slice(0, dash))) continue;
+    if (entry.lastIndexOf('-') <= 0) continue;
     const dir = path.join(derivedData, entry);
     const workspace = derivedDataWorkspace(dir);
     if (!workspace || !wanted.has(realpathOr(workspace))) continue;
@@ -272,6 +272,11 @@ export function detectIosBundleId(appPath: string): string | undefined {
 // ─── Build hints (PILOT-832) ───
 
 const BUILD_DOCS = 'https://tapsmith.dev/getting-started/#build-the-app-under-test';
+
+/** `arg` as a shell reads it: bare when it is plain, else single-quoted. */
+function shellArg(arg: string): string {
+  return /^[\w./@:+=-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'\\''`)}'`;
+}
 
 /** The Xcode workspace or project to build with, as `xcodebuild` names it: the first workspace, else the first project. */
 function xcodeBuildTarget(layout: ProjectLayout): { dir: string; flag: '-workspace' | '-project'; file: string; scheme: string } | undefined {
@@ -308,9 +313,9 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
     return 'Build one for the simulator first (in the folder with your Xcode project: `xcodebuild -workspace <App>.xcworkspace -scheme <App> -sdk iphonesimulator -derivedDataPath build build`, '
       + `or -project <App>.xcodeproj without a workspace; see ${BUILD_DOCS})`;
   }
-  const cd = target.dir === '.' ? '' : `cd ${target.dir} && `;
+  const cd = target.dir === '.' ? '' : `cd ${shellArg(target.dir)} && `;
   const out = `${target.dir === '.' ? '' : `${target.dir}/`}build/Build/Products/Debug-iphonesimulator/`;
-  return `Build one for the simulator first with \`${cd}xcodebuild ${target.flag} ${target.file} -scheme ${target.scheme} -configuration Debug -sdk iphonesimulator -derivedDataPath build build\`, `
+  return `Build one for the simulator first with \`${cd}xcodebuild ${target.flag} ${shellArg(target.file)} -scheme ${shellArg(target.scheme)} -configuration Debug -sdk iphonesimulator -derivedDataPath build build\`, `
     + `which writes the .app under ${out} (\`xcodebuild -list\` shows the schemes if yours is not ${target.scheme}; see ${BUILD_DOCS})`;
 }
 
@@ -318,9 +323,13 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
  * The warning for a build init took from Xcode's DerivedData: the path is
  * this Mac's alone, so the config will not work for teammates or CI.
  */
-export function derivedDataBuildWarning(app: string, layout: ProjectLayout): string {
-  return `Using ${app} from Xcode's DerivedData: only this Mac has that path, and it changes when DerivedData is cleared. `
-    + `For a config that works on other machines and in CI, build into the project instead — ${nativeBuildHint('ios', layout, false).replace(/^Build one for the simulator first/, 'build for the simulator')} — and set app to the new path.`;
+export function derivedDataBuildWarning(app: string, layout: ProjectLayout, sdk: AppleSdk = 'iphonesimulator'): string {
+  const using = `Using ${app} from Xcode's DerivedData: only this Mac has that path, and it changes when DerivedData is cleared. `;
+  if (sdk === 'iphoneos') {
+    return `${using}For a config that works on other machines, build the device app into the project with \`-derivedDataPath build\` `
+      + '(see https://tapsmith.dev/platform/ios-physical-devices/) and set the device app path to it.';
+  }
+  return `${using}For a config that works on other machines and in CI, build into the project instead — ${nativeBuildHint('ios', layout, false).replace(/^Build one for the simulator first/, 'build for the simulator')} — and set app to the new path.`;
 }
 
 // ─── Expo (PILOT-557) ───

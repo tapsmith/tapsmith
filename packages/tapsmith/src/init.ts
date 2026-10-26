@@ -10,6 +10,7 @@ import {
   detectAndroidPackage,
   detectExpoProject,
   detectIosBundleId,
+  derivedDataBuildWarning,
   detectProjectLayout,
   expoBuildHint,
   findApkCandidates,
@@ -458,6 +459,7 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
         : `No simulator build (.app) found in the project or Xcode's DerivedData. ${nativeBuildHint('ios', detectProjectLayout(cwd), isReactNativeProject(cwd))}, or enter its path.`,
       typeMessage: 'Path to your simulator build (.app):',
     });
+    if (builds.hints.has(appPath)) console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(appPath, detectProjectLayout(cwd))}`);
     simBundleId = detectBundleId(appPath);
   }
 
@@ -542,15 +544,19 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
       }
     }
 
+    const deviceBuilds = iosBuildCandidates('iphoneos');
     deviceAppPath = await askBuildPath({
       kind: 'device-app',
       message: 'Where is your device build .app? (must be an iphoneos build, not simulator)',
-      ...iosBuildCandidates('iphoneos'),
+      ...deviceBuilds,
       noneFound: expo && !expo.hasIosDir
         ? 'No device build (.app) found: this Expo project has no ios/ yet. Generate it with `npx expo prebuild --platform ios`, then build it for iphoneos (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.'
         : 'No device build (.app) found in the project or Xcode\'s DerivedData — build one for iphoneos first (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.',
       typeMessage: 'Path to your device build (iphoneos .app):',
     });
+    if (deviceBuilds.hints.has(deviceAppPath)) {
+      console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(deviceAppPath, detectProjectLayout(process.cwd()), 'iphoneos')}`);
+    }
     deviceBundleIdRead = detectBundleId(deviceAppPath);
   }
 
