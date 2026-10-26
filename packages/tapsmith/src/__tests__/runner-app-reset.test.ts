@@ -121,6 +121,30 @@ function resetCalls(d: ReturnType<typeof makeDevice>): string[] {
   return d.calls.filter((c) => !['startAgent'].includes(c));
 }
 
+/** Reset mock that logs into `order` as well as `d.calls`. */
+function logResets(d: ReturnType<typeof makeDevice>, order: string[]): void {
+  d.device._resetApp.mockImplementation(async (_pkg, opts) => {
+    const mode = opts.mode ?? 'warm';
+    order.push(`reset:${mode}${opts.forceCold ? ':cold' : ''}`);
+    d.calls.push(`resetApp:${mode}`);
+    recordAction('resetApp');
+    return { modeRequested: mode, modeUsed: mode, fellBack: false, coldLaunch: mode !== 'warm', durationMs: 5, hooksDetected: false, steps: [] };
+  });
+}
+
+/** Parse a packaged trace's events. */
+function traceEvents(tracePath: string): Array<Record<string, unknown> & { type: string }> {
+  const zip = unzipSync(fs.readFileSync(tracePath));
+  return new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l));
+}
+
+/** Actions and groups of a trace, in order, as `action:x` / `group-start:x` / `group-end:x`. */
+function traceOutline(tracePath: string): string[] {
+  return traceEvents(tracePath)
+    .filter((e) => e.type === 'action' || e.type === 'group-start' || e.type === 'group-end')
+    .map((e) => e.type === 'action' ? `action:${String(e.action)}` : `${e.type}:${String(e.name)}`);
+}
+
 describe('runner app reset (declared isolation)', () => {
   it('default policy: one clear reset per file, before beforeAll hooks, attributed to the first test', async () => {
     const d = makeDevice();
@@ -184,17 +208,6 @@ describe('runner app reset (declared isolation)', () => {
   });
 
   describe('retries under a file-scoped policy (PILOT-715)', () => {
-    /** Reset mock that logs into `order` as well as `d.calls`. */
-    function logResets(d: ReturnType<typeof makeDevice>, order: string[]): void {
-      d.device._resetApp.mockImplementation(async (_pkg, opts) => {
-        const mode = opts.mode ?? 'warm';
-        order.push(`reset:${mode}${opts.forceCold ? ':cold' : ''}`);
-        d.calls.push(`resetApp:${mode}`);
-        recordAction('resetApp');
-        return { modeRequested: mode, modeUsed: mode, fellBack: false, coldLaunch: mode !== 'warm', durationMs: 5, hooksDetected: false, steps: [] };
-      });
-    }
-
     it('re-runs the file setup before a retry: afterAll, a cold reset, then beforeAll, as a fresh worker would', async () => {
       const d = makeDevice();
       const order: string[] = [];
@@ -477,6 +490,274 @@ describe('runner app reset (declared isolation)', () => {
 
       expect(order).toEqual(['beforeAll', 'flaky#1', 'flaky#2']);
       expect(resetCalls(d)).toEqual([]);
+    });
+  });
+
+  describe('after a test\'s final failure (PILOT-739)', () => {
+    it('the next test starts from a fresh app: afterAll, a cold reset, then beforeAll', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      pushContext();
+      tapsmithBeforeAll(async () => { order.push('beforeAll'); });
+      tapsmithAfterAll(async () => { order.push('afterAll'); });
+      tapsmithTest('broken', async () => { order.push('broken'); throw new Error('boom'); });
+      tapsmithTest('next', async () => { order.push('next'); });
+      tapsmithTest('after', async () => { order.push('after'); });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig()));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['failed', 'passed', 'passed']);
+      expect(order).toEqual([
+        'reset:clear', 'beforeAll', 'broken',
+        // a fresh worker for the rest of the file
+        'afterAll', 'reset:clear:cold', 'beforeAll', 'next',
+        // a pass leaves nothing to redo
+        'after', 'afterAll',
+      ]);
+    });
+
+    it('after the retries run out, the next test starts fresh too', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      let attempts = 0;
+      pushContext();
+      tapsmithBeforeAll(async () => { order.push('beforeAll'); });
+      tapsmithTest('broken', async () => { attempts++; order.push(`broken#${attempts}`); throw new Error('boom'); });
+      tapsmithTest('next', async () => { order.push('next'); });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['failed', 'passed']);
+      expect(order).toEqual([
+        'reset:clear', 'beforeAll', 'broken#1',
+        'reset:clear:cold', 'beforeAll', 'broken#2',
+        'reset:clear:cold', 'beforeAll', 'next',
+      ]);
+    });
+
+    it('a flaky pass and a failing last test cost nothing extra', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      let attempts = 0;
+      pushContext();
+      tapsmithTest('flaky', async () => { attempts++; order.push(`flaky#${attempts}`); if (attempts === 1) throw new Error('boom'); });
+      tapsmithTest('stable', async () => { order.push('stable'); });
+      tapsmithTest('last', async () => { order.push('last'); throw new Error('boom'); });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ retries: 1 })));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['passed', 'passed', 'failed']);
+      expect(order).toEqual([
+        'reset:clear', 'flaky#1', 'reset:clear:cold', 'flaky#2',
+        'stable',
+        'last', 'reset:clear:cold', 'last',
+      ]);
+    });
+
+    it('a describe entered after a failure gets the fresh start before its own beforeAll runs', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      pushContext();
+      tapsmithBeforeAll(async () => { order.push('root beforeAll'); });
+      tapsmithAfterAll(async () => { order.push('root afterAll'); });
+      tapsmithDescribe('first', () => {
+        tapsmithAfterAll(async () => { order.push('first afterAll'); });
+        tapsmithTest('broken', async () => { order.push('broken'); throw new Error('boom'); });
+      });
+      tapsmithDescribe('second', () => {
+        tapsmithBeforeAll(async () => { order.push('second beforeAll'); });
+        tapsmithAfterAll(async () => { order.push('second afterAll'); });
+        tapsmithTest('a', async () => { order.push('a'); });
+        tapsmithTest('b', async () => { order.push('b'); });
+      });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig()));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['failed', 'passed', 'passed']);
+      expect(order).toEqual([
+        'reset:clear', 'root beforeAll', 'broken', 'first afterAll',
+        // `first` already tore itself down; the root goes, then comes back
+        'root afterAll', 'reset:clear:cold', 'root beforeAll',
+        'second beforeAll', 'a', 'b', 'second afterAll',
+        'root afterAll',
+      ]);
+    });
+
+    it('a describe entered after a failure in one with its own appState resets to the file policy once', async () => {
+      const d = makeDevice();
+      pushContext();
+      tapsmithDescribe('authenticated', () => {
+        tapsmithTest.use({ appState: './auth.tar.gz' });
+        tapsmithTest('broken', async () => { throw new Error('boom'); });
+      });
+      tapsmithDescribe('signed out', () => {
+        tapsmithTest('a', async () => {});
+      });
+      const ctx = popContext();
+
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig()));
+
+      expect(resetCalls(d)).toEqual([
+        'resetApp:clear', 'restoreAppState', 'restartApp',
+        // the fresh start leaves the file policy applied: `signed out` needs
+        // no entry reset of its own on top of it
+        'resetApp:clear',
+      ]);
+    });
+
+    it('a failed beforeAll leaves a fresh start for the next describe', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      pushContext();
+      tapsmithDescribe('first', () => {
+        tapsmithBeforeAll(async () => { order.push('first beforeAll'); throw new Error('setup failed'); });
+        tapsmithTest('x', async () => { order.push('x'); });
+      });
+      tapsmithDescribe('second', () => {
+        tapsmithBeforeAll(async () => { order.push('second beforeAll'); });
+        tapsmithTest('a', async () => { order.push('a'); });
+      });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig()));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['failed', 'passed']);
+      expect(order).toEqual([
+        'reset:clear', 'first beforeAll',
+        'reset:clear:cold', 'second beforeAll', 'a',
+      ]);
+    });
+
+    it('a nested describe after a failing test in its parent starts fresh', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      pushContext();
+      tapsmithDescribe('outer', () => {
+        tapsmithBeforeAll(async () => { order.push('outer beforeAll'); });
+        tapsmithTest('broken', async () => { order.push('broken'); throw new Error('boom'); });
+        tapsmithDescribe('inner', () => {
+          tapsmithTest('a', async () => { order.push('a'); });
+        });
+      });
+      const ctx = popContext();
+
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig()));
+
+      expect(order).toEqual([
+        'reset:clear', 'outer beforeAll', 'broken',
+        'reset:clear:cold', 'outer beforeAll', 'a',
+      ]);
+    });
+
+    it('serial groups, appReset: none and per-test scopes keep their own rules', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      pushContext();
+      tapsmithTest('broken', async () => { order.push('broken'); throw new Error('boom'); });
+      tapsmithDescribe('shared state', () => {
+        tapsmithTest.use({ appReset: 'none' });
+        tapsmithTest('none', async () => { order.push('none'); });
+      });
+      tapsmithDescribe('per test', () => {
+        tapsmithTest.use({ appResetScope: 'test' });
+        tapsmithTest('per-test', async () => { order.push('per-test'); });
+      });
+      tapsmithTest.describe.serial('flow', () => {
+        tapsmithTest('serial', async () => { order.push('serial'); });
+      });
+      const ctx = popContext();
+
+      await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig()));
+
+      expect(order).toEqual([
+        'reset:clear', 'broken',
+        // `appReset: 'none'` opted out of isolation: no reset before it
+        'none',
+        // a per-test scope resets before each test anyway
+        'reset:clear', 'per-test',
+        // the serial group's entry: a fresh start from its parent's setup
+        'reset:clear:cold', 'serial',
+      ]);
+    });
+
+    it('the next test\'s trace shows the fresh-start reset that ran before it, numbered from 0', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-start-'));
+      const d = makeDevice();
+      logResets(d, []);
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        tapsmithTest('broken', async () => { throw new Error('boom'); });
+        tapsmithTest('next', async () => { recordAction('tap'); });
+        const ctx = popContext();
+        const holder = new Map([['device-1', { policy: { mode: 'clear' as const, scope: 'file' as const }, preparedAt: Date.now(), durationMs: 9_800, source: 'startup launch' }]]);
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({
+          rootDir: tempRoot,
+          trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+        }), { _prepared: holder }));
+
+        const [, next] = collectResults(result);
+        expect(next.status).toBe('passed');
+        const outline = traceOutline(next.tracePath!);
+        expect(outline.slice(0, 6)).toEqual([
+          'group-start:App reset', 'action:resetApp', 'group-end:App reset',
+          'group-start:beforeAll Hooks', 'action:openDeepLink', 'group-end:beforeAll Hooks',
+        ]);
+        // not the file-entry reset (satisfied by the startup launch) replayed
+        expect(outline).not.toContain('action:appReset');
+        expect(outline.filter((e) => e === 'action:resetApp')).toHaveLength(1);
+        expect(traceEvents(next.tracePath!).find((e) => e.type === 'action')?.actionIndex).toBe(0);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('a describe entered after a failure records the fresh start in its tests\' traces, not the original file setup', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-scope-'));
+      const d = makeDevice();
+      logResets(d, []);
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        tapsmithDescribe('first', () => {
+          tapsmithTest('broken', async () => { throw new Error('boom'); });
+        });
+        tapsmithDescribe('second', () => {
+          tapsmithTest('a', async () => { recordAction('tap'); });
+        });
+        const ctx = popContext();
+        const holder = new Map([['device-1', { policy: { mode: 'clear' as const, scope: 'file' as const }, preparedAt: Date.now(), durationMs: 9_800, source: 'startup launch' }]]);
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({
+          rootDir: tempRoot,
+          trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+        }), { _prepared: holder }));
+
+        const [, a] = collectResults(result);
+        expect(a.status).toBe('passed');
+        const outline = traceOutline(a.tracePath!);
+        expect(outline).not.toContain('action:appReset');
+        expect(outline.filter((e) => e === 'action:resetApp')).toHaveLength(1);
+        expect(outline.filter((e) => e === 'action:openDeepLink')).toHaveLength(1);
+        expect(outline.indexOf('action:resetApp')).toBeLessThan(outline.indexOf('action:openDeepLink'));
+        expect(outline.indexOf('action:openDeepLink')).toBeLessThan(outline.indexOf('action:tap'));
+        const indices = traceEvents(a.tracePath!).filter((e) => e.type === 'action').map((e) => e.actionIndex);
+        expect(indices).toEqual(indices.map((_, i) => i));
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
     });
   });
 
