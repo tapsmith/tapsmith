@@ -170,6 +170,7 @@ describe('build discovery in native layouts (PILOT-832)', () => {
   }));
 
   it('leaves APKs inside node_modules out', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'settings.gradle.kts'));
     touch(path.join(tmp, 'node_modules', 'lib', 'android', 'build', 'outputs', 'apk', 'debug', 'lib-debug.apk'));
     expect(findApkCandidates(tmp)).toEqual([]);
   }));
@@ -183,6 +184,7 @@ describe('build discovery in native layouts (PILOT-832)', () => {
   }));
 
   it('leaves XCUITest runners, nested bundles and node_modules builds out', () => withTmp((tmp) => {
+    fs.mkdirSync(path.join(tmp, 'Notekeeper.xcodeproj'), { recursive: true });
     const products = path.join(tmp, 'build', 'Build', 'Products', 'Debug-iphonesimulator');
     fs.mkdirSync(path.join(products, 'Notekeeper.app', 'Watch', 'Debug-iphonesimulator', 'Inner.app'), { recursive: true });
     fs.mkdirSync(path.join(products, 'NotekeeperUITests-Runner.app'), { recursive: true });
@@ -268,6 +270,7 @@ describe('searching a project in a folder with a skipped name (PILOT-832)', () =
   it('still searches a project whose own folder is named build', () => withTmp((tmp) => {
     const project = path.join(tmp, 'build');
     fs.mkdirSync(path.join(project, 'App.xcodeproj'), { recursive: true });
+    touch(path.join(project, 'settings.gradle.kts'));
     touch(path.join(project, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
     expect(detectProjectLayout(project).iosProjects).toEqual(['App.xcodeproj']);
     expect(findApkCandidates(project)).toEqual(['app/build/outputs/apk/debug/app-debug.apk']);
@@ -297,4 +300,49 @@ describe('names with spaces and nested iOS projects (PILOT-832)', () => {
     fs.mkdirSync(path.join(tmp, 'ios', 'App', 'Pods', 'Pods.xcodeproj'), { recursive: true });
     expect(detectProjectLayout(tmp).iosProjects).toEqual(['ios/App/App.xcworkspace', 'ios/App/App.xcodeproj']);
   }));
+});
+
+describe('where builds are searched for (PILOT-832)', () => {
+  it('searches nothing outside an Android or iOS project (a home directory, say)', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'Downloads', 'other', 'build', 'outputs', 'apk', 'debug', 'x.apk'));
+    fs.mkdirSync(path.join(tmp, 'Downloads', 'Debug-iphonesimulator', 'X.app'), { recursive: true });
+    expect(findApkCandidates(tmp)).toEqual([]);
+    expect(findIosAppCandidates(tmp)).toEqual([]);
+  }));
+
+  it('searches only android/ and ios/ in a React Native project', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
+    touch(path.join(tmp, 'vendor', 'lib', 'build', 'outputs', 'apk', 'debug', 'lib-debug.apk'));
+    fs.mkdirSync(path.join(tmp, 'ios', 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'App.app'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'vendor', 'Debug-iphonesimulator', 'Other.app'), { recursive: true });
+    expect(findApkCandidates(tmp)).toEqual(['android/app/build/outputs/apk/debug/app-debug.apk']);
+    expect(findIosAppCandidates(tmp)).toEqual(['ios/build/Build/Products/Debug-iphonesimulator/App.app']);
+  }));
+
+  it('finds a build in a project folder named DerivedData (-derivedDataPath DerivedData)', () => withTmp((tmp) => {
+    fs.mkdirSync(path.join(tmp, 'ios', 'DerivedData', 'Build', 'Products', 'Debug-iphonesimulator', 'App.app'), { recursive: true });
+    expect(findIosAppCandidates(tmp)).toEqual(['ios/DerivedData/Build/Products/Debug-iphonesimulator/App.app']);
+  }));
+
+  it('prefers the workspace\'s DerivedData build over the bare project\'s beside it', () => withTmp((tmp) => {
+    const project = path.join(tmp, 'proj');
+    fs.mkdirSync(path.join(project, 'ios', 'App.xcworkspace'), { recursive: true });
+    fs.mkdirSync(path.join(project, 'ios', 'App.xcodeproj'), { recursive: true });
+    const dd = path.join(tmp, 'DerivedData');
+    for (const [dir, ws] of [['App-aaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'App.xcworkspace'], ['App-bbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'App.xcodeproj']]) {
+      fs.mkdirSync(path.join(dd, dir, 'Build', 'Products', 'Debug-iphonesimulator', 'App.app'), { recursive: true });
+      fs.writeFileSync(path.join(dd, dir, 'info.plist'), `<plist><dict><key>WorkspacePath</key><string>${path.join(project, 'ios', ws)}</string></dict></plist>`);
+    }
+    expect(findDerivedDataApps(project, ['ios/App.xcworkspace', 'ios/App.xcodeproj'], 'iphonesimulator', dd))
+      .toEqual([path.join(dd, 'App-aaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Build', 'Products', 'Debug-iphonesimulator', 'App.app')]);
+  }));
+
+  it('hints a Release iOS build for React Native, whose Debug build needs Metro', () => {
+    const layout = { androidRoot: 'android' as const, iosProjects: ['ios/App.xcworkspace'], hasIosDir: true };
+    const hint = nativeBuildHint('ios', layout, true);
+    expect(hint).toContain('`cd ios && xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphonesimulator -derivedDataPath build build`');
+    expect(hint).toContain('under ios/build/Build/Products/Release-iphonesimulator/');
+    expect(hint).toContain('Metro');
+    expect(nativeBuildHint('ios', layout, false)).toContain('-configuration Debug');
+  });
 });

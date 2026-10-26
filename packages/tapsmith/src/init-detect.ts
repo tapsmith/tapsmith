@@ -32,7 +32,7 @@ export interface ProjectLayout {
 }
 
 /** Folders never searched for projects or builds: dependencies, tooling output and hidden folders. */
-const SKIPPED_DIR = /^(?:node_modules|Pods|Carthage|DerivedData|.*\.noindex|\..*)$/;
+const SKIPPED_DIR = /^(?:node_modules|Pods|Carthage|.*\.noindex|\..*)$/;
 
 /** Bundles and Xcode project packages: matched themselves, never searched inside. */
 const OPAQUE_DIR = /\.(?:app|xcodeproj|xcworkspace)$/;
@@ -95,11 +95,15 @@ export function hasIosProject(layout: ProjectLayout): boolean {
 
 /**
  * Returns project-relative APK paths (posix-style globs, deterministic order):
- * any Gradle module's `build/outputs/apk/`, so `android/app/…` in a React
- * Native project and `app/…` in an Android Studio one (PILOT-832).
+ * any Gradle module's `build/outputs/apk/` in the Android project, so
+ * `android/app/…` in a React Native project and `app/…` in an Android Studio
+ * one (PILOT-832). Outside an Android project there is nothing to search, and
+ * a walk of a home directory would stall init.
  */
 export function findApkCandidates(cwd: string): string[] {
-  return globSync('**/build/outputs/apk/**/*.apk', {
+  const root = detectProjectLayout(cwd).androidRoot;
+  if (root === undefined) return [];
+  return globSync(`${root === '.' ? '' : `${root}/`}**/build/outputs/apk/**/*.apk`, {
     cwd,
     nodir: true,
     posix: true,
@@ -184,7 +188,11 @@ function isTestRunner(app: string): boolean {
  * extensions) and XCUITest runners are not apps to test.
  */
 function findIosBuilds(cwd: string, sdk: AppleSdk): string[] {
-  return globSync(`**/*-${sdk}/*.app`, {
+  // `ios/` in a React Native project, else the whole native project; nothing
+  // outside an iOS project, as for APKs.
+  const layout = detectProjectLayout(cwd);
+  if (!hasIosProject(layout)) return [];
+  return globSync(`${layout.hasIosDir ? 'ios/' : ''}**/*-${sdk}/*.app`, {
     cwd,
     posix: true,
     maxDepth: 12,
@@ -249,16 +257,28 @@ export function findDerivedDataApps(
   // name (`My App` becomes `My_App-<hash>`).
   const wanted = new Set(xcodeProjects.map((p) => realpathOr(path.resolve(cwd, p))));
   const apps: string[] = [];
+  const matched: Array<{ workspace: string; apps: string[] }> = [];
   for (const entry of entries.sort()) {
     if (entry.lastIndexOf('-') <= 0) continue;
     const dir = path.join(derivedData, entry);
-    const workspace = derivedDataWorkspace(dir);
-    if (!workspace || !wanted.has(realpathOr(workspace))) continue;
+    const recorded = derivedDataWorkspace(dir);
+    const workspace = recorded === undefined ? undefined : realpathOr(recorded);
+    if (!workspace || !wanted.has(workspace)) continue;
     const products = path.join(dir, 'Build', 'Products');
-    apps.push(...globSync(`*-${sdk}/*.app`, { cwd: products, posix: true })
-      .filter((app) => !isTestRunner(app))
-      .sort()
-      .map((app) => path.join(products, app)));
+    matched.push({
+      workspace,
+      apps: globSync(`*-${sdk}/*.app`, { cwd: products, posix: true })
+        .filter((app) => !isTestRunner(app))
+        .sort()
+        .map((app) => path.join(products, app)),
+    });
+  }
+  // A build of the bare .xcodeproj beside a workspace (opened by mistake,
+  // before `pod install`) is not the app: the workspace's build wins.
+  const workspaces = new Set(matched.filter((m) => m.workspace.endsWith('.xcworkspace')).map((m) => path.dirname(m.workspace)));
+  for (const m of matched) {
+    if (m.workspace.endsWith('.xcodeproj') && workspaces.has(path.dirname(m.workspace))) continue;
+    apps.push(...m.apps);
   }
   return apps;
 }
@@ -313,10 +333,13 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
     return 'Build one for the simulator first (in the folder with your Xcode project: `xcodebuild -workspace <App>.xcworkspace -scheme <App> -sdk iphonesimulator -derivedDataPath build build`, '
       + `or -project <App>.xcodeproj without a workspace; see ${BUILD_DOCS})`;
   }
+  // A React Native Debug build loads its JavaScript from Metro: Release runs on its own.
+  const configuration = reactNative ? 'Release' : 'Debug';
   const cd = target.dir === '.' ? '' : `cd ${shellArg(target.dir)} && `;
-  const out = `${target.dir === '.' ? '' : `${target.dir}/`}build/Build/Products/Debug-iphonesimulator/`;
-  return `Build one for the simulator first with \`${cd}xcodebuild ${target.flag} ${shellArg(target.file)} -scheme ${shellArg(target.scheme)} -configuration Debug -sdk iphonesimulator -derivedDataPath build build\`, `
-    + `which writes the .app under ${out} (\`xcodebuild -list\` shows the schemes if yours is not ${target.scheme}; see ${BUILD_DOCS})`;
+  const out = `${target.dir === '.' ? '' : `${target.dir}/`}build/Build/Products/${configuration}-iphonesimulator/`;
+  const metro = reactNative ? '; a Release build bundles the JavaScript, while a Debug one needs Metro running' : '';
+  return `Build one for the simulator first with \`${cd}xcodebuild ${target.flag} ${shellArg(target.file)} -scheme ${shellArg(target.scheme)} -configuration ${configuration} -sdk iphonesimulator -derivedDataPath build build\`, `
+    + `which writes the .app under ${out} (\`xcodebuild -list\` shows the schemes if yours is not ${target.scheme}${metro}; see ${BUILD_DOCS})`;
 }
 
 /**
