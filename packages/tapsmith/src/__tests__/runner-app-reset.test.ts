@@ -962,15 +962,20 @@ describe('runner app reset (declared isolation)', () => {
           tapsmithTest('b', async () => { recordAction('tap'); });
           tapsmithDescribe('inner', () => { tapsmithTest('c', async () => { recordAction('tap'); }); });
         });
+        tapsmithDescribe('again', () => { tapsmithTest('broken again', async () => { throw new Error('boom'); }); });
+        // its first runnable test is nested
+        tapsmithDescribe('wrapper', () => {
+          tapsmithDescribe('nested', () => { tapsmithTest('n', async () => { recordAction('tap'); }); });
+        });
         tapsmithDescribe('last', () => { tapsmithTest('z', async () => {}); });
         const ctx = popContext();
 
         const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn })));
 
-        const [, a, b, c] = collectResults(result);
-        // the test the entry fresh start ran for shows its teardown
-        expect(traceOutline(a.tracePath!).slice(0, 3)).toEqual(['group-start:afterAll Hooks', 'action:logout', 'group-end:afterAll Hooks']);
-        for (const t of [b, c]) {
+        const [, a, b, c, , n] = collectResults(result);
+        expect(n.fullName).toBe('wrapper > nested > n');
+        // the teardown belongs to the failed test's setup, not to any of these
+        for (const t of [a, b, c, n]) {
           expect(traceOutline(t.tracePath!)).not.toContain('action:logout');
           expectFreshSetup(t.tracePath!);
         }
