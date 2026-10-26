@@ -1817,8 +1817,9 @@ function retryReplaysSetup(
  *
  * Once it succeeds, each scope's setup view is refreshed with what was just
  * recorded up to and including that scope, so the tests after it replay
- * this setup rather than the one the file began with; the full recording is
- * returned (nothing without a collector: there is nothing true to replay).
+ * this setup rather than the one the file began with. Returns the full
+ * recording (none without a collector: there is nothing true to replay)
+ * and where in the collector the setup began, after the teardown.
  */
 async function runRetrySetup(
   chain: readonly ScopeRetryStep[],
@@ -1827,7 +1828,7 @@ async function runRetrySetup(
   phase: string,
   state: RetryState,
   announced: string | undefined,
-): Promise<ScopeSetupRecording | undefined> {
+): Promise<{ recording?: ScopeSetupRecording; setupFrom: { events: number; actions: number } }> {
   // Where each step's setup ends in the collector, to snapshot it at the end.
   const cuts: Array<{ events: number; actions: number }> = [];
   let fromEvent = 0;
@@ -1896,15 +1897,16 @@ async function runRetrySetup(
     if (collector) cuts.push({ events: collector.events.length, actions: collector.currentActionIndex });
   }
   state.setupBroken = false;
+  const setupFrom = { events: fromEvent, actions: fromIndex };
   if (!collector) {
     for (const step of chain) step.view.recs = [];
-    return undefined;
+    return { setupFrom };
   }
   // The last actions' screenshots land asynchronously.
   await collector.flushPendingCaptures();
   const recs = snapshotSetup(collector, fromEvent, fromIndex, cuts, announced, state);
   chain.forEach((step, i) => { step.view.recs = [recs[i]]; });
-  return recs[recs.length - 1];
+  return { recording: recs[recs.length - 1], setupFrom };
 }
 
 function replayBeforeAllEvents(
@@ -2215,6 +2217,10 @@ async function runSuiteContext(
   // Set when a beforeAll hook called test.skip(): the scope runs on with
   // every test skipped, so its afterAll hooks still run (PILOT-546).
   let skippedByBeforeAll = false;
+  // Where this scope's recording starts after an entry fresh start's
+  // teardown: the teardown belongs to the failed test's setup, not to the
+  // setup this scope's tests replay.
+  let freshSetupFrom: { events: number; actions: number } | undefined;
 
   try {
     const runScopeSetup = async (): Promise<void> => {
@@ -2224,7 +2230,8 @@ async function runSuiteContext(
           `fresh start after a failure, before ${parentPrefix}`, retryState, beforeAllFirstFullName,
         );
         // The enclosing scope's later children start from this setup too.
-        inherited.view.recs = fresh ? [fresh] : [];
+        inherited.view.recs = fresh.recording ? [fresh.recording] : [];
+        freshSetupFrom = fresh.setupFrom;
       }
       if (needsScopeReset) {
         // The declared app reset is fixture setup: it runs first, in its own
@@ -2391,7 +2398,21 @@ async function runSuiteContext(
   // above), so it replaces the inherited view rather than extending it. A
   // scope that adds no setup shares its parent's view, so a refresh of that
   // view reaches it too.
-  const ownRecording = beforeAllCollector ? setupRecording(beforeAllCollector, beforeAllFirstFullName) : undefined;
+  if (beforeAllCollector && freshSetupFrom) await beforeAllCollector.flushPendingCaptures();
+  const ownRecording = !beforeAllCollector
+    ? undefined
+    : freshSetupFrom
+      ? snapshotSetup(
+          beforeAllCollector, freshSetupFrom.events, freshSetupFrom.actions,
+          [{ events: beforeAllCollector.events.length, actions: beforeAllCollector.currentActionIndex }],
+          beforeAllFirstFullName, retryState,
+        )[0]
+      : setupRecording(beforeAllCollector, beforeAllFirstFullName);
+  // The test the entry fresh start ran for (and streamed to live) shows all
+  // of it, teardown included, as a fresh-started test's own trace does.
+  const firstTestRecording = beforeAllCollector && freshSetupFrom
+    ? setupRecording(beforeAllCollector, beforeAllFirstFullName)
+    : undefined;
   const view: SetupView = ownRecording || hasRetryStep
     ? { recs: ownRecording ? [ownRecording] : inherited.view.recs }
     : inherited.view;
@@ -2512,7 +2533,11 @@ async function runSuiteContext(
 
       // A fresh start records live into this attempt's own trace (below);
       // anything else on a first attempt replays the scope's current setup.
-      const setupRecs = attempt === 0 && !retrySetupRuns ? view.recs : [];
+      const setupRecs = attempt > 0 || retrySetupRuns
+        ? []
+        : firstTestRecording && fullName === beforeAllFirstFullName && view.recs[0] === ownRecording
+          ? [firstTestRecording]
+          : view.recs;
       const setupActionCount = setupRecs.reduce((n, r) => n + r.actionCount, 0);
       let traceCollector: TraceCollector | null = null;
       // Devices whose network capture the daemon confirmed this attempt.
@@ -2813,7 +2838,7 @@ async function runSuiteContext(
               retryState, fullName,
             );
             // This scope's later tests start from this setup, not the original.
-            view.recs = fresh ? [fresh] : [];
+            view.recs = fresh.recording ? [fresh.recording] : [];
           }
           if (policy.scope === 'test' && canReset) {
             await runTracedAppReset(traceCollector, opts, policy, {

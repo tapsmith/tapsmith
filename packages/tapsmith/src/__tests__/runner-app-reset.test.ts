@@ -948,6 +948,37 @@ describe('runner app reset (declared isolation)', () => {
       }
     });
 
+    it('a describe fresh-started at its entry: its later tests and nested describes replay no teardown', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-entry-later-'));
+      const d = makeDevice();
+      logResets(d, []);
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        tapsmithAfterAll(async () => { recordAction('logout'); });
+        tapsmithDescribe('first', () => { tapsmithTest('broken', async () => { throw new Error('boom'); }); });
+        tapsmithDescribe('second', () => {
+          tapsmithTest('a', async () => { recordAction('tap'); });
+          tapsmithTest('b', async () => { recordAction('tap'); });
+          tapsmithDescribe('inner', () => { tapsmithTest('c', async () => { recordAction('tap'); }); });
+        });
+        tapsmithDescribe('last', () => { tapsmithTest('z', async () => {}); });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn })));
+
+        const [, a, b, c] = collectResults(result);
+        // the test the entry fresh start ran for shows its teardown
+        expect(traceOutline(a.tracePath!).slice(0, 3)).toEqual(['group-start:afterAll Hooks', 'action:logout', 'group-end:afterAll Hooks']);
+        for (const t of [b, c]) {
+          expect(traceOutline(t.tracePath!)).not.toContain('action:logout');
+          expectFreshSetup(t.tracePath!);
+        }
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
     it('removes the temp dirs a fresh start kept for later replays when the file ends', async () => {
       const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-cleanup-'));
       const tmp = path.join(tempRoot, 'tmp');
