@@ -126,12 +126,7 @@ Tapsmith installs and launches a build of your app; it does not build it for you
 
 A native Android or iOS project works with Tapsmith as it is. Tapsmith is an npm package, though, so your repository gains a `package.json`, a `node_modules/` folder, `tapsmith.config.ts` and a `tests/` folder. Put them at the root of the repository, beside `settings.gradle.kts` or the `.xcodeproj`: that is where `tapsmith init` looks for the project and its builds.
 
-```bash
-npm init -y && npm install -D tapsmith   # creates package.json and node_modules/
-npx tapsmith init                        # adds node_modules/ to .gitignore if it isn't ignored yet
-```
-
-Then build the app at the root of the repository, which is also where CI builds it:
+Build the app first, at the root of the repository (which is also where CI builds it), so `tapsmith init` finds the build:
 
 ```bash
 # Android (Android Studio project): writes app/build/outputs/apk/debug/app-debug.apk
@@ -140,6 +135,13 @@ Then build the app at the root of the repository, which is also where CI builds 
 # iOS Simulator (Xcode project): writes build/Build/Products/Debug-iphonesimulator/MyApp.app
 xcodebuild -project MyApp.xcodeproj -scheme MyApp \
   -configuration Debug -sdk iphonesimulator -derivedDataPath build build
+```
+
+Then add Tapsmith and run the setup wizard:
+
+```bash
+npm init -y && npm install -D tapsmith   # creates package.json and node_modules/
+npx tapsmith init                        # adds node_modules/ to .gitignore if it isn't ignored yet
 ```
 
 - **Android.** A native debug APK runs without any dev server, and Gradle signs it with the debug keystore, so it installs on any emulator or device. The release APK of Android Studio's project templates is unsigned and does not install: test the debug build, or configure release signing first. A module not named `app` writes to `<module>/build/outputs/apk/`.

@@ -379,3 +379,20 @@ describe('DerivedData workspace preference with an unbuilt workspace (PILOT-832)
     expect(findDerivedDataApps(project, ['ios/App.xcworkspace', 'ios/App.xcodeproj'], 'iphonesimulator', dd)).toEqual([app]);
   }));
 });
+
+describe('DerivedData workspace preference is per project (PILOT-832)', () => {
+  it('keeps an unrelated project\'s build beside a workspace of another name', () => withTmp((tmp) => {
+    const project = path.join(tmp, 'proj');
+    fs.mkdirSync(path.join(project, 'Main.xcworkspace'), { recursive: true });
+    fs.mkdirSync(path.join(project, 'Sample.xcodeproj'), { recursive: true });
+    const dd = path.join(tmp, 'DerivedData');
+    const apps: string[] = [];
+    for (const [dir, ws, app] of [['Main-aaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Main.xcworkspace', 'Main.app'], ['Sample-bbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'Sample.xcodeproj', 'Sample.app']]) {
+      const appDir = path.join(dd, dir, 'Build', 'Products', 'Debug-iphonesimulator', app);
+      fs.mkdirSync(appDir, { recursive: true });
+      apps.push(appDir);
+      fs.writeFileSync(path.join(dd, dir, 'info.plist'), `<plist><dict><key>WorkspacePath</key><string>${path.join(project, ws)}</string></dict></plist>`);
+    }
+    expect(findDerivedDataApps(project, ['Main.xcworkspace', 'Sample.xcodeproj'], 'iphonesimulator', dd)).toEqual(apps);
+  }));
+});
