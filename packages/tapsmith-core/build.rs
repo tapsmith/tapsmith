@@ -11,10 +11,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Try monorepo-relative path first, fall back to local copy (used by cross builds
     // where only the crate directory is mounted into the Docker container).
-    let (proto_path, include_dir) = if PathBuf::from("../../proto/tapsmith.proto").exists() {
-        (PathBuf::from("../../proto/tapsmith.proto"), "../../proto")
+    let (proto_path, include_dir): (PathBuf, PathBuf) = if PathBuf::from(
+        "../../proto/tapsmith.proto",
+    )
+    .exists()
+    {
+        (
+            PathBuf::from("../../proto/tapsmith.proto"),
+            PathBuf::from("../../proto"),
+        )
     } else if PathBuf::from("proto/tapsmith.proto").exists() {
-        (PathBuf::from("proto/tapsmith.proto"), "proto")
+        (
+            PathBuf::from("proto/tapsmith.proto"),
+            PathBuf::from("proto"),
+        )
     } else {
         panic!(
             "Proto file not found. Expected at ../../proto/tapsmith.proto (monorepo) or proto/tapsmith.proto (cross build)"
@@ -22,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut protos: Vec<PathBuf> = vec![proto_path.clone()];
-    let mut includes: Vec<&str> = vec![include_dir];
+    let mut includes: Vec<PathBuf> = vec![include_dir];
 
     // The mitmproxy_ipc IPC proto is only needed on macOS (the ios_redirect
     // module that uses it is cfg-gated). Compiling it only when targeting
@@ -37,11 +47,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         protos.push(vendored);
-        includes.push("vendor");
+        includes.push(PathBuf::from("vendor"));
         println!("cargo:rerun-if-changed=vendor/mitmproxy_ipc.proto");
     }
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(true)
         .build_client(false)
         .compile_protos(&protos, &includes)?;

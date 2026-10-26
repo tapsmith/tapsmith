@@ -40,7 +40,7 @@ cargo clippy -- -D warnings  # lint (warnings are errors)
 cargo test
 cargo build --release
 ```
-Requires `protobuf-compiler` installed for tonic-build.
+Requires `protobuf-compiler` installed for tonic-prost-build.
 
 ### Android agent (`agent/`)
 ```bash

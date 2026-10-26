@@ -156,7 +156,7 @@ npm run build         # tsc -> dist/
 
 ### Rust daemon
 
-Needs `protobuf-compiler` installed for `tonic-build`.
+Needs `protobuf-compiler` installed for `tonic-prost-build`.
 
 ```bash
 cd packages/tapsmith-core

@@ -11,9 +11,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use md5::{Digest, Md5};
 use rcgen::{
-    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     KeyUsagePurpose,
 };
+use rustls::pki_types::CertificateDer;
 use rustls::ServerConfig;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::Mutex;
@@ -27,8 +28,12 @@ const CA_KEY_FILENAME: &str = "ca-key.pem";
 
 /// MITM certificate authority that generates per-host TLS certificates.
 pub struct MitmAuthority {
-    ca_cert: rcgen::Certificate,
-    ca_key: KeyPair,
+    /// DER of the CA certificate exactly as persisted in `ca.pem` (the one
+    /// pushed to devices).
+    ca_cert_der: CertificateDer<'static>,
+    /// Issuer (subject DN, key identifier method, key usages and signing key)
+    /// used to sign per-host leaf certificates.
+    ca_issuer: Issuer<'static, KeyPair>,
     ca_pem_path: PathBuf,
     host_cache: Mutex<HashMap<String, Arc<ServerConfig>>>,
 }
@@ -64,7 +69,7 @@ impl MitmAuthority {
     /// "old-style" subject hash: MD5 of the DER-encoded subject name,
     /// first 4 bytes read as little-endian u32, formatted as 8-char lowercase hex.
     pub fn device_cert_filename(&self) -> Result<String> {
-        let der = self.ca_cert.der();
+        let der = &self.ca_cert_der;
         let (_, cert) = x509_parser::certificate::X509Certificate::from_der(der)
             .map_err(|e| anyhow::anyhow!("Failed to parse CA cert DER: {e}"))?;
 
@@ -101,7 +106,7 @@ impl MitmAuthority {
             .push(ExtendedKeyUsagePurpose::ServerAuth);
 
         let cert = params
-            .signed_by(&host_key, &self.ca_cert, &self.ca_key)
+            .signed_by(&host_key, &self.ca_issuer)
             .context("Failed to sign host certificate")?;
 
         let cert_der = cert.der().clone();
@@ -160,6 +165,8 @@ impl MitmAuthority {
         // Persist to disk
         let cert_pem = ca_cert.pem();
         let key_pem = ca_key.serialize_pem();
+        let ca_cert_der = ca_cert.der().clone();
+        let ca_issuer = Issuer::new(params, ca_key);
         std::fs::write(cert_path, &cert_pem)
             .with_context(|| format!("Failed to write CA cert to {}", cert_path.display()))?;
         std::fs::write(key_path, &key_pem)
@@ -176,8 +183,8 @@ impl MitmAuthority {
         info!(path = %cert_path.display(), "MITM CA certificate saved");
 
         Ok(Self {
-            ca_cert,
-            ca_key,
+            ca_cert_der,
+            ca_issuer,
             ca_pem_path: cert_path.to_path_buf(),
             host_cache: Mutex::new(HashMap::new()),
         })
@@ -191,16 +198,20 @@ impl MitmAuthority {
 
         let ca_key = KeyPair::from_pem(&key_pem).context("Failed to parse CA key from PEM")?;
 
-        // Parse the existing CA cert so we can use it as an issuer
-        let ca_params = CertificateParams::from_ca_cert_pem(&cert_pem)
+        let ca_cert_der = rustls_pemfile::certs(&mut cert_pem.as_bytes())
+            .next()
+            .context("No certificate found in CA PEM")?
+            .context("Failed to parse CA cert PEM")?;
+
+        // Use the stored CA cert as the issuer of leaf certificates. Leaves
+        // are signed with the issuer's subject and key identifier, so they
+        // chain to the cert already installed on devices.
+        let ca_issuer = Issuer::from_ca_cert_der(&ca_cert_der, ca_key)
             .context("Failed to parse CA cert params from PEM")?;
-        let ca_cert = ca_params
-            .self_signed(&ca_key)
-            .context("Failed to reconstruct CA certificate from stored PEM")?;
 
         Ok(Self {
-            ca_cert,
-            ca_key,
+            ca_cert_der,
+            ca_issuer,
             ca_pem_path: cert_path.to_path_buf(),
             host_cache: Mutex::new(HashMap::new()),
         })
@@ -285,6 +296,58 @@ mod tests {
             format!("{expected_hash}.0"),
             "Our hash must match openssl x509 -subject_hash_old"
         );
+    }
+
+    /// Run an in-memory TLS handshake for `host` against `server_config`,
+    /// with a client that trusts only the CA in `ca_pem`.
+    fn handshake_trusting(ca_pem: &Path, host: &str, server_config: Arc<ServerConfig>) {
+        let mut roots = rustls::RootCertStore::empty();
+        let pem = fs::read(ca_pem).unwrap();
+        for cert in rustls_pemfile::certs(&mut pem.as_slice()) {
+            roots.add(cert.unwrap()).unwrap();
+        }
+        let client_config = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        let server_name = rustls::pki_types::ServerName::try_from(host.to_string()).unwrap();
+        let mut client =
+            rustls::ClientConnection::new(Arc::new(client_config), server_name).unwrap();
+        let mut server = rustls::ServerConnection::new(server_config).unwrap();
+
+        for _ in 0..10 {
+            if !client.is_handshaking() && !server.is_handshaking() {
+                return;
+            }
+            let mut buf = Vec::new();
+            client.write_tls(&mut buf).unwrap();
+            server.read_tls(&mut buf.as_slice()).unwrap();
+            server.process_new_packets().unwrap();
+            let mut buf = Vec::new();
+            server.write_tls(&mut buf).unwrap();
+            client.read_tls(&mut buf.as_slice()).unwrap();
+            client
+                .process_new_packets()
+                .expect("client must accept the leaf as chaining to the persisted CA");
+        }
+        panic!("TLS handshake did not complete");
+    }
+
+    #[tokio::test]
+    async fn leaf_certs_chain_to_persisted_ca_after_reload() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let dir = tempfile::tempdir().unwrap();
+        let cert_path = dir.path().join("ca.pem");
+        let key_path = dir.path().join("ca-key.pem");
+        let fresh = MitmAuthority::generate_new(&cert_path, &key_path).unwrap();
+        let config = fresh.server_config_for_host("example.com").await.unwrap();
+        handshake_trusting(&cert_path, "example.com", config);
+
+        // A CA loaded from disk (the common path: every daemon start after the
+        // first) must sign leaves that chain to the cert devices already trust.
+        let loaded = MitmAuthority::load_from_disk(&cert_path, &key_path).unwrap();
+        let config = loaded.server_config_for_host("example.com").await.unwrap();
+        handshake_trusting(&cert_path, "example.com", config);
     }
 
     #[tokio::test]

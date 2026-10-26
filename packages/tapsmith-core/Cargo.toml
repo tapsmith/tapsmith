@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 tonic = "0.14"
 prost = "0.14"
+tonic-prost = "0.14"
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1"
 hyper = { version = "1", features = ["server", "http1"] }
@@ -59,4 +60,4 @@ futures-util = { version = "0.3", default-features = false, features = ["sink"] 
 
 [build-dependencies]
 protoc-bin-vendored = "3"
-tonic-build = "0.14"
+tonic-prost-build = "0.14"
