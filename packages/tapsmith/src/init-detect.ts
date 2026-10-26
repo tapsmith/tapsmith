@@ -91,31 +91,53 @@ function hasDirNamed(dir: string, name: string): boolean {
 }
 
 const GRADLE_ROOT_FILES = ['settings.gradle.kts', 'settings.gradle', 'gradlew'];
+const GRADLE_SETTINGS = ['settings.gradle.kts', 'settings.gradle'];
 
-/**
- * React Native's `android/`, or another case of it (a native repository's
- * `Android/` beside `iOS/`) when that folder is a Gradle project itself.
- */
-function androidDir(cwd: string): string | undefined {
-  if (hasDirNamed(cwd, 'android')) return 'android';
+function hasAnyFile(dir: string, names: readonly string[]): boolean {
+  return names.some((f) => fs.existsSync(path.join(dir, f)));
+}
+
+/** The folder in `cwd` whose name is `name` in any case (`iOS/` for `ios`), exact case first. */
+function dirNamedAnyCase(cwd: string, name: string): string | undefined {
+  if (hasDirNamed(cwd, name)) return name;
   let entries: string[];
   try {
     entries = fs.readdirSync(cwd);
   } catch {
     return undefined;
   }
-  return entries.find((e) => e.toLowerCase() === 'android' && isDir(path.join(cwd, e))
-    && GRADLE_ROOT_FILES.some((f) => fs.existsSync(path.join(cwd, e, f))));
+  return entries.find((e) => e.toLowerCase() === name && isDir(path.join(cwd, e)));
+}
+
+/**
+ * The Gradle project: React Native's `android/` (another case of it, such as
+ * a native repository's `Android/` beside `iOS/`, only when it is a Gradle
+ * project itself), else a root `settings.gradle`. A root `settings.gradle`
+ * whose `android/` has no settings of its own wins: there `android/` is one
+ * of the root project's modules (libGDX), built with the root's gradlew.
+ */
+function androidRootOf(cwd: string): string | undefined {
+  const rootGradle = hasAnyFile(cwd, GRADLE_SETTINGS);
+  const dir = dirNamedAnyCase(cwd, 'android');
+  if (dir !== undefined) {
+    const ownSettings = hasAnyFile(path.join(cwd, dir), GRADLE_SETTINGS);
+    if (ownSettings || (!rootGradle && (dir === 'android' || hasAnyFile(path.join(cwd, dir), GRADLE_ROOT_FILES)))) return dir;
+  }
+  return rootGradle ? '.' : undefined;
 }
 
 export function detectProjectLayout(cwd: string): ProjectLayout {
-  const android = androidDir(cwd);
-  const rootGradle = GRADLE_ROOT_FILES.slice(0, 2).some((f) => fs.existsSync(path.join(cwd, f)));
   const hasIosDir = hasDirNamed(cwd, 'ios');
+  // A native repository's `iOS/` folder may hold its Xcode project a level
+  // deeper (`iOS/MyApp/MyApp.xcodeproj`); React Native's ios/ is searched as before.
+  const iosVariant = hasIosDir ? undefined : dirNamedAnyCase(cwd, 'ios');
   const iosProjects = hasIosDir
     ? xcodeProjectsIn(cwd, ['ios/*.xcworkspace', 'ios/*.xcodeproj', 'ios/*/*.xcworkspace', 'ios/*/*.xcodeproj'])
-    : xcodeProjectsIn(cwd, ['*.xcworkspace', '*.xcodeproj', '*/*.xcworkspace', '*/*.xcodeproj']);
-  return { androidRoot: android ?? (rootGradle ? '.' : undefined), iosProjects, hasIosDir };
+    : xcodeProjectsIn(cwd, [
+      '*.xcworkspace', '*.xcodeproj', '*/*.xcworkspace', '*/*.xcodeproj',
+      ...(iosVariant ? [`${iosVariant}/*/*.xcworkspace`, `${iosVariant}/*/*.xcodeproj`] : []),
+    ]);
+  return { androidRoot: androidRootOf(cwd), iosProjects, hasIosDir };
 }
 
 /** The layout has an Android project. */

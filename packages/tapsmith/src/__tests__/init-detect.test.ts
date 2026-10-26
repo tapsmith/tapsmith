@@ -413,3 +413,30 @@ describe('a native repository\'s Android/ Gradle project (PILOT-832)', () => {
     expect(detectProjectLayout(tmp).androidRoot).toBeUndefined();
   }));
 });
+
+describe('root Gradle projects with an android/ module, and iOS/<App>/ projects (PILOT-832)', () => {
+  it('keeps the root as the Gradle project when android/ is one of its modules (libGDX)', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'settings.gradle'));
+    touch(path.join(tmp, 'gradlew'));
+    touch(path.join(tmp, 'android', 'build.gradle'));
+    touch(path.join(tmp, 'android', 'build', 'outputs', 'apk', 'debug', 'android-debug.apk'));
+    touch(path.join(tmp, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
+    const layout = detectProjectLayout(tmp);
+    expect(layout.androidRoot).toBe('.');
+    expect(findApkCandidates(tmp)).toEqual(['android/build/outputs/apk/debug/android-debug.apk', 'app/build/outputs/apk/debug/app-debug.apk']);
+    expect(nativeBuildHint('android', layout, false)).not.toContain('cd android');
+  }));
+
+  it('still takes android/ when it has its own settings.gradle (React Native, or a repo root with android/ and ios/)', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'settings.gradle.kts'));
+    touch(path.join(tmp, 'android', 'settings.gradle'));
+    expect(detectProjectLayout(tmp).androidRoot).toBe('android');
+  }));
+
+  it('finds an Xcode project two folders down in a native iOS/ folder', () => withTmp((tmp) => {
+    fs.mkdirSync(path.join(tmp, 'iOS', 'MyApp', 'MyApp.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'iOS', 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'MyApp.app'), { recursive: true });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['iOS/MyApp/MyApp.xcodeproj'], hasIosDir: false });
+    expect(findIosAppCandidates(tmp)).toEqual(['iOS/build/Build/Products/Debug-iphonesimulator/MyApp.app']);
+  }));
+});
