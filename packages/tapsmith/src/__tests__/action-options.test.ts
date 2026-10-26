@@ -132,6 +132,19 @@ describe('per-call { timeout } (PILOT-840)', () => {
     expect(Date.now() - start).toBeLessThan(5_000);
   });
 
+  it('dragTo({ timeout }) shares one budget between both waits and the drag, so the whole call ends within it', async () => {
+    const start = Date.now();
+    // The source is there at once; the drop zone appears 1.5 s into a 2 s timeout.
+    const findElements = vi.fn(async (sel: unknown) =>
+      JSON.stringify(sel).includes('Bin') && Date.now() - start < 1_500 ? found([]) : found([el()]));
+    const c = client({ findElements: findElements as unknown as TapsmithGrpcClient['findElements'] });
+    const source = new ElementHandle(c, _text('Card'), DEVICE_TIMEOUT);
+    await source.dragTo(new ElementHandle(c, _text('Bin'), DEVICE_TIMEOUT), { timeout: 2_000 });
+    const budget = (vi.mocked(c.dragAndDrop).mock.calls[0] as unknown[])[2] as number;
+    // What is left of the 2 s, not a fresh 2 s after the target wait.
+    expect(budget).toBeLessThanOrEqual(2_000 - 1_400);
+  });
+
   it('keeps the other options when a timeout is given', async () => {
     const c = client();
     const handle = new ElementHandle(c, _text('Field'), DEVICE_TIMEOUT);
@@ -232,6 +245,32 @@ describe('wrong options throw at the call instead of being ignored (PILOT-840)',
     await expect(handle.highlight({ duration: 5 } as { durationMs?: number })).rejects.toThrow('highlight() accepts: durationMs.');
     await expect(handle.scrollIntoView({ timeout: 5 } as { speed?: number }))
       .rejects.toThrow('scrollIntoView() accepts: direction, maxScrolls, speed.');
+  });
+
+  it.each([
+    [{ label: 'Two' }, /Playwright's \{ value \} and \{ label \} forms are not supported/],
+    [{ value: 'two' }, /Playwright's \{ value \} and \{ label \} forms are not supported/],
+    [{ index: 2, timeout: 3000 }, /A timeout goes in the second argument: selectOption\(option, \{ timeout \}\)/],
+    [{ index: -1 }, /but got \{"index":-1\}/],
+    [{ index: 1.5 }, /non-negative integer index/],
+    [5, /but got 5 \(a number\)/],
+    [null, /but got null/],
+  ])('selectOption(%j) throws instead of selecting the first option', async (option, message) => {
+    const c = client();
+    const err = await new ElementHandle(c, _role('combobox'), DEVICE_TIMEOUT)
+      .selectOption(option as unknown as string).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TypeError);
+    expect((err as Error).message).toMatch(message);
+    expect(c.selectOption).not.toHaveBeenCalled();
+  });
+
+  it('selectOption() still takes the option text or { index }', async () => {
+    const c = client();
+    const picker = new ElementHandle(c, _role('combobox'), DEVICE_TIMEOUT);
+    await picker.selectOption('Two');
+    await picker.selectOption({ index: 0 });
+    await picker.selectOption({ index: 3 }, { timeout: 5_000 });
+    expect(vi.mocked(c.selectOption).mock.calls.map((a) => (a as unknown[])[1])).toEqual(['Two', { index: 0 }, { index: 3 }]);
   });
 
   it('accepts keys set to undefined, as a spread of optional fields produces', async () => {

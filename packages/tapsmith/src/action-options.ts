@@ -37,6 +37,15 @@ function describeValue(value: unknown): string {
   if (Array.isArray(value)) return 'an array';
   if (typeof value === 'string') return `${JSON.stringify(value)} (a string)`;
   if (typeof value === 'number' || typeof value === 'boolean') return `${String(value)} (a ${typeof value})`;
+  if (typeof value === 'object') {
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(value);
+    } catch {
+      // A cycle or a BigInt: name the type only.
+    }
+    return json !== undefined && json.length <= 80 ? json : 'an object';
+  }
   return `a ${typeof value}`;
 }
 
@@ -90,4 +99,30 @@ export function checkTimeout(method: string, timeout: unknown): number | undefin
     );
   }
   return timeout;
+}
+
+/**
+ * Check `selectOption()`'s first argument: the option's text, or
+ * `{ index }` with a non-negative integer. Playwright's `{ value }` and
+ * `{ label }` forms used to reach the device as index 0 and select the first
+ * option without an error.
+ *
+ * @throws TypeError for anything else.
+ */
+export function checkSelectOption(option: unknown): void {
+  if (typeof option === 'string') return;
+  const isObject = typeof option === 'object' && option !== null && !Array.isArray(option);
+  const entries = isObject ? Object.entries(option).filter(([, v]) => v !== undefined) : [];
+  const index = isObject ? (option as { index?: unknown }).index : undefined;
+  if (
+    isObject && entries.length === 1 && entries[0][0] === 'index' &&
+    typeof index === 'number' && Number.isInteger(index) && index >= 0
+  ) return;
+  const playwrightForm = entries.some(([k]) => k === 'value' || k === 'label');
+  throw new TypeError(
+    'selectOption(): expected the option\'s text (a string) or { index: n } with a non-negative integer index, ' +
+    `but got ${describeValue(option)}.` +
+    (playwrightForm ? ' Playwright\'s { value } and { label } forms are not supported: pass the option\'s text instead.' : '') +
+    (entries.some(([k]) => k === 'timeout') ? ' A timeout goes in the second argument: selectOption(option, { timeout }).' : ''),
+  );
 }

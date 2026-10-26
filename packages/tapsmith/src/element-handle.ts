@@ -32,7 +32,7 @@ import { tracedAction } from './trace/traced-action.js';
 import { sleep, isAbortError } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
-import { checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
+import { checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
 
 // ─── Public types ───
 
@@ -2699,15 +2699,27 @@ export class ElementHandle {
    *   device timeout.
    */
   async dragTo(target: ElementHandle, options?: TimeoutOptions): Promise<void> {
-    const call = this._forCall('dragTo()', options, ['timeout']);
-    if (call !== this) return call.dragTo(target._withTimeout(call._timeoutMs));
-    const { sourceTarget, targetTarget, remainingMs } = await this._tracedResolve('dragTo', 'swipe', async () => {
+    const timeout = checkTimeout('dragTo()', checkOptions('dragTo()', options, ['timeout'])?.timeout);
+    if (timeout !== undefined) return this._withTimeout(timeout)._dragTo(target, true);
+    return this._dragTo(target, false);
+  }
+
+  /**
+   * @internal — dragTo's body. With `shareBudget` (a per-call timeout) the
+   * waits for both ends and the drag itself share this handle's timeout, so
+   * the whole call ends within it; without, each end waits its own timeout.
+   */
+  private async _dragTo(target: ElementHandle, shareBudget: boolean): Promise<void> {
+    const { sourceTarget, targetTarget, remainingMs, dest } = await this._tracedResolve('dragTo', 'swipe', async () => {
+      const deadline = Date.now() + this._timeoutMs;
       const source = await this._strictResolve();
-      const targetRes = await target._strictResolve();
+      const dest = shareBudget ? target._withTimeout(Math.max(1, deadline - Date.now())) : target;
+      const targetRes = await dest._strictResolve();
       return {
         sourceTarget: await this._actionTarget(source.element),
-        targetTarget: await target._actionTarget(targetRes.element),
-        remainingMs: source.remainingMs,
+        targetTarget: await dest._actionTarget(targetRes.element),
+        remainingMs: shareBudget ? Math.max(1, deadline - Date.now()) : source.remainingMs,
+        dest,
       };
     });
     const dispatch = (st: ActionTarget, tt: ActionTarget): Promise<ActionResponse> =>
@@ -2731,7 +2743,7 @@ export class ElementHandle {
       } catch (err) {
         if (!isStaleElementError(err instanceof Error ? err.message : String(err))) throw err;
       }
-      return dispatch(await this._actionTarget(), await target._actionTarget());
+      return dispatch(await this._actionTarget(), await dest._actionTarget());
     }, 'Drag and drop failed');
   }
 
@@ -2880,6 +2892,7 @@ export class ElementHandle {
    *   auto-wait included. Defaults to the device timeout.
    */
   async selectOption(option: string | { index: number }, options?: TimeoutOptions): Promise<void> {
+    checkSelectOption(option);
     const call = this._forCall('selectOption()', options, ['timeout']);
     if (call !== this) return call.selectOption(option);
     const { target, remainingMs } = await this._tracedResolve('selectOption', 'other', async () => {
@@ -3068,9 +3081,11 @@ export class ElementHandle {
    * permanent spinner) a call can take the full timeout and then throws a
    * descriptive error instead of guessing. Use the polling forms there.
    *
-   * @param options.timeout - Bounds only the re-reads of a screen caught
-   *   mid-re-render, as Playwright's (deprecated) option does nothing more:
-   *   the call never waits for the element. Defaults to the device timeout.
+   * @param options.timeout - Replaces the device timeout for this call's
+   *   retries: re-reads of a screen caught mid-re-render, retries of a slow or
+   *   faulty agent, and the short settle wait before an absent answer (capped
+   *   at the timeout, so a very short one can answer before a lagging tree
+   *   catches up). It never makes the call wait for the element.
    */
   async isVisible(options?: TimeoutOptions): Promise<boolean> {
     return this._forCall('isVisible()', options, ['timeout'])._probeVisibility('isVisible');
@@ -3089,9 +3104,11 @@ export class ElementHandle {
    * device fault throws, and a screen that never stops re-rendering costs the
    * handle's timeout and then throws rather than answering `true`.
    *
-   * @param options.timeout - Bounds only the re-reads of a screen caught
-   *   mid-re-render; the call never waits for the element. Defaults to the
-   *   device timeout.
+   * @param options.timeout - Replaces the device timeout for this call's
+   *   retries: re-reads of a screen caught mid-re-render, retries of a slow or
+   *   faulty agent, and the short settle wait before an absent answer (capped
+   *   at the timeout, so a very short one can answer before a lagging tree
+   *   catches up). It never makes the call wait for the element.
    */
   async isHidden(options?: TimeoutOptions): Promise<boolean> {
     return this._forCall('isHidden()', options, ['timeout'])._probeVisibility('isHidden');

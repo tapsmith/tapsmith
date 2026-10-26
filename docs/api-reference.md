@@ -1100,7 +1100,7 @@ Unknown options and states throw a `TypeError`, as for [actions](#per-call-timeo
 
 #### Per-call timeout
 
-Every action, and every reader that waits for its element (`getText()`, `inputValue()`, `isEnabled()`, `isChecked()`, `isEditable()`, `boundingBox()`), takes a `timeout` option in milliseconds, as Playwright's do. It bounds the whole call — the auto-wait for the element and the action itself — and overrides the device timeout (the config's `timeout`, 30 s by default) for that call only. It may be shorter or longer than the device timeout.
+Every action except `scrollIntoView()` (bounded by its `maxScrolls`) and `highlight()`, and every reader that waits for its element (`getText()`, `inputValue()`, `isEnabled()`, `isChecked()`, `isEditable()`, `boundingBox()`), takes a `timeout` option in milliseconds, as Playwright's do. The options type is exported as `TimeoutOptions` (`import type { TimeoutOptions } from "tapsmith"`). It bounds the whole call — the auto-wait for the element and the action itself — and overrides the device timeout (the config's `timeout`, 30 s by default) for that call only. It may be shorter or longer than the device timeout.
 
 ```typescript
 await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });
@@ -1258,7 +1258,7 @@ await device.getByText("Top Section", { exact: true }).scrollIntoView({ directio
 
 #### `elementHandle.dragTo(target: ElementHandle, options?): Promise<void>`
 
-Drag this element to a target element. The [per-call timeout](#per-call-timeout) option bounds the wait for both elements and the drag.
+Drag this element to a target element. The [per-call timeout](#per-call-timeout) option is shared by the wait for both elements and the drag, so the whole call ends within it. Without it, each element waits for its own locator's timeout.
 
 ```typescript
 const source = device.getByText("Item 1", { exact: true });
@@ -1283,6 +1283,8 @@ Select an option from a native spinner or dropdown. Abstracts the tap-spinner, w
 await device.getByRole("combobox").selectOption("Option 2");
 await device.getByRole("combobox").selectOption({ index: 1 });
 ```
+
+`option` is the option's text or `{ index }` (a non-negative integer). Anything else, including Playwright's `{ value }` and `{ label }` forms, throws a `TypeError`.
 
 #### `elementHandle.focus(options?): Promise<void>`
 
@@ -1385,7 +1387,7 @@ for the handle's timeout and then throws a descriptive error, pointing at `expec
 > new screen is still appearing. To wait for visibility, use `await expect(x).toBeVisible()`; use
 > `isVisible()`/`isHidden()` only to branch on the current state.
 
-`isVisible()` and `isHidden()` take a `timeout` option, as Playwright's do, but it does not make them wait for the element. It bounds only the re-reads of a screen caught mid-re-render described above (Playwright ignores the option altogether).
+`isVisible()` and `isHidden()` take a `timeout` option, as Playwright's do, but it does not make them wait for the element (Playwright ignores the option altogether). It replaces the handle's timeout for the retries described above: re-reads of a screen caught mid-re-render, retries of a slow or faulty agent, and the settle wait before an absent answer, which is capped at the timeout — so a very short timeout can answer `false` before a lagging accessibility tree catches up.
 
 Only `isVisible()`, `isHidden()` and `exists()` are non-waiting. `isEnabled()`, `isChecked()` and `isEditable()`
 follow Playwright too: they wait for the element to be present and throw if it never appears, so a
