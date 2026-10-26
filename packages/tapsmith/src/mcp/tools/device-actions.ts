@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { deviceClientFor, deviceTargetFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
 import { isLocatorError, type EvaluatedLocator } from '../locator-eval.js';
-import { MCP_ACTION_RUN_TIMEOUT_MS, sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
+import { MCP_ACTION_RUN_TIMEOUT_MS, MCP_ACTION_TIMEOUT_MS, sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
 import type { ElementHandle } from '../../element-handle.js';
 
 /** The tool result for a daemon action: its error, or "OK". */
@@ -51,29 +51,40 @@ async function actOn(
 
 /**
  * `handle`, once its field is there, with a test's budget to type in. The
- * wait keeps the 5 s an agent's wrong locator should fail within; typing a
- * long string (on iOS, about ten characters a second) gets as long as a test
- * would give it. A tap is quick once its target is there, and keeps 5 s.
+ * wait keeps the 5 s an agent's wrong locator should fail within (or the
+ * tool's `timeout`); typing a long string (on iOS, about ten characters a
+ * second) gets as long as a test would give it, or the `timeout` when that is
+ * longer. A tap is quick once its target is there, and keeps 5 s.
  */
-async function acting(handle: ElementHandle): Promise<ElementHandle> {
-  await handle.waitFor({ state: 'attached' });
-  return handle._withTimeout(MCP_ACTION_RUN_TIMEOUT_MS);
+async function acting(handle: ElementHandle, timeout: number | undefined): Promise<ElementHandle> {
+  await handle.waitFor({ state: 'attached', timeout });
+  return handle._withTimeout(Math.max(MCP_ACTION_RUN_TIMEOUT_MS, timeout ?? 0));
 }
+
+/** Longest `timeout` an action tool takes: well inside an MCP client's own tool-call limit. */
+const MAX_TOOL_TIMEOUT_MS = 120_000;
+
+/** The `timeout` argument tapsmith_tap and tapsmith_type share (PILOT-840). */
+const timeoutArg = z.number().positive().max(MAX_TOOL_TIMEOUT_MS).optional().describe(
+  `How long to wait for the element, in milliseconds (default ${MCP_ACTION_TIMEOUT_MS}, at most ${MAX_TOOL_TIMEOUT_MS}), ` +
+  'as the action\'s { timeout } option does in a test. Raise it for an element that takes a while to appear.',
+);
 
 export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_tap',
-    'Tap a UI element matching the given Tapsmith locator, exactly as `await locator.tap()` in a test would (waits up to 5s for it; strict mode; chains, .filter(), .first()/.nth() and webview.* locators work). Use tapsmith_snapshot first to find the right locator.',
+    'Tap a UI element matching the given Tapsmith locator, exactly as `await locator.tap()` in a test would (waits up to 5s for it, or `timeout` ms; strict mode; chains, .filter(), .first()/.nth() and webview.* locators work). Use tapsmith_snapshot first to find the right locator.',
     {
       locator: z.string().describe('Tapsmith locator, e.g. device.getByRole("button", { name: "Login" })'),
+      timeout: timeoutArg,
       device: z.string().optional().describe(DEVICE_ARG_DESCRIPTION),
       project: z.string().optional().describe(PROJECT_ARG_DESCRIPTION),
     },
     // The SDK's own tap (PILOT-848): strict mode (PILOT-226), positions,
     // scoping and the enabled/hittable waits all behave as in a test.
-    async ({ locator, device, project }) => actOn(locator, { device, project }, dispatcher, async (evaluated) => {
-      if (evaluated.kind === 'webview') await evaluated.locator.click();
-      else await evaluated.handle.tap();
+    async ({ locator, timeout, device, project }) => actOn(locator, { device, project }, dispatcher, async (evaluated) => {
+      if (evaluated.kind === 'webview') await evaluated.locator.click({ timeout });
+      else await evaluated.handle.tap({ timeout });
     }),
   );
 
@@ -84,22 +95,23 @@ export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDi
       locator: z.string().describe('Tapsmith locator for the text field'),
       text: z.string().describe('Text to type'),
       clear: z.boolean().optional().describe('Clear existing text before typing. If the clear fails, the call returns that error and types nothing.'),
+      timeout: timeoutArg,
       device: z.string().optional().describe(DEVICE_ARG_DESCRIPTION),
       project: z.string().optional().describe(PROJECT_ARG_DESCRIPTION),
     },
-    async ({ locator, text, clear, device, project }) => actOn(locator, { device, project }, dispatcher, async (evaluated) => {
+    async ({ locator, text, clear, timeout, device, project }) => actOn(locator, { device, project }, dispatcher, async (evaluated) => {
       if (evaluated.kind === 'webview') {
         // A page field has no "type at the cursor": fill() replaces the
         // value, so appending means filling with what is already there.
-        const current = clear ? '' : await evaluated.locator.inputValue();
-        await evaluated.locator.fill(current + text);
+        const current = clear ? '' : await evaluated.locator.inputValue({ timeout });
+        await evaluated.locator.fill(current + text, { timeout });
       } else if (clear) {
         // clearAndType resolves the field once: clearing first and then
         // typing would re-resolve a locator the clear itself can break
         // (getByText("old value")), leaving the field empty.
-        await (await acting(evaluated.handle)).clearAndType(text);
+        await (await acting(evaluated.handle, timeout)).clearAndType(text);
       } else {
-        await (await acting(evaluated.handle)).type(text);
+        await (await acting(evaluated.handle, timeout)).type(text);
       }
     }),
   );

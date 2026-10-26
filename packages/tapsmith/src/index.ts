@@ -23,6 +23,7 @@ export {
   type BoundingBox,
   type LocatorOptions,
 } from './element-handle.js';
+export type { TimeoutOptions } from './action-options.js';
 
 // Assertions
 export { expect, flushSoftErrors, type TapsmithAssertions, type WebViewAssertions, type GenericAssertions, type PollOptions } from './expect.js';

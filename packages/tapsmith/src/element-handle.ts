@@ -32,6 +32,7 @@ import { tracedAction } from './trace/traced-action.js';
 import { sleep, isAbortError } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
+import { checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
 
 // ─── Public types ───
 
@@ -54,6 +55,8 @@ export interface BoundingBox {
  * @internal
  */
 export const POLL_INTERVAL_MS = 250;
+
+const WAIT_FOR_STATES: readonly string[] = ['visible', 'hidden', 'attached', 'detached'];
 /** Settle time after swipe-based scrolling.  On iOS, ScrollView momentum
  *  deceleration takes 300-500ms and the first tap during deceleration is
  *  consumed to stop the scroll rather than being delivered to child views.
@@ -1627,6 +1630,23 @@ export class ElementHandle {
   }
 
   /**
+   * @internal — Check a public method's options (PILOT-840) and return the
+   * handle the call should run on: `this`, or a copy re-timed to the options'
+   * `timeout` when one was given. A method that gets a copy back calls itself
+   * on it without the options, so the per-call timeout bounds every wait the
+   * call makes, and/or operands and scope parents included.
+   */
+  private _forCall<T extends object>(
+    method: string,
+    options: T | undefined,
+    allowed: readonly (keyof T & string)[],
+  ): ElementHandle {
+    const checked = checkOptions(method, options, allowed) as { timeout?: unknown } | undefined;
+    const timeout = checkTimeout(method, checked?.timeout);
+    return timeout === undefined ? this : this._withTimeout(timeout);
+  }
+
+  /**
    * @internal — Deep-clone a handle tree, overriding the timeout at every
    * node (and/or operands carry their own, often long, timeouts). Used by
    * assertion and waitFor poll ticks so a single tick is bounded by the short
@@ -2171,8 +2191,16 @@ export class ElementHandle {
     state?: 'visible' | 'hidden' | 'attached' | 'detached';
     timeout?: number;
   }): Promise<void> {
+    checkOptions('waitFor()', options, ['state', 'timeout']);
     const state = options?.state ?? 'visible';
-    const timeoutMs = options?.timeout ?? this._timeoutMs;
+    if (!WAIT_FOR_STATES.includes(state)) {
+      throw new TypeError(
+        `waitFor(): unknown state ${JSON.stringify(state)}. Use one of: ${WAIT_FOR_STATES.map((st) => `'${st}'`).join(', ')}.`,
+      );
+    }
+    // 0 keeps its meaning here (one check, no waiting), so only the positive
+    // check checkTimeout makes is skipped for it.
+    const timeoutMs = options?.timeout === 0 ? 0 : checkTimeout('waitFor()', options?.timeout) ?? this._timeoutMs;
     this._emitQueryStarted(`waitFor(${state})`);
     const start = Date.now();
 
@@ -2499,7 +2527,15 @@ export class ElementHandle {
     }
   }
 
-  async tap(): Promise<void> {
+  /**
+   * Tap this element, once it is enabled and nothing covers it (auto-waits).
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole tap,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async tap(options?: TimeoutOptions): Promise<void> {
+    const call = this._forCall('tap()', options, ['timeout']);
+    if (call !== this) return call.tap();
     const { target, remainingMs } = await this._tracedResolve('tap', 'tap', async () => {
       const { remainingMs, element } = await this._waitForEnabled('tap');
       return { target: await this._actionTarget(element), remainingMs };
@@ -2512,7 +2548,19 @@ export class ElementHandle {
       'Tap failed');
   }
 
-  async longPress(durationMs?: number): Promise<void> {
+  /**
+   * Long-press this element, once it is enabled and nothing covers it.
+   *
+   * @param options - How long to hold, in milliseconds (the agent's default
+   *   when omitted), either as a number or as `{ duration }`, plus an optional
+   *   `timeout` in milliseconds for the whole call (defaults to the device
+   *   timeout).
+   */
+  async longPress(options?: number | (TimeoutOptions & { duration?: number })): Promise<void> {
+    if (typeof options === 'number') return this.longPress({ duration: options });
+    const call = this._forCall('longPress()', options, ['duration', 'timeout']);
+    if (call !== this) return call.longPress({ duration: options?.duration });
+    const durationMs = options?.duration;
     const { target, remainingMs } = await this._tracedResolve('longPress', 'tap', async () => {
       const { remainingMs, element } = await this._waitForEnabled('longPress');
       return { target: await this._actionTarget(element), remainingMs };
@@ -2525,7 +2573,17 @@ export class ElementHandle {
       'Long press failed');
   }
 
-  async type(text: string, options?: { delay?: number }): Promise<void> {
+  /**
+   * Type `text` into this element.
+   *
+   * @param options.delay - Milliseconds between keystrokes; overrides the
+   *   config's `typingDelay` for this call.
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async type(text: string, options?: TimeoutOptions & { delay?: number }): Promise<void> {
+    const call = this._forCall('type()', options, ['delay', 'timeout']);
+    if (call !== this) return call.type(text, { delay: options?.delay });
     const { target, remainingMs } = await this._tracedResolve('type', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2539,7 +2597,17 @@ export class ElementHandle {
       'Type text failed', { inputValue: text });
   }
 
-  async clearAndType(text: string, options?: { delay?: number }): Promise<void> {
+  /**
+   * Replace this field's text with `text`.
+   *
+   * @param options.delay - Milliseconds between keystrokes; overrides the
+   *   config's `typingDelay` for this call.
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async clearAndType(text: string, options?: TimeoutOptions & { delay?: number }): Promise<void> {
+    const call = this._forCall('clearAndType()', options, ['delay', 'timeout']);
+    if (call !== this) return call.clearAndType(text, { delay: options?.delay });
     const { target, remainingMs } = await this._tracedResolve('clearAndType', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2553,7 +2621,15 @@ export class ElementHandle {
       'Clear and type failed', { inputValue: text });
   }
 
-  async clear(): Promise<void> {
+  /**
+   * Clear this field's text.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async clear(options?: TimeoutOptions): Promise<void> {
+    const call = this._forCall('clear()', options, ['timeout']);
+    if (call !== this) return call.clear();
     const { target, remainingMs } = await this._tracedResolve('clear', 'type', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2566,7 +2642,16 @@ export class ElementHandle {
       'Clear text failed');
   }
 
-  async scroll(direction: string, options?: { distance?: number }): Promise<void> {
+  /**
+   * Scroll inside this element in `direction`.
+   *
+   * @param options.distance - Fraction of the element to scroll across.
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async scroll(direction: string, options?: TimeoutOptions & { distance?: number }): Promise<void> {
+    const call = this._forCall('scroll()', options, ['distance', 'timeout']);
+    if (call !== this) return call.scroll(direction, { distance: options?.distance });
     const { target, remainingMs } = await this._tracedResolve('scroll', 'scroll', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2580,7 +2665,17 @@ export class ElementHandle {
 
   // ── Element Actions (PILOT-2) ──
 
-  async doubleTap(options?: { intervalMs?: number }): Promise<void> {
+  /**
+   * Double-tap this element, once it is enabled and nothing covers it.
+   *
+   * @param options.intervalMs - Milliseconds between the two taps; overrides
+   *   the config's `doubleTapInterval` for this call.
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async doubleTap(options?: TimeoutOptions & { intervalMs?: number }): Promise<void> {
+    const call = this._forCall('doubleTap()', options, ['intervalMs', 'timeout']);
+    if (call !== this) return call.doubleTap({ intervalMs: options?.intervalMs });
     const { target, remainingMs } = await this._tracedResolve('doubleTap', 'tap', async () => {
       const { remainingMs, element } = await this._waitForEnabled('doubleTap');
       return { target: await this._actionTarget(element), remainingMs };
@@ -2596,7 +2691,16 @@ export class ElementHandle {
       'Double tap failed');
   }
 
-  async dragTo(target: ElementHandle): Promise<void> {
+  /**
+   * Drag this element onto `target`.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   including the wait for both elements. Defaults to each locator's
+   *   device timeout.
+   */
+  async dragTo(target: ElementHandle, options?: TimeoutOptions): Promise<void> {
+    const call = this._forCall('dragTo()', options, ['timeout']);
+    if (call !== this) return call.dragTo(target._withTimeout(call._timeoutMs));
     const { sourceTarget, targetTarget, remainingMs } = await this._tracedResolve('dragTo', 'swipe', async () => {
       const source = await this._strictResolve();
       const targetRes = await target._strictResolve();
@@ -2631,7 +2735,16 @@ export class ElementHandle {
     }, 'Drag and drop failed');
   }
 
-  async setChecked(checked: boolean): Promise<void> {
+  /**
+   * Tap this checkbox, switch or radio button if it is not already in the
+   * `checked` state, then wait for the state to change.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait and state check included. Defaults to the device timeout.
+   */
+  async setChecked(checked: boolean, options?: TimeoutOptions): Promise<void> {
+    const call = this._forCall('setChecked()', options, ['timeout']);
+    if (call !== this) return call.setChecked(checked);
     const timeoutMs = this._timeoutMs;
     const deadline = Date.now() + timeoutMs;
 
@@ -2760,7 +2873,15 @@ export class ElementHandle {
     }, 'setChecked failed');
   }
 
-  async selectOption(option: string | { index: number }): Promise<void> {
+  /**
+   * Select `option` (by its text, or `{ index }`) in this picker.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async selectOption(option: string | { index: number }, options?: TimeoutOptions): Promise<void> {
+    const call = this._forCall('selectOption()', options, ['timeout']);
+    if (call !== this) return call.selectOption(option);
     const { target, remainingMs } = await this._tracedResolve('selectOption', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2772,7 +2893,15 @@ export class ElementHandle {
       'Select option failed');
   }
 
-  async screenshot(): Promise<Buffer> {
+  /**
+   * Capture a PNG screenshot of this element.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async screenshot(options?: TimeoutOptions): Promise<Buffer> {
+    const call = this._forCall('screenshot()', options, ['timeout']);
+    if (call !== this) return call.screenshot();
     const { remainingMs, element } = await this._strictResolve();
     const target = await this._actionTarget(element);
     const res = await this._dispatchTargeted(target, (t) => 'elementId' in t
@@ -2784,7 +2913,16 @@ export class ElementHandle {
     return res.data;
   }
 
-  async boundingBox(): Promise<BoundingBox | null> {
+  /**
+   * This element's bounds in screen points, or `null` when it reports none.
+   * Waits for the element like {@link find}.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the device timeout.
+   */
+  async boundingBox(options?: TimeoutOptions): Promise<BoundingBox | null> {
+    const call = this._forCall('boundingBox()', options, ['timeout']);
+    if (call !== this) return call.boundingBox();
     const info = await this.find();
     if (!info.bounds) return null;
     return {
@@ -2795,7 +2933,16 @@ export class ElementHandle {
     };
   }
 
-  async pinchIn(options?: { scale?: number }): Promise<void> {
+  /**
+   * Pinch in on (zoom out of) this element.
+   *
+   * @param options.scale - Pinch scale factor. Defaults to `0.5`.
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async pinchIn(options?: TimeoutOptions & { scale?: number }): Promise<void> {
+    const call = this._forCall('pinchIn()', options, ['scale', 'timeout']);
+    if (call !== this) return call.pinchIn({ scale: options?.scale });
     const { target, remainingMs } = await this._tracedResolve('pinchIn', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2808,7 +2955,16 @@ export class ElementHandle {
       'Pinch in failed');
   }
 
-  async pinchOut(options?: { scale?: number }): Promise<void> {
+  /**
+   * Pinch out on (zoom into) this element.
+   *
+   * @param options.scale - Pinch scale factor. Defaults to `2`.
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async pinchOut(options?: TimeoutOptions & { scale?: number }): Promise<void> {
+    const call = this._forCall('pinchOut()', options, ['scale', 'timeout']);
+    if (call !== this) return call.pinchOut({ scale: options?.scale });
     const { target, remainingMs } = await this._tracedResolve('pinchOut', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2821,7 +2977,15 @@ export class ElementHandle {
       'Pinch out failed');
   }
 
-  async focus(): Promise<void> {
+  /**
+   * Give this element input focus.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async focus(options?: TimeoutOptions): Promise<void> {
+    const call = this._forCall('focus()', options, ['timeout']);
+    if (call !== this) return call.focus();
     const { target, remainingMs } = await this._tracedResolve('focus', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2834,7 +2998,15 @@ export class ElementHandle {
       'Focus failed');
   }
 
-  async blur(): Promise<void> {
+  /**
+   * Remove input focus from this element.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the device timeout.
+   */
+  async blur(options?: TimeoutOptions): Promise<void> {
+    const call = this._forCall('blur()', options, ['timeout']);
+    if (call !== this) return call.blur();
     const { target, remainingMs } = await this._tracedResolve('blur', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2846,7 +3018,13 @@ export class ElementHandle {
       'Blur failed');
   }
 
+  /**
+   * Draw a highlight over this element on the device (a debugging aid).
+   *
+   * @param options.durationMs - How long the highlight stays, in milliseconds.
+   */
   async highlight(options?: { durationMs?: number }): Promise<void> {
+    checkOptions('highlight()', options, ['durationMs']);
     const { target, remainingMs } = await this._tracedResolve('highlight', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
@@ -2860,8 +3038,14 @@ export class ElementHandle {
 
   // ── Info accessors (convenience) ──
 
-  async getText(): Promise<string> {
-    const info = await this.find();
+  /**
+   * This element's text. Waits for the element like {@link find}.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the device timeout.
+   */
+  async getText(options?: TimeoutOptions): Promise<string> {
+    const info = await this._forCall('getText()', options, ['timeout']).find();
     return info.text;
   }
 
@@ -2883,9 +3067,13 @@ export class ElementHandle {
    * lands between frames — so on a screen that never stops changing (a
    * permanent spinner) a call can take the full timeout and then throws a
    * descriptive error instead of guessing. Use the polling forms there.
+   *
+   * @param options.timeout - Bounds only the re-reads of a screen caught
+   *   mid-re-render, as Playwright's (deprecated) option does nothing more:
+   *   the call never waits for the element. Defaults to the device timeout.
    */
-  async isVisible(): Promise<boolean> {
-    return this._probeVisibility('isVisible');
+  async isVisible(options?: TimeoutOptions): Promise<boolean> {
+    return this._forCall('isVisible()', options, ['timeout'])._probeVisibility('isVisible');
   }
 
   /**
@@ -2900,9 +3088,13 @@ export class ElementHandle {
    * Same caveats as {@link isVisible}: strict mode applies, a persistent
    * device fault throws, and a screen that never stops re-rendering costs the
    * handle's timeout and then throws rather than answering `true`.
+   *
+   * @param options.timeout - Bounds only the re-reads of a screen caught
+   *   mid-re-render; the call never waits for the element. Defaults to the
+   *   device timeout.
    */
-  async isHidden(): Promise<boolean> {
-    return this._probeVisibility('isHidden');
+  async isHidden(options?: TimeoutOptions): Promise<boolean> {
+    return this._forCall('isHidden()', options, ['timeout'])._probeVisibility('isHidden');
   }
 
   /**
@@ -2912,9 +3104,12 @@ export class ElementHandle {
    * present (up to the handle's timeout) and throws if it never appears —
    * only {@link isVisible}/{@link isHidden}/{@link exists} are non-waiting
    * presence probes.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the device timeout.
    */
-  async isEnabled(): Promise<boolean> {
-    const info = await this.find();
+  async isEnabled(options?: TimeoutOptions): Promise<boolean> {
+    const info = await this._forCall('isEnabled()', options, ['timeout']).find();
     return info.enabled;
   }
 
@@ -2923,9 +3118,12 @@ export class ElementHandle {
    *
    * Waits for the element to be present (up to the handle's timeout) and
    * throws if it never appears, like Playwright's `locator.isChecked()`.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the device timeout.
    */
-  async isChecked(): Promise<boolean> {
-    const info = await this.find();
+  async isChecked(options?: TimeoutOptions): Promise<boolean> {
+    const info = await this._forCall('isChecked()', options, ['timeout']).find();
     return info.checked;
   }
 
@@ -2935,9 +3133,12 @@ export class ElementHandle {
    *
    * Waits for the element to be present (up to the handle's timeout) and
    * throws if it never appears, like Playwright's `locator.isEditable()`.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the device timeout.
    */
-  async isEditable(): Promise<boolean> {
-    const info = await this.find();
+  async isEditable(options?: TimeoutOptions): Promise<boolean> {
+    const info = await this._forCall('isEditable()', options, ['timeout']).find();
     return info.role === 'textfield' && info.enabled;
   }
 
@@ -3159,8 +3360,15 @@ export class ElementHandle {
     }
   }
 
-  async inputValue(): Promise<string> {
-    const info = await this.find();
+  /**
+   * This field's current value (its text). Waits for the element like
+   * {@link find}.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the device timeout.
+   */
+  async inputValue(options?: TimeoutOptions): Promise<string> {
+    const info = await this._forCall('inputValue()', options, ['timeout']).find();
     return info.text;
   }
 
@@ -3182,6 +3390,7 @@ export class ElementHandle {
     maxScrolls?: number;
     speed?: number;
   }): Promise<void> {
+    checkOptions('scrollIntoView()', options, ['direction', 'maxScrolls', 'speed']);
     const direction = options?.direction ?? 'up';
     const maxScrolls = options?.maxScrolls ?? 5;
     const speed = options?.speed ?? 2000;

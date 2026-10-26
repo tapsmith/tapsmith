@@ -505,6 +505,26 @@ describe('tapsmith_tap', () => {
     expect(daemon.tap.mock.calls[0][1] as number).toBeLessThanOrEqual(5_000);
   });
 
+  it('waits as long as its timeout argument says, as tap({ timeout }) does in a test (PILOT-840)', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Go' })] });
+    hoisted.client = daemon.client;
+    await callTool('tapsmith_tap', { locator: 'device.getByText("Go")', timeout: 12_000 });
+    const budget = daemon.tap.mock.calls[0][1] as number;
+    expect(budget).toBeGreaterThan(10_000);
+    expect(budget).toBeLessThanOrEqual(12_000);
+  });
+
+  it('refuses a timeout that is not a positive number of milliseconds, and taps nothing (PILOT-840)', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Go' })] });
+    hoisted.client = daemon.client;
+    for (const timeout of [0, -1, '5000', 10 * 60_000]) {
+      const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Go")', timeout });
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('timeout');
+    }
+    expect(daemon.tap).not.toHaveBeenCalled();
+  });
+
   it('points an agent that missed its target at the inspection tools', async () => {
     const daemon = makeDaemon({ elements: [] });
     hoisted.client = daemon.client;
@@ -561,6 +581,13 @@ describe('tapsmith_type', () => {
     await callTool('tapsmith_type', { locator: 'device.getByText("Bio")', text: 'x'.repeat(150) });
     const budget = daemon.typeText.mock.calls[0][2] as number;
     expect(budget).toBeGreaterThan(25_000);
+  });
+
+  it('takes a timeout for the wait, and gives typing that long when it is longer than a test\'s budget (PILOT-840)', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Bio' })] });
+    hoisted.client = daemon.client;
+    await callTool('tapsmith_type', { locator: 'device.getByText("Bio")', text: 'hi', timeout: 60_000 });
+    expect(daemon.typeText.mock.calls[0][2] as number).toBeGreaterThan(50_000);
   });
 
   it('clears and types in one step when asked', async () => {
@@ -937,9 +964,18 @@ describe('webview.* locators in the action tools', () => {
     hoisted.client = makeDaemon().client;
     const { locator } = fakePage('sam@');
     await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'example.com' });
-    expect(locator.fill).toHaveBeenLastCalledWith('sam@example.com');
+    expect(locator.fill).toHaveBeenLastCalledWith('sam@example.com', { timeout: undefined });
     await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'new', clear: true });
-    expect(locator.fill).toHaveBeenLastCalledWith('new');
+    expect(locator.fill).toHaveBeenLastCalledWith('new', { timeout: undefined });
+  });
+
+  it('passes the timeout argument to the page field and button (PILOT-840)', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage('');
+    await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'a', timeout: 9_000 });
+    expect(locator.fill).toHaveBeenLastCalledWith('a', { timeout: 9_000 });
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")', timeout: 9_000 });
+    expect(locator.click).toHaveBeenLastCalledWith({ timeout: 9_000 });
   });
 
   it('counts a webview locator in the page for tapsmith_test_locator', async () => {

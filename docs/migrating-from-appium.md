@@ -55,20 +55,20 @@ Appium has clients in many languages. The examples here use [WebdriverIO](https:
 
 | Appium (WebdriverIO) | Tapsmith |
 |---|---|
-| `el.click()` | [`locator.tap()`](api-reference.md#elementhandletap-promisevoid) |
-| `el.setValue("hi")` | [`locator.clearAndType("hi")`](api-reference.md#elementhandleclearandtypetext-string-options--delay-number--promisevoid) |
-| `el.addValue("hi")` | [`locator.type("hi")`](api-reference.md#elementhandletypetext-string-options--delay-number--promisevoid) (into a field that already has text, `type()` replaces it on Android and adds to it on iOS) |
-| `el.clearValue()` | [`locator.clear()`](api-reference.md#elementhandleclear-promisevoid) |
-| `el.getText()` | [`locator.getText()`](api-reference.md#elementhandlegettext-promisestring), or assert with [`expect(locator).toHaveText()`](api-reference.md#tohavetextexpected-string--regexp--arraystring--regexp-options-promisevoid) |
-| `el.isDisplayed()` | [`locator.isVisible()`](api-reference.md#elementhandleisvisible-promiseboolean) |
+| `el.click()` | [`locator.tap()`](api-reference.md#elementhandletapoptions-promisevoid) |
+| `el.setValue("hi")` | [`locator.clearAndType("hi")`](api-reference.md#elementhandleclearandtypetext-string-options-promisevoid) |
+| `el.addValue("hi")` | [`locator.type("hi")`](api-reference.md#elementhandletypetext-string-options-promisevoid) (into a field that already has text, `type()` replaces it on Android and adds to it on iOS) |
+| `el.clearValue()` | [`locator.clear()`](api-reference.md#elementhandleclearoptions-promisevoid) |
+| `el.getText()` | [`locator.getText()`](api-reference.md#elementhandlegettextoptions-promisestring), or assert with [`expect(locator).toHaveText()`](api-reference.md#tohavetextexpected-string--regexp--arraystring--regexp-options-promisevoid) |
+| `el.isDisplayed()` | [`locator.isVisible()`](api-reference.md#elementhandleisvisibleoptions-promiseboolean) |
 | `el.waitForDisplayed({ timeout })` | [`await expect(locator).toBeVisible({ timeout })`](api-reference.md#tobevisibleoptions-promisevoid), or [`locator.waitFor()`](api-reference.md#elementhandlewaitforoptions-promisevoid) |
 | `el.waitForDisplayed({ reverse: true })` | `await expect(locator).toBeHidden()` |
 | `el.waitForEnabled()` | `await expect(locator).toBeEnabled()`, or nothing: `tap()` already waits for the element to be enabled |
 | `driver.pause(2000)` | Nothing: delete it |
-| `mobile: scroll` / `mobile: scrollGesture` / UiScrollable | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid), or [`locator.scroll()`](api-reference.md#elementhandlescrolldirection-string-options--distance-number--promisevoid) on a scroll view |
-| `mobile: swipeGesture`, W3C actions | [`device.swipe()`](api-reference.md#deviceswipedirection-string-options-swipeoptions-promisevoid), [`locator.dragTo()`](api-reference.md#elementhandledragtotarget-elementhandle-promisevoid), [`device.dragXY()`](api-reference.md#devicedragxyfrom--x-number-y-number--to--x-number-y-number--options--duration-number--promisevoid) |
-| `mobile: longClickGesture` / `mobile: doubleClickGesture` | [`locator.longPress()`](api-reference.md#elementhandlelongpressdurationms-number-promisevoid) / [`locator.doubleTap()`](api-reference.md#elementhandledoubletapoptions--intervalms-number--promisevoid) |
-| `mobile: pinchOpenGesture` / `mobile: pinchCloseGesture` | [`locator.pinchOut()`](api-reference.md#elementhandlepinchoutoptions--scale-number--promisevoid) / [`locator.pinchIn()`](api-reference.md#elementhandlepinchinoptions--scale-number--promisevoid) |
+| `mobile: scroll` / `mobile: scrollGesture` / UiScrollable | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid), or [`locator.scroll()`](api-reference.md#elementhandlescrolldirection-string-options-promisevoid) on a scroll view |
+| `mobile: swipeGesture`, W3C actions | [`device.swipe()`](api-reference.md#deviceswipedirection-string-options-swipeoptions-promisevoid), [`locator.dragTo()`](api-reference.md#elementhandledragtotarget-elementhandle-options-promisevoid), [`device.dragXY()`](api-reference.md#devicedragxyfrom--x-number-y-number--to--x-number-y-number--options--duration-number--promisevoid) |
+| `mobile: longClickGesture` / `mobile: doubleClickGesture` | [`locator.longPress()`](api-reference.md#elementhandlelongpressoptions-promisevoid) / [`locator.doubleTap()`](api-reference.md#elementhandledoubletapoptions-promisevoid) |
+| `mobile: pinchOpenGesture` / `mobile: pinchCloseGesture` | [`locator.pinchOut()`](api-reference.md#elementhandlepinchoutoptions-promisevoid) / [`locator.pinchIn()`](api-reference.md#elementhandlepinchinoptions-promisevoid) |
 | Tap at coordinates (W3C actions) | [`device.tapXY(x, y)`](api-reference.md#devicetapxyx-number-y-number-promisevoid) |
 | `mobile: hideKeyboard` | [`device.hideKeyboard()`](api-reference.md#devicehidekeyboard-promisevoid) |
 | `mobile: pressKey` / `driver.back()` | [`device.pressKey()`](api-reference.md#devicepresskeykey-string-promisevoid) / [`device.pressBack()`](api-reference.md#devicepressback-promisevoid-android-only) (Android) |

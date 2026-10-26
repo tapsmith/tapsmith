@@ -175,11 +175,12 @@ Returns a JSON object with `matched` (boolean), `count` (number), and `elements`
 
 #### `tapsmith_tap`
 
-Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` in a test would: it waits up to 5 seconds for the element, and a locator that matches more than one element is refused (strict mode) rather than tapping the first. A `webview.*` locator is clicked in the page.
+Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` in a test would: it waits up to 5 seconds for the element (or `timeout`), and a locator that matches more than one element is refused (strict mode) rather than tapping the first. A `webview.*` locator is clicked in the page.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `locator` | string | Yes | Tapsmith locator, e.g. `device.getByRole("button", { name: "Login" })` |
+| `timeout` | number | No | How long the tap may take, waiting for the element included, in milliseconds (default 5000, at most 120000), as `tap({ timeout })` in a test. |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
 #### `tapsmith_type`
@@ -191,6 +192,7 @@ Type text into an element matching the locator, as `locator.type(text)` in a tes
 | `locator` | string | Yes | Tapsmith locator for the text field |
 | `text` | string | Yes | Text to type |
 | `clear` | boolean | No | Clear existing text before typing (default: false). If the clear fails, the call returns that error and types nothing. |
+| `timeout` | number | No | How long to wait for the field, in milliseconds (default 5000, at most 120000). A timeout over 30 seconds also gives the typing that long. |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
 #### `tapsmith_swipe`

@@ -8,6 +8,7 @@ import {
 } from './element-handle.js';
 import { WebViewLocator } from './webview-locator.js';
 import { escapeJsString } from './js-string-escape.js';
+import { checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
 import { cssIdSelector } from './css-selector.js';
 import type { TraceCollector } from './trace/trace-collector.js';
 import { extractStack } from './trace/trace-collector.js';
@@ -254,9 +255,15 @@ export class WebViewHandle {
     }
   }
 
-  private async _traced<T>(action: string, selector: string | undefined, fn: (deadline: number) => Promise<T>, finderJs?: string): Promise<T> {
+  private async _traced<T>(
+    action: string,
+    selector: string | undefined,
+    fn: (deadline: number) => Promise<T>,
+    finderJs?: string,
+    timeoutMs: number = this._timeoutMs,
+  ): Promise<T> {
     const ctx = this._traceCtx;
-    if (!ctx) return fn(Date.now() + this._timeoutMs);
+    if (!ctx) return fn(Date.now() + timeoutMs);
 
     const stack = extractStack(new Error().stack ?? '');
     const sourceLocation = stack[0];
@@ -282,7 +289,7 @@ export class WebViewHandle {
     }, actionIndex);
 
     const start = Date.now();
-    const deadline = start + this._timeoutMs;
+    const deadline = start + timeoutMs;
     let success = true;
     let error: string | undefined;
     let result: T;
@@ -774,15 +781,15 @@ export class WebViewHandle {
   // ─── Locator-based actions (used by WebViewLocator) ───
 
   /** @internal */
-  async _clickLocator(loc: WebViewLocator): Promise<void> {
+  async _clickLocator(loc: WebViewLocator, timeoutMs?: number): Promise<void> {
     return this._traced('click', loc._selector, async (deadline) => {
       await this._resolveLocatorStrict(loc, remainingUntil(deadline));
       await this._evaluate(`(${loc._finderJs}).click()`, remainingUntil(deadline));
-    }, loc._finderJs);
+    }, loc._finderJs, timeoutMs);
   }
 
   /** @internal */
-  async _fillLocator(loc: WebViewLocator, value: string): Promise<void> {
+  async _fillLocator(loc: WebViewLocator, value: string, timeoutMs?: number): Promise<void> {
     return this._traced('fill', loc._selector, async (deadline) => {
       await this._resolveLocatorStrict(loc, remainingUntil(deadline));
       const escaped = JSON.stringify(value);
@@ -792,38 +799,38 @@ export class WebViewHandle {
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       })()`, remainingUntil(deadline));
-    }, loc._finderJs);
+    }, loc._finderJs, timeoutMs);
   }
 
   /** @internal */
-  async _textContentLocator(loc: WebViewLocator): Promise<string> {
+  async _textContentLocator(loc: WebViewLocator, timeoutMs?: number): Promise<string> {
     return this._traced('textContent', loc._selector, async (deadline) => {
       await this._resolveLocatorStrict(loc, remainingUntil(deadline));
       const result = await this._evaluate(`(${loc._finderJs}).textContent`, remainingUntil(deadline));
       return (result as string) ?? '';
-    }, loc._finderJs);
+    }, loc._finderJs, timeoutMs);
   }
 
   /** @internal */
-  async _innerHTMLLocator(loc: WebViewLocator): Promise<string> {
+  async _innerHTMLLocator(loc: WebViewLocator, timeoutMs?: number): Promise<string> {
     return this._traced('innerHTML', loc._selector, async (deadline) => {
       await this._resolveLocatorStrict(loc, remainingUntil(deadline));
       const result = await this._evaluate(`(${loc._finderJs}).innerHTML`, remainingUntil(deadline));
       return (result as string) ?? '';
-    }, loc._finderJs);
+    }, loc._finderJs, timeoutMs);
   }
 
   /** @internal */
-  async _inputValueLocator(loc: WebViewLocator): Promise<string> {
+  async _inputValueLocator(loc: WebViewLocator, timeoutMs?: number): Promise<string> {
     return this._traced('inputValue', loc._selector, async (deadline) => {
       await this._resolveLocatorStrict(loc, remainingUntil(deadline));
       const result = await this._evaluate(`(${loc._finderJs}).value`, remainingUntil(deadline));
       return (result as string) ?? '';
-    }, loc._finderJs);
+    }, loc._finderJs, timeoutMs);
   }
 
   /** @internal */
-  async _getAttributeLocator(loc: WebViewLocator, name: string): Promise<string | null> {
+  async _getAttributeLocator(loc: WebViewLocator, name: string, timeoutMs?: number): Promise<string | null> {
     return this._traced('getAttribute', loc._selector, async (deadline) => {
       await this._resolveLocatorStrict(loc, remainingUntil(deadline));
       const result = await this._evaluate(
@@ -831,7 +838,7 @@ export class WebViewHandle {
         remainingUntil(deadline),
       );
       return result as string | null;
-    }, loc._finderJs);
+    }, loc._finderJs, timeoutMs);
   }
 
   /** @internal — Single-tick visibility query. Strict: an ambiguous locator
@@ -969,17 +976,31 @@ export class WebViewHandle {
 
   // ─── Public API ───
 
-  async click(selector: string): Promise<void> {
+  /**
+   * `webview.click(selector)` on the first element matching the CSS selector, once it is in the DOM.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   including the wait for the selector. Defaults to the WebView's timeout.
+   */
+  async click(selector: string, options?: TimeoutOptions): Promise<void> {
+    const timeout = checkTimeout('webview.click()', checkOptions('webview.click()', options, ['timeout'])?.timeout);
     return this._traced('click', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       await this._evaluate(
         `document.querySelector(${JSON.stringify(selector)}).click()`,
         remainingUntil(deadline),
       );
-    });
+    }, undefined, timeout);
   }
 
-  async fill(selector: string, value: string): Promise<void> {
+  /**
+   * `webview.fill(selector, value)` on the first element matching the CSS selector, once it is in the DOM.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   including the wait for the selector. Defaults to the WebView's timeout.
+   */
+  async fill(selector: string, value: string, options?: TimeoutOptions): Promise<void> {
+    const timeout = checkTimeout('webview.fill()', checkOptions('webview.fill()', options, ['timeout'])?.timeout);
     return this._traced('fill', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const escaped = JSON.stringify(value);
@@ -989,10 +1010,17 @@ export class WebViewHandle {
         el.dispatchEvent(new Event('input', { bubbles: true }));
         el.dispatchEvent(new Event('change', { bubbles: true }));
       })()`, remainingUntil(deadline));
-    });
+    }, undefined, timeout);
   }
 
-  async textContent(selector: string): Promise<string> {
+  /**
+   * `webview.textContent(selector)` on the first element matching the CSS selector, once it is in the DOM.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   including the wait for the selector. Defaults to the WebView's timeout.
+   */
+  async textContent(selector: string, options?: TimeoutOptions): Promise<string> {
+    const timeout = checkTimeout('webview.textContent()', checkOptions('webview.textContent()', options, ['timeout'])?.timeout);
     return this._traced('textContent', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
@@ -1000,10 +1028,17 @@ export class WebViewHandle {
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
-    });
+    }, undefined, timeout);
   }
 
-  async innerHTML(selector: string): Promise<string> {
+  /**
+   * `webview.innerHTML(selector)` on the first element matching the CSS selector, once it is in the DOM.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   including the wait for the selector. Defaults to the WebView's timeout.
+   */
+  async innerHTML(selector: string, options?: TimeoutOptions): Promise<string> {
+    const timeout = checkTimeout('webview.innerHTML()', checkOptions('webview.innerHTML()', options, ['timeout'])?.timeout);
     return this._traced('innerHTML', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
@@ -1011,10 +1046,17 @@ export class WebViewHandle {
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
-    });
+    }, undefined, timeout);
   }
 
-  async getAttribute(selector: string, name: string): Promise<string | null> {
+  /**
+   * `webview.getAttribute(selector, name)` on the first element matching the CSS selector, once it is in the DOM.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   including the wait for the selector. Defaults to the WebView's timeout.
+   */
+  async getAttribute(selector: string, name: string, options?: TimeoutOptions): Promise<string | null> {
+    const timeout = checkTimeout('webview.getAttribute()', checkOptions('webview.getAttribute()', options, ['timeout'])?.timeout);
     return this._traced('getAttribute', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
@@ -1022,10 +1064,17 @@ export class WebViewHandle {
         remainingUntil(deadline),
       );
       return result as string | null;
-    });
+    }, undefined, timeout);
   }
 
-  async inputValue(selector: string): Promise<string> {
+  /**
+   * `webview.inputValue(selector)` on the first element matching the CSS selector, once it is in the DOM.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   including the wait for the selector. Defaults to the WebView's timeout.
+   */
+  async inputValue(selector: string, options?: TimeoutOptions): Promise<string> {
+    const timeout = checkTimeout('webview.inputValue()', checkOptions('webview.inputValue()', options, ['timeout'])?.timeout);
     return this._traced('inputValue', selector, async (deadline) => {
       await this._waitForSelector(selector, remainingUntil(deadline));
       const result = await this._evaluate(
@@ -1033,7 +1082,7 @@ export class WebViewHandle {
         remainingUntil(deadline),
       );
       return (result as string) ?? '';
-    });
+    }, undefined, timeout);
   }
 
   async isVisible(selector: string): Promise<boolean> {

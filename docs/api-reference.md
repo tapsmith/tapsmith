@@ -1083,7 +1083,9 @@ await device.getByTestId("lazy-section").waitFor({ state: "attached" });
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `state` | `'visible' \| 'hidden' \| 'attached' \| 'detached'` | `'visible'` | Target state to wait for |
-| `timeout` | `number` | Device timeout (30s) | Maximum time to wait in milliseconds |
+| `timeout` | `number` | Device timeout (30s) | Maximum time to wait in milliseconds. `0` checks once without waiting |
+
+Unknown options and states throw a `TypeError`, as for [actions](#per-call-timeout).
 
 **States:**
 
@@ -1096,12 +1098,29 @@ await device.getByTestId("lazy-section").waitFor({ state: "attached" });
 
 ### Actions
 
-#### `elementHandle.tap(): Promise<void>`
+#### Per-call timeout
+
+Every action, and every reader that waits for its element (`getText()`, `inputValue()`, `isEnabled()`, `isChecked()`, `isEditable()`, `boundingBox()`), takes a `timeout` option in milliseconds, as Playwright's do. It bounds the whole call — the auto-wait for the element and the action itself — and overrides the device timeout (the config's `timeout`, 30 s by default) for that call only. It may be shorter or longer than the device timeout.
+
+```typescript
+await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });
+await device.getByPlaceholder("Email").type("user@example.com", { delay: 50, timeout: 10_000 });
+const label = await device.getByTestId("status").getText({ timeout: 2000 });
+```
+
+The timeout must be a positive number. Unlike Playwright, `0` does not mean "no limit": it is refused, so pass a long timeout instead.
+
+Options are checked when the call is made, so a mistake fails at once rather than being ignored. Tests usually run without a type check, so TypeScript does not catch these. An unknown option (`tap({ timout: 5000 })`), an options argument that is not an object (`tap(5000)`) and an invalid timeout throw a `TypeError` naming the method and the options it accepts. A Playwright option with no Tapsmith equivalent, such as `force`, `trial` or `position`, gets a message saying so. Options set to `undefined` are ignored.
+
+#### `elementHandle.tap(options?): Promise<void>`
 
 Tap this element.
 
+- `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
+
 ```typescript
 await device.getByRole("button", { name: "Submit" }).tap();
+await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });
 ```
 
 **Covered elements.** Like a Playwright click, a tap auto-waits for the element to be enabled and then for nothing to be drawn over it. If something covers the point it would tap, the tap waits for the cover to go away. Covers include the software keyboard, a bar or window drawn over the element, and another control painted on top of it (a button, link, text input, list cell, alert, sheet…). If the cover clears within the action timeout, the tap goes ahead. If it is still there at the timeout, the tap fails instead of tapping the cover: `Element is covered by the keyboard …` or `Element is covered by button "Overlay" …`. When the keyboard or a bar covers only part of the element, the tap lands on the visible part. `doubleTap()`, `longPress()`, and the tap that `type()`, `clear()` and `focus()` use to focus a field follow the same rules. A field that already has focus is not tapped at all when the keyboard, or a control on the same screen, covers it (typically its own keyboard): typing reaches it anyway. A dialog or other window over the field is waited out like any other cover, since it takes the input. If the element goes away, or turns into a different element, while its cover is being waited out, the action does not tap whatever replaced it: it looks the locator up again and fails as not found if nothing matches. If the keyboard covers an element that is not in a scroll view, dismiss it first (`device.hideKeyboard()`, or submit the field). A plain view that is not a control (for example an unlabeled backdrop) is not detected as a cover yet (PILOT-364).
@@ -1129,11 +1148,12 @@ An element that is off-screen auto-waits like any other, in case it scrolls or a
 
 On Android, an element that is *entirely* behind the keyboard is hidden from the accessibility tree. An action on it fails as not found (after waiting out the timeout) rather than as covered, and assertions such as `toBeVisible()` and `toHaveValue()` cannot see it until the keyboard is gone.
 
-#### `elementHandle.doubleTap(options?: { intervalMs?: number }): Promise<void>`
+#### `elementHandle.doubleTap(options?): Promise<void>`
 
 Double-tap this element.
 
 - `options.intervalMs?`: `number` — interval in milliseconds between the two taps. Overrides the global `doubleTapInterval` config for this call. Defaults to `100`. On iOS, the interval is used for the coordinate-based EventSynthesizer path; the XCUIElement path handles timing internally.
+- `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByText("Zoom here", { exact: true }).doubleTap();
@@ -1142,19 +1162,23 @@ await device.getByText("Zoom here", { exact: true }).doubleTap();
 await device.getByText("Zoom here").doubleTap({ intervalMs: 150 });
 ```
 
-#### `elementHandle.longPress(durationMs?: number): Promise<void>`
+#### `elementHandle.longPress(options?): Promise<void>`
 
 Long press this element.
 
+- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout).
+
 ```typescript
 await device.getByText("Item 1", { exact: true }).longPress(2000);
+await device.getByText("Item 1", { exact: true }).longPress({ duration: 2000, timeout: 5000 });
 ```
 
-#### `elementHandle.type(text: string, options?: { delay?: number }): Promise<void>`
+#### `elementHandle.type(text: string, options?): Promise<void>`
 
 Type text into this element.
 
 - `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay).
+- `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByPlaceholder("Email").type("user@example.com");
@@ -1169,19 +1193,20 @@ await device.getByPlaceholder("OTP").type("123456", { delay: 50 });
 > Enter key). Other ASCII control codes below `0x20` are dropped with
 > a one-shot warning log.
 
-#### `elementHandle.clearAndType(text: string, options?: { delay?: number }): Promise<void>`
+#### `elementHandle.clearAndType(text: string, options?): Promise<void>`
 
 Clear existing text and type new text.
 
 - `options.delay?`: `number` — delay in milliseconds between keystrokes. Same as `type()`.
+- `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.locator({ id: "search_box" }).clearAndType("new query");
 ```
 
-#### `elementHandle.clear(): Promise<void>`
+#### `elementHandle.clear(options?): Promise<void>`
 
-Clear the text content of this element.
+Clear the text content of this element. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 await device.locator({ id: "search_box" }).clear();
@@ -1196,9 +1221,9 @@ await device.locator({ id: "search_box" }).clear();
 > field can't hang the agent. Android uses the native `UiObject2.clear()`
 > API and isn't subject to this limit.
 
-#### `elementHandle.scroll(direction: string, options?: { distance?: number }): Promise<void>`
+#### `elementHandle.scroll(direction: string, options?): Promise<void>`
 
-Scroll this element in the given direction.
+Scroll this element in the given direction. Options: `distance` (below) and the [per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByTestId("product-list").scroll("down"); // a FlatList with testID="product-list"
@@ -1210,7 +1235,7 @@ The device agents don't apply `distance` yet: each call scrolls by a fixed step 
 
 Scroll the viewport until this element is visible on screen. Useful for reaching elements that are below the fold in a scrollable container.
 
-Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Taps do not scroll for you (see [Off-screen elements](#elementhandletap-promisevoid)), so call this first for an element that may be off-screen. It swipes up by default, which reveals what is below; pass `{ direction: "down" }` for an element above the screen, such as a row the list was scrolled past.
+Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Taps do not scroll for you (see [Off-screen elements](#elementhandletapoptions-promisevoid)), so call this first for an element that may be off-screen. It swipes up by default, which reveals what is below; pass `{ direction: "down" }` for an element above the screen, such as a row the list was scrolled past.
 
 If the element is already visible, this is a no-op — it returns without scrolling, so calling `scrollIntoView()` before every `tap()` is safe even when the target is on screen (an unnecessary swipe could otherwise shift it under a pinned app bar). When the element isn't found on the first check, Tapsmith waits for the UI to settle and re-checks before the first swipe, so a briefly stale accessibility tree (e.g. right after navigation) doesn't trigger a spurious scroll. A handle from `all()` is a live `.nth(i)` locator, so on a virtualised list the scroll stops on whatever row is at index `i` in the scrolled window — see the [`all()`](#elementhandleall-promiseelementhandle) section.
 
@@ -1231,9 +1256,9 @@ await device.getByDescription("Settings").tap();
 await device.getByText("Top Section", { exact: true }).scrollIntoView({ direction: "down" });
 ```
 
-#### `elementHandle.dragTo(target: ElementHandle): Promise<void>`
+#### `elementHandle.dragTo(target: ElementHandle, options?): Promise<void>`
 
-Drag this element to a target element.
+Drag this element to a target element. The [per-call timeout](#per-call-timeout) option bounds the wait for both elements and the drag.
 
 ```typescript
 const source = device.getByText("Item 1", { exact: true });
@@ -1241,52 +1266,52 @@ const target = device.getByText("Drop Zone", { exact: true });
 await source.dragTo(target);
 ```
 
-#### `elementHandle.setChecked(checked: boolean): Promise<void>`
+#### `elementHandle.setChecked(checked: boolean, options?): Promise<void>`
 
-Ensure a checkbox, switch, or radio button is in the desired state. Idempotent -- only taps if the current state differs from the desired state, and verifies the state changed after tapping. Like `tap()`, it does not scroll an off-screen element into view (see [Off-screen elements](#elementhandletap-promisevoid)).
+Ensure a checkbox, switch, or radio button is in the desired state. Idempotent -- only taps if the current state differs from the desired state, and verifies the state changed after tapping. The [per-call timeout](#per-call-timeout) option bounds the whole call, the check that the state changed included. Like `tap()`, it does not scroll an off-screen element into view (see [Off-screen elements](#elementhandletapoptions-promisevoid)).
 
 ```typescript
 await device.getByRole("switch", { name: "Dark Mode" }).setChecked(true);
 await device.getByRole("checkbox", { name: "Remember me" }).setChecked(false);
 ```
 
-#### `elementHandle.selectOption(option: string | { index: number }): Promise<void>`
+#### `elementHandle.selectOption(option: string | { index: number }, options?): Promise<void>`
 
-Select an option from a native spinner or dropdown. Abstracts the tap-spinner, wait-for-popup, tap-option pattern into a single action.
+Select an option from a native spinner or dropdown. Abstracts the tap-spinner, wait-for-popup, tap-option pattern into a single action. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 await device.getByRole("combobox").selectOption("Option 2");
 await device.getByRole("combobox").selectOption({ index: 1 });
 ```
 
-#### `elementHandle.focus(): Promise<void>`
+#### `elementHandle.focus(options?): Promise<void>`
 
-Programmatically focus this element. For text fields, this shows the keyboard.
+Programmatically focus this element. For text fields, this shows the keyboard. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 await device.getByRole("textfield", { name: "Email" }).focus();
 ```
 
-#### `elementHandle.blur(): Promise<void>`
+#### `elementHandle.blur(options?): Promise<void>`
 
-Remove focus from this element by tapping outside its bounds.
+Remove focus from this element by tapping outside its bounds. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 await device.getByRole("textfield", { name: "Email" }).blur();
 ```
 
-#### `elementHandle.pinchIn(options?: { scale?: number }): Promise<void>`
+#### `elementHandle.pinchIn(options?): Promise<void>`
 
-Perform a pinch-in (zoom out) gesture on this element.
+Perform a pinch-in (zoom out) gesture on this element. Options: `scale` (default `0.5`) and the [per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByText("Map", { exact: true }).pinchIn();
 await device.getByText("Map", { exact: true }).pinchIn({ scale: 0.3 });
 ```
 
-#### `elementHandle.pinchOut(options?: { scale?: number }): Promise<void>`
+#### `elementHandle.pinchOut(options?): Promise<void>`
 
-Perform a pinch-out (zoom in) gesture on this element.
+Perform a pinch-out (zoom in) gesture on this element. Options: `scale` (default `2`) and the [per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByText("Map", { exact: true }).pinchOut();
@@ -1301,9 +1326,9 @@ Highlight this element for debugging. Validates that the element exists and is a
 await device.getByRole("button", { name: "Submit" }).highlight();
 ```
 
-#### `elementHandle.screenshot(): Promise<Buffer>`
+#### `elementHandle.screenshot(options?): Promise<Buffer>`
 
-Capture a screenshot cropped to this element's bounding box. Returns a `Buffer` containing PNG image data.
+Capture a screenshot cropped to this element's bounding box. Returns a `Buffer` containing PNG image data. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 const png = await device.getByRole("image", { name: "Profile" }).screenshot();
@@ -1311,16 +1336,16 @@ const png = await device.getByRole("image", { name: "Profile" }).screenshot();
 
 ### Info Accessors
 
-#### `elementHandle.getText(): Promise<string>`
+#### `elementHandle.getText(options?): Promise<string>`
 
-Get the visible text content of this element. Waits for the element like `find()`. To read the text of
+Get the visible text content of this element. Waits for the element like `find()`, for up to the [per-call timeout](#per-call-timeout) when one is given. To read the text of
 every match in one hierarchy read, use [`allTextContents()`](#elementhandlealltextcontents-promisestring).
 
 ```typescript
 const label = await device.locator({ id: "status_label" }).getText();
 ```
 
-#### `elementHandle.isVisible(): Promise<boolean>`
+#### `elementHandle.isVisible(options?): Promise<boolean>`
 
 Check whether this element is visible on screen **right now**.
 
@@ -1360,11 +1385,13 @@ for the handle's timeout and then throws a descriptive error, pointing at `expec
 > new screen is still appearing. To wait for visibility, use `await expect(x).toBeVisible()`; use
 > `isVisible()`/`isHidden()` only to branch on the current state.
 
+`isVisible()` and `isHidden()` take a `timeout` option, as Playwright's do, but it does not make them wait for the element. It bounds only the re-reads of a screen caught mid-re-render described above (Playwright ignores the option altogether).
+
 Only `isVisible()`, `isHidden()` and `exists()` are non-waiting. `isEnabled()`, `isChecked()` and `isEditable()`
 follow Playwright too: they wait for the element to be present and throw if it never appears, so a
 negative answer always describes a real element.
 
-#### `elementHandle.isHidden(): Promise<boolean>`
+#### `elementHandle.isHidden(options?): Promise<boolean>`
 
 The opposite of `isVisible()`: `true` when the element is not visible **or** does not exist. Does not
 wait for the element to appear or disappear. To wait for an element to go away, use
@@ -1386,47 +1413,47 @@ Do not use `isHidden()` to wait for a spinner or animation to finish: an animati
 what produces stale snapshots, so the probe would have to keep re-reading and, if the animation never
 stops, throws. `await expect(device.getByText("Loading…")).not.toBeVisible()` is the tool for that.
 
-#### `elementHandle.isEnabled(): Promise<boolean>`
+#### `elementHandle.isEnabled(options?): Promise<boolean>`
 
 Check whether this element is enabled (interactive). Waits for the element to be present (up to the
-handle's timeout) and throws if it never appears.
+handle's timeout, or the [per-call timeout](#per-call-timeout) when one is given) and throws if it never appears.
 
 ```typescript
 const enabled = await device.getByRole("button", { name: "Submit" }).isEnabled();
 ```
 
-#### `elementHandle.isChecked(): Promise<boolean>`
+#### `elementHandle.isChecked(options?): Promise<boolean>`
 
 Check whether this checkbox, switch, or radio button is in the checked state. Waits for the element to
-be present (up to the handle's timeout) and throws if it never appears.
+be present (up to the handle's timeout, or the [per-call timeout](#per-call-timeout) when one is given) and throws if it never appears.
 
 ```typescript
 const checked = await device.getByRole("switch", { name: "Notifications" }).isChecked();
 ```
 
-#### `elementHandle.isEditable(): Promise<boolean>`
+#### `elementHandle.isEditable(options?): Promise<boolean>`
 
 Check whether this element is an editable input field (text field role and enabled). Waits for the
-element to be present (up to the handle's timeout) and throws if it never appears.
+element to be present (up to the handle's timeout, or the [per-call timeout](#per-call-timeout) when one is given) and throws if it never appears.
 
 ```typescript
 const editable = await device.getByRole("textfield", { name: "Email" }).isEditable();
 ```
 
-#### `elementHandle.inputValue(): Promise<string>`
+#### `elementHandle.inputValue(options?): Promise<string>`
 
 Get the current value of an input field. On Android, this returns the element's text property. Waits
-for the element to be present (up to the handle's timeout, on every handle shape including
+for the element to be present (up to the handle's timeout or the [per-call timeout](#per-call-timeout), on every handle shape including
 `.first()`/`.nth()`/`.filter()`) and throws if it never appears.
 
 ```typescript
 const value = await device.getByRole("textfield", { name: "Email" }).inputValue();
 ```
 
-#### `elementHandle.boundingBox(): Promise<BoundingBox | null>`
+#### `elementHandle.boundingBox(options?): Promise<BoundingBox | null>`
 
 Get the element's position and dimensions. Returns `null` if the element has no bounds. Waits for the
-element to be present (up to the handle's timeout, on every handle shape including
+element to be present (up to the handle's timeout or the [per-call timeout](#per-call-timeout), on every handle shape including
 `.first()`/`.nth()`/`.filter()`) and throws if it never appears.
 
 ```typescript
@@ -3320,9 +3347,9 @@ await device.getByRole("button", { name: "Continue" }).tap()
 
 ### WebViewHandle
 
-Returned by `device.webview()`. All methods use CSS selectors and auto-wait for elements.
+Returned by `device.webview()`. All methods use CSS selectors and auto-wait for elements. `click`, `fill`, `textContent`, `innerHTML`, `inputValue` and `getAttribute` take a last `options` argument with a per-call `timeout`, which bounds the wait and the action and overrides the WebView's timeout for that call (`webview.click("#login", { timeout: 5000 })`). Their options are checked as native actions' are ([Per-call timeout](#per-call-timeout)).
 
-#### `webview.click(selector: string): Promise<void>`
+#### `webview.click(selector: string, options?): Promise<void>`
 
 Click an element in the WebView.
 
@@ -3331,7 +3358,7 @@ await webview.click("#login-button")
 await webview.click(".submit-btn")
 ```
 
-#### `webview.fill(selector: string, value: string): Promise<void>`
+#### `webview.fill(selector: string, value: string, options?): Promise<void>`
 
 Fill an input element with text. Dispatches `input` and `change` events.
 
@@ -3340,7 +3367,7 @@ await webview.fill("#email", "user@test.com")
 await webview.fill("#password", "secret123")
 ```
 
-#### `webview.textContent(selector: string): Promise<string>`
+#### `webview.textContent(selector: string, options?): Promise<string>`
 
 Get the text content of an element.
 
@@ -3348,15 +3375,15 @@ Get the text content of an element.
 const heading = await webview.textContent("h1")
 ```
 
-#### `webview.innerHTML(selector: string): Promise<string>`
+#### `webview.innerHTML(selector: string, options?): Promise<string>`
 
 Get the inner HTML of an element.
 
-#### `webview.inputValue(selector: string): Promise<string>`
+#### `webview.inputValue(selector: string, options?): Promise<string>`
 
 Get the current value of an input element.
 
-#### `webview.getAttribute(selector: string, name: string): Promise<string | null>`
+#### `webview.getAttribute(selector: string, name: string, options?): Promise<string | null>`
 
 Get an attribute value from an element.
 
@@ -3425,7 +3452,7 @@ Close the WebView connection. Usually called via `device.native()` instead.
 
 Lazy reference to an element within a WebView, created by `webview.locator()` or the `webview.getBy*` methods. Supports actions and assertions.
 
-**Actions & queries (strict):** `click()`, `fill(value)`, `textContent()`, `innerHTML()`, `inputValue()`, `getAttribute(name)`, `isVisible()`, `isHidden()` (both a single DOM read with no auto-wait — the same non-waiting contract as on `ElementHandle`, minus the native probe's stale-snapshot re-reads, which a DOM query does not need)
+**Actions & queries (strict):** `click(options?)`, `fill(value, options?)`, `textContent(options?)`, `innerHTML(options?)`, `inputValue(options?)`, `getAttribute(name, options?)` — each takes a per-call `timeout` like the native [actions](#per-call-timeout) (`webview.getByRole("button", { name: "Login" }).click({ timeout: 5000 })`) — and `isVisible()`, `isHidden()` (both a single DOM read with no auto-wait — the same non-waiting contract as on `ElementHandle`, minus the native probe's stale-snapshot re-reads, which a DOM query does not need)
 
 **Narrowing & multi-element (strict-mode exempt):**
 
