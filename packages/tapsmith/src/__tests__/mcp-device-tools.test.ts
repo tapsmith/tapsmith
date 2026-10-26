@@ -590,6 +590,17 @@ describe('tapsmith_type', () => {
     expect(daemon.typeText.mock.calls[0][2] as number).toBeGreaterThan(50_000);
   });
 
+  it.each([false, true])('gives up waiting for a missing field at its timeout, not the 5 s default (clear: %s, PILOT-840)', async (clear) => {
+    const daemon = makeDaemon({ elements: [] });
+    hoisted.client = daemon.client;
+    const start = Date.now();
+    const res = await callTool('tapsmith_type', { locator: 'device.getByText("Bio")', text: 'hi', clear, timeout: 400 });
+    expect(res.isError).toBe(true);
+    expect(Date.now() - start).toBeLessThan(3_000);
+    expect(daemon.typeText).not.toHaveBeenCalled();
+    expect(daemon.clearAndType).not.toHaveBeenCalled();
+  });
+
   it('clears and types in one step when asked', async () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Email' })] });
     hoisted.client = daemon.client;
