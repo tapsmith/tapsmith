@@ -17,7 +17,7 @@ import type { TapsmithConfig } from '../config.js';
 import type { SessionPreflightContext } from '../session-preflight.js';
 import type { PreparedState } from '../app-reset.js';
 import { Tracing } from '../trace/tracing.js';
-import { getActiveTraceCollector } from '../trace/trace-collector.js';
+import { getActiveTraceCollector, screenshotFileName, screenshotArchivePath } from '../trace/trace-collector.js';
 
 const { pushContext, popContext, runSuiteContext } = _internal;
 
@@ -875,6 +875,74 @@ describe('runner app reset (declared isolation)', () => {
         const [, next] = collectResults(result);
         expect(next.status).toBe('passed');
         expectFreshSetup(next.tracePath!);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('later traces keep the rebuilt setup\'s screenshots after its own test\'s trace is packaged', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-shots-'));
+      const d = makeDevice();
+      logResets(d, []);
+      /** An action with a before-screenshot the collector owns, as a real capture leaves it. */
+      const recordShot = (action: string): void => {
+        const c = getActiveTraceCollector()!;
+        const index = c.currentActionIndex;
+        const diskPath = path.join(c.tempDir, 'screenshots', screenshotFileName(index, 'before'));
+        fs.writeFileSync(diskPath, 'png');
+        (c as unknown as { _screenshots: Array<{ archivePath: string; diskPath: string; external?: boolean }> })
+          ._screenshots.push({ archivePath: screenshotArchivePath(index, 'before'), diskPath, external: false });
+        c.addActionEvent({
+          category: 'device', action, duration: 1, success: true,
+          hasScreenshotBefore: true, hasScreenshotAfter: false, hasHierarchyBefore: false, hasHierarchyAfter: false,
+        });
+      };
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordShot('openDeepLink'); });
+        tapsmithTest('broken', async () => { throw new Error('boom'); });
+        tapsmithTest('next', async () => { recordAction('tap'); });
+        tapsmithTest('after', async () => { recordAction('tap'); });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({
+          rootDir: tempRoot, trace: { ...traceOn, screenshots: true },
+        })));
+
+        const [, next, after] = collectResults(result);
+        for (const t of [next, after]) {
+          const zip = unzipSync(fs.readFileSync(t.tracePath!));
+          const deepLink = traceEvents(t.tracePath!).find((e) => e.type === 'action' && e.action === 'openDeepLink')!;
+          expect(Object.keys(zip)).toContain(screenshotArchivePath(deepLink.actionIndex as number, 'before'));
+        }
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('later traces replay the rebuilt setup without the teardown before it', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-noteardown-'));
+      const d = makeDevice();
+      logResets(d, []);
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        tapsmithAfterAll(async () => { recordAction('logout'); });
+        tapsmithTest('broken', async () => { throw new Error('boom'); });
+        tapsmithTest('next', async () => { recordAction('tap'); });
+        tapsmithTest('after', async () => { recordAction('tap'); });
+        // last, so the file's own afterAll is appended to its trace, not after's
+        tapsmithTest('last', async () => {});
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn })));
+
+        const [, next, after] = collectResults(result);
+        // the fresh-started test shows the teardown it ran; the test after it
+        // replays only the setup that built its app
+        expect(traceOutline(next.tracePath!).slice(0, 3)).toEqual(['group-start:afterAll Hooks', 'action:logout', 'group-end:afterAll Hooks']);
+        expect(traceOutline(after.tracePath!)).not.toContain('action:logout');
+        expectFreshSetup(after.tracePath!);
       } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
       }

@@ -1604,7 +1604,8 @@ function firstRunnableTest(
 /** Recorded scope setup (app reset + beforeAll) replayed into every test's trace. */
 interface ScopeSetupRecording {
   events: readonly AnyTraceEvent[];
-  collector: TraceCollector | null;
+  /** Where the events' action screenshots are on disk (by action index). */
+  screenshotDir: string | null;
   hierarchies: Map<number, { before?: string; after?: string }>;
   actionCount: number;
   /** The test whose live stream already carried these events, so it is not streamed them twice. */
@@ -1636,10 +1637,59 @@ function setupRecording(collector: TraceCollector, announced: string | undefined
     hierarchies.set(idx, entry);
   }
   return {
-    // Copies: packaging the collector's own trace mutates its events in place.
-    events: collector.events.map((e) => ({ ...e })), collector, hierarchies,
+    events: collector.events.slice(), screenshotDir: path.join(collector.tempDir, 'screenshots'), hierarchies,
     actionCount: collector.currentActionIndex, announced,
   };
+}
+
+/**
+ * The setup a fresh start just recorded into `collector` (from event
+ * `fromEvent` / action `fromIndex` on: its resets and beforeAll hooks, not
+ * the teardown before them), as recordings later tests can replay — one per
+ * cut point, each covering the setup up to it. Renumbered from 0, without
+ * the device and daemon log lines the collector also streamed, and with
+ * its screenshots copied out: the collector may be a test's own, whose
+ * packaging moves them into its archive. The copies are removed when the
+ * file ends.
+ */
+function snapshotSetup(
+  collector: TraceCollector,
+  fromEvent: number,
+  fromIndex: number,
+  cuts: ReadonlyArray<{ events: number; actions: number }>,
+  announced: string | undefined,
+  state: RetryState,
+): ScopeSetupRecording[] {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-trace-setup-'));
+  state.snapshotDirs.push(dir);
+  const sourceDir = path.join(collector.tempDir, 'screenshots');
+  const sourceHierarchies = setupRecording(collector, announced).hierarchies;
+  const hierarchies = new Map<number, { before?: string; after?: string }>();
+  const kept: Array<{ position: number; event: AnyTraceEvent }> = [];
+  collector.events.forEach((event, position) => {
+    if (position < fromEvent) return;
+    const replayable = event.type === 'action' || event.type === 'assertion'
+      || event.type === 'group-start' || event.type === 'group-end' || event.type === 'error'
+      || (event.type === 'console' && event.source === 'test');
+    if (!replayable) return;
+    const index = Math.max(0, event.actionIndex - fromIndex);
+    kept.push({ position, event: { ...event, actionIndex: index } });
+    if (event.type !== 'action' && event.type !== 'assertion') return;
+    for (const at of ['before', 'after'] as const) {
+      try {
+        fs.copyFileSync(path.join(sourceDir, screenshotFileName(event.actionIndex, at)), path.join(dir, screenshotFileName(index, at)));
+      } catch {
+        // No screenshot for this action.
+      }
+    }
+    const h = sourceHierarchies.get(event.actionIndex);
+    if (h) hierarchies.set(index, h);
+  });
+  return cuts.map((cut) => ({
+    events: kept.filter((k) => k.position < cut.events).map((k) => k.event),
+    screenshotDir: dir, hierarchies,
+    actionCount: Math.max(0, cut.actions - fromIndex), announced,
+  }));
 }
 
 /**
@@ -1711,11 +1761,8 @@ interface RetryState {
    * inheriting the failed test's screen (PILOT-739).
    */
   freshStartPending: boolean;
-  /**
-   * Setup collectors a refreshed view (or a packaged trace) still reads
-   * screenshots from; removed when the file ends.
-   */
-  kept: Set<TraceCollector>;
+  /** Screenshot copies the refreshed setup views replay from; removed when the file ends. */
+  snapshotDirs: string[];
 }
 
 /**
@@ -1781,7 +1828,10 @@ async function runRetrySetup(
   state: RetryState,
   announced: string | undefined,
 ): Promise<ScopeSetupRecording | undefined> {
-  const refreshed: Array<[ScopeRetryStep, ScopeSetupRecording | undefined]> = [];
+  // Where each step's setup ends in the collector, to snapshot it at the end.
+  const cuts: Array<{ events: number; actions: number }> = [];
+  let fromEvent = 0;
+  let fromIndex = 0;
   const teardown = state.setupBroken ? [] : [...chain].reverse();
   state.setupBroken = true;
   // Whatever happens next, this is the fresh start a failure asked for; if
@@ -1816,6 +1866,10 @@ async function runRetrySetup(
       manager.removeScopeListeners?.(step.routeScope);
     }
   });
+  if (collector) {
+    fromEvent = collector.events.length;
+    fromIndex = collector.currentActionIndex;
+  }
   for (const step of chain) {
     if (step.resetPolicy) {
       // Nothing prepared survives a failed attempt.
@@ -1839,27 +1893,28 @@ async function runRetrySetup(
         collector?.endGroup();
       }
     }
-    if (collector) await collector.flushPendingCaptures();
-    refreshed.push([step, collector ? setupRecording(collector, announced) : undefined]);
+    if (collector) cuts.push({ events: collector.events.length, actions: collector.currentActionIndex });
   }
   state.setupBroken = false;
-  for (const [step, rec] of refreshed) step.view.recs = rec ? [rec] : [];
-  if (!collector) return undefined;
-  state.kept.add(collector);
-  return setupRecording(collector, announced);
+  if (!collector) {
+    for (const step of chain) step.view.recs = [];
+    return undefined;
+  }
+  // The last actions' screenshots land asynchronously.
+  await collector.flushPendingCaptures();
+  const recs = snapshotSetup(collector, fromEvent, fromIndex, cuts, announced, state);
+  chain.forEach((step, i) => { step.view.recs = [recs[i]]; });
+  return recs[recs.length - 1];
 }
 
 function replayBeforeAllEvents(
   testCollector: TraceCollector,
   events: readonly AnyTraceEvent[],
-  beforeAllCollector: TraceCollector | null,
+  screenshotDir: string | null,
   hierarchies: Map<number, { before?: string; after?: string }>,
   stream: boolean,
 ): void {
   const cb = stream ? testCollector.getEventCallback() : undefined;
-  const screenshotDir = beforeAllCollector
-    ? path.join(beforeAllCollector.tempDir, 'screenshots')
-    : null;
 
   for (const event of events) {
     if ((event.type === 'action' || event.type === 'assertion') && screenshotDir) {
@@ -2022,7 +2077,7 @@ async function runSuiteContext(
   // A serial scope inside another serial group stays part of that group.
   const serialGroup = inherited.serialGroup ?? (ctx.mode === 'serial' ? { failed: false } : undefined);
   const canReset = !!opts.config.package && resettableDevices(opts).length > 0;
-  const retryState: RetryState = inherited.retryState ?? { setupBroken: false, freshStartPending: false, kept: new Set() };
+  const retryState: RetryState = inherited.retryState ?? { setupBroken: false, freshStartPending: false, snapshotDirs: [] };
   // File-scope policies reset on entering the file and whenever a nested
   // describe declares a different policy (e.g. test.use({ appState })).
   // Test-scope policies reset before every test instead, so a scope only
@@ -2138,7 +2193,7 @@ async function runSuiteContext(
       // not just run.
       for (const rec of freshStartAtEntry ? [] : inherited.view.recs) {
         replayBeforeAllEvents(
-          beforeAllCollector, rec.events, rec.collector, rec.hierarchies,
+          beforeAllCollector, rec.events, rec.screenshotDir, rec.hierarchies,
           beforeAllFirstFullName !== rec.announced,
         );
       }
@@ -2234,7 +2289,7 @@ async function runSuiteContext(
     // a failure: leave the untouched tests with whatever status they had,
     // mirroring the test loop's abort semantics (PILOT-222).
     if (isAbortError(err) || opts.abortSignal?.aborted) {
-      if (beforeAllCollector && !retryState.kept.has(beforeAllCollector)) beforeAllCollector.cleanup();
+      beforeAllCollector?.cleanup();
       result.durationMs = Date.now() - suiteStart;
       return result;
     }
@@ -2246,7 +2301,7 @@ async function runSuiteContext(
     // then flag every test in the file as flaky — main's between-file reset
     // recovered transparently, and so does this.
     if (fileEntryResetError && opts.abortFileOnError?.(fileEntryResetError)) {
-      if (beforeAllCollector && !retryState.kept.has(beforeAllCollector)) beforeAllCollector.cleanup();
+      beforeAllCollector?.cleanup();
       throw fileEntryResetError;
     }
 
@@ -2300,7 +2355,7 @@ async function runSuiteContext(
         } catch {
           // Trace packaging is best-effort
         }
-        if (!retryState.kept.has(beforeAllCollector)) beforeAllCollector.cleanup();
+        beforeAllCollector.cleanup();
       }
 
       // The failed setup left the app wherever it stopped.
@@ -2730,7 +2785,7 @@ async function runSuiteContext(
           if (traceCollector) {
             for (const rec of setupRecs) {
               replayBeforeAllEvents(
-                traceCollector, rec.events, rec.collector, rec.hierarchies,
+                traceCollector, rec.events, rec.screenshotDir, rec.hierarchies,
                 fullName !== rec.announced,
               );
             }
@@ -3205,9 +3260,7 @@ async function runSuiteContext(
               // Trace packaging is best-effort
             }
           }
-          // A fresh start recorded here is what later tests replay as their
-          // setup: its screenshots stay until the file ends.
-          if (!retryState.kept.has(collector)) collector.cleanup();
+          collector.cleanup();
         }
       } else {
         // No tracing — still need to clean up routes and reset the WebView
@@ -3548,9 +3601,8 @@ async function runSuiteContext(
     }
   }
 
-  // Clean up beforeAll trace temp dir (screenshots are no longer needed),
-  // unless a refreshed view elsewhere in the file still replays from it.
-  if (beforeAllCollector && !retryState.kept.has(beforeAllCollector)) {
+  // Clean up beforeAll trace temp dir (screenshots are no longer needed)
+  if (beforeAllCollector) {
     beforeAllCollector.cleanup();
   }
 
@@ -3573,8 +3625,9 @@ async function runSuiteContext(
     }
     // The file is over: nothing replays the fresh starts' recordings now.
     if (isRoot) {
-      for (const c of retryState.kept) c.cleanup();
-      retryState.kept.clear();
+      for (const dir of retryState.snapshotDirs.splice(0)) {
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+      }
     }
   }
 
