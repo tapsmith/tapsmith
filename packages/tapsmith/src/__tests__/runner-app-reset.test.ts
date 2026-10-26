@@ -880,22 +880,28 @@ describe('runner app reset (declared isolation)', () => {
       }
     });
 
-    it('removes the fresh starts\' temp dirs when the file ends', async () => {
+    it('removes the temp dirs a fresh start kept for later replays when the file ends', async () => {
       const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-cleanup-'));
+      const tmp = path.join(tempRoot, 'tmp');
+      fs.mkdirSync(tmp);
+      const prevTmp = process.env.TMPDIR;
+      process.env.TMPDIR = tmp;
       const d = makeDevice();
       logResets(d, []);
-      const before = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('tapsmith-trace-setup-')));
       try {
         pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
         tapsmithTest('broken', async () => { throw new Error('boom'); });
         tapsmithTest('next', async () => {});
+        tapsmithTest('after', async () => {});
         const ctx = popContext();
 
         await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn })));
 
-        const leftover = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('tapsmith-trace-setup-') && !before.has(n));
-        expect(leftover).toEqual([]);
+        expect(fs.readdirSync(tmp)).toEqual([]);
       } finally {
+        if (prevTmp === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = prevTmp;
         fs.rmSync(tempRoot, { recursive: true, force: true });
       }
     });

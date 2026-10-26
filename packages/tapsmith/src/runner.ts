@@ -1636,7 +1636,8 @@ function setupRecording(collector: TraceCollector, announced: string | undefined
     hierarchies.set(idx, entry);
   }
   return {
-    events: collector.events.slice(), collector, hierarchies,
+    // Copies: packaging the collector's own trace mutates its events in place.
+    events: collector.events.map((e) => ({ ...e })), collector, hierarchies,
     actionCount: collector.currentActionIndex, announced,
   };
 }
@@ -1838,6 +1839,7 @@ async function runRetrySetup(
         collector?.endGroup();
       }
     }
+    if (collector) await collector.flushPendingCaptures();
     refreshed.push([step, collector ? setupRecording(collector, announced) : undefined]);
   }
   state.setupBroken = false;
@@ -2453,41 +2455,9 @@ async function runSuiteContext(
       // Trace recording — start if configured
       const recording = shouldRecord(traceConfig.mode, attempt);
 
-      // The fresh start runs ahead of the test's own trace, the way scope
-      // setup does: recorded (and streamed live) into a collector of its own
-      // that the scope's later tests replay too, then replayed into this
-      // attempt's trace below. A failure here fails the attempt from inside
-      // its setup phase, so it is reported, screenshotted and traced as any
-      // setup failure is.
-      let setupRecs = attempt === 0 ? view.recs : [];
-      let freshStartError: unknown;
-      let announcedEarly = false;
-      if (retrySetupRuns) {
-        if (attempt === 0 && fullName !== (beforeAllFirstFullName ?? inherited.announced)) {
-          // Its events stream under this test, so the UI hears of it first.
-          if (opts.onTestStart) await opts.onTestStart(fullName, { policy });
-          opts.reporter?.onTestStart?.(fullName, opts.testFilePath, { project: opts.projectName });
-          announcedEarly = true;
-        }
-        const setupCollector = recording && primary
-          ? startSetupCollector(primary, traceConfig, 'tapsmith-trace-setup-', attemptStart)
-          : null;
-        // The attempt's packaged trace reads its screenshots, whatever happens.
-        if (setupCollector) retryState.kept.add(setupCollector);
-        const freshStart = (): Promise<ScopeSetupRecording | undefined> => runRetrySetup(
-          retryChain, setupCollector, opts,
-          attempt > 0 ? `retry of ${fullName}` : `fresh start after a failure, before ${fullName}`,
-          retryState, fullName,
-        );
-        try {
-          const fresh = setupCollector ? await withActiveTraceCollector(setupCollector, freshStart) : await freshStart();
-          // This scope's later tests start from this setup, not the original.
-          view.recs = fresh ? [fresh] : [];
-        } catch (err) {
-          freshStartError = err;
-        }
-        setupRecs = setupCollector ? [setupRecording(setupCollector, fullName)] : [];
-      }
+      // A fresh start records live into this attempt's own trace (below);
+      // anything else on a first attempt replays the scope's current setup.
+      const setupRecs = attempt === 0 && !retrySetupRuns ? view.recs : [];
       const setupActionCount = setupRecs.reduce((n, r) => n + r.actionCount, 0);
       let traceCollector: TraceCollector | null = null;
       // Devices whose network capture the daemon confirmed this attempt.
@@ -2719,7 +2689,7 @@ async function runSuiteContext(
           // Notify UI mode on first attempt only — retries re-use the same
           // test slot in the UI rather than creating duplicate entries.
           const announced = beforeAllFirstFullName ?? inherited.announced;
-          if (attempt === 0 && fullName !== announced && !announcedEarly) {
+          if (attempt === 0 && fullName !== announced) {
             if (opts.onTestStart) await opts.onTestStart(fullName, { policy });
             opts.reporter?.onTestStart?.(fullName, opts.testFilePath, { project: opts.projectName });
           }
@@ -2781,7 +2751,15 @@ async function runSuiteContext(
           // ends with a session readiness check, so it needs no prior
           // beforeEachTest recovery — a dead app just takes the ladder's
           // restart rung, and the trace says so.
-          if (freshStartError !== undefined) throw freshStartError;
+          if (retrySetupRuns) {
+            const fresh = await runRetrySetup(
+              retryChain, traceCollector, opts,
+              attempt > 0 ? `retry of ${fullName}` : `fresh start after a failure, before ${fullName}`,
+              retryState, fullName,
+            );
+            // This scope's later tests start from this setup, not the original.
+            view.recs = fresh ? [fresh] : [];
+          }
           if (policy.scope === 'test' && canReset) {
             await runTracedAppReset(traceCollector, opts, policy, {
               phase: `before test ${fullName}`,
@@ -3227,7 +3205,9 @@ async function runSuiteContext(
               // Trace packaging is best-effort
             }
           }
-          collector.cleanup();
+          // A fresh start recorded here is what later tests replay as their
+          // setup: its screenshots stay until the file ends.
+          if (!retryState.kept.has(collector)) collector.cleanup();
         }
       } else {
         // No tracing — still need to clean up routes and reset the WebView
