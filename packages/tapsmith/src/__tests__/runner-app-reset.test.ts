@@ -637,6 +637,39 @@ describe('runner app reset (declared isolation)', () => {
       ]);
     });
 
+    it('a fresh start that fails at a describe\'s entry fails that describe, and the next one sets up without a second teardown', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      let rootRuns = 0;
+      pushContext();
+      tapsmithBeforeAll(async () => { rootRuns++; order.push(`root beforeAll#${rootRuns}`); if (rootRuns === 2) throw new Error('login failed'); });
+      tapsmithAfterAll(async () => { order.push('root afterAll'); });
+      tapsmithDescribe('first', () => {
+        tapsmithTest('broken', async () => { order.push('broken'); throw new Error('boom'); });
+      });
+      tapsmithDescribe('second', () => {
+        tapsmithTest('b', async () => { order.push('b'); });
+      });
+      tapsmithDescribe('third', () => {
+        tapsmithTest('c', async () => { order.push('c'); });
+      });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig()));
+
+      const results = collectResults(result);
+      expect(results.map((t) => t.status)).toEqual(['failed', 'failed', 'passed']);
+      expect(results[1].error?.message).toMatch(/login failed/);
+      expect(order).toEqual([
+        'reset:clear', 'root beforeAll#1', 'broken',
+        'root afterAll', 'reset:clear:cold', 'root beforeAll#2',
+        // nothing completed to tear down: straight to the setup again
+        'reset:clear:cold', 'root beforeAll#3', 'c',
+        'root afterAll',
+      ]);
+    });
+
     it('a nested describe after a failing test in its parent starts fresh', async () => {
       const d = makeDevice();
       const order: string[] = [];
