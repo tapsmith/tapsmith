@@ -538,15 +538,16 @@ function textMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
  * Whether a getByLabel field's name passes `test` — the one rule the agents
  * use for a string and a RegExp alike (PILOT-666): Android's content-desc
  * (the agent also follows a labelling view, which the dump does not carry)
- * or the text of one of its descendants — a Compose TextField's label is a
- * child of the field (PILOT-828) — and iOS's label or title. iOS tests an
- * empty label like any other text, as its agent does.
+ * or, for a text field, the text of one of its descendants — a Compose
+ * TextField's label is a child of the field (PILOT-828), while a Spinner's
+ * child is its value — and iOS's label or title. iOS tests an empty label
+ * like any other text, as its agent does.
  */
 function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean): boolean {
   if (node.attributes.has('class')) {
     const contentDesc = node.attributes.get('content-desc');
     if (contentDesc !== undefined && contentDesc !== '' && test(contentDesc)) return true;
-    return descendantText(node).some(test);
+    return ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '') && descendantText(node).some(test);
   }
   return test(node.attributes.get('label') ?? '') || test(node.attributes.get('title') ?? '');
 }

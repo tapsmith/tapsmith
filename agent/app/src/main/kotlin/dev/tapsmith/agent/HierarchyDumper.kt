@@ -76,7 +76,16 @@ class HierarchyDumper internal constructor(
     private fun injectAttributes(xml: String): String {
         val collected = collectAttributeMap()
         return HierarchyAttributes.markWindowRoots(
-            HierarchyAttributes.inject(xml, collected.attributes, collected.carriers, ComposeRoles.CARRIER_DUMP_ATTRIBUTE),
+            HierarchyAttributes.inject(
+                xml,
+                collected.attributes,
+                HierarchyAttributes.ComposeMarks(
+                    collected.carriers,
+                    ComposeRoles.CARRIER_DUMP_ATTRIBUTE,
+                    collected.controlRoles,
+                    "tapsmith-role",
+                ),
+            ),
             collected.nonAppWindowRoots,
             NonAppNodes.DUMP_ATTRIBUTE,
         )
@@ -84,7 +93,8 @@ class HierarchyDumper internal constructor(
 
     /**
      * What [collectAttributeMap] gathers: bounds → attributes to inject, and
-     * the [HierarchyAttributes.carrierKey]s of the Compose role carriers, and
+     * the [HierarchyAttributes.nodeKey]s of the Compose role carriers and
+     * of the controls they give a role to (with that role), and
      * the [HierarchyAttributes.windowRootKey]s of the windows no locator
      * searches ([NonAppNodes]), whose root nodes the dump marks
      * `tapsmith-non-app="true"` so the trace viewer leaves them out too.
@@ -92,6 +102,7 @@ class HierarchyDumper internal constructor(
     private class Collected(
         val attributes: Map<String, Map<String, String>>,
         val carriers: Set<String>,
+        val controlRoles: Map<String, String>,
         val nonAppWindowRoots: Set<String>,
     )
 
@@ -109,6 +120,7 @@ class HierarchyDumper internal constructor(
     private fun collectAttributeMap(): Collected {
         val attrMap = mutableMapOf<String, MutableMap<String, String>>()
         val carriers = mutableSetOf<String>()
+        val controlRoles = mutableMapOf<String, String>()
         val nonAppRoots = mutableSetOf<String>()
         try {
             val automation = instrumentation.uiAutomation
@@ -142,7 +154,7 @@ class HierarchyDumper internal constructor(
                         nonAppRoots.add(HierarchyAttributes.windowRootKey(rootBounds, root.packageName?.toString()))
                     }
                     try {
-                        walkNodeInfo(root, clip, attrMap, carriers)
+                        walkNodeInfo(root, clip, attrMap, carriers, controlRoles)
                     } finally {
                         @Suppress("DEPRECATION")
                         root.recycle()
@@ -155,7 +167,7 @@ class HierarchyDumper internal constructor(
         } catch (e: Exception) {
             Log.w(TAG, "Failed to collect attributes from accessibility tree", e)
         }
-        return Collected(attrMap, carriers, nonAppRoots)
+        return Collected(attrMap, carriers, controlRoles, nonAppRoots)
     }
 
     @Suppress("DEPRECATION")
@@ -164,23 +176,28 @@ class HierarchyDumper internal constructor(
         clip: DumpClip,
         attrMap: MutableMap<String, MutableMap<String, String>>,
         carriers: MutableSet<String>,
+        controlRoles: MutableMap<String, String>,
+        isCarrier: Boolean = false,
     ) {
         val children = (0 until node.childCount).map { node.getChild(it) }
-        // A Compose control takes its role carrier's role (PILOT-828).
+        // A Compose control takes its role carrier's role, and the carrier
+        // has none of its own (PILOT-828). Both are written by node shape,
+        // not bounds alone, which the control shares with its children.
         val carried = carriedRole(node, children.lastOrNull())
-        val role = extractRoleFromNodeInfo(node) ?: carried?.first
+        val role = if (isCarrier) null else extractRoleFromNodeInfo(node)
         val expanded = extractExpandedFromNodeInfo(node)
         if (role != null || expanded != null) {
             val attrs = attrMap.getOrPut(dumpedBoundsKey(node, clip)) { mutableMapOf() }
             role?.let { attrs["tapsmith-role"] = it }
             expanded?.let { attrs["tapsmith-expanded"] = it.toString() }
         }
-        carried?.second?.let { carrier ->
-            carriers.add(HierarchyAttributes.carrierKey(dumpedBounds(carrier, clip), carrier.className?.toString()))
+        carried?.let { (carriedRole, carrier) ->
+            controlRoles[HierarchyAttributes.nodeKey(dumpedBounds(node, clip), node.className?.toString())] = carriedRole
+            carriers.add(HierarchyAttributes.nodeKey(dumpedBounds(carrier, clip), carrier.className?.toString()))
         }
         for (child in children) {
             if (child == null) continue
-            walkNodeInfo(child, clip, attrMap, carriers)
+            walkNodeInfo(child, clip, attrMap, carriers, controlRoles, isCarrier = child === carried?.second)
             child.recycle()
         }
     }

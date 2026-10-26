@@ -67,9 +67,14 @@ class ComposeRolesTest {
     }
 
     @Test
-    fun `text and heading are no carried role`() {
-        // An empty Text("") at the end of a Button is not the button's role.
+    fun `only the roles Compose's Role maps to are carried`() {
+        // An empty Text("") at the end of a Button is not the button's role,
+        // nor a progress indicator's ProgressBar class (progress semantics, not a Role).
         assertFalse(ComposeRoles.isCarrier(shape("android.widget.TextView", role = "text"), { buttonParent }, { true }))
+        assertFalse(ComposeRoles.isCarrier(shape("android.widget.ProgressBar", role = "progressbar"), { buttonParent }, { true }))
+        for (role in listOf("button", "checkbox", "radiobutton", "image", "spinner", "tab", "switch")) {
+            assertEquals(role, ComposeRoles.carriedRole(shape("android.view.View", role = role)))
+        }
         assertFalse(ComposeRoles.isCarrier(shape("android.view.View", role = "heading"), { buttonParent }, { true }))
         assertFalse(ComposeRoles.isCarrier(shape("android.view.View"), { buttonParent }, { true }))
         assertFalse(ComposeRoles.isCarrier(shape("android.view.View", role = ""), { buttonParent }, { true }))
@@ -81,7 +86,15 @@ class ComposeRolesTest {
         assertFalse(ComposeRoles.isCarrier(buttonCarrier, { shape("android.view.ViewGroup", childCount = 2) }, { true }))
         assertFalse(ComposeRoles.isCarrier(buttonCarrier, { shape("android.view.View", role = "tab", childCount = 2) }, { true }))
         // Compose emits the fake node only beside real children.
-        assertFalse(ComposeRoles.isCarrier(buttonCarrier, { shape("android.view.View", childCount = 1) }, { true }))
+        assertFalse(ComposeRoles.isCarrier(buttonCarrier, { shape("android.view.View", childCount = 1, clickable = true) }, { true }))
+        // A layout container (the screen's root, a Column) is not a merging
+        // control, so an unnamed last leaf keeps its own role.
+        val container = shape("android.view.View", childCount = 5)
+        assertFalse(ComposeRoles.isCarrier(buttonCarrier, { container }, { true }))
+        assertFalse(ComposeRoles.mayBeCarrierParent(container))
+        // A disabled Button is still clickable; a toggleable row checkable.
+        assertTrue(ComposeRoles.mayBeCarrierParent(shape("android.view.View", childCount = 2, clickable = true)))
+        assertTrue(ComposeRoles.mayBeCarrierParent(shape("android.view.View", childCount = 2, checkable = true)))
         assertFalse(ComposeRoles.isCarrier(buttonCarrier, { null }, { true }))
     }
 
@@ -102,6 +115,69 @@ class ComposeRolesTest {
         assertEquals("button", ComposeRoles.carriedRole(buttonCarrier))
         assertEquals("tab", ComposeRoles.carriedRole(tabCarrier))
         assertNull(ComposeRoles.carriedRole(shape("android.widget.TextView", role = "text")))
+    }
+
+    // ─── The match step (ElementFinder.matchCandidates) ───
+
+    /** A Compose button row: its text, then its role carrier; and a plain button after it. */
+    private val parents = mapOf("rowCarrier" to "row")
+    private val roles = mapOf("rowCarrier" to "button", "plainButton" to "button")
+
+    private fun match(
+        candidates: List<String>,
+        limit: Int = Int.MAX_VALUE,
+        skip: Set<String> = emptySet(),
+    ): List<String> =
+        ComposeRoles.matchInTreeOrder(
+            candidates,
+            limit,
+            read = { it.takeUnless { c -> c in skip } },
+            carrierParentOf = { parents[it] },
+            key = { it },
+            accepts = { _, roleSource -> roles[roleSource] == "button" },
+        )
+
+    @Test
+    fun `a class walk finds the carrier and matches its parent instead`() {
+        // getByRole("button") walks By.clazz(Button): the carrier, not the row.
+        assertEquals(listOf("row", "plainButton"), match(listOf("rowCarrier", "plainButton")))
+    }
+
+    @Test
+    fun `a broad walk reaches the parent twice and matches it once`() {
+        // getByRole("tab") walks every node: the row as itself (no role of
+        // its own) and again through its carrier.
+        assertEquals(listOf("row", "plainButton"), match(listOf("screen", "row", "rowText", "rowCarrier", "plainButton")))
+    }
+
+    @Test
+    fun `a parent that matches as itself is not matched again through its carrier`() {
+        val both =
+            ComposeRoles.matchInTreeOrder(
+                listOf("row", "rowCarrier"),
+                Int.MAX_VALUE,
+                read = { it },
+                carrierParentOf = { parents[it] },
+                key = { it },
+                accepts = { _, _ -> true },
+            )
+        assertEquals(listOf("row"), both)
+    }
+
+    @Test
+    fun `the carrier itself is never offered, and the limit and non-app skips hold`() {
+        val offered = mutableListOf<String>()
+        ComposeRoles.matchInTreeOrder(
+            listOf("rowCarrier"),
+            Int.MAX_VALUE,
+            read = { it },
+            carrierParentOf = { parents[it] },
+            key = { it },
+            accepts = { target, _ -> offered.add(target) },
+        )
+        assertEquals(listOf("row"), offered)
+        assertEquals(listOf("row"), match(listOf("rowCarrier", "plainButton"), limit = 1))
+        assertEquals(listOf("plainButton"), match(listOf("rowCarrier", "plainButton"), skip = setOf("rowCarrier")))
     }
 
     @Test

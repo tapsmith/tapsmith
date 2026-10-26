@@ -15,8 +15,9 @@ import { parseSelectorString, findMatchingNodes } from '../trace-viewer/componen
 // row, a Switch beside "Notifications", a "Sign in" Button, an IconButton
 // whose Icon is described "Favorite", a disabled Button, a Button with the
 // contentDescription "Submit form" around the text "Go", two selectable
-// RadioButton rows ("Small" selected, "Large"), a "Tags off" TextButton and
-// a three-item NavigationBar. Each expected count is what the agent's
+// RadioButton rows ("Small" selected, "Large"), a "Tags off" TextButton, a
+// CircularProgressIndicator last in the screen's column, and a three-item
+// NavigationBar whose "Settings" item is described "Preferences". Each expected count is what the agent's
 // getByRole / getByLabel / getByTestId returned on that screen.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,10 @@ describe('Compose controls in the trace playground agree with the device (PILOT-
     ['device.getByRole("radiobutton", { checked: true })', 1],
     ['device.getByRole("tab")', 3],
     ['device.getByRole("tab", { name: "Items" })', 1],
+    // The described item, not also its description's leaf (same bounds).
+    ['device.getByRole("tab", { name: "Preferences" })', 1],
+    // An unnamed last leaf of a layout container keeps its own role.
+    ['device.getByRole("progressbar")', 1],
     ['device.getByRole("tab", { selected: true })', 1],
     ['device.getByRole("switch")', 1],
     ['device.getByRole("checkbox")', 2],
@@ -80,5 +85,26 @@ describe('Compose controls in the trace playground agree with the device (PILOT-
     expect(carriers).toHaveLength(11);
     for (const carrier of carriers) expect(carrier.attributes.get('content-desc')).toBe('');
     for (const carrier of carriers) expect(getNodeRole(carrier)).toBe('');
+  });
+});
+
+describe('getByLabel reads a text field\'s child text, not a spinner\'s (PILOT-828)', () => {
+  const XML = `<hierarchy>
+  <node index="0" text="" resource-id="" class="android.widget.EditText" content-desc="" bounds="[0,0][500,100]">
+    <node index="0" text="Email" resource-id="" class="android.widget.TextView" content-desc="" bounds="[10,10][100,50]" />
+  </node>
+  <node index="1" text="" resource-id="" class="android.widget.Spinner" content-desc="" bounds="[0,100][500,200]">
+    <node index="0" text="Small" resource-id="" class="android.widget.TextView" content-desc="" bounds="[10,110][100,150]" />
+  </node>
+</hierarchy>`;
+  const tree = parseHierarchyXml(XML);
+  const count = (code: string): number => findMatchingNodes(tree, parseSelectorString(code)!).length;
+
+  it('a Compose text field is named by its label child', () => {
+    expect(count('device.getByLabel("Email")')).toBe(1);
+  });
+
+  it('a spinner is not named by the value it shows', () => {
+    expect(count('device.getByLabel("Small")')).toBe(0);
   });
 });

@@ -1380,17 +1380,18 @@ export class ElementHandle {
    * role React Native publishes nothing for there (PILOT-718), on Android
    * for a `getByTestId()`, which a Jetpack Compose testTag reaches only with
    * testTagsAsResourceId (PILOT-828). Not for and()/or(): the miss may be the
-   * other operand's.
+   * other operand's. Not after a `positionalDetail` either: the locator did
+   * match, only not at that index.
    */
-  _missHint(): string {
-    const hint = this._missHintSentence();
+  _missHint(positionalDetail = ''): string {
+    const hint = this._missHintSentence(positionalDetail);
     // A sentence of its own after the message it follows.
     return hint && `.${hint}`;
   }
 
   /** {@link _missHint} as a bare sentence (with its leading space), to follow one that ends in a full stop. */
-  private _missHintSentence(): string {
-    if (this._options.andHandle || this._options.orHandle) return '';
+  private _missHintSentence(positionalDetail = ''): string {
+    if (positionalDetail || this._options.andHandle || this._options.orHandle) return '';
     const kind = this._selector.kind;
     if (kind.type === 'role') return iosUnnamedRoleMissHint(kind.value, this._options.platform);
     return kind.type === 'testId' && this._options.platform === 'android' ? ANDROID_TEST_TAG_HINT : '';
@@ -1531,8 +1532,9 @@ export class ElementHandle {
       }
       if (Date.now() >= deadline) {
         if (lastTransientErr) throw lastTransientErr;
+        const detail = positionalMissDetail(lastPositionalMiss);
         throw new Error(
-          `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}${this._missHint()}`,
+          `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${detail}${this._missHint(detail)}`,
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -1801,16 +1803,17 @@ export class ElementHandle {
         if (lastTransientErr) throw lastTransientErr;
         const desc = this._describe();
         if (lastSeenOffScreen) throw offScreenError(desc, timeoutMs, action, lastSeenOffScreen);
+        const detail = positionalMissDetail(lastPositionalMiss);
         throw new Error(
           lastSeenDisabled
             ? `Element ${desc} is disabled after waiting ${timeoutMs}ms`
             // A known cause (an unnamed role iOS cannot see, PILOT-718) is told
             // instead of the generic off-screen hint; a possible one (a
             // Compose testTag, PILOT-828) after it.
-            : `Element ${desc} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}` +
-              (this._selector.kind.type === 'role' && this._missHint()
-                ? this._missHint()
-                : `. ${offScreenHint(action)}${this._missHintSentence()}`),
+            : `Element ${desc} was not found after waiting ${timeoutMs}ms${detail}` +
+              (this._selector.kind.type === 'role' && this._missHint(detail)
+                ? this._missHint(detail)
+                : `. ${offScreenHint(action)}${this._missHintSentence(detail)}`),
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -1922,7 +1925,7 @@ export class ElementHandle {
           detail = positionalMissDetail(err instanceof Error ? err : undefined);
           el = undefined;
         }
-        if (!el) throw new Error(`Element not found: ${this._describe()}${detail}${this._missHint()}`);
+        if (!el) throw new Error(`Element not found: ${this._describe()}${detail}${this._missHint(detail)}`);
         result = el;
       } else {
         // Strict resolution (PILOT-226): poll so multiple matches throw

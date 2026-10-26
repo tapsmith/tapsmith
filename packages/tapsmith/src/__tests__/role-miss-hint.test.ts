@@ -122,3 +122,27 @@ describe("a getByTestId miss on Android carries the testTagsAsResourceId hint", 
     vitestExpect(await err(device("android").getByTestId("form").getByText("Email").find())).not.toContain("testTag");
   });
 });
+
+describe("the testTag hint is left out when the test id did match (PILOT-828)", () => {
+  it("not after an out-of-range nth()", async () => {
+    const row = (i: number): ElementInfo => ({
+      elementId: `r${i}`, className: "android.view.ViewGroup", text: `Row ${i}`, contentDescription: "", resourceId: "row",
+      enabled: true, visible: true, clickable: true, focusable: true, scrollable: false, hint: "",
+      checked: false, selected: false, focused: false, role: "", viewportRatio: 1,
+      bounds: { left: 0, top: i * 100, right: 500, bottom: i * 100 + 90 },
+    } as ElementInfo);
+    const rows = [row(0), row(1), row(2)];
+    const client = {
+      findElement: vi.fn(async () => ({ requestId: "1", found: true, element: rows[0], errorMessage: "" })),
+      findElements: vi.fn(async () => ({ requestId: "1", elements: rows, errorMessage: "" })),
+    } as unknown as TapsmithGrpcClient;
+    const d = new Device(client, { platform: "android", timeout: 50 });
+    const err = (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);
+    const tap = await err(d.getByTestId("row").nth(5).tap());
+    vitestExpect(tap).toContain("nth(5)");
+    vitestExpect(tap).not.toContain("testTag");
+    const find = await err(d.getByTestId("row").nth(5).find());
+    vitestExpect(find).toContain("nth(5)");
+    vitestExpect(find).not.toContain("testTag");
+  });
+});

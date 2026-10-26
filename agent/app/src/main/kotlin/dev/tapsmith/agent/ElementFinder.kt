@@ -14,6 +14,7 @@ import org.xml.sax.InputSource
 import java.io.StringReader
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.regex.Pattern
 import javax.xml.parsers.DocumentBuilderFactory
 import javax.xml.xpath.XPathConstants
 import javax.xml.xpath.XPathFactory
@@ -629,35 +630,31 @@ class ElementFinder(
         refreshed: MutableMap<AccessibilityNodeInfo, AccessibilityNodeInfo>? = null,
         convert: (UiObject2, AccessibilityNodeInfo) -> ElementInfo,
     ): Pair<List<ElementInfo>, Int> {
-        val matches = mutableListOf<ElementInfo>()
-        // The nodes matched so far: a Compose control can be reached twice,
-        // as itself and through its role carrier.
-        val matched = HashSet<AccessibilityNodeInfo>()
         var examined = 0
-        for (candidate in candidates) {
-            if (matches.size >= limit) break
-            // Each candidate can cost an accessibility round-trip on a busy
-            // app: stop once the daemon has given up (PILOT-605).
-            CommandCancellation.checkpoint()
-            examined++
-            var obj = candidate
-            var node = snapshotOf(candidate, fresh, refreshed)
-            if (node.windowId in excludedWindows || NonAppNodes.isHooksMarker(node.text, node.contentDescription)) continue
-            // A Compose role carrier stands for its parent, which getByRole
-            // matches with the carrier's role ([ComposeRoles]).
-            val roleNode = node
-            if (selector.role != null) {
-                carrierParent(candidate, node, fresh, refreshed)?.let { (parentObj, parentNode) ->
-                    obj = parentObj
-                    node = parentNode
-                }
-            }
-            if (node in matched) continue
-            if (!matchesSelector(node, selector, fresh, roleNode) || !matchesStateFilters(node, selector)) continue
-            matched.add(node)
-            matches.add(convert(obj, node))
-        }
-        return matches to examined
+        val matches =
+            ComposeRoles.matchInTreeOrder(
+                candidates,
+                limit,
+                read = { candidate ->
+                    // Each candidate can cost an accessibility round-trip on a
+                    // busy app: stop once the daemon has given up (PILOT-605).
+                    CommandCancellation.checkpoint()
+                    examined++
+                    val node = snapshotOf(candidate, fresh, refreshed)
+                    val nonApp = node.windowId in excludedWindows || NonAppNodes.isHooksMarker(node.text, node.contentDescription)
+                    if (nonApp) null else candidate to node
+                },
+                // A Compose role carrier stands for its parent, which getByRole
+                // matches with the carrier's role ([ComposeRoles]).
+                carrierParentOf = { (obj, node) ->
+                    if (selector.role != null) carrierParent(obj, node, fresh, refreshed) else null
+                },
+                key = { (_, node) -> node },
+                accepts = { (_, node), (_, roleNode) ->
+                    matchesSelector(node, selector, fresh, roleNode) && matchesStateFilters(node, selector)
+                },
+            )
+        return matches.map { (obj, node) -> convert(obj, node) } to examined
     }
 
     /**
@@ -948,7 +945,15 @@ class ElementFinder(
             val normalizedRole = ROLE_ALIASES[lowered] ?: lowered
             val classNames = roleClassMap[normalizedRole]
 
-            if (normalizedRole in DUAL_PATH_ROLES || normalizedRole in TRAIT_ONLY_ROLES) {
+            if (normalizedRole == "switch" && classNames != null) {
+                // A switch is a switch class, or Compose's Switch: a plain
+                // View with the "Switch" description (PILOT-828). Walking
+                // just those keeps the query as cheap as the class walk it
+                // was; the dual-path post-filter decides between them.
+                val classes = classNames + ComposeRoles.COMPOSE_VIEW_CLASS
+                val pattern = classes.joinToString("|") { Regex.escape(it) }
+                by = By.clazz(Pattern.compile(pattern))
+            } else if (normalizedRole in DUAL_PATH_ROLES || normalizedRole in TRAIT_ONLY_ROLES) {
                 // Trait/dual-path roles: skip class constraint. RN
                 // surfaces these via roleDescription on generic views
                 // (ReactViewGroup), not via class name. The post-filter
@@ -1095,9 +1100,10 @@ class ElementFinder(
      * 2. the text of the node it is labeled by (AccessibilityNodeInfo's
      *    labeledBy/labelFor relationship — the native Android pattern; one
      *    round-trip, only for inputs strategy 1 rejects), or
-     * 3. the text of one of its descendants: a Compose TextField's
-     *    `label = { Text("Email") }` is a child of the field (PILOT-828).
-     *    A View-based input has no children.
+     * 3. for a text field, the text of one of its descendants: a Compose
+     *    TextField's `label = { Text("Email") }` is a child of the field
+     *    (PILOT-828). Not for other inputs: a Spinner's child shows its
+     *    selected value, which is no label.
      */
     private fun matchesLabel(
         node: AccessibilityNodeInfo,
@@ -1114,7 +1120,8 @@ class ElementFinder(
                 labelNode.recycle()
             }
         }
-        return node.childCount > 0 && descendantTextParts(node, fresh).any(labelMatches)
+        if (node.childCount == 0 || !EDIT_TEXT_HINT_CLASS_PATTERN.matcher(node.className?.toString() ?: "").matches()) return false
+        return descendantTextParts(node, fresh).any(labelMatches)
     }
 
     private fun parseBounds(boundsStr: String): Rect {
