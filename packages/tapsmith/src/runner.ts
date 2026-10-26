@@ -1793,7 +1793,7 @@ interface ScopeRetryStep {
  */
 function retryReplaysSetup(
   policy: AppResetPolicy,
-  chain: readonly ScopeRetryStep[],
+  chain: ReadonlyArray<Pick<ScopeRetryStep, 'resetPolicy'>>,
   serialGroup: { failed: boolean } | undefined,
 ): boolean {
   return policy.scope === 'file' && !serialGroup
@@ -2113,17 +2113,29 @@ async function runSuiteContext(
   // happened to run last.
   const firstRunnable = firstRunnableTest(ctx, parentPrefix, opts, policy);
   const scopeHasRunnable = firstRunnable !== undefined;
+  // A fresh worker resets on entering a scope whose policy differs from its
+  // lexical parent's — not, as `needsScopeReset` does, from whatever an
+  // earlier sibling left on the device: a describe that shares a sibling's
+  // `appState` skipped its own entry reset, but its retry must restore it.
+  const freshWorkerReset = canReset && (
+    policy.scope === 'file'
+      ? (isRoot || !appResetPolicyEquals(policy, parentPolicy))
+      : ctx.beforeAll.length > 0
+  );
   // An earlier test failed and nothing has started fresh since: before this
   // scope sets itself up, its enclosing scopes' setup runs again from a
   // fresh app (PILOT-739), as it would in Playwright's new worker — this
   // scope's own beforeAll must not run on the failed test's screen. Not for
   // a scope that opts out of the replay (appReset: 'none', per-test scope).
+  // Its own reset counts: under a root that does not reset, a describe
+  // declaring a reset of its own is the fresh start.
   const parentChain = inherited.retrySetup ?? [];
   const freshStartAtEntry = !isRoot && scopeHasRunnable && canReset && retryState.freshStartPending
-    && retryReplaysSetup(policy, parentChain, inherited.serialGroup);
+    && retryReplaysSetup(policy, freshWorkerReset ? [...parentChain, { resetPolicy: policy }] : parentChain, inherited.serialGroup);
   // Compare against what the device actually holds (the last policy applied
   // in this file), falling back to the lexical parent before anything ran.
-  // A fresh start leaves the parent's policy applied.
+  // A fresh start leaves the parent's policy applied (or, under a chain that
+  // does not reset, has this scope's own reset run as its fresh start).
   const appliedPolicy = freshStartAtEntry ? parentPolicy : (opts._applied?.current ?? parentPolicy);
   const policyChanged = !isRoot && !appResetPolicyEquals(policy, appliedPolicy);
   // A test-scoped policy resets before every test, so its scope only needs an
@@ -2409,16 +2421,10 @@ async function runSuiteContext(
   // What a retry of a test in this scope (or below it) re-runs to start
   // where its first attempt started.
   const retryChain: ScopeRetryStep[] = [...(inherited.retrySetup ?? [])];
-  // A fresh worker resets on entering a scope whose policy differs from its
-  // lexical parent's — not, as `needsScopeReset` does, from whatever an
-  // earlier sibling left on the device: a describe that shares a sibling's
-  // `appState` skipped its own entry reset, but its retry must restore it.
-  const freshWorkerReset = canReset && (
-    policy.scope === 'file'
-      ? (isRoot || !appResetPolicyEquals(policy, parentPolicy))
-      : ctx.beforeAll.length > 0
-  );
-  const hasRetryStep = freshWorkerReset || ctx.beforeAll.length > 0 || ctx.afterAll.length > 0;
+  // A scope with a recording of its own gets a step even with nothing to
+  // replay, so a fresh start below it refreshes the view its later
+  // children read.
+  const hasRetryStep = freshWorkerReset || ctx.beforeAll.length > 0 || ctx.afterAll.length > 0 || !!beforeAllCollector;
   // This scope's recording already contains the inherited setup (folded in
   // above), so it replaces the inherited view rather than extending it. A
   // scope that adds no setup shares its parent's view, so a refresh of that

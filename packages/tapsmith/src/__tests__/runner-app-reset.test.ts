@@ -724,6 +724,35 @@ describe('runner app reset (declared isolation)', () => {
       ]);
     });
 
+    it('under a root that does not reset, a describe declaring its own reset is the fresh start, once', async () => {
+      const d = makeDevice();
+      const order: string[] = [];
+      logResets(d, order);
+      pushContext();
+      tapsmithTest.use({ appReset: 'none' });
+      tapsmithDescribe('first', () => {
+        tapsmithTest.use({ appReset: 'clear' });
+        tapsmithTest('broken', async () => { order.push('broken'); throw new Error('boom'); });
+      });
+      tapsmithDescribe('second', () => {
+        tapsmithTest.use({ appReset: 'clear' });
+        tapsmithBeforeAll(async () => { order.push('second beforeAll'); });
+        tapsmithAfterAll(async () => { order.push('second afterAll'); });
+        tapsmithTest('a', async () => { order.push('a'); });
+        tapsmithTest('b', async () => { order.push('b'); });
+      });
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig()));
+
+      expect(collectResults(result).map((t) => t.status)).toEqual(['failed', 'passed', 'passed']);
+      expect(order).toEqual([
+        'reset:clear', 'broken',
+        // `second` shares `first`'s policy, so only the failure makes it reset
+        'reset:clear', 'second beforeAll', 'a', 'b', 'second afterAll',
+      ]);
+    });
+
     it('the next test\'s trace shows the fresh-start reset that ran before it, numbered from 0', async () => {
       const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-start-'));
       const d = makeDevice();
@@ -979,6 +1008,42 @@ describe('runner app reset (declared isolation)', () => {
           expect(traceOutline(t.tracePath!)).not.toContain('action:logout');
           expectFreshSetup(t.tracePath!);
         }
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('a describe below a hook-less one that was fresh-started at entry replays the latest rebuild', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-deep-'));
+      const d = makeDevice();
+      logResets(d, []);
+      let rootRuns = 0;
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { rootRuns++; recordAction(`openDeepLink#${rootRuns}`); });
+        tapsmithDescribe('first', () => { tapsmithTest('broken', async () => { throw new Error('boom'); }); });
+        tapsmithDescribe('wrapper', () => {
+          tapsmithDescribe('inner', () => {
+            tapsmithBeforeAll(async () => {});
+            tapsmithTest('t1', async () => { throw new Error('boom'); });
+            tapsmithTest('t2', async () => { recordAction('tap'); });
+          });
+          tapsmithDescribe('inner2', () => {
+            tapsmithBeforeAll(async () => {});
+            tapsmithTest('p', async () => { recordAction('tap'); });
+          });
+        });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn })));
+
+        const p = collectResults(result).find((t) => t.name === 'p')!;
+        expect(p.status).toBe('passed');
+        // #1 at file entry, #2 at `wrapper`'s entry, #3 before t2
+        expect(rootRuns).toBe(3);
+        const outline = traceOutline(p.tracePath!);
+        expect(outline).toContain('action:openDeepLink#3');
+        expect(outline).not.toContain('action:openDeepLink#2');
       } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
       }
