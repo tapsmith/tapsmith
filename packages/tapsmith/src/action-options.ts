@@ -91,11 +91,11 @@ export function checkOptions<T extends object>(
 export function checkTimeout(method: string, timeout: unknown): number | undefined {
   if (timeout === undefined) return undefined;
   if (typeof timeout !== 'number' || !Number.isFinite(timeout) || timeout <= 0) {
-    const hint = timeout === 0
+    const hint = timeout === 0 || timeout === Infinity
       ? ' In Playwright 0 means no limit; Tapsmith needs one, so pass a long timeout instead (e.g. { timeout: 120_000 }).'
       : '';
     throw new TypeError(
-      `${method}: timeout must be a positive number of milliseconds, but got ${describeValue(timeout)}.${hint}`,
+      `${method}: timeout must be a positive, finite number of milliseconds, but got ${describeValue(timeout)}.${hint}`,
     );
   }
   return timeout;

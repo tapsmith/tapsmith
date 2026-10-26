@@ -1108,7 +1108,7 @@ await device.getByPlaceholder("Email").type("user@example.com", { delay: 50, tim
 const label = await device.getByTestId("status").getText({ timeout: 2000 });
 ```
 
-The timeout must be a positive number. Unlike Playwright, `0` does not mean "no limit": it is refused, so pass a long timeout instead.
+The timeout must be a positive, finite number. Unlike Playwright, `0` does not mean "no limit": it is refused, as is `Infinity`, so pass a long timeout instead.
 
 Options are checked when the call is made, so a mistake fails at once rather than being ignored. Tests usually run without a type check, so TypeScript does not catch these. An unknown option (`tap({ timout: 5000 })`), an options argument that is not an object (`tap(5000)`) and an invalid timeout throw a `TypeError` naming the method and the options it accepts. A Playwright option with no Tapsmith equivalent, such as `force`, `trial` or `position`, gets a message saying so. Options set to `undefined` are ignored. `exists()`, `count()`, `all()` and `allTextContents()` take no arguments, since they read the screen as it is: given one (`exists({ timeout: 5000 })`), they throw rather than answer at once as if they had waited, and the message names the waiting form to use.
 
@@ -1166,7 +1166,7 @@ await device.getByText("Zoom here").doubleTap({ intervalMs: 150 });
 
 Long press this element.
 
-- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout).
+- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
 
 ```typescript
 await device.getByText("Item 1", { exact: true }).longPress(2000);

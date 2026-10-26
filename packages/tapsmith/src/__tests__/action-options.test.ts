@@ -190,6 +190,16 @@ describe('per-call { timeout } (PILOT-840)', () => {
     expect((vi.mocked(c.longPress).mock.calls[1] as unknown[])[2]).toBeLessThanOrEqual(5_000);
   });
 
+  it('longPress(duration, { timeout }) takes the timeout as a second argument after a number', async () => {
+    const handle = new ElementHandle(emptyClient(), _text('Ghost'), DEVICE_TIMEOUT);
+    const start = Date.now();
+    await expect(handle.longPress(2000, { timeout: 300 })).rejects.toThrow(/300ms/);
+    expect(Date.now() - start).toBeLessThan(5_000);
+    await expect(handle.longPress(2000, { timout: 300 } as { timeout?: number })).rejects.toThrow('longPress(): unknown option "timout"');
+    await expect(handle.longPress({ duration: 2000 }, { timeout: 300 }))
+      .rejects.toThrow('longPress(): a second argument goes only with a duration given as a number');
+  });
+
   it('setChecked({ timeout }) waits for the state change only until that timeout', async () => {
     // The tap lands but the switch never turns on.
     const c = client({ findElements: vi.fn(async () => found([el({ checked: false })])) });
@@ -243,10 +253,10 @@ describe('wrong options throw at the call instead of being ignored (PILOT-840)',
     ['an array', [5000], /but got an array/],
     ['a misspelt key', { timout: 5000 }, /tap\(\): unknown option "timout"\. tap\(\) accepts: timeout\./],
     ['a Playwright-only option', { force: true }, /tap\(\): option "force" is a Playwright option Tapsmith does not support\. tap\(\) accepts: timeout\./],
-    ['a negative timeout', { timeout: -1 }, /tap\(\): timeout must be a positive number of milliseconds, but got -1 \(a number\)\./],
+    ['a negative timeout', { timeout: -1 }, /tap\(\): timeout must be a positive, finite number of milliseconds, but got -1 \(a number\)\./],
     ['a zero timeout', { timeout: 0 }, /but got 0 \(a number\)\. In Playwright 0 means no limit/],
     ['a NaN timeout', { timeout: NaN }, /but got NaN/],
-    ['an infinite timeout', { timeout: Infinity }, /but got Infinity/],
+    ['an infinite timeout', { timeout: Infinity }, /but got Infinity \(a number\)\. In Playwright 0 means no limit; Tapsmith needs one/],
     ['a string timeout', { timeout: '5000' }, /but got "5000" \(a string\)/],
   ];
 
@@ -333,7 +343,7 @@ describe('wrong options throw at the call instead of being ignored (PILOT-840)',
     const handle = new ElementHandle(client(), _text('Go'), DEVICE_TIMEOUT);
     await expect(handle.waitFor({ timeout: 0 })).resolves.toBeUndefined();
     await expect(handle.waitFor({ timout: 5 } as { timeout?: number })).rejects.toThrow('waitFor(): unknown option "timout"');
-    await expect(handle.waitFor({ timeout: -5 })).rejects.toThrow(/waitFor\(\): timeout must be a positive number/);
+    await expect(handle.waitFor({ timeout: -5 })).rejects.toThrow(/waitFor\(\): timeout must be a positive, finite number/);
     await expect(handle.waitFor({ state: 'visibile' } as unknown as { state: 'visible' }))
       .rejects.toThrow(`waitFor(): unknown state "visibile". Use one of: 'visible', 'hidden', 'attached', 'detached'.`);
   });
