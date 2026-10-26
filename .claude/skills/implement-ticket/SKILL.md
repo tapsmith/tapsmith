@@ -23,7 +23,8 @@ References, read when the phase needs them:
 | `references/state.md` | Phase 0 and whenever context was summarised: the state file and resuming |
 
 `${CLAUDE_SKILL_DIR}` is this skill's directory; sibling skills are
-`/review-loop` and `/qa-this-branch` (invoke them with the Skill tool).
+`/review-loop` and `/qa-this-branch` (invoke `/review-loop` with the Skill tool; run
+`/qa-this-branch` in a fresh subagent, as Phase 5 says).
 
 **The skill-directory placeholder is not a shell variable.** Claude Code fills in the
 `CLAUDE_SKILL_DIR` placeholder only in this SKILL.md; the Bash environment does not have
@@ -50,6 +51,7 @@ plan (constraints, hints, "don't touch X").
 | `worker` | run as one of several parallel workers under `/implement-tickets` — see *Worker mode* | off |
 | `worktree=<path>` | do all work in this existing worktree (the coordinator created it) | Phase 0 decides |
 | `plan-review` | (worker mode) stop after Phase 2 and return the plan for approval | off |
+| `continuation` | you are a fresh context that a standalone run handed Phases 6–8 to (*Context hand-off*): resume from the state file, never ask the user directly (return `blocked` with a `QUESTION:` block, as in worker mode), and never hand off again | off |
 
 ## What you may and may not do
 
@@ -118,7 +120,8 @@ replaced. So **every wait has a deadline**, in every mode:
 - **A wait is a background command that ends by itself** — with `WAIT_DONE: …` when the
   thing happened, or `WAIT_TIMEOUT: …` (exit 124) at its deadline. Never a bare
   `--watch`, never an `until` loop without a deadline, and never ending a turn "waiting"
-  with no such command running to wake you. Give the Bash call a `timeout` above the
+  with no such command running to wake you (a *Context hand-off* is not that: the state
+  file records the wait and someone else watches it). Give the Bash call a `timeout` above the
   deadline (the background maximum is 2 hours), so the deadline, not the harness, ends it.
   Recipes: `references/pr-and-ci.md` §Waiting recipes.
 - **On waking, for whatever reason, re-read the real state** (`gh pr view`, `gh pr checks`,
@@ -135,6 +138,53 @@ replaced. So **every wait has a deadline**, in every mode:
 | CodeRabbit's review of head | 30 min, then comment `@coderabbitai review` and wait 30 more | record in the PR "CodeRabbit did not review <sha> (status: …)". The gate item is then met by the clean `/review-loop` on head — CodeRabbit is a second opinion, not the gate |
 | a device | as *Devices* says (60 min of polling) | as *Devices* says |
 | a human (a re-review, an answer) | do not wait | report it; the gate item stays unmet |
+
+## Context hand-off
+
+Every turn re-reads the whole conversation. By Phase 6 a run's context is typically
+300–600k tokens, and from there on most turns are waits: polling CI, CodeRabbit, iOS E2E.
+Waking from an idle wait also re-caches the whole context from scratch. The state file
+exists so that a fresh context can pick the work up, and a fresh context costs a small
+fraction of that per turn. So once the remaining work is mostly waiting, **hand off
+rather than wait in a large context**. This changes who does the work, never what is
+done: every review, QA cycle, CI check and gate item still happens, and a hand-off is not
+a result.
+
+**The hand-off point.** All of these hold: the last QA verdict is `ready` or
+`ready-pending-ci` (or QA was skipped as trivial and recorded), every commit is pushed,
+nothing is uncommitted, no `/review-loop` or QA run is in progress, and the next step is
+a wait on CI, CodeRabbit or `E2E iOS` with nothing else left to do. That point recurs:
+after the first QA cycle, after a pushed CI or thread fix, after `gh pr ready`. Never hand
+off during Phases 0–5.
+
+**How:**
+
+1. Make the state file complete for a reader who has seen nothing else
+   (`references/state.md`): phase, head SHA, the *Loops* line for every loop, the *Gate*
+   checklist with the items already evidenced on head, every decision, and a **Next**
+   line saying what is being waited on and what to do when it ends.
+2. Stop your background waiters (TaskStop) and release your device leases.
+3. Then, depending on how you are running:
+   - **`worker`**: end with `IMPLEMENT_TICKET: handoff` and a `WAITING_ON:` line (*Final
+     report*). The coordinator watches the PR and launches a fresh worker when there is
+     something to do. It resumes from the state file.
+   - **Standalone** (neither `worker` nor `continuation`): once, at the first hand-off
+     point, spawn one fresh `general-purpose` subagent (background, no `isolation`) whose
+     prompt is: *Invoke the Skill tool with skill `implement-ticket` and args `<your args>
+     continuation worktree=<the checkout your branch is in>`, and follow that skill
+     exactly. End your final message with the skill's result lines.* It owns the branch
+     from then on: do no work on it yourself, and wait for it to finish. When it returns
+     `blocked`, ask the user its question (interactive; with `auto` it never blocks) and
+     relay the answer with `SendMessage`. Its final result is yours: report it.
+   - **`continuation`**: do not hand off. Do the waits yourself.
+
+If you cannot spawn the subagent (the Agent tool is unavailable), carry on yourself and
+note it in the state file.
+
+**Resuming after a hand-off** is the ordinary resume (`references/state.md`), with one
+rule: trust the state file's loop records. Do not re-read the ticket, re-plan, or re-run
+review or QA unless the state file shows code that landed after them, or you are about to
+change code yourself (then *When to review and QA* applies as usual).
 
 ## Worker mode
 
@@ -156,6 +206,9 @@ With `worker`, you are one of several `implement-ticket` runs coordinated by
 - **Shared machine.** Builds, devices and CI runners are shared with the other workers:
   lease devices, and keep the push-batching rule strictly — every push costs CI time that
   other workers' PRs are queued behind.
+- **Hand off at each hand-off point** (*Context hand-off*), including with `auto`. The
+  coordinator watches your PR while you are handed off and launches a fresh worker,
+  saying in its prompt what woke it.
 - **Main moves under you.** If the coordinator tells you another PR merged, check
   `gh pr view <n> --json mergeable`: only on `CONFLICTING` fetch, merge `origin/<base>`
   into your branch, and re-run the gate (Phase 7). Otherwise carry on — `main`'s own CI
@@ -224,7 +277,8 @@ Each stop rule becomes a decision:
 | 7 unreadable ticket | Try every Jira connector the session has before giving up. Never guess a ticket's content: none can read it → result `held`, nothing created. |
 
 **Never idle while unfinished** — every wait follows *Waiting* (deadlines, re-check on
-wake). Your final message is a report, not an offer: no "want me to…?".
+wake). A *Context hand-off* is not idling: it hands a recorded wait to the coordinator or
+a continuation. Your final message is a report, not an offer: no "want me to…?".
 
 **Final results in auto mode** (in place of `blocked`):
 
@@ -370,12 +424,26 @@ When the plan's slices are all built and the package checks are green:
 
 ## Phase 5 — QA
 
-Invoke `/qa-this-branch` with `autonomous ticket=<KEY> #<pr> worktree=<the checkout your branch is in> report=<state dir>/qa-<unix-ts>/report.md` (one directory per cycle, so each cycle's evidence stays with its report)
+Run `/qa-this-branch` with `autonomous ticket=<KEY> #<pr> worktree=<the checkout your branch is in> report=<state dir>/qa-<unix-ts>/report.md` (one directory per cycle, so each cycle's evidence stays with its report)
 plus the plan's QA items as focus text (focus adds emphasis; it never shrinks QA's
 matrix). Always pass `lease-owner=<KEY>` so QA leases under your name — your own
 device leases then never block the platform leases QA needs for mode 2 or device groups —
-and, if you hold device leases, `devices=<ids>` so QA uses yours first. On later cycles, add `leads=<previous report path>`. Parse the last two lines of its reply (`QA_VERDICT:` /
-`QA_REPORT:`) and act:
+and, if you hold device leases, `devices=<ids>` so QA uses yours first. On later cycles, add `leads=<previous report path>`.
+
+**Run it in a fresh subagent**, not inline: a `general-purpose` Agent (background, no
+`isolation`) whose prompt is *Invoke the Skill tool with skill `qa-this-branch` and args
+`<the args above>`, and follow it to completion. QA is read-only: never edit, commit or
+push. End your reply with its `QA_VERDICT:` and `QA_REPORT:` lines.* QA reads and runs a
+great deal, and run inline, all of that would stay in your context and be re-read on
+every later turn. Its contract is already a report file plus two result lines, so it
+loses nothing by running in a fresh context, and QA that has not seen your reasoning is
+also a more independent check. While it runs, leave the branch alone: no edits, commits,
+pushes or builds in the worktree. Your CI watch carries on in the background. If you
+cannot spawn the subagent, invoke the skill inline and note it in the state file.
+
+Parse the last two lines of its reply (`QA_VERDICT:` / `QA_REPORT:`), then read the
+report file's verdict, blocking findings and open questions (the evidence is there if a
+finding needs it), and act:
 
 | Verdict | Do |
 |---|---|
@@ -419,7 +487,8 @@ with `auto`, follow *Auto mode* for rules 4 and 5.
 
 ## Phase 6 — CI and review threads
 
-Work these until both are clean (`references/pr-and-ci.md` has the commands):
+Work these until both are clean (`references/pr-and-ci.md` has the commands). Whenever
+what is left is a wait, that is a hand-off point (*Context hand-off*):
 
 - **CI** — every check on the PR's **head SHA** green, including `E2E Android`, not just
   the required DCO check. `E2E iOS` reads *skipped* while the PR is a draft; it runs
@@ -521,13 +590,20 @@ descoped, pre-existing bugs and proposed follow-up tickets, and anything a human
 decide before merging. End with:
 
 ```
-IMPLEMENT_TICKET: <merged|ready-to-merge|ready-stacked|best-effort|held|blocked|planned|stopped-by-user>
+IMPLEMENT_TICKET: <merged|ready-to-merge|ready-stacked|best-effort|held|blocked|planned|handoff|stopped-by-user>
 PR: <url or none>
 STATE: <absolute path to state.md>
 ```
 
 `ready-stacked`, `best-effort` and `held` are `auto`-mode results (*Auto mode*); `auto`
-never returns `blocked` or `planned`. When `blocked`, follow with the question, written so it can be answered without reading
+never returns `blocked` or `planned`. `handoff` is a `worker`'s interim return at a
+hand-off point (*Context hand-off*). It is not a final result, and it ends with one more line:
+
+```
+WAITING_ON: <one or more of ci coderabbit e2e-ios> on <head sha>
+```
+
+For a `handoff`, the report is just the result lines and one sentence on where things stand. When `blocked`, follow with the question, written so it can be answered without reading
 anything else:
 
 ```

@@ -40,6 +40,11 @@ push — never only at the end.
 ## Blocked on
 <only when Phase = blocked: exactly what is needed from whom>
 
+## Next
+<at a hand-off (SKILL.md *Context hand-off*): what is being waited on, on which head SHA,
+and what to do when it ends, e.g. "CI + CodeRabbit on abc123; then gate pass 1 and
+`gh pr ready`". A fresh context starts here>
+
 ## Gate
 <the SKILL.md Phase 7 checklist, ticked with evidence pointers>
 ```
@@ -58,6 +63,7 @@ On invocation, or after noticing the conversation was summarised:
 3. Continue from the recorded phase. A half-done slice restarts from its red test. A
    review-loop that was mid-round resumes from its own ledger (it has its own resume
    rule). A QA run that was interrupted is re-run from scratch — QA is always a full
-   retest anyway.
+   retest anyway. After a hand-off, start from *Next*, and let the *Loops* records stand
+   (SKILL.md *Context hand-off*): re-check reality (step 2), not the earlier phases' work.
 4. Never create a second branch or PR for the key, and never discard commits to "start
    clean".

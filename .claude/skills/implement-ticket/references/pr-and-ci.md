@@ -233,6 +233,61 @@ while :; do
 done
 ```
 
+**Hand-off watch** — run by the `/implement-tickets` coordinator, not a worker, for a
+worker that returned `handoff` (SKILL.md *Context hand-off*). It ends at the first thing a
+worker must act on, or once everything in `WAITING_ON` is done. Set `need` to the
+`WAITING_ON` words and `head` to its SHA:
+
+```bash
+R=tapsmith/tapsmith; n=<pr>; head=<sha>; need="<ci coderabbit e2e-ios, as WAITING_ON lists>"
+thr() { gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){
+  pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}}}}}' -f o=tapsmith -f r=tapsmith -F n=$n \
+  -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not)] | length' 2>/dev/null; }
+t0=$(thr) || t0=""
+end=$((SECONDS+6000)); start=$SECONDS
+q='if length == 0 then "none" else (([.[] | select(.conclusion != "skipped")][0]) // {status: "waiting"} | "\(.status) \(.conclusion // "")") end'
+while :; do
+  p=$(gh pr view $n -R $R --json headRefOid,mergeable,state,reviewDecision \
+      -q '"\(.headRefOid) \(.mergeable) \(.state) \(.reviewDecision)"' 2>/dev/null) || p=""
+  if [ -n "$p" ]; then
+    read -r ph pm ps pr <<<"$p"
+    [ "$ph" = "$head" ] || { echo "WAIT_DONE: head moved off $head"; exit 0; }
+    [ "$ps" = OPEN ] || { echo "WAIT_DONE: PR is $ps"; exit 0; }
+    [ "$pm" = CONFLICTING ] && { echo "WAIT_DONE: PR conflicts with its base"; exit 0; }
+    [ "$pr" = CHANGES_REQUESTED ] && { echo "WAIT_DONE: changes requested on $head"; exit 0; }
+  fi
+  t=$(thr) || t=""; [ -z "$t0" ] && t0=$t
+  [ -n "$t" ] && [ -n "$t0" ] && [ "$t" -gt "$t0" ] && { echo "WAIT_DONE: new unresolved review thread on $head"; exit 0; }
+  pending=""
+  case " $need " in *" ci "*)
+    b=$(gh pr checks $n -R $R --json workflow,bucket -q '[.[] | select(.workflow != "") | .bucket]' 2>/dev/null) || b=""
+    case "$b" in *'"fail"'*) echo "WAIT_DONE: a CI check failed on $head"; exit 0;;
+                 ""|"[]"|*'"pending"'*) pending="$pending ci";; esac;;
+  esac
+  case " $need " in *" coderabbit "*)
+    s=$(gh api repos/$R/commits/$head/status -q '.statuses[] | select(.context=="CodeRabbit") | .state + " " + .description' 2>/dev/null) || s=""
+    case "$s" in pending*|"") [ $((SECONDS-start)) -lt 1800 ] && pending="$pending coderabbit";; esac;;
+  esac
+  case " $need " in *" e2e-ios "*)
+    r=$(gh run list -R $R --workflow e2e-ios.yml --commit $head --limit 10 --json status,conclusion -q "$q" 2>/dev/null) || r=""
+    case "$r" in "completed success") ;;
+                 completed*) echo "WAIT_DONE: E2E iOS $r on $head"; exit 0;;
+                 none) [ $((SECONDS-start)) -ge 600 ] || pending="$pending e2e-ios";;
+                 *) pending="$pending e2e-ios";; esac;;
+  esac
+  [ -z "$pending" ] && { echo "WAIT_DONE: $need done on $head"; exit 0; }
+  [ $SECONDS -ge $end ] && { echo "WAIT_TIMEOUT:$pending still pending on $head"; exit 124; }
+  sleep 120
+done
+```
+
+`WAIT_DONE: … done` is also what fires once CodeRabbit has been pending for 30 minutes,
+and when `E2E iOS` never ran for head (outside its `paths`). The fresh worker re-reads
+the real state on waking, as *Waiting* requires, and handles those cases (the
+`@coderabbitai review` nudge, the "no `E2E iOS` run" note in the PR) exactly as its own
+recipes would. On `WAIT_TIMEOUT`, the coordinator launches a fresh worker too: diagnosing
+a stuck run is the worker's job (SKILL.md *Waiting* table).
+
 ## Keeping up with the base
 
 Before the Phase 7 gate passes, merge the base in only when GitHub reports a conflict, or
