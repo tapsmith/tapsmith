@@ -320,10 +320,12 @@ class ElementFinder(
         // render progressbar and toolbar as a generic android.view.View
         // with only a role description, so they must be here too (PILOT-656),
         // and RN's tab list ("Tab List") is a tablist beside the native tab
-        // containers (PILOT-514).
+        // containers (PILOT-514). Compose's Switch is a View with the
+        // "Switch" description beside the framework and AppCompat classes
+        // (PILOT-828).
         // The SDK's ANDROID_DUAL_PATH_ROLES (roles.ts) is pinned to this list.
         val DUAL_PATH_ROLES: Set<String> =
-            setOf("heading", "link", "image", "searchfield", "progressbar", "toolbar", "tablist")
+            setOf("heading", "link", "image", "searchfield", "progressbar", "toolbar", "tablist", "switch")
     }
 
     /**
@@ -628,16 +630,31 @@ class ElementFinder(
         convert: (UiObject2, AccessibilityNodeInfo) -> ElementInfo,
     ): Pair<List<ElementInfo>, Int> {
         val matches = mutableListOf<ElementInfo>()
+        // The nodes matched so far: a Compose control can be reached twice,
+        // as itself and through its role carrier.
+        val matched = HashSet<AccessibilityNodeInfo>()
         var examined = 0
-        for (obj in candidates) {
+        for (candidate in candidates) {
             if (matches.size >= limit) break
             // Each candidate can cost an accessibility round-trip on a busy
             // app: stop once the daemon has given up (PILOT-605).
             CommandCancellation.checkpoint()
             examined++
-            val node = snapshotOf(obj, fresh, refreshed)
+            var obj = candidate
+            var node = snapshotOf(candidate, fresh, refreshed)
             if (node.windowId in excludedWindows || NonAppNodes.isHooksMarker(node.text, node.contentDescription)) continue
-            if (!matchesSelector(node, selector, fresh) || !matchesStateFilters(node, selector)) continue
+            // A Compose role carrier stands for its parent, which getByRole
+            // matches with the carrier's role ([ComposeRoles]).
+            val roleNode = node
+            if (selector.role != null) {
+                carrierParent(candidate, node, fresh, refreshed)?.let { (parentObj, parentNode) ->
+                    obj = parentObj
+                    node = parentNode
+                }
+            }
+            if (node in matched) continue
+            if (!matchesSelector(node, selector, fresh, roleNode) || !matchesStateFilters(node, selector)) continue
+            matched.add(node)
             matches.add(convert(obj, node))
         }
         return matches to examined
@@ -827,21 +844,23 @@ class ElementFinder(
     /**
      * The parts of the selector UIAutomator can't express natively, checked
      * against a candidate's snapshot [node]: label, trait-based role, role
-     * name and hint.
+     * name and hint. The role is read from [roleNode]: the node itself, or
+     * the Compose role carrier that stands for it ([ComposeRoles]).
      */
     private fun matchesSelector(
         node: AccessibilityNodeInfo,
         selector: ElementSelector,
         fresh: Boolean,
+        roleNode: AccessibilityNodeInfo = node,
     ): Boolean {
         // Label selector: an input whose contentDescription matches the
         // label text, OR one labeled by a TextView with matching text (via
         // AccessibilityNodeInfo.getLabeledBy).
         if (selector.label != null) {
-            return matchesLabel(node) { TextMatch.equalsNormalized(it, selector.label) }
+            return matchesLabel(node, fresh) { TextMatch.equalsNormalized(it, selector.label) }
         }
         if (selector.labelRegex != null) {
-            return matchesLabel(node) { selector.labelRegex.matches(it) }
+            return matchesLabel(node, fresh) { selector.labelRegex.matches(it) }
         }
 
         // Trait-based and dual-path roles use the broad By.clazz(".*")
@@ -854,8 +873,8 @@ class ElementFinder(
             if (normalized in TRAIT_ONLY_ROLES || normalized in DUAL_PATH_ROLES) {
                 val isRole =
                     FindRules.matchesTraitRole(
-                        roleDescription = extractRoleDescription(node),
-                        className = node.className?.toString(),
+                        roleDescription = extractRoleDescription(roleNode),
+                        className = roleNode.className?.toString(),
                         acceptable = acceptableRoleDescriptions(normalized),
                         classSet = roleClassMap[normalized]?.toSet() ?: emptySet(),
                         ambiguous = normalized == "heading" || normalized == "link",
@@ -1072,23 +1091,30 @@ class ElementFinder(
     /**
      * Whether input [node] is named by a label that [labelMatches]:
      * 1. its contentDescription (most common in React Native, where
-     *    accessibilityLabel is set directly on the input), or
+     *    accessibilityLabel is set directly on the input),
      * 2. the text of the node it is labeled by (AccessibilityNodeInfo's
      *    labeledBy/labelFor relationship — the native Android pattern; one
-     *    round-trip, only for inputs strategy 1 rejects).
+     *    round-trip, only for inputs strategy 1 rejects), or
+     * 3. the text of one of its descendants: a Compose TextField's
+     *    `label = { Text("Email") }` is a child of the field (PILOT-828).
+     *    A View-based input has no children.
      */
     private fun matchesLabel(
         node: AccessibilityNodeInfo,
+        fresh: Boolean,
         labelMatches: (CharSequence?) -> Boolean,
     ): Boolean {
         if (labelMatches(node.contentDescription?.toString())) return true
-        val labelNode = node.labeledBy ?: return false
-        try {
-            return labelMatches(labelNode.text)
-        } finally {
-            @Suppress("DEPRECATION")
-            labelNode.recycle()
+        val labelNode = node.labeledBy
+        if (labelNode != null) {
+            try {
+                if (labelMatches(labelNode.text)) return true
+            } finally {
+                @Suppress("DEPRECATION")
+                labelNode.recycle()
+            }
         }
+        return node.childCount > 0 && descendantTextParts(node, fresh).any(labelMatches)
     }
 
     private fun parseBounds(boundsStr: String): Rect {
@@ -1356,19 +1382,24 @@ class ElementFinder(
     private fun collectDescendantText(
         node: AccessibilityNodeInfo,
         fresh: Boolean,
-    ): String =
-        FindRules
-            .descendantTextParts(
-                node,
-                children = { visibleChildren(it, fresh) },
-                ownText = { child ->
-                    child.text?.toString()?.takeIf { it.isNotEmpty() }
-                        ?: child.contentDescription?.toString()?.takeIf { it.isNotEmpty() }
-                },
-                // The hooks marker is no one's visible text ([NonAppNodes]).
-                skip = { child -> NonAppNodes.isHooksMarker(child.text, child.contentDescription) },
-                maxDepth = MAX_DESCENDANT_TEXT_DEPTH,
-            ).joinToString(" ")
+    ): String = descendantTextParts(node, fresh).joinToString(" ")
+
+    /** The parts [collectDescendantText] joins, one per contributing descendant. */
+    private fun descendantTextParts(
+        node: AccessibilityNodeInfo,
+        fresh: Boolean,
+    ): List<String> =
+        FindRules.descendantTextParts(
+            node,
+            children = { visibleChildren(it, fresh) },
+            ownText = { child ->
+                child.text?.toString()?.takeIf { it.isNotEmpty() }
+                    ?: child.contentDescription?.toString()?.takeIf { it.isNotEmpty() }
+            },
+            // The hooks marker is no one's visible text ([NonAppNodes]).
+            skip = { child -> NonAppNodes.isHooksMarker(child.text, child.contentDescription) },
+            maxDepth = MAX_DESCENDANT_TEXT_DEPTH,
+        )
 
     /**
      * [node]'s children visible to the user. Without a [fresh] walk each
@@ -1382,6 +1413,70 @@ class ElementFinder(
         (0 until node.childCount).mapNotNull { i ->
             node.getChild(i)?.takeIf { (fresh || it.refresh()) && it.isVisibleToUser }
         }
+
+    /** What [ComposeRoles] reads of [node]: local reads of its snapshot. */
+    private fun shapeOf(node: AccessibilityNodeInfo): ComposeRoles.NodeShape {
+        val className = node.className?.toString()
+        return ComposeRoles.NodeShape(
+            className = className,
+            role = extractRoleDescription(node) ?: resolveRole(className ?: ""),
+            text = node.text,
+            contentDescription = node.contentDescription,
+            childCount = node.childCount,
+            clickable = node.isClickable,
+            longClickable = node.isLongClickable,
+            focusable = node.isFocusable,
+            checkable = node.isCheckable,
+        )
+    }
+
+    /**
+     * When [node] (the snapshot of [obj]) is a Compose role carrier
+     * ([ComposeRoles]), its parent — the control getByRole matches — and
+     * the parent's snapshot; null for any other node. Only a leaf of the
+     * carrier's shape costs a parent read.
+     */
+    private fun carrierParent(
+        obj: UiObject2,
+        node: AccessibilityNodeInfo,
+        fresh: Boolean,
+        refreshed: MutableMap<AccessibilityNodeInfo, AccessibilityNodeInfo>?,
+    ): Pair<UiObject2, AccessibilityNodeInfo>? {
+        var parentNode: AccessibilityNodeInfo? = null
+        val carrier =
+            ComposeRoles.isCarrier(
+                shapeOf(node),
+                parent = {
+                    node.parent?.takeIf { fresh || it.refresh() }?.let {
+                        parentNode = it
+                        shapeOf(it)
+                    }
+                },
+                isLastChild = {
+                    val p = parentNode
+                    p != null && p.getChild(p.childCount - 1) == node
+                },
+            )
+        if (!carrier) return null
+        val parentObj = obj.parent ?: return null
+        return parentObj to snapshotOf(parentObj, fresh, refreshed)
+    }
+
+    /**
+     * The role a Compose control [node] takes from its role carrier — its
+     * last child ([ComposeRoles]) — or null. One child read, only for a
+     * role-less node of Compose's shape.
+     */
+    private fun carriedRoleOf(
+        node: AccessibilityNodeInfo,
+        fresh: Boolean,
+    ): String? {
+        val parent = shapeOf(node)
+        if (!ComposeRoles.mayBeCarrierParent(parent)) return null
+        val last = node.getChild(node.childCount - 1)?.takeIf { fresh || it.refresh() } ?: return null
+        val shape = shapeOf(last)
+        return if (ComposeRoles.isCarrier(shape, { parent }, { true })) ComposeRoles.carriedRole(shape) else null
+    }
 
     /**
      * Read [obj]'s snapshot [node] into an [ElementInfo], plus the
@@ -1416,8 +1511,9 @@ class ElementFinder(
             )
 
         // Prefer the framework-set RoleDescription (React Native's
-        // accessibilityRole) over the className-based mapping when present.
-        val role = extractRoleDescription(node) ?: resolveRole(className)
+        // accessibilityRole) over the className-based mapping when present;
+        // a Compose control without either takes its carrier's (PILOT-828).
+        val role = (extractRoleDescription(node) ?: resolveRole(className)).ifEmpty { carriedRoleOf(node, fresh) ?: "" }
         val viewportRatio = computeViewportRatio(bounds)
 
         val info =
