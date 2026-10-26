@@ -2252,11 +2252,12 @@ export class ElementHandle {
         `waitFor(): unknown state ${JSON.stringify(state)}. Use one of: ${WAIT_FOR_STATES.map((st) => `'${st}'`).join(', ')}.`,
       );
     }
-    // 0 keeps its meaning here (one check, no waiting), and so does a negative
-    // number, as before: a budget computed as `deadline - Date.now()` that has
-    // run out must fail as a timeout, not as a TypeError on a slow run.
+    // 0 keeps its meaning here (one check, no waiting), and so does anything
+    // under 1 ms, as before: a budget computed as `deadline - Date.now()` (or
+    // from performance.now(), fractional) that has run out must fail as a
+    // timeout, not as a TypeError on a slow run.
     const raw = options?.timeout;
-    const timeoutMs = typeof raw === 'number' && raw <= 0 ? 0 : checkTimeout('waitFor()', raw) ?? this._timeoutMs;
+    const timeoutMs = typeof raw === 'number' && raw < 1 ? 0 : checkTimeout('waitFor()', raw) ?? this._timeoutMs;
     this._emitQueryStarted(`waitFor(${state})`);
     const start = Date.now();
 

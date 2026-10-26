@@ -1089,7 +1089,7 @@ await device.getByTestId("lazy-section").waitFor({ state: "attached" });
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `state` | `'visible' \| 'hidden' \| 'attached' \| 'detached'` | `'visible'` | Target state to wait for |
-| `timeout` | `number` | Device timeout (30s) | Maximum time to wait in milliseconds. `0` (or a negative number) checks once without waiting |
+| `timeout` | `number` | Device timeout (30s) | Maximum time to wait in milliseconds. `0` (or any number under 1) checks once without waiting |
 
 Unknown options and states throw a `TypeError`, as for [actions](#per-call-timeout).
 

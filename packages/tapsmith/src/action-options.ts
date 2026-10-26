@@ -16,7 +16,7 @@ export interface TimeoutOptions {
    * Time in milliseconds for the whole call: the auto-wait for the element and
    * the action itself. On a native locator, an element found just before the
    * timeout still gets up to a second for the action, so a call can end
-   * shortly after it. Must be a positive, finite number. Defaults to the
+   * shortly after it. Must be a finite number, at least 1. Defaults to the
    * device timeout (the config's `timeout`, 30 s by default). On the
    * non-waiting `isVisible()`/`isHidden()` it bounds only their retries.
    */
@@ -107,7 +107,7 @@ export function checkTimeout(method: string, timeout: unknown): number | undefin
   if (timeout < 1) {
     throw new TypeError(
       `${method}: timeout is in milliseconds and must be at least 1, but got ${describeValue(timeout)}` +
-      ` (for ${timeout} seconds, pass ${Math.round(timeout * 1000)}).`,
+      ` (for ${timeout} seconds, pass ${Math.max(1, Math.round(timeout * 1000))}).`,
     );
   }
   return timeout;

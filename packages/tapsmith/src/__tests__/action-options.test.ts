@@ -350,6 +350,7 @@ describe('wrong options throw at the call instead of being ignored (PILOT-840)',
     await expect(handle.waitFor({ timout: 5 } as { timeout?: number })).rejects.toThrow('waitFor(): unknown option "timout"');
     // A run-out computed budget is one check, as 0 is, not a TypeError.
     await expect(handle.waitFor({ timeout: -5 })).resolves.toBeUndefined();
+    await expect(handle.waitFor({ timeout: 0.37 })).resolves.toBeUndefined();
     await expect(new ElementHandle(emptyClient(), _text('Go'), DEVICE_TIMEOUT).waitFor({ timeout: -5 }))
       .rejects.not.toBeInstanceOf(TypeError);
     await expect(handle.waitFor({ timeout: NaN })).rejects.toThrow(/waitFor\(\): timeout must be a positive, finite number/);

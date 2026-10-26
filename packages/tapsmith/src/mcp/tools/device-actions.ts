@@ -66,8 +66,8 @@ const MAX_TOOL_TIMEOUT_MS = 120_000;
 
 /** The `timeout` argument tapsmith_tap and tapsmith_type share (PILOT-840). */
 const timeoutArg = z.number().min(1).max(MAX_TOOL_TIMEOUT_MS).optional().describe(
-  `How long to wait for the element, in milliseconds (default ${MCP_ACTION_TIMEOUT_MS}, at most ${MAX_TOOL_TIMEOUT_MS}), ` +
-  'as the action\'s { timeout } option does in a test. Raise it for an element that takes a while to appear.',
+  `How long to wait for the element, in milliseconds (default ${MCP_ACTION_TIMEOUT_MS}, at most ${MAX_TOOL_TIMEOUT_MS}). ` +
+  'Raise it for an element that takes a while to appear.',
 );
 
 export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDispatcher): void {
