@@ -51,28 +51,50 @@ internal object HierarchyAttributes {
     /**
      * Inject [attributes] (bounds → name → value) into the stock XML: after
      * the `bounds` attribute of every `<node>` whose bounds have an entry.
+     * [leafAttributes] go only on a node without children (written `<node …/>`)
+     * — a parent can share its bounds with its last child (PILOT-828).
      */
     fun inject(
         xml: String,
         attributes: Map<String, Map<String, String>>,
+        leafAttributes: Map<String, Map<String, String>> = emptyMap(),
     ): String {
-        if (attributes.isEmpty()) return xml
-        val sb = StringBuilder(xml.length + attributes.size * 30)
+        if (attributes.isEmpty() && leafAttributes.isEmpty()) return xml
+        val sb = StringBuilder(xml.length + (attributes.size + leafAttributes.size) * 30)
         var lastEnd = 0
         for (match in NODE_BOUNDS.findAll(xml)) {
-            sb.append(xml, lastEnd, match.range.last + 1)
-            attributes[match.groupValues[2]]?.forEach { (name, value) ->
-                sb
-                    .append(' ')
-                    .append(name)
-                    .append("=\"")
-                    .append(escapeXmlAttr(value))
-                    .append('"')
-            }
-            lastEnd = match.range.last + 1
+            val end = match.range.last + 1
+            sb.append(xml, lastEnd, end)
+            val bounds = match.groupValues[2]
+            attributes[bounds]?.let { appendAttributes(sb, it) }
+            leafAttributes[bounds]?.let { if (isLeafTag(xml, end)) appendAttributes(sb, it) }
+            lastEnd = end
         }
         sb.append(xml, lastEnd, xml.length)
         return sb.toString()
+    }
+
+    private fun appendAttributes(
+        sb: StringBuilder,
+        attributes: Map<String, String>,
+    ) {
+        attributes.forEach { (name, value) ->
+            sb
+                .append(' ')
+                .append(name)
+                .append("=\"")
+                .append(escapeXmlAttr(value))
+                .append('"')
+        }
+    }
+
+    /** Whether the `<node>` tag that continues at [from] closes itself (`/>`): a node without children. */
+    private fun isLeafTag(
+        xml: String,
+        from: Int,
+    ): Boolean {
+        val close = xml.indexOf('>', from)
+        return close > 0 && xml[close - 1] == '/'
     }
 
     private val NODE_TAG = Regex("""<(/?)node\b([^>]*?)(/?)>""")

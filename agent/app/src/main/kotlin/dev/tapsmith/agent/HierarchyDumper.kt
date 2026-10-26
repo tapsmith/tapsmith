@@ -19,11 +19,15 @@ import java.io.ByteArrayOutputStream
  * attributes for elements with trait-based roles (heading, alert, link,
  * combobox, etc.) that React Native surfaces via AccessibilityNodeInfo
  * bundle extras but the stock dump doesn't include, and `tapsmith-expanded`
- * for elements with an expanded state (their expand/collapse actions).
+ * for elements with an expanded state (their expand/collapse actions). A
+ * Jetpack Compose control gets the role of its role carrier, which is marked
+ * `tapsmith-role-carrier` ([ComposeRoles], PILOT-828).
  */
-class HierarchyDumper(
+class HierarchyDumper internal constructor(
     private val device: UiDevice,
     private val instrumentation: Instrumentation,
+    /** The finder's reading of a node for [ComposeRoles], so the dump and getByRole agree. */
+    private val composeShapeOf: (AccessibilityNodeInfo) -> ComposeRoles.NodeShape,
 ) {
     companion object {
         private const val TAG = "TapsmithHierarchy"
@@ -72,7 +76,7 @@ class HierarchyDumper(
     private fun injectAttributes(xml: String): String {
         val collected = collectAttributeMap()
         return HierarchyAttributes.markWindowRoots(
-            HierarchyAttributes.inject(xml, collected.attributes),
+            HierarchyAttributes.inject(xml, collected.attributes, collected.leafAttributes),
             collected.nonAppWindowRoots,
             NonAppNodes.DUMP_ATTRIBUTE,
         )
@@ -80,12 +84,15 @@ class HierarchyDumper(
 
     /**
      * What [collectAttributeMap] gathers: bounds → attributes to inject, and
+     * the attributes only a leaf with those bounds gets (a Compose role
+     * carrier's marker, as its parent can share its bounds), and
      * the [HierarchyAttributes.windowRootKey]s of the windows no locator
      * searches ([NonAppNodes]), whose root nodes the dump marks
      * `tapsmith-non-app="true"` so the trace viewer leaves them out too.
      */
     private class Collected(
         val attributes: Map<String, Map<String, String>>,
+        val leafAttributes: Map<String, Map<String, String>>,
         val nonAppWindowRoots: Set<String>,
     )
 
@@ -102,6 +109,7 @@ class HierarchyDumper(
      */
     private fun collectAttributeMap(): Collected {
         val attrMap = mutableMapOf<String, MutableMap<String, String>>()
+        val leafMap = mutableMapOf<String, MutableMap<String, String>>()
         val nonAppRoots = mutableSetOf<String>()
         try {
             val automation = instrumentation.uiAutomation
@@ -135,7 +143,7 @@ class HierarchyDumper(
                         nonAppRoots.add(HierarchyAttributes.windowRootKey(rootBounds, root.packageName?.toString()))
                     }
                     try {
-                        walkNodeInfo(root, clip, attrMap)
+                        walkNodeInfo(root, clip, attrMap, leafMap)
                     } finally {
                         @Suppress("DEPRECATION")
                         root.recycle()
@@ -148,7 +156,7 @@ class HierarchyDumper(
         } catch (e: Exception) {
             Log.w(TAG, "Failed to collect attributes from accessibility tree", e)
         }
-        return Collected(attrMap, nonAppRoots)
+        return Collected(attrMap, leafMap, nonAppRoots)
     }
 
     @Suppress("DEPRECATION")
@@ -156,31 +164,59 @@ class HierarchyDumper(
         node: AccessibilityNodeInfo,
         clip: DumpClip,
         attrMap: MutableMap<String, MutableMap<String, String>>,
+        leafMap: MutableMap<String, MutableMap<String, String>>,
     ) {
-        val role = extractRoleFromNodeInfo(node)
+        val children = (0 until node.childCount).map { node.getChild(it) }
+        // A Compose control takes its role carrier's role (PILOT-828).
+        val carried = carriedRole(node, children.lastOrNull())
+        val role = extractRoleFromNodeInfo(node) ?: carried?.first
         val expanded = extractExpandedFromNodeInfo(node)
         if (role != null || expanded != null) {
-            val rect = Rect()
-            node.getBoundsInScreen(rect)
-            // Keyed by the bounds the stock dump writes for this node, which
-            // are clipped to the display and window.
-            val bounds =
-                HierarchyAttributes
-                    .dumpedBounds(
-                        HierarchyAttributes.Box(rect.left, rect.top, rect.right, rect.bottom),
-                        clip.displayWidth,
-                        clip.displayHeight,
-                        clip.window,
-                    ).key()
-            val attrs = attrMap.getOrPut(bounds) { mutableMapOf() }
+            val attrs = attrMap.getOrPut(dumpedBoundsKey(node, clip)) { mutableMapOf() }
             role?.let { attrs["tapsmith-role"] = it }
             expanded?.let { attrs["tapsmith-expanded"] = it.toString() }
         }
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i) ?: continue
-            walkNodeInfo(child, clip, attrMap)
+        carried?.second?.let { carrier ->
+            leafMap.getOrPut(dumpedBoundsKey(carrier, clip)) { mutableMapOf() }[ComposeRoles.CARRIER_DUMP_ATTRIBUTE] = "true"
+        }
+        for (child in children) {
+            if (child == null) continue
+            walkNodeInfo(child, clip, attrMap, leafMap)
             child.recycle()
         }
+    }
+
+    /** The role [node] takes from [lastChild] when that is its Compose role carrier, with the carrier; else null. */
+    private fun carriedRole(
+        node: AccessibilityNodeInfo,
+        lastChild: AccessibilityNodeInfo?,
+    ): Pair<String, AccessibilityNodeInfo>? {
+        if (lastChild == null) return null
+        val parent = composeShapeOf(node)
+        if (!ComposeRoles.mayBeCarrierParent(parent)) return null
+        val carrier = composeShapeOf(lastChild)
+        if (!ComposeRoles.isCarrier(carrier, { parent }, { true })) return null
+        return ComposeRoles.carriedRole(carrier)?.let { it to lastChild }
+    }
+
+    /**
+     * The `bounds` the stock dump writes for [node] — its screen bounds
+     * clipped to the display and window — which is the key the injected
+     * attributes join on.
+     */
+    private fun dumpedBoundsKey(
+        node: AccessibilityNodeInfo,
+        clip: DumpClip,
+    ): String {
+        val rect = Rect()
+        node.getBoundsInScreen(rect)
+        return HierarchyAttributes
+            .dumpedBounds(
+                HierarchyAttributes.Box(rect.left, rect.top, rect.right, rect.bottom),
+                clip.displayWidth,
+                clip.displayHeight,
+                clip.window,
+            ).key()
     }
 
     /** The element's expanded state, as ElementFinder's `expanded` filter reads it. */

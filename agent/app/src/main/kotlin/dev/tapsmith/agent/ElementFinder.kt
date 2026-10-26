@@ -1415,7 +1415,7 @@ class ElementFinder(
         }
 
     /** What [ComposeRoles] reads of [node]: local reads of its snapshot. */
-    private fun shapeOf(node: AccessibilityNodeInfo): ComposeRoles.NodeShape {
+    internal fun composeShapeOf(node: AccessibilityNodeInfo): ComposeRoles.NodeShape {
         val className = node.className?.toString()
         return ComposeRoles.NodeShape(
             className = className,
@@ -1445,11 +1445,11 @@ class ElementFinder(
         var parentNode: AccessibilityNodeInfo? = null
         val carrier =
             ComposeRoles.isCarrier(
-                shapeOf(node),
+                composeShapeOf(node),
                 parent = {
                     node.parent?.takeIf { fresh || it.refresh() }?.let {
                         parentNode = it
-                        shapeOf(it)
+                        composeShapeOf(it)
                     }
                 },
                 isLastChild = {
@@ -1471,10 +1471,10 @@ class ElementFinder(
         node: AccessibilityNodeInfo,
         fresh: Boolean,
     ): String? {
-        val parent = shapeOf(node)
+        val parent = composeShapeOf(node)
         if (!ComposeRoles.mayBeCarrierParent(parent)) return null
         val last = node.getChild(node.childCount - 1)?.takeIf { fresh || it.refresh() } ?: return null
-        val shape = shapeOf(last)
+        val shape = composeShapeOf(last)
         return if (ComposeRoles.isCarrier(shape, { parent }, { true })) ComposeRoles.carriedRole(shape) else null
     }
 

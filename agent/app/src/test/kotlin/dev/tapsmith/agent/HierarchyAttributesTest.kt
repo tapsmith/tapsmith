@@ -40,6 +40,29 @@ class HierarchyAttributesTest {
     }
 
     @Test
+    fun `leaf attributes land only on a leaf with that key, not on a parent sharing its bounds`() {
+        // PILOT-828: a Compose NavigationBarItem and its role carrier have
+        // the same bounds; only the carrier (a leaf) is marked.
+        val xml =
+            """<hierarchy><node index="0" class="android.view.View" bounds="[0,0][100,50]">""" +
+                """<node index="0" class="android.widget.TextView" text="Items" bounds="[10,10][90,40]" />""" +
+                """<node index="1" class="android.view.View" bounds="[0,0][100,50]" /></node></hierarchy>"""
+        val out =
+            HierarchyAttributes.inject(
+                xml,
+                mapOf("[0,0][100,50]" to mapOf("tapsmith-role" to "tab")),
+                leafAttributes = mapOf("[0,0][100,50]" to mapOf("tapsmith-role-carrier" to "true")),
+            )
+        assertEquals(
+            """<hierarchy><node index="0" class="android.view.View" bounds="[0,0][100,50]" tapsmith-role="tab">""" +
+                """<node index="0" class="android.widget.TextView" text="Items" bounds="[10,10][90,40]" />""" +
+                """<node index="1" class="android.view.View" bounds="[0,0][100,50]" tapsmith-role="tab" """ +
+                """tapsmith-role-carrier="true" /></node></hierarchy>""",
+            out,
+        )
+    }
+
+    @Test
     fun `injects each attribute after the bounds of every node with that key`() {
         val xml =
             """<hierarchy><node index="0" class="android.widget.Button" bounds="[0,0][100,50]" />""" +
