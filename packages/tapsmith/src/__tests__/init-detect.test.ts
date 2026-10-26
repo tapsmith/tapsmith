@@ -363,3 +363,19 @@ describe('case and React Native corners (PILOT-832)', () => {
     expect(derivedDataBuildWarning('/dd/App.app', layout, 'iphonesimulator', false)).toContain('-configuration Debug');
   });
 });
+
+describe('DerivedData workspace preference with an unbuilt workspace (PILOT-832)', () => {
+  it('keeps the bare project\'s build when the workspace\'s DerivedData folder holds none', () => withTmp((tmp) => {
+    const project = path.join(tmp, 'proj');
+    fs.mkdirSync(path.join(project, 'ios', 'App.xcworkspace'), { recursive: true });
+    fs.mkdirSync(path.join(project, 'ios', 'App.xcodeproj'), { recursive: true });
+    const dd = path.join(tmp, 'DerivedData');
+    const plist = (ws: string): string => `<plist><dict><key>WorkspacePath</key><string>${path.join(project, 'ios', ws)}</string></dict></plist>`;
+    fs.mkdirSync(path.join(dd, 'App-aaaaaaaaaaaaaaaaaaaaaaaaaaaa'), { recursive: true });
+    fs.writeFileSync(path.join(dd, 'App-aaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'info.plist'), plist('App.xcworkspace'));
+    const app = path.join(dd, 'App-bbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'Build', 'Products', 'Debug-iphonesimulator', 'App.app');
+    fs.mkdirSync(app, { recursive: true });
+    fs.writeFileSync(path.join(dd, 'App-bbbbbbbbbbbbbbbbbbbbbbbbbbbb', 'info.plist'), plist('App.xcodeproj'));
+    expect(findDerivedDataApps(project, ['ios/App.xcworkspace', 'ios/App.xcodeproj'], 'iphonesimulator', dd)).toEqual([app]);
+  }));
+});

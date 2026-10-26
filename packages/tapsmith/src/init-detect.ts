@@ -289,8 +289,9 @@ export function findDerivedDataApps(
     });
   }
   // A build of the bare .xcodeproj beside a workspace (opened by mistake,
-  // before `pod install`) is not the app: the workspace's build wins.
-  const workspaces = new Set(matched.filter((m) => m.workspace.endsWith('.xcworkspace')).map((m) => path.dirname(m.workspace)));
+  // before `pod install`) is not the app: the workspace's build wins, when
+  // the workspace has one of this kind.
+  const workspaces = new Set(matched.filter((m) => m.workspace.endsWith('.xcworkspace') && m.apps.length > 0).map((m) => path.dirname(m.workspace)));
   for (const m of matched) {
     if (m.workspace.endsWith('.xcodeproj') && workspaces.has(path.dirname(m.workspace))) continue;
     apps.push(...m.apps);
