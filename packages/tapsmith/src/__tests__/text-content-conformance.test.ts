@@ -238,6 +238,10 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
     // A generic wrapper of a native control with the same label and bounds gives way to it.
     const wrapper = node(T.other, 'Submit', [node(T.button, 'Submit', [], bounds)], bounds);
     expect(matchTypes(wrapper, 'device.getByText("Submit", { exact: true })')).toEqual([`${T.button}:Submit`]);
+    // A button filling the same bounds as its text is kept: it carries the state.
+    const button = node(T.button, 'Submit', [node(T.text, 'Submit', [], bounds)], { ...bounds, enabled: 'false' });
+    const kept = findMatchingNodes([button], parseSelectorString('device.getByText("Submit", { exact: true })')!);
+    expect(kept.map((n) => n.attributes.get('type'))).toEqual([T.button]);
     // A container with other bounds still gives way.
     const row = node(T.button, 'Test Screens', [node(T.text, 'Test Screens', [], bounds)], { bounds: '[0,90][400,150]' });
     expect(matchTypes(row, 'device.getByText("Test Screens", { exact: true })')).toEqual([`${T.text}:Test Screens`]);

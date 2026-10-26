@@ -25,7 +25,9 @@ describe("getByText matches text content", () => {
 
   test("an accessibilityValue isn't text", async ({ device, accessibilityScreen }) => {
     await openScreen(device, "/accessibility")
-    await expect(accessibilityScreen.uploadProgress).toHaveCount(1)
+    // Android's tree holds only what is on screen.
+    await accessibilityScreen.uploadProgress.scrollIntoView()
+    await expect(accessibilityScreen.uploadProgress).toBeVisible()
     await expect(device.getByText("65%", { exact: true })).toHaveCount(0)
   })
 
@@ -33,8 +35,8 @@ describe("getByText matches text content", () => {
     await openScreen(device, "/dialogs")
     await dialogsScreen.showAlertButton.tap()
     await expect(dialogsScreen.alertOk).toBeVisible()
+    // On iOS the alert element is labelled "Info" too; Android's title is a heading.
     await expect(device.getByText("Info", { exact: true })).toHaveCount(1)
-    await expect(device.getByText("Info", { exact: true })).toHaveRole("text")
     await dialogsScreen.alertOk.tap()
     await expect(dialogsScreen.alertOk).toBeHidden()
   })

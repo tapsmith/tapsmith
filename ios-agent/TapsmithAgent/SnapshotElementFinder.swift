@@ -1181,16 +1181,19 @@ class SnapshotElementFinder {
             // (TextContent, PILOT-794) — a Toggle row, a NavigationLink or
             // an alert to the static text it holds.
             //
-            // Except a same-target duplicate — the inner copy of a static
-            // text iOS exposes twice, with the same type, label and frame:
-            // the outer one carries its traits and identifier, and the SDK's
-            // collapse keeps it (collapseSameTargetDuplicates, PILOT-226). A
-            // generic wrapper of a native control still gives way to it.
+            // Except a same-target duplicate — one target iOS exposes twice,
+            // with the same label and (whole-point) bounds, such as a static
+            // text's attribute-carrying copy (PILOT-226) or a button and the
+            // text filling it: the outer one carries the traits, state and
+            // identifier, and the SDK's collapse keeps it
+            // (collapseSameTargetDuplicates). A generic `.other` wrapper of a
+            // native control still gives way to it, as above.
             let innermostOnly = selector.matchesInnermostOnly
             let myFrame = parseFrame(nodeDict)
             if innermostOnly {
                 for anc in matchedAncestors
-                where !(anc.elementType == elType && anc.frame == myFrame && TextMatch.equals(anc.label, myLabel)) {
+                where !(Self.sameTarget(anc.frame, myFrame) && TextMatch.equals(anc.label, myLabel)
+                    && (anc.elementType != .other || elType == .other)) {
                     suppressed.insert(anc.resultIndex)
                 }
             } else if elType != .other {
@@ -1415,6 +1418,15 @@ class SnapshotElementFinder {
         if !hasAnySelector { return false }
 
         return true
+    }
+
+    /// Whether two frames are one target as the SDK's same-target collapse
+    /// keys it: equal once truncated to whole points, like ElementBounds.
+    static func sameTarget(_ a: CGRect, _ b: CGRect) -> Bool {
+        func bounds(_ r: CGRect) -> [Int] {
+            [Int(r.origin.x), Int(r.origin.y), Int(r.origin.x + r.width), Int(r.origin.y + r.height)]
+        }
+        return a.width > 0 && a.height > 0 && bounds(a) == bounds(b)
     }
 
     private func parseFrame(_ node: [String: Any]) -> CGRect {

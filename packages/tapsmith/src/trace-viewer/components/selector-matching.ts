@@ -778,9 +778,15 @@ function collapseSameTargetNodes(nodes: HierarchyNode[]): HierarchyNode[] {
   return result;
 }
 
-/** Whether two iOS nodes are one target exposed twice: the same type, label and bounds. */
+/**
+ * Whether two iOS nodes are one target exposed twice — the same label and
+ * bounds — whose outer copy the agent keeps: anything but a generic `.other`
+ * wrapper of a native control.
+ */
 function isSameTargetDuplicate(outer: HierarchyNode, inner: HierarchyNode): boolean {
-  return (outer.attributes.get('type') ?? outer.tagName) === (inner.attributes.get('type') ?? inner.tagName)
+  const outerType = outer.attributes.get('type') ?? outer.tagName;
+  const innerType = inner.attributes.get('type') ?? inner.tagName;
+  return (outerType !== 'XCUIElementTypeOther' || innerType === 'XCUIElementTypeOther')
     && normalizeWhitespace(outer.attributes.get('label') ?? '') === normalizeWhitespace(inner.attributes.get('label') ?? '')
     && outer.attributes.get('bounds') !== undefined
     && outer.attributes.get('bounds') === inner.attributes.get('bounds');
@@ -879,8 +885,9 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     let pushed = false;
     if (matches) {
       if (iosText && isIos) {
-        // Not a same-target duplicate's outer copy (same label and bounds):
-        // collapseSameTargetNodes keeps that one, as the agent does.
+        // Not a same-target duplicate's outer copy (same label and bounds,
+        // not a generic wrapper of a native control): collapseSameTargetNodes
+        // keeps that one, as the agent does.
         for (const index of matchedAncestors) {
           if (!isSameTargetDuplicate(raw[index], node)) suppressed.add(index);
         }
