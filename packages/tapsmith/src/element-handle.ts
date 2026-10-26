@@ -2699,9 +2699,10 @@ export class ElementHandle {
   /**
    * Drag this element onto `target`.
    *
-   * @param options.timeout - Maximum time in milliseconds for the whole call,
-   *   including the wait for both elements. Defaults to each locator's
-   *   device timeout.
+   * @param options.timeout - Time in milliseconds shared by the wait for both
+   *   elements and the drag; each step that starts with under a second left
+   *   still gets up to a second. Without it, each element waits for its own
+   *   locator's timeout.
    */
   async dragTo(target: ElementHandle, options?: TimeoutOptions): Promise<void> {
     const timeout = checkTimeout('dragTo()', checkOptions('dragTo()', options, ['timeout'])?.timeout);

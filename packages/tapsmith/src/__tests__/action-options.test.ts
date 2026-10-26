@@ -189,6 +189,16 @@ describe('per-call { timeout } (PILOT-840)', () => {
     expect(await handle.isHidden({ timeout: 1_000 })).toBe(true);
   });
 
+  it('isVisible({ timeout }) stops re-reading a screen that never settles at that timeout, not the device timeout', async () => {
+    const stale = client({
+      findElements: vi.fn(async () => ({ requestId: '1', elements: [], errorMessage: 'Element is stale (UI changed): null' })),
+    });
+    const handle = new ElementHandle(stale, _text('Spinner'), DEVICE_TIMEOUT);
+    const start = Date.now();
+    await expect(handle.isVisible({ timeout: 500 })).rejects.toThrow();
+    expect(Date.now() - start).toBeLessThan(5_000);
+  });
+
   it('records one action row in the trace, under the action name', async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-action-options-'));
     try {

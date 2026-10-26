@@ -1258,7 +1258,7 @@ await device.getByText("Top Section", { exact: true }).scrollIntoView({ directio
 
 #### `elementHandle.dragTo(target: ElementHandle, options?): Promise<void>`
 
-Drag this element to a target element. The [per-call timeout](#per-call-timeout) option is shared by the wait for both elements and the drag, so the whole call ends within it. Without it, each element waits for its own locator's timeout.
+Drag this element to a target element. The [per-call timeout](#per-call-timeout) option is shared by the wait for both elements and the drag: each step gets what the earlier ones left of it. As for other actions, a step that starts with less than a second left still gets up to a second, so a call whose elements turn up late can end shortly after the timeout. Without the option, each element waits for its own locator's timeout.
 
 ```typescript
 const source = device.getByText("Item 1", { exact: true });
