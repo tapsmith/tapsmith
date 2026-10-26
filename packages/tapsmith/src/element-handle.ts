@@ -32,7 +32,7 @@ import { tracedAction } from './trace/traced-action.js';
 import { sleep, isAbortError } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
-import { checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
+import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
 
 // ─── Public types ───
 
@@ -1976,7 +1976,11 @@ export class ElementHandle {
    * re-read, a momentary agent fault is retried briefly and then thrown, and a
    * user stop propagates — never swallowed as "doesn't exist".
    */
-  async exists(): Promise<boolean> {
+  exists(): Promise<boolean>;
+  // The arguments are only checked (PILOT-840): under tsx an option passed
+  // here would otherwise be dropped without a word.
+  async exists(...args: unknown[]): Promise<boolean> {
+    checkNoArguments('exists()', args, "It answers at once without waiting; to wait for the element, use waitFor({ state: 'attached', timeout }) or expect(locator).toExist({ timeout }).");
     this._emitQueryStarted('exists');
     const start = Date.now();
     try {
@@ -2060,7 +2064,11 @@ export class ElementHandle {
    * handle from `all()` (a plain `nth(i)` locator) it is 1 while a row is at
    * that index and 0 once the list has shrunk.
    */
-  async count(): Promise<number> {
+  count(): Promise<number>;
+  // The arguments are only checked (PILOT-840): under tsx an option passed
+  // here would otherwise be dropped without a word.
+  async count(...args: unknown[]): Promise<number> {
+    checkNoArguments('count()', args, 'It reads the screen as it is now; to wait for the matches, use expect(locator).toHaveCount(n, { timeout }).');
     this._emitQueryStarted('count');
     const start = Date.now();
     try {
@@ -2083,7 +2091,11 @@ export class ElementHandle {
    * `count()`: `list.first().all()` (or `.nth(i)`/`.last()`) is that one
    * positional locator, or an empty array.
    */
-  async all(): Promise<ElementHandle[]> {
+  all(): Promise<ElementHandle[]>;
+  // The arguments are only checked (PILOT-840): under tsx an option passed
+  // here would otherwise be dropped without a word.
+  async all(...args: unknown[]): Promise<ElementHandle[]> {
+    checkNoArguments('all()', args, 'It reads the screen as it is now; to wait for the matches, use expect(locator).toHaveCount(n, { timeout }).');
     this._emitQueryStarted('all');
     const start = Date.now();
     try {
@@ -2118,7 +2130,11 @@ export class ElementHandle {
    * for a batch read: each handle from `all()` is a live locator, so that
    * loop is one hierarchy read per row (PILOT-346).
    */
-  async allTextContents(): Promise<string[]> {
+  allTextContents(): Promise<string[]>;
+  // The arguments are only checked (PILOT-840): under tsx an option passed
+  // here would otherwise be dropped without a word.
+  async allTextContents(...args: unknown[]): Promise<string[]> {
+    checkNoArguments('allTextContents()', args, 'It reads the screen as it is now; to wait for the matches, use expect(locator).toHaveCount(n, { timeout }).');
     this._emitQueryStarted('allTextContents');
     const start = Date.now();
     try {

@@ -1085,7 +1085,15 @@ export class WebViewHandle {
     }, undefined, timeout);
   }
 
-  async isVisible(selector: string): Promise<boolean> {
+  /**
+   * Whether the first element matching the CSS selector is visible right now
+   * (one DOM read, no auto-wait).
+   *
+   * @param options.timeout - Accepted, and checked, for Playwright parity; it
+   *   has no effect, since the call never waits.
+   */
+  async isVisible(selector: string, options?: TimeoutOptions): Promise<boolean> {
+    checkTimeout('webview.isVisible()', checkOptions('webview.isVisible()', options, ['timeout'])?.timeout);
     return this._traced('isVisible', selector, () => this._isVisibleSelector(selector));
   }
 
@@ -1095,7 +1103,8 @@ export class WebViewHandle {
    * `ElementHandle.isHidden()` / `WebViewLocator.isHidden()`. Traced under its
    * own name, like the locator form, so the check is a row in the trace.
    */
-  async isHidden(selector: string): Promise<boolean> {
+  async isHidden(selector: string, options?: TimeoutOptions): Promise<boolean> {
+    checkTimeout('webview.isHidden()', checkOptions('webview.isHidden()', options, ['timeout'])?.timeout);
     return this._traced('isHidden', selector, async () => !(await this._isVisibleSelector(selector)));
   }
 

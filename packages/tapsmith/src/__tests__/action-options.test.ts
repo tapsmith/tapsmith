@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { ElementHandle } from '../element-handle.js';
 import { WebViewHandle } from '../webview-handle.js';
-import { checkOptions, checkTimeout } from '../action-options.js';
+import { checkNoArguments, checkOptions, checkTimeout } from '../action-options.js';
 import { TraceCollector, type TraceCapture } from '../trace/trace-collector.js';
 import type { ActionTraceEvent } from '../trace/types.js';
 import { _text, _role } from '../selectors.js';
@@ -286,6 +286,26 @@ describe('wrong options throw at the call instead of being ignored (PILOT-840)',
     expect(vi.mocked(c.selectOption).mock.calls.map((a) => (a as unknown[])[1])).toEqual(['Two', { index: 0 }, { index: 3 }]);
   });
 
+  it.each([
+    ['exists', (h: ElementHandle) => (h.exists as (...a: unknown[]) => Promise<unknown>)({ timeout: 5000 }), /waitFor\(\{ state: 'attached', timeout \}\)/],
+    ['count', (h: ElementHandle) => (h.count as (...a: unknown[]) => Promise<unknown>)({ timeout: 5000 }), /toHaveCount\(n, \{ timeout \}\)/],
+    ['all', (h: ElementHandle) => (h.all as (...a: unknown[]) => Promise<unknown>)({ timeout: 5000 }), /toHaveCount/],
+    ['allTextContents', (h: ElementHandle) => (h.allTextContents as (...a: unknown[]) => Promise<unknown>)(5000), /but got 5000 \(a number\)/],
+  ])('%s() refuses an argument instead of answering at once as if it had waited', async (name, call, hint) => {
+    const c = emptyClient();
+    const err = await call(new ElementHandle(c, _text('Banner'), DEVICE_TIMEOUT)).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(TypeError);
+    expect((err as Error).message).toContain(`${name}() takes no arguments`);
+    expect((err as Error).message).toMatch(hint);
+    expect(c.findElements).not.toHaveBeenCalled();
+  });
+
+  it('exists()/count() still answer without arguments (and with an explicit undefined)', async () => {
+    const handle = new ElementHandle(emptyClient(), _text('Banner'), DEVICE_TIMEOUT);
+    expect(await handle.exists()).toBe(false);
+    expect(await (handle.count as (...a: unknown[]) => Promise<number>)(undefined)).toBe(0);
+  });
+
   it('accepts keys set to undefined, as a spread of optional fields produces', async () => {
     const c = client();
     const handle = new ElementHandle(c, _text('Go'), DEVICE_TIMEOUT);
@@ -311,6 +331,11 @@ describe('checkOptions / checkTimeout', () => {
 
   it('say when a method takes no options at all', () => {
     expect(() => checkOptions<Record<string, unknown>>('x()', { a: 1 }, [])).toThrow('x(): unknown option "a". x() takes no options.');
+  });
+
+  it('checkNoArguments ignores undefined and names the first real argument', () => {
+    expect(() => checkNoArguments('x()', [undefined], 'Hint.')).not.toThrow();
+    expect(() => checkNoArguments('x()', [undefined, 'a'], 'Hint.')).toThrow('x() takes no arguments, but got "a" (a string). Hint.');
   });
 
   it('describe a function argument without printing its source', () => {
@@ -352,6 +377,14 @@ describe('WebView { timeout } (PILOT-840)', () => {
     // The string forms report what was left of the timeout when their wait began.
     await expect(call(emptyWebView(), { timeout: 300 })).rejects.toThrow(/in WebView \(([12]\d\d|300)ms\)/);
     expect(Date.now() - start).toBeLessThan(5_000);
+  });
+
+  it('webview isVisible()/isHidden() take a timeout (no effect, as in Playwright) and refuse an unknown option', async () => {
+    const h = emptyWebView();
+    expect(await h.locator('#go').isVisible({ timeout: 1_000 })).toBe(false);
+    expect(await h.locator('#go').isHidden({ timeout: 1_000 })).toBe(true);
+    await expect(h.locator('#go').isVisible({ timout: 1 } as { timeout?: number })).rejects.toThrow('isVisible(): unknown option "timout"');
+    await expect(h.isHidden('#go', { timout: 1 } as { timeout?: number })).rejects.toThrow('webview.isHidden(): unknown option "timout"');
   });
 
   it.each(LOCATOR_CALLS)('webview %s() refuses an unknown option', async (_name, call) => {

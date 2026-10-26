@@ -1110,7 +1110,7 @@ const label = await device.getByTestId("status").getText({ timeout: 2000 });
 
 The timeout must be a positive number. Unlike Playwright, `0` does not mean "no limit": it is refused, so pass a long timeout instead.
 
-Options are checked when the call is made, so a mistake fails at once rather than being ignored. Tests usually run without a type check, so TypeScript does not catch these. An unknown option (`tap({ timout: 5000 })`), an options argument that is not an object (`tap(5000)`) and an invalid timeout throw a `TypeError` naming the method and the options it accepts. A Playwright option with no Tapsmith equivalent, such as `force`, `trial` or `position`, gets a message saying so. Options set to `undefined` are ignored.
+Options are checked when the call is made, so a mistake fails at once rather than being ignored. Tests usually run without a type check, so TypeScript does not catch these. An unknown option (`tap({ timout: 5000 })`), an options argument that is not an object (`tap(5000)`) and an invalid timeout throw a `TypeError` naming the method and the options it accepts. A Playwright option with no Tapsmith equivalent, such as `force`, `trial` or `position`, gets a message saying so. Options set to `undefined` are ignored. `exists()`, `count()`, `all()` and `allTextContents()` take no arguments, since they read the screen as it is: given one (`exists({ timeout: 5000 })`), they throw rather than answer at once as if they had waited, and the message names the waiting form to use.
 
 #### `elementHandle.tap(options?): Promise<void>`
 
@@ -3454,7 +3454,7 @@ Close the WebView connection. Usually called via `device.native()` instead.
 
 Lazy reference to an element within a WebView, created by `webview.locator()` or the `webview.getBy*` methods. Supports actions and assertions.
 
-**Actions & queries (strict):** `click(options?)`, `fill(value, options?)`, `textContent(options?)`, `innerHTML(options?)`, `inputValue(options?)`, `getAttribute(name, options?)` — each takes a per-call `timeout` like the native [actions](#per-call-timeout) (`webview.getByRole("button", { name: "Login" }).click({ timeout: 5000 })`) — and `isVisible()`, `isHidden()` (both a single DOM read with no auto-wait — the same non-waiting contract as on `ElementHandle`, minus the native probe's stale-snapshot re-reads, which a DOM query does not need)
+**Actions & queries (strict):** `click(options?)`, `fill(value, options?)`, `textContent(options?)`, `innerHTML(options?)`, `inputValue(options?)`, `getAttribute(name, options?)` — each takes a per-call `timeout` like the native [actions](#per-call-timeout) (`webview.getByRole("button", { name: "Login" }).click({ timeout: 5000 })`) — and `isVisible(options?)`, `isHidden(options?)`, whose `timeout` is checked but, as in Playwright, has no effect (both a single DOM read with no auto-wait — the same non-waiting contract as on `ElementHandle`, minus the native probe's stale-snapshot re-reads, which a DOM query does not need)
 
 **Narrowing & multi-element (strict-mode exempt):**
 

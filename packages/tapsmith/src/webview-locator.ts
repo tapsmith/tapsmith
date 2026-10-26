@@ -175,8 +175,14 @@ export class WebViewLocator {
     return this._handle._getAttributeLocator(this, name, timedCall('getAttribute()', options));
   }
 
-  /** Whether the target is visible right now (single read, no auto-wait). */
-  async isVisible(): Promise<boolean> {
+  /**
+   * Whether the target is visible right now (single read, no auto-wait).
+   *
+   * @param options.timeout - Accepted, and checked, for Playwright parity;
+   *   like Playwright's, it has no effect, since the call never waits.
+   */
+  async isVisible(options?: TimeoutOptions): Promise<boolean> {
+    timedCall('isVisible()', options);
     return this._handle._isVisibleLocator(this);
   }
 
@@ -187,8 +193,12 @@ export class WebViewLocator {
    * Mirrors `ElementHandle.isHidden()` so native and WebView locators share
    * one reader vocabulary. (Goes through the handle rather than
    * `this.isVisible()` so the trace row is named `isHidden`.)
+   *
+   * @param options.timeout - Accepted, and checked, for Playwright parity;
+   *   it has no effect, since the call never waits.
    */
-  async isHidden(): Promise<boolean> {
+  async isHidden(options?: TimeoutOptions): Promise<boolean> {
+    timedCall('isHidden()', options);
     return !(await this._handle._isVisibleLocator(this, 'isHidden'));
   }
 }

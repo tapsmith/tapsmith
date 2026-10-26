@@ -126,3 +126,17 @@ export function checkSelectOption(option: unknown): void {
     (entries.some(([k]) => k === 'timeout') ? ' A timeout goes in the second argument: selectOption(option, { timeout }).' : ''),
   );
 }
+
+/**
+ * Refuse arguments passed to a method that takes none, such as
+ * `exists({ timeout: 5000 })`: it answers at once and would otherwise drop the
+ * option silently, so the caller believes it waited.
+ *
+ * @param hint - what to call instead, appended to the message.
+ * @throws TypeError when any argument other than `undefined` was passed.
+ */
+export function checkNoArguments(method: string, args: readonly unknown[], hint: string): void {
+  const given = args.find((a) => a !== undefined);
+  if (given === undefined) return;
+  throw new TypeError(`${method} takes no arguments, but got ${describeValue(given)}. ${hint}`);
+}
