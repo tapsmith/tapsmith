@@ -1,6 +1,6 @@
 ---
 name: implement-ticket
-description: Implement a Jira ticket end to end and keep going until its PR is ready to merge. Understands the ticket and its Playwright precedent, plans the design, edge cases and test tiers up front, builds it test-first where a test can come first, then decides for itself when to run /review-loop and /qa-this-branch, when to commit, push and open a draft PR, how to answer CI failures and CodeRabbit or human review threads, and when the PR meets the ready-to-merge bar. Never merges unless given `merge`. Resumable from its state file. With `auto`, never asks the user anything and makes every decision itself, disclosed in the PR. Use when asked to implement, build, fix or pick up a ticket (e.g. "implement PILOT-123", "/implement-ticket PILOT-123").
+description: Implement a Jira ticket end to end and keep going until its PR is ready to merge. Understands the ticket and its Playwright precedent, plans the design, edge cases and test tiers up front, builds it test-first where a test can come first, then decides for itself when to run /review-loop and /qa-this-branch, when to commit, push and open a draft PR, how to answer CI failures and review threads (human or bot), and when the PR meets the ready-to-merge bar. Never merges unless given `merge`. Resumable from its state file. With `auto`, never asks the user anything and makes every decision itself, disclosed in the PR. Use when asked to implement, build, fix or pick up a ticket (e.g. "implement PILOT-123", "/implement-ticket PILOT-123").
 ---
 
 # implement-ticket
@@ -112,7 +112,7 @@ running (TaskStop), then release whatever it may have acquired.
 
 ## Waiting
 
-Runs have hung for hours on a wait whose event never came or was missed: CodeRabbit's
+Runs have hung for hours on a wait whose event never came or was missed: a review bot's
 status sitting at "Review in progress" long after the PR merged, `gh pr checks --watch`
 waiting forever on that bot check, a watcher still watching a SHA that a later push
 replaced. So **every wait has a deadline**, in every mode:
@@ -135,14 +135,13 @@ replaced. So **every wait has a deadline**, in every mode:
 |---|---|---|
 | CI checks to register after a push | 10 min | `gh run list --branch <branch> --limit 5`: no run for head → close and reopen the PR once (`gh pr close <n> && gh pr reopen <n>`, which re-fires its workflows); still none → infra (below) |
 | CI (workflow checks) on one head | 100 min per watch; re-arm up to twice while jobs are moving | macOS jobs (`E2E iOS`) queued for a long time are waiting for the org's 5 macOS slots, not stuck — re-arm, never cancel them (a re-run goes to the back of the queue). Other jobs `queued` over 60 min with no runner, or running far past their usual time → cancel and re-run that run once (`gh run cancel <id>`, then `gh run rerun <id>`); still stuck → infra: tell the user (interactive) or `best-effort` with the evidence (`auto`) |
-| CodeRabbit's review of head | 30 min, then comment `@coderabbitai review` and wait 30 more | record in the PR "CodeRabbit did not review <sha> (status: …)". The gate item is then met by the clean `/review-loop` on head — CodeRabbit is a second opinion, not the gate |
 | a device | as *Devices* says (60 min of polling) | as *Devices* says |
 | a human (a re-review, an answer) | do not wait | report it; the gate item stays unmet |
 
 ## Context hand-off
 
 Every turn re-reads the whole conversation. By Phase 6 a run's context is typically
-300–600k tokens, and from there on most turns are waits: polling CI, CodeRabbit, iOS E2E.
+300–600k tokens, and from there on most turns are waits: polling CI and iOS E2E.
 Waking from an idle wait also re-caches the whole context from scratch. The state file
 exists so that a fresh context can pick the work up, and a fresh context costs a small
 fraction of that per turn. So once the remaining work is mostly waiting, **hand off
@@ -153,7 +152,7 @@ a result.
 **The hand-off point.** All of these hold: the last QA verdict is `ready` or
 `ready-pending-ci` (or QA was skipped as trivial and recorded), every commit is pushed,
 nothing is uncommitted, no `/review-loop` or QA run is in progress, and the next step is
-a wait on CI, CodeRabbit or `E2E iOS` with nothing else left to do. That point recurs:
+a wait on CI or `E2E iOS` with nothing else left to do. That point recurs:
 after the first QA cycle, after a pushed CI or thread fix, after `gh pr ready`. Never hand
 off during Phases 0–5.
 
@@ -163,7 +162,9 @@ off during Phases 0–5.
    (`references/state.md`): phase, head SHA, the *Loops* line for every loop, the *Gate*
    checklist with the items already evidenced on head, every decision, and a **Next**
    line saying what is being waited on and what to do when it ends.
-2. Stop your background waiters (TaskStop) and release your device leases.
+2. Check the review threads one last time (Phase 6), note that UTC time for
+   `WAITING_ON`'s `since`, then stop your background waiters (TaskStop) and release your
+   device leases.
 3. Then, depending on how you are running:
    - **`worker`**: end with `IMPLEMENT_TICKET: handoff` and a `WAITING_ON:` line (*Final
      report*). The coordinator watches the PR and launches a fresh worker when there is
@@ -476,8 +477,7 @@ finding, or when you hesitated. When in doubt, review: a clean first round is ch
 
 Record each skip in the state file (`<sha> — skipped review/QA: trivial, <why>`) and list
 them in the PR's "How it was tested", so a reader sees exactly what landed after the last
-clean review and why. CodeRabbit still reviews every push, so nothing reaches the gate
-unseen by any reviewer.
+clean review and why.
 
 Batch first: collect a QA cycle's fixes (or a round of CI and thread fixes), then run one
 `/review-loop` over all of them if any is non-trivial, then push once.
@@ -495,7 +495,8 @@ what is left is a wait, that is a hand-off point (*Context hand-off*):
   once Phase 7 marks the PR ready. A red job: read the failed log, decide
   branch-caused vs flake vs infra, and act (fix test-first; re-run failed jobs once for a
   flake with evidence; never paper over).
-- **Review threads** — CodeRabbit reviews every PR and humans may too. Triage each
+- **Review threads** — from humans, and from whatever review bot the repo has installed
+  at the time (*Review bots* in `references/pr-and-ci.md`). Triage each
   unresolved thread like a review-loop card: fix it (with a test if it is a behaviour
   change), or reply with the reason it is not being changed. Resolve threads you fixed;
   leave a human's thread for the human unless they asked you to resolve it.
@@ -526,9 +527,6 @@ checklist with evidence:
       for this PR because it touches none of the workflow's `paths` (there is no `E2E iOS`
       run for head at all, not even a skipped draft one; say so in the PR);
 - [ ] no unresolved review thread you can act on; no outstanding "changes requested";
-      and CodeRabbit has reviewed the head commit, not an earlier one (its `CodeRabbit`
-      commit status on head reads `Review completed`), or did not within the deadline
-      in *Waiting* and the PR says so;
 - [ ] the branch merges cleanly into `<base>` (merge `<base>` in if not, then re-check);
 - [ ] every commit is signed off; the package checks pass locally;
 - [ ] `docs/api-reference.md` and other affected docs are updated;
@@ -545,8 +543,8 @@ checklist with evidence:
    someone marks the PR ready). A `ready-stacked` or `best-effort` PR also stops here.
 2. **`E2E iOS` on head.** Wait for it (`references/pr-and-ci.md` §Waiting recipes, *E2E
    iOS after ready*). A red job is Phase 6 work as usual — the PR stays ready, and any fix
-   re-opens pass 1 for what it touched. Marking ready may also trigger CodeRabbit's first
-   review (it can skip drafts): its threads are Phase 6 work too. The gate passes when
+   re-opens pass 1 for what it touched. Threads posted meanwhile (a review bot may review
+   only once the PR is ready) are Phase 6 work too. The gate passes when
    pass 1 still holds on the head where `E2E iOS` went green. Unless `no-jira`: comment the result on the ticket
 (ready to merge, or what is still open) and leave it **In Progress** — the project has no
 review status, and **Done** means merged — that happens in Phase 8 with `merge`, or when
@@ -600,7 +598,7 @@ never returns `blocked` or `planned`. `handoff` is a `worker`'s interim return a
 hand-off point (*Context hand-off*). It is not a final result, and it ends with one more line:
 
 ```
-WAITING_ON: <one or more of ci coderabbit e2e-ios> on <head sha>
+WAITING_ON: <ci, e2e-ios or both> on <head sha> since <UTC time of your last review-thread check, e.g. 2026-10-26T14:05:00Z>
 ```
 
 For a `handoff`, the report is just the result lines and one sentence on where things stand. When `blocked`, follow with the question, written so it can be answered without reading

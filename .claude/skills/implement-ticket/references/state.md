@@ -42,8 +42,7 @@ push — never only at the end.
 
 ## Next
 <at a hand-off (SKILL.md *Context hand-off*): what is being waited on, on which head SHA,
-and what to do when it ends, e.g. "CI + CodeRabbit on abc123; then gate pass 1 and
-`gh pr ready`". A fresh context starts here>
+and what to do when it ends, e.g. "CI on abc123; then gate pass 1 and `gh pr ready`". A fresh context starts here>
 
 ## Gate
 <the SKILL.md Phase 7 checklist, ticked with evidence pointers>

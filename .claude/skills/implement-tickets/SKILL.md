@@ -52,7 +52,7 @@ the session). `<batch-id>` is the start date plus the keys sorted numerically, e
 |---|---|---|---|---|---|---|---|
 | PILOT-12 | parallel | .claude/worktrees/pilot-12 | <agent id / session name> | 5-qa | #251 | — | — |
 | PILOT-15 | after PILOT-12 | — | — | queued | — | — | PILOT-12 merged |
-| PILOT-19 | parallel | .claude/worktrees/pilot-19 | — (handed off) | handoff | #253 | — | ci coderabbit on abc123 (watch <task id>) |
+| PILOT-19 | parallel | .claude/worktrees/pilot-19 | — (handed off) | handoff | #253 | — | ci on abc123 (watch <task id>) |
 
 ## Batch plan
 <lanes and the reason for each>

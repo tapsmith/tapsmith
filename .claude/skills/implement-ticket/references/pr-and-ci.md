@@ -16,7 +16,8 @@ Facts about this repo that shape every rule below:
   commits on the branch are fine, and there is never a reason to force-push.
 - **The `main` ruleset requires only the DCO check.** GitHub will offer the merge button
   long before the PR is actually ready; the gate in SKILL.md is the real bar.
-- **CodeRabbit reviews PRs** and leaves review threads; it reviews again on later pushes.
+- **Review bots come and go.** Whatever bot is installed at the time may leave review
+  threads; *Review bots* below says how to treat them.
 
 ## Branch
 
@@ -92,7 +93,7 @@ the branch is a gate failure.
 
 Watch in the background, so QA and other work continue meanwhile, with the deadline
 recipes below (*Waiting recipes*) — never a bare `gh pr checks --watch`: it also waits on
-bot checks like `CodeRabbit`, whose status can sit at pending forever.
+review bots' checks, whose status can sit at pending forever.
 
 Judge only runs on the **head SHA** (`gh pr view <n> --json headRefOid`) — older runs are
 history. For any job you rely on that has `continue-on-error` steps, check the step
@@ -117,7 +118,7 @@ gh run list --branch main --workflow "<workflow name>" --limit 10 --json conclus
 
 Never "fix" CI by skipping, loosening or retrying a test in code.
 
-## Review threads (CodeRabbit and humans)
+## Review threads (humans and bots)
 
 List unresolved threads:
 
@@ -149,11 +150,20 @@ gh api graphql -f query='mutation($t:ID!,$b:String!){addPullRequestReviewThreadR
 gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' -f t=<thread id>
 ```
 
-CodeRabbit is recall-biased like the review-loop reviewer: expect some invalid findings,
-and give each a reasoned reply rather than blanket agreement. If it has not reviewed
-within the deadline (*Waiting recipes*; it may skip drafts — its status then reads
-`Review skipped`), comment `@coderabbitai review` on the PR. A human's "changes requested" (`reviewDecision: CHANGES_REQUESTED`) blocks the
-gate until they re-review.
+A human's "changes requested" (`reviewDecision: CHANGES_REQUESTED`) blocks the gate
+until they re-review.
+
+### Review bots
+
+The repo's review bot changes over time, and is often rate-limited or out of quota, so
+nothing here names one. Treat a bot as a second opinion, never as the gate:
+
+- **Its threads are review threads.** Triage each as above. Bots are recall-biased like
+  the review-loop reviewer, so expect some invalid findings, and give each a reasoned reply
+  rather than blanket agreement.
+- **Never wait for a bot, nudge it, or gate on it.** A bot that has not reviewed, or that
+  posted a rate-limit notice, changes nothing; the clean `/review-loop` on head is the
+  review bar. Its summary comments and status checks are not threads: ignore them.
 
 ## Waiting recipes
 
@@ -167,7 +177,7 @@ R=tapsmith/tapsmith; n=<pr>; head=$(gh pr view $n -R $R --json headRefOid -q .he
 ```
 
 **CI checks registered** (right after a push `gh` reports no checks, which looks like a
-finished watch). CI means checks with a workflow; DCO, CodeRabbit and other apps have none:
+finished watch). CI means checks with a workflow; DCO, review bots and other apps have none:
 
 ```bash
 end=$((SECONDS+600))
@@ -220,30 +230,18 @@ the PR); any other conclusion is a red check for Phase 6. Only the draft's skipp
 minutes after `gh pr ready` (`waiting`) is the *CI checks to register* timeout in SKILL.md
 *Waiting*.
 
-**CodeRabbit reviewed this head** — its commit status, which ends `Review completed` (or
-`Review skipped`, which is not a review):
-
-```bash
-end=$((SECONDS+1800))
-while :; do
-  s=$(gh api repos/$R/commits/$head/status -q '.statuses[] | select(.context=="CodeRabbit") | .state + " " + .description' 2>/dev/null) || s=""
-  case "$s" in pending*|"") ;; *) echo "WAIT_DONE: CodeRabbit $s on $head"; exit 0;; esac
-  [ $SECONDS -ge $end ] && { echo "WAIT_TIMEOUT: CodeRabbit ${s:-has no status} on $head"; exit 124; }
-  sleep 60
-done
-```
-
 **Hand-off watch** — run by the `/implement-tickets` coordinator, not a worker, for a
 worker that returned `handoff` (SKILL.md *Context hand-off*). It ends at the first thing a
-worker must act on, or once everything in `WAITING_ON` is done. Set `need` to the
-`WAITING_ON` words and `head` to its SHA:
+worker must act on, or once everything in `WAITING_ON` is done. Set `need`, `head` and
+`since` from the `WAITING_ON` line:
 
 ```bash
-R=tapsmith/tapsmith; n=<pr>; head=<sha>; need="<ci coderabbit e2e-ios, as WAITING_ON lists>"
+R=tapsmith/tapsmith; n=<pr>; head=<sha>; need="<ci e2e-ios, as WAITING_ON lists>"; since=<WAITING_ON's since time>
+# unresolved threads with a comment newer than the worker's last thread check
 thr() { gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){
-  pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}}}}}' -f o=tapsmith -f r=tapsmith -F n=$n \
-  -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved|not)] | length' 2>/dev/null; }
-t0=$(thr) || t0=""
+  pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved comments(last:1){nodes{createdAt}}}}}}}' \
+  -f o=tapsmith -f r=tapsmith -F n=$n \
+  -q "[.data.repository.pullRequest.reviewThreads.nodes[] | select((.isResolved|not) and (.comments.nodes[0].createdAt > \"$since\"))] | length" 2>/dev/null; }
 end=$((SECONDS+6000)); start=$SECONDS
 q='if length == 0 then "none" else (([.[] | select(.conclusion != "skipped")][0]) // {status: "waiting"} | "\(.status) \(.conclusion // "")") end'
 while :; do
@@ -256,17 +254,15 @@ while :; do
     [ "$pm" = CONFLICTING ] && { echo "WAIT_DONE: PR conflicts with its base"; exit 0; }
     [ "$pr" = CHANGES_REQUESTED ] && { echo "WAIT_DONE: changes requested on $head"; exit 0; }
   fi
-  t=$(thr) || t=""; [ -z "$t0" ] && t0=$t
-  [ -n "$t" ] && [ -n "$t0" ] && [ "$t" -gt "$t0" ] && { echo "WAIT_DONE: new unresolved review thread on $head"; exit 0; }
+  t=$(thr) || t=""
+  [ -n "$t" ] && [ "$t" -gt 0 ] && { echo "WAIT_DONE: review thread activity since $since"; exit 0; }
   pending=""
   case " $need " in *" ci "*)
     b=$(gh pr checks $n -R $R --json workflow,bucket -q '[.[] | select(.workflow != "") | .bucket]' 2>/dev/null) || b=""
     case "$b" in *'"fail"'*) echo "WAIT_DONE: a CI check failed on $head"; exit 0;;
-                 ""|"[]"|*'"pending"'*) pending="$pending ci";; esac;;
-  esac
-  case " $need " in *" coderabbit "*)
-    s=$(gh api repos/$R/commits/$head/status -q '.statuses[] | select(.context=="CodeRabbit") | .state + " " + .description' 2>/dev/null) || s=""
-    case "$s" in pending*|"") [ $((SECONDS-start)) -lt 1800 ] && pending="$pending coderabbit";; esac;;
+                 ""|"[]") [ $((SECONDS-start)) -ge 600 ] && { echo "WAIT_DONE: no CI checks registered for $head after 10 min"; exit 0; }
+                          pending="$pending ci";;
+                 *'"pending"'*) pending="$pending ci";; esac;;
   esac
   case " $need " in *" e2e-ios "*)
     r=$(gh run list -R $R --workflow e2e-ios.yml --commit $head --limit 10 --json status,conclusion -q "$q" 2>/dev/null) || r=""
@@ -281,12 +277,14 @@ while :; do
 done
 ```
 
-`WAIT_DONE: … done` is also what fires once CodeRabbit has been pending for 30 minutes,
-and when `E2E iOS` never ran for head (outside its `paths`). The fresh worker re-reads
-the real state on waking, as *Waiting* requires, and handles those cases (the
-`@coderabbitai review` nudge, the "no `E2E iOS` run" note in the PR) exactly as its own
-recipes would. On `WAIT_TIMEOUT`, the coordinator launches a fresh worker too: diagnosing
-a stuck run is the worker's job (SKILL.md *Waiting* table).
+Each wait in it ends on its own deadline, matching the worker's recipes and the SKILL.md
+*Waiting* table: CI checks that never register end it after 10 minutes, and so does a head
+with no `E2E iOS` run at all (outside its `paths`; the `… done` line). Any reply or new
+thread since `since` ends it, so a thread posted while the worker was handing off is not
+missed, and neither is one hidden by another thread being resolved. The fresh worker
+re-reads the real state on waking, as *Waiting* requires. On `WAIT_TIMEOUT`, the
+coordinator launches a fresh worker too: diagnosing a stuck run is the worker's job
+(SKILL.md *Waiting* table).
 
 ## Keeping up with the base
 
