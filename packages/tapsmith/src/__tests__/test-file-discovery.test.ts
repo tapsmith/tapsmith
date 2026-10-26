@@ -76,6 +76,27 @@ describe('test-file-discovery helpers', () => {
       'vendor/bundle/ruby/3.3.0/gems/cocoapods-1.15.2/lib/x.rb',
       '.yarn/cache/react-native.zip',
       '.e2e/node_modules/pkg/x.test.ts',
+      // A native project builds at its root (PILOT-832): Gradle's and
+      // xcodebuild -derivedDataPath build's output trees.
+      'app/build/intermediates',
+      'app/build/intermediates/dex/x.test.ts',
+      'composeApp/build/tmp/kotlin-classes',
+      'app/build/generated/source/x.test.ts',
+      'app/build/kotlin/compileDebugKotlin',
+      'app/build/outputs/apk/debug/app-debug.apk',
+      'app/.cxx/Debug',
+      'build/Build/Products/Debug-iphonesimulator/App.app',
+      'build/SourcePackages/checkouts/swift-collections/x.test.ts',
+      'build/Index.noindex/DataStore',
+      'build/ModuleCache.noindex/x',
+      'build/CompilationCache.noindex/x',
+      'build/Logs/Build/x.xcactivitylog',
+      'build/SDKExplicitPrecompiledModules/x',
+      'composeApp/build/bin/iosSimulatorArm64/debugFramework',
+      'app/build/classes/kotlin/main',
+      'app/build/reports/tests/x.html',
+      'app/build/kspCaches/debug',
+      'shared/build/xcode-frameworks/Debug',
     ]) {
       expect(matchesTestIgnore(ignored), ignored).toBe(true);
     }

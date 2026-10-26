@@ -33,12 +33,8 @@ export class NativeTogglesScreen {
     return this.device.getByRole("button", { name, exact: true, ...options })
   }
   selectedSize(name: string) { return this.device.getByText(`Selected size: ${name}`, { exact: true }) }
-  /**
-   * The Stepper's own label text. `getByText()` would also match the Stepper
-   * and its two buttons (labelled "Quantity: 1, Increment"), hence the role
-   * (PILOT-794).
-   */
-  quantity(n: number) { return this.device.getByRole("text", { name: `Quantity: ${n}`, exact: true }) }
+  /** The Stepper's label text, not the Stepper or its buttons (PILOT-794). */
+  quantity(n: number) { return this.device.getByText(`Quantity: ${n}`, { exact: true }) }
   get increment() { return this.device.getByRole("button", { name: "Increment" }) }
   get slider() { return this.device.getByRole("slider", { name: "Volume" }) }
 }

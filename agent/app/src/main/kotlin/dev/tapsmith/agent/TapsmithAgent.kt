@@ -66,7 +66,7 @@ class TapsmithAgent : Instrumentation() {
         val occlusionGuard = OcclusionGuard(device, this, elementFinder::nodeInfoFor)
         val actionExecutor = ActionExecutor(device, this, occlusionGuard)
         val waitEngine = WaitEngine(device)
-        val hierarchyDumper = HierarchyDumper(device, this)
+        val hierarchyDumper = HierarchyDumper(device, this, elementFinder::composeShapeOf)
         val commandHandler =
             CommandHandler(
                 context = targetContext,

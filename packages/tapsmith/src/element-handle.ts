@@ -33,6 +33,7 @@ import { sleep, isAbortError } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
+import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
 
 // ─── Public types ───
 
@@ -525,11 +526,20 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
     const shown = exact ? name : name.slice(0, 60);
     return `device.getByRole("${el.role}", { name: "${escapeJsString(shown)}"${exact ? ', exact: true' : ''} })`;
   }
-  if (el.text) {
+  // iOS: a control's name is a getByLabel field's name, never getByText's
+  // text; the value of anything but text is not text either (PILOT-794).
+  const isIos = el.className.startsWith('XCUIElementType');
+  if (isIos && IOS_NAME_ONLY_TYPES.has(el.className)) {
+    return el.contentDescription ? `device.getByLabel("${escapeJsString(el.contentDescription)}")` : undefined;
+  }
+  const text = isIos && !IOS_VALUE_TEXT_TYPES.has(el.className) && el.text !== el.contentDescription
+    ? el.contentDescription
+    : el.text;
+  if (text) {
     // Like the role name above: an exact match needs the whole text, so a
     // long one is suggested as its leading part, matched as a substring.
-    const exact = el.text.length <= 60;
-    const shown = exact ? el.text : el.text.slice(0, 60);
+    const exact = text.length <= 60;
+    const shown = exact ? text : text.slice(0, 60);
     return `device.getByText("${escapeJsString(shown)}"${exact ? ', { exact: true }' : ''})`;
   }
   if (nativeId) return `device.locator({ id: "${escapeJsString(nativeId)}" })`;
@@ -701,6 +711,15 @@ function offScreenHint(action: TapFamilyAction): string {
   return 'It may be off-screen in a scrollable list: ' +
     scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)');
 }
+
+/**
+ * The hint a getByTestId() miss carries on Android (PILOT-828): Compose
+ * exposes a `Modifier.testTag()` as the resource-id getByTestId matches only
+ * under `testTagsAsResourceId`, which applies to the node it is set on and
+ * its descendants.
+ */
+const ANDROID_TEST_TAG_HINT = ' On Android, a Jetpack Compose Modifier.testTag() is a test id only where the app sets ' +
+  'Modifier.semantics { testTagsAsResourceId = true } on it or an ancestor — on the root of setContent, for the whole screen.';
 
 /** How often a refused tap-family dispatch is retried. */
 const NOT_HITTABLE_RETRY_MS = 1000;
@@ -1369,17 +1388,26 @@ export class ElementHandle {
   }
 
   /**
-   * @internal — The iOS hint a miss of an unnamed `getByRole()` carries for a
-   * role React Native publishes nothing for there (PILOT-718), as ". On iOS
-   * …" to append to the failure message, or ''. Not for
-   * and()/or(): the miss may be the other operand's.
+   * @internal — The platform hint a miss carries, as ". On iOS …" to append
+   * to the failure message, or '': on iOS for an unnamed `getByRole()` of a
+   * role React Native publishes nothing for there (PILOT-718), on Android
+   * for a `getByTestId()`, which a Jetpack Compose testTag reaches only with
+   * testTagsAsResourceId (PILOT-828). Not for and()/or(): the miss may be the
+   * other operand's. Not after a `positionalDetail` either: the locator did
+   * match, only not at that index.
    */
-  _roleMissHint(): string {
-    if (this._options.andHandle || this._options.orHandle) return '';
-    const kind = this._selector.kind;
-    const hint = kind.type === 'role' ? iosUnnamedRoleMissHint(kind.value, this._options.platform) : '';
+  _missHint(positionalDetail = ''): string {
+    const hint = this._missHintSentence(positionalDetail);
     // A sentence of its own after the message it follows.
     return hint && `.${hint}`;
+  }
+
+  /** {@link _missHint} as a bare sentence (with its leading space), to follow one that ends in a full stop. */
+  private _missHintSentence(positionalDetail = ''): string {
+    if (positionalDetail || this._options.andHandle || this._options.orHandle) return '';
+    const kind = this._selector.kind;
+    if (kind.type === 'role') return iosUnnamedRoleMissHint(kind.value, this._options.platform);
+    return kind.type === 'testId' && this._options.platform === 'android' ? ANDROID_TEST_TAG_HINT : '';
   }
 
   /** @internal — The locator as the code that built it, for error and assertion messages. */
@@ -1517,8 +1545,9 @@ export class ElementHandle {
       }
       if (Date.now() >= deadline) {
         if (lastTransientErr) throw lastTransientErr;
+        const detail = positionalMissDetail(lastPositionalMiss);
         throw new Error(
-          `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}${this._roleMissHint()}`,
+          `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${detail}${this._missHint(detail)}`,
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -1804,13 +1833,17 @@ export class ElementHandle {
         if (lastTransientErr) throw lastTransientErr;
         const desc = this._describe();
         if (lastSeenOffScreen) throw offScreenError(desc, timeoutMs, action, lastSeenOffScreen);
+        const detail = positionalMissDetail(lastPositionalMiss);
         throw new Error(
           lastSeenDisabled
             ? `Element ${desc} is disabled after waiting ${timeoutMs}ms`
             // A known cause (an unnamed role iOS cannot see, PILOT-718) is told
-            // instead of the generic off-screen hint.
-            : `Element ${desc} was not found after waiting ${timeoutMs}ms${positionalMissDetail(lastPositionalMiss)}` +
-              (this._roleMissHint() || `. ${offScreenHint(action)}`),
+            // instead of the generic off-screen hint; a possible one (a
+            // Compose testTag, PILOT-828) after it.
+            : `Element ${desc} was not found after waiting ${timeoutMs}ms${detail}` +
+              (this._selector.kind.type === 'role' && this._missHint(detail)
+                ? this._missHint(detail)
+                : `. ${offScreenHint(action)}${this._missHintSentence(detail)}`),
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -1927,7 +1960,7 @@ export class ElementHandle {
           detail = positionalMissDetail(err instanceof Error ? err : undefined);
           el = undefined;
         }
-        if (!el) throw new Error(`Element not found: ${this._describe()}${detail}${this._roleMissHint()}`);
+        if (!el) throw new Error(`Element not found: ${this._describe()}${detail}${this._missHint(detail)}`);
         result = el;
       } else {
         // Strict resolution (PILOT-226): poll so multiple matches throw
@@ -2292,7 +2325,7 @@ export class ElementHandle {
           if (lastTransientErr) throw lastTransientErr;
           // A miss of an unnamed iOS role query explains itself (PILOT-718).
           const missed = (state === 'visible' || state === 'attached') && !lastAttached;
-          const hint = missed ? this._roleMissHint() : '';
+          const hint = missed ? this._missHint() : '';
           throw new Error(
             `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms${hint}`,
           );

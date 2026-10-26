@@ -1,6 +1,7 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
-import { getNodeRole, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
+import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
+import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
@@ -410,12 +411,11 @@ function mapWebViewMethod(method: string, value: string, name?: string, exact?: 
 // Android uses: text, content-desc, resource-id, hint, class
 // iOS uses: label, identifier, placeholderValue, type
 
-// iOS runtime text matching also accepts the element's value (and title), so
-// fall back to the `value` attribute the iOS agent emits. Remaining fidelity
-// gaps vs the on-device matcher (title attribute, auto-concatenated child
-// labels, trailing-punctuation tolerance) are accepted here — native selector
-// VALIDATION goes through the real runtime via findElements (tapsmith_test_locator);
-// this TS matcher only powers the browser-side trace viewer/playground.
+// A node's text: Android's `text`, else an iOS label or value. iOS getByText
+// reads the agent's text content rule instead (text-content.ts); this is
+// getByText on other nodes and the duplicate collapse's key. Native selector
+// VALIDATION goes through the real runtime (EvaluateSelectors); this TS matcher
+// only powers the offline trace playground.
 function getNodeText(node: HierarchyNode): string {
   return node.attributes.get('text') ?? node.attributes.get('label') ?? node.attributes.get('value') ?? '';
 }
@@ -530,21 +530,39 @@ function roleNameMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
  * Playwright tests the element's full text.
  */
 function textMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
-  if (node.attributes.has('class')) return re.test(node.attributes.get('text') ?? '');
-  return ['label', 'title', 'value'].some((key) => re.test(node.attributes.get(key) ?? ''));
+  return re.test(node.attributes.get('text') ?? '');
+}
+
+/** The getByText selector types, which on iOS read a node's text content (text-content.ts). */
+const TEXT_SELECTOR_TYPES: ReadonlySet<string> = new Set(['text', 'textContains', 'textRegex']);
+
+/**
+ * getByText on an iOS node (PILOT-794): its text content, as the agent's
+ * TextContent reads it. `containerLabel` is the nearest app ancestor's label.
+ */
+function iosNodeMatchesText(node: HierarchyNode, selector: ParsedSelector, containerLabel: string): boolean {
+  const texts = iosTexts(node, containerLabel);
+  switch (selector.type) {
+    case 'text': return iosTextMatchesExact(texts, selector.value);
+    case 'textContains': return iosTextMatchesSubstring(texts, selector.value);
+    default: return selector.regex !== undefined && iosTextMatchesRegex(texts, toJsRegExp(selector.regex));
+  }
 }
 
 /**
  * Whether a getByLabel field's name passes `test` — the one rule the agents
  * use for a string and a RegExp alike (PILOT-666): Android's content-desc
- * (the agent also follows a labelling view, which the dump does not carry),
- * iOS's label or title. iOS tests an empty label like any other text, as its
- * agent does; Android has no name without a content-desc.
+ * (the agent also follows a labelling view, which the dump does not carry)
+ * or, for a text field, the text of one of its descendants — a Compose
+ * TextField's label is a child of the field (PILOT-828), while a Spinner's
+ * child is its value — and iOS's label or title. iOS tests an empty label
+ * like any other text, as its agent does.
  */
 function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean): boolean {
   if (node.attributes.has('class')) {
     const contentDesc = node.attributes.get('content-desc');
-    return contentDesc !== undefined && contentDesc !== '' && test(contentDesc);
+    if (contentDesc !== undefined && contentDesc !== '' && test(contentDesc)) return true;
+    return ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '') && descendantText(node).some(test);
   }
   return test(node.attributes.get('label') ?? '') || test(node.attributes.get('title') ?? '');
 }
@@ -764,6 +782,20 @@ function collapseSameTargetNodes(nodes: HierarchyNode[]): HierarchyNode[] {
 }
 
 /**
+ * Whether two iOS nodes are one target exposed twice — the same label and
+ * bounds — whose outer copy the agent keeps: anything but a generic `.other`
+ * wrapper of a native control.
+ */
+function isSameTargetDuplicate(outer: HierarchyNode, inner: HierarchyNode): boolean {
+  const outerType = outer.attributes.get('type') ?? outer.tagName;
+  const innerType = inner.attributes.get('type') ?? inner.tagName;
+  return (outerType !== 'XCUIElementTypeOther' || innerType === 'XCUIElementTypeOther')
+    && normalizeWhitespace(outer.attributes.get('label') ?? '') === normalizeWhitespace(inner.attributes.get('label') ?? '')
+    && outer.attributes.get('bounds') !== undefined
+    && outer.attributes.get('bounds') === inner.attributes.get('bounds');
+}
+
+/**
  * Resolve a positional chain (.first()/.last()/.nth(n), negative n counting
  * from the end) to a concrete index. May be out of range — callers decide
  * whether that means "empty result" or an error.
@@ -799,6 +831,8 @@ const ANDROID_DESCRIPTION_ONLY_ROLES = new Set(['heading', 'link']);
  * view no role description marks.
  */
 function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean {
+  // A Compose role carrier: its parent has the role (PILOT-828).
+  if (isComposeRoleCarrier(node)) return false;
   const reported = getNodeRole(node);
   if (reported && normalizeRole(reported) === role) return true;
   const className = node.attributes.get('class');
@@ -838,23 +872,49 @@ export function parsedSelectorError(selector: ParsedSelector): string | null {
 
 export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelector): HierarchyNode[] {
   const raw: HierarchyNode[] = [];
+  // iOS getByText, like the agent (PILOT-794): a node's text content depends
+  // on its container's label, and a match that contains another match gives
+  // way to it (innermost). `suppressed` holds those ancestors' raw indices.
+  const iosText = TEXT_SELECTOR_TYPES.has(selector.type);
+  const suppressed = new Set<number>();
+  const matchedAncestors: number[] = [];
 
-  function walk(node: HierarchyNode) {
+  function walk(node: HierarchyNode, containerLabel: string) {
     // What isn't the app's never matches (PILOT-756, non-app-nodes.ts).
     if (isNonAppSubtree(node)) return;
-    if (!isNonAppNode(node) && nodeMatchesSelector(node, selector)) {
+    const isIos = !node.attributes.has('class') && !isWebViewNode(node);
+    const appNode = !isNonAppNode(node);
+    const matches = appNode && (iosText && isIos
+      ? iosNodeMatchesText(node, selector, containerLabel)
+      : nodeMatchesSelector(node, selector));
+    let pushed = false;
+    if (matches) {
+      if (iosText && isIos) {
+        // Not a same-target duplicate's outer copy (same label and bounds,
+        // not a generic wrapper of a native control): collapseSameTargetNodes
+        // keeps that one, as the agent does.
+        for (const index of matchedAncestors) {
+          if (!isSameTargetDuplicate(raw[index], node)) suppressed.add(index);
+        }
+        matchedAncestors.push(raw.length);
+        pushed = true;
+      }
       raw.push(node);
     }
+    const label = node.attributes.get('label') ?? '';
+    const childContainer = isIos && appNode && label !== '' ? label : containerLabel;
     for (const child of node.children) {
-      walk(child);
+      walk(child, childContainer);
     }
+    if (pushed) matchedAncestors.pop();
   }
 
   for (const root of roots) {
-    walk(root);
+    walk(root, '');
   }
 
-  return applyPositionalIndex(collapseSameTargetNodes(raw), selector.index);
+  const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));
+  return applyPositionalIndex(collapseSameTargetNodes(kept), selector.index);
 }
 
 // Geometry lives with the hierarchy model (no matching); re-exported for

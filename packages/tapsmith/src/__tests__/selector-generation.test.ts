@@ -618,10 +618,20 @@ describe('parseSelectorString getByText semantics', () => {
     expect(findMatchingNodes(wvRoots, parseSelectorString('webview.getByText("Add", { exact: true })')!)).toHaveLength(0);
   });
 
-  it('text matching falls back to the iOS value attribute', () => {
-    const slider = makeNode('XCUIElementTypeSlider', { type: 'XCUIElementTypeSlider', value: '50%' });
-    const matches = findMatchingNodes([slider], parseSelectorString('device.getByText("50%", { exact: true })')!);
-    expect(matches).toHaveLength(1);
+  it("suggests no getByText for an iOS switch, slider or stepper, whose label is only its name (PILOT-794)", () => {
+    for (const type of ['XCUIElementTypeSwitch', 'XCUIElementTypeSlider', 'XCUIElementTypeStepper']) {
+      const control = makeNode(type, { type, label: 'Dark Mode', value: '0' });
+      expect(generateSelectors(control).map((s) => s.code)).not.toContain('device.getByText("Dark Mode")');
+    }
+    const text = makeNode('XCUIElementTypeStaticText', { type: 'XCUIElementTypeStaticText', label: 'Dark Mode', value: '' });
+    expect(generateSelectors(text).map((s) => s.code)).toContain('device.getByText("Dark Mode")');
+  });
+
+  it("text matching reads an iOS text field's value, not a control's (PILOT-794)", () => {
+    const field = makeNode('XCUIElementTypeTextField', { type: 'XCUIElementTypeTextField', label: '', value: 'nick' });
+    expect(findMatchingNodes([field], parseSelectorString('device.getByText("nick", { exact: true })')!)).toHaveLength(1);
+    const slider = makeNode('XCUIElementTypeSlider', { type: 'XCUIElementTypeSlider', label: 'Volume', value: '50%' });
+    expect(findMatchingNodes([slider], parseSelectorString('device.getByText("50%", { exact: true })')!)).toHaveLength(0);
   });
 });
 

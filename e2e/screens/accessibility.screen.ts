@@ -19,6 +19,10 @@ export class AccessibilityScreen {
   get cartIcon() { return this.device.getByDescription("Shopping cart with 3 items") }
   get avatar() { return this.device.getByDescription("User avatar") }
 
+  // States
+  /** A progressbar view whose accessibilityValue text is "65%". */
+  get uploadProgress() { return this.device.getByTestId("state-progress") }
+
   // Grouped elements
   get groupedProfile() { return this.device.getByDescription("John Doe, Software Engineer, Online") }
 }

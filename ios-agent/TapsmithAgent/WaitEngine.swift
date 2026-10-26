@@ -244,6 +244,10 @@ class WaitEngine {
     /// the complete selector without a second pass through the snapshot matcher.
     private func waitQueryFullyRepresentsSelector(_ selector: ElementSelector) -> Bool {
         if selector.role != nil { return false }
+        // getByText's label query returns a Toggle row before the text it
+        // holds, and a control by its name; the snapshot walk keeps the
+        // innermost text content (TextContent, PILOT-794).
+        if selector.matchesInnermostOnly { return false }
         if selector.name != nil { return false }
         if selector.enabled != nil || selector.checked != nil || selector.focused != nil
             || selector.selected != nil || selector.expanded != nil {

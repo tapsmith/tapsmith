@@ -10,10 +10,17 @@ import {
   detectAndroidPackage,
   detectExpoProject,
   detectIosBundleId,
+  derivedDataBuildWarning,
+  detectProjectLayout,
   expoBuildHint,
   findApkCandidates,
+  findDerivedDataApps,
   findIosAppCandidates,
   findIosDeviceAppCandidates,
+  hasAndroidProject,
+  hasIosProject,
+  isReactNativeProject,
+  nativeBuildHint,
   preferDebugApk,
   type ExpoProject,
 } from './init-detect.js';
@@ -28,7 +35,7 @@ import { minimatch } from 'minimatch';
 import { DEFAULT_TEST_IGNORE } from './test-file-discovery.js';
 import { confirmQuestion } from './confirm-prompt.js';
 import { isPromptCancel, tolerateClosedReadline } from './prompt-cancel.js';
-import { ignoreTestResultsOrWarn } from './init-gitignore.js';
+import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
@@ -70,7 +77,8 @@ function displayEnvironment(env: EnvScan, expo: ExpoProject | undefined): void {
   if (env.agentApk && env.agentTestApk) lines.push(ok('Android agent (bundled)'));
   else if (env.agentApk || env.agentTestApk) lines.push(warn('Android agent (incomplete)'));
 
-  lines.push(env.adbVersion ? ok(`ADB ${env.adbVersion}`) : warn('ADB not found'));
+  // An SDK that has adb off PATH is said here; the Android questions give the fix (PILOT-832).
+  lines.push(env.adbVersion ? ok(`ADB ${env.adbVersion}`) : warn(env.adbOffPath ? `ADB not on PATH (found in ${env.adbOffPath})` : 'ADB not found'));
   if (env.androidHome) lines.push(ok('ANDROID_HOME'));
 
   if (env.isMacOS) {
@@ -171,6 +179,8 @@ async function askBuildPath(opts: {
   kind: BuildKind;
   message: string;
   candidates: string[];
+  /** A hint beside each candidate that has one (a DerivedData build: this Mac only). */
+  hints?: ReadonlyMap<string, string>;
   noneFound: string;
   typeMessage: string;
 }): Promise<string> {
@@ -183,12 +193,28 @@ async function askBuildPath(opts: {
     type: 'select',
     message: opts.message,
     choices: [
-      ...opts.candidates.map((c) => ({ name: c, message: c })),
+      ...opts.candidates.map((c) => {
+        const hint = opts.hints?.get(c);
+        return { name: c, message: c, ...(hint ? { hint } : {}) };
+      }),
       { name: OTHER_PATH, message: OTHER_PATH },
     ],
   });
   if (picked !== OTHER_PATH) return picked;
   return typedBuildPath(await ask<string>({ type: 'input', message: opts.typeMessage, validate }));
+}
+
+/**
+ * The simulator or device builds to offer: the project's own, else this
+ * project's in Xcode's DerivedData (a build from the Xcode UI), hinted as
+ * this Mac's only (PILOT-832), as `init --yes` takes them.
+ */
+function iosBuildCandidates(sdk: 'iphonesimulator' | 'iphoneos'): { candidates: string[]; hints: Map<string, string> } {
+  const cwd = process.cwd();
+  const own = sdk === 'iphonesimulator' ? findIosAppCandidates(cwd) : findIosDeviceAppCandidates(cwd);
+  if (own.length > 0) return { candidates: own, hints: new Map() };
+  const derived = findDerivedDataApps(cwd, detectProjectLayout(cwd).iosProjects, sdk);
+  return { candidates: derived, hints: new Map(derived.map((d) => [d, 'Xcode DerivedData: this Mac only'])) };
 }
 
 /** Debug APKs first (the build `init --yes` prefers), then the rest. */
@@ -287,16 +313,17 @@ export function androidEmulatorCaptureLine(avd: string | undefined, avdImages: A
 /**
  * The platform prompt: Android, and on macOS iOS and Both, each that cannot
  * run here hinted with why, and a default that can. The project's layout
- * narrows it (an `ios/`-only project means iOS, both directories mean Both,
- * as `init --yes` infers), then the toolchains: Android needs adb, iOS needs
- * Xcode and a simulator. A project with neither directory gets Android when
- * adb is there, else iOS when it can run.
+ * narrows it (an iOS-only project means iOS, both mean Both, as `init --yes`
+ * infers from `android/`, `ios/`, a root `settings.gradle` or an Xcode
+ * project, PILOT-832), then the toolchains: Android needs adb, iOS needs
+ * Xcode and a simulator. A project with neither gets Android when adb is
+ * there, else iOS when it can run.
  */
 export function platformPrompt(
   env: EnvScan,
-  layout: { hasAndroidDir: boolean; hasIosDir: boolean },
+  layout: { hasAndroidProject: boolean; hasIosProject: boolean },
 ): { choices: Array<{ name: string; message: string; hint?: string }>; initial: number } {
-  const androidHint = env.adbVersion ? undefined : 'ADB not found';
+  const androidHint = env.adbVersion ? undefined : env.adbOffPath ? 'adb not on PATH' : 'ADB not found';
   if (!env.isMacOS) return { choices: [{ name: 'android', message: 'Android', ...(androidHint ? { hint: androidHint } : {}) }], initial: 0 };
   const iosHint = !env.xcodeVersion
     ? 'Xcode not found'
@@ -308,16 +335,16 @@ export function platformPrompt(
   ];
   const androidOk = !androidHint;
   const iosOk = !iosHint;
-  const { hasAndroidDir, hasIosDir } = layout;
+  const { hasAndroidProject, hasIosProject } = layout;
   let pick: 'android' | 'ios' | 'both';
-  if (hasAndroidDir || hasIosDir) {
-    const android = hasAndroidDir && androidOk;
-    const ios = hasIosDir && iosOk;
+  if (hasAndroidProject || hasIosProject) {
+    const android = hasAndroidProject && androidOk;
+    const ios = hasIosProject && iosOk;
     if (android && ios) pick = 'both';
     else if (android) pick = 'android';
     else if (ios) pick = 'ios';
     // Nothing the layout names can run yet: the layout still says what the project is.
-    else pick = hasAndroidDir && hasIosDir ? 'both' : hasIosDir ? 'ios' : 'android';
+    else pick = hasAndroidProject && hasIosProject ? 'both' : hasIosProject ? 'ios' : 'android';
   } else {
     pick = !androidOk && iosOk ? 'ios' : 'android';
   }
@@ -331,17 +358,18 @@ export function platformPrompt(
 export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = 'npx tapsmith'): Promise<AndroidConfig> {
   console.log(`  ${bold('Android')}`);
   if (!env.adbVersion) {
-    console.log(`  ${YELLOW}⚠${RESET} ADB not found — Tapsmith cannot reach Android devices or emulators until it is on PATH`);
+    console.log(`  ${YELLOW}⚠${RESET} ${env.adbOffPath ? 'ADB is not on PATH' : 'ADB not found'} — Tapsmith cannot reach Android devices or emulators until it is on PATH`);
     console.log(dim(`    ${adbMissingFix()}`));
   }
 
+  const cwd = process.cwd();
   const apkPath = await askBuildPath({
     kind: 'apk',
     message: 'Where is your Android APK?',
-    candidates: orderApkCandidates(findApkCandidates(process.cwd())),
+    candidates: orderApkCandidates(findApkCandidates(cwd)),
     noneFound: expo
-      ? `No APK found under android/**/build/outputs/apk/. ${expoBuildHint(['android'], expo, 'Or enter its path.')}`
-      : 'No APK found under android/**/build/outputs/apk/ — build one first (e.g. cd android && ./gradlew assembleDebug; a React Native Debug build also needs Metro running, see https://tapsmith.dev/getting-started/#build-the-app-under-test), or enter its path.',
+      ? `No APK found in the project's build outputs (**/build/outputs/apk/). ${expoBuildHint(['android'], expo, 'Or enter its path.')}`
+      : `No APK found in the project's build outputs (**/build/outputs/apk/). ${nativeBuildHint('android', detectProjectLayout(cwd), isReactNativeProject(cwd))}, or enter its path.`,
     typeMessage: 'Path to your Android APK:',
   });
 
@@ -420,15 +448,18 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
   let appPath: string | undefined;
   let simBundleId: string | undefined;
   if (useSimulators) {
+    const cwd = process.cwd();
+    const builds = iosBuildCandidates('iphonesimulator');
     appPath = await askBuildPath({
       kind: 'simulator-app',
       message: 'Where is your iOS .app bundle? (simulator build)',
-      candidates: findIosAppCandidates(process.cwd()),
+      ...builds,
       noneFound: expo
-        ? `No simulator build (.app) found under ios/. ${expoBuildHint(['ios'], expo, 'Or enter its path.')}`
-        : 'No simulator build (.app) found under ios/ — build one first (in ios/: xcodebuild -workspace <App>.xcworkspace -scheme <App> -sdk iphonesimulator -derivedDataPath build; see https://tapsmith.dev/getting-started/#build-the-app-under-test), or enter its path.',
+        ? `No simulator build (.app) found in the project or Xcode's DerivedData. ${expoBuildHint(['ios'], expo, 'Or enter its path.')}`
+        : `No simulator build (.app) found in the project or Xcode's DerivedData. ${nativeBuildHint('ios', detectProjectLayout(cwd), isReactNativeProject(cwd))}, or enter its path.`,
       typeMessage: 'Path to your simulator build (.app):',
     });
+    if (builds.hints.has(appPath)) console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(appPath, detectProjectLayout(cwd), 'iphonesimulator', isReactNativeProject(cwd))}`);
     simBundleId = detectBundleId(appPath);
   }
 
@@ -513,15 +544,19 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
       }
     }
 
+    const deviceBuilds = iosBuildCandidates('iphoneos');
     deviceAppPath = await askBuildPath({
       kind: 'device-app',
       message: 'Where is your device build .app? (must be an iphoneos build, not simulator)',
-      candidates: findIosDeviceAppCandidates(process.cwd()),
+      ...deviceBuilds,
       noneFound: expo && !expo.hasIosDir
         ? 'No device build (.app) found: this Expo project has no ios/ yet. Generate it with `npx expo prebuild --platform ios`, then build it for iphoneos (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.'
-        : 'No device build (.app) found under ios/ — build one for iphoneos first (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.',
+        : 'No device build (.app) found in the project or Xcode\'s DerivedData — build one for iphoneos first (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.',
       typeMessage: 'Path to your device build (iphoneos .app):',
     });
+    if (deviceBuilds.hints.has(deviceAppPath)) {
+      console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(deviceAppPath, detectProjectLayout(process.cwd()), 'iphoneos')}`);
+    }
     deviceBundleIdRead = detectBundleId(deviceAppPath);
   }
 
@@ -1227,10 +1262,8 @@ async function runInitInner(): Promise<void> {
   displayEnvironment(env, expo);
 
   // Step 2: Platform selection, defaulting to one that can run (PILOT-721)
-  const platforms = platformPrompt(env, {
-    hasAndroidDir: fs.existsSync(path.join(cwd, 'android')),
-    hasIosDir: fs.existsSync(path.join(cwd, 'ios')),
-  });
+  const layout = detectProjectLayout(cwd);
+  const platforms = platformPrompt(env, { hasAndroidProject: hasAndroidProject(layout), hasIosProject: hasIosProject(layout) });
   const platformChoice = await ask<string>({
     type: 'select',
     message: 'Which platform(s) will you test?',
@@ -1306,6 +1339,10 @@ async function runInitInner(): Promise<void> {
   if (ignored === 'created') console.log(`  ${green('✓')} .gitignore created (ignores Tapsmith's test output)`);
   else if (ignored === 'added') console.log(`  ${green('✓')} Tapsmith's test output folders added to .gitignore`);
   else if (typeof ignored === 'object') console.log(`  ${YELLOW}⚠${RESET} ${ignored.warning}`);
+  // A native project's .gitignore lacks node_modules/ (PILOT-832).
+  const depsIgnored = typeof ignored === 'object' ? 'present' : ignoreNodeModulesOrWarn(process.cwd());
+  if (depsIgnored === 'created' || depsIgnored === 'added') console.log(`  ${green('✓')} node_modules/ added to .gitignore`);
+  else if (typeof depsIgnored === 'object') console.log(`  ${YELLOW}⚠${RESET} ${depsIgnored.warning}`);
 
   if (exampleTestExisted) console.log(`  ${YELLOW}⚠${RESET} ${EXAMPLE_TEST_PATH} already exists, skipping.`);
   else if (written.includes(EXAMPLE_TEST_PATH)) console.log(`  ${green('✓')} ${EXAMPLE_TEST_PATH} created`);

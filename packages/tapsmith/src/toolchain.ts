@@ -78,6 +78,31 @@ function locateAdb(deps: ToolchainDeps): AdbLocation {
 }
 
 /**
+ * The SDK `platform-tools` directory that has adb when adb is not on PATH —
+ * undefined when it is on PATH or no SDK has it (PILOT-832): init says adb
+ * is off PATH rather than missing.
+ */
+export function adbOffPathDir(overrides: Partial<ToolchainDeps> = {}): string | undefined {
+  const deps = hostDeps(overrides);
+  if (isOnPath('adb', deps.env, deps.platform, deps.isFile)) return undefined;
+  const where = locateAdb(deps);
+  return where.kind === 'off-path' ? where.platformTools : undefined;
+}
+
+/**
+ * doctor's fix for an unset ANDROID_HOME (and ANDROID_SDK_ROOT): the SDK
+ * found at the OS default location, where Android Studio installs it
+ * without setting either (PILOT-832), else the generic advice.
+ */
+export function androidHomeUnsetFix(overrides: Partial<ToolchainDeps> = {}): string {
+  const deps = hostDeps(overrides);
+  const sdk = androidSdkRoots(deps.env, deps.platform, deps.homedir()).find((root) => deps.isDir(root));
+  if (!sdk) return 'Set ANDROID_HOME to your Android SDK location';
+  const example = deps.platform === 'win32' ? '' : ` (e.g. export ANDROID_HOME="${sdk}" in your shell profile)`;
+  return `Your Android SDK is at ${sdk}: set ANDROID_HOME to it${example}`;
+}
+
+/**
  * The fix for a missing adb: the platform-tools directory to add to PATH
  * when an SDK has it, the platform-tools install when the SDK lacks it, or
  * installing an SDK at all when there is none.

@@ -79,6 +79,16 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
 
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/TextContentTests/main.swift \
+  TapsmithAgent/TextContent.swift \
+  TapsmithAgent/TextMatch.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/text-content-tests"
+"$OUT/text-content-tests" "../packages/tapsmith/src/__tests__/fixtures/text-content-conformance.json"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/NonAppElementsTests/main.swift \
   TapsmithAgent/NonAppElements.swift \
   -o "$OUT/non-app-elements-tests"

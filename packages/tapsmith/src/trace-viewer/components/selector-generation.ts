@@ -4,6 +4,7 @@ import { iosDescribedRole, unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
 import { isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
+import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
 
 // ─── Attribute Helpers ───
 
@@ -330,8 +331,9 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
     });
   }
 
-  // 6. Text — Testing Library getByText (visible text content)
-  if (text) {
+  // 6. Text — Testing Library getByText (visible text content). An iOS
+  // switch's, slider's or stepper's label is only its name (PILOT-794).
+  if (text && !(ios && IOS_NAME_ONLY_TYPES.has(node.attributes.get('type') ?? node.tagName))) {
     selectors.push({
       code: `device.getByText("${escapeJsString(text)}")`,
       label: 'Text',

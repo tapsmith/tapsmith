@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as path from 'node:path';
 import {
   adbMissingFix,
+  androidHomeUnsetFix,
   androidToolchainBlocker,
   assertAdbForEmulatorLaunch,
   iosToolchainBlocker,
@@ -107,5 +108,22 @@ describe('assertAdbForEmulatorLaunch()', () => {
 
   it('does nothing when adb is on PATH', () => {
     expect(() => assertAdbForEmulatorLaunch(host({ env: { PATH: '/tools' }, files: ['/tools/adb'] }))).not.toThrow();
+  });
+});
+
+describe('androidHomeUnsetFix() (PILOT-832)', () => {
+  it('names the SDK it found at the default location, with the export line', () => {
+    const fix = androidHomeUnsetFix(host({ env: {}, dirs: [DEFAULT_SDK] }));
+    expect(fix).toBe(`Your Android SDK is at ${DEFAULT_SDK}: set ANDROID_HOME to it (e.g. export ANDROID_HOME="${DEFAULT_SDK}" in your shell profile)`);
+  });
+
+  it('uses ~/Android/Sdk on Linux, and no export example on Windows', () => {
+    expect(androidHomeUnsetFix(host({ env: {}, platform: 'linux', dirs: ['/Users/me/Android/Sdk'] }))).toContain('export ANDROID_HOME="/Users/me/Android/Sdk"');
+    const win = androidHomeUnsetFix(host({ env: { LOCALAPPDATA: 'C:\\Users\\me\\AppData\\Local' }, platform: 'win32', dirs: ['C:\\Users\\me\\AppData\\Local\\Android\\Sdk'] }));
+    expect(win).toBe('Your Android SDK is at C:\\Users\\me\\AppData\\Local\\Android\\Sdk: set ANDROID_HOME to it');
+  });
+
+  it('keeps the generic advice when no SDK is at the default location', () => {
+    expect(androidHomeUnsetFix(host({ env: {} }))).toBe('Set ANDROID_HOME to your Android SDK location');
   });
 });

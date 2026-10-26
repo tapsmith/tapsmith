@@ -14,7 +14,7 @@ To run Tapsmith tests in CI, you need:
 ## GitHub Actions (Android)
 
 Here is a complete GitHub Actions workflow that builds a React Native app, starts an emulator, and
-runs Tapsmith tests. It works as pasted in a React Native CLI project and in an Expo project, whether
+runs Tapsmith tests (for an Android Studio project, see [Native Android project](#native-android-project)). It works as pasted in a React Native CLI project and in an Expo project, whether
 or not the project commits its `android/` directory: when `android/` is missing (Expo's
 [Continuous Native Generation](https://docs.expo.dev/workflow/continuous-native-generation/)), the
 workflow generates it with `npx expo prebuild`.
@@ -129,6 +129,37 @@ export default defineConfig({
   - [WebView debugging](webview.md), which `device.webview()` needs: a
     `webviewDebuggingEnabled={__DEV__}` prop must be enabled for the test build too.
 
+### Native Android project
+
+In an Android Studio project, with Gradle and Tapsmith's `package.json` both at the root of the
+repository, the same workflow builds the debug APK at the root instead: there is no `android/`
+folder, no `expo prebuild` and no Metro. Replace the `Generate the native project (Expo)` and
+`Build the release APK` steps with this one:
+
+```yaml
+      # A native debug APK needs no dev server, and Gradle signs it with the
+      # debug keystore, so it installs on the emulator as built.
+      - name: Build the debug APK
+        run: ./gradlew assembleDebug
+```
+
+and point `apk` at it:
+
+```typescript
+// tapsmith.config.ts
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  apk: "./app/build/outputs/apk/debug/app-debug.apk",
+  package: "com.example.myapp", // applicationId in app/build.gradle.kts
+  timeout: 60_000,
+});
+```
+
+Build the debug variant rather than `assembleRelease`: Android Studio's project templates leave the
+release build unsigned, and an unsigned APK does not install. An app module not named `app` (often
+`composeApp` in a Kotlin Multiplatform project) writes to `<module>/build/outputs/apk/debug/`.
+
 ### Letting Tapsmith launch the emulator
 
 Instead of starting the emulator in the workflow, you can give Tapsmith an AVD and let it launch
@@ -185,7 +216,7 @@ through `tapsmith create-avd --install-tools`.
 
 iOS tests require a macOS runner with Xcode installed. Tapsmith manages the simulator lifecycle
 automatically. Like the Android workflow, this one works as pasted in a React Native CLI project and
-in an Expo project, generating `ios/` with `npx expo prebuild` when the project does not commit it.
+in an Expo project (for an Xcode project, see [Native iOS project](#native-ios-project)), generating `ios/` with `npx expo prebuild` when the project does not commit it.
 Replace `MyApp` with your app's name — the name of the `.xcworkspace` in `ios/`, which is also its
 scheme and the name of the built `.app`. In an Expo project that doesn't commit `ios/`, `expo prebuild`
 derives that name from `name` in `app.json` and drops characters Xcode can't use, so run
@@ -295,6 +326,47 @@ export default defineConfig({
   in an Expo project.
 - Tapsmith boots and manages simulators automatically -- no manual `xcrun simctl` setup needed. Tapsmith's own CI checks this weekly and on changes to its simulator-provisioning code: it starts with no simulator booted and verifies that Tapsmith booted the configured one.
 - With `workers` above 1, Tapsmith boots a simulator for each extra worker (another simulator of the same name and OS, or a clone of the configured one). The standard 3-core GitHub-hosted macOS runner cannot run two simulators at usable speed (app installs and XCUITest launches time out), so keep `workers: 1` there or use a larger runner. Tapsmith's CI does not cover multiple simulators on hosted runners for this reason.
+
+### Native iOS project
+
+In an Xcode project, with the `.xcodeproj` and Tapsmith's `package.json` both at the root of the
+repository, there is no `ios/` folder, no CocoaPods and no Metro. Replace the
+`Generate the native project (Expo)`, `Install CocoaPods` and `Build the app for the simulator`
+steps with this one, which builds the project itself (a Debug build runs on its own here):
+
+```yaml
+      - name: Build the app for the simulator
+        run: |
+          xcodebuild build \
+            -project MyApp.xcodeproj \
+            -scheme MyApp \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            ARCHS=arm64 \
+            -quiet
+```
+
+and point `app` at the build:
+
+```typescript
+// tapsmith.config.ts
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  platform: "ios",
+  app: "./build/Build/Products/Debug-iphonesimulator/MyApp.app",
+  package: "com.example.myapp", // PRODUCT_BUNDLE_IDENTIFIER
+  simulator: "iPhone 17",
+  timeout: 60_000,
+});
+```
+
+If the project has an `.xcworkspace` (CocoaPods, or Swift packages added through a workspace), build
+it with `-workspace MyApp.xcworkspace`, after `pod install` when it uses CocoaPods. With XcodeGen and
+no committed `.xcodeproj`, generate it first in a step that runs `brew install xcodegen` and then
+`xcodegen generate`.
 
 ### iOS network capture on CI
 

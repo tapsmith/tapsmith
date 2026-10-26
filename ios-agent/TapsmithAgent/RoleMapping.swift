@@ -340,6 +340,7 @@ enum RoleMapping {
         case .progressIndicator: return "XCUIElementTypeProgressIndicator"
         case .activityIndicator: return "XCUIElementTypeActivityIndicator"
         case .picker: return "XCUIElementTypePicker"
+        case .pickerWheel: return "XCUIElementTypePickerWheel"
         case .stepper: return "XCUIElementTypeStepper"
         case .toolbar: return "XCUIElementTypeToolbar"
         case .tabBar: return "XCUIElementTypeTabBar"
