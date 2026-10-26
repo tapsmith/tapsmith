@@ -96,3 +96,29 @@ describe("a role-only miss on iOS carries the hint", () => {
       .not.toContain("On iOS");
   });
 });
+
+// PILOT-828: a Jetpack Compose testTag reaches accessibility as a resource-id
+// only with testTagsAsResourceId, which a Compose developer has no reason to
+// know.
+const TEST_TAG_HINT = /[^.]\. On Android, a Jetpack Compose Modifier\.testTag\(\) is a test id only where the app sets Modifier\.semantics \{ testTagsAsResourceId = true \} on it or an ancestor — on the root of setContent, for the whole screen\.$/;
+
+describe("a getByTestId miss on Android carries the testTagsAsResourceId hint", () => {
+  const err = (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);
+
+  it("in actions, assertions and waitFor", async () => {
+    const d = device("android");
+    // After the off-screen hint, which stays true of an off-screen row.
+    const tap = await err(d.getByTestId("email_input").tap());
+    vitestExpect(tap).toMatch(TEST_TAG_HINT);
+    vitestExpect(tap).toContain("It may be off-screen in a scrollable list");
+    vitestExpect(await err(d.getByTestId("email_input").find())).toMatch(TEST_TAG_HINT);
+    vitestExpect(await err(tapsmithExpect(d.getByTestId("email_input")).toBeVisible({ timeout: 50 }))).toMatch(TEST_TAG_HINT);
+    vitestExpect(await err(d.getByTestId("email_input").waitFor({ timeout: 50 }))).toMatch(TEST_TAG_HINT);
+  });
+
+  it("not on iOS, nor for another locator", async () => {
+    vitestExpect(await err(device("ios").getByTestId("email_input").find())).not.toContain("testTag");
+    vitestExpect(await err(device("android").getByText("Email").find())).not.toContain("testTag");
+    vitestExpect(await err(device("android").getByTestId("form").getByText("Email").find())).not.toContain("testTag");
+  });
+});

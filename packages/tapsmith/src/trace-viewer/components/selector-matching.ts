@@ -1,5 +1,5 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
-import { getNodeRole, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
+import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
@@ -537,14 +537,16 @@ function textMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
 /**
  * Whether a getByLabel field's name passes `test` — the one rule the agents
  * use for a string and a RegExp alike (PILOT-666): Android's content-desc
- * (the agent also follows a labelling view, which the dump does not carry),
- * iOS's label or title. iOS tests an empty label like any other text, as its
- * agent does; Android has no name without a content-desc.
+ * (the agent also follows a labelling view, which the dump does not carry)
+ * or the text of one of its descendants — a Compose TextField's label is a
+ * child of the field (PILOT-828) — and iOS's label or title. iOS tests an
+ * empty label like any other text, as its agent does.
  */
 function labelNameMatches(node: HierarchyNode, test: (name: string) => boolean): boolean {
   if (node.attributes.has('class')) {
     const contentDesc = node.attributes.get('content-desc');
-    return contentDesc !== undefined && contentDesc !== '' && test(contentDesc);
+    if (contentDesc !== undefined && contentDesc !== '' && test(contentDesc)) return true;
+    return descendantText(node).some(test);
   }
   return test(node.attributes.get('label') ?? '') || test(node.attributes.get('title') ?? '');
 }
@@ -799,6 +801,8 @@ const ANDROID_DESCRIPTION_ONLY_ROLES = new Set(['heading', 'link']);
  * view no role description marks.
  */
 function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean {
+  // A Compose role carrier: its parent has the role (PILOT-828).
+  if (isComposeRoleCarrier(node)) return false;
   const reported = getNodeRole(node);
   if (reported && normalizeRole(reported) === role) return true;
   const className = node.attributes.get('class');

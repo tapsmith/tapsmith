@@ -176,10 +176,10 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
  * `DUAL_PATH_ROLES`, which `roles.test.ts` pins. A node with a description
  * matches only through it; one without falls back to the role's classes.
  * RN renders progressbar, toolbar and tablist as a generic View with only a
- * description (PILOT-656, PILOT-514).
+ * description (PILOT-656, PILOT-514), and Compose its Switch (PILOT-828).
  */
 export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
-  'heading', 'link', 'image', 'searchfield', 'progressbar', 'toolbar', 'tablist',
+  'heading', 'link', 'image', 'searchfield', 'progressbar', 'toolbar', 'tablist', 'switch',
 ]);
 
 /**

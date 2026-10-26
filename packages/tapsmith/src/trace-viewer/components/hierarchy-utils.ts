@@ -154,7 +154,22 @@ export const WEBVIEW_TAG_TO_ROLE: Record<string, string> = {
   dialog: 'dialog',
 };
 
+/**
+ * The attribute the Android agent marks a Jetpack Compose role carrier with:
+ * the fake leaf Compose appends to a control to carry its role, which the
+ * control itself reports (`tapsmith-role`) and no getByRole matches
+ * (agent ComposeRoles.kt, PILOT-828).
+ */
+export const COMPOSE_ROLE_CARRIER_ATTRIBUTE = 'tapsmith-role-carrier';
+
+/** Whether a node is a Compose role carrier ({@link COMPOSE_ROLE_CARRIER_ATTRIBUTE}). */
+export function isComposeRoleCarrier(node: HierarchyNode): boolean {
+  return node.attributes.get(COMPOSE_ROLE_CARRIER_ATTRIBUTE) === 'true';
+}
+
 export function getNodeRole(node: HierarchyNode): string {
+  // A Compose role carrier lends its role to its parent and has none itself.
+  if (isComposeRoleCarrier(node)) return '';
   // Agent-injected role (trait-based: heading, alert, link, combobox, etc.)
   const agentRole = node.attributes.get('tapsmith-role');
   if (agentRole) return agentRole;
