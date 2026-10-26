@@ -1421,6 +1421,9 @@ describe('resolveInitPlan() on native projects (PILOT-832)', () => {
     const detect = { ...detectStubs, ...noExpo, findIosAppCandidates: () => [], findDerivedDataApps: () => builds };
     const err = expectInitError(() => resolveInitPlan(initArgs({ yes: true }), baseEnv, detect, tmp), 'AMBIGUOUS_IOS_APP');
     expect(err.candidates).toEqual(builds);
+    // Says where they came from and how to get a path that works elsewhere.
+    expect(err.message).toContain("in Xcode's DerivedData");
+    expect(err.fix).toMatch(/only on this Mac.*-derivedDataPath build/);
   }));
 
   it('prefers a build in the project over DerivedData', () => nativeProject(xcodeProject, (tmp) => {

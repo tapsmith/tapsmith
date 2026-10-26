@@ -247,16 +247,23 @@ function isTestRunner(app: string): boolean {
  * extensions) and XCUITest runners are not apps to test.
  */
 function findIosBuilds(cwd: string, sdk: AppleSdk): string[] {
-  // `ios/` in a React Native project, else the whole native project; nothing
-  // outside an iOS project, as for APKs.
+  // `ios/` in a React Native project; in a native one, the top folder of each
+  // Xcode project (the whole project when one is at the root) plus a root
+  // `build/` (a build run from the root). Nothing outside an iOS project, as
+  // for APKs: run in a home directory holding `~/MyApp/MyApp.xcodeproj`, a
+  // whole-tree walk would reach other projects' builds in ~/Library.
   const layout = detectProjectLayout(cwd);
   if (!hasIosProject(layout)) return [];
-  return globSync(`${layout.hasIosDir ? 'ios/' : ''}**/*-${sdk}/*.app`, {
+  const tops = layout.hasIosDir ? ['ios'] : [...new Set(layout.iosProjects.map((p) => (p.includes('/') ? p.split('/')[0] : '.')))];
+  const patterns = tops.includes('.')
+    ? [`**/*-${sdk}/*.app`]
+    : [...tops, ...(layout.hasIosDir ? [] : ['build'])].map((top) => `${top}/**/*-${sdk}/*.app`);
+  return [...new Set(globSync(patterns, {
     cwd,
     posix: true,
     maxDepth: 12,
     ignore: searchIgnore(),
-  }).filter((app) => !isTestRunner(app)).sort();
+  }))].filter((app) => !isTestRunner(app)).sort();
 }
 
 /** Returns project-relative simulator .app bundle paths. */

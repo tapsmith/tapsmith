@@ -317,8 +317,10 @@ export function resolveInitPlan(
         });
       }
       if (candidates.length > 1) {
-        throw new InitError('AMBIGUOUS_IOS_APP', `Found ${candidates.length} .app candidates`, {
-          fix: 'Pass --app <path> to choose one',
+        throw new InitError('AMBIGUOUS_IOS_APP', `Found ${candidates.length} .app candidates${fromDerivedData ? ' in Xcode\'s DerivedData' : ''}`, {
+          fix: fromDerivedData
+            ? `Pass --app <path> to choose one. These paths exist only on this Mac: for a config that works elsewhere, ${detectDefaults.nativeBuildHint('ios', layout, reactNative).replace(/^Build one for the simulator first/, 'build for the simulator')}`
+            : 'Pass --app <path> to choose one',
           candidates,
         });
       }

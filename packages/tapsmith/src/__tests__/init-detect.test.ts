@@ -440,3 +440,24 @@ describe('root Gradle projects with an android/ module, and iOS/<App>/ projects 
     expect(findIosAppCandidates(tmp)).toEqual(['iOS/build/Build/Products/Debug-iphonesimulator/MyApp.app']);
   }));
 });
+
+describe('iOS build search stays inside the Xcode project\'s folder (PILOT-832)', () => {
+  it('in a home directory with a project one folder down, never walks Library/ (other projects\' DerivedData)', () => withTmp((home) => {
+    fs.mkdirSync(path.join(home, 'MyApp', 'MyApp.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'MyApp', 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'MyApp.app'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'Library', 'Developer', 'Xcode', 'DerivedData', 'Other-abc', 'Build', 'Products', 'Debug-iphonesimulator', 'Other.app'), { recursive: true });
+    fs.mkdirSync(path.join(home, 'Downloads', 'Debug-iphonesimulator', 'Stray.app'), { recursive: true });
+    expect(findIosAppCandidates(home)).toEqual(['MyApp/build/Build/Products/Debug-iphonesimulator/MyApp.app']);
+  }));
+
+  it('also searches a root build/ beside a project one folder down (KMP built from the root)', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'settings.gradle.kts'));
+    fs.mkdirSync(path.join(tmp, 'iosApp', 'iosApp.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'iosApp.app'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'iosApp', 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'App.app'), { recursive: true });
+    expect(findIosAppCandidates(tmp)).toEqual([
+      'build/Build/Products/Debug-iphonesimulator/iosApp.app',
+      'iosApp/build/Build/Products/Debug-iphonesimulator/App.app',
+    ]);
+  }));
+});
