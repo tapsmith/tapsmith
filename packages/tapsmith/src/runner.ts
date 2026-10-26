@@ -2321,7 +2321,11 @@ async function runSuiteContext(
     // this scope's recording: that teardown ends the failed test's setup and
     // is no part of the setup this scope's tests start from (the trace would
     // otherwise replay an AFTER ALL section into every one of them).
-    if (freshStartAtEntry) await runRetryTeardown(parentChain, null, opts, retryState);
+    if (freshStartAtEntry) {
+      await runRetryTeardown(parentChain, null, opts, retryState);
+      // The untraced teardown's time is not the first reset's.
+      beforeAllCollector?.setTimelineOrigin(Date.now());
+    }
     if (beforeAllCollector) {
       await withActiveTraceCollector(beforeAllCollector, runScopeSetup);
       beforeAllCollector.endGroup();

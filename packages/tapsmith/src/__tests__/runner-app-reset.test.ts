@@ -1049,6 +1049,31 @@ describe('runner app reset (declared isolation)', () => {
       }
     });
 
+    it('a describe fresh-started at its entry does not charge the untraced teardown to its first reset', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-timing-'));
+      const d = makeDevice();
+      logResets(d, []);
+      let afterAllRuns = 0;
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        tapsmithAfterAll(async () => { afterAllRuns++; if (afterAllRuns === 1) await new Promise((r) => setTimeout(r, 1500)); });
+        tapsmithDescribe('first', () => { tapsmithTest('broken', async () => { throw new Error('boom'); }); });
+        tapsmithDescribe('second', () => { tapsmithTest('a', async () => { recordAction('tap'); }); });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn })));
+
+        const a = collectResults(result).find((t) => t.name === 'a')!;
+        const reset = traceEvents(a.tracePath!).find((e) => e.type === 'action' && e.action === 'resetApp')!;
+        expect(afterAllRuns).toBeGreaterThanOrEqual(1);
+        expect(reset.wallDuration as number).toBeLessThan(1000);
+        expect((reset.gapBefore as number | undefined) ?? 0).toBeLessThan(1000);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
     it('removes the temp dirs a fresh start kept for later replays when the file ends', async () => {
       const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-cleanup-'));
       const tmp = path.join(tempRoot, 'tmp');
