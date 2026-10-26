@@ -1600,10 +1600,10 @@ class SnapshotElementFinder {
                     format: "label MATCHES %@ OR title MATCHES %@ OR value MATCHES %@",
                     pattern, pattern, pattern
                 )
-                if nodeIdentifier.isEmpty, let labelIndex {
-                    element = labelQuery(predicate).element(boundBy: labelIndex)
-                } else if !nodeIdentifier.isEmpty {
-                    element = resolve(labelQuery(predicate))
+                if let labelIndex {
+                    element = nodeIdentifier.isEmpty
+                        ? labelQuery(predicate).element(boundBy: labelIndex)
+                        : resolve(labelQuery(predicate))
                 } else {
                     // The query can't return this node (labelIndices):
                     // cache nothing, so live-element actions fail loudly.
@@ -1694,12 +1694,6 @@ class SnapshotElementFinder {
             NSPredicate(format: "label ENDSWITH %@", ", " + value),
             NSPredicate(format: "label CONTAINS %@", ", " + value + ", "),
         ])
-    }
-
-    /// `concatenatedLabelPredicate` with whitespace normalized (PILOT-510), for
-    /// the selectors the snapshot walk compares normalized (text, role name).
-    private func normalizedConcatenatedLabelPredicate(_ value: String) -> NSPredicate {
-        NSPredicate(format: "label MATCHES %@", TextMatch.concatenatedLabelPattern(value))
     }
 
     // MARK: - Helpers
