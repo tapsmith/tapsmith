@@ -153,8 +153,28 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
     expect(q?.type).toBe('input');
     expect(q?.initial).toBeUndefined();
     expect(q?.validate).toBeTypeOf('function');
-    expect(logged.join('\n')).toMatch(/No APK found under android\//);
+    expect(logged.join('\n')).toMatch(/No APK found in the project's build outputs/);
     expect(android.apkPath).toBe('./built/app.apk');
+  });
+
+  it('in an Android Studio project with no APK, says to run ./gradlew assembleDebug at the root, without Metro (PILOT-832)', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-native-'));
+    fs.writeFileSync(path.join(project, 'settings.gradle.kts'), '');
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+    script([
+      [/Where is your Android APK/, './built/app.apk'],
+      [/package name/, 'com.acme.app'],
+    ]);
+    try {
+      await configureAndroid(env);
+    } finally {
+      vi.mocked(process.cwd).mockRestore();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+    const out = logged.join('\n');
+    expect(out).toContain('`./gradlew assembleDebug`, which writes app/build/outputs/apk/debug/app-debug.apk');
+    expect(out).not.toContain('cd android');
+    expect(out).not.toContain('Metro');
   });
 
   it('never defaults the package name to a placeholder when it cannot be read', async () => {

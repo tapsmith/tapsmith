@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { ignoreTestResults } from '../init-gitignore.js';
+import { ignoreNodeModules, ignoreTestResults } from '../init-gitignore.js';
 
 const tmps: string[] = [];
 function tmp(): string {
@@ -87,5 +87,35 @@ describe('ignoreTestResults() (PILOT-562)', () => {
     const dir = tmp();
     fs.mkdirSync(path.join(dir, '.gitignore')); // a directory where the file should be
     expect(() => ignoreTestResults(dir, notIgnored)).toThrow();
+  });
+});
+
+describe('ignoreNodeModules() (PILOT-832)', () => {
+  it('adds node_modules/ to a native project\'s .gitignore, which has no such line', () => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, '.gitignore'), 'xcuserdata/\n*.xcuserstate\n');
+    expect(ignoreNodeModules(dir, notIgnored)).toBe('added');
+    expect(read(dir)).toBe('xcuserdata/\n*.xcuserstate\n\n# Node.js dependencies (Tapsmith is installed with npm)\nnode_modules/\n');
+  });
+
+  it.each(['node_modules', 'node_modules/', '/node_modules', '/node_modules/'])('leaves a .gitignore that lists %j alone', (line) => {
+    const dir = tmp();
+    fs.writeFileSync(path.join(dir, '.gitignore'), `${line}\n`);
+    expect(ignoreNodeModules(dir, notIgnored)).toBe('present');
+    expect(read(dir)).toBe(`${line}\n`);
+  });
+
+  it('changes nothing when git already ignores it', () => {
+    const dir = tmp();
+    expect(ignoreNodeModules(dir, () => ['node_modules/'])).toBe('present');
+    expect(fs.existsSync(path.join(dir, '.gitignore'))).toBe(false);
+  });
+
+  it('sits beside the test output block, each added once', () => {
+    const dir = tmp();
+    ignoreTestResults(dir, notIgnored);
+    expect(ignoreNodeModules(dir, notIgnored)).toBe('added');
+    expect(ignoreNodeModules(dir, notIgnored)).toBe('present');
+    expect(read(dir)).toBe(`${BLOCK}\n# Node.js dependencies (Tapsmith is installed with npm)\nnode_modules/\n`);
   });
 });

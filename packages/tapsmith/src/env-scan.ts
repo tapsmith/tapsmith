@@ -8,6 +8,7 @@ import { rosettaNodeWarning } from './host-arch.js';
 import { findAgentApk, findAgentTestApk } from './agent-resolve.js';
 import { scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
 import { resolveEmulatorBinary } from './emulator.js';
+import { adbOffPathDir } from './toolchain.js';
 
 // ─── Helpers ───
 
@@ -33,6 +34,8 @@ export interface EnvScan {
   agentApk: boolean;
   agentTestApk: boolean;
   adbVersion: string | undefined;
+  /** With no adb on PATH, the SDK platform-tools directory that has one (PILOT-832). */
+  adbOffPath?: string;
   androidHome: string | undefined;
   xcodeVersion: string | undefined;
   simulators: SimulatorInfo[];
@@ -191,6 +194,7 @@ export function scanEnvironment(): EnvScan {
     adbVersion = match?.[1] ?? 'installed';
   }
 
+  const adbOffPath = adbVersion ? undefined : adbOffPathDir();
   const androidHome = process.env['ANDROID_HOME'] || process.env['ANDROID_SDK_ROOT'];
 
   let xcodeVersion: string | undefined;
@@ -219,5 +223,5 @@ export function scanEnvironment(): EnvScan {
 
   const avdImages = scanAvdImageTags();
 
-  return { nodeVersion, rosettaWarning, daemonBin, agentApk, agentTestApk, adbVersion, androidHome, xcodeVersion, simulators, avds, avdImages, isMacOS };
+  return { nodeVersion, rosettaWarning, daemonBin, agentApk, agentTestApk, adbVersion, ...(adbOffPath ? { adbOffPath } : {}), androidHome, xcodeVersion, simulators, avds, avdImages, isMacOS };
 }

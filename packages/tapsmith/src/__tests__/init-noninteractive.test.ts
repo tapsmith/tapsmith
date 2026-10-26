@@ -901,6 +901,20 @@ describe('executeInitPlan()', () => {
     }
   });
 
+  it('adds node_modules/ to a native project\'s .gitignore, listing the file once (PILOT-832)', () => {
+    const tmp = makeTmp();
+    try {
+      fs.writeFileSync(path.join(tmp, '.gitignore'), 'xcuserdata/\ntapsmith-results/\ntapsmith-report/\n');
+      const args = initArgs({ yes: true, platform: 'android' });
+      const result = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), args, tmp);
+      expect(fs.readFileSync(path.join(tmp, '.gitignore'), 'utf8')).toMatch(/\nnode_modules\/\n$/);
+      expect(result.filesCreated.filter((f) => f === '.gitignore')).toEqual(['.gitignore']);
+      expect(result.warnings.join('\n')).not.toContain('node_modules');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('respects --no-example-test and --no-agents-md', () => {
     const tmp = makeTmp();
     try {
@@ -1323,4 +1337,96 @@ describe('simulatorChoices() (PILOT-562)', () => {
     const plan = resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), env, detectStubs);
     expect(plan.ios?.simulator).toBe('iPhone 16');
   });
+});
+
+// ─── Native project layouts (PILOT-832) ───
+
+describe('resolveInitPlan() on native projects (PILOT-832)', () => {
+  function nativeProject(setup: (dir: string) => void, fn: (dir: string) => void): void {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-native-')));
+    try {
+      setup(tmp);
+      fn(tmp);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  const xcodeProject = (dir: string): void => {
+    fs.mkdirSync(path.join(dir, 'Notekeeper.xcodeproj'), { recursive: true });
+  };
+  const gradleProject = (dir: string): void => fs.writeFileSync(path.join(dir, 'settings.gradle.kts'), 'include(":app")\n');
+  const noExpo = { detectExpoProject: () => undefined, findDerivedDataApps: () => [] };
+
+  it('infers iOS from an Xcode project at the root', () => nativeProject(xcodeProject, (tmp) => {
+    const detect = { ...detectStubs, ...noExpo, findIosAppCandidates: () => ['build/Build/Products/Debug-iphonesimulator/Notekeeper.app'] };
+    const plan = resolveInitPlan(initArgs({ yes: true }), baseEnv, detect, tmp);
+    expect(plan.platforms).toEqual(['ios']);
+    expect(plan.ios?.appPath).toBe('build/Build/Products/Debug-iphonesimulator/Notekeeper.app');
+  }));
+
+  it('infers Android from a settings.gradle.kts at the root', () => nativeProject(gradleProject, (tmp) => {
+    const plan = resolveInitPlan(initArgs({ yes: true }), baseEnv, { ...detectStubs, ...noExpo }, tmp);
+    expect(plan.platforms).toEqual(['android']);
+  }));
+
+  it('infers both from a Gradle project with an Xcode project beside it (Kotlin Multiplatform)', () => nativeProject((dir) => {
+    gradleProject(dir);
+    fs.mkdirSync(path.join(dir, 'iosApp', 'iosApp.xcodeproj'), { recursive: true });
+  }, (tmp) => {
+    expect(resolveInitPlan(initArgs({ yes: true }), baseEnv, { ...detectStubs, ...noExpo }, tmp).platforms).toEqual(['android', 'ios']);
+  }));
+
+  it('does not infer iOS from an Xcode project off macOS', () => nativeProject(xcodeProject, (tmp) => {
+    expectInitError(() => resolveInitPlan(initArgs({ yes: true }), { ...baseEnv, isMacOS: false }, { ...detectStubs, ...noExpo }, tmp), 'NO_PLATFORM');
+  }));
+
+  it('NO_APK in an Android Studio project names ./gradlew assembleDebug at the root, without Metro', () => nativeProject(gradleProject, (tmp) => {
+    const err = expectInitError(() => resolveInitPlan(initArgs({ yes: true }), baseEnv, { ...detectStubs, ...noExpo, findApkCandidates: () => [] }, tmp), 'NO_APK');
+    expect(err.message).not.toContain('android/');
+    expect(err.fix).toContain('`./gradlew assembleDebug`');
+    expect(err.fix).toContain('app/build/outputs/apk/debug/app-debug.apk');
+    expect(err.fix).not.toContain('cd android');
+    expect(err.fix).not.toContain('Metro');
+    expect(err.fix).toContain('--apk <path>');
+  }));
+
+  it('NO_IOS_APP in a native Xcode project names its own project and scheme', () => nativeProject(xcodeProject, (tmp) => {
+    const err = expectInitError(() => resolveInitPlan(initArgs({ yes: true }), baseEnv, { ...detectStubs, ...noExpo, findIosAppCandidates: () => [] }, tmp), 'NO_IOS_APP');
+    expect(err.message).not.toContain('under ios/');
+    expect(err.fix).toContain('`xcodebuild -project Notekeeper.xcodeproj -scheme Notekeeper -configuration Debug -sdk iphonesimulator -derivedDataPath build build`');
+    expect(err.fix).not.toContain('cd ios');
+    expect(err.fix).toContain('--app <path>');
+  }));
+
+  it('takes this project\'s build from Xcode\'s DerivedData when the project holds none, and warns it is this Mac\'s only', () => nativeProject(xcodeProject, (tmp) => {
+    const derived = '/Users/me/Library/Developer/Xcode/DerivedData/Notekeeper-abc/Build/Products/Debug-iphonesimulator/Notekeeper.app';
+    const lookedUp: Array<[string, string[], string]> = [];
+    const detect = {
+      ...detectStubs,
+      ...noExpo,
+      findIosAppCandidates: () => [],
+      findDerivedDataApps: (cwd: string, projects: string[], sdk: 'iphonesimulator' | 'iphoneos') => {
+        lookedUp.push([cwd, projects, sdk]);
+        return [derived];
+      },
+    };
+    const plan = resolveInitPlan(initArgs({ yes: true }), baseEnv, detect, tmp);
+    expect(lookedUp).toEqual([[tmp, ['Notekeeper.xcodeproj'], 'iphonesimulator']]);
+    expect(plan.ios?.appPath).toBe(derived);
+    expect(plan.warnings.join('\n')).toMatch(/DerivedData: only this Mac has that path.*-derivedDataPath build/);
+  }));
+
+  it('lists every DerivedData build when there are several', () => nativeProject(xcodeProject, (tmp) => {
+    const builds = ['/dd/Notekeeper-a/Build/Products/Debug-iphonesimulator/Notekeeper.app', '/dd/Notekeeper-a/Build/Products/Release-iphonesimulator/Notekeeper.app'];
+    const detect = { ...detectStubs, ...noExpo, findIosAppCandidates: () => [], findDerivedDataApps: () => builds };
+    const err = expectInitError(() => resolveInitPlan(initArgs({ yes: true }), baseEnv, detect, tmp), 'AMBIGUOUS_IOS_APP');
+    expect(err.candidates).toEqual(builds);
+  }));
+
+  it('prefers a build in the project over DerivedData', () => nativeProject(xcodeProject, (tmp) => {
+    let called = false;
+    const detect = { ...detectStubs, ...noExpo, findDerivedDataApps: () => { called = true; return ['/dd/x.app']; } };
+    resolveInitPlan(initArgs({ yes: true }), baseEnv, detect, tmp);
+    expect(called).toBe(false);
+  }));
 });

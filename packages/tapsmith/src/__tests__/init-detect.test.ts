@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk } from '../init-detect.js';
+import { detectProjectLayout, findDerivedDataApps, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
 
 describe('parseAapt2Badging()', () => {
   it('extracts the package name', () => {
@@ -96,4 +96,180 @@ describe('findIosDeviceAppCandidates() (PILOT-513)', () => {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
   });
+});
+
+// ─── Native project layouts (PILOT-832) ───
+
+function withTmp(fn: (dir: string) => void): void {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-detect-')));
+  try {
+    fn(tmp);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+function touch(file: string, content = ''): void {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+}
+
+describe('detectProjectLayout() (PILOT-832)', () => {
+  it('reads a React Native layout from android/ and ios/', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'android', 'settings.gradle'));
+    fs.mkdirSync(path.join(tmp, 'ios', 'MyApp.xcworkspace'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'ios', 'MyApp.xcodeproj'), { recursive: true });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: 'android', iosProjects: ['ios/MyApp.xcworkspace', 'ios/MyApp.xcodeproj'], hasIosDir: true });
+  }));
+
+  it('reads a native Xcode project at the root (xcodegen, Xcode\'s App template)', () => withTmp((tmp) => {
+    fs.mkdirSync(path.join(tmp, 'Notekeeper.xcodeproj', 'project.xcworkspace'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'Notekeeper'), { recursive: true });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['Notekeeper.xcodeproj'], hasIosDir: false });
+  }));
+
+  it('reads a native Gradle project at the root (Android Studio\'s templates), Kotlin or Groovy DSL', () => {
+    for (const settings of ['settings.gradle.kts', 'settings.gradle']) {
+      withTmp((tmp) => {
+        touch(path.join(tmp, settings));
+        touch(path.join(tmp, 'app', 'build.gradle.kts'));
+        expect(detectProjectLayout(tmp)).toEqual({ androidRoot: '.', iosProjects: [], hasIosDir: false });
+      });
+    }
+  });
+
+  it('finds an Xcode project one folder down beside a root Gradle project (Kotlin Multiplatform)', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'settings.gradle.kts'));
+    fs.mkdirSync(path.join(tmp, 'iosApp', 'iosApp.xcodeproj'), { recursive: true });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: '.', iosProjects: ['iosApp/iosApp.xcodeproj'], hasIosDir: false });
+  }));
+
+  it('ignores Xcode projects inside node_modules, Pods and build output', () => withTmp((tmp) => {
+    fs.mkdirSync(path.join(tmp, 'node_modules', 'some-lib', 'Lib.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'Pods', 'Pods.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'build', 'Thing.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, '.hidden', 'Thing.xcodeproj'), { recursive: true });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: [], hasIosDir: false });
+  }));
+
+  it('finds nothing in an empty directory', () => withTmp((tmp) => {
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: [], hasIosDir: false });
+  }));
+});
+
+describe('build discovery in native layouts (PILOT-832)', () => {
+  it('finds an Android Studio project\'s APK at <module>/build/outputs/apk', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'settings.gradle.kts'));
+    touch(path.join(tmp, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
+    touch(path.join(tmp, 'app', 'build', 'outputs', 'apk', 'androidTest', 'debug', 'app-debug-androidTest.apk'));
+    touch(path.join(tmp, 'composeApp', 'build', 'outputs', 'apk', 'release', 'composeApp-release-unsigned.apk'));
+    expect(findApkCandidates(tmp)).toEqual([
+      'app/build/outputs/apk/debug/app-debug.apk',
+      'composeApp/build/outputs/apk/release/composeApp-release-unsigned.apk',
+    ]);
+  }));
+
+  it('leaves APKs inside node_modules out', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'node_modules', 'lib', 'android', 'build', 'outputs', 'apk', 'debug', 'lib-debug.apk'));
+    expect(findApkCandidates(tmp)).toEqual([]);
+  }));
+
+  it('finds a simulator build written by -derivedDataPath build at the root', () => withTmp((tmp) => {
+    fs.mkdirSync(path.join(tmp, 'Notekeeper.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'Notekeeper.app'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'build', 'Build', 'Products', 'Debug-iphoneos', 'Notekeeper.app'), { recursive: true });
+    expect(findIosAppCandidates(tmp)).toEqual(['build/Build/Products/Debug-iphonesimulator/Notekeeper.app']);
+    expect(findIosDeviceAppCandidates(tmp)).toEqual(['build/Build/Products/Debug-iphoneos/Notekeeper.app']);
+  }));
+
+  it('leaves XCUITest runners, nested bundles and node_modules builds out', () => withTmp((tmp) => {
+    const products = path.join(tmp, 'build', 'Build', 'Products', 'Debug-iphonesimulator');
+    fs.mkdirSync(path.join(products, 'Notekeeper.app', 'Watch', 'Debug-iphonesimulator', 'Inner.app'), { recursive: true });
+    fs.mkdirSync(path.join(products, 'NotekeeperUITests-Runner.app'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'node_modules', 'x', 'Debug-iphonesimulator', 'X.app'), { recursive: true });
+    expect(findIosAppCandidates(tmp)).toEqual(['build/Build/Products/Debug-iphonesimulator/Notekeeper.app']);
+  }));
+});
+
+describe('findDerivedDataApps() (PILOT-832)', () => {
+  function derivedData(root: string, dir: string, workspacePath: string | undefined, apps: string[]): void {
+    const base = path.join(root, dir);
+    fs.mkdirSync(base, { recursive: true });
+    if (workspacePath !== undefined) {
+      fs.writeFileSync(path.join(base, 'info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>LastAccessedDate</key>
+	<date>2026-10-21T12:00:00Z</date>
+	<key>WorkspacePath</key>
+	<string>${workspacePath}</string>
+</dict>
+</plist>
+`);
+    }
+    for (const app of apps) fs.mkdirSync(path.join(base, 'Build', 'Products', app), { recursive: true });
+  }
+
+  it('finds this project\'s builds in Xcode\'s default DerivedData, matched by WorkspacePath', () => withTmp((tmp) => {
+    const project = path.join(tmp, 'proj');
+    fs.mkdirSync(path.join(project, 'Notekeeper.xcodeproj'), { recursive: true });
+    const dd = path.join(tmp, 'DerivedData');
+    derivedData(dd, 'Notekeeper-abcdefghijklmnopqrstuvwxyzab', path.join(project, 'Notekeeper.xcodeproj'), ['Debug-iphonesimulator/Notekeeper.app', 'Debug-iphoneos/Notekeeper.app', 'Debug-iphonesimulator/NotekeeperUITests-Runner.app']);
+    // Another checkout of a project with the same name, and a folder with no info.plist.
+    derivedData(dd, 'Notekeeper-zzzzzzzzzzzzzzzzzzzzzzzzzzzz', '/elsewhere/Notekeeper.xcodeproj', ['Debug-iphonesimulator/Notekeeper.app']);
+    derivedData(dd, 'Notekeeper-yyyyyyyyyyyyyyyyyyyyyyyyyyyy', undefined, ['Debug-iphonesimulator/Notekeeper.app']);
+    const base = path.join(dd, 'Notekeeper-abcdefghijklmnopqrstuvwxyzab', 'Build', 'Products');
+    expect(findDerivedDataApps(project, ['Notekeeper.xcodeproj'], 'iphonesimulator', dd)).toEqual([path.join(base, 'Debug-iphonesimulator', 'Notekeeper.app')]);
+    expect(findDerivedDataApps(project, ['Notekeeper.xcodeproj'], 'iphoneos', dd)).toEqual([path.join(base, 'Debug-iphoneos', 'Notekeeper.app')]);
+  }));
+
+  it('matches a workspace by its own path', () => withTmp((tmp) => {
+    const project = path.join(tmp, 'proj');
+    fs.mkdirSync(path.join(project, 'ios', 'MyApp.xcworkspace'), { recursive: true });
+    const dd = path.join(tmp, 'DerivedData');
+    derivedData(dd, 'MyApp-abcdefghijklmnopqrstuvwxyzab', path.join(project, 'ios', 'MyApp.xcworkspace'), ['Release-iphonesimulator/MyApp.app']);
+    expect(findDerivedDataApps(project, ['ios/MyApp.xcworkspace'], 'iphonesimulator', dd)).toHaveLength(1);
+  }));
+
+  it('returns nothing without DerivedData or without an Xcode project', () => withTmp((tmp) => {
+    expect(findDerivedDataApps(tmp, ['A.xcodeproj'], 'iphonesimulator', path.join(tmp, 'missing'))).toEqual([]);
+    expect(findDerivedDataApps(tmp, [], 'iphonesimulator', tmp)).toEqual([]);
+  }));
+});
+
+describe('resolveAapt2() (PILOT-832, PILOT-516)', () => {
+  const notOnPath = (): boolean => false;
+
+  it('finds the newest aapt2 in Android Studio\'s default SDK without ANDROID_HOME', () => withTmp((home) => {
+    const buildTools = path.join(home, 'Library', 'Android', 'sdk', 'build-tools');
+    touch(path.join(buildTools, '34.0.0', 'aapt2'));
+    touch(path.join(buildTools, '35.0.0', 'aapt2'));
+    fs.mkdirSync(path.join(buildTools, '36.0.0'), { recursive: true }); // no aapt2 in it
+    expect(resolveAapt2({ env: {}, platform: 'darwin', home, onPath: notOnPath })).toBe(path.join(buildTools, '35.0.0', 'aapt2'));
+  }));
+
+  it('prefers aapt2 on PATH, then ANDROID_HOME, over the default SDK', () => withTmp((home) => {
+    touch(path.join(home, 'Library', 'Android', 'sdk', 'build-tools', '35.0.0', 'aapt2'));
+    const custom = path.join(home, 'custom-sdk');
+    touch(path.join(custom, 'build-tools', '30.0.3', 'aapt2'));
+    expect(resolveAapt2({ env: { ANDROID_HOME: custom }, platform: 'darwin', home, onPath: notOnPath })).toBe(path.join(custom, 'build-tools', '30.0.3', 'aapt2'));
+    expect(resolveAapt2({ env: { ANDROID_HOME: custom }, platform: 'darwin', home, onPath: () => true })).toBe('aapt2');
+  }));
+
+  it('uses ~/Android/Sdk on Linux, and falls back to a bare aapt2 when no SDK has it', () => withTmp((home) => {
+    expect(resolveAapt2({ env: {}, platform: 'linux', home, onPath: notOnPath })).toBe('aapt2');
+    touch(path.join(home, 'Android', 'Sdk', 'build-tools', '35.0.0', 'aapt2'));
+    expect(resolveAapt2({ env: {}, platform: 'linux', home, onPath: notOnPath })).toBe(path.join(home, 'Android', 'Sdk', 'build-tools', '35.0.0', 'aapt2'));
+  }));
+});
+
+describe('searching a project in a folder with a skipped name (PILOT-832)', () => {
+  it('still searches a project whose own folder is named build', () => withTmp((tmp) => {
+    const project = path.join(tmp, 'build');
+    fs.mkdirSync(path.join(project, 'App.xcodeproj'), { recursive: true });
+    touch(path.join(project, 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
+    expect(detectProjectLayout(project).iosProjects).toEqual(['App.xcodeproj']);
+    expect(findApkCandidates(project)).toEqual(['app/build/outputs/apk/debug/app-debug.apk']);
+  }));
 });
