@@ -794,6 +794,113 @@ describe('runner app reset (declared isolation)', () => {
     });
   });
 
+  describe('later traces replay the setup that rebuilt the app, not the original one', () => {
+    const traceOn = { mode: 'on' as const, network: false, screenshots: false, snapshots: false, sources: false };
+    const startupPrepared = () => new Map([['device-1', { policy: { mode: 'clear' as const, scope: 'file' as const }, preparedAt: Date.now(), durationMs: 9_800, source: 'startup launch' }]]);
+
+    /** Assert a trace replays exactly one live reset, ahead of the setup's deep link and the test's tap, densely numbered. */
+    function expectFreshSetup(tracePath: string): void {
+      const outline = traceOutline(tracePath);
+      expect(outline).not.toContain('action:appReset');
+      expect(outline.filter((e) => e === 'action:resetApp')).toHaveLength(1);
+      expect(outline.indexOf('action:resetApp')).toBeLessThan(outline.indexOf('action:openDeepLink'));
+      expect(outline.lastIndexOf('action:openDeepLink')).toBeLessThan(outline.indexOf('action:tap'));
+      const indices = traceEvents(tracePath).filter((e) => e.type === 'action').map((e) => e.actionIndex);
+      expect(indices).toEqual(indices.map((_, i) => i));
+    }
+
+    it('the tests after the fresh-started one in the same describe', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-later-'));
+      const d = makeDevice();
+      logResets(d, []);
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        tapsmithTest('broken', async () => { throw new Error('boom'); });
+        tapsmithTest('next', async () => { recordAction('tap'); });
+        tapsmithTest('after', async () => { recordAction('tap'); });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn }), { _prepared: startupPrepared() }));
+
+        const [, next, after] = collectResults(result);
+        expect(after.status).toBe('passed');
+        expectFreshSetup(next.tracePath!);
+        expectFreshSetup(after.tracePath!);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('a describe after the one that was fresh-started at its entry', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-sibling-'));
+      const d = makeDevice();
+      logResets(d, []);
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        tapsmithDescribe('first', () => { tapsmithTest('broken', async () => { throw new Error('boom'); }); });
+        tapsmithDescribe('second', () => { tapsmithTest('b', async () => { recordAction('tap'); }); });
+        tapsmithDescribe('third', () => {
+          tapsmithBeforeAll(async () => {});
+          tapsmithTest('c', async () => { recordAction('tap'); });
+        });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn }), { _prepared: startupPrepared() }));
+
+        const [, b, c] = collectResults(result);
+        expect(c.status).toBe('passed');
+        expectFreshSetup(b.tracePath!);
+        expectFreshSetup(c.tracePath!);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('the test after a retry that rebuilt the setup', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-retry-'));
+      const d = makeDevice();
+      logResets(d, []);
+      let attempts = 0;
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordAction('openDeepLink'); });
+        tapsmithTest('flaky', async () => { attempts++; if (attempts === 1) throw new Error('boom'); });
+        tapsmithTest('next', async () => { recordAction('tap'); });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, retries: 1, trace: traceOn }), { _prepared: startupPrepared() }));
+
+        const [, next] = collectResults(result);
+        expect(next.status).toBe('passed');
+        expectFreshSetup(next.tracePath!);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('removes the fresh starts\' temp dirs when the file ends', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-cleanup-'));
+      const d = makeDevice();
+      logResets(d, []);
+      const before = new Set(fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('tapsmith-trace-setup-')));
+      try {
+        pushContext();
+        tapsmithTest('broken', async () => { throw new Error('boom'); });
+        tapsmithTest('next', async () => {});
+        const ctx = popContext();
+
+        await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ rootDir: tempRoot, trace: traceOn })));
+
+        const leftover = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('tapsmith-trace-setup-') && !before.has(n));
+        expect(leftover).toEqual([]);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+  });
+
   it('per-test resets record in an APP RESET group ahead of BEFORE EACH', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-appreset-pertest-'));
     const d = makeDevice();
