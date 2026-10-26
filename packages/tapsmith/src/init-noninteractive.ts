@@ -323,7 +323,7 @@ export function resolveInitPlan(
         });
       }
       appPath = candidates[0];
-      if (fromDerivedData) warnings.push(detectDefaults.derivedDataBuildWarning(appPath, layout));
+      if (fromDerivedData) warnings.push(detectDefaults.derivedDataBuildWarning(appPath, layout, 'iphonesimulator', reactNative));
     }
 
     const appAbs = path.resolve(cwd, appPath);

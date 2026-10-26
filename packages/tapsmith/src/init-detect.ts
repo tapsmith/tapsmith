@@ -71,10 +71,25 @@ function xcodeProjectsIn(cwd: string, patterns: string[]): string[] {
   return found.sort((a, b) => path.posix.dirname(a).localeCompare(path.posix.dirname(b)) || rank(a) - rank(b) || a.localeCompare(b));
 }
 
+/**
+ * A directory named exactly `name` in `dir`: on a case-insensitive disk a
+ * plain stat also finds a native project's `iOS/` source folder, which is
+ * not React Native's `ios/`.
+ */
+function hasDirNamed(dir: string, name: string): boolean {
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(dir);
+  } catch {
+    return false;
+  }
+  return entries.includes(name) && isDir(path.join(dir, name));
+}
+
 export function detectProjectLayout(cwd: string): ProjectLayout {
-  const hasAndroidDir = isDir(path.join(cwd, 'android'));
+  const hasAndroidDir = hasDirNamed(cwd, 'android');
   const rootGradle = ['settings.gradle.kts', 'settings.gradle'].some((f) => fs.existsSync(path.join(cwd, f)));
-  const hasIosDir = isDir(path.join(cwd, 'ios'));
+  const hasIosDir = hasDirNamed(cwd, 'ios');
   const iosProjects = hasIosDir
     ? xcodeProjectsIn(cwd, ['ios/*.xcworkspace', 'ios/*.xcodeproj', 'ios/*/*.xcworkspace', 'ios/*/*.xcodeproj'])
     : xcodeProjectsIn(cwd, ['*.xcworkspace', '*.xcodeproj', '*/*.xcworkspace', '*/*.xcodeproj']);
@@ -346,13 +361,13 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
  * The warning for a build init took from Xcode's DerivedData: the path is
  * this Mac's alone, so the config will not work for teammates or CI.
  */
-export function derivedDataBuildWarning(app: string, layout: ProjectLayout, sdk: AppleSdk = 'iphonesimulator'): string {
+export function derivedDataBuildWarning(app: string, layout: ProjectLayout, sdk: AppleSdk = 'iphonesimulator', reactNative = false): string {
   const using = `Using ${app} from Xcode's DerivedData: only this Mac has that path, and it changes when DerivedData is cleared. `;
   if (sdk === 'iphoneos') {
     return `${using}For a config that works on other machines, build the device app into the project with \`-derivedDataPath build\` `
       + '(see https://tapsmith.dev/platform/ios-physical-devices/) and set the device app path to it.';
   }
-  return `${using}For a config that works on other machines and in CI, build into the project instead — ${nativeBuildHint('ios', layout, false).replace(/^Build one for the simulator first/, 'build for the simulator')} — and set app to the new path.`;
+  return `${using}For a config that works on other machines and in CI, build into the project instead — ${nativeBuildHint('ios', layout, reactNative).replace(/^Build one for the simulator first/, 'build for the simulator')} — and set app to the new path.`;
 }
 
 // ─── Expo (PILOT-557) ───

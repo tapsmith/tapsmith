@@ -459,7 +459,7 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
         : `No simulator build (.app) found in the project or Xcode's DerivedData. ${nativeBuildHint('ios', detectProjectLayout(cwd), isReactNativeProject(cwd))}, or enter its path.`,
       typeMessage: 'Path to your simulator build (.app):',
     });
-    if (builds.hints.has(appPath)) console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(appPath, detectProjectLayout(cwd))}`);
+    if (builds.hints.has(appPath)) console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(appPath, detectProjectLayout(cwd), 'iphonesimulator', isReactNativeProject(cwd))}`);
     simBundleId = detectBundleId(appPath);
   }
 

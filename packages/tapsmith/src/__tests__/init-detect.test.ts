@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { detectProjectLayout, findDerivedDataApps, nativeBuildHint, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
+import { derivedDataBuildWarning, detectProjectLayout, findDerivedDataApps, nativeBuildHint, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
 
 describe('parseAapt2Badging()', () => {
   it('extracts the package name', () => {
@@ -344,5 +344,22 @@ describe('where builds are searched for (PILOT-832)', () => {
     expect(hint).toContain('under ios/build/Build/Products/Release-iphonesimulator/');
     expect(hint).toContain('Metro');
     expect(nativeBuildHint('ios', layout, false)).toContain('-configuration Debug');
+  });
+});
+
+describe('case and React Native corners (PILOT-832)', () => {
+  it('does not take a native project\'s iOS/ source folder for React Native\'s ios/ (case-insensitive disks)', () => withTmp((tmp) => {
+    fs.mkdirSync(path.join(tmp, 'MyApp.xcodeproj'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'iOS'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'Shared'), { recursive: true });
+    fs.mkdirSync(path.join(tmp, 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'MyApp.app'), { recursive: true });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['MyApp.xcodeproj'], hasIosDir: false });
+    expect(findIosAppCandidates(tmp)).toEqual(['build/Build/Products/Debug-iphonesimulator/MyApp.app']);
+  }));
+
+  it('gives the Release build in the DerivedData warning for React Native', () => {
+    const layout = { androidRoot: 'android' as const, iosProjects: ['ios/App.xcworkspace'], hasIosDir: true };
+    expect(derivedDataBuildWarning('/dd/App.app', layout, 'iphonesimulator', true)).toContain('-configuration Release');
+    expect(derivedDataBuildWarning('/dd/App.app', layout, 'iphonesimulator', false)).toContain('-configuration Debug');
   });
 });
