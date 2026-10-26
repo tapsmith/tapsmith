@@ -37,9 +37,9 @@ jobs:
       run:
         working-directory: packages/tapsmith-core
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -48,7 +48,7 @@ jobs:
         run: cargo install cross --locked
 
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -94,7 +94,7 @@ jobs:
           if [ -f "$HELPER" ]; then codesign -s - "$HELPER"; fi
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: daemon-${{ matrix.npm-pkg }}
           path: |
@@ -109,15 +109,15 @@ jobs:
       run:
         working-directory: agent
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 17
 
       - name: Cache Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.gradle/caches
@@ -131,13 +131,13 @@ jobs:
         run: ./gradlew assembleDebug assembleDebugAndroidTest
 
       - name: Upload agent APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: android-agent-apk
           path: agent/app/build/outputs/apk/debug/app-debug.apk
 
       - name: Upload agent test APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: android-agent-test-apk
           path: agent/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
@@ -182,7 +182,7 @@ jobs:
       run:
         working-directory: ios-agent
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Check the Xcode and its simulator SDK
         run: |
@@ -236,14 +236,14 @@ jobs:
       # The artifact name carries the SDK, so two rows that build the same SDK
       # fail the second upload instead of one overwriting the other.
       - name: Upload artifact (arm64)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ios-sim-agent-agent-ios-simulator-arm64-sdk-${{ matrix.sdk }}
           path: npm-packages/agent-ios-simulator-arm64/sdk-*/
           if-no-files-found: error
 
       - name: Upload artifact (x64)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ios-sim-agent-agent-ios-simulator-x64-sdk-${{ matrix.sdk }}
           path: npm-packages/agent-ios-simulator-x64/sdk-*/
@@ -266,15 +266,15 @@ jobs:
           - core-linux-x64
           - core-linux-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Download daemon binary
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: daemon-${{ matrix.pkg }}
           path: npm-packages/${{ matrix.pkg }}/
@@ -364,15 +364,15 @@ jobs:
           - agent-ios-simulator-arm64
           - agent-ios-simulator-x64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Download iOS simulator agent builds (one per SDK)
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: ios-sim-agent-${{ matrix.pkg }}-sdk-*
           path: npm-packages/${{ matrix.pkg }}/
@@ -462,9 +462,9 @@ jobs:
       run:
         working-directory: packages/tapsmith-react-native
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -522,21 +522,21 @@ jobs:
     needs: [build-daemon, build-android-agent, build-ios-simulator-agent]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
 
       - name: Download Android agent APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: android-agent-apk
           path: npm-packages/agent-android/
 
       - name: Download Android agent test APK
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: android-agent-test-apk
           path: npm-packages/agent-android/
@@ -592,9 +592,9 @@ jobs:
       run:
         working-directory: packages/tapsmith
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
@@ -671,7 +671,7 @@ jobs:
       actions: write
     steps:
       # fetch-depth: 0 so all tags are available for the notes-base computation.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
 
