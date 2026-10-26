@@ -83,11 +83,40 @@ describe('iosXctestrunForAgentStart', () => {
       .rejects.toThrow(/The xctestrun set by `iosXctestrun` .*does not exist/);
   });
 
-  it('a simulator with nothing set uses the plain lookup, never the on-demand build (it logs to the stdio channel)', async () => {
+  // PILOT-485: a simulator resolves like every test run path — building the
+  // agent when nothing current is cached (a first run, an upgrade) — with its
+  // progress on stderr, never stdout (the stdio protocol channel).
+  it('a simulator with nothing set resolves through the on-demand build, logging to stderr', async () => {
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    vi.mocked(ensureSimulatorAgent).mockImplementationOnce(async (opts) => {
+      opts?.onProgress?.('Building iOS agent for SDK 27.0... (cached for future runs)');
+      return '/cache/Sim_iphonesimulator27.0-arm64.xctestrun';
+    });
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const stdout = vi.spyOn(process.stdout, 'write');
+    try {
+      await expect(iosXctestrunForAgentStart(config(), 'SIM-1')).resolves.toBe('/cache/Sim_iphonesimulator27.0-arm64.xctestrun');
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining('[tapsmith-mcp] Building iOS agent for SDK 27.0'));
+      expect(stdout).not.toHaveBeenCalled();
+    } finally {
+      stderr.mockRestore();
+      stdout.mockRestore();
+    }
+  });
+
+  it('a simulator whose agent cannot be built fails with the build\'s reason, for the agent start to report', async () => {
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    vi.mocked(ensureSimulatorAgent).mockRejectedValueOnce(new Error('Failed to build iOS simulator agent from source: boom'));
+    await expect(iosXctestrunForAgentStart(config(), 'SIM-1'))
+      .rejects.toThrow('Failed to build iOS simulator agent from source: boom');
+  });
+
+  it('with no device known (it may be a phone), only looks — never builds and stalls discovery', async () => {
     const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
     const { findSimulatorXctestrun } = await import('../ios-device-resolve.js');
+    vi.mocked(ensureSimulatorAgent).mockClear();
     vi.mocked(findSimulatorXctestrun).mockReturnValueOnce('/cache/Sim_iphonesimulator27.0-arm64.xctestrun');
-    await expect(iosXctestrunForAgentStart(config(), 'SIM-1')).resolves.toBe('/cache/Sim_iphonesimulator27.0-arm64.xctestrun');
+    await expect(iosXctestrunForAgentStart(config(), undefined)).resolves.toBe('/cache/Sim_iphonesimulator27.0-arm64.xctestrun');
     expect(ensureSimulatorAgent).not.toHaveBeenCalled();
   });
 

@@ -128,10 +128,11 @@ interface ElementHandleOptions {
   orSelf?: ElementHandle;
   orHandle?: ElementHandle;
   /**
-   * Parent scope for a `getBy*`/`locator()` call made on a *modified* handle
-   * (e.g. `dialog.first().getByRole('button')`). The parent's modifiers can't
-   * be folded into a nested Selector, so it is resolved to concrete element(s)
-   * and the child is scoped to them by geometric containment (see _resolveAll).
+   * Parent scope for a `getBy*`/`locator()` call made on a handle (e.g.
+   * `list.getByText('Row')`, `dialog.first().getByRole('button')`). The
+   * parent is resolved to concrete element(s) and the child is kept when its
+   * centre lies inside one of them (see inScope, PILOT-850): the agents do
+   * not scope by a nested parent Selector.
    */
   scopeParent?: ElementHandle;
   /** Trace capture context, propagated from the Device. */
@@ -142,8 +143,9 @@ interface ElementHandleOptions {
   doubleTapInterval?: number;
   /**
    * The device's platform, for failure hints that only hold on one
-   * (`iosUnnamedRoleMissHint`, PILOT-718). Absent on handles built outside a
-   * Device; it only ever adds a hint, so a missing one costs nothing else.
+   * (`iosUnnamedRoleMissHint`, PILOT-718), and for a chained getter's iOS-only
+   * parent fallback (scopeToParents, PILOT-850). Absent on handles built
+   * outside a Device, which then get neither.
    */
   platform?: Platform;
 }
@@ -181,6 +183,66 @@ function boundsContain(
     child.right <= parent.right &&
     child.bottom <= parent.bottom;
   return contained ? 'contained' : 'not_contained';
+}
+
+/** A positional index as the call that set it: `.first()`, `.last()` or `.nth(n)`. */
+function renderNth(n: number): string {
+  return n === 0 ? '.first()' : n === -1 ? '.last()' : `.nth(${n})`;
+}
+
+/**
+ * Whether `child` lies inside a chained getter's resolved `parent`
+ * (`parent.getByText(…)`, PILOT-850): its centre is within the parent's
+ * bounds, and it is not a larger element enclosing the parent (an ancestor,
+ * a full-screen backdrop behind a dialog).
+ *
+ * Scope is geometric, not the accessibility tree's parent/child links: the
+ * trees React Native produces hoist a container's children to be its
+ * siblings (a modal's buttons are not children of its `testID` view), so a
+ * tree search would find nothing where the user plainly sees the child. The
+ * centre, not the whole box, decides, so a row half-scrolled past its list's
+ * edge — iOS reports unclipped frames — is still in the list; an element with
+ * no area has no centre on screen and never is. An element drawn over the
+ * parent from elsewhere is in scope too; that is the price of bounds.
+ */
+function inScope(parent: ElementInfo, child: ElementInfo): boolean {
+  const p = parent.bounds;
+  const c = child.bounds;
+  if (!p || !c || !hasUsableGeometry(child)) return false;
+  const encloses = c.left <= p.left && c.top <= p.top && c.right >= p.right && c.bottom >= p.bottom;
+  const sameRect = c.left === p.left && c.top === p.top && c.right === p.right && c.bottom === p.bottom;
+  if (encloses && !sameRect) return false;
+  const cx = (c.left + c.right) / 2;
+  const cy = (c.top + c.bottom) / 2;
+  return cx >= p.left && cx <= p.right && cy >= p.top && cy <= p.bottom;
+}
+
+/**
+ * Whether `child` is `parent` read again (its id differs per read). A
+ * same-size wrapper's child differs in its test id or description.
+ */
+function isSameElement(parent: ElementInfo, child: ElementInfo): boolean {
+  return sameTargetKey(child) === sameTargetKey(parent) && child.className === parent.className
+    && child.resourceId === parent.resourceId && child.contentDescription === parent.contentDescription;
+}
+
+/**
+ * The matches in scope of a chained getter's resolved parents, in match
+ * order. Within each parent what lies inside it wins; with `parentFallback`
+ * the parent itself counts when nothing inside matches — on iOS an
+ * accessible React Native container (any Pressable) is one element whose
+ * children are not exposed, so `card.getByText("Title")` can only ever match
+ * the card. Android exposes the children, so there (and on a handle with no
+ * platform) the parent never matches.
+ */
+function scopeToParents(parents: ElementInfo[], elements: ElementInfo[], parentFallback: boolean): ElementInfo[] {
+  const kept = new Set<ElementInfo>();
+  for (const p of parents) {
+    const inside = elements.filter((c) => inScope(p, c) && !isSameElement(p, c));
+    const matches = inside.length > 0 || !parentFallback ? inside : elements.filter((e) => isSameElement(p, e));
+    for (const c of matches) kept.add(c);
+  }
+  return elements.filter((c) => kept.has(c));
 }
 
 /**
@@ -804,23 +866,22 @@ export class ElementHandle {
     return this._scoped(locatorOptionsToSelector(options));
   }
 
-  /** @internal */
+  /**
+   * @internal — A child scoped to this handle: the parent is resolved to its
+   * concrete element(s) and only children inside them are kept (see
+   * {@link inScope}). Every parent goes this
+   * way, modified or not: the agents scope a find only by a resolved element,
+   * never by a nested parent selector, so a plain parent sent as one was
+   * silently ignored and the child matched across the whole screen
+   * (PILOT-850).
+   */
   private _scoped(child: Selector): ElementHandle {
-    if (this._hasModifiers()) {
-      // The parent carries modifiers (.first(), .filter(), .and(), or a prior
-      // scope) that can't be expressed as a nested Selector. Defer to runtime
-      // geometric scoping: resolve the parent to concrete element(s), then keep
-      // only children contained within them (Playwright-style subtree scoping).
-      return new ElementHandle(this._client, child, this._timeoutMs, {
-        scopeParent: this,
-        traceCapture: this._options.traceCapture,
-        platform: this._options.platform,
-      });
-    }
-    const scoped = withParent(child, this._selector);
-    return new ElementHandle(this._client, scoped, this._timeoutMs, {
+    return new ElementHandle(this._client, child, this._timeoutMs, {
+      scopeParent: this,
       traceCapture: this._options.traceCapture,
       platform: this._options.platform,
+      typingDelay: this._options.typingDelay,
+      doubleTapInterval: this._options.doubleTapInterval,
     });
   }
 
@@ -948,9 +1009,9 @@ export class ElementHandle {
 
   /**
    * @internal — The xpath selector anywhere in this handle's shape: its own
-   * selector or a scoped ancestor (`locator({ xpath }).getByText(…)` nests the
-   * xpath as the selector's `parent`; a modified parent lives in
-   * `scopeParent`), or an operand of a nested and()/or().
+   * selector (or a nested `parent`, as filter({ has }) builds), a scoped
+   * ancestor (`locator({ xpath }).getByText(…)` keeps it in `scopeParent`),
+   * or an operand of a nested and()/or().
    */
   private static _findXpath(handle: ElementHandle): Selector | undefined {
     for (let sel: Selector | undefined = handle._selector; sel; sel = sel.parent) {
@@ -966,6 +1027,16 @@ export class ElementHandle {
   }
 
   // ── Internal resolution helpers ──
+
+  /**
+   * @internal — Whether this handle's own Selector misnames it: chained off a
+   * parent (`parent.getBy*()`), or an and()/or() combination, whose Selector
+   * is only one operand's.
+   */
+  _isComposed(): boolean {
+    const o = this._options;
+    return o.scopeParent !== undefined || o.andHandle !== undefined || o.orHandle !== undefined;
+  }
 
   /** @internal */
   private _hasModifiers(): boolean {
@@ -1051,20 +1122,26 @@ export class ElementHandle {
       return elements;
     }
 
-    // Base case: no and/or — resolve selector then apply filters
-    const res = await this._client.findElements(this._selector, this._timeoutMs);
+    // Base case: no and/or — resolve selector then apply filters. A scoped
+    // child's parent is read at the same time, not after (PILOT-850).
+    const scopeParent = this._options.scopeParent;
+    const [res, parents] = await Promise.all([
+      this._client.findElements(this._selector, this._timeoutMs),
+      scopeParent ? ElementHandle._resolveScope(scopeParent) : Promise.resolve(undefined),
+    ]);
     if (res.errorMessage) {
       // Daemon-level failure (agent dead, command error) — not "no match".
       // Surface it instead of letting it read as an empty result.
       throw new Error(`findElements failed: ${res.errorMessage}`);
     }
-    let elements = collapseSameTargetDuplicates(res.elements ?? []);
-
-    // Scope to a modified parent (getBy*/locator() called on a modified handle):
-    // keep only matches geometrically contained within the resolved parent(s).
-    if (this._options.scopeParent) {
-      elements = await this._scopeToParent(elements, this._options.scopeParent);
+    let elements = res.elements ?? [];
+    // Scope first: a same-size child keys like its parent to the duplicate
+    // collapse (bounds + text) but not to scoping (id, class, description),
+    // so collapsing first could keep the parent and drop the child.
+    if (parents) {
+      elements = scopeToParents(parents, elements, this._options.platform === 'ios');
     }
+    elements = collapseSameTargetDuplicates(elements);
 
     if (this._options.filters) {
       for (const f of this._options.filters) {
@@ -1076,33 +1153,23 @@ export class ElementHandle {
   }
 
   /**
-   * @internal — Restrict `children` to those geometrically contained within the
-   * resolved parent handle, the same containment primitive used by
-   * `filter({ has })`. The parent's modifiers are honored: a positional parent
+   * @internal — The element(s) a scoped child is searched within (see
+   * {@link inScope}). The parent's modifiers are honored: a positional parent
    * (`.first()`, `.nth()`, an `all()` handle) resolves to its single selected
-   * element; a filter/and/or parent resolves to all of its matches, and a child
-   * contained within *any* of them is in scope.
+   * element; a plain, filter or and/or parent resolves to all of its matches,
+   * and a child inside *any* of them is in scope.
    *
-   * Requires bounds: a parent or child without bounds cannot be confirmed
-   * contained and is excluded (Add accessibility identifiers / ensure the
-   * container reports bounds if scoping returns nothing).
-   *
-   * A missing or out-of-range positional parent resolves to an empty scope
+   * A positional parent is resolved live by index, like every reader on it:
+   * re-identifying a previously seen row in a fresh read has no reliable key —
+   * element ids go stale, bounds move with any layout shift, text mutates and
+   * testIDs repeat — so every "smarter" match has a silent wrong-row failure
+   * (PILOT-346). A missing or out-of-range parent resolves to an empty scope
    * (no children in scope) rather than throwing — so `count()`/`exists()` and
    * absence assertions on a scoped handle report 0/false/empty like
    * Playwright, instead of surfacing the parent's "not found" error.
    */
-  private async _scopeToParent(children: ElementInfo[], parent: ElementHandle): Promise<ElementInfo[]> {
-    // A positional parent (`.nth(i)`, a handle from all()) is resolved live
-    // by index, like every reader on it: re-identifying a previously seen row
-    // in a fresh read has no reliable key — element ids go stale, bounds move
-    // with any layout shift, text mutates and testIDs repeat — so every
-    // "smarter" match has a silent wrong-row failure (PILOT-346).
-    const scopedParents = await parent._select(await parent._resolveAll());
-
-    return children.filter((child) =>
-      scopedParents.some((p) => boundsContain(p.bounds, child.bounds) === 'contained'),
-    );
+  private static async _resolveScope(parent: ElementHandle): Promise<ElementInfo[]> {
+    return parent._select(await parent._resolveAll());
   }
 
   /** @internal */
@@ -1219,6 +1286,31 @@ export class ElementHandle {
   }
 
   /**
+   * @internal — The Selector this locator sends the agent as it is, or
+   * undefined when it carries anything a Selector cannot hold (a position,
+   * filter, and/or, or a parent scope). MCP snapshot suggestions are checked
+   * by sending such selectors in one batch (PILOT-848).
+   */
+  _plainSelector(): Selector | undefined {
+    const o = this._options;
+    const modified = o.nthIndex !== undefined || !!o.filters?.length || !!o.post?.length
+      || !!o.andHandle || !!o.orHandle || !!o.scopeParent;
+    return modified ? undefined : this._selector;
+  }
+
+  /**
+   * @internal — What this locator matches right now, without waiting for a
+   * match, read the way `count()` reads it (a stale snapshot is re-read) (MCP `tapsmith_test_locator`,
+   * PILOT-848). `total` is the matches before a positional index narrowed
+   * them (equal to `matches.length` without one); `positional` says whether
+   * one did — such a locator is exempt from strict mode.
+   */
+  async _currentMatches(): Promise<{ matches: ElementInfo[]; total: number; positional: boolean }> {
+    const { all, matches } = await this._readMatchSet();
+    return { matches, total: all.length, positional: this._options.nthIndex !== undefined };
+  }
+
+  /**
    * @internal — Apply this handle's positional index and every modifier
    * chained after it, in call order, to its resolved matches (see
    * {@link PostIndexStep}). Filters chained before the index are applied by
@@ -1253,7 +1345,6 @@ export class ElementHandle {
   private _describePostIndex(): string {
     const post = this._options.post;
     if (!post?.length) return '';
-    const renderNth = (n: number): string => (n === 0 ? '.first()' : n === -1 ? '.last()' : `.nth(${n})`);
     // `post` only exists alongside an index (nth()/filter() gate on it); if
     // that ever changes, render the steps alone rather than "undefined".
     let desc = this._options.nthIndex === undefined ? '' : renderNth(this._options.nthIndex);
@@ -1288,8 +1379,8 @@ export class ElementHandle {
     return hint && `.${hint}`;
   }
 
-  /** @internal — Build a human-readable description of this handle for error messages. */
-  private _describe(): string {
+  /** @internal — The locator as the code that built it, for error and assertion messages. */
+  _describe(): string {
     const sel = formatSelector(this._selector);
     if (this._options.andHandle) {
       const left = this._options.andSelf?._describe() ?? sel;
@@ -1305,7 +1396,21 @@ export class ElementHandle {
       if (this._options.filters?.length) desc += `.filter(…×${this._options.filters.length})`;
       return desc + this._describePostIndex();
     }
-    let desc = this._options.scopeParent ? `${this._options.scopeParent._describe()} >> ${sel}` : sel;
+    // A scoped child reads as the chain that built it, e.g.
+    // getByRole("list").first().getByText("Row") — copy-pasteable code.
+    let desc = sel;
+    if (this._options.scopeParent) {
+      const parent = this._options.scopeParent;
+      // A bare index is not rendered on its own (_describePostIndex), but as
+      // a scope it is what tells this row's child from every row's.
+      const { nthIndex, post } = parent._options;
+      const bareIndex = nthIndex !== undefined && !post?.length ? renderNth(nthIndex) : '';
+      const parentDesc = parent._describe() + bareIndex;
+      // An and/or parent is bracketed, so the child reads as scoping the
+      // whole combination, not its right operand.
+      const combined = parent._options.andHandle !== undefined || parent._options.orHandle !== undefined;
+      desc = `${combined ? `(${parentDesc})` : parentDesc}.${sel}`;
+    }
     if (this._options.filters?.length) desc += `.filter(…×${this._options.filters.length})`;
     return desc + this._describePostIndex();
   }
@@ -1514,6 +1619,11 @@ export class ElementHandle {
     } catch (err) {
       return ElementHandle._classifyTickError(err);
     }
+  }
+
+  /** @internal — This locator with another timeout (MCP actions, PILOT-848). */
+  _withTimeout(timeoutMs: number): ElementHandle {
+    return ElementHandle._cloneWithTimeout(this, timeoutMs);
   }
 
   /**
@@ -1883,13 +1993,21 @@ export class ElementHandle {
    * whole timeout; anything else propagates at once.
    */
   private async _readMatches(): Promise<ElementInfo[]> {
-    if (this._timeoutMs === 0) return this._select(await this._resolveAll());
+    return (await this._readMatchSet()).matches;
+  }
+
+  /** {@link _readMatches}, also returning the matches before the positional index. */
+  private async _readMatchSet(): Promise<{ all: ElementInfo[]; matches: ElementInfo[] }> {
+    const read = async (h: ElementHandle) => {
+      const all = await h._resolveAll();
+      return { all, matches: await h._select(all) };
+    };
+    if (this._timeoutMs === 0) return read(this);
     const deadline = Date.now() + this._timeoutMs;
     let faultDeadline: number | undefined;
     while (true) {
       try {
-        const tick = ElementHandle._cloneWithTimeout(this, tickBudget(deadline));
-        return await tick._select(await tick._resolveAll());
+        return await read(ElementHandle._cloneWithTimeout(this, tickBudget(deadline)));
       } catch (err) {
         if (Date.now() >= deadline) throw err;
         if (isStaleSnapshotError(err) || isTransientAgentError(err)) {

@@ -8,6 +8,7 @@ import { readTraceSummary } from './trace-utils.js';
 import { getAllDaemonAddresses } from '../connection.js';
 import { matchesTestFilter } from '../../test-filter.js';
 import { getSessionResultsStore } from '../session-results.js';
+import { beginTestRun, endTestRun } from '../sdk-device.js';
 import { clipText, MCP_IMAGE_BUDGET_BYTES, serializedTextBytes } from '../response-limits.js';
 
 /**
@@ -295,6 +296,8 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
       }
 
       _running = true;
+      // The CLI run connects to the page itself: release the tools' WebView.
+      beginTestRun();
       try {
         const args = stdioTestArgs({ files, testFilter, project, device });
 
@@ -311,6 +314,7 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
           .finally(() => clearInterval(heartbeat));
         return { content: [{ type: 'text' as const, text: keepTail(result, CLI_OUTPUT_CHARS) }] };
       } finally {
+        endTestRun();
         _running = false;
       }
     },

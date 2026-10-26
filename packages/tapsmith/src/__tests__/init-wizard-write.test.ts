@@ -71,7 +71,7 @@ function lock(p: string): void {
 }
 
 async function wizard(): Promise<{ exit: unknown; output: string }> {
-  const opts: InitCommandOptions = { yes: false, json: false, force: false, networkCapture: false, exampleTest: true, agentsMd: true };
+  const opts: InitCommandOptions = { yes: false, json: false, force: false, exampleTest: true, agentsMd: true };
   const exit = await runInit(opts).then(() => undefined, (err: unknown) => (err as Error).message);
   return { exit, output: out.join('\n') };
 }

@@ -20,7 +20,7 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-// The daemon's AGENT_NOT_INSTALLED message (grpc_server.rs).
+// The daemon's AGENT_NOT_INSTALLED message (grpc_server/android_backend.rs).
 const DAEMON_MESSAGE = 'Tapsmith agent is not installed on the device. Set agentApk and agentTestApk in your Tapsmith config, or install manually with: adb install <path-to-agent.apk>';
 
 describe('missingAndroidAgentAdvice()', () => {

@@ -96,7 +96,7 @@ export async function missingAndroidAgentAdvice(dir: string): Promise<AndroidAge
   return { why, install: install.display, ...(project !== dir ? { where: project } : {}) };
 }
 
-// The daemon's AGENT_NOT_INSTALLED error (grpc_server.rs): the device has no
+// The daemon's AGENT_NOT_INSTALLED error (grpc_server/android_backend.rs): the device has no
 // agent and the start request carried no APKs to install.
 const AGENT_NOT_INSTALLED = /agent is not installed on the device/i;
 

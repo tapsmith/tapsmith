@@ -5,6 +5,8 @@ import type { ChildProcess, ForkOptions } from "node:child_process";
 import type { Writable } from "node:stream";
 import { deviceGroupSize, type TapsmithConfig } from "./config.js";
 import type { ResolvedProject } from "./project.js";
+import { resolveTraceConfig } from "./trace/types.js";
+import { shouldRecord } from "./trace/trace-mode.js";
 
 const RESET = "\x1b[0m";
 const BOLD = "\x1b[1m";
@@ -157,6 +159,34 @@ function platformSummary(
   return [...platforms].sort().join(" + ");
 }
 
+/**
+ * How network capture runs (PILOT-775): `captured` when the trace records
+ * network for every test, else `on demand` — the proxy starts on a test's
+ * first route() or network wait. Projects that differ are listed together.
+ */
+function networkSummary(
+  config: TapsmithConfig,
+  projects: ResolvedProject[] | undefined,
+  mode: "ui" | "test",
+): string {
+  const configs =
+    projects && projects.length > 0
+      ? projects.map((p) => p.effectiveConfig)
+      : [config];
+  const modes = new Set(
+    configs.map((c) => {
+      // UI mode's workers turn a missing or 'off' trace on (ui-worker.ts).
+      const trace = resolveTraceConfig(
+        mode === "ui" && (!c.trace || c.trace === "off") ? "on" : c.trace,
+      );
+      return trace.network && shouldRecord(trace.mode, 0)
+        ? "captured"
+        : "on demand";
+    }),
+  );
+  return `network: ${[...modes].sort().join(" + ")}`;
+}
+
 function describeDeviceTarget(config: TapsmithConfig): string {
   if (config.platform === "ios") {
     if (config.device) return `use iOS device ${config.device}`;
@@ -214,6 +244,7 @@ export function createUiLaunchSteps(input: UiLaunchPlanInput): LaunchStep[] {
     plural(input.testFileCount, "test file"),
     platformSummary(input.config, input.projects),
     projectCount > 0 ? plural(projectCount, "project") : undefined,
+    networkSummary(input.config, input.projects, input.mode ?? "ui"),
   ]
     .filter(Boolean)
     .join(" | ");

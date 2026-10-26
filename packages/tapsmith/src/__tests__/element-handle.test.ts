@@ -119,38 +119,169 @@ describe('ElementHandle constructor', () => {
 // ─── getBy* scoping ───
 
 describe('getBy* scoping', () => {
-  it('creates a child handle with nested selector', () => {
+  it('creates a child handle scoped to its parent handle', () => {
     const client = makeMockClient();
     const parent = new ElementHandle(client, _role('list'), 5000);
 
     const child = parent.getByText('Item 1', { exact: true });
     expect(child._selector.kind.type).toBe('text');
-    expect(child._selector.parent).toBeDefined();
-    expect(child._selector.parent!.kind.type).toBe('role');
-  });
-
-  it('scoped selector serializes with parent', () => {
-    const client = makeMockClient();
-    const parent = new ElementHandle(
-      client,
-      _className('android.widget.ListView'),
-      5000,
-    );
-
-    const child = parent.getByText('Row', { exact: true });
-    expect(selectorToProto(child._selector)).toEqual({
-      text: 'Row',
-      parent: { className: 'android.widget.ListView' },
-    });
+    expect(child._selector.parent).toBeUndefined();
+    expect((child as unknown as { _options: { scopeParent?: ElementHandle } })._options.scopeParent).toBe(parent);
   });
 
   it('substring getByText (default) builds a textContains child', () => {
     const client = makeMockClient();
     const parent = new ElementHandle(client, _role('list'), 5000);
     const child = parent.getByText('partial');
-    expect(selectorToProto(child._selector)).toEqual({
-      textContains: 'partial',
-      parent: { role: { role: 'list', name: '' } },
+    expect(selectorToProto(child._selector)).toEqual({ textContains: 'partial' });
+  });
+
+  it('scopes a plain parent\'s child to the parent, not the whole screen (PILOT-850)', async () => {
+    // Agents never read a nested `parent` selector, so the parent must be
+    // resolved by the SDK, as a modified parent is.
+    const list = makeElementInfo({ elementId: 'list', role: 'list', bounds: { left: 0, top: 0, right: 400, bottom: 500 } });
+    const inside = makeElementInfo({ elementId: 'in', text: 'Row', bounds: { left: 0, top: 100, right: 400, bottom: 150 } });
+    const outside = makeElementInfo({ elementId: 'out', text: 'Row', bounds: { left: 0, top: 700, right: 400, bottom: 750 } });
+    const findElements = vi.fn(async (selector: Selector) =>
+      makeFindElementsResponse(selector.kind.type === 'role' ? [list] : [inside, outside]));
+    const child = new ElementHandle(makeMockClient({ findElements }), _role('list'), 5000).getByText('Row');
+    expect(await child.count()).toBe(1);
+    expect((await child.find()).elementId).toBe('in');
+    // The agent is never asked for a selector it would scope wrongly.
+    for (const [sel] of findElements.mock.calls) expect((sel as Selector).parent).toBeUndefined();
+  });
+
+  describe('what is in a chained getter\'s scope (PILOT-850)', () => {
+    const list = makeElementInfo({ elementId: 'L', role: 'list', className: 'android.widget.ScrollView', text: '', bounds: { left: 0, top: 100, right: 400, bottom: 500 } });
+    const scoped = (children: ElementInfo[]) => {
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'role' ? [list] : children));
+      return new ElementHandle(makeMockClient({ findElements }), _role('list'), 5000);
+    };
+
+    it('keeps a row half-scrolled past the parent\'s edge when its centre is inside (iOS frames are not clipped)', async () => {
+      const half = makeElementInfo({ elementId: 'h', text: 'Row 1', bounds: { left: 0, top: 80, right: 400, bottom: 160 } });
+      const out = makeElementInfo({ elementId: 'o', text: 'Row 9', bounds: { left: 0, top: 480, right: 400, bottom: 600 } });
+      const ids = (await scoped([half, out]).getByText('Row')._resolveAll()).map((e) => e.elementId);
+      expect(ids).toEqual(['h']);
+    });
+
+    it('prefers what is inside over the parent itself, read again', async () => {
+      const again = { ...list, elementId: 'L-reread' };
+      const inner = makeElementInfo({ elementId: 'i', role: 'list', className: 'android.widget.ListView', bounds: { left: 10, top: 110, right: 390, bottom: 490 } });
+      const ids = (await scoped([again, inner]).getByTestId('list')._resolveAll()).map((e) => e.elementId);
+      expect(ids).toEqual(['i']);
+    });
+
+    it('keeps a same-size wrapped child that differs from the parent only by test id', async () => {
+      // RN: <View testID="screen"><View testID="content" /></View>, both
+      // ViewGroups filling the same rect with no text of their own.
+      const rect = { left: 0, top: 0, right: 400, bottom: 800 };
+      const screen = makeElementInfo({ elementId: 's', className: 'android.view.ViewGroup', resourceId: 'screen', text: '', bounds: rect });
+      const content = makeElementInfo({ elementId: 'c', className: 'android.view.ViewGroup', resourceId: 'content', text: '', bounds: rect });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' && selector.kind.value === 'screen' ? [screen] : [content]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('screen'), 5000).getByTestId('content');
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['c']);
+    });
+
+    it('keeps a same-size wrapped child that the child\'s selector matches together with the parent', async () => {
+      // Both ViewGroups match locator({ className }); the parent comes first.
+      // Same rect and text read as one target to the duplicate collapse, so
+      // scoping must tell them apart before it runs.
+      const rect = { left: 0, top: 0, right: 400, bottom: 800 };
+      const screen = makeElementInfo({ elementId: 's', className: 'android.view.ViewGroup', resourceId: 'screen', text: '', bounds: rect });
+      const content = makeElementInfo({ elementId: 'c', className: 'android.view.ViewGroup', resourceId: 'content', text: '', bounds: rect });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' ? [screen] : [screen, content]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('screen'), 5000)
+        .locator({ className: 'android.view.ViewGroup' });
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['c']);
+    });
+
+    it('never matches a larger element enclosing the parent, such as a backdrop behind a dialog', async () => {
+      const dialog = makeElementInfo({ elementId: 'D', resourceId: 'dialog', bounds: { left: 50, top: 300, right: 350, bottom: 500 } });
+      const backdrop = makeElementInfo({ elementId: 'B', role: 'button', bounds: { left: 0, top: 0, right: 400, bottom: 800 } });
+      const ok = makeElementInfo({ elementId: 'K', role: 'button', text: 'OK', bounds: { left: 100, top: 420, right: 300, bottom: 480 } });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' ? [dialog] : [backdrop, ok]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('dialog'), 5000).getByRole('button');
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['K']);
+    });
+
+    it('matches the parent itself only when nothing inside it does (an iOS accessible container hides its children)', async () => {
+      const card = makeElementInfo({ elementId: 'C', resourceId: 'card', role: 'button', text: 'Title, Subtitle', bounds: { left: 0, top: 100, right: 400, bottom: 200 } });
+      const again = { ...card, elementId: 'C2' };
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' ? [card] : [again]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('card'), 5000, { platform: 'ios' } as never).getByText('Title');
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['C2']);
+    });
+
+    it('never matches the parent itself on Android, which exposes a container\'s children', async () => {
+      const row = makeElementInfo({ elementId: 'R', role: 'checkbox', bounds: { left: 0, top: 100, right: 400, bottom: 200 } });
+      const findElements = vi.fn(async () => makeFindElementsResponse([{ ...row, elementId: 'R2' }]));
+      const parent = new ElementHandle(makeMockClient({ findElements }), _role('checkbox'), 5000, { platform: 'android' } as never);
+      expect(await parent.getByRole('checkbox').count()).toBe(0);
+    });
+
+    it('decides the parent fallback per parent: one row\'s own match does not hide another row\'s', async () => {
+      // Row A has a "Buy" label inside it; row B is an accessible container
+      // whose only "Buy" match is itself.
+      const rowA = makeElementInfo({ elementId: 'A', resourceId: 'row', bounds: { left: 0, top: 0, right: 400, bottom: 100 } });
+      const rowB = makeElementInfo({ elementId: 'B', resourceId: 'row', text: 'Buy now', bounds: { left: 0, top: 100, right: 400, bottom: 200 } });
+      const buyA = makeElementInfo({ elementId: 'a', text: 'Buy', bounds: { left: 10, top: 10, right: 100, bottom: 90 } });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'testId' ? [rowA, rowB] : [buyA, { ...rowB, elementId: 'B2' }]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _testId('row'), 5000, { platform: 'ios' } as never).getByText('Buy');
+      expect((await child._resolveAll()).map((e) => e.elementId)).toEqual(['a', 'B2']);
+    });
+
+    it('never matches an element with no area', async () => {
+      const clipped = makeElementInfo({ elementId: 'z', text: 'Row 50', bounds: { left: 0, top: 0, right: 0, bottom: 0 } });
+      const origin = makeElementInfo({ elementId: 'O', role: 'list', bounds: { left: 0, top: 0, right: 400, bottom: 500 } });
+      const findElements = vi.fn(async (selector: Selector) =>
+        makeFindElementsResponse(selector.kind.type === 'role' ? [origin] : [clipped]));
+      const child = new ElementHandle(makeMockClient({ findElements }), _role('list'), 5000).getByText('Row 50');
+      expect(await child.count()).toBe(0);
+    });
+
+    it('reads the parent and the child at the same time', async () => {
+      let pending = 0;
+      let overlapped = false;
+      const findElements = vi.fn(async (selector: Selector) => {
+        pending++;
+        if (pending > 1) overlapped = true;
+        await new Promise((r) => setTimeout(r, 5));
+        pending--;
+        return makeFindElementsResponse(selector.kind.type === 'role' ? [list] : []);
+      });
+      await new ElementHandle(makeMockClient({ findElements }), _role('list'), 5000).getByText('Row').count();
+      expect(overlapped).toBe(true);
+    });
+
+    it('carries typingDelay and doubleTapInterval to the scoped child', () => {
+      const parent = new ElementHandle(makeMockClient(), _role('list'), 5000, { typingDelay: 50, doubleTapInterval: 120 } as never);
+      const opts = (parent.getByPlaceholder('Email') as unknown as { _options: { typingDelay?: number; doubleTapInterval?: number } })._options;
+      expect(opts.typingDelay).toBe(50);
+      expect(opts.doubleTapInterval).toBe(120);
+    });
+
+    it('describes a child of a positional parent with its position', async () => {
+      const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse([])) });
+      const rows = new ElementHandle(client, _role('listitem'), 300);
+      await expect(withFakeClock(5000, () => rows.nth(2).getByText('Price', { exact: true }).find()))
+        .rejects.toThrow('getByRole("listitem").nth(2).getByText("Price", { exact: true })');
+      await expect(withFakeClock(5000, () => rows.first().getByText('Price', { exact: true }).find()))
+        .rejects.toThrow('getByRole("listitem").first().getByText("Price", { exact: true })');
+    });
+
+    it('describes a child of an and/or parent with the combination bracketed', async () => {
+      const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse([])) });
+      const a = new ElementHandle(client, _text('a'), 300);
+      const b = new ElementHandle(client, _text('b'), 300);
+      await expect(withFakeClock(5000, () => a.or(b).getByText('Row', { exact: true }).find()))
+        .rejects.toThrow('(getByText("a", { exact: true }) OR getByText("b", { exact: true })).getByText("Row", { exact: true })');
     });
   });
 
@@ -173,9 +304,10 @@ describe('getBy* scoping', () => {
     const mid = root.getByRole('list');
     const leaf = mid.getByText('Label', { exact: true });
 
-    expect(leaf._selector.parent).toBeDefined();
-    expect(leaf._selector.parent!.parent).toBeDefined();
-    expect(leaf._selector.parent!.parent!.kind.type).toBe('role');
+    type Scoped = { _options: { scopeParent?: ElementHandle } };
+    expect((leaf as unknown as Scoped)._options.scopeParent).toBe(mid);
+    expect((mid as unknown as Scoped)._options.scopeParent).toBe(root);
+    expect(leaf._selector.parent).toBeUndefined();
   });
 
   it('getByDescription, getByPlaceholder, getByTestId, locator scope correctly', () => {
@@ -198,7 +330,7 @@ describe('getBy* scoping', () => {
       type: 'id',
       value: 'foo',
     });
-    expect(parent.locator({ id: 'foo' })._selector.parent).toBeDefined();
+    expect((parent.locator({ id: 'foo' }) as unknown as { _options: { scopeParent?: ElementHandle } })._options.scopeParent).toBe(parent);
   });
 
   describe('scoping off a modified handle (geometric containment)', () => {

@@ -67,7 +67,8 @@ export interface InitCommandOptions {
   avd?: string;
   simulator?: string;
   deviceType?: string;
-  networkCapture: boolean;
+  /** Unset when neither --network-capture nor --no-network-capture was passed. */
+  networkCapture?: boolean;
   exampleTest: boolean;
   agentsMd: boolean;
 }
@@ -465,7 +466,8 @@ function buildProgram(deps: RunCliDeps, io: CliIo, state: ParseState): Command {
     .option('--avd <name>', 'Android AVD to auto-launch (default: the first that supports HTTPS capture, else the first available)')
     .option('--simulator <name>', 'iOS simulator name (default: a booted iOS simulator, else the newest available iPhone; stock names before renamed ones)')
     .option('--device-type <type>', 'emulator, physical or both (default: emulator)')
-    .option('--network-capture', 'Enable HTTP(S) trace capture', false)
+    .option('--network-capture', 'Record HTTP(S) traffic in traces (default: on, unless the only device is a Google Play-image emulator)')
+    .option('--no-network-capture', 'Write no trace setting (network mocking still works: the proxy starts on demand)')
     .option('--no-example-test', 'Skip scaffolding tests/example.tapsmith.ts')
     .option('--no-agents-md', 'Skip scaffolding the AGENTS.md section')
     .option('--force', 'Overwrite an existing tapsmith.config.*', false)

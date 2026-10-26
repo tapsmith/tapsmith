@@ -182,25 +182,117 @@ function newestIphoneosXctestrun(productsDir: string): string | undefined {
   return stamped[0].path;
 }
 
+// ─── Simulator agent ───
+
 /**
- * Find the newest simulator-slice xctestrun.
- *
- * Resolution order:
- *   1. Auto-build cache (`~/.tapsmith/ios-simulator-agent/`) — SDK-matched
- *      simulator builds Tapsmith makes on demand (ios-simulator-build.ts).
- *   2. Prebuilt npm package (`@tapsmith/agent-ios-simulator-{arch}`) — ships
- *      a ready-to-use xctestrun with `__TAPSMITH_PKG__` path placeholders
- *      that the daemon resolves at runtime.
- *   3. Xcode DerivedData scan (`~/Library/Developer/Xcode/DerivedData/TapsmithAgent-*`)
- *      — covers local `xcodebuild build-for-testing` builds.
- *
- * `.patched.xctestrun` files are excluded from the DerivedData scan because
- * the daemon rewrites xctestrun at runtime and re-selecting a patched file
- * stacks suffixes.
- *
- * Returns `undefined` when no build exists; the CLI turns that into a
- * fix-it message pointing at the simulator build command.
+ * `~/.tapsmith/ios-simulator-agent` — the root of the simulator agent build
+ * cache. Builds live in a subdirectory per Tapsmith version
+ * ({@link simulatorAgentCacheDir}); releases before PILOT-485 built straight
+ * into the root, and still do.
  */
+export function simulatorAgentCacheRoot(): string {
+  return path.join(os.homedir(), '.tapsmith', 'ios-simulator-agent');
+}
+
+/**
+ * Where this Tapsmith version builds the simulator agent on demand
+ * (ios-simulator-build.ts): a directory of its own, so a build is only ever
+ * used by the version whose agent source it was compiled from, two versions
+ * on one Mac never rebuild over each other, and a release that predates the
+ * per-version layout never writes into it (PILOT-485).
+ */
+export function simulatorAgentCacheDir(version: string = tapsmithPackageVersion()): string {
+  return path.join(simulatorAgentCacheRoot(), version);
+}
+
+/** Marker in a cache directory: the simulator SDK its build targets, written once the build is complete. */
+export const SIMULATOR_CACHE_SDK_MARKER = '.sdk-version';
+
+/** What the auto-build cache holds, and whether {@link findSimulatorXctestrun} may use it. */
+export interface SimulatorAgentCache {
+  xctestrun: string
+  /** The SDK it was built for; undefined when the build never finished. */
+  sdk: string | undefined
+  /**
+   * The Tapsmith version that built it; undefined for a build from a release
+   * before the per-version layout.
+   */
+  builtBy: string | undefined
+  /** This Tapsmith version. */
+  current: string
+  /**
+   * Why it is not used, or undefined when it is: the build never finished
+   * (`incomplete`), it targets another simulator SDK (`sdk`), or only another
+   * Tapsmith version has a build, from that version's agent source (`version`).
+   */
+  stale?: 'incomplete' | 'sdk' | 'version'
+}
+
+/**
+ * The auto-build cache's state: this version's build when it has one, else
+ * the newest build another version left (`stale: 'version'`), else
+ * undefined. A build is only as current as the agent source it was compiled
+ * from: another version's runs that version's agent against this version's
+ * SDK and daemon (PILOT-485).
+ */
+export function inspectSimulatorAgentCache(
+  // Required, not defaulted: an `undefined` (no SDK detected) the caller
+  // already has must not quietly trigger another detection.
+  installedSdk: string | undefined,
+): SimulatorAgentCache | undefined {
+  const current = tapsmithPackageVersion();
+  const own = simulatorAgentCacheDir(current);
+  const xctestrun = newestSimulatorXctestrunIn(own);
+  if (xctestrun) {
+    const sdk = readMarker(path.join(own, SIMULATOR_CACHE_SDK_MARKER));
+    const stale = !sdk ? 'incomplete' : installedSdk && sdk !== installedSdk ? 'sdk' : undefined;
+    return { xctestrun, sdk, builtBy: current, current, ...(stale ? { stale } : {}) };
+  }
+  const other = newestOtherVersionBuild(current);
+  return other && { ...other, current, stale: 'version' };
+}
+
+/**
+ * The newest simulator build another Tapsmith version left in the cache: a
+ * pre-PILOT-485 one in the root, or another version's subdirectory.
+ */
+function newestOtherVersionBuild(current: string): { xctestrun: string; sdk: string | undefined; builtBy: string | undefined } | undefined {
+  const root = simulatorAgentCacheRoot();
+  const candidates: Array<{ dir: string; builtBy: string | undefined }> = [{ dir: root, builtBy: undefined }];
+  let entries: fs.Dirent[] = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { /* no cache */ }
+  for (const e of entries) {
+    if (e.isDirectory() && e.name !== current && /^\d/.test(e.name)) {
+      candidates.push({ dir: path.join(root, e.name), builtBy: e.name });
+    }
+  }
+  let best: { xctestrun: string; sdk: string | undefined; builtBy: string | undefined; mtime: number } | undefined;
+  for (const { dir, builtBy } of candidates) {
+    const xctestrun = newestSimulatorXctestrunIn(dir);
+    if (!xctestrun) continue;
+    let mtime = 0;
+    try { mtime = fs.statSync(xctestrun).mtimeMs; } catch { /* vanished */ }
+    if (!best || mtime > best.mtime) {
+      best = { xctestrun, sdk: readMarker(path.join(dir, SIMULATOR_CACHE_SDK_MARKER)), builtBy, mtime };
+    }
+  }
+  return best && { xctestrun: best.xctestrun, sdk: best.sdk, builtBy: best.builtBy };
+}
+
+/** Why a cache built by another Tapsmith version is not used, for messages. */
+export function describeStaleSimulatorAgentCache(cache: SimulatorAgentCache): string {
+  const by = cache.builtBy ? `Tapsmith ${cache.builtBy}` : 'an earlier Tapsmith version';
+  return `the cached iOS simulator agent in ${displayPath(simulatorAgentCacheRoot())} was built by ${by} (this is ${cache.current})`;
+}
+
+function readMarker(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, 'utf8').trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * True when the installed agent platform package's version differs from the
  * SDK's own version (agent and SDK ship together per release, so a mismatch
@@ -227,47 +319,69 @@ function agentPackageVersionMismatch(pkg: string, pkgJsonPath: string): boolean 
   return false;
 }
 
+/**
+ * The prebuilt npm package's directory for this machine, or undefined when
+ * it is not installed or is version-drifted. The lockfile pins these via
+ * "*", and a stale pinned agent silently shadows a fresh build, producing
+ * protocol-mismatch failures that masquerade as flaky tests (PILOT-289:
+ * stale-element taps from an agent predating the textContains cache
+ * branch). The machine's arch, not Node's: under Rosetta npm installs the
+ * x64 package, whose x86_64 agent arm64 simulators cannot run (PILOT-559).
+ */
+function simulatorAgentPackageDir(): string | undefined {
+  const pkg = `@tapsmith/agent-ios-simulator-${hostArch()}`;
+  let pkgJsonPath: string;
+  try {
+    pkgJsonPath = require.resolve(`${pkg}/package.json`);
+  } catch {
+    return undefined; // not installed
+  }
+  if (agentPackageVersionMismatch(pkg, pkgJsonPath)) return undefined;
+  return path.dirname(pkgJsonPath);
+}
+
+/**
+ * Find the newest simulator-slice xctestrun.
+ *
+ * Resolution order:
+ *   1. Prebuilt npm package (`@tapsmith/agent-ios-simulator-{arch}`) built
+ *      for exactly the installed simulator SDK — a release build of this
+ *      version's agent. Ships with `__TAPSMITH_PKG__` path placeholders that
+ *      the daemon resolves at runtime.
+ *   2. This version's auto-build cache (`~/.tapsmith/ios-simulator-agent/<version>/`),
+ *      when it was built for the installed SDK ({@link inspectSimulatorAgentCache}).
+ *      Another version's build there is never used.
+ *   3. The npm package's build for another SDK (newest first), or its flat
+ *      layout (older packages). ensureSimulatorAgent rebuilds into the cache
+ *      instead of running it, and step 2 then finds that build.
+ *   4. Xcode DerivedData scan (`~/Library/Developer/Xcode/DerivedData/TapsmithAgent-*`)
+ *      and the monorepo's build dirs — local `xcodebuild build-for-testing` builds.
+ *
+ * Either version-drifted source (an npm package from another release, a
+ * build another version cached) is skipped, never used.
+ *
+ * `.patched.xctestrun` files are excluded because the daemon rewrites
+ * xctestrun at runtime and re-selecting a patched file stacks suffixes.
+ *
+ * Returns `undefined` when no build exists; the CLI turns that into a
+ * fix-it message pointing at the simulator build command.
+ */
 export function findSimulatorXctestrun(): string | undefined {
-  // 1. Auto-build cache (only if SDK matches installed version).
-  const cacheDir = path.join(os.homedir(), '.tapsmith', 'ios-simulator-agent');
   const installedSdk = getInstalledSimulatorSdkVersion();
-  const cached = newestSimulatorXctestrunIn(cacheDir);
-  if (cached) {
-    try {
-      const cachedSdk = fs.readFileSync(path.join(cacheDir, '.sdk-version'), 'utf8').trim();
-      if (!installedSdk || cachedSdk === installedSdk) return cached;
-    } catch {
-      // No marker — skip cache (incomplete build)
-    }
+  const pkgDir = simulatorAgentPackageDir();
+
+  // 1. The npm package's exact SDK match.
+  if (pkgDir && installedSdk) {
+    const match = newestSimulatorXctestrunIn(path.join(pkgDir, `sdk-${installedSdk}`));
+    if (match) return match;
   }
 
-  // 2. Try the prebuilt npm package for the current architecture — unless it
-  // is version-drifted. The lockfile pins these via "*", and a stale pinned
-  // agent here silently shadows a fresh DerivedData build (step 3),
-  // producing protocol-mismatch failures that masquerade as flaky tests
-  // (PILOT-289: stale-element taps from an agent predating the textContains
-  // cache branch). On mismatch, warn and use the DerivedData scan instead.
-  // The machine's arch, not Node's: under Rosetta npm installs the x64
-  // package, whose x86_64 agent arm64 simulators cannot run (PILOT-559).
-  const pkg = `@tapsmith/agent-ios-simulator-${hostArch()}`;
-  try {
-    const pkgJsonPath = require.resolve(`${pkg}/package.json`);
-    const pkgDir = path.dirname(pkgJsonPath);
+  // 2. The auto-build cache, when this version built it for this SDK.
+  const cache = inspectSimulatorAgentCache(installedSdk);
+  if (cache && !cache.stale) return cache.xctestrun;
 
-    if (agentPackageVersionMismatch(pkg, pkgJsonPath)) {
-      throw new Error('agent package version mismatch — use DerivedData scan');
-    }
-
-    // 2a. Exact SDK match in sdk-{version}/ subdirectory.
-    if (installedSdk) {
-      const sdkSubdir = path.join(pkgDir, `sdk-${installedSdk}`);
-      if (fs.existsSync(sdkSubdir)) {
-        const match = newestSimulatorXctestrunIn(sdkSubdir);
-        if (match) return match;
-      }
-    }
-
-    // 2b. Any sdk-*/ subdirectory (newest xctestrun across all subdirs wins).
+  if (pkgDir) {
+    // 3a. Any sdk-*/ subdirectory (newest xctestrun across all subdirs wins).
     try {
       const subdirs = fs.readdirSync(pkgDir)
         .filter((e) => e.startsWith('sdk-'))
@@ -287,14 +401,12 @@ export function findSimulatorXctestrun(): string | undefined {
       // No subdirectories — fall through.
     }
 
-    // 2c. Flat layout (backward compat with older packages).
+    // 3b. Flat layout (backward compat with older packages).
     const flat = newestSimulatorXctestrunIn(pkgDir);
     if (flat) return flat;
-  } catch {
-    // Package not installed — fall through.
   }
 
-  // 3. DerivedData scan (local Xcode builds).
+  // 4. DerivedData scan (local Xcode builds).
   // Local builds: Xcode's default DerivedData plus the monorepo's own build
   // dirs (`ios-agent/.build-sim`, `ios-agent/build`) — relative to this module
   // and to the cwd — so a rebuild in any of them is picked up. Newest wins

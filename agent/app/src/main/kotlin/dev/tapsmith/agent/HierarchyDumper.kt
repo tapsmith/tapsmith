@@ -70,7 +70,25 @@ class HierarchyDumper(
      * expand/collapse actions, so the Locator Playground can apply it —
      * PILOT-655).
      */
-    private fun injectAttributes(xml: String): String = HierarchyAttributes.inject(xml, collectAttributeMap())
+    private fun injectAttributes(xml: String): String {
+        val collected = collectAttributeMap()
+        return HierarchyAttributes.markWindowRoots(
+            HierarchyAttributes.inject(xml, collected.attributes),
+            collected.nonAppWindowRoots,
+            NonAppNodes.DUMP_ATTRIBUTE,
+        )
+    }
+
+    /**
+     * What [collectAttributeMap] gathers: bounds → attributes to inject, and
+     * the [HierarchyAttributes.windowRootKey]s of the windows no locator
+     * searches ([NonAppNodes]), whose root nodes the dump marks
+     * `tapsmith-non-app="true"` so the trace viewer leaves them out too.
+     */
+    private class Collected(
+        val attributes: Map<String, Map<String, String>>,
+        val nonAppWindowRoots: Set<String>,
+    )
 
     /**
      * Walk all accessibility windows and build a map of bounds → the
@@ -83,8 +101,9 @@ class HierarchyDumper(
      * trait-based roles and expandable elements are uncommon, and
      * overlapping elements with *different* ones are rarer still.
      */
-    private fun collectAttributeMap(): Map<String, Map<String, String>> {
+    private fun collectAttributeMap(): Collected {
         val attrMap = mutableMapOf<String, MutableMap<String, String>>()
+        val nonAppRoots = mutableSetOf<String>()
         try {
             val automation = instrumentation.uiAutomation
             val displayWidth = device.displayWidth
@@ -96,6 +115,26 @@ class HierarchyDumper(
                     window.getBoundsInScreen(windowRect)
                     val windowBox = HierarchyAttributes.Box(windowRect.left, windowRect.top, windowRect.right, windowRect.bottom)
                     val clip = DumpClip(displayWidth, displayHeight, windowBox)
+                    if (NonAppNodes.excludesWindow(
+                            window.type,
+                            window.isFocused,
+                            window.isActive,
+                            windowBox,
+                            displayWidth,
+                            displayHeight,
+                        ) { root.packageName }
+                    ) {
+                        val rootRect = Rect()
+                        root.getBoundsInScreen(rootRect)
+                        val rootBounds =
+                            HierarchyAttributes.dumpedBounds(
+                                HierarchyAttributes.Box(rootRect.left, rootRect.top, rootRect.right, rootRect.bottom),
+                                displayWidth,
+                                displayHeight,
+                                windowBox,
+                            )
+                        nonAppRoots.add(HierarchyAttributes.windowRootKey(rootBounds, root.packageName?.toString()))
+                    }
                     try {
                         walkNodeInfo(root, clip, attrMap)
                     } finally {
@@ -110,7 +149,7 @@ class HierarchyDumper(
         } catch (e: Exception) {
             Log.w(TAG, "Failed to collect attributes from accessibility tree", e)
         }
-        return attrMap
+        return Collected(attrMap, nonAppRoots)
     }
 
     @Suppress("DEPRECATION")

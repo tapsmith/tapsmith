@@ -26,6 +26,12 @@ use crate::proto;
 use crate::route_handler::RouteInterceptHandler;
 use crate::screenshot;
 
+mod android_backend;
+mod device_backend;
+mod ios_backend;
+
+use device_backend::{DeviceBackend, PermissionChange};
+
 const ANDROID_PROXY_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const ANDROID_REVERSE_PORT_FALLBACK_BASE: u16 = 41_000;
 const ANDROID_REVERSE_PORT_FALLBACK_SPAN: u16 = 20_000;
@@ -38,6 +44,12 @@ const KEYBOARD_STATE_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBVIEW_ADB_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const IOS_OPEN_URL_PROMPT_TIMEOUT: Duration = Duration::from_secs(28);
 const IOS_OPEN_DIALOG_ACCEPT_TIMEOUT_MS: u64 = 300;
+/// Budget for one `evaluateSelectors` batch. Evaluating never waits for a
+/// match, so this only bounds the agent's work on a large batch; the SDK sends
+/// a screen's candidates in small chunks. The Android agent also stops early
+/// once the command is abandoned; the iOS agent matches in-process over one
+/// snapshot and finishes a chunk in well under a second.
+const EVALUATE_SELECTORS_TIMEOUT_MS: u64 = 15_000;
 // Must exceed the agent-side cold path's worst case — `waitForDeepLinkDestination`
 // (10s) followed by the hooks epoch/nav acknowledgement wait (8s) — plus gRPC
 // round-trip, so each verify returns a verdict rather than tripping this
@@ -156,6 +168,10 @@ pub struct TapsmithServiceImpl {
     proxy_http_ports: Arc<RwLock<Vec<u16>>>,
     /// On-device path of the installed CA cert (for cleanup, Android only).
     proxy_ca_cert_path: Arc<RwLock<Option<String>>>,
+    /// The device the selection-time CA install (`ensure_android_ca_installed`)
+    /// went to, so cleanup can remove a CA that no capture start took over:
+    /// a session that never captured has no `proxy_device_serial`.
+    preinstalled_ca_serial: Arc<RwLock<Option<String>>>,
     /// Whether iptables transparent redirect is active (Android only). Used
     /// to run targeted cleanup — only remove iptables rules when they were
     /// actually installed, and only reset the system HTTP proxy when it was set.
@@ -373,6 +389,7 @@ impl TapsmithServiceImpl {
             proxy_reverse_port: Arc::new(RwLock::new(None)),
             proxy_http_ports: Arc::new(RwLock::new(Vec::new())),
             proxy_ca_cert_path: Arc::new(RwLock::new(None)),
+            preinstalled_ca_serial: Arc::new(RwLock::new(None)),
             proxy_uses_iptables: Arc::new(RwLock::new(false)),
             #[cfg(target_os = "macos")]
             ios_redirect: Arc::new(RwLock::new(None)),
@@ -525,15 +542,38 @@ impl TapsmithServiceImpl {
             }
         };
         let ca_pem_path = mitm_ca.ca_pem_path().to_string_lossy().to_string();
-        match adb::install_ca_cert(serial, &ca_pem_path, &cert_filename).await {
+        let daemon_agent = self.android_agent_started_on(serial).await;
+        match adb::install_ca_cert(serial, &ca_pem_path, &cert_filename, daemon_agent).await {
             Ok(path) => {
                 info!(%serial, "MITM CA pre-installed during device setup (before first app launch)");
                 *self.proxy_ca_cert_path.write().await = Some(path);
+                *self.preinstalled_ca_serial.write().await = Some(serial.to_string());
             }
             Err(e) => {
                 debug!(%serial, "CA pre-install during setup failed: {e} — will retry at capture start");
             }
         }
+    }
+
+    /// Whether this daemon has started, or holds a connection to, an Android
+    /// agent on `serial`. Restarting adbd (`adb root`) under it would end the
+    /// agent's instrumentation and drop its forward (PILOT-831). The record
+    /// can outlive the agent (an emulator that restarted), so
+    /// `adb::install_ca_cert` confirms the process on the device.
+    async fn android_agent_started_on(&self, serial: &str) -> bool {
+        if self
+            .agent
+            .read()
+            .await
+            .connected_host_port_for(serial, false)
+            .is_some()
+        {
+            return true;
+        }
+        matches!(
+            self.started_agent_config.read().await.as_ref(),
+            Some(c) if c.serial == serial && c.platform == Platform::Android
+        )
     }
 
     fn request_id(provided: &str) -> String {
@@ -1212,7 +1252,7 @@ impl TapsmithServiceImpl {
         ack_epoch_gt: Option<u64>,
         mut ack_boot_before: Option<String>,
     ) -> Result<Response<proto::ActionResponse>, Status> {
-        let platform = self.require_platform().await?;
+        let backend = self.backend().await?;
         // Plain navigation links (no reset-epoch ack) can still be positively
         // acknowledged when the app mounts `@tapsmith/react-native` with a
         // `nav` counter: the app bumps it for every URL it receives, so even a
@@ -1244,422 +1284,16 @@ impl TapsmithServiceImpl {
                 }
             }
         }
-        match platform {
-            Platform::Ios => {
-                let bundle_id = self
-                    .ios_agent_config
-                    .read()
-                    .await
-                    .as_ref()
-                    .map(|c| c.target_package.clone())
-                    .filter(|p| !p.is_empty())
-                    .ok_or_else(|| {
-                        Status::failed_precondition(
-                            "device.openDeepLink requires an active agent session \
-                             with a target package. Call startAgent first.",
-                        )
-                    })?;
-                let serial = self.active_serial().await?;
-
-                if self.is_active_ios_physical().await {
-                    // Physical: use the agent's XCUIApplication.open(url:).
-                    let command = AgentCommand::OpenDeepLink {
-                        url: uri.to_string(),
-                        package: bundle_id,
-                        deliver_in_process: true,
-                        require_ui_change: false,
-                        ack_epoch_gt,
-                        ack_boot_before: ack_boot_before.clone(),
-                        ack_nav_gt,
-                    };
-                    let result = Self::require_epoch_ack_echo(
-                        ack_epoch_gt,
-                        self.send_agent_command(&command).await,
-                    );
-                    return self.make_action_response(request_id, result).await;
-                }
-
-                // Simulator: warm-first, cold fallback.
-                //
-                // Warm attempt: if the app is already running with rendered
-                // content, deliver in-process (the physical-device path:
-                // activate + XCUIApplication.open(url:)) and require the UI
-                // hierarchy to change from its pre-open state within a bounded
-                // window. The hierarchy-change requirement is what makes warm
-                // delivery verifiable — a warm app trivially "has rendered
-                // content", so the cold verify's readiness check would mask a
-                // dropped Linking event. This skips the terminate -> cold
-                // relaunch cycle (~14-22s on CI) for the common case: per-test
-                // soft resets and in-test navigation against a running app.
-                //
-                // The historical reasons for avoiding this path no longer
-                // hold as written: the "open(url:) hangs on quiescence" finding
-                // predates the QuiescenceDisabler swizzle (which the agent now
-                // applies before delivery), and the "warm delivery doesn't
-                // trigger RN navigation" finding was observed with warm
-                // `simctl openurl`, not XCUIApplication.open(url:) — which
-                // physical devices use for every deep link today. The fallback
-                // below keeps behavior identical when warm delivery doesn't
-                // land; the worst case is the status quo plus one bounded
-                // warm window (IOS_OPEN_DEEP_LINK_WARM_TIMEOUT_MS).
-                //
-                // `force_cold_launch` skips the warm attempt entirely. The SDK
-                // sets it for the between-file soft reset: a July 2026 local
-                // soak of the full E2E suite showed that sessions running
-                // all-warm for ~60+ deliveries accumulate native navigation
-                // state that observably diverges from a cold launch (screen
-                // a11y trees stop being flattened — strict-mode selectors that
-                // matched one element start matching two — and element ids go
-                // stale), while every file-sized warm window (~20-30
-                // deliveries from a cold start) stayed green. Cold-launching
-                // at file boundaries pins each file to the exact starting
-                // state it had before warm delivery existed and bounds the
-                // warm window to one file.
-                if delivery != DeepLinkDelivery::Cold {
-                    let warm_command = AgentCommand::OpenDeepLink {
-                        url: uri.to_string(),
-                        package: bundle_id.clone(),
-                        deliver_in_process: true,
-                        // With an epoch or nav ack the in-app hook is the
-                        // verifier; otherwise fall back to the hierarchy-change
-                        // heuristic (older app builds without the nav counter).
-                        require_ui_change: ack_epoch_gt.is_none() && ack_nav_gt.is_none(),
-                        ack_epoch_gt,
-                        ack_boot_before: ack_boot_before.clone(),
-                        ack_nav_gt,
-                    };
-                    let warm_result = Self::require_epoch_ack_echo(
-                        ack_epoch_gt,
-                        self.send_agent_command_with_timeout(
-                            &warm_command,
-                            IOS_OPEN_DEEP_LINK_WARM_TIMEOUT_MS,
-                        )
-                        .await,
-                    );
-                    let warm_only = delivery == DeepLinkDelivery::WarmOnly;
-                    let next = if warm_only {
-                        "reporting the miss to the caller"
-                    } else {
-                        "falling back to cold relaunch"
-                    };
-                    match &warm_result {
-                        Ok(resp) if resp.success => {
-                            return self.make_action_response(request_id, warm_result).await;
-                        }
-                        Ok(resp) => {
-                            info!(
-                                %serial, uri = %uri,
-                                error = %resp.error.as_deref().unwrap_or("unknown"),
-                                "warm in-process deep link did not land; {next}"
-                            );
-                        }
-                        Err(status) => {
-                            info!(
-                                %serial, uri = %uri, error = %status.message(),
-                                "warm in-process deep link errored; {next}"
-                            );
-                        }
-                    }
-                    if warm_only {
-                        return self.make_action_response(request_id, warm_result).await;
-                    }
-                }
-
-                // Cold fallback: terminate -> simctl openurl -> agent verify,
-                // retried as a unit. The first cold, trust-gated openurl on a
-                // fresh sim intermittently fails to foreground the app (the
-                // "Open in <app>?" prompt races the launch and the app lands
-                // back on SpringBoard). Re-delivering self-heals: a second
-                // openurl is warm and already trusted, so it lands. We only
-                // succeed once the agent confirms the app actually rendered
-                // content (the verify returns false on a never-foregrounded app
-                // rather than masking it).
-                //
-                // simctl openurl to a running app doesn't trigger navigation
-                // (the React Native scene handler misses it), so we terminate
-                // first — making openurl cold-launch the app with the URL.
-                // Fresh simulators can show "Open in <app>?" and block simctl
-                // itself, so the daemon taps that dialog while openurl is
-                // still pending.
-                let max_attempts = IOS_OPEN_DEEP_LINK_MAX_ATTEMPTS;
-                let mut last_error = "openDeepLink: app did not reach destination".to_string();
-                let mut verify_result: Option<Result<AgentResponse, Status>> = None;
-                let mut attempt: u32 = 0;
-                // One-shot escalation for the compositor outage: when the
-                // agent reports the display is not rendering (black screen
-                // with a healthy a11y tree), app relaunches provably don't
-                // recover it — only recreating the whole render surface does.
-                // Reboot the simulator, bring the agent back, and re-deliver.
-                let mut rebooted_for_black_display = false;
-                loop {
-                    attempt += 1;
-                    if last_error.contains("display is not rendering")
-                        && !rebooted_for_black_display
-                        && !self.is_active_ios_physical().await
-                    {
-                        rebooted_for_black_display = true;
-                        warn!(
-                            %serial, uri = %uri,
-                            "display is not rendering and an app relaunch cannot recover a dead \
-                             compositor; rebooting the simulator and restarting the agent"
-                        );
-                        let _ = ios::device::shutdown_simulator(&serial).await;
-                        if let Err(e) = ios::device::boot_simulator(&serial).await {
-                            warn!(%serial, error = %e, "simulator reboot failed; continuing with re-delivery");
-                        } else {
-                            // Give SpringBoard a moment past `Booted` before
-                            // asking xcodebuild to install/launch the runner.
-                            tokio::time::sleep(Duration::from_secs(5)).await;
-                            if let Err(e) = self
-                                .restart_ios_agent_for_app(&serial, &bundle_id, false, 5_000)
-                                .await
-                            {
-                                warn!(%serial, error = %e, "agent restart after simulator reboot failed");
-                            }
-                        }
-                        // The reboot is recovery, not a delivery attempt —
-                        // don't let it consume one.
-                        attempt -= 1;
-                    }
-                    // The terminate MUST actually land: `simctl openurl` to a
-                    // still-running app foregrounds it without delivering any
-                    // navigation event to React Native, and the verify below
-                    // can't tell that apart from a legitimate delivery whose
-                    // destination renders like the current screen — the app
-                    // silently stays where it was while the reset "succeeds".
-                    // The agent now confirms the process died; when it can't
-                    // (observed under CoreSimulator pressure with agent
-                    // commands running 10-40s), force it host-side before
-                    // delivering.
-                    let terminate_confirmed = matches!(
-                        self.send_agent_command_with_timeout(
-                            &AgentCommand::TerminateApp {
-                                package: bundle_id.clone(),
-                            },
-                            10_000,
-                        )
-                        .await,
-                        Ok(resp) if resp.success
-                    );
-                    if !terminate_confirmed {
-                        warn!(
-                            %serial, uri = %uri,
-                            "agent could not confirm app termination; forcing simctl \
-                             terminate so openurl cold-launches the app"
-                        );
-                        let _ = ios::device::terminate_app(&serial, &bundle_id).await;
-                    }
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-
-                    if let Err(e) = self
-                        .open_ios_simulator_url_with_prompt_handling(&serial, uri)
-                        .await
-                    {
-                        if ios::device::is_retryable_open_url_error(&e.to_string()) {
-                            last_error = e.to_string();
-                            if attempt >= max_attempts {
-                                warn!(
-                                    %serial, uri = %uri, attempt, max_attempts,
-                                    error = %e,
-                                    "simctl openurl kept hitting a transient timeout; giving up"
-                                );
-                                break;
-                            }
-                            warn!(
-                                %serial, uri = %uri, attempt,
-                                error = %e,
-                                "simctl openurl hit a transient timeout; re-delivering deep link"
-                            );
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                            continue;
-                        }
-                        return Ok(self
-                            .action_error(request_id, "ACTION_FAILED", e.to_string())
-                            .await);
-                    }
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-
-                    let command = AgentCommand::OpenDeepLink {
-                        url: uri.to_string(),
-                        package: bundle_id.clone(),
-                        deliver_in_process: false,
-                        require_ui_change: false,
-                        ack_epoch_gt,
-                        ack_boot_before: ack_boot_before.clone(),
-                        ack_nav_gt,
-                    };
-                    let result = Self::require_epoch_ack_echo(
-                        ack_epoch_gt,
-                        self.send_agent_command_with_timeout(
-                            &command,
-                            IOS_OPEN_DEEP_LINK_VERIFY_TIMEOUT_MS,
-                        )
-                        .await,
-                    );
-                    if matches!(&result, Ok(resp) if resp.success) {
-                        verify_result = Some(result);
-                        break;
-                    }
-                    last_error = match &result {
-                        Ok(resp) => resp.error.clone().unwrap_or_else(|| {
-                            "app did not reach deep-link destination".to_string()
-                        }),
-                        Err(status) => status.message().to_string(),
-                    };
-                    verify_result = Some(result);
-                    // A display-not-rendering failure is exempt from the
-                    // attempt cap until the one-shot reboot escalation (top of
-                    // loop) has had its chance — re-delivery alone provably
-                    // can't fix it, so counting it against the cap just gives up.
-                    let reboot_pending = last_error.contains("display is not rendering")
-                        && !rebooted_for_black_display;
-                    if attempt >= max_attempts && !reboot_pending {
-                        warn!(
-                            %serial, uri = %uri, attempt, max_attempts,
-                            error = %last_error,
-                            "deep link did not reach its destination after retries; giving up"
-                        );
-                        break;
-                    }
-                    warn!(
-                        %serial, uri = %uri, attempt,
-                        error = %last_error,
-                        "deep link did not reach its destination; re-delivering"
-                    );
-                }
-
-                match verify_result {
-                    Some(result) => self.make_action_response(request_id, result).await,
-                    None => Ok(self
-                        .action_error(request_id, "ACTION_FAILED", last_error)
-                        .await),
-                }
-            }
-            Platform::Android => {
-                if uri.contains('\'') {
-                    return Err(Status::invalid_argument(
-                        "uri contains an invalid character: single quote (') is not allowed",
-                    ));
-                }
-                let serial = self.active_serial().await?;
-                let target_package = self
-                    .started_agent_config
-                    .read()
-                    .await
-                    .as_ref()
-                    .map(|c| c.target_package.clone())
-                    .filter(|p| !p.is_empty());
-
-                let cmd = format!("am start -a android.intent.action.VIEW -d '{}'", uri);
-                if let Err(e) = adb::shell(&serial, &cmd).await {
-                    let screenshot = self.error_screenshot().await;
-                    return Ok(Response::new(proto::ActionResponse {
-                        request_id,
-                        success: false,
-                        error_type: "ADB_COMMAND_FAILED".to_string(),
-                        error_message: e.to_string(),
-                        screenshot,
-                    }));
-                }
-
-                // Settle: with an epoch ack, wait for the in-app hook to
-                // confirm the reset ran; otherwise wait for the target app to
-                // be the resumed activity. Neither compares whole hierarchies —
-                // a link that lands on the screen already showing used to stall
-                // here for the full 10s window and then re-fire the intent.
-                let started = tokio::time::Instant::now();
-                let mut refired = false;
-                loop {
-                    tokio::time::sleep(ANDROID_DEEP_LINK_POLL).await;
-                    let elapsed = started.elapsed();
-
-                    let satisfied = match (ack_epoch_gt, ack_nav_gt) {
-                        (Some(before), _) => match self.current_hooks_marker(5_000).await {
-                            Some(marker)
-                                if app_reset::hooks_acknowledged(
-                                    before,
-                                    ack_boot_before.as_deref(),
-                                    &marker,
-                                ) =>
-                            {
-                                if let Some(err) = marker.err {
-                                    return Ok(self
-                                        .action_error(
-                                            request_id,
-                                            "ACTION_FAILED",
-                                            format!("in-app reset reported an error: {err}"),
-                                        )
-                                        .await);
-                                }
-                                true
-                            }
-                            _ => false,
-                        },
-                        // Navigation link into an app with the nav counter:
-                        // the app bumping it is positive proof of delivery —
-                        // "resumed activity" can't tell a delivered same-screen
-                        // link from a dropped one.
-                        (None, Some(nav_before)) => match self.current_hooks_marker(5_000).await {
-                            Some(marker) => app_reset::nav_acknowledged(
-                                nav_before,
-                                ack_boot_before.as_deref(),
-                                &marker,
-                            ),
-                            None => false,
-                        },
-                        (None, None) => match (&target_package, self.get_current_component().await)
-                        {
-                            (Some(target), Ok(Some((pkg, _)))) => &pkg == target,
-                            // No target to judge against: the intent was
-                            // accepted, that is all we can know.
-                            (None, _) => true,
-                            _ => false,
-                        },
-                    };
-                    if satisfied {
-                        break;
-                    }
-                    let deadline = if ack_epoch_gt.is_some() {
-                        ANDROID_HOOK_ACK_TIMEOUT
-                    } else {
-                        ANDROID_DEEP_LINK_SETTLE_TIMEOUT
-                    };
-                    if elapsed >= deadline {
-                        if ack_epoch_gt.is_some() {
-                            return Ok(self
-                                .action_error(
-                                    request_id,
-                                    "ACTION_FAILED",
-                                    format!(
-                                        "in-app reset did not acknowledge within {}ms",
-                                        deadline.as_millis()
-                                    ),
-                                )
-                                .await);
-                        }
-                        // Navigation links are best-effort here, as before: the
-                        // caller's own assertions decide whether it landed.
-                        break;
-                    }
-                    if !refired && elapsed >= ANDROID_DEEP_LINK_REFIRE_AFTER {
-                        refired = true;
-                        debug!("Deep link: target not resumed yet, re-firing intent once");
-                        let _ = adb::shell(&serial, &cmd).await;
-                    }
-                }
-
-                // Final idle wait so animations finish before the caller
-                // interacts with the new screen.
-                let idle_cmd = AgentCommand::WaitForIdle {
-                    timeout_ms: Some(ANDROID_DEEP_LINK_IDLE_TIMEOUT_MS),
-                };
-                let _ = self
-                    .send_agent_command_with_timeout(&idle_cmd, ANDROID_DEEP_LINK_IDLE_TIMEOUT_MS)
-                    .await;
-
-                Ok(Self::success_action_response(request_id))
-            }
-        }
+        backend
+            .deliver_deep_link(
+                request_id,
+                uri,
+                delivery,
+                ack_epoch_gt,
+                ack_boot_before,
+                ack_nav_gt,
+            )
+            .await
     }
 
     async fn current_hierarchy_xml(&self, timeout_ms: u64) -> Option<String> {
@@ -1683,29 +1317,7 @@ impl TapsmithServiceImpl {
     /// Whether `package` has a live process. `None` when it cannot be told
     /// (no agent, command failure).
     async fn app_is_running(&self, package: &str) -> Option<bool> {
-        match self.require_platform().await.ok()? {
-            Platform::Ios => {
-                let command = AgentCommand::GetAppState {
-                    package: package.to_string(),
-                };
-                let result = self.send_agent_command(&command).await.ok()?;
-                let state = result.data.get("state").and_then(|v| v.as_str())?;
-                Some(!matches!(
-                    state,
-                    "stopped" | "not_running" | "notRunning" | "unknown"
-                ))
-            }
-            Platform::Android => {
-                // `pidof` exits non-zero when nothing matches, which adb::shell
-                // surfaces as an error — `|| true` makes "no process" read as
-                // not running rather than unknown.
-                let serial = self.active_serial().await.ok()?;
-                let out = adb::shell(&serial, &format!("pidof {package} 2>/dev/null || true"))
-                    .await
-                    .ok()?;
-                Some(!out.trim().is_empty())
-            }
-        }
+        self.backend().await.ok()?.app_is_running(package).await
     }
 
     /// Terminate + relaunch keeping data — the `restart` rung of the reset ladder.
@@ -1719,20 +1331,11 @@ impl TapsmithServiceImpl {
         // The relaunched process may render a marker an earlier probe missed
         // (see `nav_probe_found_no_marker`).
         *self.nav_probe_found_no_marker.write().await = false;
-        match self
-            .require_platform()
+        self.backend()
             .await
             .map_err(|e| e.message().to_string())?
-        {
-            Platform::Ios => {
-                self.reset_ios_app(serial, package_name, wait_for_idle, idle_timeout_ms)
-                    .await
-            }
-            Platform::Android => {
-                self.android_clean_relaunch(serial, package_name, wait_for_idle, idle_timeout_ms)
-                    .await
-            }
-        }
+            .relaunch_app(serial, package_name, wait_for_idle, idle_timeout_ms)
+            .await
     }
 
     /// Relaunch an Android app from a clean task, then wait for it to render.
@@ -1848,75 +1451,11 @@ impl TapsmithServiceImpl {
     /// Wipe app data — the `clear` rung of the reset ladder, without the
     /// relaunch. Mirrors the `ClearAppData` RPC's platform behaviour.
     async fn clear_app_data_inner(&self, serial: &str, package_name: &str) -> Result<(), String> {
-        match self
-            .require_platform()
+        self.backend()
             .await
             .map_err(|e| e.message().to_string())?
-        {
-            Platform::Ios => {
-                if self.is_active_ios_physical().await {
-                    let app_path = self
-                        .ios_agent_config
-                        .read()
-                        .await
-                        .as_ref()
-                        .and_then(|c| c.app_path.clone())
-                        .ok_or_else(|| {
-                            "clearing app data on a physical iOS device requires the app \
-                             bundle path passed at startAgent time"
-                                .to_string()
-                        })?;
-                    if let Err(e) = ios::device::uninstall_app_on_device(serial, package_name).await
-                    {
-                        warn!(error = %e, "Uninstall step of physical-iOS clear failed, continuing to reinstall");
-                    }
-                    ios::device::install_app_on_device(serial, &app_path)
-                        .await
-                        .map_err(|e| format!("reinstall failed: {e}"))?;
-                    tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
-                    return Ok(());
-                }
-                // Terminate first (as launch_app's own clear path does): a
-                // running process flushes UserDefaults / caches on exit, which
-                // would resurrect state deleted from under it.
-                let _ = ios::device::terminate_app(serial, package_name).await;
-                match self.get_app_container_cached(serial, package_name).await {
-                    Ok(ref container) => {
-                        if let Err(e) = ios::device::clear_container(container).await {
-                            warn!(error = %e, "Failed to clear app container, continuing anyway");
-                        }
-                        if !ios::device::keychain_state_disabled() {
-                            if let Some(keychain_dir) =
-                                ios::device::simulator_keychain_dir(container)
-                            {
-                                if let Err(e) =
-                                    ios::device::clear_keychain(serial, &keychain_dir).await
-                                {
-                                    warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        debug!(error = %e, "Could not get app container (app may not be installed)");
-                    }
-                }
-                Ok(())
-            }
-            Platform::Android => {
-                let output = adb::shell(serial, &format!("pm clear {}", package_name))
-                    .await
-                    .map_err(|e| format!("pm clear failed: {e}"))?;
-                if output.trim().starts_with("Success") {
-                    Ok(())
-                } else {
-                    Err(format!(
-                        "pm clear did not report success: {}",
-                        output.trim()
-                    ))
-                }
-            }
-        }
+            .wipe_app_data(serial, package_name)
+            .await
     }
 
     /// Require the active device's platform, returning a gRPC error if
@@ -1925,6 +1464,13 @@ impl TapsmithServiceImpl {
         self.active_platform()
             .await
             .ok_or_else(|| Status::failed_precondition("No device selected. Call SetDevice first."))
+    }
+
+    /// The active device's platform backend. Fails like [`Self::require_platform`]
+    /// when no device is selected.
+    async fn backend(&self) -> Result<Box<dyn DeviceBackend + '_>, Status> {
+        let platform = self.require_platform().await?;
+        Ok(device_backend::for_platform(self, platform))
     }
 
     async fn error_screenshot(&self) -> Vec<u8> {
@@ -1987,6 +1533,7 @@ impl TapsmithServiceImpl {
         let platform = self.proxy_platform.write().await.take();
         let reverse_port = self.proxy_reverse_port.write().await.take();
         let ca_cert_path = self.proxy_ca_cert_path.write().await.take();
+        let preinstalled_ca_serial = self.preinstalled_ca_serial.write().await.take();
         self.proxy_http_ports.write().await.clear();
         let used_iptables = std::mem::replace(&mut *self.proxy_uses_iptables.write().await, false);
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
@@ -1998,48 +1545,33 @@ impl TapsmithServiceImpl {
             ios::system_proxy::release(lease).await;
         }
 
-        if let Some(serial) = &serial {
-            match platform {
-                Some(Platform::Ios) => {
-                    info!(%serial, "iOS proxy stopped on shutdown");
-                }
-                _ => {
-                    info!(%serial, "Cleaning up Android proxy settings on shutdown");
-                    if used_iptables {
-                        adb::cleanup_iptables_redirect(serial).await;
-                    } else if let Err(e) = adb::shell_with_timeout(
-                        serial,
-                        "settings put global http_proxy :0",
-                        ANDROID_PROXY_CLEANUP_TIMEOUT,
-                    )
-                    .await
-                    {
-                        warn!(%serial, "Failed to reset http_proxy on shutdown: {e}");
-                    }
-                    if let Some(port) = reverse_port {
-                        if let Err(e) = adb::remove_reverse_with_timeout(
-                            serial,
-                            port,
-                            ANDROID_PROXY_CLEANUP_TIMEOUT,
-                        )
-                        .await
-                        {
-                            warn!(%serial, port, "Failed to remove reverse port forward on shutdown: {e}");
-                        }
-                    }
-                    if let Some(cert_path) = &ca_cert_path {
-                        if let Err(e) = adb::shell_with_timeout(
-                            serial,
-                            &format!("rm -f {cert_path}"),
-                            ANDROID_PROXY_CLEANUP_TIMEOUT,
-                        )
-                        .await
-                        {
-                            warn!(%serial, "Failed to remove CA cert on shutdown: {e}");
-                        }
-                    }
-                }
+        // A CA put in when the device was selected, which no capture start
+        // took over (the session never captured): remove it the way a capture
+        // stop would.
+        if let (None, Some(cert_path), Some(ca_serial)) =
+            (&serial, &ca_cert_path, &preinstalled_ca_serial)
+        {
+            if let Err(e) = adb::shell_with_timeout(
+                ca_serial,
+                &format!("rm -f {cert_path}"),
+                ANDROID_PROXY_CLEANUP_TIMEOUT,
+            )
+            .await
+            {
+                warn!(serial = %ca_serial, "Failed to remove pre-installed CA cert on shutdown: {e}");
             }
+        }
+
+        if let Some(serial) = &serial {
+            // A capture with no recorded platform is reverted the Android way, as before.
+            device_backend::for_platform(self, platform.unwrap_or(Platform::Android))
+                .release_capture_route_on_shutdown(
+                    serial,
+                    reverse_port,
+                    ca_cert_path,
+                    used_iptables,
+                )
+                .await;
         }
 
         // Explicit drop BEFORE `proxy.stop()` — see comment above. On
@@ -2201,75 +1733,6 @@ impl TapsmithServiceImpl {
             error_message: String::new(),
             screenshot: Vec::new(),
         })
-    }
-
-    /// Helper for methods where iOS is a no-op (returns success) and Android
-    /// runs a single ADB shell command.
-    async fn ios_noop_or_android_adb(
-        &self,
-        request_id: String,
-        android_cmd: &str,
-    ) -> Result<Response<proto::ActionResponse>, Status> {
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => Ok(Self::success_action_response(request_id)),
-            Platform::Android => self.adb_action(request_id, android_cmd).await,
-        }
-    }
-
-    /// Helper for grant/revoke permission which share identical structure:
-    /// iOS calls `ios::device::{action}_permission`, Android validates the
-    /// permission format then runs `pm {action}`.
-    async fn platform_permission_action(
-        &self,
-        request_id: String,
-        package_name: &str,
-        permission: &str,
-        action: &str,
-    ) -> Result<Response<proto::ActionResponse>, Status> {
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                if self.is_active_ios_physical().await {
-                    // `xcrun simctl privacy` only targets simulators. Physical
-                    // devices require user interaction (or MDM) to change
-                    // permission state. Surface a clear error with a workaround
-                    // pointing to the in-app permission dialog + UIInterruptionMonitor.
-                    return Ok(self
-                        .action_error(
-                            request_id,
-                            "UNSUPPORTED_ON_PHYSICAL_DEVICE",
-                            format!(
-                                "device.{action}Permission is not supported on physical iOS devices. \
-                                 Workaround: trigger the in-app permission dialog during the test and \
-                                 let the XCUITest UIInterruptionMonitor tap through it automatically."
-                            ),
-                        )
-                        .await);
-                }
-                let serial = self.active_serial().await?;
-                let result = match action {
-                    "grant" => {
-                        ios::device::grant_permission(&serial, package_name, permission).await
-                    }
-                    "revoke" => {
-                        ios::device::revoke_permission(&serial, package_name, permission).await
-                    }
-                    _ => unreachable!("platform_permission_action called with invalid action"),
-                };
-                match result {
-                    Ok(()) => Ok(Self::success_action_response(request_id)),
-                    Err(e) => Ok(self
-                        .action_error(request_id, "ACTION_FAILED", e.to_string())
-                        .await),
-                }
-            }
-            Platform::Android => {
-                Self::validate_permission(permission)?;
-                let cmd = format!("pm {action} {package_name} {permission}");
-                self.adb_action(request_id, &cmd).await
-            }
-        }
     }
 
     async fn finish_launch(
@@ -2783,6 +2246,125 @@ pub(crate) fn opt_timeout(ms: u64) -> Option<u64> {
     }
 }
 
+/// Clear a field and type into it as one action, reaching the same field for
+/// both (PILOT-848). The agent clears and types as two commands, and a
+/// selector re-resolved for the typing can miss a field it found by the
+/// text the clear removed (`getByText("old value")`), leaving it empty.
+///
+/// On Android the field is found once and both commands act on its element
+/// id (a live UiObject2 that survives the clear). iOS element ids are lazy
+/// queries (some selector shapes get none), so iOS keeps both commands on the
+/// selector; its agent cannot yet clear a field matched by its own value.
+/// A pinned step whose node went stale falls back to the selector.
+///
+/// `send` delivers one agent command with its timeout.
+pub(crate) async fn run_clear_and_type<F, Fut>(
+    platform: Option<Platform>,
+    selector: Value,
+    element_id: Option<String>,
+    text: String,
+    timeout_ms: u64,
+    typing_delay_ms: Option<u32>,
+    mut send: F,
+) -> Result<AgentResponse, Status>
+where
+    F: FnMut(AgentCommand, u64) -> Fut,
+    Fut: std::future::Future<Output = Result<AgentResponse, Status>>,
+{
+    // Each step uses only what is left of the budget, not the full timeout
+    // again (which would double the wall-clock). No timeout (0) leaves every
+    // step to the agent's own default, as before.
+    let start = std::time::Instant::now();
+    let remaining = || {
+        if timeout_ms == 0 {
+            0
+        } else {
+            timeout_ms
+                .saturating_sub(start.elapsed().as_millis() as u64)
+                .max(1000)
+        }
+    };
+
+    // Android: find the field once and pin both steps to its element id.
+    let mut pinned: Option<String> = None;
+    if element_id.is_none() && platform == Some(Platform::Android) {
+        let found = send(
+            AgentCommand::FindElement {
+                selector: selector.clone(),
+                timeout_ms: opt_timeout(timeout_ms),
+            },
+            timeout_ms,
+        )
+        .await?;
+        if !found.success {
+            return Ok(found);
+        }
+        pinned = parse_element_info(&found.data)
+            .map(|e| e.element_id)
+            .filter(|id| !id.is_empty());
+    }
+    // A pinned step whose node went stale (the clear re-rendered the field)
+    // falls back to the selector, as both steps went before.
+    let target = |by_selector: bool| match (&pinned, by_selector) {
+        (Some(id), false) => (json!({}), Some(id.clone())),
+        _ => (selector.clone(), element_id.clone()),
+    };
+
+    let mut by_selector = false;
+    let cleared = loop {
+        let (sel, eid) = target(by_selector);
+        let budget = remaining();
+        let resp = send(
+            AgentCommand::ClearText {
+                selector: sel,
+                timeout_ms: opt_timeout(budget),
+                element_id: eid,
+            },
+            budget,
+        )
+        .await?;
+        if pinned.is_some() && !by_selector && is_stale_id_failure(&resp) {
+            by_selector = true;
+            continue;
+        }
+        break resp;
+    };
+    if !cleared.success {
+        return Ok(cleared);
+    }
+
+    loop {
+        let (sel, eid) = target(by_selector);
+        let budget = remaining();
+        let resp = send(
+            AgentCommand::TypeText {
+                selector: sel,
+                text: text.clone(),
+                timeout_ms: opt_timeout(budget),
+                typing_delay_ms,
+                element_id: eid,
+            },
+            budget,
+        )
+        .await?;
+        if pinned.is_some() && !by_selector && is_stale_id_failure(&resp) {
+            by_selector = true;
+            continue;
+        }
+        return Ok(resp);
+    }
+}
+
+/// An id-addressed agent command that failed because its element is gone.
+fn is_stale_id_failure(resp: &AgentResponse) -> bool {
+    !resp.success
+        && (resp.error_type.as_deref() == Some("ELEMENT_NOT_FOUND")
+            || resp
+                .error
+                .as_deref()
+                .is_some_and(|e| e.to_ascii_lowercase().contains("stale")))
+}
+
 /// Resolve an element-targeting action's request into the (selector_json,
 /// element_id) pair the AgentCommand needs. When `element_id` is non-empty the
 /// agent acts on that exact previously-found element (how positional/filtered
@@ -2944,6 +2526,52 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     }
 
     #[instrument(skip_all, fields(request_id))]
+    async fn evaluate_selectors(
+        &self,
+        request: Request<proto::EvaluateSelectorsRequest>,
+    ) -> Result<Response<proto::EvaluateSelectorsResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+        let error = |request_id: String, message: String| {
+            Ok(Response::new(proto::EvaluateSelectorsResponse {
+                request_id,
+                results: Vec::new(),
+                error_message: message,
+            }))
+        };
+
+        if req.selectors.is_empty() {
+            return Ok(Response::new(proto::EvaluateSelectorsResponse {
+                request_id,
+                results: Vec::new(),
+                error_message: String::new(),
+            }));
+        }
+
+        let command = AgentCommand::EvaluateSelectors {
+            selectors: req.selectors.iter().map(selector_to_json).collect(),
+        };
+
+        match self
+            .send_agent_command_with_timeout(&command, EVALUATE_SELECTORS_TIMEOUT_MS)
+            .await
+        {
+            Ok(resp) if resp.success => {
+                match parse_selector_evaluations(&resp.data, req.selectors.len()) {
+                    Ok(results) => Ok(Response::new(proto::EvaluateSelectorsResponse {
+                        request_id,
+                        results,
+                        error_message: String::new(),
+                    })),
+                    Err(message) => error(request_id, message),
+                }
+            }
+            Ok(resp) => error(request_id, resp.error.unwrap_or_default()),
+            Err(status) => error(request_id, status.message().to_string()),
+        }
+    }
+
+    #[instrument(skip_all, fields(request_id))]
     async fn tap(
         &self,
         request: Request<proto::TapRequest>,
@@ -3071,50 +2699,26 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let request_id = Self::request_id(&req.request_id);
 
         let (sel_json, element_id) = action_target(req.selector.as_ref(), &req.element_id)?;
-
-        // Track elapsed time so the type phase uses only the remaining budget
-        // instead of the full user timeout (which would double the wall-clock).
-        let start = std::time::Instant::now();
-
-        // Clear first, then type
-        let clear_cmd = AgentCommand::ClearText {
-            selector: sel_json.clone(),
-            timeout_ms: opt_timeout(req.timeout_ms),
-            element_id: element_id.clone(),
-        };
-
-        let clear_result = self
-            .send_agent_command_with_timeout(&clear_cmd, req.timeout_ms)
-            .await;
-
-        if let Err(e) = &clear_result {
-            return self.make_action_response(request_id, Err(e.clone())).await;
-        }
-
-        if let Ok(ref resp) = clear_result {
-            if !resp.success {
-                return self.make_action_response(request_id, clear_result).await;
-            }
-        }
-
-        let elapsed_ms = start.elapsed().as_millis() as u64;
-        let remaining_ms = req.timeout_ms.saturating_sub(elapsed_ms).max(1000);
-
-        let type_cmd = AgentCommand::TypeText {
-            selector: sel_json,
-            text: req.text,
-            timeout_ms: opt_timeout(remaining_ms),
-            typing_delay_ms: if req.typing_delay_ms > 0 {
-                Some(req.typing_delay_ms)
-            } else {
-                None
-            },
+        let platform = self
+            .device_manager
+            .read()
+            .await
+            .active_device()
+            .map(|d| d.platform);
+        let typing_delay_ms = (req.typing_delay_ms > 0).then_some(req.typing_delay_ms);
+        let result = run_clear_and_type(
+            platform,
+            sel_json,
             element_id,
-        };
-
-        let result = self
-            .send_agent_command_with_timeout(&type_cmd, remaining_ms)
-            .await;
+            req.text,
+            req.timeout_ms,
+            typing_delay_ms,
+            |command, timeout_ms| async move {
+                self.send_agent_command_with_timeout(&command, timeout_ms)
+                    .await
+            },
+        )
+        .await;
         self.make_action_response(request_id, result).await
     }
 
@@ -3202,65 +2806,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
+        let backend = self.backend().await?;
 
         // On iOS, route through the agent (XCUIScreen.main.screenshot()) which
         // is much faster than spawning `xcrun simctl io screenshot` per call.
-        if platform == Platform::Ios {
-            let command = AgentCommand::Screenshot {};
-            // Use a short timeout — screenshots are best-effort for tracing
-            // and should not block for 30s if the agent is busy.
-            match self.send_agent_command_with_timeout(&command, 5000).await {
-                Ok(resp) if resp.success => {
-                    let b64_str = resp.data.get("data").and_then(|v| v.as_str()).unwrap_or("");
-                    use base64::Engine;
-                    match base64::engine::general_purpose::STANDARD.decode(b64_str) {
-                        Ok(data) => Ok(Response::new(proto::ScreenshotResponse {
-                            request_id,
-                            success: true,
-                            data,
-                            error_message: String::new(),
-                        })),
-                        Err(e) => Ok(Response::new(proto::ScreenshotResponse {
-                            request_id,
-                            success: false,
-                            data: Vec::new(),
-                            error_message: format!("Failed to decode screenshot data: {e}"),
-                        })),
-                    }
-                }
-                Ok(resp) => Ok(Response::new(proto::ScreenshotResponse {
-                    request_id,
-                    success: false,
-                    data: Vec::new(),
-                    error_message: resp
-                        .error
-                        .unwrap_or_else(|| "Screenshot failed".to_string()),
-                })),
-                Err(status) => Ok(Response::new(proto::ScreenshotResponse {
-                    request_id,
-                    success: false,
-                    data: Vec::new(),
-                    error_message: status.message().to_string(),
-                })),
-            }
-        } else {
-            let serial = self.active_serial().await?;
-            match screenshot::capture(&serial, platform).await {
-                Ok(data) => Ok(Response::new(proto::ScreenshotResponse {
-                    request_id,
-                    success: true,
-                    data,
-                    error_message: String::new(),
-                })),
-                Err(e) => Ok(Response::new(proto::ScreenshotResponse {
-                    request_id,
-                    success: false,
-                    data: Vec::new(),
-                    error_message: e.to_string(),
-                })),
-            }
-        }
+        backend.take_screenshot(request_id).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -3550,35 +3100,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                         )
                         .await;
                 }
-                // For physical iOS with tracing enabled, pre-start the Wi-Fi
-                // MITM proxy immediately so any subsequent devicectl install
-                // / launch / xcodebuild invocation can't race the phone's
-                // OCSP check (which routes through the Wi-Fi proxy port on
-                // the Mac). When tracing is off, iOS has no reason to route
-                // through our proxy at all, so we skip the pre-start entirely
-                // — this is the single biggest basic-track failure reduction.
-                #[cfg(target_os = "macos")]
-                if req.network_tracing_enabled && self.is_active_ios_physical().await {
-                    self.ensure_ios_physical_proxy(&req.serial).await;
-                    // Push the current trace.networkHosts allowlist into
-                    // the live proxy so the next `/tapsmith.pac` fetch from
-                    // iOS reflects the user's tapsmith.config.ts exactly.
-                    // Safe to call while the proxy is serving traffic.
-                    if let Some(proxy) = self.network_proxy.read().await.as_ref() {
-                        proxy.set_network_hosts(req.network_hosts.clone()).await;
-                    }
-                }
-                // Symmetric to the iOS pre-arm above: for Android with tracing
-                // enabled, install the MITM CA now — during setup, before the
-                // first app launch — so the app under test forks from a zygote
-                // that already trusts the cert (Android 14+ injects into the
-                // zygote mount namespace, which only future forks inherit). This
-                // is what spares the first HTTPS request on a freshly-booted
-                // device. See `ensure_android_ca_installed`.
-                if req.network_tracing_enabled
-                    && self.active_platform().await == Some(Platform::Android)
-                {
-                    self.ensure_android_ca_installed(&req.serial).await;
+                // Pre-arm network tracing on the new device (a no-op when it is
+                // off), before any install or launch can race it.
+                if let Ok(backend) = self.backend().await {
+                    backend.prearm_network_tracing(&req).await;
                 }
                 Ok(Response::new(proto::ActionResponse {
                     request_id,
@@ -3608,21 +3133,14 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         let serial = self.active_serial().await?;
         let platform = self.require_platform().await?;
+        let backend = device_backend::for_platform(self, platform);
 
         info!(serial = %serial, %platform, "Starting agent connection");
 
         info!(ios_xctestrun_path = %req.ios_xctestrun_path, "StartAgent fields");
 
-        if platform == Platform::Ios && req.ios_xctestrun_path.is_empty() {
-            return Ok(Response::new(proto::ActionResponse {
-                request_id,
-                success: false,
-                error_type: "AGENT_NOT_CONFIGURED".to_string(),
-                error_message: "iOS agent not configured. \
-                    Set iosXctestrun in your Tapsmith config."
-                    .to_string(),
-                screenshot: Vec::new(),
-            }));
+        if let Err(resp) = backend.check_start_agent(&request_id, &req) {
+            return Ok(Response::new(resp));
         }
 
         let desired_agent_config =
@@ -3634,13 +3152,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         *self.network_tracing_enabled.write().await = req.network_tracing_enabled;
 
         if self.can_reuse_started_agent(&desired_agent_config).await {
-            #[cfg(target_os = "macos")]
-            if platform == Platform::Ios
-                && req.network_tracing_enabled
-                && self.is_active_ios_physical().await
-            {
-                self.ensure_ios_physical_proxy(&serial).await;
-            }
+            backend.reuse_agent(&serial, &req).await;
 
             info!(serial = %serial, %platform, "Reusing existing agent connection");
             return Ok(Self::success_action_response(request_id));
@@ -3653,227 +3165,21 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         *self.last_hooks_marker.write().await = None;
         *self.nav_probe_found_no_marker.write().await = false;
 
-        match platform {
-            Platform::Ios => {
-                // ─── iOS: launch XCUITest agent ───
-                let is_physical = self.is_active_ios_physical().await;
-
-                // Apply test-friendly defaults every time the agent starts,
-                // not just on first boot — reused simulators may have stale config.
-                // Skipped entirely on physical devices: the simctl spawns
-                // would fail, and the device's defaults are user-owned anyway.
-                if !is_physical {
-                    ios::device::configure_simulator(&serial).await;
-                }
-
-                // Drop any prior iproxy tunnel BEFORE start_agent so the
-                // existing host port is free when start_agent tries to bind
-                // a fresh tunnel. Without this, a re-started agent on the
-                // same physical device would fight its own leftover tunnel.
-                agent_comms::clear_stream_cache(&self.agent_stream).await;
-                *self.ios_iproxy.write().await = None;
-
-                // Re-affirm the server-wide tracing flag. SetDevice is the
-                // primary setter, but StartAgent is called in the same RPC
-                // sequence — keeping both in sync is defensive against
-                // future clients that skip set_device.
-                *self.network_tracing_enabled.write().await = req.network_tracing_enabled;
-
-                // Pre-start the Wi-Fi MITM proxy for physical iOS devices
-                // with tracing enabled. Idempotent — skipped if already
-                // bound (typically from set_device). Re-primes when prior
-                // test's stop_network_capture tore the listener down. When
-                // tracing is off, skipped entirely (see SetDevice for why).
-                #[cfg(target_os = "macos")]
-                if is_physical && req.network_tracing_enabled {
-                    self.ensure_ios_physical_proxy(&serial).await;
-                }
-
-                // PILOT-245: before the agent launches the target app, force
-                // gRPC-Core onto the native resolver. Its c-ares resolver emits
-                // UDP DNS from the app process, which the TCP-only redirector
-                // cannot proxy.
-                #[cfg(target_os = "macos")]
-                if !is_physical && req.network_tracing_enabled {
-                    ios::device::prepare_grpc_trust(&serial, &req.target_package).await;
-                }
-
-                let agent_port = self.agent.read().await.port();
-                let iproxy_handle = match ios::agent_launch::start_agent(
-                    &serial,
-                    &req.ios_xctestrun_path,
-                    &req.target_package,
-                    agent_port,
-                    is_physical,
-                )
-                .await
-                {
-                    Ok(handle) => handle,
-                    Err(e) => {
-                        error!(error = %e, "Failed to start iOS agent");
-                        return Ok(Response::new(proto::ActionResponse {
-                            request_id,
-                            success: false,
-                            error_type: "AGENT_START_FAILED".to_string(),
-                            error_message: e.to_string(),
-                            screenshot: Vec::new(),
-                        }));
-                    }
-                };
-                if let Some(handle) = iproxy_handle {
-                    *self.ios_iproxy.write().await = Some(handle);
-                }
-
-                // Store config for potential agent restart in launchApp
-                *self.ios_agent_config.write().await = Some(IosAgentConfig {
-                    xctestrun_path: req.ios_xctestrun_path.clone(),
-                    target_package: req.target_package.clone(),
-                    app_path: (!req.ios_app_path.is_empty()).then(|| req.ios_app_path.clone()),
-                });
-            }
-            Platform::Android => {
-                // ─── Android: install APKs and launch instrumentation ───
-                if let Err(e) = adb::wait_for_device_ready(&serial, Duration::from_secs(45)).await {
-                    return Ok(Response::new(proto::ActionResponse {
-                        request_id,
-                        success: false,
-                        error_type: "DEVICE_NOT_READY".to_string(),
-                        error_message: format!(
-                            "Android device was not ready before starting agent: {e}"
-                        ),
-                        screenshot: Vec::new(),
-                    }));
-                }
-
-                let has_apk_paths =
-                    !req.agent_apk_path.is_empty() && !req.agent_test_apk_path.is_empty();
-                let agent_installed = adb::is_package_installed(&serial, "dev.tapsmith.agent")
-                    .await
-                    .unwrap_or(false);
-
-                if !agent_installed && !has_apk_paths {
-                    return Ok(Response::new(proto::ActionResponse {
-                        request_id,
-                        success: false,
-                        error_type: "AGENT_NOT_INSTALLED".to_string(),
-                        error_message: "Tapsmith agent is not installed on the device. \
-                            Set agentApk and agentTestApk in your Tapsmith config, \
-                            or install manually with: adb install <path-to-agent.apk>"
-                            .to_string(),
-                        screenshot: Vec::new(),
-                    }));
-                }
-
-                // Always reinstall when APK paths are provided so that code
-                // changes to the agent are deployed without manual intervention.
-                if has_apk_paths {
-                    info!("Installing agent APKs...");
-                    if let Err(e) = adb::install_apk(&serial, &req.agent_apk_path, true).await {
-                        return Ok(Response::new(proto::ActionResponse {
-                            request_id,
-                            success: false,
-                            error_type: "AGENT_INSTALL_FAILED".to_string(),
-                            error_message: format!("Failed to install agent APK: {e}"),
-                            screenshot: Vec::new(),
-                        }));
-                    }
-                    if let Err(e) = adb::install_apk(&serial, &req.agent_test_apk_path, true).await
-                    {
-                        return Ok(Response::new(proto::ActionResponse {
-                            request_id,
-                            success: false,
-                            error_type: "AGENT_INSTALL_FAILED".to_string(),
-                            error_message: format!("Failed to install agent test APK: {e}"),
-                            screenshot: Vec::new(),
-                        }));
-                    }
-                    info!("Agent APKs installed successfully");
-                }
-
-                // Launch the agent instrumentation
-                agent_comms::clear_stream_cache(&self.agent_stream).await;
-                let instrument_cmd = if req.target_package.is_empty() {
-                    "am instrument -w dev.tapsmith.agent/.TapsmithAgent".to_string()
-                } else {
-                    format!(
-                        "am instrument -w -e targetPackage {} dev.tapsmith.agent/.TapsmithAgent",
-                        req.target_package
-                    )
-                };
-
-                // Launch in background on device, keeping the runner's output
-                // on the device for the failure diagnostics below.
-                let bg_cmd = format!("nohup {instrument_cmd} > {ANDROID_AGENT_LOG_PATH} 2>&1 &");
-                if let Err(e) = adb::shell(&serial, &bg_cmd).await {
-                    error!(error = %e, "Failed to start agent instrumentation");
-                    return Ok(Response::new(proto::ActionResponse {
-                        request_id,
-                        success: false,
-                        error_type: "AGENT_START_FAILED".to_string(),
-                        error_message: e.to_string(),
-                        screenshot: Vec::new(),
-                    }));
-                }
-            }
+        if let Err(resp) = backend
+            .launch_agent(request_id.clone(), serial.clone(), &req)
+            .await
+        {
+            return Ok(Response::new(resp));
         }
 
         // Connect to the agent (iOS: direct TCP, Android: via ADB port forward)
         let mut agent = self.agent.write().await;
-        let connect_result = match platform {
-            Platform::Ios => agent.connect_ios(&serial).await,
-            // The instrumentation was launched just above. Wait for it to
-            // actually answer: through the forwarded port a bare connect
-            // succeeds before (or without) the agent ever listening.
-            Platform::Android => {
-                agent
-                    .connect_android_with_readiness(&serial, ANDROID_AGENT_START_READINESS)
-                    .await
-            }
-        };
+        let connect_result = backend.connect_agent(&mut agent, &serial).await;
         match connect_result {
             Ok(()) => {
-                // Best-effort pre-warm of the app-container cache while
-                // CoreSimulator is (presumably) healthy: if it wedges later
-                // in the session, app-state save/clear fall back to this
-                // resolved path instead of failing on a timed-out lookup.
-                if platform == Platform::Ios
-                    && !self.is_active_ios_physical().await
-                    && !desired_agent_config.target_package.is_empty()
-                {
-                    let cache = self.ios_app_container_cache.clone();
-                    let serial_c = serial.clone();
-                    let pkg = desired_agent_config.target_package.clone();
-                    tokio::spawn(async move {
-                        if let Ok(path) = ios::device::get_app_container(&serial_c, &pkg).await {
-                            cache
-                                .write()
-                                .await
-                                .insert(format!("{serial_c}\u{0}{pkg}"), path);
-                        }
-                    });
-                }
-                // Resolve and cache the Android launcher activity now, while
-                // the device is calm, so every later clean-task relaunch (the
-                // restart/clear reset rungs) can discard saved instance state
-                // without depending on a `resolve-activity` call landing under
-                // load. `pm clear` wipes app data but NOT the ActivityManager
-                // task record, so a relaunch that can't clear the task brings
-                // back the old route and scroll position.
-                if matches!(self.require_platform().await, Ok(Platform::Android))
-                    && !desired_agent_config.target_package.is_empty()
-                {
-                    if let Ok(serial) = self.active_serial().await {
-                        let activity = self
-                            .resolve_launcher_activity(
-                                &serial,
-                                &desired_agent_config.target_package,
-                            )
-                            .await
-                            .ok()
-                            .flatten();
-                        *self.android_launcher_activity.write().await = activity;
-                    }
-                }
+                backend
+                    .after_agent_connected(&serial, &desired_agent_config.target_package)
+                    .await;
                 *self.started_agent_config.write().await = Some(desired_agent_config);
                 Ok(Self::success_action_response(request_id))
             }
@@ -3881,9 +3187,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error!(error = %e, "Failed to connect to agent");
                 let platform = self.require_platform().await?;
                 let mut error_message = e.to_string();
-                if platform == Platform::Android {
-                    error_message.push_str(&android_agent_start_diagnostics(&serial).await);
-                }
+                error_message.push_str(
+                    &device_backend::for_platform(self, platform)
+                        .agent_start_diagnostics(&serial)
+                        .await,
+                );
                 let screenshot = screenshot::capture_for_error(Some(&serial), platform).await;
                 Ok(Response::new(proto::ActionResponse {
                     request_id,
@@ -4189,7 +3497,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
         let serial = self.active_serial().await?;
-        let platform = self.require_platform().await?;
+        let backend = self.backend().await?;
 
         Self::validate_package_name(&req.package_name)?;
 
@@ -4197,144 +3505,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         // reinstalled build) — let the next navigation link re-probe.
         *self.nav_probe_found_no_marker.write().await = false;
 
-        match platform {
-            Platform::Ios => {
-                let idle_timeout_ms = if req.idle_timeout_ms > 0 {
-                    req.idle_timeout_ms
-                } else {
-                    10000
-                };
-                let is_physical = self.is_active_ios_physical().await;
-
-                if req.clear_data {
-                    if is_physical {
-                        // Physical devices have no host-accessible app container
-                        // filesystem — `get_app_container` / `clear_container`
-                        // are simulator-only hacks. Instead, we rely on the
-                        // agent-mediated relaunch below to provide a fresh
-                        // launch; to actually wipe persistent state on a
-                        // physical device the user must reinstall the app
-                        // (future work: wire reinstall via devicectl into
-                        // clear_data).
-                        warn!(
-                            package = %req.package_name,
-                            "clear_data on physical iOS device is best-effort: \
-                             persistent AsyncStorage/caches are not wiped. \
-                             Reinstall the app via `tapsmith test --force-install` \
-                             for a clean slate."
-                        );
-                    } else {
-                        // Terminate the app first to avoid file access conflicts
-                        // when clearing the data container.
-                        let _ = ios::device::terminate_app(&serial, &req.package_name).await;
-                        // Clear the data container (AsyncStorage, caches, etc.)
-                        // without uninstalling the app.
-                        match self
-                            .get_app_container_cached(&serial, &req.package_name)
-                            .await
-                        {
-                            Ok(ref container) => {
-                                if let Err(e) = ios::device::clear_container(container).await {
-                                    warn!(error = %e, "Failed to clear app container");
-                                }
-                            }
-                            Err(e) => {
-                                debug!(error = %e, "Could not get app container");
-                            }
-                        }
-                    }
-                }
-
-                if let Err(error_message) = self
-                    .reset_ios_app(
-                        &serial,
-                        &req.package_name,
-                        req.wait_for_idle,
-                        idle_timeout_ms,
-                    )
-                    .await
-                {
-                    return Ok(self
-                        .action_error(request_id, "LAUNCH_FAILED", error_message)
-                        .await);
-                }
-
-                Ok(Response::new(proto::ActionResponse {
-                    request_id,
-                    success: true,
-                    error_type: String::new(),
-                    error_message: String::new(),
-                    screenshot: Vec::new(),
-                }))
-            }
-            Platform::Android => {
-                if !req.activity.is_empty() {
-                    Self::validate_activity(&req.activity)?;
-                }
-
-                // Clear data first if requested
-                if req.clear_data {
-                    match adb::shell(&serial, &format!("pm clear {}", req.package_name)).await {
-                        Ok(output) if !output.trim().starts_with("Success") => {
-                            error!(output = %output.trim(), "pm clear did not report success");
-                            let screenshot = self.error_screenshot().await;
-                            return Ok(Response::new(proto::ActionResponse {
-                                request_id,
-                                success: false,
-                                error_type: "CLEAR_DATA_FAILED".to_string(),
-                                error_message: format!(
-                                    "Failed to clear app data: {}",
-                                    output.trim()
-                                ),
-                                screenshot,
-                            }));
-                        }
-                        Err(e) => {
-                            error!(error = %e, "Failed to clear app data before launch");
-                            let screenshot = self.error_screenshot().await;
-                            return Ok(Response::new(proto::ActionResponse {
-                                request_id,
-                                success: false,
-                                error_type: "CLEAR_DATA_FAILED".to_string(),
-                                error_message: format!("Failed to clear app data: {e}"),
-                                screenshot,
-                            }));
-                        }
-                        Ok(_) => {} // Success
-                    }
-                }
-
-                if req.activity.is_empty() {
-                    self.launch_package(
-                        &serial,
-                        request_id,
-                        &req.package_name,
-                        req.wait_for_idle,
-                        req.idle_timeout_ms,
-                    )
-                    .await
-                } else {
-                    // -S force-stops the app before launching, ensuring no
-                    // residual savedInstanceState Bundle survives from a
-                    // previous Activity. Without it, React Navigation /
-                    // Expo Router can restore stale navigation state from
-                    // the Bundle even after pm clear wiped AsyncStorage.
-                    // --activity-clear-task ensures a fresh task stack.
-                    let cmd = format!(
-                        "am start -S --activity-clear-task -n {}/{}",
-                        req.package_name, req.activity,
-                    );
-                    self.launch_and_idle(
-                        &serial,
-                        request_id,
-                        &cmd,
-                        req.wait_for_idle,
-                        req.idle_timeout_ms,
-                    )
-                    .await
-                }
-            }
-        }
+        backend.launch_app(request_id, serial, &req).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -4366,23 +3537,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        let package_name = match platform {
-            Platform::Ios => {
-                // On iOS, return the target package from agent config
-                self.ios_agent_config
-                    .read()
-                    .await
-                    .as_ref()
-                    .map(|c| c.target_package.clone())
-                    .unwrap_or_default()
-            }
-            Platform::Android => self
-                .get_current_component()
-                .await?
-                .map(|(pkg, _)| pkg)
-                .unwrap_or_default(),
-        };
+        let package_name = self.backend().await?.current_package().await?;
 
         Ok(Response::new(proto::GetCurrentPackageResponse {
             request_id,
@@ -4398,18 +3553,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        let activity = match platform {
-            Platform::Ios => {
-                // Android-only concept — iOS doesn't have activities
-                String::new()
-            }
-            Platform::Android => self
-                .get_current_component()
-                .await?
-                .map(|(_, act)| act)
-                .unwrap_or_default(),
-        };
+        let activity = self.backend().await?.current_activity().await?;
 
         Ok(Response::new(proto::GetCurrentActivityResponse {
             request_id,
@@ -4426,8 +3570,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let request_id = Self::request_id(&req.request_id);
         Self::validate_package_name(&req.package_name)?;
         let serial = self.active_serial().await?;
-        let platform = self.require_platform().await?;
-        let is_physical = platform == Platform::Ios && self.is_active_ios_physical().await;
+        let supports_cold_delivery = self.backend().await?.supports_cold_deep_link().await;
         let idle_timeout_ms = if req.idle_timeout_ms > 0 {
             req.idle_timeout_ms
         } else {
@@ -4510,7 +3653,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     reset_deep_link: &req.reset_deep_link,
                     force_cold: req.force_cold,
                     cold_every_n: req.cold_every_n_resets,
-                    supports_cold_delivery: platform == Platform::Ios && !is_physical,
+                    supports_cold_delivery,
                     fallback_to_clear: req.fallback_to_clear,
                     allow_fallback: req.allow_fallback,
                 },
@@ -4644,57 +3787,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         Self::validate_package_name(&req.package_name)?;
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                let idle_timeout_ms = if req.idle_timeout_ms > 0 {
-                    req.idle_timeout_ms
-                } else {
-                    10000
-                };
-
-                if let Err(error_message) = self
-                    .reset_ios_app(
-                        &serial,
-                        &req.package_name,
-                        req.wait_for_idle,
-                        idle_timeout_ms,
-                    )
-                    .await
-                {
-                    return Ok(self
-                        .action_error(request_id, "LAUNCH_FAILED", error_message)
-                        .await);
-                }
-
-                Ok(Self::success_action_response(request_id))
-            }
-            Platform::Android => {
-                // Force-stop the app to kill the process and reset all in-memory state.
-                if let Err(e) =
-                    adb::shell(&serial, &format!("am force-stop {}", req.package_name)).await
-                {
-                    error!(error = %e, "Failed to force-stop app");
-                    let screenshot = self.error_screenshot().await;
-                    return Ok(Response::new(proto::ActionResponse {
-                        request_id,
-                        success: false,
-                        error_type: "FORCE_STOP_FAILED".to_string(),
-                        error_message: format!("Failed to stop app: {e}"),
-                        screenshot,
-                    }));
-                }
-
-                self.launch_package(
-                    &serial,
-                    request_id,
-                    &req.package_name,
-                    req.wait_for_idle,
-                    req.idle_timeout_ms,
-                )
-                .await
-            }
-        }
+        let backend = self.backend().await?;
+        backend.restart_app(request_id, serial, &req).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -4707,61 +3801,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         Self::validate_package_name(&req.package_name)?;
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                // Terminate through the XCUITest agent so the runner stays in
-                // sync with app state. This prevents the cascading fallback
-                // chain in reset_ios_app when the next test calls restartApp.
-                // Fall back to simctl terminate if the agent is unreachable.
-                let agent_result = self
-                    .send_agent_command_with_timeout(
-                        &AgentCommand::TerminateApp {
-                            package: req.package_name.clone(),
-                        },
-                        4_000,
-                    )
-                    .await;
-
-                // Fall back to simctl on transport error AND on agent-reported
-                // failure (Ok(resp) where !resp.success). The agent can return
-                // a structured failure (e.g. app already gone, XCUI error) that
-                // would otherwise be silently swallowed. Physical devices have
-                // no simctl fallback — if the agent fails, the app state is
-                // indeterminate and we surface the error rather than pretending
-                // it worked.
-                let needs_fallback = match &agent_result {
-                    Err(_) => true,
-                    Ok(resp) => !resp.success,
-                };
-                if needs_fallback {
-                    if self.is_active_ios_physical().await {
-                        let msg = match &agent_result {
-                            Err(status) => status.message().to_string(),
-                            Ok(resp) => resp
-                                .error
-                                .clone()
-                                .unwrap_or_else(|| "terminate_app agent path failed".to_string()),
-                        };
-                        return Ok(self.action_error(request_id, "TERMINATE_FAILED", msg).await);
-                    }
-                    let serial = self.active_serial().await?;
-                    let _ = ios::device::terminate_app(&serial, &req.package_name).await;
-                }
-
-                Ok(Response::new(proto::ActionResponse {
-                    request_id,
-                    success: true,
-                    error_type: String::new(),
-                    error_message: String::new(),
-                    screenshot: Vec::new(),
-                }))
-            }
-            Platform::Android => {
-                let cmd = format!("am force-stop {}", req.package_name);
-                self.adb_action(request_id, &cmd).await
-            }
-        }
+        self.backend()
+            .await?
+            .terminate_app(request_id, &req.package_name)
+            .await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -4774,73 +3817,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         Self::validate_package_name(&req.package_name)?;
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                // Route through the XCUITest agent which can query app state
-                let command = AgentCommand::GetAppState {
-                    package: req.package_name.clone(),
-                };
-                let result = self.send_agent_command(&command).await?;
-                let state = result
-                    .data
-                    .get("state")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("stopped")
-                    .to_string();
-                Ok(Response::new(proto::GetAppStateResponse {
-                    request_id,
-                    state,
-                }))
-            }
-            Platform::Android => {
-                let serial = self.active_serial().await?;
-
-                // Check if app is installed
-                let installed =
-                    adb::shell_lenient(&serial, &format!("pm list packages {}", req.package_name))
-                        .await
-                        .map_err(|e| Status::internal(e.to_string()))?;
-
-                if !installed.contains(&req.package_name) {
-                    return Ok(Response::new(proto::GetAppStateResponse {
-                        request_id,
-                        state: "not_installed".to_string(),
-                    }));
-                }
-
-                // Check if app process is running and in foreground
-                let resumed = adb::shell_lenient(
-                    &serial,
-                    "dumpsys activity activities | grep -E 'mResumedActivity|ResumedActivity|topResumedActivity'",
-                )
-                .await
-                .map_err(|e| Status::internal(e.to_string()))?;
-
-                if resumed.contains(&req.package_name) {
-                    return Ok(Response::new(proto::GetAppStateResponse {
-                        request_id,
-                        state: "foreground".to_string(),
-                    }));
-                }
-
-                // Check if process exists at all
-                let procs = adb::shell_lenient(&serial, &format!("pidof {}", req.package_name))
-                    .await
-                    .map_err(|e| Status::internal(e.to_string()))?;
-
-                let state = if procs.trim().is_empty() {
-                    "stopped"
-                } else {
-                    "background"
-                };
-
-                Ok(Response::new(proto::GetAppStateResponse {
-                    request_id,
-                    state: state.to_string(),
-                }))
-            }
-        }
+        let state = self.backend().await?.app_state(&req.package_name).await?;
+        Ok(Response::new(proto::GetAppStateResponse {
+            request_id,
+            state,
+        }))
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -4853,125 +3834,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         Self::validate_package_name(&req.package_name)?;
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                if self.is_active_ios_physical().await {
-                    // Physical devices have no host-accessible app container
-                    // filesystem, so `get_app_container` / `clear_container`
-                    // are meaningless. Reinstall the app bundle as the only
-                    // reliable way to wipe persistent state on a real device.
-                    // Requires the app path to have been cached during
-                    // StartAgent (via the StartAgentRequest.ios_app_path
-                    // field). Without it we can't reinstall and must surface
-                    // an actionable error.
-                    let serial = self.active_serial().await?;
-                    let app_path = self
-                        .ios_agent_config
-                        .read()
-                        .await
-                        .as_ref()
-                        .and_then(|c| c.app_path.clone());
-                    let Some(app_path) = app_path else {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "UNSUPPORTED_ON_PHYSICAL_DEVICE",
-                                "device.clearAppData on a physical iOS device requires the \
-                                 app bundle path to have been passed at startAgent time. \
-                                 Tapsmith's CLI does this automatically when `app` is set in \
-                                 your config. If you're calling startAgent manually, pass \
-                                 the device-signed .app path via StartAgentRequest.ios_app_path."
-                                    .to_string(),
-                            )
-                            .await);
-                    };
-                    // Uninstall + install is the only devicectl sequence
-                    // that actually wipes the app's data container on
-                    // physical iOS (plain `install` preserves the container
-                    // when replacing an existing bundle). Uninstall also
-                    // drops the bundle's LaunchServices URL-scheme entry,
-                    // so we wait briefly after install for LaunchServices
-                    // to re-index — without this, the first subsequent
-                    // `openDeepLink` call drops silently.
-                    if let Err(e) =
-                        ios::device::uninstall_app_on_device(&serial, &req.package_name).await
-                    {
-                        warn!(error = %e, "Uninstall step of physical-iOS clearAppData failed, continuing to reinstall");
-                    }
-                    if let Err(e) = ios::device::install_app_on_device(&serial, &app_path).await {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "ACTION_FAILED",
-                                format!("clearAppData reinstall failed: {e}"),
-                            )
-                            .await);
-                    }
-                    // Give LaunchServices time to re-index the bundle's URL
-                    // schemes. Without this, the next `openDeepLink` often
-                    // fires before iOS knows what app handles the scheme.
-                    tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
-                    return Ok(Response::new(proto::ActionResponse {
-                        request_id,
-                        success: true,
-                        error_type: String::new(),
-                        error_message: String::new(),
-                        screenshot: Vec::new(),
-                    }));
-                }
-                let serial = self.active_serial().await?;
-                // Clear the data container (AsyncStorage, UserDefaults, caches)
-                // but do NOT terminate the app — launchApp handles that and
-                // properly re-establishes the XCUITest accessibility bridge.
-                // Clearing data while the app is running is fine because the
-                // app will be relaunched anyway.
-                match self
-                    .get_app_container_cached(&serial, &req.package_name)
-                    .await
-                {
-                    Ok(ref container) => {
-                        if let Err(e) = ios::device::clear_container(container).await {
-                            warn!(error = %e, "Failed to clear app container, continuing anyway");
-                        }
-                        // Also clear the simulator's device-level keychain so
-                        // keychain-backed auth state (e.g. Firebase Auth)
-                        // doesn't survive a "full" data clear, leaving a
-                        // half-signed-in app. The keychain is device-global,
-                        // so this clears it for every app on the simulator —
-                        // acceptable for test-owned simulators.
-                        if !ios::device::keychain_state_disabled() {
-                            match ios::device::simulator_keychain_dir(container) {
-                                Some(keychain_dir) => {
-                                    if let Err(e) =
-                                        ios::device::clear_keychain(&serial, &keychain_dir).await
-                                    {
-                                        warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
-                                    }
-                                }
-                                None => {
-                                    warn!(container = %container, "Could not derive simulator keychain dir; keychain not cleared");
-                                }
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        debug!(error = %e, "Could not get app container (app may not be installed)");
-                    }
-                }
-                Ok(Response::new(proto::ActionResponse {
-                    request_id,
-                    success: true,
-                    error_type: String::new(),
-                    error_message: String::new(),
-                    screenshot: Vec::new(),
-                }))
-            }
-            Platform::Android => {
-                let cmd = format!("pm clear {}", req.package_name);
-                self.adb_action(request_id, &cmd).await
-            }
-        }
+        let backend = self.backend().await?;
+        backend.clear_app_data(request_id, &req).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -4985,7 +3849,14 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         Self::validate_package_name(&req.package_name)?;
 
         // iOS uses service names: camera, photos, location, microphone, etc.
-        self.platform_permission_action(request_id, &req.package_name, &req.permission, "grant")
+        self.backend()
+            .await?
+            .change_permission(
+                request_id,
+                &req.package_name,
+                &req.permission,
+                PermissionChange::Grant,
+            )
             .await
     }
 
@@ -4999,7 +3870,14 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         Self::validate_package_name(&req.package_name)?;
 
-        self.platform_permission_action(request_id, &req.package_name, &req.permission, "revoke")
+        self.backend()
+            .await?
+            .change_permission(
+                request_id,
+                &req.package_name,
+                &req.permission,
+                PermissionChange::Revoke,
+            )
             .await
     }
 
@@ -5010,62 +3888,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     ) -> Result<Response<proto::ActionResponse>, Status> {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
-        let platform = self.require_platform().await?;
 
-        match platform {
-            Platform::Ios => {
-                if self.is_active_ios_physical().await {
-                    // simctl pbcopy is simulator-only. Physical devices go
-                    // through the XCUITest agent, which calls
-                    // `UIPasteboard.general.string = ...`. Writes don't
-                    // trigger the iOS 16+ paste prompt — only reads do, and
-                    // even then the runner bundle bypasses the dialog since
-                    // it isn't a foreground app.
-                    let command = AgentCommand::SetClipboard { text: req.text };
-                    let result = self.send_agent_command(&command).await;
-                    return self.make_action_response(request_id, result).await;
-                }
-                // Use simctl pbcopy to avoid the iOS 16+ paste permission dialog
-                // that would crash the XCUITest agent if it accessed UIPasteboard.
-                //
-                // pbcopy rides the sim's pasteboard-sync service, which wedges
-                // intermittently on CI — retry briefly, then fall back to the
-                // agent's `UIPasteboard.general.string = ...` (the physical-
-                // device path above): clipboard WRITES don't trigger the iOS
-                // 16+ paste prompt, so the fallback is prompt-safe on
-                // simulators too.
-                let serial = self.active_serial().await?;
-                let mut last_err: Option<anyhow::Error> = None;
-                for attempt in 0..3 {
-                    if attempt > 0 {
-                        tokio::time::sleep(Duration::from_millis(500)).await;
-                    }
-                    match ios::device::set_clipboard(&serial, &req.text).await {
-                        Ok(()) => return Ok(Self::success_action_response(request_id)),
-                        Err(e) => {
-                            warn!(%serial, attempt, error = %e, "simctl pbcopy failed");
-                            last_err = Some(e);
-                        }
-                    }
-                }
-                let pbcopy_err = last_err.expect("loop ran at least once");
-                info!(%serial, "Falling back to agent UIPasteboard write after pbcopy failures");
-                let command = AgentCommand::SetClipboard { text: req.text };
-                let result = self.send_agent_command(&command).await.map_err(|agent_err| {
-                    Status::internal(format!(
-                        "Failed to set clipboard on {serial}: {pbcopy_err} (agent fallback also failed: {agent_err})"
-                    ))
-                })?;
-                self.make_action_response(request_id, Ok(result)).await
-            }
-            Platform::Android => {
-                // Use the on-device agent for clipboard operations since it has
-                // access to Android's ClipboardManager via the instrumentation context.
-                let command = AgentCommand::SetClipboard { text: req.text };
-                let result = self.send_agent_command(&command).await;
-                self.make_action_response(request_id, result).await
-            }
-        }
+        self.backend()
+            .await?
+            .set_clipboard(request_id, req.text)
+            .await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5075,75 +3902,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     ) -> Result<Response<proto::GetClipboardResponse>, Status> {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
-        let platform = self.require_platform().await?;
 
-        let text = match platform {
-            Platform::Ios => {
-                if self.is_active_ios_physical().await {
-                    // Route through the XCUITest agent — the runner bundle
-                    // can call `UIPasteboard.general.string` without hitting
-                    // the iOS 16+ paste prompt since it isn't a foreground
-                    // app. On simulators we keep the simctl pbpaste path to
-                    // match the existing behaviour (and avoid touching the
-                    // agent at all when we don't need to).
-                    let command = AgentCommand::GetClipboard {};
-                    let result = self
-                        .send_agent_command(&command)
-                        .await
-                        .map_err(|e| Status::internal(e.to_string()))?;
-                    result
-                        .data
-                        .get("text")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string()
-                } else {
-                    // Use simctl pbpaste to avoid the iOS 16+ paste permission dialog
-                    // that would crash the XCUITest agent if it accessed UIPasteboard.
-                    // Same bounded retry as set_clipboard — the sim's
-                    // pasteboard-sync service wedges intermittently on CI.
-                    let serial = self.active_serial().await?;
-                    let mut text = None;
-                    let mut last_err = None;
-                    for attempt in 0..3 {
-                        if attempt > 0 {
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                        }
-                        match ios::device::get_clipboard(&serial).await {
-                            Ok(t) => {
-                                text = Some(t);
-                                break;
-                            }
-                            Err(e) => {
-                                warn!(%serial, attempt, error = %e, "simctl pbpaste failed");
-                                last_err = Some(e);
-                            }
-                        }
-                    }
-                    match text {
-                        Some(t) => t,
-                        None => {
-                            return Err(Status::internal(
-                                last_err.expect("loop ran at least once").to_string(),
-                            ))
-                        }
-                    }
-                }
-            }
-            Platform::Android => {
-                let command = AgentCommand::GetClipboard {};
-                let result = self
-                    .send_agent_command(&command)
-                    .await
-                    .map_err(|e| Status::internal(e.to_string()))?;
-                result
-                    .data
-                    .get("text")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string()
-            }
-        };
+        let text = self.backend().await?.get_clipboard().await?;
 
         Ok(Response::new(proto::GetClipboardResponse {
             request_id,
@@ -5159,35 +3919,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                let command = AgentCommand::SetOrientation {
-                    orientation: req.orientation.clone(),
-                };
-                let result = self.send_agent_command(&command).await;
-                self.make_action_response(request_id, result).await
-            }
-            Platform::Android => {
-                let serial = self.active_serial().await?;
-                let rotation = match req.orientation.as_str() {
-                    "portrait" => "0",
-                    "landscape" => "1",
-                    other => {
-                        return Err(Status::invalid_argument(format!(
-                            "orientation must be 'portrait' or 'landscape', got '{other}'"
-                        )));
-                    }
-                };
-                if let Err(e) =
-                    adb::shell(&serial, "settings put system accelerometer_rotation 0").await
-                {
-                    error!(error = %e, "Failed to disable auto-rotate");
-                }
-                let cmd = format!("settings put system user_rotation {rotation}");
-                self.adb_action(request_id, &cmd).await
-            }
-        }
+        self.backend()
+            .await?
+            .set_orientation(request_id, &req.orientation)
+            .await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5198,37 +3933,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                let command = AgentCommand::GetOrientation {};
-                let result = self.send_agent_command(&command).await?;
-                let orientation = result
-                    .data
-                    .get("orientation")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("portrait")
-                    .to_string();
-                Ok(Response::new(proto::GetOrientationResponse {
-                    request_id,
-                    orientation,
-                }))
-            }
-            Platform::Android => {
-                let serial = self.active_serial().await?;
-                let output = adb::shell(&serial, "settings get system user_rotation")
-                    .await
-                    .map_err(|e| Status::internal(e.to_string()))?;
-                let orientation = match output.trim() {
-                    "1" | "3" => "landscape",
-                    _ => "portrait",
-                };
-                Ok(Response::new(proto::GetOrientationResponse {
-                    request_id,
-                    orientation: orientation.to_string(),
-                }))
-            }
-        }
+        let orientation = self.backend().await?.get_orientation().await?;
+        Ok(Response::new(proto::GetOrientationResponse {
+            request_id,
+            orientation,
+        }))
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5239,30 +3948,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                let command = AgentCommand::IsKeyboardShown {};
-                let result = self.send_agent_command(&command).await?;
-                let shown = result
-                    .data
-                    .get("shown")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                Ok(Response::new(proto::IsKeyboardShownResponse {
-                    request_id,
-                    shown,
-                }))
-            }
-            Platform::Android => {
-                let serial = self.active_serial().await?;
-                let shown = self.android_is_keyboard_shown(&serial).await?;
-                Ok(Response::new(proto::IsKeyboardShownResponse {
-                    request_id,
-                    shown,
-                }))
-            }
-        }
+        let shown = self.backend().await?.is_keyboard_shown().await?;
+        Ok(Response::new(proto::IsKeyboardShownResponse {
+            request_id,
+            shown,
+        }))
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5273,29 +3963,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                let result = self
-                    .send_agent_command(&AgentCommand::HideKeyboard {})
-                    .await;
-                self.make_action_response(request_id, result).await
-            }
-            Platform::Android => {
-                // The Android soft keyboard is dismissed by BACK, not ESCAPE —
-                // KEYCODE_ESCAPE is a no-op for the IME on most apps (incl.
-                // Flutter). Only send BACK when the keyboard is actually shown,
-                // otherwise BACK would pop the current screen / background the app.
-                let serial = self.active_serial().await?;
-                let shown = self.android_is_keyboard_shown(&serial).await?;
-                if shown {
-                    self.adb_action(request_id, "input keyevent KEYCODE_BACK")
-                        .await
-                } else {
-                    Ok(Self::success_action_response(request_id))
-                }
-            }
-        }
+        self.backend().await?.hide_keyboard(request_id).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5306,9 +3974,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        // iOS has no notification shade — success no-op
-        self.ios_noop_or_android_adb(request_id, "cmd statusbar expand-notifications")
-            .await
+        self.backend().await?.open_notifications(request_id).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5319,9 +3985,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        // iOS has no quick settings — success no-op
-        self.ios_noop_or_android_adb(request_id, "cmd statusbar expand-settings")
-            .await
+        self.backend().await?.open_quick_settings(request_id).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5332,54 +3996,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                match req.scheme.as_str() {
-                    "dark" | "light" => {}
-                    other => {
-                        return Err(Status::invalid_argument(format!(
-                            "scheme must be 'dark' or 'light', got '{other}'"
-                        )));
-                    }
-                }
-                if self.is_active_ios_physical().await {
-                    // `xcrun simctl ui appearance` is simulator-only. Physical
-                    // devices require the user to toggle light/dark mode in
-                    // Settings; there is no programmatic path.
-                    return Ok(self
-                        .action_error(
-                            request_id,
-                            "UNSUPPORTED_ON_PHYSICAL_DEVICE",
-                            "device.setColorScheme is not supported on physical iOS devices. \
-                             Workaround: set the system appearance on the device manually \
-                             (Settings → Display & Brightness) before running the test."
-                                .to_string(),
-                        )
-                        .await);
-                }
-                let serial = self.active_serial().await?;
-                match ios::device::set_appearance(&serial, &req.scheme).await {
-                    Ok(()) => Ok(Self::success_action_response(request_id)),
-                    Err(e) => Ok(self
-                        .action_error(request_id, "ACTION_FAILED", e.to_string())
-                        .await),
-                }
-            }
-            Platform::Android => {
-                let mode = match req.scheme.as_str() {
-                    "dark" => "yes",
-                    "light" => "no",
-                    other => {
-                        return Err(Status::invalid_argument(format!(
-                            "scheme must be 'dark' or 'light', got '{other}'"
-                        )));
-                    }
-                };
-                let cmd = format!("cmd uimode night {mode}");
-                self.adb_action(request_id, &cmd).await
-            }
-        }
+        self.backend()
+            .await?
+            .set_color_scheme(request_id, &req.scheme)
+            .await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5390,39 +4010,11 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                // Route through agent — it can read UITraitCollection.current
-                let command = AgentCommand::GetColorScheme {};
-                let result = self.send_agent_command(&command).await?;
-                let scheme = result
-                    .data
-                    .get("scheme")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("light")
-                    .to_string();
-                Ok(Response::new(proto::GetColorSchemeResponse {
-                    request_id,
-                    scheme,
-                }))
-            }
-            Platform::Android => {
-                let serial = self.active_serial().await?;
-                let output = adb::shell_lenient(&serial, "cmd uimode night")
-                    .await
-                    .map_err(|e| Status::internal(e.to_string()))?;
-                let scheme = if output.contains("Night mode: yes") {
-                    "dark"
-                } else {
-                    "light"
-                };
-                Ok(Response::new(proto::GetColorSchemeResponse {
-                    request_id,
-                    scheme: scheme.to_string(),
-                }))
-            }
-        }
+        let scheme = self.backend().await?.get_color_scheme().await?;
+        Ok(Response::new(proto::GetColorSchemeResponse {
+            request_id,
+            scheme,
+        }))
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5433,9 +4025,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        // iOS simulator is always awake
-        self.ios_noop_or_android_adb(request_id, "input keyevent KEYCODE_WAKEUP")
-            .await
+        self.backend().await?.wake(request_id).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -5446,44 +4036,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let req = request.into_inner();
         let request_id = Self::request_id(&req.request_id);
 
-        let platform = self.require_platform().await?;
-        match platform {
-            // iOS simulator has no lock screen
-            Platform::Ios => Ok(Self::success_action_response(request_id)),
-            Platform::Android => {
-                let serial = self.active_serial().await?;
-                // Wake the screen first
-                let _ = adb::shell_lenient(&serial, "input keyevent KEYCODE_WAKEUP").await;
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                // Only dismiss a keyguard that is actually showing. The
-                // legacy sequence below is a MENU key plus a swipe up, and
-                // on an already-unlocked device both land on the foreground
-                // app — the swipe scrolls its root list to the bottom. UI
-                // mode unlocks right before running a file whose reset the
-                // background preparation already satisfied, so nothing
-                // undoes that scroll and the first assertions fail on a
-                // "prepared" device (headless survived only because its
-                // inline reset runs after the unlock).
-                if adb::keyguard_showing(&serial).await == Some(false) {
-                    return Ok(Self::success_action_response(request_id));
-                }
-                // `wm dismiss-keyguard` is the input-free path (API 26+). It
-                // does nothing for secure keyguards, so re-check and fall
-                // back to the gesture only while the lock screen is still up
-                // (or when the dump cannot tell).
-                let _ = adb::shell_lenient(&serial, "wm dismiss-keyguard").await;
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                if adb::keyguard_showing(&serial).await == Some(false) {
-                    return Ok(Self::success_action_response(request_id));
-                }
-                // Dismiss non-secure lock screen (KEYCODE_MENU)
-                let _ = adb::shell_lenient(&serial, "input keyevent 82").await;
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                // Swipe up as fallback for swipe-to-unlock screens
-                let _ = adb::shell_lenient(&serial, "input swipe 540 1800 540 800 300").await;
-                Ok(Self::success_action_response(request_id))
-            }
-        }
+        self.backend().await?.unlock(request_id).await
     }
 
     // ─── Network Capture (PILOT-164) ───
@@ -5639,154 +4192,33 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         let serial = self.active_serial().await?;
         let platform = self.require_platform().await?;
+        let backend = device_backend::for_platform(self, platform);
         let ca_pem_path = mitm_ca.ca_pem_path().to_string_lossy().to_string();
         let mut warnings: Vec<String> = Vec::new();
         // The warning, when the device cannot trust the CA and all TLS is
         // tunneled — see `android_ca_install_failure`.
         let mut tunnel_all_tls: Option<String> = None;
 
-        let is_ios_physical = self.is_active_ios_physical().await;
-
-        match platform {
-            Platform::Ios if !is_ios_physical => {
-                // Simulator path — install CA into the simulator's trust store
-                // once per session; it stays trusted for subsequent captures.
-                // Per-UDID set, not a single slot: workers switching between
-                // simulators on a shared daemon would otherwise evict each
-                // other's entry and re-run the slow install on every switch.
-                let already_installed = self
-                    .ios_ca_cert_installed
-                    .read()
-                    .await
-                    .contains(serial.as_str());
-                if already_installed {
-                    debug!(%serial, "MITM CA already installed on simulator this session");
-                } else {
-                    match ios::device::install_ca_cert(&serial, &ca_pem_path).await {
-                        Ok(()) => {
-                            self.ios_ca_cert_installed
-                                .write()
-                                .await
-                                .insert(serial.clone());
-                        }
-                        Err(e) => {
-                            let msg = format!(
-                                "Failed to install CA cert on simulator: {e} — HTTPS traffic will not be captured"
-                            );
-                            error!("{msg}");
-                            warnings.push(msg);
-                        }
-                    }
-                }
-            }
-            Platform::Ios => {
-                // Physical device path (PILOT-185) — the CA is trusted via the
-                // mobileconfig the user installed on the device, so there's
-                // nothing to install from the host. We just verify the
-                // mobileconfig exists and warn loudly if it's missing, since
-                // without it the device has no route into our proxy and no
-                // trust for our CA.
-                #[cfg(target_os = "macos")]
-                {
-                    if !ios::physical_device_proxy::mobileconfig_exists(&serial).await {
-                        return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                            request_id,
-                            success: false,
-                            proxy_port: 0,
-                            error_message: format!(
-                                "No Tapsmith network profile found for device {serial}. \
-                                 Run `tapsmith ios network configure {serial}` first, then \
-                                 install the generated .mobileconfig on the device."
-                            ),
-                            ..Default::default()
-                        }));
-                    }
-                    // Warn if the host's Wi-Fi IP has drifted from what the
-                    // mobileconfig was generated against.
-                    if let Ok(Some(meta)) =
-                        ios::physical_device_proxy::read_mobileconfig_meta(&serial).await
-                    {
-                        if let Ok(current_ip) =
-                            ios::physical_device_proxy::resolve_host_wifi_ip().await
-                        {
-                            if ios::physical_device_proxy::is_mobileconfig_stale(&meta, current_ip)
-                                .await
-                            {
-                                let msg = format!(
-                                    "Host Wi-Fi IP changed since mobileconfig was generated ({} → {}). \
-                                     Run `tapsmith ios network configure {serial} --refresh` and reinstall the profile.",
-                                    meta.host_ip, current_ip
-                                );
-                                warn!("{msg}");
-                                warnings.push(msg);
-                            }
-                        }
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                        request_id,
-                        success: false,
-                        proxy_port: 0,
-                        error_message: "Physical iOS network capture requires macOS".to_string(),
-                        ..Default::default()
-                    }));
-                }
-            }
-            Platform::Android => {
-                let cert_filename = mitm_ca.device_cert_filename().map_err(|e| {
-                    Status::internal(format!("Failed to compute CA cert hash: {e}"))
-                })?;
-                match adb::install_ca_cert(&serial, &ca_pem_path, &cert_filename).await {
-                    Ok(installed_path) => {
-                        *self.proxy_ca_cert_path.write().await = Some(installed_path);
-                    }
-                    Err(e) => {
-                        let (tunnel, msg) = android_ca_install_failure(&e);
-                        if tunnel {
-                            tunnel_all_tls = Some(msg.clone());
-                        }
-                        error!("{msg}");
-                        warnings.push(msg);
-                    }
-                }
-            }
+        if let Err(stop) = backend
+            .trust_capture_ca(
+                request_id.clone(),
+                serial.clone(),
+                &mitm_ca,
+                &ca_pem_path,
+                &mut warnings,
+                &mut tunnel_all_tls,
+            )
+            .await
+        {
+            return stop.into_response();
         }
 
-        // Pick the proxy bind address based on device type. Simulators and
-        // Android both want loopback (they reach the proxy via transparent
-        // redirection or adb reverse). Physical iOS devices need a LAN-
-        // reachable listener on a deterministic per-UDID port so their
-        // installed mobileconfig can route traffic here.
-        let proxy = if is_ios_physical {
-            #[cfg(target_os = "macos")]
-            {
-                let port = ios::physical_device_proxy::deterministic_port(&serial);
-                let bind = std::net::SocketAddr::new(
-                    std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED),
-                    port,
-                );
-                NetworkProxy::start_on(Arc::clone(&mitm_ca), bind)
-                    .await
-                    .map_err(|e| {
-                        Status::internal(format!("Failed to start proxy on {bind}: {e}"))
-                    })?
-            }
-            #[cfg(not(target_os = "macos"))]
-            {
-                return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                    request_id,
-                    success: false,
-                    proxy_port: 0,
-                    error_message: "Physical iOS network capture requires macOS".to_string(),
-                    ..Default::default()
-                }));
-            }
-        } else {
-            NetworkProxy::start(Arc::clone(&mitm_ca))
-                .await
-                .map_err(|e| Status::internal(format!("Failed to start proxy: {e}")))?
+        let proxy = match backend
+            .start_capture_proxy(request_id.clone(), serial.clone(), &mitm_ca)
+            .await
+        {
+            Ok(proxy) => proxy,
+            Err(stop) => return stop.into_response(),
         };
         // Clone out of the read guard before awaiting — holding a RwLock
         // guard across an await risks starving writers.
@@ -5807,296 +4239,30 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         proxy.set_tunnel_all_tls(tunnel_all_tls).await;
         let host_port = proxy.port();
 
-        // Physical iOS: verify the proxy is reachable from the LAN. On
-        // modern macOS the Application Firewall's stealth mode silently
-        // drops inbound TCP SYNs to user processes, even when the binary
-        // is explicitly allowed in the firewall list. The symptom is the
-        // device never reaches the proxy — traffic capture silently
-        // returns 0 entries and users spend an hour debugging SSID /
-        // profile install / Wi-Fi before finding the real cause.
-        //
-        // Check by connecting to our own LAN IP on the proxy port. If
-        // that times out, the firewall (or similar) is blocking and we
-        // return a clear error with the exact socketfilterfw fix.
-        #[cfg(target_os = "macos")]
-        if is_ios_physical {
-            if let Ok(lan_ip) = ios::physical_device_proxy::resolve_host_wifi_ip().await {
-                let reachable = self_probe_lan_listener(lan_ip, host_port).await;
-                if !reachable {
-                    // Drop the proxy — otherwise the next start_network_capture
-                    // call will fail with "already running".
-                    drop(proxy);
-                    return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                        request_id,
-                        success: false,
-                        proxy_port: 0,
-                        error_message: format!(
-                            "Tapsmith proxy is bound to {lan_ip}:{host_port} but inbound LAN \
-                             connections are being blocked — the iPhone will never reach it.\n\n\
-                             Most likely cause: macOS Application Firewall stealth mode is \
-                             silently dropping unsolicited inbound TCP SYNs, even for \
-                             allow-listed binaries. Disable it with:\n  \
-                             sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setstealthmode off\n\n\
-                             Or disable the firewall entirely for this session:\n  \
-                             sudo /usr/libexec/ApplicationFirewall/socketfilterfw --setglobalstate off"
-                        ),
-                        ..Default::default()
-                    }));
-                }
-            }
+        if let Err(stop) = backend
+            .check_capture_reachable(request_id.clone(), host_port)
+            .await
+        {
+            return stop.into_response();
         }
 
-        let route: proto::NetworkCaptureRoute;
-        #[cfg(target_os = "macos")]
-        let mut pending_lease: Option<ios::system_proxy::PendingLease> = None;
-        match platform {
-            Platform::Ios if !is_ios_physical => {
-                // PILOT-182: route the simulator's traffic into the MITM
-                // proxy via the macOS Network Extension redirector instead
-                // of a global system proxy. Per-PID filtering gives each
-                // worker daemon full isolation from other concurrent
-                // workers (and from the user's host traffic).
-                //
-                // If the redirector fails to start (SE not approved, brew
-                // missing, launcher binary unreachable, …), there is NO
-                // path for traffic to reach the proxy — capture is
-                // effectively dead. Early-return `success: false` so the
-                // runner prints "Network capture disabled" instead of the
-                // misleading "warning". The local `proxy` is dropped at
-                // end of scope, releasing the TCP listener.
-                #[cfg(target_os = "macos")]
-                {
-                    // The system-proxy fallback is host-wide: it records every
-                    // process on the Mac (browsers, trustd, other simulators)
-                    // and nothing in the captured entries says which. It is
-                    // refused when the caller needs per-device attribution (the
-                    // runner, for a multi-device group) and, unless opted in,
-                    // outside CI — a developer Mac has the Network Extension, so
-                    // falling back there hides a real failure behind a capture
-                    // of the developer's own browsing (PILOT-319).
-                    let decision = ios::system_proxy::fallback_decision(
-                        req.require_isolation,
-                        ios::system_proxy::fallback_allowed_from_env(),
-                    );
-                    // A recent NE failure skips the doomed launch (each waits
-                    // out a 10 s control-channel timeout) and goes straight to
-                    // the decision above; see `cached_ne_failure` for why it
-                    // expires and why multi-device callers never use it.
-                    let cached_ne_error = ios::system_proxy::cached_ne_failure(
-                        self.ios_ne_unavailable.read().await.as_ref(),
-                        req.require_isolation,
-                        std::time::Instant::now(),
-                    );
-                    let ne_known_bad = cached_ne_error.is_some();
-                    let ne_result = if let Some(cached) = cached_ne_error {
-                        debug!("Skipping NE attempt (previously failed: {cached})");
-                        Err(anyhow::anyhow!("{cached}"))
-                    } else {
-                        crate::ios_redirect::IosRedirect::start(
-                            serial.clone(),
-                            proxy.state_handle(),
-                            Arc::clone(&mitm_ca),
-                        )
-                        .await
-                    };
-                    match ne_result {
-                        Ok(redirect) => {
-                            *self.ios_redirect.write().await = Some(redirect);
-                            *self.ios_ne_unavailable.write().await = None;
-                            route = proto::NetworkCaptureRoute::IosNetworkExtension;
-                            info!(
-                                %serial, host_port,
-                                "iOS redirector session established"
-                            );
-                        }
-                        Err(e) => {
-                            if !ne_known_bad && !req.require_isolation {
-                                *self.ios_ne_unavailable.write().await =
-                                    Some(ios::system_proxy::NeFailure {
-                                        message: e.to_string(),
-                                        at: std::time::Instant::now(),
-                                    });
-                                warn!("Network Extension redirector unavailable: {e}");
-                            }
-                            // Two daemons launching the redirector at once used to
-                            // be the most common local cause of an NE failure (they
-                            // share one NETransparentProxyManager and the loser's
-                            // control channel never connects); launches are now
-                            // serialised by `ios_redirect::LaunchLock`.
-                            if decision == ios::system_proxy::FallbackDecision::RefuseIsolation {
-                                let msg = format!(
-                                    "iOS network capture unavailable for this device: the \
-                                     Network Extension redirector failed ({e}) and the \
-                                     macOS system-proxy fallback is not device-isolated, so \
-                                     it is refused for multi-device runs. See \
-                                     docs/ios-network-capture.md#multi-device-groups"
-                                );
-                                warn!("{msg}");
-                                return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                                    request_id,
-                                    success: false,
-                                    proxy_port: 0,
-                                    error_message: msg,
-                                    ..Default::default()
-                                }));
-                            }
-                            if decision == ios::system_proxy::FallbackDecision::RefuseLocal {
-                                let msg = format!(
-                                    "iOS network capture unavailable for {serial}: the Network \
-                                     Extension redirector failed ({e}). Run `npx tapsmith \
-                                     doctor` and `npx tapsmith ios network setup-simulator` to fix it. The \
-                                     macOS system-proxy fallback would record all traffic on \
-                                     this Mac, so it is only used on CI; set {}=1 to allow it \
-                                     here anyway. See docs/ios-network-capture.md",
-                                    ios::system_proxy::FALLBACK_ENV
-                                );
-                                warn!("{msg}");
-                                return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                                    request_id,
-                                    success: false,
-                                    proxy_port: 0,
-                                    error_message: msg,
-                                    ..Default::default()
-                                }));
-                            }
-                            // `acquire` releases a lease whose caller was
-                            // cancelled mid-acquire; from here until the capture
-                            // is published the guard does the same.
-                            match ios::system_proxy::acquire(host_port).await {
-                                Ok(lease) => {
-                                    pending_lease =
-                                        Some(ios::system_proxy::PendingLease::new(lease));
-                                    route = proto::NetworkCaptureRoute::IosSystemProxy;
-                                    warnings.push(system_proxy_fallback_warning(&serial));
-                                }
-                                Err(proxy_err) => {
-                                    let msg = format!(
-                                        "iOS network capture unavailable for {serial}: Network \
-                                         Extension failed ({e}), system proxy fallback also \
-                                         failed ({proxy_err})"
-                                    );
-                                    error!("{msg}");
-                                    return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                                        request_id,
-                                        success: false,
-                                        proxy_port: 0,
-                                        error_message: msg,
-                                        ..Default::default()
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                        request_id,
-                        success: false,
-                        proxy_port: 0,
-                        error_message: "iOS network capture requires macOS".to_string(),
-                        ..Default::default()
-                    }));
-                }
-            }
-            Platform::Ios => {
-                // PILOT-185 physical-device path — the device already has the
-                // mobileconfig installed, so its outbound HTTP traffic is
-                // directed at us via the standard HTTP proxy protocol. The
-                // existing `handle_connection` path inside NetworkProxy
-                // transparently handles CONNECT / GET-with-absolute-URL
-                // requests from the device, so no redirector is needed.
-                route = proto::NetworkCaptureRoute::IosDeviceProxy;
-                info!(
-                    %serial,
-                    host_port,
-                    "Physical iOS proxy listening for device HTTP_PROXY traffic"
-                );
-            }
-            Platform::Android => {
-                // Use `adb reverse` to make the proxy reachable as
-                // 127.0.0.1:{device_port} on the device. The host proxy port
-                // is OS-assigned and only known to be free on the host; the
-                // same number can still be occupied on the device. Try it
-                // first for continuity, then fall back to alternate device
-                // ports while forwarding all of them to the same host port.
-                let device_port =
-                    match setup_android_reverse_with_fallback(&serial, host_port).await {
-                        Ok(port) => port,
-                        Err(msg) => {
-                            error!("{msg}");
-                            return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                                request_id,
-                                success: false,
-                                proxy_port: 0,
-                                error_message: msg,
-                                ..Default::default()
-                            }));
-                        }
-                    };
-
-                info!(%serial, device_port, host_port, "Configuring Android proxy");
-
-                // PILOT-187: Use iptables transparent redirect instead of the
-                // system HTTP proxy setting. Some Android HTTP clients (notably
-                // React Native's fetch/OkHttp) don't issue CONNECT tunnels for
-                // HTTPS through the system proxy, causing HTTPS traffic to be
-                // recorded as http://. Transparent redirect intercepts at the
-                // TCP level, so TLS is correctly detected from the ClientHello.
-                let iptables_ok =
-                    adb::setup_iptables_redirect(&serial, device_port, &http_ports).await;
-                *self.proxy_uses_iptables.write().await = iptables_ok;
-                route = if iptables_ok {
-                    proto::NetworkCaptureRoute::AndroidTransparent
-                } else {
-                    proto::NetworkCaptureRoute::AndroidHttpProxy
-                };
-                // The redirect is IPv4-only. On a device with IPv6 egress, an
-                // app that prefers IPv6 bypasses it entirely and its traffic is
-                // *invisible* — no capture entry and no `passthrough` marker,
-                // which reads as "the app made no request". Say so rather than
-                // letting it look like a capture bug. (Emulators normally have
-                // no IPv6 default route, so this stays quiet there.)
-                if iptables_ok && adb::has_ipv6_default_route(&serial).await {
-                    let msg = "Device has IPv6 connectivity but the transparent redirect \
-                               is IPv4-only — traffic the app sends over IPv6 bypasses \
-                               capture entirely and will not appear in the trace"
-                        .to_string();
-                    warn!(%serial, "{msg}");
-                    warnings.push(msg);
-                }
-                if !iptables_ok {
-                    // Fallback: set the system HTTP proxy for non-rooted devices
-                    // or emulators where iptables is unavailable.
-                    warn!(
-                        %serial,
-                        "iptables redirect unavailable, falling back to system HTTP proxy"
-                    );
-                    let proxy_setting = format!("127.0.0.1:{device_port}");
-                    if let Err(e) = adb::shell(
-                        &serial,
-                        &format!("settings put global http_proxy {proxy_setting}"),
-                    )
-                    .await
-                    {
-                        let msg = format!("Failed to configure Android HTTP proxy: {e}");
-                        error!("{msg}");
-                        return Ok(Response::new(proto::StartNetworkCaptureResponse {
-                            request_id,
-                            success: false,
-                            proxy_port: 0,
-                            error_message: msg,
-                            ..Default::default()
-                        }));
-                    }
-                    warnings.push(
-                        "iptables redirect unavailable; using Android system HTTP proxy fallback"
-                            .to_string(),
-                    );
-                }
-                *self.proxy_reverse_port.write().await = Some(device_port);
-            }
-        }
+        let captured_route = match backend
+            .route_capture_traffic(
+                request_id.clone(),
+                serial.clone(),
+                &req,
+                &proxy,
+                &mitm_ca,
+                host_port,
+                &http_ports,
+                &mut warnings,
+            )
+            .await
+        {
+            Ok(captured_route) => captured_route,
+            Err(stop) => return stop.into_response(),
+        };
+        let route = captured_route.route;
 
         if *self.proxy_uses_iptables.read().await {
             *self.proxy_http_ports.write().await = http_ports;
@@ -6111,7 +4277,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         // await in between, so a cancellation either releases the lease with
         // the unpublished proxy or leaves both published.
         #[cfg(target_os = "macos")]
-        if let Some(pending) = pending_lease {
+        if let Some(pending) = captured_route.pending_lease {
             let mut lease_slot = self.ios_system_proxy.write().await;
             *lease_slot = Some(pending.disarm());
         }
@@ -6281,70 +4447,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         // Revert proxy settings based on platform
         if let Some(serial) = &serial {
-            match platform {
-                Some(Platform::Ios) => {
-                    // PILOT-182 simulators: the redirector session handle was
-                    // dropped above, BEFORE `proxy.stop()`. Drop closes the
-                    // control channel, which tells the SE to remove this
-                    // worker's per-PID filter; the accept + refresh tasks abort
-                    // and the Unix socket file is unlinked.
-                    //
-                    // PILOT-185 physical devices: the ios_redirect slot is
-                    // always None on that path — the device's own HTTP proxy
-                    // setting (installed via mobileconfig) is the routing
-                    // mechanism and it persists across runs by design.
-                    info!(%serial, "iOS proxy stopped");
-                }
-                _ => {
-                    info!(%serial, "Reverting Android proxy configuration");
-                    // Run cleanup commands concurrently — they're independent
-                    // and each has its own timeout. Sequential execution on
-                    // slow CI emulators can exceed the gRPC deadline.
-                    let serial_a = serial.to_string();
-                    let serial_b = serial.to_string();
-                    let serial_c = serial.to_string();
-                    let proxy_cleanup = async move {
-                        if used_iptables {
-                            adb::cleanup_iptables_redirect(&serial_a).await;
-                        } else if let Err(e) = adb::shell_with_timeout(
-                            &serial_a,
-                            "settings put global http_proxy :0",
-                            ANDROID_PROXY_CLEANUP_TIMEOUT,
-                        )
-                        .await
-                        {
-                            warn!(serial = %serial_a, "Failed to reset http_proxy: {e}");
-                        }
-                    };
-                    let reverse_cleanup = async move {
-                        if let Some(port) = reverse_port {
-                            if let Err(e) = adb::remove_reverse_with_timeout(
-                                &serial_b,
-                                port,
-                                ANDROID_PROXY_CLEANUP_TIMEOUT,
-                            )
-                            .await
-                            {
-                                warn!(serial = %serial_b, port, "Failed to remove reverse port forward: {e}");
-                            }
-                        }
-                    };
-                    let cert_cleanup = async move {
-                        if let Some(cert_path) = &ca_cert_path {
-                            if let Err(e) = adb::shell_with_timeout(
-                                &serial_c,
-                                &format!("rm -f {cert_path}"),
-                                ANDROID_PROXY_CLEANUP_TIMEOUT,
-                            )
-                            .await
-                            {
-                                warn!(serial = %serial_c, "Failed to remove CA cert: {e}");
-                            }
-                        }
-                    };
-                    tokio::join!(proxy_cleanup, reverse_cleanup, cert_cleanup);
-                }
-            }
+            // A capture with no recorded platform is reverted the Android way, as before.
+            device_backend::for_platform(self, platform.unwrap_or(Platform::Android))
+                .release_capture_route(serial, reverse_port, ca_cert_path, used_iptables)
+                .await;
         }
 
         let capture_session = proxy.capture_session().to_string();
@@ -6770,307 +4876,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             return Err(Status::invalid_argument("path is required"));
         }
 
-        let pkg = &req.package_name;
-        let local_path = &req.path;
-
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                if self.is_active_ios_physical().await {
-                    // Physical devices: use `xcrun devicectl device copy from
-                    // --domain-type appDataContainer` to pull the app's data
-                    // container to a scratch directory, then tar it for
-                    // parity with the simulator output shape.
-                    warn!(
-                        %pkg,
-                        "Keychain state is not captured on physical iOS devices — keychain-backed data (e.g. native auth SDK credentials) will not be saved"
-                    );
-                    let scratch = tempfile::tempdir()
-                        .map_err(|e| Status::internal(format!("tempdir: {e}")))?;
-                    let scratch_path = scratch.path().to_string_lossy().to_string();
-                    if let Err(e) =
-                        ios::device::copy_app_container_from_device(&serial, pkg, &scratch_path)
-                            .await
-                    {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_SAVE_FAILED",
-                                format!("devicectl copy from failed: {e}"),
-                            )
-                            .await);
-                    }
-                    if let Some(parent) = std::path::Path::new(local_path).parent() {
-                        let _ = tokio::fs::create_dir_all(parent).await;
-                    }
-                    let output = tokio::process::Command::new("tar")
-                        .args([
-                            "czf",
-                            local_path,
-                            "--exclude=./Library/Caches",
-                            "--exclude=./Library/WebKit",
-                            "--exclude=./Library/SplashBoard",
-                            "--exclude=./Library/Saved Application State",
-                            "--exclude=./tmp",
-                            "-C",
-                            &scratch_path,
-                            ".",
-                        ])
-                        .output()
-                        .await;
-                    return match output {
-                        Ok(out) if out.status.success() => {
-                            info!(%pkg, %local_path, "iOS physical app state saved");
-                            Ok(Self::success_action_response(request_id))
-                        }
-                        Ok(out) => {
-                            let stderr = String::from_utf8_lossy(&out.stderr);
-                            Ok(self
-                                .action_error(
-                                    request_id,
-                                    "APP_STATE_SAVE_FAILED",
-                                    format!("tar failed: {stderr}"),
-                                )
-                                .await)
-                        }
-                        Err(e) => Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_SAVE_FAILED",
-                                format!("Failed to run tar: {e}"),
-                            )
-                            .await),
-                    };
-                }
-                // iOS simulator: app container is on the host filesystem.
-                // Use simctl to find it, then tar it directly.
-                let container = match self.get_app_container_cached(&serial, pkg).await {
-                    Ok(path) => path,
-                    Err(e) => {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_SAVE_FAILED",
-                                format!("Failed to locate app container: {e}"),
-                            )
-                            .await);
-                    }
-                };
-
-                // Terminate the app to flush data
-                let _ = ios::device::terminate_app(&serial, pkg).await;
-
-                // Stage the simulator's device-level keychain db so the
-                // archive captures keychain-backed state (Firebase Auth and
-                // other SDKs persist credentials there, outside the app
-                // container). Staging failures are non-fatal: the archive is
-                // still valid, just without keychain state.
-                let keychain_staging =
-                    tempfile::tempdir().map_err(|e| Status::internal(format!("tempdir: {e}")))?;
-                let mut keychain_staged = 0;
-                if !ios::device::keychain_state_disabled() {
-                    match ios::device::simulator_keychain_dir(&container) {
-                        Some(keychain_dir) => {
-                            let dest = keychain_staging
-                                .path()
-                                .join(ios::device::KEYCHAIN_ARCHIVE_MEMBER);
-                            match ios::device::stage_keychain_files(&keychain_dir, &dest).await {
-                                Ok(count) => keychain_staged = count,
-                                Err(e) => {
-                                    warn!(%pkg, error = %e, "Failed to stage simulator keychain; archive will not include keychain state");
-                                }
-                            }
-                        }
-                        None => {
-                            warn!(%pkg, container, "Could not derive simulator keychain dir; archive will not include keychain state");
-                        }
-                    }
-                }
-
-                // Create tar.gz archive of the data container, excluding
-                // caches and ephemeral data that inflates the archive
-                // without contributing to app state (auth tokens, prefs,
-                // databases). A React Native app container can have tens
-                // of MB in Library/Caches and Library/WebKit alone.
-                if let Some(parent) = std::path::Path::new(local_path).parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-                let mut tar_args: Vec<String> = vec![
-                    "czf".into(),
-                    local_path.clone(),
-                    "--exclude=./Library/Caches".into(),
-                    "--exclude=./Library/WebKit".into(),
-                    "--exclude=./Library/SplashBoard".into(),
-                    "--exclude=./Library/Saved Application State".into(),
-                    "--exclude=./tmp".into(),
-                    "-C".into(),
-                    container.clone(),
-                    ".".into(),
-                ];
-                if keychain_staged > 0 {
-                    // Second -C pair appends the staged keychain as a
-                    // reserved member alongside the container contents.
-                    tar_args.extend([
-                        "-C".into(),
-                        keychain_staging.path().to_string_lossy().to_string(),
-                        format!("./{}", ios::device::KEYCHAIN_ARCHIVE_MEMBER),
-                    ]);
-                }
-                let output = tokio::process::Command::new("tar")
-                    .args(&tar_args)
-                    .output()
-                    .await;
-
-                match output {
-                    Ok(out) if out.status.success() => {
-                        info!(%pkg, %local_path, "iOS app state saved");
-                        Ok(Self::success_action_response(request_id))
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_SAVE_FAILED",
-                                format!("tar failed: {stderr}"),
-                            )
-                            .await)
-                    }
-                    Err(e) => Ok(self
-                        .action_error(
-                            request_id,
-                            "APP_STATE_SAVE_FAILED",
-                            format!("Failed to run tar: {e}"),
-                        )
-                        .await),
-                }
-            }
-            Platform::Android => {
-                let device_tmp = format!(
-                    "/data/local/tmp/tapsmith-app-state-{}.tar.gz",
-                    Uuid::new_v4()
-                );
-                let data_dir = format!("/data/data/{pkg}");
-                let tar_timeout = Duration::from_secs(300);
-
-                // 1. Force-stop the app to avoid data corruption
-                if let Err(e) = adb::shell(&serial, &format!("am force-stop {pkg}")).await {
-                    warn!(%pkg, "Failed to force-stop app before save: {e}");
-                }
-
-                // 2. Determine access strategy: root or run-as
-                let is_root = adb::shell_lenient(&serial, "id")
-                    .await
-                    .map(|out| out.contains("uid=0"))
-                    .unwrap_or(false);
-
-                // 2b. Capture device-side state that lives OUTSIDE /data/data and
-                // is destroyed by `pm clear` (root only), embedding each as a
-                // reserved member written into the data dir so the tar below
-                // picks it up and restore can re-establish it:
-                //  - AndroidKeyStore keys: Firebase et al. encrypt data-dir
-                //    credentials with a keystore key the data tar can't carry.
-                //  - Granted runtime permissions (e.g. POST_NOTIFICATIONS): so a
-                //    prompt dismissed once stays dismissed across restore.
-                // Best-effort: capture never fails the save. The guard removes
-                // the members from the live data dir once it drops — after the
-                // tar below has captured them, or on cancellation — so they never
-                // linger inside the app's files.
-                let mut injected_members = adb::DeviceFileGuard::new(serial.clone());
-                if is_root {
-                    match android_keystore::capture_into_data_dir(&serial, pkg, &data_dir).await {
-                        Ok(true) => injected_members.track(format!(
-                            "{data_dir}/{}",
-                            android_keystore::KEYSTORE_ARCHIVE_MEMBER
-                        )),
-                        Ok(false) => {}
-                        Err(e) => {
-                            warn!(%pkg, error = %e, "Keystore capture failed; archive will not include keystore state");
-                        }
-                    }
-                    match android_permissions::capture_into_data_dir(&serial, pkg, &data_dir).await
-                    {
-                        Ok(true) => injected_members.track(format!(
-                            "{data_dir}/{}",
-                            android_permissions::PERMISSIONS_ARCHIVE_MEMBER
-                        )),
-                        Ok(false) => {}
-                        Err(e) => {
-                            warn!(%pkg, error = %e, "Runtime permission capture failed; archive will not include permission state");
-                        }
-                    }
-                }
-
-                // 3. Create tar.gz archive on device, excluding cache
-                // directories that don't carry meaningful app state.
-                // Older Toybox builds (pre-Android 10) lack --exclude, so
-                // fall back to archiving everything if the first attempt fails.
-                let tar_cmd = |excludes: &str| {
-                    let prefix = if is_root {
-                        String::new()
-                    } else {
-                        format!("run-as {pkg} ")
-                    };
-                    if excludes.is_empty() {
-                        format!("{prefix}tar czf {device_tmp} -C {data_dir} .")
-                    } else {
-                        format!("{prefix}tar czf {device_tmp} {excludes} -C {data_dir} .")
-                    }
-                };
-                let tar_result = adb::shell_with_timeout(
-                    &serial,
-                    &tar_cmd("--exclude=./cache --exclude=./code_cache"),
-                    tar_timeout,
-                )
-                .await;
-                let tar_result = match tar_result {
-                    Ok(_) => Ok(()),
-                    Err(_) => {
-                        debug!("tar with --exclude failed, retrying without exclusions");
-                        let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                        adb::shell_with_timeout(&serial, &tar_cmd(""), tar_timeout)
-                            .await
-                            .map(|_| ())
-                    }
-                };
-
-                // The reserved members are now inside the archive; `injected_members`
-                // (a DeviceFileGuard) removes them from the live data dir when it
-                // drops at the end of this handler, on every exit path.
-
-                if let Err(e) = tar_result {
-                    let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                    return Ok(self
-                        .action_error(
-                            request_id,
-                            "APP_STATE_SAVE_FAILED",
-                            format!("Failed to archive app data: {e}"),
-                        )
-                        .await);
-                }
-
-                // 4. Pull archive to host
-                if let Some(parent) = std::path::Path::new(local_path).parent() {
-                    let _ = tokio::fs::create_dir_all(parent).await;
-                }
-                if let Err(e) = adb::pull_file(&serial, &device_tmp, local_path).await {
-                    let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                    return Ok(self
-                        .action_error(
-                            request_id,
-                            "APP_STATE_SAVE_FAILED",
-                            format!("Failed to pull app state archive: {e}"),
-                        )
-                        .await);
-                }
-
-                // 5. Clean up temp file on device
-                let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-
-                info!(%pkg, %local_path, "App state saved");
-                Ok(Self::success_action_response(request_id))
-            }
-        }
+        let backend = self.backend().await?;
+        backend.save_app_state(request_id, serial, &req).await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -7087,7 +4894,6 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             return Err(Status::invalid_argument("path is required"));
         }
 
-        let pkg = &req.package_name;
         let local_path = &req.path;
 
         // Verify local archive exists
@@ -7097,463 +4903,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             )));
         }
 
-        let platform = self.require_platform().await?;
-        match platform {
-            Platform::Ios => {
-                if self.is_active_ios_physical().await {
-                    // Physical: extract the archive locally, then push each
-                    // top-level child (`Documents`, `Library`, `tmp`) back
-                    // into the app container via `devicectl device copy to
-                    // --remove-existing-content true`. We terminate the app
-                    // first so iOS isn't actively writing to the directories
-                    // we're overwriting.
-                    let scratch = tempfile::tempdir()
-                        .map_err(|e| Status::internal(format!("tempdir: {e}")))?;
-                    let scratch_path = scratch.path().to_string_lossy().to_string();
-                    let extract = tokio::process::Command::new("tar")
-                        .args(["xzf", local_path, "-C", &scratch_path])
-                        .output()
-                        .await;
-                    match extract {
-                        Ok(out) if !out.status.success() => {
-                            let stderr = String::from_utf8_lossy(&out.stderr);
-                            return Ok(self
-                                .action_error(
-                                    request_id,
-                                    "APP_STATE_RESTORE_FAILED",
-                                    format!("tar extract failed: {stderr}"),
-                                )
-                                .await);
-                        }
-                        Err(e) => {
-                            return Ok(self
-                                .action_error(
-                                    request_id,
-                                    "APP_STATE_RESTORE_FAILED",
-                                    format!("Failed to run tar: {e}"),
-                                )
-                                .await);
-                        }
-                        _ => {}
-                    }
-                    // Collect top-level children that actually exist in the
-                    // archive — we only want to push directories the user
-                    // actually saved, so empty runs don't wipe the live data.
-                    let mut sources: Vec<String> = Vec::new();
-                    for name in ["Documents", "Library", "tmp"] {
-                        let candidate = std::path::Path::new(&scratch_path).join(name);
-                        if candidate.exists() {
-                            sources.push(candidate.to_string_lossy().to_string());
-                        }
-                    }
-                    if sources.is_empty() {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                "Archive contained no Documents/Library/tmp directories"
-                                    .to_string(),
-                            )
-                            .await);
-                    }
-                    // Wipe the container by uninstalling + reinstalling the
-                    // app. `devicectl copy to --remove-existing-content`
-                    // alone would leave the app running and racing with
-                    // our writes; wiping via reinstall is the same pattern
-                    // we use for `clearAppData` and avoids every possible
-                    // "process is holding files" edge case. After the
-                    // reinstall the container is empty, so the subsequent
-                    // copy just lays the saved state on top.
-                    let app_path = self
-                        .ios_agent_config
-                        .read()
-                        .await
-                        .as_ref()
-                        .and_then(|c| c.app_path.clone());
-                    let Some(app_path) = app_path else {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                "device.restoreAppState on a physical iOS device requires \
-                                 the app bundle path cached at startAgent time. Tapsmith's \
-                                 CLI passes this automatically when `app` is set."
-                                    .to_string(),
-                            )
-                            .await);
-                    };
-                    if let Err(e) = ios::device::uninstall_app_on_device(&serial, pkg).await {
-                        warn!(error = %e, "Pre-restore uninstall failed, continuing");
-                    }
-                    if let Err(e) = ios::device::install_app_on_device(&serial, &app_path).await {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("Pre-restore reinstall failed: {e}"),
-                            )
-                            .await);
-                    }
-                    // Give LaunchServices a moment to re-register the
-                    // freshly installed bundle before devicectl re-enters
-                    // its sandbox to push the container contents.
-                    tokio::time::sleep(std::time::Duration::from_millis(1_500)).await;
-                    if let Err(e) =
-                        ios::device::copy_app_container_to_device(&serial, pkg, &sources).await
-                    {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("devicectl copy to failed: {e}"),
-                            )
-                            .await);
-                    }
-                    info!(%pkg, %local_path, "iOS physical app state restored");
-                    // Reinstalling + pushing the container replaces the app
-                    // bundle under the running XCUITest runner. The agent's
-                    // cached XCUIApplication references become stale in a
-                    // way that causes snapshots to return partial trees
-                    // after the next launch — elements present in the
-                    // hierarchy dump are missing from findElement. Restart
-                    // the agent entirely so the new test session starts
-                    // against fresh XCUITest bindings.
-                    if let Err(e) = self
-                        .restart_ios_agent_for_app(&serial, pkg, false, 10_000)
-                        .await
-                    {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("Agent restart after restore failed: {e}"),
-                            )
-                            .await);
-                    }
-                    return Ok(Self::success_action_response(request_id));
-                }
-                // iOS simulator: terminate the app, clear the data container,
-                // then extract the saved archive.
-                let _ = ios::device::terminate_app(&serial, pkg).await;
-
-                let container = match self.get_app_container_cached(&serial, pkg).await {
-                    Ok(path) => path,
-                    Err(e) => {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("Failed to locate app container: {e}"),
-                            )
-                            .await);
-                    }
-                };
-
-                // Clear the container in-place rather than rm -rf. Deleting
-                // the container directory entirely can cause iOS to lose
-                // its internal bundle-id → container UUID mapping, making
-                // the app launch into a fresh container instead of the one
-                // we extracted into.
-                if let Err(e) = ios::device::clear_container(&container).await {
-                    warn!(%pkg, error = %e, "clear_container failed, continuing");
-                }
-
-                // Archives saved by newer daemons carry the simulator
-                // keychain under a reserved member; older archives don't,
-                // and restore exactly as before.
-                let has_keychain = match tokio::process::Command::new("tar")
-                    .args(["tzf", local_path])
-                    .output()
-                    .await
-                {
-                    Ok(out) if out.status.success() => ios::device::archive_has_keychain_member(
-                        &String::from_utf8_lossy(&out.stdout),
-                    ),
-                    _ => false,
-                };
-
-                // Exclude both the `./`-prefixed form (how bsdtar stores it
-                // when we add it on save) and the bare form, so the keychain
-                // member can never be extracted into the app container
-                // regardless of how the archive recorded it.
-                let member = ios::device::KEYCHAIN_ARCHIVE_MEMBER;
-                let member_pattern = format!("./{member}");
-                // The archive carries the *source* container's
-                // container-manager metadata; keep this container's own
-                // (PILOT-462). bsdtar's --exclude is not anchored, so the
-                // files are put back after the extract rather than excluded.
-                // Spawned, so a cancelled request (its future dropped
-                // mid-extract) still finishes the extract and the put-back
-                // instead of leaving the archive's record in the container.
-                let output = {
-                    let container = container.clone();
-                    let local_path = local_path.clone();
-                    let excludes = [
-                        member_pattern.clone(),
-                        format!("{member_pattern}/*"),
-                        member.to_string(),
-                        format!("{member}/*"),
-                    ];
-                    tokio::spawn(async move {
-                        ios::device::keeping_container_manager_files(&container, async {
-                            let mut tar = tokio::process::Command::new("tar");
-                            tar.args(["xzf", local_path.as_str(), "-C", container.as_str()]);
-                            for pattern in &excludes {
-                                tar.args(["--exclude", pattern.as_str()]);
-                            }
-                            tar.output().await
-                        })
-                        .await
-                    })
-                    .await
-                    .unwrap_or_else(|e| Err(std::io::Error::other(e)))
-                };
-
-                match output {
-                    Ok(out) if out.status.success() => {
-                        if has_keychain && !ios::device::keychain_state_disabled() {
-                            if let Err(e) =
-                                restore_simulator_keychain(&serial, &container, local_path).await
-                            {
-                                // Failing silently here would reproduce the
-                                // half-restored auth state this feature
-                                // exists to fix — surface it instead.
-                                return Ok(self
-                                    .action_error(
-                                        request_id,
-                                        "APP_STATE_RESTORE_FAILED",
-                                        format!("Keychain restore failed: {e}"),
-                                    )
-                                    .await);
-                            }
-                        } else if has_keychain {
-                            debug!(%pkg, "Archive contains keychain state but TAPSMITH_NO_KEYCHAIN_STATE is set; skipping keychain restore");
-                        } else {
-                            debug!(%pkg, "Archive has no keychain member (saved by an older version); skipping keychain restore");
-                        }
-                        info!(%pkg, %local_path, container, "iOS simulator app state restored");
-                        Ok(Self::success_action_response(request_id))
-                    }
-                    Ok(out) => {
-                        let stderr = String::from_utf8_lossy(&out.stderr);
-                        Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("tar extract failed: {stderr}"),
-                            )
-                            .await)
-                    }
-                    Err(e) => Ok(self
-                        .action_error(
-                            request_id,
-                            "APP_STATE_RESTORE_FAILED",
-                            format!("Failed to run tar: {e}"),
-                        )
-                        .await),
-                }
-            }
-            Platform::Android => {
-                let device_tmp = format!(
-                    "/data/local/tmp/tapsmith-app-state-{}.tar.gz",
-                    Uuid::new_v4()
-                );
-                let data_dir = format!("/data/data/{pkg}");
-                let tar_timeout = Duration::from_secs(300);
-
-                // 1. Force-stop the app
-                if let Err(e) = adb::shell(&serial, &format!("am force-stop {pkg}")).await {
-                    warn!(%pkg, "Failed to force-stop app before restore: {e}");
-                }
-
-                // 2. Determine access strategy: root or run-as.
-                let is_root = adb::shell_lenient(&serial, "id")
-                    .await
-                    .map(|out| out.contains("uid=0"))
-                    .unwrap_or(false);
-
-                // 3. Clear the app's data dir IN PLACE, preserving the device
-                // keystore. `pm clear` would also wipe the app's AndroidKeyStore
-                // keys — and on Android those keys hold the decryption key for
-                // credentials persisted *inside* the data dir (e.g. Firebase
-                // Auth encrypts its session token with a Tink keyset that is
-                // itself wrapped by an AndroidKeyStore master key). Wiping the
-                // keystore leaves the restored, still-encrypted credentials
-                // undecryptable, so the app comes back signed out. Removing only
-                // the data-dir contents keeps the keystore intact. The `lib`
-                // entry (symlink to the installed native libraries) is left in
-                // place. Restored files get their ownership/SELinux context
-                // fixed below (root) or inherit the run-as app identity.
-                let clear_cmd = {
-                    // `-exec ... \;` (one `rm` per entry) rather than `+`: with
-                    // `+`, a `find` that matches nothing can invoke `rm` with no
-                    // operands on some implementations, which errors. `\;` only
-                    // runs `rm` per match, so an empty/lib-only dir is a no-op.
-                    let find = format!(
-                        "find {data_dir} -mindepth 1 -maxdepth 1 ! -name lib -exec rm -rf {{}} \\;"
-                    );
-                    if is_root {
-                        find
-                    } else {
-                        format!("run-as {pkg} {find}")
-                    }
-                };
-                if let Err(e) = adb::shell(&serial, &clear_cmd).await {
-                    return Ok(self
-                        .action_error(
-                            request_id,
-                            "APP_STATE_RESTORE_FAILED",
-                            format!("Failed to clear app data: {e}"),
-                        )
-                        .await);
-                }
-
-                // 4. Push archive to device
-                if let Err(e) = adb::push_file(&serial, local_path, &device_tmp).await {
-                    let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                    return Ok(self
-                        .action_error(
-                            request_id,
-                            "APP_STATE_RESTORE_FAILED",
-                            format!("Failed to push app state archive: {e}"),
-                        )
-                        .await);
-                }
-
-                // 5. Extract archive into app data dir
-                let tar_result = if is_root {
-                    adb::shell_with_timeout(
-                        &serial,
-                        &format!("tar xzf {device_tmp} -C {data_dir}"),
-                        tar_timeout,
-                    )
-                    .await
-                } else {
-                    adb::shell_with_timeout(
-                        &serial,
-                        &format!("run-as {pkg} tar xzf {device_tmp} -C {data_dir}"),
-                        tar_timeout,
-                    )
-                    .await
-                };
-
-                if let Err(e) = tar_result {
-                    let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                    return Ok(self
-                        .action_error(
-                            request_id,
-                            "APP_STATE_RESTORE_FAILED",
-                            format!("Failed to extract app state archive: {e}"),
-                        )
-                        .await);
-                }
-
-                // 6. Fix ownership and SELinux context (root only)
-                if is_root {
-                    let uid_output = match adb::shell_lenient(
-                        &serial,
-                        &format!("stat -c '%u' {data_dir}"),
-                    )
-                    .await
-                    {
-                        Ok(output) => output,
-                        Err(e) => {
-                            let _ =
-                                adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                            return Ok(self
-                                .action_error(
-                                    request_id,
-                                    "APP_STATE_RESTORE_FAILED",
-                                    format!("Failed to determine app UID via stat: {e}"),
-                                )
-                                .await);
-                        }
-                    };
-                    let uid = uid_output.trim().to_string();
-
-                    if uid.is_empty() {
-                        let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                "Failed to determine app UID: stat returned empty output"
-                                    .to_string(),
-                            )
-                            .await);
-                    }
-
-                    if let Err(e) = adb::shell_with_timeout(
-                        &serial,
-                        &format!("chown -R {uid}:{uid} {data_dir}"),
-                        Duration::from_secs(60),
-                    )
-                    .await
-                    {
-                        let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("Failed to fix ownership on restored app state: {e}"),
-                            )
-                            .await);
-                    }
-
-                    if let Err(e) = adb::shell_with_timeout(
-                        &serial,
-                        &format!("restorecon -R {data_dir}"),
-                        Duration::from_secs(60),
-                    )
-                    .await
-                    {
-                        let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("Failed to fix SELinux context on restored app state: {e}"),
-                            )
-                            .await);
-                    }
-                }
-
-                // 7. Clean up temp file
-                let _ = adb::shell_lenient(&serial, &format!("rm -f {device_tmp}")).await;
-
-                // 8. Re-establish device-side state captured outside /data/data
-                // (root only), if the archive carried it.
-                if is_root {
-                    // Keystore keys: without these, credentials encrypted by a
-                    // keystore key destroyed by a `pm clear` between save and
-                    // restore (e.g. a sibling login project resetting the app)
-                    // can't be decrypted and the app comes back signed out.
-                    if let Err(e) =
-                        android_keystore::restore_from_data_dir(&serial, pkg, &data_dir).await
-                    {
-                        return Ok(self
-                            .action_error(
-                                request_id,
-                                "APP_STATE_RESTORE_FAILED",
-                                format!("Keystore restore failed: {e}"),
-                            )
-                            .await);
-                    }
-                    // Granted runtime permissions: re-grant what was granted at
-                    // save time so a dismissed prompt (e.g. notifications) stays
-                    // dismissed. Best-effort — a stale permission must not fail
-                    // the whole restore.
-                    if let Err(e) =
-                        android_permissions::restore_from_data_dir(&serial, pkg, &data_dir).await
-                    {
-                        warn!(%pkg, error = %e, "Runtime permission restore failed; app may re-prompt");
-                    }
-                }
-
-                info!(%pkg, %local_path, "App state restored");
-                Ok(Self::success_action_response(request_id))
-            }
-        }
+        let backend = self.backend().await?;
+        backend.restore_app_state(request_id, serial, &req).await
     }
 
     // ─── Network Route Interception ───
@@ -7717,114 +5068,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let platform = device.platform;
         drop(dm);
 
-        match platform {
-            Platform::Android => match adb::list_webview_sockets(&serial).await {
-                Ok(sockets) => {
-                    let webviews = sockets
-                        .into_iter()
-                        .map(|s| proto::WebViewInfo {
-                            socket_name: s.socket_name,
-                            pid: s.pid,
-                            package_name: s.package_name,
-                            url: String::new(),
-                            title: String::new(),
-                        })
-                        .collect();
-                    Ok(Response::new(proto::ListWebViewsResponse {
-                        request_id,
-                        webviews,
-                        error_message: String::new(),
-                    }))
-                }
-                Err(e) => Ok(Response::new(proto::ListWebViewsResponse {
-                    request_id,
-                    webviews: Vec::new(),
-                    error_message: format!(
-                        "Failed to discover WebViews: {e}. Ensure the app has \
-                             WebView.setWebContentsDebuggingEnabled(true) set."
-                    ),
-                })),
-            },
-            // Note: the iOS TypeScript SDK connects directly to the simulator's
-            // webinspectord socket (webkit-inspector.ts) and does not use this
-            // RPC. This path exists as a server-side fallback via
-            // ios-webkit-debug-proxy for potential future use.
-            Platform::Ios => {
-                #[cfg(target_os = "macos")]
-                {
-                    use crate::ios::webkit_debug_proxy::WebkitDebugProxyHandle;
-
-                    let mut proxy_guard = self.webkit_debug_proxy.write().await;
-                    if proxy_guard.is_none() {
-                        match WebkitDebugProxyHandle::start(serial.clone(), 9221).await {
-                            Ok(handle) => {
-                                *proxy_guard = Some(handle);
-                            }
-                            Err(e) => {
-                                return Ok(Response::new(proto::ListWebViewsResponse {
-                                    request_id,
-                                    webviews: Vec::new(),
-                                    error_message: format!(
-                                        "Failed to start ios_webkit_debug_proxy: {e}"
-                                    ),
-                                }));
-                            }
-                        }
-                    }
-                    let port = proxy_guard.as_ref().unwrap().port();
-                    drop(proxy_guard);
-
-                    // Query the proxy's HTTP endpoint for available targets
-                    match query_cdp_json(port).await {
-                        Ok(targets) => {
-                            let webviews = targets
-                                .into_iter()
-                                .filter_map(|t| {
-                                    let ws_url = t.get("webSocketDebuggerUrl")?.as_str()?;
-                                    Some(proto::WebViewInfo {
-                                        socket_name: ws_url.to_string(),
-                                        pid: 0,
-                                        package_name: String::new(),
-                                        url: t
-                                            .get("url")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("")
-                                            .to_string(),
-                                        title: t
-                                            .get("title")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("")
-                                            .to_string(),
-                                    })
-                                })
-                                .collect();
-                            Ok(Response::new(proto::ListWebViewsResponse {
-                                request_id,
-                                webviews,
-                                error_message: String::new(),
-                            }))
-                        }
-                        Err(e) => Ok(Response::new(proto::ListWebViewsResponse {
-                            request_id,
-                            webviews: Vec::new(),
-                            error_message: format!(
-                                "Failed to query ios_webkit_debug_proxy: {e}. \
-                                 Ensure Safari Web Inspector is enabled on the device \
-                                 and the WebView has isInspectable = true (iOS 16.4+)."
-                            ),
-                        })),
-                    }
-                }
-                #[cfg(not(target_os = "macos"))]
-                {
-                    Ok(Response::new(proto::ListWebViewsResponse {
-                        request_id,
-                        webviews: Vec::new(),
-                        error_message: "iOS WebView testing requires macOS".to_string(),
-                    }))
-                }
-            }
-        }
+        device_backend::for_platform(self, platform)
+            .list_web_views(request_id, serial)
+            .await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -7843,69 +5089,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         let platform = device.platform;
         drop(dm);
 
-        match platform {
-            Platform::Android => {
-                // Find a free port by binding to :0
-                let listener = std::net::TcpListener::bind("127.0.0.1:0")
-                    .map_err(|e| Status::internal(format!("Failed to find free port: {e}")))?;
-                let host_port = listener
-                    .local_addr()
-                    .map_err(|e| Status::internal(format!("Failed to get port: {e}")))?
-                    .port();
-                drop(listener);
-
-                match adb::forward_abstract_socket_with_timeout(
-                    &serial,
-                    host_port,
-                    &req.socket_name,
-                    WEBVIEW_ADB_TIMEOUT,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        self.webview_forwards
-                            .write()
-                            .await
-                            .insert(host_port, req.socket_name);
-                        Ok(Response::new(proto::ForwardWebViewPortResponse {
-                            request_id,
-                            success: true,
-                            local_port: host_port as u32,
-                            error_message: String::new(),
-                        }))
-                    }
-                    Err(e) => Ok(Response::new(proto::ForwardWebViewPortResponse {
-                        request_id,
-                        success: false,
-                        local_port: 0,
-                        error_message: format!("Failed to forward WebView port: {e}"),
-                    })),
-                }
-            }
-            Platform::Ios => {
-                // For iOS, the socket_name IS the webSocketDebuggerUrl —
-                // extract the port from it and return it directly since
-                // ios_webkit_debug_proxy already exposes targets on localhost.
-                let port = extract_port_from_ws_url(&req.socket_name).unwrap_or(0);
-                if port == 0 {
-                    return Ok(Response::new(proto::ForwardWebViewPortResponse {
-                        request_id,
-                        success: false,
-                        local_port: 0,
-                        error_message: format!(
-                            "Failed to extract port from WebSocket URL: {}",
-                            req.socket_name
-                        ),
-                    }));
-                }
-                Ok(Response::new(proto::ForwardWebViewPortResponse {
-                    request_id,
-                    success: true,
-                    local_port: port as u32,
-                    error_message: String::new(),
-                }))
-            }
-        }
+        device_backend::for_platform(self, platform)
+            .forward_web_view_port(request_id, serial, req)
+            .await
     }
 
     #[instrument(skip_all, fields(request_id))]
@@ -8428,6 +5614,34 @@ pub(crate) fn parse_element_list(data: &Value) -> Vec<proto::ElementInfo> {
         .unwrap_or_default();
 
     arr.iter().filter_map(parse_element_info).collect()
+}
+
+/// One result per requested selector, in request order. A result list that
+/// doesn't line up with the request can't be attributed to selectors, so it
+/// is an error rather than a partial answer.
+pub(crate) fn parse_selector_evaluations(
+    data: &Value,
+    expected: usize,
+) -> Result<Vec<proto::SelectorEvaluation>, String> {
+    let arr = match data.get("results").and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None if expected == 0 => return Ok(Vec::new()),
+        None => return Err("agent returned no results for evaluateSelectors".to_string()),
+    };
+    if arr.len() != expected {
+        return Err(format!(
+            "agent returned {} result(s) for {} selector(s)",
+            arr.len(),
+            expected
+        ));
+    }
+    Ok(arr
+        .iter()
+        .map(|entry| proto::SelectorEvaluation {
+            elements: parse_element_list(entry),
+            error_message: json_str(entry, "error"),
+        })
+        .collect())
 }
 
 pub(crate) fn parse_bounds(value: Option<&Value>) -> Option<proto::Bounds> {
@@ -8959,6 +6173,21 @@ fn system_proxy_fallback_warning(serial: &str) -> String {
 fn android_ca_install_failure(err: &anyhow::Error) -> (bool, String) {
     let cause = err.to_string();
     let cause = cause.trim().trim_end_matches('.');
+    // The CA never went in, and the device is left alone so the agent keeps
+    // running (PILOT-831): tunnel, so the app's HTTPS still works.
+    if err.downcast_ref::<adb::AdbdRestartRefused>().is_some() {
+        return (
+            true,
+            format!(
+                "Could not install Tapsmith's CA certificate on the device: {cause}. \
+                 HTTPS is passed through to its servers uncaptured, so device.route(), \
+                 waitForRequest() and waitForResponse() cannot see it; plain HTTP is still \
+                 captured. A Tapsmith daemon roots the device when it selects it, before \
+                 starting its agent: quit Tapsmith (UI mode, watch and MCP sessions too) \
+                 and start it again to capture HTTPS"
+            ),
+        );
+    }
     match err.downcast_ref::<adb::AdbRootUnavailable>() {
         Some(root) if root.is_emulator => (
             true,
@@ -9085,6 +6314,48 @@ mod tests {
         assert!(!tunnel);
         assert!(msg.contains("adb push failed: device offline."), "{msg}");
         assert!(msg.contains("HTTPS is still intercepted"), "{msg}");
+    }
+
+    // PILOT-831: a capture start that would have to restart adbd under the
+    // running agent leaves the device alone, and tunnels so HTTPS still works.
+    #[test]
+    fn refused_adbd_restart_tunnels_https_and_says_why() {
+        let (tunnel, msg) = android_ca_install_failure(&adb::AdbdRestartRefused.into());
+        assert!(tunnel);
+        assert!(msg.contains("end the Tapsmith agent"), "{msg}");
+        assert!(msg.contains("start it again"), "{msg}");
+        assert!(msg.contains("passed through"), "{msg}");
+        assert!(msg.contains("device.route()"), "{msg}");
+    }
+
+    fn test_service() -> TapsmithServiceImpl {
+        TapsmithServiceImpl::new(
+            Arc::new(RwLock::new(DeviceManager::new())),
+            Arc::new(RwLock::new(AgentConnection::new())),
+            crate::daemon_log_bus::DaemonLogBus::new(16),
+        )
+    }
+
+    fn started_on(serial: &str, platform: Platform) -> StartedAgentConfig {
+        StartedAgentConfig::from_start_agent_request(
+            serial,
+            platform,
+            &proto::StartAgentRequest::default(),
+        )
+    }
+
+    // PILOT-831: only an Android agent this daemon started on that serial
+    // stops the CA install from restarting adbd.
+    #[tokio::test]
+    async fn android_agent_started_on_matches_serial_and_platform() {
+        let svc = test_service();
+        assert!(!svc.android_agent_started_on("emulator-5554").await);
+        *svc.started_agent_config.write().await =
+            Some(started_on("emulator-5554", Platform::Android));
+        assert!(svc.android_agent_started_on("emulator-5554").await);
+        assert!(!svc.android_agent_started_on("emulator-5556").await);
+        *svc.started_agent_config.write().await = Some(started_on("emulator-5554", Platform::Ios));
+        assert!(!svc.android_agent_started_on("emulator-5554").await);
     }
 
     #[test]
@@ -9694,6 +6965,315 @@ mod tests {
         assert_eq!(list[1].element_id, "b");
         assert_eq!(list[0].text, "First");
         assert_eq!(list[1].text, "Second");
+    }
+
+    // ─── run_clear_and_type (PILOT-848) ───
+
+    /// Run clear-and-type against a scripted agent; returns each command sent
+    /// as (method, params) and the result.
+    fn clear_and_type_with(
+        platform: Platform,
+        selector: Value,
+        element_id: Option<&str>,
+        replies: Vec<AgentResponse>,
+    ) -> (Vec<(String, Value)>, Result<AgentResponse, Status>) {
+        let (sent, _, result) =
+            clear_and_type_full(Some(platform), selector, element_id, 5000, replies);
+        (sent, result)
+    }
+
+    /// As clear_and_type_with, also returning each command's transport timeout.
+    fn clear_and_type_full(
+        platform: Option<Platform>,
+        selector: Value,
+        element_id: Option<&str>,
+        timeout_ms: u64,
+        replies: Vec<AgentResponse>,
+    ) -> (
+        Vec<(String, Value)>,
+        Vec<u64>,
+        Result<AgentResponse, Status>,
+    ) {
+        let timeouts = std::sync::Mutex::new(Vec::new());
+        let sent = std::sync::Mutex::new(Vec::new());
+        let replies = std::sync::Mutex::new(std::collections::VecDeque::from(replies));
+        let result = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(run_clear_and_type(
+                platform,
+                selector,
+                element_id.map(String::from),
+                "new".to_string(),
+                timeout_ms,
+                None,
+                |command, timeout| {
+                    timeouts.lock().unwrap().push(timeout);
+                    let json = command.to_json("t");
+                    sent.lock().unwrap().push((
+                        json["method"].as_str().unwrap().to_string(),
+                        json["params"].clone(),
+                    ));
+                    let reply = replies
+                        .lock()
+                        .unwrap()
+                        .pop_front()
+                        .expect("unscripted agent command");
+                    async move { Ok(reply) }
+                },
+            ));
+        (
+            sent.into_inner().unwrap(),
+            timeouts.into_inner().unwrap(),
+            result,
+        )
+    }
+
+    fn ok(data: Value) -> AgentResponse {
+        AgentResponse {
+            success: true,
+            error: None,
+            error_type: None,
+            data,
+        }
+    }
+
+    #[test]
+    fn clear_and_type_android_acts_on_the_field_it_found_once() {
+        // getByText("old value"): a selector re-resolved after the clear
+        // would miss the field.
+        let (sent, result) = clear_and_type_with(
+            Platform::Android,
+            json!({ "textContains": "old value" }),
+            None,
+            vec![
+                ok(json!({ "elementId": "field-1" })),
+                ok(Value::Null),
+                ok(Value::Null),
+            ],
+        );
+        assert!(result.unwrap().success);
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["findElement", "clearText", "typeText"]);
+        for (_, params) in &sent[1..] {
+            assert_eq!(params["elementId"], "field-1");
+            assert!(params.get("textContains").is_none());
+        }
+    }
+
+    #[test]
+    fn clear_and_type_android_reports_a_field_it_cannot_find() {
+        let missing = AgentResponse {
+            success: false,
+            error: Some("Element not found".into()),
+            error_type: None,
+            data: Value::Null,
+        };
+        let (sent, result) = clear_and_type_with(
+            Platform::Android,
+            json!({ "testId": "x" }),
+            None,
+            vec![missing],
+        );
+        assert!(!result.unwrap().success);
+        assert_eq!(sent.len(), 1);
+    }
+
+    #[test]
+    fn clear_and_type_by_element_id_needs_no_find() {
+        let (sent, _) = clear_and_type_with(
+            Platform::Android,
+            json!({}),
+            Some("e7"),
+            vec![ok(Value::Null), ok(Value::Null)],
+        );
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["clearText", "typeText"]);
+    }
+
+    #[test]
+    fn clear_and_type_ios_keeps_both_commands_on_the_selector() {
+        let (sent, _) = clear_and_type_with(
+            Platform::Ios,
+            json!({ "hint": "Email" }),
+            None,
+            vec![ok(Value::Null), ok(Value::Null)],
+        );
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["clearText", "typeText"]);
+        assert_eq!(sent[1].1["hint"], "Email");
+    }
+
+    fn stale() -> AgentResponse {
+        AgentResponse {
+            success: false,
+            error: Some("Element 'field-1' not found. It may have gone stale.".into()),
+            error_type: Some("ELEMENT_NOT_FOUND".into()),
+            data: Value::Null,
+        }
+    }
+
+    #[test]
+    fn clear_and_type_android_falls_back_to_the_selector_when_the_pinned_field_goes_stale() {
+        // The clear re-rendered the field: the type by id is stale, and goes
+        // by selector as both steps did before.
+        let (sent, result) = clear_and_type_with(
+            Platform::Android,
+            json!({ "testId": "email" }),
+            None,
+            vec![
+                ok(json!({ "elementId": "field-1" })),
+                ok(Value::Null),
+                stale(),
+                ok(Value::Null),
+            ],
+        );
+        assert!(result.unwrap().success);
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(
+            methods,
+            ["findElement", "clearText", "typeText", "typeText"]
+        );
+        assert_eq!(sent[2].1["elementId"], "field-1");
+        assert_eq!(sent[3].1["testId"], "email");
+        assert!(sent[3].1.get("elementId").is_none());
+    }
+
+    #[test]
+    fn clear_and_type_android_clears_by_selector_when_the_pinned_field_goes_stale() {
+        let (sent, _) = clear_and_type_with(
+            Platform::Android,
+            json!({ "testId": "email" }),
+            None,
+            vec![
+                ok(json!({ "elementId": "field-1" })),
+                stale(),
+                ok(Value::Null),
+                ok(Value::Null),
+            ],
+        );
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(
+            methods,
+            ["findElement", "clearText", "clearText", "typeText"]
+        );
+        assert_eq!(sent[2].1["testId"], "email");
+        assert_eq!(sent[3].1["testId"], "email");
+    }
+
+    #[test]
+    fn clear_and_type_android_keeps_the_selector_when_the_find_returns_no_id() {
+        let (sent, _) = clear_and_type_with(
+            Platform::Android,
+            json!({ "testId": "email" }),
+            None,
+            vec![ok(json!({})), ok(Value::Null), ok(Value::Null)],
+        );
+        assert_eq!(sent[1].1["testId"], "email");
+        assert_eq!(sent[2].1["testId"], "email");
+    }
+
+    #[test]
+    fn clear_and_type_without_a_known_platform_keeps_the_selector() {
+        let (sent, _, _) = clear_and_type_full(
+            None,
+            json!({ "hint": "Email" }),
+            None,
+            5000,
+            vec![ok(Value::Null), ok(Value::Null)],
+        );
+        let methods: Vec<&str> = sent.iter().map(|(m, _)| m.as_str()).collect();
+        assert_eq!(methods, ["clearText", "typeText"]);
+    }
+
+    #[test]
+    fn clear_and_type_without_a_timeout_leaves_every_step_to_the_agent_default() {
+        let (sent, timeouts, _) = clear_and_type_full(
+            Some(Platform::Android),
+            json!({ "hint": "Email" }),
+            None,
+            0,
+            vec![
+                ok(json!({ "elementId": "f" })),
+                ok(Value::Null),
+                ok(Value::Null),
+            ],
+        );
+        assert_eq!(timeouts, [0, 0, 0]);
+        for (_, params) in &sent {
+            assert!(params.get("timeout").is_none());
+        }
+    }
+
+    #[test]
+    fn clear_and_type_shares_one_budget_across_its_steps() {
+        let (_, timeouts, _) = clear_and_type_full(
+            Some(Platform::Android),
+            json!({ "hint": "Email" }),
+            None,
+            5000,
+            vec![
+                ok(json!({ "elementId": "f" })),
+                ok(Value::Null),
+                ok(Value::Null),
+            ],
+        );
+        assert_eq!(timeouts[0], 5000);
+        assert!(timeouts[1] <= 5000 && timeouts[2] <= timeouts[1]);
+    }
+
+    #[test]
+    fn clear_and_type_types_nothing_after_a_failed_clear() {
+        let failed = AgentResponse {
+            success: false,
+            error: Some("read-only".into()),
+            error_type: None,
+            data: Value::Null,
+        };
+        let (sent, result) = clear_and_type_with(
+            Platform::Ios,
+            json!({ "hint": "Email" }),
+            None,
+            vec![failed],
+        );
+        assert!(!result.unwrap().success);
+        assert_eq!(sent.len(), 1);
+    }
+
+    #[test]
+    fn parse_selector_evaluations_per_entry() {
+        let data = json!({
+            "results": [
+                {"elements": [
+                    {"elementId": "", "text": "A", "bounds": {"left": 0, "top": 0, "right": 10, "bottom": 10}},
+                    {"text": "B"}
+                ]},
+                {"elements": []},
+                {"error": "Invalid regex: ("}
+            ]
+        });
+        let results = parse_selector_evaluations(&data, 3).unwrap();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].elements.len(), 2);
+        assert_eq!(results[0].elements[0].text, "A");
+        assert_eq!(results[0].elements[0].bounds.as_ref().unwrap().right, 10);
+        assert_eq!(results[0].error_message, "");
+        assert!(results[1].elements.is_empty());
+        assert_eq!(results[2].error_message, "Invalid regex: (");
+        assert!(results[2].elements.is_empty());
+    }
+
+    #[test]
+    fn parse_selector_evaluations_count_mismatch_is_an_error() {
+        // A result list that doesn't line up with the request can't be
+        // attributed to selectors, so it must not be returned as if it did.
+        let data = json!({"results": [{"elements": []}]});
+        let err = parse_selector_evaluations(&data, 2).unwrap_err();
+        assert!(err.contains("1 result"), "{err}");
+        assert!(err.contains("2 selector"), "{err}");
+        assert!(parse_selector_evaluations(&json!({}), 1).is_err());
+        assert!(parse_selector_evaluations(&json!({}), 0)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

@@ -4,6 +4,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Device } from '../device.js';
+import { WebViewHandle } from '../webview-handle.js';
+import { isTestEndedError, runInAttemptContext } from '../attempt-fence.js';
 import { selectorToProto } from '../selectors.js';
 import type { TapsmithGrpcClient, ActionResponse } from '../grpc-client.js';
 import { TraceCollector } from '../trace/trace-collector.js';
@@ -392,6 +394,110 @@ describe('Device.webview()', () => {
     expect((forwardWebViewPort.mock.calls[0] as unknown[])[0]).toBe('webview_devtools_remote_app');
   });
 
+  it('handles a WebView call\'s rejection even when the call starts after its deadline has passed', async () => {
+    // A forward started with no time left rejects; with nothing handling
+    // it, that rejection is fatal in the UI server.
+    const app = (socketName: string) => ({ socketName, pid: 222, packageName: 'com.example.app', url: '', title: '' });
+    const listWebViews = vi.fn(async () => ({ requestId: '1', webviews: [app('wv_a'), app('wv_b')], errorMessage: '' }));
+    let skew = 0;
+    const realNow = Date.now.bind(Date);
+    const now = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + skew);
+    const late = new Promise<never>((_, reject) => setTimeout(() => reject(new Error('4 DEADLINE_EXCEEDED')), 5));
+    const then = late.then.bind(late);
+    let handled = false;
+    late.then = ((...args: Parameters<typeof then>) => { handled = true; return then(...args); }) as typeof late.then;
+    // A plain function, not vi.fn: a mock's result tracking would itself
+    // handle the promise it returns.
+    const forwarded: string[] = [];
+    const forwardWebViewPort = (socketName: string) => {
+      forwarded.push(socketName);
+      if (socketName === 'wv_b') return late;
+      skew = 60_000; // the device timeout goes by during the first forward
+      return Promise.resolve({ requestId: '1', success: false, localPort: 0, errorMessage: 'not forwarded' });
+    };
+    try {
+      const device = new Device(makeMockClient({ listWebViews, forwardWebViewPort }), { timeout: 5_000, package: 'com.example.app' });
+      await expect(device.webview()).rejects.toThrow(/Timed out waiting for WebView/);
+      expect(forwarded).toEqual(['wv_a', 'wv_b']);
+      expect(handled).toBe(true);
+    } finally {
+      now.mockRestore();
+      then(undefined, () => {});
+    }
+  });
+
+  it('hands UI mode only a WebView connection that is already up, never connecting for it', async () => {
+    // A second inspector session on the page would wedge it (PILOT-288): the
+    // picker's own connect is the only one.
+    const device = new Device(makeMockClient(), { timeout: 100, package: 'com.example.app' });
+    const establish = vi.spyOn(device as unknown as { _establishWebView: () => Promise<unknown> }, '_establishWebView');
+    expect(device._connectedWebView()).toBeNull();
+    expect(establish).not.toHaveBeenCalled();
+    const alive = { _isAlive: () => true } as unknown as WebViewHandle;
+    (device as unknown as { _cachedWebView: WebViewHandle })._cachedWebView = alive;
+    expect(device._connectedWebView()).toBe(alive);
+    (device as unknown as { _cachedWebView: WebViewHandle })._cachedWebView = { _isAlive: () => false } as unknown as WebViewHandle;
+    expect(device._connectedWebView()).toBeNull();
+  });
+
+  it('gives a reused WebView connection the device timeout as it is now', async () => {
+    // A later test's test.use({ timeout }) must reach the cached handle.
+    const listWebViews = vi.fn(async () => ({ requestId: '1', webviews: [{ socketName: 'webview_devtools_remote_app', pid: 222, packageName: 'com.example.app', url: '', title: '' }], errorMessage: '' }));
+    const forwardWebViewPort = vi.fn(async () => ({ requestId: '1', success: true, localPort: 9222, errorMessage: '' }));
+    const connect = vi.spyOn(WebViewHandle.prototype, '_connect').mockResolvedValue(undefined);
+    const alive = vi.spyOn(WebViewHandle.prototype, '_isAlive').mockReturnValue(true);
+    try {
+      const device = new Device(makeMockClient({ listWebViews, forwardWebViewPort }), { timeout: 100, package: 'com.example.app' });
+      await device.webview();
+      (device as unknown as { _setDefaultTimeout(ms: number): void })._setDefaultTimeout(60_000);
+      const handle = await device.webview();
+      expect((handle as unknown as { _timeoutMs: number })._timeoutMs).toBe(60_000);
+      expect(connect).toHaveBeenCalledTimes(1);
+    } finally {
+      connect.mockRestore();
+      alive.mockRestore();
+    }
+  });
+
+  it('stops an Android WebView connect at once when the WebViews are disposed mid-connect', async () => {
+    // Retrying until the deadline kept opening CDP sessions on a page a
+    // test run was connecting to.
+    const listWebViews = vi.fn(async () => ({ requestId: '1', webviews: [{ socketName: 'webview_devtools_remote_app', pid: 222, packageName: 'com.example.app', url: '', title: '' }], errorMessage: '' }));
+    const forwardWebViewPort = vi.fn(async () => ({ requestId: '1', success: true, localPort: 9222, errorMessage: '' }));
+    let device!: Device;
+    const connect = vi.spyOn(WebViewHandle.prototype, '_connect').mockImplementation(async () => {
+      await device._disposeWebViewManager();
+      throw new Error('socket closed');
+    });
+    try {
+      device = new Device(makeMockClient({ listWebViews, forwardWebViewPort }), { timeout: 5_000, package: 'com.example.app' });
+      const started = Date.now();
+      await expect(device.webview()).rejects.toThrow(/disposed before it completed/);
+      expect(Date.now() - started).toBeLessThan(1_000);
+      expect(connect).toHaveBeenCalledTimes(1);
+    } finally {
+      connect.mockRestore();
+    }
+  });
+
+  it('gives a connected Android WebView the device timeout, not what the connect left', async () => {
+    // The connect is bounded by its attempt budget; a slow discovery used to
+    // leave the cached handle (and every later wait on it) with the remainder.
+    const listWebViews = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      return { requestId: '1', webviews: [{ socketName: 'webview_devtools_remote_app', pid: 222, packageName: 'com.example.app', url: '', title: '' }], errorMessage: '' };
+    });
+    const forwardWebViewPort = vi.fn(async () => ({ requestId: '1', success: true, localPort: 9222, errorMessage: '' }));
+    const connect = vi.spyOn(WebViewHandle.prototype, '_connect').mockResolvedValue(undefined);
+    try {
+      const device = new Device(makeMockClient({ listWebViews, forwardWebViewPort }), { timeout: 100, package: 'com.example.app' });
+      const handle = await device.webview();
+      expect((handle as unknown as { _timeoutMs: number })._timeoutMs).toBe(100);
+    } finally {
+      connect.mockRestore();
+    }
+  });
+
   it('does not attach to another app when a package is configured', async () => {
     const listWebViews = vi.fn(async () => ({
       requestId: '1',
@@ -623,6 +729,121 @@ describe('Device.route()', () => {
 
     await expect(device.route('**/posts*', async () => undefined)).resolves.toBeUndefined();
     expect(stream.writes).toHaveLength(1);
+  });
+
+  // PILOT-775: mocking needs no trace config — the runner arms an on-demand
+  // start and the first route() makes it.
+  describe('on-demand network capture (PILOT-775)', () => {
+    const makeOnDemand = (results: Array<{ success: boolean; errorMessage: string }>) => {
+      const stream = new FakeRouteStream();
+      const startNetworkCapture = vi.fn(async () => ({ requestId: '1', proxyPort: 1, ...(results.shift() ?? { success: true, errorMessage: '' }) }));
+      const client = makeMockClient({
+        startNetworkCapture,
+        networkRouteStream: vi.fn(
+          () => stream as unknown as ReturnType<TapsmithGrpcClient['networkRouteStream']>,
+        ),
+      });
+      const device = new Device(client);
+      const arm = (): void => device._setOnDemandNetworkCapture(async () => { await device._startNetworkCapture(); });
+      return { device, startNetworkCapture, arm };
+    };
+
+    it('starts capture once for concurrent first calls, then not again while it runs', async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([]);
+      arm();
+      await Promise.all([
+        device.route('**/a', async () => undefined),
+        device.route('**/b', async () => undefined),
+      ]);
+      await device.route('**/c', async () => undefined);
+
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+      expect(device._networkProxyRunning).toBe(true);
+      expect(device._takeProxyStartedOnDemand()).toBe(true);
+    });
+
+    it('uses a proxy kept from an earlier test as it is, without restarting it mid-test', async () => {
+      // A restart resets the daemon's capture state, including the hosts it
+      // learned to tunnel for clients that reject its certificate.
+      const { device, startNetworkCapture, arm } = makeOnDemand([]);
+      arm();
+      await device.route('**/a', async () => undefined);
+      device._takeProxyStartedOnDemand();
+      await device._stopNetworkCapture({ keepRunning: true });
+
+      arm();
+      await device.route('**/b', async () => undefined);
+
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+      expect(device._takeProxyStartedOnDemand()).toBe(false);
+    });
+
+    it('fails route() with the reason, tries once per arm, and tries again once re-armed', async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([
+        { success: false, errorMessage: 'Network Extension not approved' },
+        { success: true, errorMessage: '' },
+      ]);
+      arm();
+      await expect(device.route('**/a', async () => undefined))
+        .rejects.toThrow('Network capture disabled: Network Extension not approved');
+      await expect(device.route('**/a', async () => undefined))
+        .rejects.toThrow('Network capture disabled: Network Extension not approved');
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+
+      arm();
+      await expect(device.route('**/a', async () => undefined)).resolves.toBeUndefined();
+      expect(startNetworkCapture).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not register a route whose test ended while the on-demand start ran', async () => {
+      const stream = new FakeRouteStream();
+      const token = { closed: false };
+      const client = makeMockClient({
+        startNetworkCapture: vi.fn(async () => {
+          token.closed = true; // the test timed out meanwhile
+          return { requestId: '1', proxyPort: 1, success: true, errorMessage: '' };
+        }),
+        networkRouteStream: vi.fn(() => stream as unknown as ReturnType<TapsmithGrpcClient['networkRouteStream']>),
+      });
+      const device = new Device(client);
+      device._setOnDemandNetworkCapture(async () => { await device._startNetworkCapture(); });
+
+      const err = await runInAttemptContext(token, () => device.route('**/a', async () => undefined).then(() => undefined, (e: unknown) => e));
+
+      expect(isTestEndedError(err)).toBe(true);
+      expect(stream.writes.filter((m) => typeof m === 'object' && m !== null && 'registerRoute' in m)).toEqual([]);
+      expect(device._takeRouteRegistrations()).toBe(0);
+    });
+
+    it('starts capture on demand for device.on() too', async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([]);
+      arm();
+      device.on('request', () => {});
+      await vi.waitFor(() => expect(device._networkProxyRunning).toBe(true));
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not retry on demand a trace's own start that failed in the same arm", async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([
+        { success: false, errorMessage: 'proxy unavailable' },
+      ]);
+      arm();
+      await device._startNetworkCapture();
+      await expect(device.route('**/a', async () => undefined))
+        .rejects.toThrow('Network capture disabled: proxy unavailable');
+      expect(startNetworkCapture).toHaveBeenCalledTimes(1);
+    });
+
+    it('starts nothing when the runner has not armed it, or cleared it', async () => {
+      const { device, startNetworkCapture, arm } = makeOnDemand([]);
+      await device.route('**/a', async () => undefined);
+      arm();
+      device._setOnDemandNetworkCapture(null);
+      await device.route('**/b', async () => undefined);
+
+      expect(startNetworkCapture).not.toHaveBeenCalled();
+      expect(device._networkProxyRunning).toBe(false);
+    });
   });
 
   it('counts successful registrations for the runner and resets when taken (PILOT-517)', async () => {

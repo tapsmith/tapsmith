@@ -119,4 +119,18 @@ describe("Locator & assertion regressions", () => {
       device.getByPlaceholder("This placeholder definitely does not exist"),
     ).toHaveCount(0)
   })
+
+  // ─── PILOT-850: a getter chained off a plain parent was not scoped ───
+  // The parent was sent to the agent as a nested selector, which neither agent
+  // reads, so the child matched across the whole screen.
+  test("PILOT-850: a getter chained off a plain parent stays inside it", async ({ device }) => {
+    await device.getByDescription("Toggles").tap()
+    const heading = device.getByRole("heading", { name: "Switches" })
+    // Both are on screen, so a 0 below is the scope working, not a parent
+    // that never resolved.
+    await expect(heading).toBeVisible()
+    await expect(device.getByText("Dark Mode").first()).toBeVisible()
+    // "Dark Mode" sits below the heading, not inside it.
+    await expect(heading.getByText("Dark Mode")).toHaveCount(0)
+  })
 })

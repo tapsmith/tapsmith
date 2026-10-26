@@ -174,7 +174,22 @@ class FindRulesTest {
         children = { n -> n.children.filter { it.visible } },
         ownText = { n -> n.text?.takeIf { it.isNotEmpty() } ?: n.desc?.takeIf { it.isNotEmpty() } },
         maxDepth = maxDepth,
+        skip = { n -> NonAppNodes.isHooksMarker(n.text, n.desc) },
     )
+
+    @Test
+    fun `the hooks marker gives no text to the view around it (PILOT-830)`() {
+        val root =
+            Node(
+                children =
+                    listOf(
+                        Node(text = "Home"),
+                        Node(children = listOf(Node(text = "tapsmith-hooks:1;epoch=0;nav=1;url=app:///"))),
+                        Node(desc = "tapsmith-hooks:1;epoch=0"),
+                    ),
+            )
+        assertEquals(listOf("Home"), parts(root))
+    }
 
     @Test
     fun `each child contributes its text, else its description, else its own descendants`() {

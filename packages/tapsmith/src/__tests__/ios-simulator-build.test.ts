@@ -239,6 +239,17 @@ describe('findSimulatorXctestrun() SDK-aware resolution', () => {
     expect(findSimulatorXctestrun()).toBeUndefined();
   });
 
+  /** This Tapsmith is 9.9.9, and its cache (PILOT-485: `<root>/9.9.9`) was built for SDK 26.0. */
+  function mockCurrentCacheMarkers(): void {
+    vi.mocked(fs.readFileSync).mockImplementation(((file: string) => {
+      const f = String(file);
+      if (f.endsWith('.sdk-version')) return '26.0';
+      if (f.endsWith('package.json')) return JSON.stringify({ version: '9.9.9' });
+      throw new Error('ENOENT');
+    }// eslint-disable-next-line @typescript-eslint/no-explicit-any -- readFileSync overloads
+    ) as any);
+  }
+
   // ─── Host architecture (PILOT-559) ───
 
   it('looks for the arm64 package under Rosetta, not the x64 one npm installed', async () => {
@@ -255,9 +266,9 @@ describe('findSimulatorXctestrun() SDK-aware resolution', () => {
 
   it('skips an x86_64 auto-build cache on an arm64 host, so the agent is rebuilt', async () => {
     execFileSyncMock.mockReturnValue('26.0\n');
-    vi.mocked(fs.readFileSync).mockReturnValue('26.0');
+    mockCurrentCacheMarkers();
     mockResolve.mockImplementation(() => { throw new Error('MODULE_NOT_FOUND'); });
-    const cacheDir = path.join('/Users/test', '.tapsmith', 'ios-simulator-agent');
+    const cacheDir = path.join('/Users/test', '.tapsmith', 'ios-simulator-agent', '9.9.9');
     mockDirs({
       [cacheDir]: ['TapsmithAgentUITests_iphonesimulator26.0-x86_64.xctestrun', 'Debug-iphonesimulator'],
       ...productsDirs(cacheDir),
@@ -270,9 +281,9 @@ describe('findSimulatorXctestrun() SDK-aware resolution', () => {
 
   it('keeps an arm64 or universal cache on an arm64 host, and an x86_64 one on an Intel Mac', async () => {
     execFileSyncMock.mockReturnValue('26.0\n');
-    vi.mocked(fs.readFileSync).mockReturnValue('26.0');
+    mockCurrentCacheMarkers();
     mockResolve.mockImplementation(() => { throw new Error('MODULE_NOT_FOUND'); });
-    const cacheDir = path.join('/Users/test', '.tapsmith', 'ios-simulator-agent');
+    const cacheDir = path.join('/Users/test', '.tapsmith', 'ios-simulator-agent', '9.9.9');
     statSync.mockReturnValue({ mtimeMs: Date.now() } as fs.Stats);
     const { findSimulatorXctestrun } = await import('../ios-device-resolve.js');
 

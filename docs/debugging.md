@@ -473,19 +473,7 @@ See the [Locators Guide](locators.md) for the full priority hierarchy and when t
 
 ### The ESLint plugin
 
-Tapsmith's ESLint plugin warns when you use low-priority locators (test IDs, resource IDs, XPath) where a higher-priority accessible locator would work:
-
-```javascript
-// eslint.config.js
-import { eslintPlugin } from "tapsmith"
-
-export default [
-  {
-    plugins: { tapsmith: eslintPlugin },
-    rules: { ...eslintPlugin.configs.recommended.rules },
-  },
-]
-```
+Tapsmith's ESLint plugin warns when you use low-priority locators (test IDs, resource IDs, XPath) where a higher-priority accessible locator would work. The [Locators Guide](locators.md#eslint-plugin) has the setup for a TypeScript project. That setup also reports actions and assertions that are missing an `await`.
 
 | Rule | What it catches |
 |------|----------------|

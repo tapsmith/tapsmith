@@ -10,6 +10,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { tapsmithPackageVersion } from '../ios-agent-paths.js';
+
 vi.mock('../build-ios-agent.js', () => ({
   resolveIosAgentDir: () => process.env.FAKE_AGENT_DIR,
   stripDstRootPath: () => undefined,
@@ -20,11 +22,22 @@ vi.mock('../build-ios-agent.js', () => ({
 const { existingBuild } = vi.hoisted(() => ({
   existingBuild: { path: undefined as string | undefined, sdk: '27.0' as string | undefined },
 }));
-vi.mock('../ios-device-resolve.js', () => ({
-  findSimulatorXctestrun: () => existingBuild.path,
-  getInstalledSimulatorSdkVersion: () => existingBuild.sdk,
-  extractSdkVersion: (p: string) => /iphonesimulator(\d+\.\d+)/.exec(p)?.[1],
-}));
+// Without a hand-set existing build, the lookup finds what the real cache
+// inspection (reading the temp HOME) calls current — so a build one call
+// made is what the next call finds.
+vi.mock('../ios-device-resolve.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../ios-device-resolve.js')>();
+  return {
+    ...actual,
+    findSimulatorXctestrun: () => {
+      if (existingBuild.path) return existingBuild.path;
+      const cache = actual.inspectSimulatorAgentCache(existingBuild.sdk);
+      return cache && !cache.stale ? cache.xctestrun : undefined;
+    },
+    getInstalledSimulatorSdkVersion: () => existingBuild.sdk,
+    extractSdkVersion: (p: string) => /iphonesimulator(\d+\.\d+)/.exec(p)?.[1],
+  };
+});
 
 // The machine's arch as host-arch.ts reports it: arm64 under Rosetta too.
 const { hostArch } = vi.hoisted(() => ({ hostArch: vi.fn(() => 'arm64') }));
@@ -37,16 +50,21 @@ const XCTESTRUN = 'TapsmithAgentUITests_TapsmithAgentUITests_iphonesimulator27.0
 
 const FAKE_XCODEBUILD = `#!/bin/sh
 [ -n "$FAKE_XCB_ARGS" ] && echo "$@" > "$FAKE_XCB_ARGS"
+[ -n "$FAKE_XCB_COUNT" ] && echo build >> "$FAKE_XCB_COUNT"
 dd=""
 while [ $# -gt 0 ]; do
   case "$1" in -derivedDataPath) dd="$2"; shift;; esac
   shift
 done
 products() {
-  mkdir -p "$dd/Build/Products/Debug-iphonesimulator/TapsmithAgentUITests-Runner.app"
+  mkdir -p "$dd/Build/Products/Debug-iphonesimulator/TapsmithAgentUITests-Runner.app/PlugIns/TapsmithAgentUITests.xctest"
   touch "$dd/Build/Products/${XCTESTRUN}"
 }
 case "$FAKE_XCB_MODE" in
+  slow-ok)
+    sleep 1
+    products
+    exit 0;;
   big-ok)
     # 12 MB: over both the old 1 MB (init) and 10 MB (runtime) buffers.
     yes 'CompileSwift normal arm64 /a/fairly/long/path/to/TapsmithAgent/Source.swift (in target TapsmithAgentUITests)' | head -c 12000000
@@ -134,7 +152,9 @@ afterEach(() => {
   existingBuild.sdk = '27.0';
 });
 
-const cacheDir = (): string => path.join(home, '.tapsmith', 'ios-simulator-agent');
+const cacheRoot = (): string => path.join(home, '.tapsmith', 'ios-simulator-agent');
+/** This version's cache (PILOT-485: one directory per Tapsmith version). */
+const cacheDir = (): string => path.join(cacheRoot(), tapsmithPackageVersion());
 const logPath = (): string => path.join(cacheDir(), `xcodebuild-${process.pid}.log`);
 
 async function build(mode: string, options?: { timeoutMs?: number }): Promise<string> {
@@ -325,6 +345,99 @@ describe('ensureSimulatorAgent() options', () => {
       log.mockRestore();
     }
   });
+
+  // PILOT-485: another version's cached build is never used, so the run
+  // builds this version's own — says that is why — and leaves the other be.
+  it('builds its own agent when only another Tapsmith version has one cached, and says why', async () => {
+    const otherDir = path.join(cacheRoot(), '0.0.1-older');
+    fs.mkdirSync(path.join(otherDir, 'Debug-iphonesimulator', 'R.app', 'PlugIns', 'T.xctest'), { recursive: true });
+    fs.writeFileSync(path.join(otherDir, XCTESTRUN), '<plist/>');
+    fs.writeFileSync(path.join(otherDir, '.sdk-version'), '27.0');
+    process.env.FAKE_XCB_MODE = 'big-ok';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+      expect(await ensureSimulatorAgent()).toBe(path.join(cacheDir(), XCTESTRUN));
+      expect(log).toHaveBeenCalledWith(expect.stringMatching(
+        /^The cached iOS simulator agent in .* was built by Tapsmith 0\.0\.1-older \(this is .*\)\. Building iOS agent for SDK 27\.0/,
+      ));
+      expect(fs.existsSync(path.join(otherDir, XCTESTRUN))).toBe(true);
+    } finally {
+      log.mockRestore();
+    }
+  }, 30_000);
+
+  it('drops the SDK marker while it builds, so a failed build leaves no current-looking cache', async () => {
+    fs.mkdirSync(cacheDir(), { recursive: true });
+    fs.writeFileSync(path.join(cacheDir(), '.sdk-version'), '27.0');
+    await buildError('fail');
+    expect(fs.existsSync(path.join(cacheDir(), '.sdk-version'))).toBe(false);
+  }, 30_000);
+
+  it('builds once when several workers need the agent at the same time', async () => {
+    const count = path.join(home, 'xcodebuild-count');
+    process.env.FAKE_XCB_COUNT = count;
+    process.env.FAKE_XCB_MODE = 'slow-ok';
+    onTestFinished(() => { delete process.env.FAKE_XCB_COUNT; });
+    const lines: string[] = [];
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    const results = await Promise.all([1, 2, 3].map(() => ensureSimulatorAgent({ onProgress: (m) => lines.push(m) })));
+    expect(results).toEqual(Array(3).fill(path.join(cacheDir(), XCTESTRUN)));
+    expect(fs.readFileSync(count, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect(lines).toContain('Waiting for another Tapsmith process to finish building the iOS simulator agent...');
+  }, 30_000);
+
+  it('reports the build that failed while it waited, instead of repeating it once per worker', async () => {
+    const count = path.join(home, 'xcodebuild-count');
+    process.env.FAKE_XCB_COUNT = count;
+    process.env.FAKE_XCB_MODE = 'fail';
+    onTestFinished(() => { delete process.env.FAKE_XCB_COUNT; });
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    const results = await Promise.allSettled([1, 2, 3].map(() => ensureSimulatorAgent({ quiet: true })));
+    expect(fs.readFileSync(count, 'utf8').trim().split('\n')).toHaveLength(1);
+    for (const r of results) {
+      expect(r.status).toBe('rejected');
+      expect(String((r as PromiseRejectedResult).reason)).toContain('xcodebuild build-for-testing failed (exit code 65)');
+    }
+    // The next run (nobody building) tries again.
+    process.env.FAKE_XCB_MODE = 'big-ok';
+    expect(await ensureSimulatorAgent({ quiet: true })).toBe(path.join(cacheDir(), XCTESTRUN));
+    expect(fs.existsSync(path.join(cacheDir(), '.build-failed'))).toBe(false);
+  }, 30_000);
+
+  it('keeps a finished build when its lock was broken as stale meanwhile (release rejects ERELEASED)', async () => {
+    const actual = await vi.importActual<typeof import('proper-lockfile')>('proper-lockfile');
+    vi.doMock('proper-lockfile', () => ({
+      default: {
+        ...actual,
+        lock: async (file: string, opts: object) => {
+          const release = await actual.lock(file, opts);
+          return async () => {
+            await release();
+            throw Object.assign(new Error('Lock is already released'), { code: 'ERELEASED' });
+          };
+        },
+      },
+    }));
+    onTestFinished(() => { vi.doUnmock('proper-lockfile'); });
+    process.env.FAKE_XCB_MODE = 'big-ok';
+    const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+    expect(await ensureSimulatorAgent({ quiet: true })).toBe(path.join(cacheDir(), XCTESTRUN));
+  }, 30_000);
+
+  it('hands its progress to onProgress instead of stdout', async () => {
+    process.env.FAKE_XCB_MODE = 'big-ok';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const lines: string[] = [];
+    try {
+      const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+      await ensureSimulatorAgent({ onProgress: (m) => lines.push(m) });
+      expect(lines).toEqual([expect.stringContaining('Building from source for SDK 27.0')]);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+    }
+  }, 30_000);
 
   it('says macOS is needed when there is no SDK because this is not a Mac', async () => {
     existingBuild.sdk = undefined;

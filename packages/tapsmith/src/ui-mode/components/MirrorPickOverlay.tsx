@@ -107,7 +107,7 @@ export function MirrorPickOverlay({ canvasRef, dpr, hoverBounds, matchBounds }: 
       {matchBounds.map((b, i) => (
         <div key={i} class="mp-rect-match" style={toStyle(b)} />
       ))}
-      {hoverBounds && <div class="mp-rect-hover" style={toStyle(hoverBounds)} />}
+      {hoverBounds && <div class="mp-rect-hover" data-testid="mirror-pick-hover" style={toStyle(hoverBounds)} />}
     </div>
   );
 }

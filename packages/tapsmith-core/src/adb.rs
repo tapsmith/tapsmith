@@ -672,41 +672,57 @@ fn is_retryable_adb_transport_error(message: &str) -> bool {
 ///
 /// Returns the on-device path where the cert was installed, so the caller
 /// can clean it up later.
+///
+/// On a rootable build that is not root yet, `adb root` restarts adbd, which
+/// ends a running agent's instrumentation and drops its port forward
+/// (PILOT-831). `daemon_agent` says whether this daemon has started or holds
+/// an agent on the device; when it has and the agent's process is still alive,
+/// nothing is changed and the error is [`AdbdRestartRefused`]. An agent the
+/// daemon has not started yet (one an earlier session left running) is about
+/// to be replaced, so it does not stop the root.
 pub async fn install_ca_cert(
     serial: &str,
     ca_pem_path: &str,
     cert_filename: &str,
+    daemon_agent: bool,
 ) -> Result<String> {
     // Check if already running as root (e.g. CLI called `adb root` during setup)
-    let already_root = shell_lenient(serial, "id")
-        .await
-        .map(|out| out.contains("uid=0"))
-        .unwrap_or(false);
-
-    if already_root {
-        debug!(%serial, "adb already running as root, skipping adb root");
+    let root = adbd_is_root(serial).await;
+    // The daemon's own record outlives an agent that died with its emulator,
+    // so the device confirms it. Only a rootable build restarts adbd on
+    // `adb root`; a production build refuses without a restart, so asking it
+    // stays safe under an agent. Each probe runs only when the answer so far
+    // needs it.
+    let alive = if root == Some(true) || !daemon_agent {
+        None
     } else {
-        // Attempt to restart adb as root — required for writing to system dirs
-        let root_result = run_adb_lenient(serial, &["root"]).await;
-        match root_result {
-            Ok(output) => {
-                let msg = String::from_utf8_lossy(&output);
-                if msg.contains("cannot run as root") || msg.contains("adbd cannot run as root") {
-                    let err = adb_root_unavailable(serial).await;
-                    tracing::warn!(%serial, "{err}");
-                    return Err(err.into());
-                }
-                debug!(%serial, "adb root succeeded, waiting for device");
-            }
-            Err(e) => {
-                tracing::warn!(%serial, "adb root failed: {e} — CA must be installed manually");
-                return Err(anyhow::anyhow!("adb root failed: {e}"));
-            }
-        }
+        probe(serial, AGENT_ALIVE_PROBE, parse_agent_alive).await
+    };
+    let rootable = if alive == Some(true) {
+        probe(serial, "getprop ro.debuggable", parse_rootable).await
+    } else {
+        None
+    };
 
-        // Wait for device to come back after root restart
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        let _ = run_adb(Some(serial), &["wait-for-device"], DEFAULT_TIMEOUT).await;
+    match root_step(daemon_agent, root, alive, rootable) {
+        RootStep::AlreadyRoot => {
+            debug!(%serial, "adb already running as root, skipping adb root");
+        }
+        RootStep::Refuse => {
+            let err = AdbdRestartRefused;
+            tracing::warn!(%serial, "{err}");
+            return Err(err.into());
+        }
+        // A probe went unanswered (adb hiccup). Restarting adbd under the
+        // agent on a guess is not safe, so leave it alone and install anyway:
+        // a root adbd takes the CA as before, and an unrooted one fails the
+        // install with a plain error, which keeps MITM on.
+        RootStep::Unknown => {
+            debug!(%serial, "adb did not answer a root probe; installing the CA without adb root");
+        }
+        RootStep::Restart => {
+            root_adbd(serial).await?;
+        }
     }
 
     let tmp_cert = format!("/data/local/tmp/tapsmith-ca-{cert_filename}.pem");
@@ -763,6 +779,189 @@ pub async fn install_ca_cert(
 
     result
 }
+
+/// What `install_ca_cert` does about root before it writes the CA.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RootStep {
+    AlreadyRoot,
+    /// Run `adb root`: restarts adbd on a rootable build, and is refused
+    /// without a restart on a production one.
+    Restart,
+    /// Leave adbd alone: restarting it would end the running agent.
+    Refuse,
+    /// Leave adbd alone: a probe went unanswered, so it is not known whether
+    /// restarting it would end the running agent.
+    Unknown,
+}
+
+/// `root`, `agent_alive` and `rootable` are the device's answers (`None`: not
+/// asked, or no answer). `daemon_agent`: this daemon has an agent on it.
+fn root_step(
+    daemon_agent: bool,
+    root: Option<bool>,
+    agent_alive: Option<bool>,
+    rootable: Option<bool>,
+) -> RootStep {
+    if root == Some(true) {
+        return RootStep::AlreadyRoot;
+    }
+    // No agent of ours to protect: an earlier session's is about to be
+    // replaced, so root as before (a failed `id` reads as not root).
+    if !daemon_agent {
+        return RootStep::Restart;
+    }
+    match (root, agent_alive, rootable) {
+        (None, _, _) | (_, None, _) => RootStep::Unknown,
+        (_, Some(false), _) => RootStep::Restart,
+        (_, Some(true), Some(false)) => RootStep::Restart,
+        (_, Some(true), Some(true)) => RootStep::Refuse,
+        (_, Some(true), None) => RootStep::Unknown,
+    }
+}
+
+/// Exits with an explicit marker, because `shell_lenient` returns whatever
+/// stdout it got even when adb itself failed.
+const AGENT_ALIVE_PROBE: &str = "pidof dev.tapsmith.agent >/dev/null 2>&1; echo rc=$?";
+
+/// pidof's exit status: found, not found, or no answer.
+fn parse_agent_alive(out: &str) -> Option<bool> {
+    out.lines().find_map(|l| match l.trim() {
+        "rc=0" => Some(true),
+        "rc=1" => Some(false),
+        _ => None,
+    })
+}
+
+/// `ro.debuggable`: 1 on builds whose adbd restarts on `adb root`, 0 on
+/// production builds, anything else no answer.
+fn parse_rootable(out: &str) -> Option<bool> {
+    match out.trim() {
+        "1" => Some(true),
+        "0" => Some(false),
+        _ => None,
+    }
+}
+
+/// `id` output: root, another user, or no answer.
+fn parse_adbd_root(out: &str) -> Option<bool> {
+    if out.contains("uid=0(") {
+        Some(true)
+    } else if out.contains("uid=") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+async fn adbd_is_root(serial: &str) -> Option<bool> {
+    probe(serial, "id", parse_adbd_root).await
+}
+
+/// Run a device probe, asking once more after a short pause when it gets no
+/// answer: one adb hiccup should not decide what happens to adbd.
+async fn probe(serial: &str, command: &str, parse: fn(&str) -> Option<bool>) -> Option<bool> {
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+        if let Some(answer) = shell_lenient(serial, command)
+            .await
+            .ok()
+            .and_then(|out| parse(&out))
+        {
+            return Some(answer);
+        }
+    }
+    None
+}
+
+/// Restart adbd as root (required for writing to system dirs) and wait for the
+/// device to come back.
+///
+/// The restart drops every `adb reverse` and `adb forward` rule for the device
+/// — a dev build's `adb reverse tcp:8081 tcp:8081` to Metro among them — so the
+/// ones in place before it are put back afterwards.
+async fn root_adbd(serial: &str) -> Result<()> {
+    let reverses = run_adb_lenient(serial, &["reverse", "--list"])
+        .await
+        .map(|out| parse_port_rules(&String::from_utf8_lossy(&out), None))
+        .unwrap_or_default();
+    let forwards = list_forwards(DEFAULT_TIMEOUT)
+        .await
+        .map(|out| parse_port_rules(&out, Some(serial)))
+        .unwrap_or_default();
+    match run_adb_lenient(serial, &["root"]).await {
+        Ok(output) => {
+            let msg = String::from_utf8_lossy(&output);
+            if msg.contains("cannot run as root") || msg.contains("adbd cannot run as root") {
+                let err = adb_root_unavailable(serial).await;
+                tracing::warn!(%serial, "{err}");
+                return Err(err.into());
+            }
+            debug!(%serial, "adb root succeeded, waiting for device");
+        }
+        Err(e) => {
+            tracing::warn!(%serial, "adb root failed: {e} — CA must be installed manually");
+            return Err(anyhow::anyhow!("adb root failed: {e}"));
+        }
+    }
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let _ = run_adb(Some(serial), &["wait-for-device"], DEFAULT_TIMEOUT).await;
+    // `adb root` returns before adbd goes down, and a rule re-added on the
+    // old adbd dies with it: wait for the root adbd itself.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+    while adbd_is_root(serial).await != Some(true) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let _ = run_adb(Some(serial), &["wait-for-device"], DEFAULT_TIMEOUT).await;
+    }
+    for (kind, rules) in [("reverse", &reverses), ("forward", &forwards)] {
+        for (from, to) in rules {
+            if let Err(e) = run_adb(Some(serial), &[kind, from, to], DEFAULT_TIMEOUT).await {
+                tracing::warn!(%serial, "Could not restore adb {kind} {from} {to} after adb root: {e}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The `(first, second)` specs of `adb reverse --list` (device side, host side)
+/// or `adb forward --list` (host side, device side) lines, in the order
+/// `adb reverse`/`adb forward` take them back. `serial` keeps only that
+/// device's lines of the host-wide forward list; reverse lines start with a
+/// transport name instead.
+fn parse_port_rules(out: &str, serial: Option<&str>) -> Vec<(String, String)> {
+    out.lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            match fields.as_slice() {
+                [owner, from, to] if serial.is_none_or(|s| s == *owner) => {
+                    Some(((*from).to_string(), (*to).to_string()))
+                }
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// `install_ca_cert` left a rootable device's adbd unrooted because an agent
+/// is running on it: `adb root` would restart adbd, which ends the agent's
+/// instrumentation and drops its port forward mid-session (PILOT-831). The
+/// session roots the device when it selects it, before the agent starts, so
+/// this only happens when that setup-time install could not root it.
+#[derive(Debug)]
+pub struct AdbdRestartRefused;
+
+impl std::fmt::Display for AdbdRestartRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "adbd is not running as root, and switching it to root now would restart adbd \
+             and end the Tapsmith agent running on the device"
+        )
+    }
+}
+
+impl std::error::Error for AdbdRestartRefused {}
 
 /// `install_ca_cert` failed because adbd cannot run as root — a production
 /// build (a Google Play emulator image, or a physical device) — so nothing can
@@ -1729,6 +1928,118 @@ mod tests {
             model: String::new(),
         };
         assert!(!dev.is_online());
+    }
+
+    // ─── root_step (PILOT-831) ───
+
+    #[test]
+    fn root_step_skips_root_when_adbd_already_is() {
+        assert_eq!(
+            root_step(true, Some(true), None, None),
+            RootStep::AlreadyRoot
+        );
+        assert_eq!(
+            root_step(false, Some(true), None, None),
+            RootStep::AlreadyRoot
+        );
+    }
+
+    // At selection, before this daemon starts its agent, root as before —
+    // even when `id` did not answer.
+    #[test]
+    fn root_step_restarts_adbd_before_the_daemons_agent_runs() {
+        assert_eq!(root_step(false, Some(false), None, None), RootStep::Restart);
+        assert_eq!(root_step(false, None, None, None), RootStep::Restart);
+    }
+
+    // A mid-session capture start must not restart a rootable device's adbd
+    // under the running agent: that ended the agent.
+    #[test]
+    fn root_step_refuses_to_restart_a_rootable_adbd_under_the_agent() {
+        assert_eq!(
+            root_step(true, Some(false), Some(true), Some(true)),
+            RootStep::Refuse
+        );
+    }
+
+    // The daemon's record outlives an agent that died with its emulator.
+    #[test]
+    fn root_step_restarts_when_the_daemons_agent_is_gone() {
+        assert_eq!(
+            root_step(true, Some(false), Some(false), None),
+            RootStep::Restart
+        );
+    }
+
+    // A production build refuses `adb root` without restarting adbd, so it is
+    // still asked, and reports AdbRootUnavailable as before (PILOT-711).
+    #[test]
+    fn root_step_still_asks_a_production_build_under_the_agent() {
+        assert_eq!(
+            root_step(true, Some(false), Some(true), Some(false)),
+            RootStep::Restart
+        );
+    }
+
+    // An adb hiccup under the agent is neither a reason to restart adbd nor
+    // to tunnel for the rest of the capture.
+    #[test]
+    fn root_step_leaves_adbd_alone_when_a_probe_goes_unanswered() {
+        assert_eq!(root_step(true, None, None, None), RootStep::Unknown);
+        assert_eq!(root_step(true, Some(false), None, None), RootStep::Unknown);
+        assert_eq!(
+            root_step(true, Some(false), Some(true), None),
+            RootStep::Unknown
+        );
+    }
+
+    #[test]
+    fn agent_probe_reads_pidofs_exit_status() {
+        assert_eq!(parse_agent_alive("rc=1\n"), Some(false));
+        assert_eq!(parse_agent_alive("rc=0\n"), Some(true));
+        // adb failed (device offline): no marker on stdout.
+        assert_eq!(parse_agent_alive(""), None);
+    }
+
+    #[test]
+    fn debuggable_reads_one_zero_or_no_answer() {
+        assert_eq!(parse_rootable("1\n"), Some(true));
+        assert_eq!(parse_rootable("0\n"), Some(false));
+        assert_eq!(parse_rootable(""), None);
+    }
+
+    #[test]
+    fn id_reads_root_another_user_or_no_answer() {
+        assert_eq!(parse_adbd_root("uid=0(root) gid=0(root)\n"), Some(true));
+        assert_eq!(
+            parse_adbd_root("uid=2000(shell) gid=2000(shell)\n"),
+            Some(false)
+        );
+        assert_eq!(parse_adbd_root(""), None);
+    }
+
+    #[test]
+    fn port_rules_parse_reverse_lines_whatever_the_transport_name() {
+        assert_eq!(
+            parse_port_rules(
+                "host-20 tcp:8081 tcp:8081\nUsbFfs localabstract:x tcp:9\n",
+                None
+            ),
+            vec![
+                ("tcp:8081".to_string(), "tcp:8081".to_string()),
+                ("localabstract:x".to_string(), "tcp:9".to_string()),
+            ]
+        );
+        assert!(parse_port_rules("", None).is_empty());
+    }
+
+    #[test]
+    fn port_rules_keep_only_the_devices_forwards() {
+        let out = "emulator-5554 tcp:51360 tcp:18700\nemulator-5556 tcp:1 tcp:2\n";
+        assert_eq!(
+            parse_port_rules(out, Some("emulator-5554")),
+            vec![("tcp:51360".to_string(), "tcp:18700".to_string())]
+        );
     }
 
     // ─── root_unavailable_hint ───

@@ -65,7 +65,8 @@ export class LoginScreen {
   async login(email: string, password: string) {
     await this.emailField.clearAndType(email)
     await this.passwordField.clearAndType(password)
-    await this.device.hideKeyboard()
+    // The keyboard is still up: tap() puts it away first on a React Native
+    // ScrollView. Without one, hideKeyboard() first if it covers the button.
     await this.signInButton.tap()
   }
 }
@@ -386,14 +387,14 @@ For elements that must be individually addressable on both platforms, use `getBy
 
 ### ESLint plugin
 
-Tapsmith ships an ESLint plugin that warns when tests use low-priority locators. Add it to your ESLint config to enforce accessible locator usage across your team. See [Locators Guide](locators.md) for full details.
+Tapsmith ships an ESLint plugin that warns when tests use low-priority locators. Add it to your ESLint config to enforce accessible locator usage across your team. The [Locators Guide](locators.md#eslint-plugin) has the setup, which also reports a missing `await`.
 
 ### Scoping with `.locator()`
 
-Narrow a search to descendants of a specific element using chained `getBy*` calls:
+Narrow a search to elements inside a specific element using chained `getBy*` calls (an element is inside when its centre lies within the parent's bounds; see [Chaining and Scoping](locators.md#chaining-and-scoping)):
 
 ```typescript
-const form = device.getByRole("button", { name: "Login Form" })
+const form = device.getByTestId("login-form") // a plain View with testID="login-form"
 const emailField = form.getByRole("textfield", { name: "Email" })
 await emailField.type("user@example.com")
 ```
@@ -465,7 +466,7 @@ await device.waitForIdle()
 
 ### Network-dependent flows
 
-For flows that depend on network responses, use `waitForRequest()` or `waitForResponse()` instead of arbitrary timeouts. These require network tracing to be enabled:
+For flows that depend on network responses, use `waitForRequest()` or `waitForResponse()` instead of arbitrary timeouts. Start waiting before the action that sends the request (the network proxy starts on demand; see [Network prerequisites](network.md#prerequisites)):
 
 ```typescript
 // Wait for a specific API call to complete

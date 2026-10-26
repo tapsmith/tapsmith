@@ -11,6 +11,7 @@ import * as crypto from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import type * as grpc from '@grpc/grpc-js';
 import type { TapsmithGrpcClient } from './grpc-client.js';
+import { runOutsideAttempt } from './attempt-fence.js';
 import { getActiveTraceCollector, extractStack } from './trace/trace-collector.js';
 import type { SourceLocation } from './trace/types.js';
 
@@ -522,6 +523,13 @@ export class NetworkRouteManager {
   private _requestListeners: Set<(req: TapsmithRequest) => void> = new Set();
   private _responseListeners: Set<(resp: NetworkResponseEventData) => void> = new Set();
   /**
+   * The route scope each request/response listener was added in (undefined
+   * for a test's own), so listeners end with their test or scope like routes
+   * do (PILOT-775): the route manager now outlives the test whenever a proxy
+   * is running, traced or not.
+   */
+  private _listenerScopes: Map<unknown, RouteScope | undefined> = new Map();
+  /**
    * Whether daemon network events are wanted (a listener, or network
    * capture's eager subscription). This is intent, kept across streams; the
    * subscription itself lives on the daemon's per-stream handler, so every
@@ -534,6 +542,8 @@ export class NetworkRouteManager {
   private _reopenTimer: ReturnType<typeof setTimeout> | null = null;
   private _reopenDelayMs = REOPEN_INITIAL_DELAY_MS;
   private _disposed = false;
+  /** Requests handed to a route handler since the runner last took the count (PILOT-775). */
+  private _handlerCalls = 0;
 
   constructor(client: TapsmithGrpcClient) {
     this._client = client;
@@ -549,7 +559,10 @@ export class NetworkRouteManager {
     // may open it, and callbacks it drives (route handlers) must not inherit
     // that scope, or a route a handler registers mid-test would be kept as
     // the scope's instead of removed after the test (PILOT-534).
-    const stream = routeScopeStorage.exit(() => this._client.networkRouteStream());
+    // Outside any attempt context too: the stream outlives the test whose
+    // route() may open it, and its callbacks run in the context it was
+    // opened in (PILOT-775).
+    const stream = routeScopeStorage.exit(() => runOutsideAttempt(() => this._client.networkRouteStream()));
     this._stream = stream;
 
     // Route handlers run outside any route scope, whatever async context
@@ -873,25 +886,51 @@ export class NetworkRouteManager {
   /** Subscribe to request events. */
   addRequestListener(handler: (req: TapsmithRequest) => void): void {
     this._requestListeners.add(handler);
+    this._listenerScopes.set(handler, currentRouteScope());
     this.ensureEventsSubscribed();
   }
 
   /** Unsubscribe from request events. */
   removeRequestListener(handler: (req: TapsmithRequest) => void): void {
     this._requestListeners.delete(handler);
+    if (!this._responseListeners.has(handler as never)) this._listenerScopes.delete(handler);
     this._unsubscribeIfUnused();
   }
 
   /** Subscribe to response events. */
   addResponseListener(handler: (resp: NetworkResponseEventData) => void): void {
     this._responseListeners.add(handler);
+    this._listenerScopes.set(handler, currentRouteScope());
     this.ensureEventsSubscribed();
   }
 
   /** Unsubscribe from response events. */
   removeResponseListener(handler: (resp: NetworkResponseEventData) => void): void {
     this._responseListeners.delete(handler);
+    if (!this._requestListeners.has(handler as never)) this._listenerScopes.delete(handler);
     this._unsubscribeIfUnused();
+  }
+
+  /** Remove the request/response listeners the current test added (PILOT-775). */
+  removeTestListeners(): void {
+    this._removeListenersWhere((scope) => scope === undefined);
+  }
+
+  /** Remove the listeners `scope`'s hooks or fixtures added, once it has ended (PILOT-775). */
+  removeScopeListeners(scope: RouteScope): void {
+    this._removeListenersWhere((s) => s === scope);
+  }
+
+  private _removeListenersWhere(match: (scope: RouteScope | undefined) => boolean): void {
+    let removed = false;
+    for (const [listener, scope] of [...this._listenerScopes]) {
+      if (!match(scope)) continue;
+      this._requestListeners.delete(listener as (req: TapsmithRequest) => void);
+      this._responseListeners.delete(listener as (resp: NetworkResponseEventData) => void);
+      this._listenerScopes.delete(listener);
+      removed = true;
+    }
+    if (removed) this._unsubscribeIfUnused();
   }
 
   private _unsubscribeIfUnused(): void {
@@ -901,6 +940,17 @@ export class NetworkRouteManager {
       this._subscribedStream = null;
       this._safeWrite({ unsubscribeEvents: {} });
     }
+  }
+
+  /**
+   * How many intercepted requests reached a route handler since the last
+   * call, then reset. The runner reads it after each test to tell a route
+   * that never fired from one that did (PILOT-775).
+   */
+  takeHandlerCalls(): number {
+    const n = this._handlerCalls;
+    this._handlerCalls = 0;
+    return n;
   }
 
   /** Whether any routes are registered. */
@@ -926,6 +976,7 @@ export class NetworkRouteManager {
     this._rejectPendingFetches('NetworkRouteManager disposed');
     this._requestListeners.clear();
     this._responseListeners.clear();
+    this._listenerScopes.clear();
 
     if (this._stream) {
       this._stream.end();
@@ -1013,6 +1064,7 @@ export class NetworkRouteManager {
     const route = new Route(msg.interceptId, request, sendDecision, awaitFetchedResponse);
 
     const startTime = Date.now();
+    this._handlerCalls++;
 
     // Run the handler. If it throws, rejects, or returns without calling
     // abort/continue/fulfill/fetch, continue the request (fail-open).

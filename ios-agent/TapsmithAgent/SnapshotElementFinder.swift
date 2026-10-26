@@ -129,15 +129,51 @@ class SnapshotElementFinder {
 
     /// Find all elements from a pre-taken snapshot (avoids an extra IPC).
     func findElements(_ selector: ElementSelector, fromSnapshot resolvedSnapshot: XCUIElementSnapshot) throws -> [ElementInfo] {
+        var snapshotDict = matchableDict(of: resolvedSnapshot)
+        return try findElements(selector, in: &snapshotDict, register: true)
+    }
+
+    /// Evaluate several selectors against one snapshot (PILOT-848), by the
+    /// same match walk as `findElements`, so locator suggestions and match
+    /// counts are decided by the rules tests run with.
+    ///
+    /// - One snapshot and one dictionary conversion for the whole batch:
+    ///   the counts are consistent with each other.
+    /// - Never waits, and never registers a match (no element id, no cache
+    ///   entry, no live query), so evaluating a screen's worth of candidates
+    ///   can't evict the handles of a test running on the same agent.
+    /// - A selector that fails (an invalid RegExp) fails only its own entry.
+    func evaluateSelectors(_ selectors: [ElementSelector]) throws -> [Result<[ElementInfo], Error>] {
+        let snapshot = try takeSnapshot()
+        var snapshotDict = matchableDict(of: snapshot)
+        return selectors.map { selector in
+            Result { try findElements(selector, in: &snapshotDict, register: false) }
+        }
+    }
+
+    /// The snapshot as the string-keyed dictionary the match walk reads,
+    /// with accessibility traits annotated.
+    private func matchableDict(of snapshot: XCUIElementSnapshot) -> [String: Any] {
+        var snapshotDict = convertKeys(snapshot.dictionaryRepresentation)
+        Self.annotateTraits(dict: &snapshotDict, snapshot: snapshot)
+        return snapshotDict
+    }
+
+    /// The match walk over a converted snapshot. With `register`, each match
+    /// gets an element id, cache entries and a lazily built live query for
+    /// later actions; without it (evaluating), matches are only described
+    /// and `snapshotDict` is left as it was.
+    private func findElements(
+        _ selector: ElementSelector,
+        in snapshotDict: inout [String: Any],
+        register: Bool
+    ) throws -> [ElementInfo] {
         if let regexError = selector.regexError {
             throw AgentError.invalidSelector(regexError)
         }
-        // Convert to string-keyed dict for easier processing
-        var snapshotDict = convertKeys(resolvedSnapshot.dictionaryRepresentation)
-        SnapshotElementFinder.annotateTraits(dict: &snapshotDict, snapshot: resolvedSnapshot)
 
         // Check once if keyboard is visible (for focus detection).
-        // Keyboard = elementType 56 (XCUIElement.ElementType.keyboard).
+        // Keyboard = elementType 19 (XCUIElement.ElementType.keyboard).
         let keyboardVisibleInSnapshot = hasKeyboardInTree(snapshotDict)
 
         // Number the app's descendants in pre-order (XCUIElementQuery order)
@@ -145,7 +181,7 @@ class SnapshotElementFinder {
         // by its index within the live query that finds it again
         // (cacheQueryElement, PILOT-549, PILOT-520, PILOT-522).
         var queryNodes: [QueryNode] = []
-        if selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel {
+        if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel) {
             SnapshotElementFinder.numberDescendants(of: &snapshotDict, into: &queryNodes)
         }
         var liveFocusedTextInputFetched = false
@@ -166,6 +202,8 @@ class SnapshotElementFinder {
         var matches: [([String: Any], CGRect)] = []
         var otherAncestors: [WrapperAncestor] = []
         var suppressed = Set<Int>()
+        var keyboardMatches: [UInt] = []
+        var keyboardTop: CGFloat?
         findMatches(
             in: snapshotDict,
             inTabBar: false,
@@ -173,6 +211,8 @@ class SnapshotElementFinder {
             results: &matches,
             otherAncestors: &otherAncestors,
             suppressed: &suppressed,
+            keyboardMatches: &keyboardMatches,
+            keyboardTop: &keyboardTop,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
             focusedHint: focusedHint
@@ -232,7 +272,7 @@ class SnapshotElementFinder {
                 bottom: Int(frame.origin.y + frame.height)
             )
 
-            let elementId = UUID().uuidString
+            let elementId = register ? UUID().uuidString : ""
             let label = nodeDict["label"] as? String ?? ""
             let title = nodeDict["title"] as? String ?? ""
             let identifier = nodeDict["identifier"] as? String ?? ""
@@ -254,26 +294,28 @@ class SnapshotElementFinder {
                 value: value,
                 selected: isSelected
             )
-            // Cache the snapshot bounds for fast coordinate-based actions.
-            lock.lock()
-            boundsCache[elementId] = frame
-            identityCache[elementId] = CachedIdentity(
-                elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar
-            )
-            // Every minted id takes part in eviction, with or without a live
-            // query — ids that get none (placeholder, className, …) would
-            // otherwise stay in the bounds and identity caches for the whole
-            // session.
-            cacheOrder.append(elementId)
-            lock.unlock()
+            if register {
+                // Cache the snapshot bounds for fast coordinate-based actions.
+                lock.lock()
+                boundsCache[elementId] = frame
+                identityCache[elementId] = CachedIdentity(
+                    elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar
+                )
+                // Every minted id takes part in eviction, with or without a live
+                // query — ids that get none (placeholder, className, …) would
+                // otherwise stay in the bounds and identity caches for the whole
+                // session.
+                cacheOrder.append(elementId)
+                lock.unlock()
 
-            // Lazily build an XCUIElement query for actions that need it (typeText, etc.).
-            // This is deferred — the query object is created but not evaluated until
-            // a property (like .isHittable) is accessed. Pass the snapshot node so the
-            // query can use element type + identifier for more precise matching.
-            cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, idIndex: idIndices[matchIndex],
-                labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict
-            )
+                // Lazily build an XCUIElement query for actions that need it (typeText, etc.).
+                // This is deferred — the query object is created but not evaluated until
+                // a property (like .isHittable) is accessed. Pass the snapshot node so the
+                // query can use element type + identifier for more precise matching.
+                cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, idIndex: idIndices[matchIndex],
+                    labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict
+                )
+            }
             // The snapshot's hasFocus is unreliable on Xcode 26 — it can
             // report false even when the text input is the first responder.
             // Use the snapshot when it reports true; otherwise fall back to
@@ -359,6 +401,7 @@ class SnapshotElementFinder {
         // from the batch we are about to return, or a large match set would
         // evict its own first elements before the SDK can act on them
         // (`.first()` acts on the oldest-appended id of the batch).
+        guard register else { return results }
         let currentBatch = Set(results.map { $0.elementId })
         lock.lock()
         pruneCacheLocked(protecting: currentBatch)
@@ -596,6 +639,31 @@ class SnapshotElementFinder {
         let type = element.elementType
         guard textInputTypes.contains(type) else { return nil }
         return (type, element.frame)
+    }
+
+    /// The text input that has keyboard focus right now, as the typing
+    /// focus check compares it (PILOT-829), from the same live query as
+    /// `liveFocusedTextInputFrame`. One snapshot of the match reads every
+    /// attribute at once; `exists` first, because a snapshot of no match
+    /// fails only after XCUITest's wait for one (seconds per call).
+    func liveFocusedTypingInput() -> TypingFocus.Input? {
+        let element = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true"))
+            .firstMatch
+        guard element.exists, let snap = try? element.snapshot() else { return nil }
+        let classNames: [XCUIElement.ElementType: String] = [
+            .textField: "XCUIElementTypeTextField",
+            .secureTextField: "XCUIElementTypeSecureTextField",
+            .textView: "XCUIElementTypeTextView",
+            .searchField: "XCUIElementTypeSearchField",
+        ]
+        guard let className = classNames[snap.elementType] else { return nil }
+        return TypingFocus.Input(
+            frame: snap.frame,
+            className: className,
+            identifier: snap.identifier,
+            placeholder: snap.placeholderValue ?? ""
+        )
     }
 
     private func findLiveFocusedTextInput() -> LiveFocusedTextInput? {
@@ -923,6 +991,12 @@ class SnapshotElementFinder {
         var parts: [String] = []
         if let children = node["children"] as? [[String: Any]] {
             for child in children {
+                // The hooks marker is no one's visible text (NonAppElements).
+                if NonAppElements.isHooksMarker(
+                    label: child["label"] as? String ?? "",
+                    title: child["title"] as? String ?? "",
+                    value: child["value"] as? String ?? ""
+                ) { continue }
                 let ownText: String?
                 if let v = child["value"] as? String, !v.isEmpty {
                     ownText = v
@@ -982,6 +1056,45 @@ class SnapshotElementFinder {
     /// `.tabBar` ancestor (RoleMapping.isTabBarItem, PILOT-514).
     static let inTabBarKey = "tapsmithInTabBar"
 
+    /// Key under which `findMatches` records, on a match after the keyboard
+    /// in tree order, the element types of the keyboard's nodes that match
+    /// the selector: a live query re-resolving the match by position returns
+    /// those of its own type (or all, unscoped) too.
+    static let keyboardMatchesKey = "tapsmithKeyboardMatches"
+
+    /// The element types of the nodes of the subtree at `nodeDict` (itself
+    /// included) that match the selector, ignoring NonAppElements — the
+    /// keyboard's, which the live queries see.
+    private func matchingTypes(
+        in nodeDict: [String: Any],
+        selector: ElementSelector,
+        keyboardVisibleInSnapshot: Bool,
+        liveFocusedTextInput: () -> LiveFocusedTextInput?,
+        focusedHint: FocusedTextInputHint?
+    ) -> [UInt] {
+        var types: [UInt] = []
+        if matchesSelector(
+            nodeDict,
+            inTabBar: false,
+            selector: selector,
+            keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
+            liveFocusedTextInput: liveFocusedTextInput,
+            focusedHint: focusedHint
+        ) {
+            types.append(parseUInt(nodeDict["elementType"]) ?? 0)
+        }
+        for child in nodeDict["children"] as? [[String: Any]] ?? [] {
+            types += matchingTypes(
+                in: child,
+                selector: selector,
+                keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
+                liveFocusedTextInput: liveFocusedTextInput,
+                focusedHint: focusedHint
+            )
+        }
+        return types
+    }
+
     private func findMatches(
         in nodeDict: [String: Any],
         inTabBar: Bool,
@@ -989,6 +1102,8 @@ class SnapshotElementFinder {
         results: inout [([String: Any], CGRect)],
         otherAncestors: inout [WrapperAncestor],
         suppressed: inout Set<Int>,
+        keyboardMatches: inout [UInt],
+        keyboardTop: inout CGFloat?,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
         focusedHint: FocusedTextInputHint?
@@ -998,8 +1113,38 @@ class SnapshotElementFinder {
         // reorder here. We use an ancestor stack to suppress RN-style
         // `.other` wrappers whose identifier/label matches a native
         // descendant in one linear pass.
+        //
+        // What isn't the app's never matches (NonAppElements): the keyboard
+        // and everything in it, the application element itself, the hooks
+        // marker. Only matching skips them — numberDescendants still counts
+        // them, as the live queries that re-resolve a match see them too.
+        let nodeType = XCUIElement.ElementType(rawValue: parseUInt(nodeDict["elementType"]) ?? 0) ?? .other
+        if NonAppElements.excludesSubtree(
+            elementType: nodeType,
+            identifier: nodeDict["identifier"] as? String ?? "",
+            frame: parseFrame(nodeDict),
+            keyboardTop: keyboardTop
+        ) {
+            if nodeType == .keyboard { keyboardTop = parseFrame(nodeDict).minY }
+            // Not matches, but counted: a live query re-resolving a later
+            // match by its position sees the keyboard's nodes that match too.
+            keyboardMatches += matchingTypes(
+                in: nodeDict,
+                selector: selector,
+                keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
+                liveFocusedTextInput: liveFocusedTextInput,
+                focusedHint: focusedHint
+            )
+            return
+        }
+        let isAppNode = !NonAppElements.excludesNode(
+            elementType: nodeType,
+            label: nodeDict["label"] as? String ?? "",
+            title: nodeDict["title"] as? String ?? "",
+            value: nodeDict["value"] as? String ?? ""
+        )
         var pushedAncestor = false
-        if matchesSelector(
+        if isAppNode, matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
             selector: selector,
@@ -1036,6 +1181,7 @@ class SnapshotElementFinder {
             let frame = parseFrame(nodeDict)
             var matched = nodeDict
             if inTabBar { matched[SnapshotElementFinder.inTabBarKey] = true }
+            if !keyboardMatches.isEmpty { matched[SnapshotElementFinder.keyboardMatchesKey] = keyboardMatches }
             results.append((matched, frame))
             let myIndex = results.count - 1
 
@@ -1052,6 +1198,10 @@ class SnapshotElementFinder {
         if let children = nodeDict["children"] as? [[String: Any]] {
             let childrenInTabBar = inTabBar
                 || parseUInt(nodeDict["elementType"]) == XCUIElement.ElementType.tabBar.rawValue
+            // A keyboard's top edge only applies within its own window.
+            let outerKeyboardTop = keyboardTop
+            if nodeType == .window { keyboardTop = nil }
+            defer { if nodeType == .window { keyboardTop = outerKeyboardTop } }
             for child in children {
                 findMatches(
                     in: child,
@@ -1060,6 +1210,8 @@ class SnapshotElementFinder {
                     results: &results,
                     otherAncestors: &otherAncestors,
                     suppressed: &suppressed,
+                    keyboardMatches: &keyboardMatches,
+                    keyboardTop: &keyboardTop,
                     keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
                     liveFocusedTextInput: liveFocusedTextInput,
                     focusedHint: focusedHint
@@ -1371,7 +1523,22 @@ class SnapshotElementFinder {
         // out — and `matchIndex 0` (`.first()`) is always correct. The
         // identifier path (above) is unaffected. Fully eliminating it would need
         // frame-based resolution, which XCUIElement predicates can't express.
-        func resolve(_ base: XCUIElementQuery) -> XCUIElement {
+        //
+        // The match set leaves out what isn't the app's (NonAppElements), so
+        // the query does too: it never counts the hooks marker. It can't leave
+        // out the keyboard, so a match after the keyboard in tree order (an
+        // accessory toolbar, a later window) is indexed past the keyboard's
+        // nodes that match the selector (`keyboardMatchesKey`).
+        let keyboardTypes = snapshotNode?[SnapshotElementFinder.keyboardMatchesKey] as? [UInt] ?? []
+        let scopedToType = nodeElType.map { $0 != .other && $0 != .any } ?? false
+        // `resolve` re-finds by a query on the match's type when it is specific
+        // (`labelQuery`); the testId/id queries below are on any type.
+        let keyboardOffsetInScope = scopedToType
+            ? keyboardTypes.filter { $0 == nodeElTypeRaw }.count
+            : keyboardTypes.count
+        let keyboardOffset = keyboardTypes.count
+        func resolve(_ query: XCUIElementQuery) -> XCUIElement? {
+            let base = query.excludingHooksMarker()
             if !nodeIdentifier.isEmpty {
                 // Narrow to the identifier, then index WITHIN that id group so a
                 // non-unique identifier still resolves positionally. For a unique
@@ -1379,7 +1546,7 @@ class SnapshotElementFinder {
                 return base.matching(NSPredicate(format: "identifier == %@", nodeIdentifier))
                     .element(boundBy: idIndex)
             }
-            return base.element(boundBy: matchIndex)
+            return base.element(boundBy: matchIndex + keyboardOffsetInScope)
         }
         // A label predicate scoped to the snapshot element's type when it is
         // specific (RN buttons surface as `.other`, so fall back to any type).
@@ -1404,11 +1571,13 @@ class SnapshotElementFinder {
         if let testId = selector.testId {
             element = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", testId))
-                .element(boundBy: matchIndex)
+                .excludingHooksMarker()
+                .element(boundBy: matchIndex + keyboardOffset)
         } else if let id = selector.id {
             element = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", id))
-                .element(boundBy: matchIndex)
+                .excludingHooksMarker()
+                .element(boundBy: matchIndex + keyboardOffset)
         } else if let text = selector.text {
             element = resolve(labelQuery(normalizedConcatenatedLabelPredicate(text)))
         } else if let textContains = selector.textContains {

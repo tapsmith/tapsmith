@@ -60,6 +60,16 @@ describe("Login screen", () => {
     await expect(loginScreen.emailField).toContainText("wrong@email.com")
   })
 
+  // The field is found by the text the clear removes: the daemon clears and
+  // types as two agent commands, which must both reach this field (PILOT-848).
+  test("clearAndType() replaces a field found by its own text", async ({ device, loginScreen, platform }) => {
+    test.skip(platform !== "android", "PILOT-852: the iOS agent's clear re-reads the field by its selector, which stops matching once the text shrinks")
+    await loginScreen.emailField.clearAndType("old@value.com")
+    await device.getByText("old@value.com").clearAndType("new@value.com")
+    await expect(loginScreen.emailField).toContainText("new@value.com")
+    await expect(loginScreen.emailField).not.toContainText("old@value.com")
+  })
+
   test("clear() empties the field", async ({ loginScreen }) => {
     await loginScreen.emailField.type("hello")
     await loginScreen.emailField.clear()
@@ -68,13 +78,23 @@ describe("Login screen", () => {
 
   // ─── Form Submission ───
 
-  test("can type credentials and submit", async ({ device, loginScreen }) => {
+  // PILOT-622: tap() leaves the keyboard alone for a text input.
+  test("tapping the next field keeps the keyboard up and moves the focus", async ({ device, loginScreen }) => {
+    await loginScreen.emailField.clearAndType("test@example.com")
+    await loginScreen.passwordField.tap()
+    await expect(loginScreen.passwordField).toBeFocused()
+    expect(await device.isKeyboardShown()).toBe(true)
+  })
+
+  // PILOT-622: the form is in a ScrollView with the default
+  // keyboardShouldPersistTaps, which spends the first touch after typing on
+  // closing the keyboard. tap() puts the keyboard away first, so no
+  // hideKeyboard() is needed.
+  test("can type credentials and submit without hiding the keyboard", async ({ device, loginScreen }) => {
     await loginScreen.emailField.clearAndType("test@example.com")
     await loginScreen.passwordField.clearAndType("password123")
     await expect(loginScreen.signInButton).toBeEnabled()
-    // hideKeyboard mirrors auth.setup.ts — without it, the keyboard
-    // intercepts the submit tap on some iOS configurations.
-    await device.hideKeyboard()
+    expect(await device.isKeyboardShown()).toBe(true)
     await loginScreen.signInButton.tap()
     await expect(device.getByText("Login successful!", { exact: true })).toBeVisible()
   })

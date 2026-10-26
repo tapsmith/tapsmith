@@ -38,6 +38,7 @@ test("a PR touching any guarded area runs the check", () => {
   const samples = [
     "packages/tapsmith-core/src/ios/device.rs",
     "packages/tapsmith-core/src/grpc_server.rs",
+    "packages/tapsmith-core/src/grpc_server/ios_backend.rs",
     "packages/tapsmith-core/src/agent_comms.rs",
     "ios-agent/TapsmithAgent/HierarchyDumper.swift",
     "ios-agent/TapsmithAgent.xcodeproj/project.pbxproj",

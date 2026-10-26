@@ -21,7 +21,7 @@ import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { McpEventEmitter } from '../mcp/events.js';
 import { McpSessionRouter } from '../mcp/http-session-router.js';
-import { configureMcpConnection } from '../mcp/connection.js';
+import { configureMcpConnection, type UiDaemonPorts } from '../mcp/connection.js';
 import { matchRequestedFiles, fileFailureEntry } from '../mcp/headless-dispatcher.js';
 import { fileLoadFailureTitle, isLoadFailureNode, loadFailureFollowUp, loadFailureTreeNode, runFilterForFile, withoutLoadFailedFiles } from '../load-failure.js';
 import { resolveRunSelection } from './run-selection.js';
@@ -79,6 +79,9 @@ import { DeviceReadiness, toWireReadiness, type Candidate, type ReadinessCommand
 import { mergeResetCapabilities, nextCandidate as pickCandidate, policyForFile, type CandidateProject } from './readiness-candidate.js';
 import type { AppResetPolicy, PreparedState, ResetCapabilities } from '../app-reset.js';
 import { DEFAULT_UI_PREFERENCES, type DeviceActivityMessage, type UIPreferences } from './ui-protocol.js';
+import { beginTestRun, endTestRun } from '../mcp/sdk-device.js';
+import { evaluateLiveLocator, LatestOnlyRunner, LiveHierarchyCache, suggestLiveLocators, type LiveLocatorEvaluation } from './live-locators.js';
+import { nodeAtPath, parseHierarchyXml } from '../trace-viewer/components/hierarchy-utils.js';
 import {
   forkStdioForLaunchProgress,
   pipeForkOutputForLaunchProgress,
@@ -386,6 +389,8 @@ export async function startUIServer(
   const targetsRetriedThisRun = new Set<string>();
 
   function markRunStarted(): void {
+    // Release the MCP device tools' WebView before the run connects to it.
+    if (!isRunning) beginTestRun();
     isRunning = true;
     targetsRetriedThisRun.clear();
     runStartedAt = Date.now();
@@ -416,6 +421,7 @@ export async function startUIServer(
   }
 
   function markRunEnded(): void {
+    if (isRunning) endTestRun();
     isRunning = false;
     runStartedAt = 0;
     runningFiles.clear();
@@ -1099,43 +1105,54 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     return matchRequestedFiles(files, ctx.testFiles, roots);
   }
 
+  async function runRequestedFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult> {
+    if (workersEnabled) await ensureWorkersReady();
+    const { testFilter, project } = options ?? {};
+    const validFiles = resolveRequested(files);
+    if (validFiles.length === 0) {
+      return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+    }
+    if (validFiles.length === 1) return withFailures(await runFile(validFiles[0], testFilter, project));
+    let totalPassed = 0, totalFailed = 0, totalSkipped = 0, totalDuration = 0;
+    let stopped = false;
+    // Each runFile() clears testResults at the start of its own run, so the
+    // map only ever holds the most recent file's results. Snapshot each
+    // file's results as it finishes and re-seed the union after the loop so
+    // getResults()/collectFailures() (and thus list_results) reflect the
+    // whole multi-file run, not just the last file.
+    const accumulated: UITestResultEntry[] = [];
+    for (const f of validFiles) {
+      const r = await runFile(f, testFilter, project);
+      accumulated.push(...testResults.values());
+      totalPassed += r.passed;
+      totalFailed += r.failed;
+      totalSkipped += r.skipped;
+      totalDuration += r.duration;
+      // Checked AFTER each file: a stop during file N must not start file
+      // N+1 (each runFile resets the flag when its run begins).
+      if (stopRequested || r.status === 'stopped') { stopped = true; break; }
+    }
+    testResults.clear();
+    for (const entry of accumulated) testResults.set(resultEntryKey(entry), entry);
+    return withFailures({
+      status: stopped ? 'stopped' : totalFailed > 0 ? 'failed' : 'passed',
+      passed: totalPassed,
+      failed: totalFailed,
+      skipped: totalSkipped,
+      duration: totalDuration,
+    });
+  }
+
   const testDispatcher: TestDispatcher = {
     async runFiles(files, options) {
-      if (workersEnabled) await ensureWorkersReady();
-      const { testFilter, project } = options ?? {};
-      const validFiles = resolveRequested(files);
-      if (validFiles.length === 0) {
-        return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+      // One run for the whole request: a file at a time ends each file's run,
+      // which would let the MCP tools' WebView connect between files.
+      beginTestRun();
+      try {
+        return await runRequestedFiles(files, options);
+      } finally {
+        endTestRun();
       }
-      if (validFiles.length === 1) return withFailures(await runFile(validFiles[0], testFilter, project));
-      let totalPassed = 0, totalFailed = 0, totalSkipped = 0, totalDuration = 0;
-      let stopped = false;
-      // Each runFile() clears testResults at the start of its own run, so the
-      // map only ever holds the most recent file's results. Snapshot each
-      // file's results as it finishes and re-seed the union after the loop so
-      // getResults()/collectFailures() (and thus list_results) reflect the
-      // whole multi-file run, not just the last file.
-      const accumulated: UITestResultEntry[] = [];
-      for (const f of validFiles) {
-        const r = await runFile(f, testFilter, project);
-        accumulated.push(...testResults.values());
-        totalPassed += r.passed;
-        totalFailed += r.failed;
-        totalSkipped += r.skipped;
-        totalDuration += r.duration;
-        // Checked AFTER each file: a stop during file N must not start file
-        // N+1 (each runFile resets the flag when its run begins).
-        if (stopRequested || r.status === 'stopped') { stopped = true; break; }
-      }
-      testResults.clear();
-      for (const entry of accumulated) testResults.set(resultEntryKey(entry), entry);
-      return withFailures({
-        status: stopped ? 'stopped' : totalFailed > 0 ? 'failed' : 'passed',
-        passed: totalPassed,
-        failed: totalFailed,
-        skipped: totalSkipped,
-        duration: totalDuration,
-      });
     },
     async runAll() {
       if (workersEnabled) await ensureWorkersReady();
@@ -1300,7 +1317,53 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   // one from the cwd. A daemon started for the MCP endpoint of
   // `tapsmith test --ui -c configs/ci.config.ts` would then get its device and
   // agent artifacts from whatever config the working directory happened to hold.
-  configureMcpConnection({ uiMode: true, configFile: ctx.configPath });
+  /**
+   * The daemons and devices this UI session drives, as `/api/daemon-ports`
+   * publishes them. This server's own MCP endpoint reads it directly
+   * (PILOT-564): over HTTP it would go through the per-project port file, which
+   * a second UI session in the same project overwrites — and the endpoint
+   * would then take that session's daemons for its own.
+   */
+  function uiDaemonPorts(): UiDaemonPorts {
+    const daemons = uiWorkers
+      .filter(w => !w.retired)
+      .flatMap(w => [
+        {
+          address: `127.0.0.1:${w.daemonPort}`,
+          deviceSerial: w.deviceSerial,
+          // Resolved, like every other consumer of a worker's platform: the raw
+          // field comes from the bucket config and is unset when that config
+          // declares no platform. An MCP session tags its connection from this,
+          // and an untagged one matches no project — so `tap({project: 'ios'})`
+          // would report no ios device with the worker sitting right there.
+          platform: resolveWorkerPlatform(ctx, w),
+        },
+        // Group members are this session's too — a headless MCP server must
+        // not claim their daemons.
+        ...w.members.map((m) => ({
+          address: `127.0.0.1:${m.daemonPort}`,
+          deviceSerial: m.deviceSerial,
+          platform: resolveWorkerPlatform(ctx, w),
+        })),
+      ]);
+    // Every daemon this session drives, workers *and* the primary one. A
+    // headless MCP server has to be able to tell that the daemon at the
+    // default address belongs to a UI run: it reaches that address through
+    // its own `daemonAddress`, where the `ui` and `peer` guards never apply,
+    // and would claim it, repoint it and start its own agent on it.
+    const owned = [
+      ...daemons.map((d) => d.address),
+      ctx.daemonAddress ?? ctx.config.daemonAddress,
+    ].filter(Boolean);
+    // Every device this session provisioned, not just those with a live
+    // worker: the primary before its worker spawns, and each group member.
+    // A headless MCP server refusing our daemons but then starting its own
+    // agent on these devices took them over just the same.
+    const devices = [...new Set([...workerGroups.flat(), ...daemons.map((d) => d.deviceSerial)].filter(Boolean))];
+    return { daemons, owned, devices };
+  }
+
+  configureMcpConnection({ uiMode: true, configFile: ctx.configPath, uiDaemonPorts });
 
   // PILOT-221: route MCP over per-session transports so dropped clients can
   // reconnect and multiple agents can attach to this one device session. The
@@ -2301,6 +2364,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     child.on('exit', (code, signal) => {
       if (worker.retired || worker.dispatchAttached) return;
       worker.retired = true;
+      // Its id may be reused for another device: its captures must not resolve a pick.
+      liveHierarchies.forgetWorker(worker.id);
       worker.busy = false;
       worker.currentFile = undefined;
       worker.currentTest = undefined;
@@ -2713,6 +2778,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       function retireWorker(worker: UIWorkerHandle, reason: string): void {
         if (worker.retired) return;
         worker.retired = true;
+      // Its id may be reused for another device: its captures must not resolve a pick.
+      liveHierarchies.forgetWorker(worker.id);
         const inFlightFile = worker.currentFile;
         const inFlightTest = worker.currentTest;
         const inFlightReported = worker.reportedInFile;
@@ -3167,6 +3234,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       try { worker.process.kill('SIGKILL'); } catch { /* already dead */ }
 
       worker.retired = true;
+      // Its id may be reused for another device: its captures must not resolve a pick.
+      liveHierarchies.forgetWorker(worker.id);
       worker.busy = false;
       readinessEvent(worker, { type: 'worker-retired' });
       broadcastWorkerStatus(worker, 'error');
@@ -3362,6 +3431,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       worker.retired = true;
+      // Its id may be reused for another device: its captures must not resolve a pick.
+      liveHierarchies.forgetWorker(worker.id);
       broadcastWorkerStatus(worker, 'error');
       // Settle the activity row too, or it spins forever in Device Activity.
       pushActivity({ type: 'device-activity', id: activityId, workerId: worker.id, kind: 'recycle', status: 'error', label: 'Recycle worker (fresh code)', detail: errMsg, timestamp: startedAt, durationMs: Date.now() - startedAt });
@@ -3699,6 +3770,72 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       describe(0, worker.deviceSerial, worker.displayName),
       ...worker.members.map((m, i) => describe(i + 1, m.deviceSerial, m.displayName)),
     ];
+  }
+
+  // ─── Live locators (PILOT-848) ───
+
+  /** Recent live hierarchy captures per device, so a pick can name the one it was made on. */
+  const liveHierarchies = new LiveHierarchyCache();
+  /** One live locator evaluation per device at a time; superseded ones never run. */
+  const liveEvaluations = new LatestOnlyRunner<LiveLocatorEvaluation>();
+  /** The latest pick per device and tab, by a generation count. */
+  const latestPicks = new Map<string, number>();
+  /**
+   * When a live WebView connect last failed per device (`worker:device`),
+   * off the adopted primary: re-asking every capture would otherwise spend
+   * the 15 s connect budget each time on a WebView that cannot be inspected.
+   */
+  const liveConnectFailedAt = new Map<string, number>();
+  const DEBUGGABLE_HINT = 'Make sure it is debuggable (webviewDebuggingEnabled={true}, or WebView.setWebContentsDebuggingEnabled(true) on Android).';
+  /** Notes a live answer's WebView connect failure, to hold off the next connects. */
+  function noteLiveConnect(workerId: number, deviceIndex: number, error: string | undefined): void {
+    if (error && /^(Timed out waiting for WebView|WebView connection setup timed out)/.test(error)) {
+      liveConnectFailedAt.set(`${workerId}:${deviceIndex}`, Date.now());
+    }
+  }
+
+  /** The device a live locator question is about, resolved as request-hierarchy resolves it. */
+  function liveLocatorTarget(workerId: number | undefined, deviceIndex: number | undefined):
+    {
+      workerId: number; deviceIndex: number; client: TapsmithGrpcClient; serial: string | undefined
+      webview: (() => Promise<import('../webview-handle.js').WebViewHandle>) | undefined
+      beforeConnect: () => void
+    } | undefined {
+    const id = workerId ?? selectedWorkerId;
+    const index = deviceIndex ?? (id === selectedWorkerId ? selectedDeviceIndex : 0);
+    const worker = uiWorkers.find((w) => w.id === id && !w.retired);
+    const client = worker ? deviceClientOf(worker, index) : undefined;
+    if (!worker || !client) return undefined;
+    const serial = index <= 0 ? worker.deviceSerial : worker.members[index - 1]?.deviceSerial;
+    // The primary device's WebView is the one the picker connects to: use
+    // that connection once it is up rather than open a second (PILOT-288).
+    // The live tab's hierarchy poll is what brings it up.
+    const device = worker.adoptedPrimary && index === 0 ? ctx.device : undefined;
+    // Any device: a webview.* locator connects only once a capture shows a
+    // WebView on screen. A connect that could only time out would hold the
+    // device's live answers for the connect budget. Before the first
+    // capture the screen is unknown: the re-ask that capture brings answers.
+    const beforeConnect = () => {
+      const xml = liveHierarchies.latest(id, index);
+      if (xml === undefined) throw new Error('Reading the screen…');
+      if (!xml.includes('XCUIElementTypeWebView') && !xml.includes('android.webkit.WebView')) {
+        throw new Error('No WebView on screen.');
+      }
+      if (!device && Date.now() - (liveConnectFailedAt.get(`${id}:${index}`) ?? 0) < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
+        throw new Error(`Could not connect to the WebView; retrying. ${DEBUGGABLE_HINT}`);
+      }
+    };
+    const webview = device
+      ? async () => {
+        const handle = device._connectedWebView();
+        if (handle) return handle;
+        if (Date.now() - webviewInspectFailedAt < WEBVIEW_INSPECT_FAILURE_COOLDOWN_MS) {
+          throw new Error(`Could not connect to the WebView; retrying. ${DEBUGGABLE_HINT}`);
+        }
+        throw new Error('Connecting to the WebView; the count appears once the connection is up.');
+      }
+      : undefined;
+    return { workerId: id, deviceIndex: index, client, serial, webview, beforeConnect };
   }
 
   /** The gRPC client driving device `deviceIndex` of a worker's group (0 = primary). */
@@ -4453,15 +4590,66 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           // webview.* locators. Primary-device only — the server's Device
           // instance can open a WebView connection to that device; other
           // workers' devices (and group members) have none.
-          const webviewDom = hierWorker?.adoptedPrimary && hierDeviceIndex === 0 ? await dumpWebViewDomForPicker(xml) : undefined;
+          const webviewOverlay = !!hierWorker?.adoptedPrimary && hierDeviceIndex === 0;
+          const webviewDom = webviewOverlay ? await dumpWebViewDomForPicker(xml) : undefined;
           if (webviewDom) {
             const lastClose = xml.lastIndexOf('</');
             if (lastClose !== -1) {
               xml = xml.slice(0, lastClose) + webviewDom + '\n' + xml.slice(lastClose);
             }
           }
-          broadcast({ type: 'hierarchy-update', xml, workerId: hierWorkerId, deviceIndex: hierDeviceIndex });
+          // Retired meanwhile: its id may already name another device.
+          if (hierWorker?.retired) return;
+          const revision = liveHierarchies.remember(hierWorkerId, hierDeviceIndex, xml);
+          broadcast({ type: 'hierarchy-update', xml, revision, workerId: hierWorkerId, deviceIndex: hierDeviceIndex, webviewOverlay });
         }).catch(() => {});
+        break;
+      }
+      case 'evaluate-locator': {
+        const target = liveLocatorTarget(msg.workerId, msg.deviceIndex);
+        const requestId = msg.requestId;
+        if (!target) {
+          broadcast({ type: 'locator-evaluation', requestId, bounds: [], error: 'No live device to check the locator on.' });
+          break;
+        }
+        liveEvaluations.run(
+          // Per tab: a tab's waiting request must never be dropped for another's.
+          `${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`,
+          () => evaluateLiveLocator(target.client, target.serial, msg.locator, { webview: target.webview, beforeConnect: target.beforeConnect }),
+          (result) => {
+            noteLiveConnect(target.workerId, target.deviceIndex, result.error);
+            broadcast({ type: 'locator-evaluation', requestId, ...result });
+          },
+        );
+        break;
+      }
+      case 'suggest-locators': {
+        const target = liveLocatorTarget(msg.workerId, msg.deviceIndex);
+        const requestId = msg.requestId;
+        const xml = target ? liveHierarchies.at(target.workerId, target.deviceIndex, msg.revision) : undefined;
+        const node = xml ? nodeAtPath(parseHierarchyXml(xml), msg.path) : undefined;
+        if (!target || !node) {
+          broadcast({
+            type: 'locator-suggestions', requestId, suggestions: [],
+            note: target ? 'The screen has changed since that pick; pick the element again.' : 'No live device to check locators on.',
+          });
+          break;
+        }
+        // A tab's newer pick on this device replaces this one: its check
+        // stops between candidates and its answer is never sent.
+        const pickKey = `${target.workerId}:${target.deviceIndex}:${msg.clientId ?? ''}`;
+        const generation = (latestPicks.get(pickKey) ?? 0) + 1;
+        latestPicks.set(pickKey, generation);
+        const superseded = () => latestPicks.get(pickKey) !== generation;
+        void suggestLiveLocators(target.client, target.serial, node, { ios: xml!.includes('<XCUIElementType'), webview: target.webview, beforeConnect: target.beforeConnect, superseded })
+          .then((result) => {
+            noteLiveConnect(target.workerId, target.deviceIndex, result.note);
+            if (!superseded()) broadcast({ type: 'locator-suggestions', requestId, ...result });
+          })
+          .catch((err) => broadcast({
+            type: 'locator-suggestions', requestId, suggestions: [],
+            note: err instanceof Error ? err.message : String(err),
+          }));
         break;
       }
       case 'request-source':
@@ -4548,6 +4736,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         const worker = uiWorkers.find((w) => w.id === msg.workerId);
         if (worker && !worker.retired) {
           worker.retired = true;
+      // Its id may be reused for another device: its captures must not resolve a pick.
+      liveHierarchies.forgetWorker(worker.id);
           worker.busy = false;
           try { if (worker.process.connected) worker.process.send({ type: 'shutdown' }); } catch { /* dead */ }
           console.log(`${DIM}Worker ${worker.id} marked for respawn by user${RESET}`);
@@ -4925,43 +5115,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
     // Daemon discovery for multi-daemon MCP connections
     if (url.pathname === '/api/daemon-ports' && req.method === 'GET') {
-      const daemons = uiWorkers
-        .filter(w => !w.retired)
-        .flatMap(w => [
-          {
-            address: `127.0.0.1:${w.daemonPort}`,
-            deviceSerial: w.deviceSerial,
-            // Resolved, like every other consumer of a worker's platform: the raw
-            // field comes from the bucket config and is unset when that config
-            // declares no platform. An MCP session tags its connection from this,
-            // and an untagged one matches no project — so `tap({project: 'ios'})`
-            // would report no ios device with the worker sitting right there.
-            platform: resolveWorkerPlatform(ctx, w),
-          },
-          // Group members are this session's too — a headless MCP server must
-          // not claim their daemons.
-          ...w.members.map((m) => ({
-            address: `127.0.0.1:${m.daemonPort}`,
-            deviceSerial: m.deviceSerial,
-            platform: resolveWorkerPlatform(ctx, w),
-          })),
-        ]);
-      // Every daemon this session drives, workers *and* the primary one. A
-      // headless MCP server has to be able to tell that the daemon at the
-      // default address belongs to a UI run: it reaches that address through
-      // its own `daemonAddress`, where the `ui` and `peer` guards never apply,
-      // and would claim it, repoint it and start its own agent on it.
-      const owned = [
-        ...daemons.map((d) => d.address),
-        ctx.daemonAddress ?? ctx.config.daemonAddress,
-      ].filter(Boolean);
-      // Every device this session provisioned, not just those with a live
-      // worker: the primary before its worker spawns, and each group member.
-      // A headless MCP server refusing our daemons but then starting its own
-      // agent on these devices took them over just the same.
-      const devices = [...new Set([...workerGroups.flat(), ...daemons.map((d) => d.deviceSerial)].filter(Boolean))];
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ daemons, owned, devices }));
+      res.end(JSON.stringify(uiDaemonPorts()));
       return;
     }
 

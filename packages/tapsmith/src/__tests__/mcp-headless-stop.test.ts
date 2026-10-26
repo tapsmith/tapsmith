@@ -6,6 +6,7 @@ import type { TestResultEntry, TestRunResult } from '../mcp/test-dispatcher.js';
 import type { WatchRunMessage } from '../watch-run.js';
 import { STOPPED_BY_USER, TestAbortedError } from '../abort.js';
 import { classifyEntryStatus, isInterruptedEntry } from '../mcp/test-dispatcher.js';
+import * as sdkDevice from '../mcp/sdk-device.js';
 
 vi.mock('node:child_process', () => ({ fork: vi.fn() }));
 
@@ -134,6 +135,27 @@ async function untilRunning(child: ScriptedChild): Promise<void> {
 afterEach(() => {
   vi.useRealTimers();
   vi.mocked(fork).mockReset();
+});
+
+describe('a run holds off the device tools\' WebView (PILOT-288)', () => {
+  it('marks the run for its whole length, including watch re-runs, which go through runFiles', async () => {
+    const begin = vi.spyOn(sdkDevice, 'beginTestRun');
+    const end = vi.spyOn(sdkDevice, 'endTestRun');
+    try {
+      const child = scriptedChild();
+      const dispatcher = armDispatcher(child, [FILE]);
+      const run = dispatcher.runFiles([FILE]);
+      await untilRunning(child);
+      expect(begin).toHaveBeenCalledTimes(1);
+      expect(end).not.toHaveBeenCalled();
+      child.emit('message', fileDone(FILE, [], 0));
+      await run;
+      expect(end).toHaveBeenCalledTimes(1);
+    } finally {
+      begin.mockRestore();
+      end.mockRestore();
+    }
+  });
 });
 
 describe('stop asks the child to report before killing it', () => {

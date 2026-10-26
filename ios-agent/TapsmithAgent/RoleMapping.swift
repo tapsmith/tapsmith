@@ -354,6 +354,11 @@ enum RoleMapping {
         case .alert: return "XCUIElementTypeAlert"
         case .sheet: return "XCUIElementTypeSheet"
         case .other: return "XCUIElementTypeOther"
+        // Named so a dump reads as what they are (the trace viewer also
+        // accepts the raw `XCUIElementType(<n>)` older dumps carry).
+        case .application: return "XCUIElementTypeApplication"
+        case .keyboard: return "XCUIElementTypeKeyboard"
+        case .key: return "XCUIElementTypeKey"
         default: return "XCUIElementType(\(elementType.rawValue))"
         }
     }

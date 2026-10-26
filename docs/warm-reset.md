@@ -11,19 +11,36 @@ npm install @tapsmith/react-native
 ```
 
 ```tsx
-// app/_layout.tsx (Expo Router) — or your root component
-import AsyncStorage from "@react-native-async-storage/async-storage"
+// app/_layout.tsx or src/app/_layout.tsx (Expo Router) — or your root component
 import * as Linking from "expo-linking"
+import { Stack } from "expo-router"
 import { TapsmithTestHooks } from "@tapsmith/react-native"
 
 export default function RootLayout() {
   return (
     <>
       <Stack />
-      <TapsmithTestHooks urlPrefix={Linking.createURL("/")} clear={[AsyncStorage]} />
+      <TapsmithTestHooks
+        urlPrefix={Linking.createURL("/")}
+        enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
+      />
     </>
   )
 }
+```
+
+Keep the `enabled` line exactly as written, in your app's own code: it is what lets a Release build made for tests turn the hooks on (see [Release builds for e2e](#release-builds-for-e2e)).
+
+To wipe stored data on every reset, pass the stores your app keeps it in as `clear`. With AsyncStorage (`npx expo install @react-native-async-storage/async-storage`, which the stock Expo template does not include):
+
+```tsx
+import AsyncStorage from "@react-native-async-storage/async-storage"
+
+<TapsmithTestHooks
+  urlPrefix={Linking.createURL("/")}
+  enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}
+  clear={[AsyncStorage]}
+/>
 ```
 
 That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'` detects the hooks in the app's accessibility tree and the file-entry reset switches from clear + relaunch (5-10 s) to a warm in-app reset (~1 s). Scopes whose tests need a fresh app before *every* test opt in with `test.use({ appResetScope: 'test' })` — each of those resets is warm too. Your existing `beforeEach` resets keep working (the lint rule `tapsmith/prefer-app-reset-option` will point out the ones that are now redundant).
@@ -33,13 +50,17 @@ That is the whole integration. **No Tapsmith config changes**: `appReset: 'auto'
 | `clear` | Stores to wipe on every reset — anything with `clear()` or `clearAll()`: AsyncStorage, MMKV, … |
 | `onReset` | Your own reset: sign out, drop in-memory caches, reset navigation. Receives `{ target, nonce }`. |
 | `urlPrefix` / `scheme` | How Tapsmith builds reset links into your app. Expo: `Linking.createURL("/")` (works in Expo Go and standalone builds). Bare React Native: `scheme="myapp"`. |
-| `enabled` | Defaults to `__DEV__` **or** the build-time flag `EXPO_PUBLIC_TAPSMITH_HOOKS=1`. Production builds without the flag render nothing and register nothing. |
+| `enabled` | Whether the hooks are on. Pass `__DEV__ \|\| process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"`, as above. Left out, the package checks `__DEV__` and the flag itself, but Expo never inlines the flag inside `node_modules`, so an Expo Release build gets no hooks. When off, the component renders nothing and registers nothing. |
 
 `registerTapsmithReset(fn)` registers a handler from non-React code.
 
 ### Release builds for e2e
 
-Release builds strip `__DEV__`. Set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` in the environment of the build that your tests run against (the repo's own e2e workflows do this).
+Release builds strip `__DEV__`. Set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` in the environment of the build that your tests run against (the repo's own e2e workflows do this). The `enabled` line in your root layout then turns the hooks on.
+
+The flag has to be read in your app's code, as `enabled` above, not left to the package. Expo inlines `EXPO_PUBLIC_*` variables only in app code, never inside `node_modules`, so the package cannot see the flag in a Release build. If the app depends on `@tapsmith/react-native` but Tapsmith still finds no hooks a few seconds after launching or resetting the app, it adds a warning to the next test's result saying that resets are the slow kind, and names this as the likely cause. It does this once per device session, so a run with several workers can show it once per worker, and a watch-mode or MCP re-run, which starts a fresh session, can show it again. If a build is meant to have no hooks, set `appReset: 'clear'` in its config to silence the warning.
+
+In a bare React Native app, which does not inline `EXPO_PUBLIC_*` variables, pass `enabled` from a build-time flag of your own.
 
 > **Warning: never ship a build with the flag to users.** With the hooks compiled in, anything that can open your app's URL scheme — another app, a webpage — can wipe its local storage and navigate it. The flag is inlined at build time, so the only guard is the build pipeline itself: set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` only in the job that produces your test build, and make sure store/production release jobs never export it (a shared CI environment or `.env` file is the classic leak).
 
@@ -65,7 +86,7 @@ export default function HomeScreen() {
 
 ## How a warm reset works
 
-1. The component renders a tiny marker in the accessibility tree — `tapsmith-hooks:1;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>` — that Tapsmith reads once after launch (that is the detection) and again after every reset. `nav` counts every URL the process receives, which lets Tapsmith positively acknowledge plain navigation deep links too — including a link to the screen already showing, which no UI heuristic can verify (on iOS that used to cost the full warm-delivery window plus a cold relaunch, ~11 s per navigation). `boot` is a random token generated once per app process: when Tapsmith delivers a reset cold (its periodic cold-launch valve, or a retry), the epoch counter restarts with the process, and a changed `boot` is how the fresh process's acknowledgement is recognised.
+1. The component renders an invisible marker in the accessibility tree — `tapsmith-hooks:1;epoch=<n>;nav=<n>;boot=<token>;url=<prefix>` — that Tapsmith reads once after launch (that is the detection) and again after every reset. `nav` counts every URL the process receives, which lets Tapsmith positively acknowledge plain navigation deep links too — including a link to the screen already showing, which no UI heuristic can verify (on iOS that used to cost the full warm-delivery window plus a cold relaunch, ~11 s per navigation). `boot` is a random token generated once per app process: when Tapsmith delivers a reset cold (its periodic cold-launch valve, or a retry), the epoch counter restarts with the process, and a changed `boot` is how the fresh process's acknowledgement is recognised. The marker draws nothing on screen, and no locator matches it: `getByText("nav")` or `getByTestId("tapsmith-hooks")` find nothing ([what locators never match](locators.md#what-locators-never-match)). Earlier versions of `@tapsmith/react-native` also drew a small grey copy of the marker in the bottom-right corner; upgrading the package removes it.
 2. To reset, Tapsmith opens `<prefix><route>?__tapsmith_reset=1&nonce=…` — a normal deep link, so your router lands on `route` while the hooks clear the stores and run `onReset`.
 3. The hooks bump `epoch`. Tapsmith waits for the epoch to advance — that is the **acknowledgement**; no fixed sleeps. If your handler throws, the epoch still advances and the marker carries `err=…`, so Tapsmith reports the failure and falls back instead of hanging.
 

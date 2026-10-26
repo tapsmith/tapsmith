@@ -224,7 +224,7 @@ export function isRecoverableInfrastructureError(err: unknown): boolean {
  * system-proxy fallback's policy, PILOT-319) are not: a restarted session gets
  * the same answer until the cause changes, so recovering only restarts the app,
  * fails the retry, and can retire a healthy worker. Substrings of the daemon's
- * messages in `grpc_server.rs` / `ios/system_proxy.rs`.
+ * messages in `grpc_server/ios_backend.rs` / `ios/system_proxy.rs`.
  */
 export const DETERMINISTIC_CAPTURE_REFUSALS = [
   // Not on CI and not opted in (FallbackDecision::RefuseLocal).

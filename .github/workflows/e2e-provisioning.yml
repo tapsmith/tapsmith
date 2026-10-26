@@ -29,8 +29,8 @@ on:
   schedule:
     - cron: "0 7 * * 1" # Mondays 07:00 UTC, an hour after the hook-less suite
   workflow_dispatch:
+  # Every PR, whatever its base (stacked PRs; see ci.yml).
   pull_request:
-    branches: [ main ]
     paths:
       - ".github/workflows/e2e-provisioning.yml"
       - "e2e/verify-provisioning.mjs"

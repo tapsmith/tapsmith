@@ -50,7 +50,8 @@ class HierarchyDumper {
         xml += "<hierarchy>\n"
         var dict = convertKeys(snapshot.dictionaryRepresentation)
         SnapshotElementFinder.annotateTraits(dict: &dict, snapshot: snapshot)
-        dumpNode(dict, depth: 1, inTabBar: false, into: &xml)
+        var keyboardTop: CGFloat?
+        dumpNode(dict, depth: 1, inTabBar: false, insideNonApp: false, keyboardTop: &keyboardTop, into: &xml)
         xml += "</hierarchy>\n"
         return xml
     }
@@ -58,8 +59,19 @@ class HierarchyDumper {
     // MARK: - Snapshot-based dump (fast path)
 
     /// `inTabBar`: whether the node has a `.tabBar` ancestor, which makes a
-    /// button a tab (RoleMapping.isTabBarItem, PILOT-514).
-    private func dumpNode(_ node: [String: Any], depth: Int, inTabBar: Bool, into xml: inout String) {
+    /// button a tab (RoleMapping.isTabBarItem, PILOT-514). `nonApp`: whether
+    /// an ancestor is keyboard UI no locator matches, and the window's
+    /// keyboard top so far (NonAppElements.excludesSubtree). Each such
+    /// subtree's root is written `tapsmith-non-app="true"`, so the trace
+    /// viewer leaves it out too.
+    private func dumpNode(
+        _ node: [String: Any],
+        depth: Int,
+        inTabBar: Bool,
+        insideNonApp: Bool,
+        keyboardTop: inout CGFloat?,
+        into xml: inout String
+    ) {
         let indent = String(repeating: "  ", count: depth)
         let elTypeRaw = (node["elementType"] as? UInt) ?? (node["elementType"] as? Int).map(UInt.init) ?? 0
         let elType = XCUIElement.ElementType(rawValue: elTypeRaw) ?? .other
@@ -101,6 +113,16 @@ class HierarchyDumper {
         xml += " selected=\"\(isSelected)\""
         xml += " hasFocus=\"\(hasFocus)\""
         xml += " bounds=\"\(bounds)\""
+        let nonApp = !insideNonApp && NonAppElements.excludesSubtree(
+            elementType: elType,
+            identifier: node["identifier"] as? String ?? "",
+            frame: frame,
+            keyboardTop: keyboardTop
+        )
+        if nonApp {
+            xml += " tapsmith-non-app=\"true\""
+            if elType == .keyboard { keyboardTop = frame.minY }
+        }
 
         let children = node["children"] as? [[String: Any]] ?? []
 
@@ -108,9 +130,20 @@ class HierarchyDumper {
             xml += " />\n"
         } else {
             xml += ">\n"
+            // A keyboard's top edge only applies within its own window.
+            let outerKeyboardTop = keyboardTop
+            if elType == .window { keyboardTop = nil }
             for child in children {
-                dumpNode(child, depth: depth + 1, inTabBar: inTabBar || elType == .tabBar, into: &xml)
+                dumpNode(
+                    child,
+                    depth: depth + 1,
+                    inTabBar: inTabBar || elType == .tabBar,
+                    insideNonApp: insideNonApp || nonApp,
+                    keyboardTop: &keyboardTop,
+                    into: &xml
+                )
             }
+            if elType == .window { keyboardTop = outerKeyboardTop }
             xml += "\(indent)</\(typeName)>\n"
         }
     }

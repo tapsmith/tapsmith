@@ -1,12 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes, locatorStringError } from '../trace-viewer/components/selector-matching.js';
-import { parseSelectorToInternal } from '../mcp/locator-helper.js';
-import { selectorToProto } from '../selectors.js';
 
-// Locator strings with a call chained after the getter — what
-// tapsmith_test_locator, the MCP action tools and the Locator Playground
-// parse. The parser read the first getter and dropped the rest, so
+// Locator strings with a call chained after the getter, as the offline
+// trace Locator Playground parses them (the MCP tools build chains with the
+// SDK since PILOT-848). The parser read the first getter and dropped the rest, so
 // `device.getByRole("list").getByText("x")` matched every list and a tap could
 // land on the wrong element (PILOT-660). A chained call is now refused, with
 // an error that names it.
@@ -100,21 +98,6 @@ describe('locatorStringError names the chained call', () => {
     expect(locatorStringError('click the login button')).toBeNull();
     // A getter Tapsmith does not have is the problem, not what follows it.
     expect(locatorStringError('device.getByAltText("Logo").first().tap()')).toBeNull();
-  });
-});
-
-describe('the MCP action path refuses a chained locator', () => {
-  it('throws an Invalid locator error naming the call, rather than acting on the unscoped getter', () => {
-    expect(() => parseSelectorToInternal('device.getByRole("list").getByText("x")')).toThrow(
-      'Invalid locator: "device.getByRole("list").getByText("x")": unsupported chained call .getByText() — '
-      + 'a locator string here is one getter, optionally followed by .first(), .last() or .nth(n).',
-    );
-  });
-
-  it('still converts a statement-terminated locator', () => {
-    const { selector, index } = parseSelectorToInternal('device.getByText("Item").last();');
-    expect(selectorToProto(selector)).toEqual({ textContains: 'Item' });
-    expect(index).toBe('last');
   });
 });
 

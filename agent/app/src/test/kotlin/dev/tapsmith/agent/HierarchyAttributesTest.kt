@@ -66,4 +66,61 @@ class HierarchyAttributesTest {
             HierarchyAttributes.inject(xml, mapOf("[0,0][1,1]" to mapOf("tapsmith-role" to "a\"<b"))),
         )
     }
+
+    // ─── Non-app window roots (PILOT-756) ───
+
+    private val statusBar = HierarchyAttributes.windowRootKey(Box(0, 0, 1080, 63), "com.android.systemui")
+
+    @Test
+    fun `an excluded window's root node is marked, and only it`() {
+        val xml =
+            """<hierarchy rotation="0">""" +
+                """<node index="0" package="com.android.systemui" bounds="[0,0][1080,63]">""" +
+                """<node index="0" text="10:06" package="com.android.systemui" bounds="[40,10][140,55]" /></node>""" +
+                """<node index="0" package="com.example.app" bounds="[0,0][1080,2400]">""" +
+                """<node index="0" text="Header" package="com.example.app" bounds="[0,0][1080,63]" /></node>""" +
+                """</hierarchy>"""
+        val marked = HierarchyAttributes.markWindowRoots(xml, setOf(statusBar), "tapsmith-non-app")
+        assertEquals(
+            """<hierarchy rotation="0">""" +
+                """<node tapsmith-non-app="true" index="0" package="com.android.systemui" bounds="[0,0][1080,63]">""" +
+                """<node index="0" text="10:06" package="com.android.systemui" bounds="[40,10][140,55]" /></node>""" +
+                """<node index="0" package="com.example.app" bounds="[0,0][1080,2400]">""" +
+                """<node index="0" text="Header" package="com.example.app" bounds="[0,0][1080,63]" /></node>""" +
+                """</hierarchy>""",
+            marked,
+        )
+    }
+
+    @Test
+    fun `a nested node with a window root's bounds and package is not a window root`() {
+        // The app's own root and a child of it share bounds and package; only
+        // a top-level node is a window's root.
+        val app = HierarchyAttributes.windowRootKey(Box(0, 0, 1080, 2400), "com.example.app")
+        val xml =
+            """<hierarchy><node package="com.other" bounds="[0,0][1080,2400]">""" +
+                """<node package="com.example.app" bounds="[0,0][1080,2400]" /></node></hierarchy>"""
+        assertEquals(xml, HierarchyAttributes.markWindowRoots(xml, setOf(app), "tapsmith-non-app"))
+    }
+
+    @Test
+    fun `a self-closing window root keeps the depth right for the next window`() {
+        val ime = HierarchyAttributes.windowRootKey(Box(0, 1600, 1080, 2400), "com.google.android.inputmethod.latin")
+        val xml =
+            """<hierarchy><node package="com.android.systemui" bounds="[0,0][1080,63]" />""" +
+                """<node package="com.google.android.inputmethod.latin" bounds="[0,1600][1080,2400]">""" +
+                """<node bounds="[0,0][1,1]" /></node></hierarchy>"""
+        assertEquals(
+            """<hierarchy><node package="com.android.systemui" bounds="[0,0][1080,63]" />""" +
+                """<node tapsmith-non-app="true" package="com.google.android.inputmethod.latin" bounds="[0,1600][1080,2400]">""" +
+                """<node bounds="[0,0][1,1]" /></node></hierarchy>""",
+            HierarchyAttributes.markWindowRoots(xml, setOf(ime), "tapsmith-non-app"),
+        )
+    }
+
+    @Test
+    fun `no excluded windows leaves the dump as it was`() {
+        val xml = """<hierarchy><node package="a" bounds="[0,0][1,1]" /></hierarchy>"""
+        assertEquals(xml, HierarchyAttributes.markWindowRoots(xml, emptySet(), "tapsmith-non-app"))
+    }
 }

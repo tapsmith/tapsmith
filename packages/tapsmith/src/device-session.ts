@@ -29,6 +29,7 @@ import {
 import {
   ensureSessionReady,
   launchConfiguredApp,
+  checkMissingResetHooks,
   probeResetCapabilities,
   type SessionPreflightContext,
 } from './session-preflight.js';
@@ -663,6 +664,10 @@ export async function openDeviceSession(
       // Detection only ever upgrades: a session that already knows the app
       // has hooks has nothing to probe for.
       if (!capabilities.hooksDetected) await probeResetCapabilities(session.context);
+      // A child that adopts may never run an inline reset (one file, the
+      // first one satisfied by the parent's launch), and the parent's own
+      // notice has no runner to show it: check here too.
+      await checkMissingResetHooks(session.context);
       session.prepared = opts.adoptPrepared
         ? { policy: { mode: 'clear', scope: 'file' }, preparedAt: Date.now(), durationMs: 0, source: 'startup launch' }
         : undefined;

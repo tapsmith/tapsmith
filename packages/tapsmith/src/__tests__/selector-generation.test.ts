@@ -56,6 +56,30 @@ describe('getNodeRole with tapsmith-role', () => {
   });
 });
 
+// ─── iOS roles React Native describes in a generic view's value (PILOT-608) ───
+
+describe('generateSelectors for a generic iOS view whose value describes its role', () => {
+  const other = (value: string, extra: Record<string, string> = {}) =>
+    makeNode('XCUIElementTypeOther', { type: 'XCUIElementTypeOther', label: 'I agree to terms', value, ...extra });
+
+  it('offers role + name first for an RN checkbox, as the agent\'s getByRole finds it', () => {
+    const codes = generateSelectors(other('checkbox, unchecked')).map((s) => s.code);
+    expect(codes[0]).toBe('device.getByRole("checkbox", { name: "I agree to terms" })');
+    expect(generateSelectors(other('radio button, selected')).map((s) => s.code)[0])
+      .toBe('device.getByRole("radiobutton", { name: "I agree to terms" })');
+  });
+
+  it('keeps the displayed role the agent reports back (none), so toHaveRole is not invited to fail', () => {
+    expect(getNodeRole(other('checkbox, unchecked'))).toBe('');
+  });
+
+  it('reads only the first part of the value, and lets a trait role stand', () => {
+    expect(generateSelectors(other('50%, checkbox')).some((s) => s.code.includes('getByRole'))).toBe(false);
+    expect(generateSelectors(other('checkbox, unchecked', { 'tapsmith-role': 'button' })).map((s) => s.code)[0])
+      .toBe('device.getByRole("button", { name: "I agree to terms" })');
+  });
+});
+
 // ─── Native selector priority order ───
 
 describe('generateNativeSelectors priority order', () => {

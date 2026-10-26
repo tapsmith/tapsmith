@@ -1016,7 +1016,7 @@ describe('runner execution', () => {
         expect(warnings).toHaveLength(1);
         expect(warnings[0]).toContain('"mocks the feed without tracing"');
         expect(warnings[0]).toContain('network capture was not running');
-        expect(warnings[0]).toContain("trace: 'retain-on-failure'");
+        expect(warnings[0]).toContain('starts on the first route()');
         // The routes are still cleaned up between tests.
         expect(device._routeManager.removeTestRoutes).toHaveBeenCalled();
       } finally {
@@ -1143,6 +1143,171 @@ describe('runner execution', () => {
       } finally {
         warn.mockRestore();
       }
+    });
+
+    // PILOT-775: without a trace recording network, a test's first route()
+    // starts the proxy on demand; routes that then never fire say why.
+    describe('on-demand capture (PILOT-775)', () => {
+      const makeOnDemandDevice = (opts: {
+        handled: number
+        drained?: Array<{ url: string; routeAction: string; isHttps: boolean }>
+        tlsRejectedHosts?: string[]
+        name?: string
+      }) => {
+        const base = makeRoutedDevice({ proxyRunning: false, registered: 0, name: opts.name });
+        let starter: (() => Promise<void>) | null = null;
+        let startedOnDemand = false;
+        let drained = opts.drained ?? [];
+        const device = Object.assign(base, {
+          _setOnDemandNetworkCapture: vi.fn((start: (() => Promise<void>) | null) => { starter = start; }),
+          _takeProxyStartedOnDemand: () => { const v = startedOnDemand; startedOnDemand = false; return v; },
+          _takeRouteHandlerCalls: () => opts.handled,
+          /** What Device.route() does: start capture on demand, then register. */
+          route: async () => {
+            if (starter && !base._networkProxyRunning) {
+              await starter();
+              startedOnDemand = base._networkProxyRunning;
+            }
+            base.registerRoute();
+          },
+        });
+        device._stopNetworkCapture = vi.fn(async () => {
+          const entries = drained;
+          drained = [];
+          return { success: true, entries, errorMessage: '', tlsRejectedHosts: opts.tlsRejectedHosts ?? [] };
+        }) as unknown as typeof device._stopNetworkCapture;
+        return device;
+      };
+      const runBody = async (
+        testName: string,
+        body: () => Promise<void>,
+        devices: Array<{ name: string; device: unknown }>,
+      ) => {
+        pushContext();
+        tapsmithTest(testName, body);
+        const ctx = popContext();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mocks
+        return runSuiteContext(ctx, '', [], [], makeOpts({ config: makeConfig(), devices: devices as any }));
+      };
+
+      it("starts capture on the test's first route, drains it after the test, and keeps the route stream", async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({ handled: 1 });
+        try {
+          const result = await runBody('mocks without a trace', () => device.route(), [{ name: 'device-1', device }]);
+          expect(result.tests.map((t) => t.status)).toEqual(['passed']);
+          expect(device._startNetworkCapture).toHaveBeenCalledTimes(1);
+          expect(device._startNetworkCapture).toHaveBeenCalledWith({ requireIsolation: false, httpPorts: undefined });
+          expect(device._stopNetworkCapture).toHaveBeenCalledWith({ keepRunning: true });
+          expect(device._disposeRouteManager).not.toHaveBeenCalled();
+          expect(routeWarnings(warn)).toEqual([]);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('starts nothing for a test that never mocks', async () => {
+        const device = makeOnDemandDevice({ handled: 0 });
+        await runBody('never mocks', async () => {}, [{ name: 'device-1', device }]);
+        expect(device._startNetworkCapture).not.toHaveBeenCalled();
+        expect(device._stopNetworkCapture).not.toHaveBeenCalled();
+      });
+
+      const failAfter = (fn: () => Promise<void>) => async () => {
+        await fn();
+        throw new Error('Order Confirmed not visible');
+      };
+
+      it('says the proxy only came up mid-test when a failed test\'s routes never fired', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({ handled: 0 });
+        try {
+          await runBody('mocks too late', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('"mocks too late" registered route handlers and none of them fired');
+          expect(warnings[0]).toContain('the network proxy started on demand during this test or its hooks');
+          expect(warnings[0]).toContain('the app never sent a request matching the route patterns');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('names the hosts passed through uncaptured when routes never fire', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [
+            { url: 'https://api.example.com/', routeAction: 'passthrough', isHttps: true },
+            { url: 'http://plain.example.com/', routeAction: 'passthrough', isHttps: false },
+          ],
+        });
+        try {
+          await runBody('mocks on a play image', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('HTTPS to api.example.com passed through the network proxy uncaptured');
+          expect(warnings[0]).not.toContain('plain.example.com');
+          expect(warnings[0]).toContain('Google Play emulator image');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('stays quiet about a passing test\'s unfired route, which the app just did not need', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [{ url: 'https://play.googleapis.com/', routeAction: 'passthrough', isHttps: true }],
+        });
+        try {
+          await runBody('defensive mock', () => device.route(), [{ name: 'device-1', device }]);
+          expect(routeWarnings(warn)).toEqual([]);
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('warns, once per run, about hosts whose client rejected the certificate when no trace records network', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const device = makeOnDemandDevice({ handled: 1, tlsRejectedHosts: ['pinned-pilot775.example.com'] });
+          await runBody('pinned host 1', () => device.route(), [{ name: 'device-1', device }]);
+          await runBody('pinned host 2', () => device.route(), [{ name: 'device-1', device }]);
+          const rejected = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('pinned-pilot775.example.com'));
+          expect(rejected).toHaveLength(1);
+          expect(rejected[0]).toContain('[tapsmith] Network capture warning:');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('also explains a failed test that relied on routes a beforeAll keeps live', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [{ url: 'https://api-pilot775-scoped.example.com/', routeAction: 'passthrough', isHttps: true }],
+        });
+        try {
+          // No route registered by the test itself; the scope's route is live.
+          device._routeManager.hasRoutes = true;
+          device._networkProxyRunning = true;
+          await runBody('relies on a beforeAll mock', async () => { throw new Error('mock not applied'); }, [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('HTTPS to api-pilot775-scoped.example.com passed through');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('requires isolation for a group member started on demand', async () => {
+        const alice = makeOnDemandDevice({ handled: 1, name: 'alice' });
+        const bob = makeOnDemandDevice({ handled: 1, name: 'bob' });
+        await runBody('group mocks', () => bob.route(), [{ name: 'alice', device: alice }, { name: 'bob', device: bob }]);
+        expect(bob._startNetworkCapture).toHaveBeenCalledWith({ requireIsolation: true, httpPorts: undefined });
+        expect(alice._startNetworkCapture).not.toHaveBeenCalled();
+      });
     });
   });
 

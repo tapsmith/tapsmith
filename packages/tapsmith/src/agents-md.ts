@@ -27,7 +27,7 @@ This project uses [Tapsmith](https://github.com/tapsmith/tapsmith) for mobile E2
 - Config lives in \`tapsmith.config.ts\`.
 - Environment problems: \`npx tapsmith doctor --json\` (each failing check includes a \`fix\`).
 - Verify the whole setup end-to-end: \`npx tapsmith verify --json\`.
-- Traces are recorded only when tracing is on (\`trace\` in the config, or \`--trace retain-on-failure\`); open one with \`npx tapsmith show-trace <trace.zip>\`. Network mocks (\`device.route()\`) also need it: they run on the network proxy, which Tapsmith starts only for tests whose trace records network traffic.
+- Traces are recorded only when tracing is on (\`trace\` in the config, or \`--trace retain-on-failure\`); open one with \`npx tapsmith show-trace <trace.zip>\`. Network mocks (\`device.route()\`) need no trace: the network proxy starts on a test's first route or network wait. Register routes before the app sends the requests they mock.
 
 ### MCP workflow
 

@@ -114,6 +114,15 @@ server (see [Several sessions on one machine](./parallel-and-sharding.md#several
 It picks a free device instead, and a pinned one that is held is refused with
 an error naming the session that holds it.
 
+A daemon the server finds rather than starts — on its `daemonAddress`, by
+default `localhost:50051` — is never moved to another platform: one that is
+driving an Android device, or serves only Android devices, is not used for
+iOS, and the other way round. An iOS config next to an Android `tapsmith test`
+starts its own daemon instead of taking that run's. The
+UI-mode endpoint only uses the UI session's own daemons, even when that
+session had to start on a free port because another session held the
+configured one.
+
 For a project that drives several devices per test (`use.devices`, see
 [Multi-device tests](./multi-device.md)), `device` also accepts a member's
 **name** — `device: "bob"`. Such a project is discoverable without reading the
@@ -141,7 +150,7 @@ Get the current screen's accessibility tree with copy-paste-ready Tapsmith locat
 
 Returns a text representation of the accessibility tree with suggested locators like `device.getByRole("button", { name: "Login" })` for each interactive element.
 
-Each suggestion is checked against the snapshot to resolve to exactly one element, and one that fails the check is not offered. When nothing else singles an element out, its suggestion ends in `.first()`, `.nth(i)` or `.last()`, which depends on the order of the matching elements on screen. A character that does not survive copy-paste, such as the icon-font glyph in a React Navigation tab's name, is written as a `\uXXXX` escape: JavaScript and `tapsmith_test_locator` read it back to the same character.
+Each suggestion is checked by the device's automation agent, with the same matching a test resolves locators with, and is offered only when it resolves to exactly the element it is listed against. They are checked in a few short batches; if checking stops early (the agent errors, or a slow device is still being checked after about 20 seconds, when no further batch is started), the elements checked so far keep their suggestions and a note says why the rest have none or are pinned by position. When nothing else singles an element out, its suggestion ends in `.first()`, `.nth(i)` or `.last()`, counted in the order the agent matches elements, so it depends on what else is on screen. If the agent cannot check any suggestion, or none resolves to its element (the screen changed while it was checked), the tree is still returned, without suggestions, followed by a note that says why; elements that were no longer on screen when the agent checked them are counted in a note too. A character that does not survive copy-paste, such as the icon-font glyph in a React Navigation tab's name, is written as a `\uXXXX` escape: JavaScript and `tapsmith_test_locator` read it back to the same character.
 
 #### `tapsmith_screenshot`
 
@@ -155,18 +164,18 @@ Returns a base64-encoded PNG image.
 
 #### `tapsmith_test_locator`
 
-Test a Tapsmith locator against the current screen. Returns whether it matches, how many elements match, and details about each match. Use to validate locators before putting them in test code.
+Test a Tapsmith locator against the current screen, resolved exactly as a test resolves it: the same SDK locator code and the device agent's own matching (it does not wait for a match to appear). Returns whether it matches, how many elements match, and details about each match. Use to validate locators before putting them in test code.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `locator` | string | Yes | Tapsmith locator string, e.g. `device.getByRole("button", { name: "Login" })` |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
-Returns a JSON object with `matched` (boolean), `count` (number), and `elements` (array of matched elements with role, text, and bounds).
+Returns a JSON object with `matched` (boolean), `count` (number), and `elements` (array of matched elements with role, text, and bounds). With `.first()`, `.last()` or `.nth(n)`, `totalMatches` counts the matches before the position picked one; without one, `strictModeWarning` says when more than one element matches, which makes an action on the locator fail in a test. A `webview.*` locator is counted in the page (its matches have no `elements` list).
 
 #### `tapsmith_tap`
 
-Tap a UI element matching the given Tapsmith locator.
+Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` in a test would: it waits up to 5 seconds for the element, and a locator that matches more than one element is refused (strict mode) rather than tapping the first. A `webview.*` locator is clicked in the page.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -175,7 +184,7 @@ Tap a UI element matching the given Tapsmith locator.
 
 #### `tapsmith_type`
 
-Type text into an element matching the locator.
+Type text into an element matching the locator, as `locator.type(text)` in a test would: it waits up to 5 seconds for the field to appear, then gives the typing a test's 30 seconds (a long string takes a while on iOS), which is also how long it waits for something covering the field, such as an open sheet, to go away. A `webview.*` field is filled in the page; without `clear` its current value is kept and the text appended.
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -411,9 +420,11 @@ device.getByRole("tab", { name: "Settings", selected: true })
 
 `getByRole` takes the same options as in test code: `name` (a string or a RegExp), `exact`, and the state filters `checked`, `disabled`, `selected` and `expanded`. A locator with an option the tools don't recognize is rejected as invalid instead of run without it.
 
-The `device.` is optional: `getByText("Welcome")`, a screen object's `this.device.getByText("Welcome")` and a Playwright-style `page.getByText("Welcome")` all read as `device.getByText("Welcome")`.
+The `device.` is optional: `getByText("Welcome")`, a screen object's `this.device.getByText("Welcome")` and a Playwright-style `page.getByText("Welcome")` or `this.page.getByText("Welcome")` all read as `device.getByText("Welcome")`; `this.webview.` reads as `webview.`.
 
-A locator string is one getter, optionally followed by `.first()`, `.last()` or `.nth(n)`. The tools don't take a chained call such as a scoped getter (`.getByRole("list").getByText("x")`), `.filter()`, `.and()` or `.or()`: a locator with one is rejected as invalid, with an error naming the call, instead of run without it. To single an element out, use a more specific getter, such as `getByRole` with a `name` or `getByTestId`, or a positional step.
+Chains work as in a test, because the string is built by the SDK's own locator code: scoped getters (`device.getByRole("list").getByText("Row 2")`), `.filter({ hasText, hasNotText, has, hasNot })`, `.and()`, `.or()`, and `.first()`, `.last()` or `.nth(n)`. `.filter({ has, hasNot })` takes a single getter, as it only reads that getter in a test too. WebView locators start at `webview.` (`webview.getByText("Submit")`, `webview.locator("#email")`) and resolve in the WebView of the app the device reports as current (on iOS, the app the session was started for, even while another app is in front), and only in that app's own WebView. The connection is kept for the next call, so a run of calls is quick, and closed after 15 seconds without one, when another app becomes current (Android), or when a test run starts; while a run is in progress `webview.` locators are refused (two connections to one page can stall each other).
+
+The string is read, never run as code: only locator-building calls with literal arguments (strings, numbers, booleans, RegExp literals and option objects) are accepted. Anything else, such as an action (`.tap()`), `await`, a variable or an expression, is rejected as invalid with an error naming it.
 
 Use `tapsmith_snapshot` to see suggested locators for every interactive element on screen.
 

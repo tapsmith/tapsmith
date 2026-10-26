@@ -242,6 +242,24 @@ class CommandHandler(
                 )
             }
 
+            "evaluateSelectors" -> {
+                val raw = params.optJSONArray("selectors") ?: org.json.JSONArray()
+                val selectors =
+                    (0 until raw.length()).map { i ->
+                        runCatching { parseSelectorParams(raw.getJSONObject(i)) }
+                    }
+                val results =
+                    elementFinder.evaluateSelectors(selectors).map { result ->
+                        result.fold(
+                            onSuccess = { elements ->
+                                JSONObject().put("elements", org.json.JSONArray(elements.map { it.toJson() }))
+                            },
+                            onFailure = { e -> JSONObject().put("error", e.message ?: e.javaClass.simpleName) },
+                        )
+                    }
+                JSONObject().put("results", org.json.JSONArray(results))
+            }
+
             "tap" -> {
                 val x = params.optInt("x", -1)
                 val y = params.optInt("y", -1)

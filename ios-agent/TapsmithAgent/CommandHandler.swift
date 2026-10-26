@@ -23,6 +23,10 @@ class CommandHandler {
     /// `readTimeoutMs`, counted from the command's arrival (PILOT-223 — the
     /// occlusion wait never touches past it). nil from an older daemon.
     private var commandReadDeadline: Date?
+    /// Whether the software keyboard may be up (PILOT-622; see
+    /// `KeyboardFirstGate`). A keyboard the app raises by itself
+    /// (`autoFocus`) is not seen until the test types into the field.
+    private var keyboardFirstGate = KeyboardFirstGate()
 
     // Interactive-mirror live-drag: iOS can't stream touches, so buffer the
     // path during the drag and dispatch it as one gesture on touchUp.
@@ -170,7 +174,7 @@ class CommandHandler {
     ) -> (epoch: UInt64, nav: UInt64?, boot: String?, err: String?)? {
         let candidates = [snapshot.label, snapshot.identifier, String(describing: snapshot.value ?? "")]
         for text in candidates {
-            guard let range = text.range(of: "tapsmith-hooks:") else { continue }
+            guard let range = text.range(of: NonAppElements.hooksMarkerPrefix) else { continue }
             let body = text[range.upperBound...]
             let fields = body.split(separator: ";")
             // A different protocol version has unknown semantics — treat it as
@@ -860,6 +864,7 @@ class CommandHandler {
         var staleError: Error?
         do { _ = try getXCUIElement(element.elementId) } catch { staleError = error }
 
+        putKeyboardAwayIfItWouldEatTheTouch(element)
         switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
         case .hittableElement(let xcElem):
             actionExecutor.tapHittable(xcElem)
@@ -881,6 +886,7 @@ class CommandHandler {
         // live query and nothing cached to recognise it by, planTouch reports
         // it gone. Ids that never had a query (placeholder, className, …)
         // still take the coordinate path.
+        putKeyboardAwayIfItWouldEatTheTouch(element)
         switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
         case .point(let point, _):
             actionExecutor.doubleTapCoordinates(
@@ -973,26 +979,127 @@ class CommandHandler {
     /// value instead of moving it into the middle of existing text, inside
     /// `area` (the element's uncovered part, from `focusTarget`). Without an
     /// area, XCUITest taps the element itself (refused when unhittable).
+    ///
+    /// The tap is checked (PILOT-829): when no text input took focus from it,
+    /// points further in are tried, and a field that still has no focus
+    /// fails the command instead of typing into nothing (`TypingFocus`).
     private func focusElementForTyping(
         _ element: ElementInfo,
         settleTime: TimeInterval,
         within area: CGRect?
     ) throws {
+        keyboardFirstGate.arm()
+        let target = TypingFocus.Input(
+            frame: CGRect(
+                x: element.bounds.left, y: element.bounds.top,
+                width: element.bounds.width, height: element.bounds.height
+            ),
+            className: element.className,
+            identifier: element.resourceId ?? "",
+            placeholder: element.hint ?? ""
+        )
+        let focusedBefore = snapshotFinder.liveFocusedTypingInput()
+        // A further tap on a field that did take focus moves its caret, so
+        // each tap gets at least this long to report focus, whatever the
+        // caller's settle time.
+        let focusWait = max(settleTime, 0.5)
+        var tried: [CGPoint] = []
         if let area {
-            let inset = min(12, max(1, area.width / 4))
-            let x = max(area.minX + 1, area.maxX - inset)
-            actionExecutor.tapCoordinates(x: Int(x.rounded()), y: Int(area.midY.rounded()))
+            let first = TypingFocus.trailingPoint(in: area)
+            tapToFocus(element, at: first)
+            tried.append(first)
+            if waitForTypingFocus(target, tappedAt: first, focusedBefore: focusedBefore,
+                                  maxWait: focusWait, settleTime: settleTime) { return }
+            // Planned again, one check and no waiting: the first tap can have
+            // moved the field or raised a keyboard over its old spot.
+            let plan = try? planTouch(element, timeoutMs: 0, preferElementTap: false)
+            var fallbacks: [CGPoint] = []
+            if case .point(_, let visible)? = plan {
+                fallbacks = TypingFocus.fallbackPoints(in: visible, after: first)
+            }
+            for point in fallbacks + [nil] {
+                let last = tried[tried.count - 1]
+                NSLog("[typeText] focus tap at \(Self.describe(last)) did not focus the field")
+                // Focus may have been reported since the last check.
+                if typingFocusVerdict(target, tappedAt: last, focusedBefore: focusedBefore) == .focused {
+                    waitForKeyboardAppearance(maxWait: settleTime)
+                    return
+                }
+                guard let point else { break }
+                tapToFocus(element, at: point)
+                tried.append(point)
+                if waitForTypingFocus(target, tappedAt: point, focusedBefore: focusedBefore,
+                                      maxWait: focusWait, settleTime: settleTime) { return }
+            }
+        } else {
+            let xcElem = try getXCUIElement(element.elementId)
+            guard xcElem.isHittable else {
+                throw AgentError.actionFailed("Element is not hittable — cannot type text")
+            }
+            xcElem.tap()
             snapshotFinder.recordFocusedTextInputHint(element)
-            waitForKeyboardAppearance(maxWait: settleTime)
-            return
+            if waitForTypingFocus(target, tappedAt: nil, focusedBefore: focusedBefore,
+                                  maxWait: focusWait, settleTime: settleTime) { return }
         }
-        let xcElem = try getXCUIElement(element.elementId)
-        guard xcElem.isHittable else {
-            throw AgentError.actionFailed("Element is not hittable — cannot type text")
-        }
-        xcElem.tap()
+        // The taps recorded the field as focused; it is not.
+        snapshotFinder.clearFocusedTextInputHint()
+        let at = tried.isEmpty ? "the element" : tried.map(Self.describe).joined(separator: ", ")
+        throw Self.notFocusedError(tried: at)
+    }
+
+    private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
+        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
         snapshotFinder.recordFocusedTextInputHint(element)
-        waitForKeyboardAppearance(maxWait: settleTime)
+    }
+
+    private static func describe(_ point: CGPoint) -> String {
+        "(\(Int(point.x.rounded())), \(Int(point.y.rounded())))"
+    }
+
+    private static func notFocusedError(tried: String) -> AgentError {
+        .actionFailed(
+            "Tapping the field at \(tried) did not give it keyboard focus, so nothing was typed. " +
+                "The field may not accept text input there, or may not be editable."
+        )
+    }
+
+    /// Wait, up to `maxWait`, for a focusing tap on `target` to take
+    /// (`TypingFocus.verdict`), then for the keyboard until `settleTime`
+    /// after the tap. False when it never took focus. An unverifiable result
+    /// counts only if it still holds at the deadline: a keyboard can be on
+    /// its way out after a tap that removed focus.
+    private func waitForTypingFocus(
+        _ target: TypingFocus.Input,
+        tappedAt: CGPoint?,
+        focusedBefore: TypingFocus.Input?,
+        maxWait: TimeInterval,
+        settleTime: TimeInterval
+    ) -> Bool {
+        let start = CFAbsoluteTimeGetCurrent()
+        let deadline = start + maxWait
+        while true {
+            let verdict = typingFocusVerdict(target, tappedAt: tappedAt, focusedBefore: focusedBefore)
+            if verdict == .focused {
+                waitForKeyboardAppearance(maxWait: max(0, start + settleTime - CFAbsoluteTimeGetCurrent()))
+                return true
+            }
+            if CFAbsoluteTimeGetCurrent() >= deadline { return verdict == .unverifiable }
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+    }
+
+    /// One check of whether `target` has keyboard focus now.
+    private func typingFocusVerdict(
+        _ target: TypingFocus.Input,
+        tappedAt: CGPoint?,
+        focusedBefore: TypingFocus.Input?
+    ) -> TypingFocus.Verdict {
+        let focused = snapshotFinder.liveFocusedTypingInput()
+        // The keyboard only matters when no input reports focus; a tree that
+        // cannot be read is no evidence the tap missed.
+        let keyboard = focused == nil ? (keyboardPresence().map { $0 == .onScreen } ?? true) : false
+        return TypingFocus.verdict(element: target, tappedAt: tappedAt, focusedBefore: focusedBefore,
+                                   focusedAfter: focused, keyboardOnScreen: keyboard)
     }
 
     private func waitForKeyboardAppearance(maxWait: TimeInterval) {
@@ -1162,6 +1269,19 @@ class CommandHandler {
             let elements = try elementFinder.findElements(selector, parentId: parentId)
             return ["elements": elements.map { $0.toDict() }]
 
+        case "evaluateSelectors":
+            // PILOT-848: one snapshot, every selector matched by the walk
+            // findElements uses; a failing selector fails only its entry.
+            let raw = params["selectors"] as? [[String: Any]] ?? []
+            let results = try snapshotFinder.evaluateSelectors(raw.map { SelectorParser.parse($0) })
+            return ["results": results.map { result -> [String: Any] in
+                switch result {
+                case .success(let elements): return ["elements": elements.map { $0.toDict() }]
+                case .failure(let error as AgentError): return ["error": error.message]
+                case .failure(let error): return ["error": error.localizedDescription]
+                }
+            }]
+
         // ─── Tap Actions ───
 
         case "tap":
@@ -1173,10 +1293,13 @@ class CommandHandler {
             if x >= 0 && y >= 0 {
                 actionExecutor.tapCoordinates(x: x, y: y)
                 snapshotFinder.recordFocusedTextInputHint(at: CGPoint(x: CGFloat(x), y: CGFloat(y)))
+                // It may have landed on a text field.
+                keyboardFirstGate.arm()
             } else {
                 let element = try resolveElement(params)
                 try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params))
                 snapshotFinder.recordFocusedTextInputHint(element)
+                if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
             }
             // Force-flush pending touch events: take a snapshot() which does
             // a round-trip through the XCTest daemon. This acts as a barrier,
@@ -1203,6 +1326,7 @@ class CommandHandler {
                 actionExecutor.longPressCoordinates(x: x, y: y, durationMs: duration)
             } else {
                 let element = try resolveElement(params)
+                putKeyboardAwayIfItWouldEatTheTouch(element)
                 // The press itself must still fit the daemon's read timeout.
                 let coverBudget = max(0, actionTimeoutMs(params) - duration)
                 switch try planTouch(element, timeoutMs: coverBudget, preferElementTap: false, reserveMs: duration) {
@@ -1237,6 +1361,8 @@ class CommandHandler {
             } else {
                 element = try findTopLevelElement(SelectorParser.parse(params), timeoutMs: budget)
             }
+            // The daemon's HID double tap and long press land at this point.
+            putKeyboardAwayIfItWouldEatTheTouch(element)
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
             switch try planTouch(element, timeoutMs: remaining, preferElementTap: false) {
             case .point(let point, _):
@@ -1255,6 +1381,7 @@ class CommandHandler {
             if text.isEmpty {
                 return ["success": true]
             }
+            keyboardFirstGate.arm()
             let delayMs = params["typingDelayMs"] as? Int ?? 0
             let selectorKeys = [
                 "role", "id", "contentDesc", "className", "testId",
@@ -1316,6 +1443,8 @@ class CommandHandler {
             // think the field is already empty. The snapshot path's
             // role/type filter avoids this.
             let element = try resolveElement(params)
+            // The field may have focus already (no focusing tap below).
+            keyboardFirstGate.arm()
             // Refuse to "clear" non-text elements. The backspace loop below
             // assumes `element.text` reflects the editable value; on a
             // wrapper / button / static text it would compare against the
@@ -1496,7 +1625,8 @@ class CommandHandler {
                         "\(iterationsRun) iteration\(iterationsRun == 1 ? "" : "s") — \(reason)"
                 )
             }
-            try? refocusForTyping(element, settleTime: 0.1)
+            // As it is now: the first focusing tap can have moved it.
+            try? refocusForTyping((try? resolveElement(params)) ?? element, settleTime: 0.1)
             return ["success": true]
 
         // ─── Interactive Mirror Live-Drag (buffered touch path) ───
@@ -1689,6 +1819,7 @@ class CommandHandler {
                 try actionExecutor.focus(xcElem)
             }
             snapshotFinder.recordFocusedTextInputHint(element)
+            keyboardFirstGate.arm()
             return ["success": true]
 
         case "blur":
@@ -2142,18 +2273,7 @@ class CommandHandler {
                 if touchedScreen { snapshotFinder.clearFocusedTextInputHint() }
                 throw error
             }
-            // Off screen first, out of the tree a moment later: give it that
-            // moment on every success path, so isKeyboardShown() (any keyboard
-            // element) agrees straight after. Best effort — it is already
-            // off the screen.
-            let treeDeadline = Date(timeIntervalSinceNow: 1.0)
-            while keyboardPresence() == .offScreen, Date() < treeDeadline {
-                Thread.sleep(forTimeInterval: 0.1)
-            }
-            // The keyboard leaving the hierarchy precedes the app's own
-            // animated relayout completing — give that a beat to settle.
-            Thread.sleep(forTimeInterval: 0.35)
-            snapshotFinder.clearFocusedTextInputHint()
+            settleAfterKeyboardDismissed()
             return ["success": true]
 
         // ─── Color Scheme ───
@@ -2237,18 +2357,97 @@ class CommandHandler {
         return String(data: data, encoding: .utf8)
     }
 
+    /// After the keyboard left: off screen first, out of the tree a moment
+    /// later — give it that moment, so isKeyboardShown() (any keyboard
+    /// element) agrees straight after (best effort: it is already off the
+    /// screen). Then let the app's own animated relayout settle.
+    private func settleAfterKeyboardDismissed(by deadline: Date? = nil) {
+        var treeDeadline = Date(timeIntervalSinceNow: 1.0)
+        if let deadline { treeDeadline = min(treeDeadline, deadline) }
+        while keyboardPresence() == .offScreen, Date() < treeDeadline {
+            Thread.sleep(forTimeInterval: 0.1)
+        }
+        Thread.sleep(forTimeInterval: 0.35)
+        snapshotFinder.clearFocusedTextInputHint()
+        keyboardFirstGate.disarm()
+    }
+
+    private static let textInputClassNames: Set<String> = Set(
+        OcclusionAnalyzer.textInputTypes.map { RoleMapping.typeName(for: $0) }
+    )
+
+    /// Put the keyboard away before a touch on `element` that would only
+    /// close it (PILOT-622; see `OcclusionAnalyzer.keyboardFirst`). Best
+    /// effort: when the keyboard cannot be put away, or there is no time to
+    /// try, the touch goes ahead as it would have.
+    private func putKeyboardAwayIfItWouldEatTheTouch(_ element: ElementInfo) {
+        guard keyboardFirstGate.isArmed,
+              let stepDeadline = KeyboardFirstGate.stepDeadline(now: Date(), readDeadline: commandReadDeadline)
+        else { return }
+        guard let snapshot = try? snapshotFinder.takeSnapshot() else { return }
+        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+        switch analyzer.keyboardFirst(cachedTarget(element)) {
+        case .noKeyboard:
+            keyboardFirstGate.sawNoKeyboard()
+            return
+        case .touchAsIs:
+            return
+        case .putKeyboardAway:
+            break
+        }
+        NSLog("[TapsmithCommand] \(element.elementId): the keyboard is up and the element is in a scroll view; putting the keyboard away first")
+        do {
+            try dismissKeyboard(strategies: KeyboardDismissPlanner.keyboardFirstStrategies, deadline: stepDeadline)
+            settleAfterKeyboardDismissed(by: stepDeadline)
+        } catch {
+            if touchedScreen { snapshotFinder.clearFocusedTextInputHint() }
+            // Not again for every tap on this screen: each try costs seconds.
+            // The next command that focuses a field arms it again.
+            keyboardFirstGate.disarm()
+            NSLog("[TapsmithCommand] could not put the keyboard away first (\(error)); touching anyway")
+        }
+    }
+
+    /// `element` as the analyzer looks for it — no live read. Its frame is
+    /// the one it was just resolved with; the cached exact frame only stands
+    /// in for it when the two differ by rounding (the resolved bounds are
+    /// whole points), so a target that moved since it was first found is
+    /// still located.
+    private func cachedTarget(_ element: ElementInfo) -> OcclusionAnalyzer.Target {
+        let b = element.bounds
+        let resolved = CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
+        var frame = resolved
+        if let cached = snapshotFinder.getBounds(element.elementId),
+           OcclusionAnalyzer.framesMatch(cached, resolved) {
+            frame = cached
+        }
+        let identity = snapshotFinder.getIdentity(element.elementId)
+        return .init(
+            frame: frame,
+            elementType: identity?.elementType,
+            label: identity?.label,
+            identifier: identity?.identifier
+        )
+    }
+
     /// Put the software keyboard away the ways a user would, trying each in
     /// turn until it is gone (PILOT-363; see `KeyboardDismissPlanner` for
     /// what each one may touch), or throw naming what was tried. Every
     /// strategy is planned on a fresh snapshot, so a keyboard that finished
     /// leaving during the previous one's wait ends it without another touch.
-    private func dismissKeyboard() throws {
+    /// With a `deadline`, strategies are tried only until then and their
+    /// waits end there (a touch is waiting on it).
+    private func dismissKeyboard(
+        strategies: [KeyboardDismissPlanner.Strategy] = KeyboardDismissPlanner.Strategy.allCases,
+        deadline: Date? = nil
+    ) throws {
         // Whether a strategy touched the app (it may have moved focus: the
         // return key's submit handler focusing the next field). The caller
         // clears the focused-field hint then, even when this throws.
         touchedScreen = false
         var attempts: [(KeyboardDismissPlanner.Strategy, KeyboardDismissPlanner.Outcome)] = []
-        for strategy in KeyboardDismissPlanner.Strategy.allCases {
+        for strategy in strategies {
+            if let deadline, Date() >= deadline { break }
             guard let snapshot = try? snapshotFinder.takeSnapshot() else {
                 throw AgentError.actionFailed("hideKeyboard could not read the screen to dismiss the keyboard")
             }
@@ -2262,9 +2461,10 @@ class CommandHandler {
                 NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area; nothing to dismiss")
                 return
             }
-            let outcome = runDismissStrategy(strategy, planner: planner)
+            let outcome = runDismissStrategy(strategy, planner: planner, deadline: deadline)
             if outcome == .keyboardStayed { touchedScreen = true }
-            if outcome == .keyboardStayed, waitForKeyboardDismissed(timeout: dismissWait(for: strategy)) {
+            if outcome == .keyboardStayed,
+               waitForKeyboardDismissed(timeout: Self.clipped(dismissWait(for: strategy), to: deadline)) {
                 NSLog("[TapsmithCommand] hideKeyboard: dismissed by \(strategy.summary)")
                 return
             }
@@ -2273,6 +2473,12 @@ class CommandHandler {
         // The last wait can end just before the keyboard leaves.
         if keyboardGoneNow() == true { return }
         throw AgentError.actionFailed(KeyboardDismissPlanner.failureMessage(attempts))
+    }
+
+    /// `wait`, cut short so it ends by `deadline` (never negative).
+    private static func clipped(_ wait: TimeInterval, to deadline: Date?) -> TimeInterval {
+        guard let deadline else { return wait }
+        return max(0, min(wait, deadline.timeIntervalSinceNow))
     }
 
     /// Set by `dismissKeyboard`: whether any strategy touched the screen.
@@ -2292,7 +2498,8 @@ class CommandHandler {
     /// means nothing was touched.
     private func runDismissStrategy(
         _ strategy: KeyboardDismissPlanner.Strategy,
-        planner: KeyboardDismissPlanner
+        planner: KeyboardDismissPlanner,
+        deadline: Date? = nil
     ) -> KeyboardDismissPlanner.Outcome {
         let screen = snapshotFinder.screenSize
         switch strategy {
@@ -2307,7 +2514,8 @@ class CommandHandler {
                 from: start, to: CGPoint(x: start.x, y: start.y - dy), duration: 0.05
             ) else { return .notPossible("the drag could not be synthesized") }
             // Gone already: the caller's wait after this return sees that at once.
-            if waitForKeyboardDismissed(timeout: Self.dragWait) { return .keyboardStayed }
+            if waitForKeyboardDismissed(timeout: Self.clipped(Self.dragWait, to: deadline)) { return .keyboardStayed }
+            if let deadline, Date() >= deadline { return .keyboardStayed }
             // A horizontal scroll view drags sideways — planned again, since the
             // first drag may have scrolled a control under the old point.
             guard let snapshot = try? snapshotFinder.takeSnapshot(),
@@ -2318,7 +2526,7 @@ class CommandHandler {
             _ = EventSynthesizer.swipe(
                 from: again, to: CGPoint(x: again.x - dx, y: again.y), duration: 0.05
             )
-            _ = waitForKeyboardDismissed(timeout: Self.dragWait)
+            _ = waitForKeyboardDismissed(timeout: Self.clipped(Self.dragWait, to: deadline))
             return .keyboardStayed
         case .dismissKey:
             guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }

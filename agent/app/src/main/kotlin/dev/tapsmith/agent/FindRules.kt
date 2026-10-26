@@ -101,7 +101,8 @@ internal object FindRules {
      * The text of [node]'s descendants, in tree order: each child gives its
      * [ownText] (text, else content description) or, when it has none, its
      * own descendants' text, down to [maxDepth] levels. [children] lists
-     * only the children a query can see (visible to the user).
+     * only the children a query can see (visible to the user). A child
+     * [skip] accepts gives nothing, nor do its descendants.
      */
     fun <N> descendantTextParts(
         node: N,
@@ -109,15 +110,17 @@ internal object FindRules {
         ownText: (N) -> String?,
         maxDepth: Int,
         depth: Int = 0,
+        skip: (N) -> Boolean = { false },
     ): List<String> {
         if (depth >= maxDepth) return emptyList()
         val parts = mutableListOf<String>()
         for (child in children(node)) {
+            if (skip(child)) continue
             val text = ownText(child)
             if (text != null) {
                 parts.add(text)
             } else {
-                parts.addAll(descendantTextParts(child, children, ownText, maxDepth, depth + 1))
+                parts.addAll(descendantTextParts(child, children, ownText, maxDepth, depth + 1, skip))
             }
         }
         return parts

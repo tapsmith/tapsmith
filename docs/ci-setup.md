@@ -120,9 +120,10 @@ export default defineConfig({
 - **What a release build turns off.** `__DEV__` is false in a release build, so anything your app
   enables only in development is off in CI. Two things Tapsmith uses:
   - the [`@tapsmith/react-native` reset hooks](warm-reset.md#release-builds-for-e2e). In an Expo
-    project, keep them by setting `EXPO_PUBLIC_TAPSMITH_HOOKS: "1"` in the `env` of the build step
-    (only in the job that builds your test app, never a store build). A React Native CLI project's
-    Babel preset does not inline that variable: add a Babel plugin that does (such as
+    project whose root layout passes `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}`
+    (as the guide shows), keep them by setting `EXPO_PUBLIC_TAPSMITH_HOOKS: "1"` in the `env` of the
+    build step (only in the job that builds your test app, never a store build). A React Native CLI
+    project's Babel preset does not inline that variable: add a Babel plugin that does (such as
     `babel-plugin-transform-inline-environment-variables`), or set the provider's `enabled` prop from
     a flag your own build already passes.
   - [WebView debugging](webview.md), which `device.webview()` needs: a

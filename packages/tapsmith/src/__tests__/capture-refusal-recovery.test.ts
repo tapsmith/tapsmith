@@ -10,7 +10,7 @@ import { DETERMINISTIC_CAPTURE_REFUSALS, isRecoverableInfrastructureError } from
 // only in a comment doesn't count, and `\`-continued string lines are joined
 // the way Rust joins them (continuation drops the next line's indentation).
 const CORE = path.resolve(import.meta.dirname, '../../../tapsmith-core/src');
-const rustCode = ['grpc_server.rs', 'ios/system_proxy.rs']
+const rustCode = ['grpc_server.rs', 'grpc_server/ios_backend.rs', 'ios/system_proxy.rs']
   .map((f) => fs.readFileSync(path.join(CORE, f), 'utf-8'))
   .join('\n')
   .split('\n')

@@ -1,9 +1,11 @@
+import * as path from 'node:path';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
 import { appResetAction, parseHooksMarker, satisfies, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
 import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, isSystemDrawnDialog } from './emulator.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
+import { appDependsOnTapsmithHooks } from './init-detect.js';
 
 type SessionDevice = Pick<Device, 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
 type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
@@ -11,6 +13,10 @@ type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
 export interface SessionPreflightContext {
   label: string
   config: Pick<TapsmithConfig, 'package' | 'activity' | 'platform' | 'resetAppDeepLink' | 'resetAppWaitMs' | 'appReset' | 'appResetColdEvery' | 'device'>
+    // Only used to find the app's package.json for the missing-hooks warning
+    // (from the config's folder and from the app build's);
+    // optional so a context built without a project (unit tests) skips it.
+    & Partial<Pick<TapsmithConfig, 'rootDir' | 'apk' | 'app'>>
   device: SessionDevice
   client: SessionClient
   agentApkPath?: string
@@ -48,12 +54,14 @@ export interface SessionPreflightContext {
   notices: PreflightNotice[]
 }
 
-/** A system ANR/crash dialog the Android preflight dealt with. */
+/** A system ANR/crash dialog the Android preflight dealt with, or a session-level finding about the app. */
 export interface PreflightNotice {
   /** `app-dialog`: the app under test's own, or one whose owner could not be
    *  read (dismissed, session recovered; its test gets a warning).
-   *  `foreign-dialog`: another package's (dismissed; trace row only). */
-  kind: 'app-dialog' | 'foreign-dialog'
+   *  `foreign-dialog`: another package's (dismissed; trace row only).
+   *  `hooks-missing`: `@tapsmith/react-native` is installed but its hooks
+   *  never showed up (its test gets a warning; no trace row). */
+  kind: 'app-dialog' | 'foreign-dialog' | 'hooks-missing'
   /** The dialog's title, e.g. `Pixel Launcher isn't responding`. */
   title: string
   /** Owning process, when dumpsys named exactly one (or it is the app's). */
@@ -80,16 +88,8 @@ export async function probeResetCapabilities(
   const deadline = Date.now() + (options.pollMs ?? HOOKS_PROBE_POLL_MS);
   let readWithoutMarker = false;
   for (;;) {
-    let seen = false;
-    try {
-      const h = await ctx.client.getUiHierarchy();
-      const marker = parseHooksMarker(h.hierarchyXml);
-      seen = !!marker && marker.urlPrefix.length > 0;
-      if (!seen) readWithoutMarker = true;
-    } catch {
-      // A failed read says nothing about the app; it neither confirms nor
-      // rules out the hooks.
-    }
+    const seen = await readHooksMarker(ctx);
+    if (seen === false) readWithoutMarker = true;
     if (seen) {
       caps.hooksDetected = true;
       return caps;
@@ -112,6 +112,105 @@ export async function probeResetCapabilities(
   // the question open for the next probe.
   if (readWithoutMarker) caps.hooksDetected ??= false;
   return caps;
+}
+
+/**
+ * One look at the hierarchy for a usable hooks marker: `true` seen, `false` a
+ * hierarchy read without one, `undefined` the read failed (threw; with
+ * `strict`, also an error response with no hierarchy) — which says
+ * nothing about the app, and neither confirms nor rules out the hooks.
+ */
+async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?: boolean } = {}): Promise<boolean | undefined> {
+  try {
+    const h = await ctx.client.getUiHierarchy();
+    // The daemon answers a failed dump with an error and no hierarchy rather
+    // than throwing. Strict callers (the missing-hooks check) count that as
+    // no read. The probe keeps counting it as a read without the marker: its
+    // `false` is what lets the next clear reset re-read and upgrade a hooked
+    // app whose startup dumps all failed.
+    if (options.strict && (h.errorMessage || !h.hierarchyXml)) return undefined;
+    const marker = parseHooksMarker(h.hierarchyXml);
+    return !!marker && marker.urlPrefix.length > 0;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Whether the app under test depends on `@tapsmith/react-native`, looking up
+ * from the config's folder and from the app build's (`apk`/`app`, relative to
+ * `rootDir`): in a monorepo the config often sits outside the app's folder,
+ * but the build lives inside it.
+ */
+function appUsesTapsmithHooks(config: Pick<TapsmithConfig, 'rootDir' | 'apk' | 'app'>): boolean {
+  const builds = [config.apk, config.app].filter((p): p is string => !!p);
+  const starts = [config.rootDir, ...builds.map((p) => path.dirname(path.resolve(config.rootDir, p)))];
+  return starts.some((dir) => appDependsOnTapsmithHooks(dir));
+}
+
+/**
+ * Run {@link checkMissingHooks} when `appReset: 'auto'` resolves to clear
+ * because no marker has been seen (and no `resetAppDeepLink` makes it warm):
+ * after the startup launch, after a child process adopts a session (a
+ * single-file session never reaches an inline reset — the launch satisfies
+ * its first one), and after each clear reset until the session is checked.
+ */
+export async function checkMissingResetHooks(ctx: SessionPreflightContext, pollMs: number = HOOKS_PROBE_POLL_MS): Promise<void> {
+  if ((ctx.config.appReset ?? 'auto') !== 'auto' || ctx.config.resetAppDeepLink) return;
+  if (ctx.capabilities?.hooksDetected !== false) return;
+  await checkMissingHooks(ctx, ctx.capabilities, pollMs);
+}
+
+/**
+ * Sessions already checked for the missing-hooks warning, keyed by their
+ * shared capabilities object: the runner hands {@link executeAppReset} a
+ * fresh spread of the session context on every reset, so a flag on the
+ * context itself would not survive to the next one.
+ */
+const missingHooksChecked = new WeakSet<ResetCapabilities>();
+
+/**
+ * Once per session, after the startup probe or a clear reset's re-read found
+ * no hooks marker: if the app depends on `@tapsmith/react-native`, look again
+ * for the probe budget (a slow first mount, or a re-read that landed on a
+ * splash before the React root mounted), and if a real hierarchy still has no marker,
+ * leave a notice the runner attaches to the next test result as a warning —
+ * the one channel every run path, UI mode and MCP included, shows. Almost
+ * always a Release build with the hooks off: Expo inlines `EXPO_PUBLIC_*` only
+ * in app code, never inside node_modules, so the package cannot read the flag.
+ */
+async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabilities, pollMs: number): Promise<void> {
+  if (missingHooksChecked.has(caps) || !ctx.config.rootDir) return;
+  missingHooksChecked.add(caps);
+  if (!appUsesTapsmithHooks({ rootDir: ctx.config.rootDir, apk: ctx.config.apk, app: ctx.config.app })) return;
+  const deadline = Date.now() + pollMs;
+  let read = false;
+  for (;;) {
+    const seen = await readHooksMarker(ctx, { strict: true });
+    if (seen) {
+      caps.hooksDetected = true;
+      return;
+    }
+    if (seen === false) read = true;
+    if (Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+    await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
+  }
+  if (!read) {
+    // Nothing was actually read: no evidence either way, so ask again next reset.
+    missingHooksChecked.delete(caps);
+    return;
+  }
+  ctx.notices.push({
+    kind: 'hooks-missing',
+    title: '@tapsmith/react-native hooks not found',
+    // Kept under 500 characters: MCP clips each warning line there.
+    message: '@tapsmith/react-native is installed, but its reset hooks never showed up, so resets clear app data (5-10 s) '
+      + 'instead of resetting in-app (~1 s). In a Release build the app must pass `enabled` itself, because Expo does not inline '
+      + 'EXPO_PUBLIC_* inside node_modules: `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}`, built with '
+      + 'EXPO_PUBLIC_TAPSMITH_HOOKS=1 (bare React Native: your own flag). No hooks intended? Set `appReset: \'clear\'`. '
+      + 'https://tapsmith.dev/guides/warm-reset/',
+    timestamp: Date.now(),
+  });
 }
 
 /** Marker poll cadence inside {@link probeResetCapabilities}. */
@@ -422,6 +521,7 @@ export async function launchConfiguredApp(
     await ensureSessionReady(ctx, phase, readinessAttempts);
     await waitForAppReady(ctx);
     await probeResetCapabilities(ctx, probe);
+    await checkMissingResetHooks(ctx, probe.pollMs);
     return prepared();
   }
 
@@ -429,6 +529,7 @@ export async function launchConfiguredApp(
   await ensureSessionReady(ctx, phase, readinessAttempts);
   await waitForAppReady(ctx);
   await probeResetCapabilities(ctx, probe);
+  await checkMissingResetHooks(ctx, probe.pollMs);
   return prepared();
 }
 
@@ -448,6 +549,8 @@ export interface ExecuteAppResetOptions {
    * check and the report says so (`origin: 'prepared'`).
    */
   prepared?: PreparedState
+  /** How long the missing-hooks check looks for the marker (default: the startup probe's budget). */
+  hooksProbeMs?: number
 }
 
 /**
@@ -592,6 +695,7 @@ export async function executeAppReset(
     // upgrade path — the next scope resolves warm. A hookless app pays one
     // hierarchy read per clear reset; a hooked one upgrades on the first.
     await probeResetCapabilities(ctx, { pollMs: 0 });
+    if (action.kind === 'clear') await checkMissingResetHooks(ctx, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
   }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
 }

@@ -39,6 +39,7 @@ import { pickResolvedDeviceName } from './tools/device-target.js';
 import type { TestTreeNode, UIDiscoverMessage, UIDiscoverChildMessage } from '../ui-mode/ui-protocol.js';
 import { pruneTreeByGrep } from '../ui-mode/grep-tree.js';
 import { grepFiltersFor, type GrepFilters } from '../test-filter.js';
+import { beginTestRun, endTestRun } from './sdk-device.js';
 
 /** Key for a session with no platform of its own (single-platform configs). */
 const DEFAULT_PLATFORM_KEY = 'default';
@@ -213,6 +214,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     // Running from here, before the first await: resolving devices takes
     // seconds on a first run, and a second run arriving meanwhile must meet
     // the guard above.
+    beginTestRun();
     this._isRunning = true;
     this._stopRequested = false;
     this._testResults.clear();
@@ -274,6 +276,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     // exists to prevent.
     this._startRunRequest();
 
+    beginTestRun();
     this._isRunning = true;
     this._stopRequested = false;
     this._testResults.clear();
@@ -487,6 +490,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * Always a fresh synthetic result — falling back to _lastRunEnd would
    * report the PREVIOUS run's outcome. */
   private _endRunState(): void {
+    if (this._isRunning) endTestRun();
     this._isRunning = false;
     this._stopRequested = false;
     // Nothing left to escalate against, and a pending timer would outlive the

@@ -58,6 +58,20 @@ export interface FindElementsResponse {
   errorMessage: string;
 }
 
+/** One selector's matches from {@link TapsmithGrpcClient.evaluateSelectors},
+ *  in the agent's match order. `elementId` is empty: nothing is cached. */
+export interface SelectorEvaluation {
+  elements: ElementInfo[];
+  errorMessage: string;
+}
+
+export interface EvaluateSelectorsResponse {
+  requestId: string;
+  /** One entry per requested selector, in request order; empty on error. */
+  results: SelectorEvaluation[];
+  errorMessage: string;
+}
+
 export interface ScreenshotResponse {
   requestId: string;
   success: boolean;
@@ -367,6 +381,13 @@ export class TapsmithGrpcClient {
   private client: grpc.Client & Record<string, Function>;
   private address: string;
   private _abortSignal?: AbortSignal;
+  /**
+   * A network capture start in flight (PILOT-775). Every other RPC waits for
+   * it: a waiter created on a cold device starts capture without blocking,
+   * and the action after it (`tap()`, `launchApp()`) must not send the app's
+   * request before the proxy is there to see it.
+   */
+  private _pendingCaptureStart: Promise<unknown> | null = null;
 
   constructor(address: string = DEFAULT_ADDRESS) {
     this.address = address;
@@ -406,6 +427,15 @@ export class TapsmithGrpcClient {
     this._abortSignal = signal;
   }
 
+  /** @internal — Hold other RPCs until this capture start settles (PILOT-775). */
+  _holdForCaptureStart(start: Promise<unknown>): void {
+    this._pendingCaptureStart = start;
+    const release = (): void => {
+      if (this._pendingCaptureStart === start) this._pendingCaptureStart = null;
+    };
+    start.then(release, release);
+  }
+
   /** @internal */
   _getAbortSignal(): AbortSignal | undefined {
     return this._abortSignal;
@@ -417,6 +447,15 @@ export class TapsmithGrpcClient {
     deadlineMs?: number,
     opts?: { bypassAbort?: boolean },
   ): Promise<T> {
+    const pendingStart = this._pendingCaptureStart;
+    if (pendingStart && method !== 'startNetworkCapture') {
+      const settle = (): Promise<T> => {
+        // Released before this runs (the hold settles first), so no re-wait.
+        if (this._pendingCaptureStart === pendingStart) this._pendingCaptureStart = null;
+        return this.call<T>(method, request, deadlineMs, opts);
+      };
+      return pendingStart.then(settle, settle);
+    }
     const signal = this._abortSignal;
     const bypassAbort = opts?.bypassAbort ?? false;
     if (signal?.aborted && !bypassAbort) return Promise.reject(new TestAbortedError());
@@ -506,6 +545,23 @@ export class TapsmithGrpcClient {
       requestId: requestId(),
       selector: this.selectorProto(selector),
       timeoutMs: timeoutMs ?? 0,
+    });
+  }
+
+  /**
+   * Evaluate several selectors against one UI snapshot, without waiting
+   * (PILOT-848): the agent's own matching decides every count, so locator
+   * suggestions can't drift from what a test resolves.
+   */
+  async evaluateSelectors(selectors: Selector[]): Promise<EvaluateSelectorsResponse> {
+    // Agents scope a find by a resolved parent element id, never by a nested
+    // parent selector, so a scoped selector would be counted unscoped.
+    if (selectors.some((s) => s.parent)) {
+      throw new Error('evaluateSelectors does not support scoped selectors (a locator chained from another locator)');
+    }
+    return this.call<EvaluateSelectorsResponse>('evaluateSelectors', {
+      requestId: requestId(),
+      selectors: selectors.map((s) => this.selectorProto(s)),
     });
   }
 

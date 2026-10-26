@@ -11,7 +11,8 @@
 //!   verifications, or the bounded warm window (PILOT-249).
 //! * **The ladder** — `warm → restart → clear`, run through a [`ResetOps`]
 //!   trait so the sequencing is unit-tested against a mock while the real
-//!   device work lives in `grpc_server.rs`.
+//!   device work lives in `grpc_server.rs` (`ServiceResetOps`) and the
+//!   platform backends under `grpc_server/`.
 //!
 //! Wire format the in-app module implements (framework-agnostic):
 //!

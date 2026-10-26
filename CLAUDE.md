@@ -14,6 +14,7 @@ proto/tapsmith.proto      # gRPC contract (single proto file, buf for linting)
 npm-packages/             # Platform-specific npm packages (@tapsmith/core-{os}-{arch}) for daemon binary distribution
 docs/                     # User-facing documentation
 test-app/                 # React Native (Expo) test app for E2E testing
+native-ios-test-app/      # Plain SwiftUI fixture app (xcodegen; build.sh) — e2e/native-ios/*.native.ts, not in CI yet
 e2e/                      # E2E test suite run against the test app
 .claude/skills/           # Claude Code project skills (implement-ticket(s), review-loop, qa-this-branch); .claude/ otherwise git-ignored
 ```
@@ -202,6 +203,15 @@ silently (this class of bug has shipped more than once):
 5. `mcp/headless-dispatcher.ts` — `tapsmith mcp-server`, which forks the same
    `watch-run.ts` children (so 4 and 5 share child code but have separate
    parent-side state threading)
+
+A once-per-session warning about the app itself belongs in the shared session
+layer every path opens through (`device-session.ts` → `session-preflight.ts`),
+not in one embedder, and should reach the user as a `PreflightNotice` (the runner
+turns it into a test-result warning, which every path shows) rather than
+`console.warn` (UI-mode and MCP children's stderr reaches no user). The missing
+`@tapsmith/react-native` hooks warning (PILOT-774) works this way. The runner
+passes `executeAppReset` a fresh spread of the session context per reset, so
+per-session state must live in a shared object, not a scalar on the context.
 
 When adding a per-session concern, prefer a **required** option on
 `runTestFile` over an optional one — a compile error in every embedder beats

@@ -5,8 +5,9 @@ on:
     # release/** so the auto-created release PR (pushed via the deploy key)
     # gets CI — a GITHUB_TOKEN-authored PR does not trigger pull_request runs.
     branches: [main, 'release/**']
+  # Every PR, whatever its base: a stacked PR targets the branch below it,
+  # not main, and still needs CI.
   pull_request:
-    branches: [main]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}

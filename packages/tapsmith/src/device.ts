@@ -97,13 +97,15 @@ async function sleepUpTo(ms: number, deadline: number): Promise<void> {
 }
 
 async function withDeadline<T>(promise: Promise<T>, deadline: number, label: string): Promise<T> {
+  // Handled first: the call is already under way, and a deadline that has
+  // passed must not leave its rejection unhandled (fatal in the UI server).
+  promise.catch(() => undefined);
   const timeoutMs = remainingMs(deadline);
   if (timeoutMs <= 0) {
     throw new Error(`${label} timed out`);
   }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
-  promise.catch(() => undefined);
 
   try {
     return await Promise.race([
@@ -195,6 +197,18 @@ export class Device {
   private _networkCaptureError: string | undefined;
   /** Successful `route()` calls since the runner last took the count. */
   private _routeRegistrations = 0;
+  /**
+   * The runner's starter for network capture on demand (PILOT-775): a
+   * route(), waitForRequest() or waitForResponse() made while capture is not
+   * running calls it, so mocking needs no config. Null outside a test file.
+   */
+  private _onDemandCapture: (() => Promise<void>) | null = null;
+  /** Whether a capture start was tried since the last arm (one try per arm). */
+  private _onDemandTried = false;
+  /** The on-demand start in flight, shared by concurrent callers. */
+  private _onDemandStart: Promise<void> | null = null;
+  /** The proxy came up through an on-demand start since the runner last asked. */
+  private _proxyStartedOnDemand = false;
   /** waitForRequest/waitForResponse calls still waiting (PILOT-543). */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
   /**
@@ -293,6 +307,18 @@ export class Device {
     } catch {
       return undefined;
     }
+  }
+
+  /**
+   * @internal — The live WebView connection this Device already holds (the
+   * test session's active one, else the inspection one UI mode's picker
+   * keeps), or null. Never connects: UI mode's live locators use it only
+   * once the picker's connection is up, so the page never gets a second
+   * inspector session (PILOT-288).
+   */
+  _connectedWebView(): WebViewHandle | null {
+    if (this._activeWebView) return this._activeWebView;
+    return this._cachedWebView?._isAlive() ? this._cachedWebView : null;
   }
 
   /**
@@ -902,6 +928,9 @@ export class Device {
     errorMessage: string
   }> {
     let res: Awaited<ReturnType<TapsmithGrpcClient['startNetworkCapture']>>;
+    // Any start is this arm's try: a trace's failed start is not retried on
+    // demand within the same test (PILOT-775).
+    this._onDemandTried = true;
     try {
       res = await this._client.startNetworkCapture(options);
     } catch (err) {
@@ -930,6 +959,60 @@ export class Device {
       success: res.success,
       errorMessage: res.errorMessage,
     };
+  }
+
+  /**
+   * @internal — Arm (or clear, with null) the runner's starter for network
+   * capture on demand (PILOT-775). Each arm allows one start: a start that
+   * failed is not retried on every later call — its error is what route()
+   * and the network waiters report — but the runner re-arms per test.
+   */
+  _setOnDemandNetworkCapture(start: (() => Promise<void>) | null): void {
+    this._onDemandCapture = start;
+    this._onDemandTried = false;
+  }
+
+  /**
+   * @internal — Whether the proxy came up through an on-demand start since
+   * the last call, then reset (PILOT-775). A route that never fires after
+   * such a start may have missed connections the app opened before it.
+   */
+  _takeProxyStartedOnDemand(): boolean {
+    const started = this._proxyStartedOnDemand;
+    this._proxyStartedOnDemand = false;
+    return started;
+  }
+
+  /** Start capture on demand if the runner allows it and it is not running. */
+  private async _ensureOnDemandNetworkCapture(): Promise<void> {
+    if (!this._onDemandStart) {
+      const start = this._onDemandCapture;
+      // A proxy already up (from an earlier test) is used as it is: restarting
+      // it mid-test resets the daemon's capture state, including the hosts it
+      // has learned to tunnel for clients that reject its certificate.
+      if (this._networkCaptureActive || this._networkProxyRunning || !start || this._onDemandTried) return;
+      this._onDemandTried = true;
+      const wasRunning = this._networkProxyRunning;
+      this._onDemandStart = start()
+        .catch(() => {
+          // The starter reports its own failure; callers read
+          // `_networkCaptureError`.
+        })
+        .then(() => {
+          if (!wasRunning && this._networkProxyRunning) this._proxyStartedOnDemand = true;
+        })
+        .finally(() => { this._onDemandStart = null; });
+      this._client._holdForCaptureStart?.(this._onDemandStart);
+    }
+    await this._onDemandStart;
+  }
+
+  /**
+   * @internal — Requests that reached one of this device's route handlers
+   * since the last call, then reset (PILOT-775).
+   */
+  _takeRouteHandlerCalls(): number {
+    return this._routeManager?.takeHandlerCalls() ?? 0;
   }
 
   /**
@@ -1106,10 +1189,14 @@ export class Device {
    * `Route` object that can `abort()`, `continue()`, `fulfill()`, or `fetch()`
    * the request.
    *
-   * Requires the network proxy, which the runner starts for a test whose
-   * trace records network traffic (`trace` records the attempt and `network`
-   * is `true`, the default). Without it route handlers never fire, and the
-   * runner warns at the end of the test (PILOT-517).
+   * Routes run on Tapsmith's network proxy. The test runner starts it for a
+   * test whose trace records network traffic, and otherwise on the first
+   * `route()`, `waitForRequest()` or `waitForResponse()` of a test
+   * (PILOT-775); it then stays up for the rest of the session. Connections
+   * the app opened before the proxy started bypass it, so register routes
+   * before the app sends the requests they mock. Outside the test runner
+   * nothing starts the proxy, route handlers never fire, and the runner
+   * warns at the end of a test whose routes could not fire (PILOT-517).
    */
   async route(
     url: string | RegExp | ((url: URL) => boolean),
@@ -1119,6 +1206,10 @@ export class Device {
     const start = Date.now();
     const stack = extractStack(new Error().stack ?? '');
     const source = stack[0];
+    await this._ensureOnDemandNetworkCapture();
+    // The start can take seconds: a test that timed out meanwhile must not
+    // register its route into whatever test runs next.
+    if (isCurrentAttemptClosed()) return fencedRejection<void>('route()');
     if (!this._networkCaptureActive && this._networkCaptureError) {
       const error = `Network capture disabled: ${this._networkCaptureError}`;
       this._emitNetworkAction('route', formatPattern(url), start, false, error, source, stack);
@@ -1169,7 +1260,9 @@ export class Device {
   /**
    * Wait for a request matching the pattern.
    *
-   * Requires network tracing to be enabled (same prerequisite as `route()`).
+   * Sees traffic through the network proxy, which the test runner starts on
+   * demand as for `route()`. Start waiting before the action that sends the
+   * request. Rejects at once when network capture failed to start.
    */
   waitForRequest(
     urlOrPredicate: string | RegExp | ((request: TapsmithRequest) => boolean),
@@ -1193,7 +1286,9 @@ export class Device {
   /**
    * Wait for a response matching the pattern.
    *
-   * Requires network tracing to be enabled (same prerequisite as `route()`).
+   * Sees traffic through the network proxy, which the test runner starts on
+   * demand as for `route()`. Start waiting before the action that sends the
+   * request. Rejects at once when network capture failed to start.
    */
   waitForResponse(
     urlOrPredicate: string | RegExp | ((response: NetworkResponseEventData) => boolean),
@@ -1229,6 +1324,7 @@ export class Device {
     // A body that outlived its attempt must not leave a waiter in the next test.
     if (isCurrentAttemptClosed()) return fencedRejection<T>(`${method}()`);
     const manager = this._ensureRouteManager();
+    const proxyWasRunning = this._networkProxyRunning;
     const promise: Promise<T> = new Promise<T>((resolve, reject) => {
       let unsubscribe = (): void => {};
       const finish = (): void => {
@@ -1246,15 +1342,17 @@ export class Device {
           reject(new TestEndedError(`${method}()`));
         },
       };
-      const timer = setTimeout(() => {
+      const fail = (message: string): void => {
         finish();
-        const message = `${method} timed out after ${timeout}ms`;
         const err = new Error(message);
         // Point at the call, not this timer: the stack is what reporters
         // draw a code frame from.
         const frames = callSite.stack?.split('\n').slice(1).join('\n');
         if (frames) err.stack = `Error: ${message}\n${frames}`;
         reject(err);
+      };
+      const timer = setTimeout(() => {
+        fail(`${method} timed out after ${timeout}ms${this._networkWaiterHint(proxyWasRunning)}`);
       }, timeout);
       this._pendingWaiters.add(waiter);
       unsubscribe = subscribe(manager, (event) => {
@@ -1263,8 +1361,34 @@ export class Device {
           resolve(event);
         }
       });
+      // No request can arrive without capture: fail now, not at the timeout.
+      void this._ensureOnDemandNetworkCapture().then(() => {
+        if (this._pendingWaiters.has(waiter) && !this._networkCaptureActive && this._networkCaptureError) {
+          fail(`${method}() cannot see any request: Network capture disabled: ${this._networkCaptureError}`);
+        }
+      });
     });
     return promise;
+  }
+
+  /**
+   * Why a network waiter may have timed out, when that is down to capture
+   * rather than the app (PILOT-775): nothing was capturing, or the proxy only
+   * came up with this wait, after the app may have opened its connections.
+   */
+  private _networkWaiterHint(proxyWasRunning: boolean): string {
+    if (!this._networkProxyRunning) {
+      return '. No network capture was running on this device, so no request could be seen: ' +
+        'waitForRequest() and waitForResponse() see traffic only through Tapsmith\'s network proxy, ' +
+        'which the test runner starts for a test (on its first route() or network wait, or when its ' +
+        'trace records network). See https://tapsmith.dev/guides/network/#prerequisites';
+    }
+    if (!proxyWasRunning) {
+      return '. The network proxy started on demand with this wait, and connections the app had ' +
+        'already opened may bypass it: start waiting (or register a route) before the app first ' +
+        'talks to that server, e.g. before launchApp(). See https://tapsmith.dev/guides/network/#prerequisites';
+    }
+    return '';
   }
 
   /**
@@ -1284,6 +1408,9 @@ export class Device {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overload implementation
   on(event: string, handler: (...args: any[]) => void): void {
     const manager = this._ensureRouteManager();
+    // Events come through the proxy, which the runner starts on demand
+    // (PILOT-775); a failed start is reported by the runner's warning.
+    void this._ensureOnDemandNetworkCapture();
     if (event === 'request') {
       manager.addRequestListener(handler as (req: TapsmithRequest) => void);
     } else {
@@ -1438,9 +1565,12 @@ export class Device {
    * concurrently (the poll's multi-second connect resolving after the test's
    * would clobber the test's activation).
    */
-  private async _establishWebView(packageName?: string, log?: string[]): Promise<WebViewHandle> {
+  private async _establishWebView(packageName?: string, log?: string[], appOnly = false): Promise<WebViewHandle> {
     if (this._cachedWebView?._isAlive()) {
       appendWebViewConnectLog(log, 'Reusing cached WebView connection');
+      // The device timeout now, not the one it was connected under: a later
+      // test's test.use({ timeout }) applies to its waits too.
+      this._cachedWebView._setTimeoutMs(this._defaultTimeoutMs);
       this._applyTraceCtx(this._cachedWebView);
       return this._cachedWebView;
     }
@@ -1448,13 +1578,26 @@ export class Device {
     const generation = this._webviewGeneration;
 
     if (this._platform === 'ios') {
-      return this._webviewIos(packageName, generation, log);
+      return this._webviewIos(packageName, generation, log, appOnly);
     }
     return this._webviewAndroid(packageName, generation, log);
   }
 
   private async _connectWebView(packageName?: string, log?: string[]): Promise<WebViewHandle> {
     const handle = await this._establishWebView(packageName, log);
+    this._activeWebView = handle;
+    return handle;
+  }
+
+  /**
+   * @internal — Connect to `packageName`'s own WebView, never another app's.
+   * The MCP tools act on the app the daemon reports as current; iOS's
+   * connect otherwise falls back to any app with an inspectable page, which
+   * would point their taps and typing at a background app. (Android's
+   * connect already keeps to the package.)
+   */
+  async _webviewOfApp(packageName: string): Promise<WebViewHandle> {
+    const handle = await this._establishWebView(packageName, undefined, true);
     this._activeWebView = handle;
     return handle;
   }
@@ -1538,12 +1681,20 @@ export class Device {
           }
 
           appendWebViewConnectLog(log, `Connected to ${describeWebView(target)} on local port ${fwd.localPort}`);
+          // The connect had what was left of its budget; what the handle
+          // does from now on gets the device timeout, as on iOS.
+          handle._setTimeoutMs(this._defaultTimeoutMs);
           this._cachedWebView = handle;
           return handle;
         } catch (e) {
+          await handle.close();
+          // Disposed mid-connect (the session closed its WebViews): stop
+          // instead of reconnecting to the page until the deadline.
+          if (generation !== this._webviewGeneration) {
+            throw new Error('WebView connection was disposed before it completed');
+          }
           lastError = e instanceof Error ? e.message : String(e);
           appendWebViewConnectLog(log, `Connecting to ${target.socketName} failed: ${lastError}`);
-          await handle.close();
           continue;
         }
       }
@@ -1558,7 +1709,7 @@ export class Device {
     );
   }
 
-  private async _webviewIos(_packageName: string | undefined, generation: number, log?: string[]): Promise<WebViewHandle> {
+  private async _webviewIos(_packageName: string | undefined, generation: number, log?: string[], appOnly = false): Promise<WebViewHandle> {
     const { WebKitInspectorClient, findSimulatorInspectorSocket } = await import('./webkit-inspector.js');
 
     // Prefer the explicitly selected device serial (= simulator UDID) over
@@ -1646,13 +1797,15 @@ export class Device {
         // answering evaluates against their frozen DOM, so the responsiveness
         // probe below cannot reject them. The live page is the newest one:
         // probe apps newest-pid-first and pages newest-id-first.
-        const candidates = (matching.length > 0 ? matching : withPages)
+        const candidates = (matching.length > 0 || appOnly ? matching : withPages)
           .slice()
           .sort((a, b) => inspectorAppPid(b.appId) - inspectorAppPid(a.appId));
 
         if (candidates.length === 0) {
           lastPhase = 'waiting for an inspectable WebView page';
-          lastError = 'No inspectable WebView pages found';
+          lastError = appOnly && withPages.length > 0
+            ? `No inspectable WebView page in ${_packageName} (only in other apps)`
+            : 'No inspectable WebView pages found';
           appendWebViewConnectLog(log, lastError);
           await sleepUpTo(WEBVIEW_RETRY_INTERVAL_MS, deadline);
           continue;

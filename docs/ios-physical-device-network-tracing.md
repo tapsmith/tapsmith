@@ -27,7 +27,7 @@ export default defineConfig({
 });
 ```
 
-With `trace.mode` off, Tapsmith's daemon skips every network-capture code path — no proxy pre-start, no OCSP passthrough, nothing. Flipping `trace.mode` on is the switch that turns everything on this page from "dead code" to "active".
+With `trace.mode` off, Tapsmith starts no proxy until a test calls `device.route()`, `waitForRequest()` or `waitForResponse()`, which start it on demand. Turning `trace.mode` on starts it for every test, so the trace records each test's traffic.
 
 ## One-time device setup
 
@@ -106,9 +106,9 @@ tapsmith ios network configure <udid> --refresh
 
 ## Security note
 
-When network tracing is enabled, Tapsmith's MITM proxy binds on `0.0.0.0:<port>` (all network interfaces) so the iPhone can reach it over Wi-Fi. This means **any device on the same local network** could potentially route HTTP/HTTPS traffic through the proxy and have it decrypted by the Tapsmith CA. The proxy has no authentication.
+While network capture runs (a trace that records network, or a test that mocks with `device.route()` or waits on the network), Tapsmith's MITM proxy binds on `0.0.0.0:<port>` (all network interfaces) so the iPhone can reach it over Wi-Fi. This means **any device on the same local network** could potentially route HTTP/HTTPS traffic through the proxy and have it decrypted by the Tapsmith CA. The proxy has no authentication.
 
-In practice this is only a concern on untrusted networks (coffee shops, shared offices). On a private home/lab Wi-Fi it's a non-issue. If you're on a shared network, either restrict to simulator-only tracing (which binds on `127.0.0.1`) or ensure your Mac's firewall allows only the specific iPhone's IP. The proxy is only bound while `tapsmith test` (with tracing) or `tapsmith ios network verify` is running — it's not a persistent listener.
+In practice this is only a concern on untrusted networks (coffee shops, shared offices). On a private home/lab Wi-Fi it's a non-issue. If you're on a shared network, either restrict to simulator-only tracing (which binds on `127.0.0.1`) or ensure your Mac's firewall allows only the specific iPhone's IP. The proxy is only bound while a `tapsmith test` session that captures or mocks network traffic, or `tapsmith ios network verify`, is running — from the first test that needs it until the session ends. It's not a persistent listener.
 
 ## Known limitations
 

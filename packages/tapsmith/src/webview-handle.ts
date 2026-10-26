@@ -174,6 +174,11 @@ export class WebViewHandle {
     this._timeoutMs = timeoutMs;
   }
 
+  /** @internal — The timeout every later wait on this handle gets (set once connected). */
+  _setTimeoutMs(timeoutMs: number): void {
+    this._timeoutMs = timeoutMs;
+  }
+
   /** @internal — Create a WebViewHandle backed by WebKit Inspector (iOS). */
   static _createFromInspector(
     client: TapsmithGrpcClient,
@@ -678,6 +683,71 @@ export class WebViewHandle {
       return idx >= 0 && idx < probe.count ? 1 : 0;
     }
     return probe.count;
+  }
+
+  /**
+   * @internal — A locator's current matches with their screen bounds, mapped
+   * as {@link _dumpDomHierarchy} maps its nodes, so UI mode's live Locator
+   * tab can draw them on the device mirror and tell a picked element from
+   * another (PILOT-848). Single tick; at most `max` matches are described.
+   * `bounds` is absent when the WebView's place on screen is not known.
+   */
+  async _liveMatches(loc: WebViewLocator, timeoutMs: number, max = 200): Promise<{
+    count: number
+    total: number
+    matches: Array<{ tag: string; id: string; testId: string; bounds?: { left: number; top: number; right: number; bottom: number } }>
+    /** Where the WebView is on screen, when found: matches outside it are scrolled out of view. */
+    viewport?: { left: number; top: number; right: number; bottom: number }
+  }> {
+    const nth = loc._nthIndex;
+    const idxJs = nth === undefined ? 'null' : nth >= 0 ? String(nth) : `els.length - ${-nth}`;
+    const useDpr = this._platform === 'android';
+    const found = await this._evaluate(`(() => {
+      const els = (${loc._finderAllJs});
+      const idx = ${idxJs};
+      const picked = idx === null ? els.slice(0, ${max}) : (idx >= 0 && idx < els.length ? [els[idx]] : []);
+      const dpr = ${useDpr ? 'window.devicePixelRatio || 1' : '1'};
+      return {
+        total: els.length,
+        matches: picked.map((el) => {
+          const r = el.getBoundingClientRect();
+          return {
+            tag: (el.tagName || '').toLowerCase(),
+            id: el.id || '',
+            testId: el.getAttribute('data-testid') || '',
+            rect: { left: r.left * dpr, top: r.top * dpr, right: r.right * dpr, bottom: r.bottom * dpr },
+          };
+        }),
+      };
+    })()`, timeoutMs) as { total: number; matches: Array<{ tag: string; id: string; testId: string; rect: { left: number; top: number; right: number; bottom: number } }> };
+    // Found afresh each time: the WebView may have moved, or left the screen
+    // while its page stays loaded (a covered stack screen) — then a cached
+    // place would draw its matches over whatever is showing now.
+    let wb: { left: number; top: number; right: number; bottom: number } | undefined;
+    try {
+      const res = await this._client.findElement(
+        { kind: { type: 'className', value: this._platform === 'ios' ? 'XCUIElementTypeWebView' : 'android.webkit.WebView' } },
+        200,
+      );
+      if (res.found && res.element?.bounds) wb = this._webviewNativeBounds = res.element.bounds;
+    } catch { /* best-effort: bounds stay unknown */ }
+    const count = nth === undefined ? found.total : found.matches.length;
+    return {
+      count,
+      total: found.total,
+      viewport: wb,
+      matches: found.matches.map(({ rect, ...m }) => ({
+        ...m,
+        bounds: wb
+          ? {
+            left: Math.round(wb.left + rect.left),
+            top: Math.round(wb.top + rect.top),
+            right: Math.round(wb.left + rect.right),
+            bottom: Math.round(wb.top + rect.bottom),
+          }
+          : undefined,
+      })),
+    };
   }
 
   /**

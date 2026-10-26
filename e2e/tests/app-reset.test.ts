@@ -1,6 +1,7 @@
 import type { Device } from "tapsmith"
 import { test, describe, expect } from "../fixtures.js"
 import type { LoginScreen } from "../screens/login.screen"
+import { readHooksMarker } from "../utils/hooks-marker.js"
 
 /**
  * The reset ladder end to end against the test app, which mounts
@@ -50,7 +51,8 @@ describe("App reset (declared isolation)", () => {
   test("a warm reset is acknowledged by the in-app hooks and signs the user out", async ({ device, loginScreen }) => {
     await signIn(device, loginScreen)
 
-    const before = await device.getByTestId("tapsmith-hooks").getText()
+    // No locator matches the marker (PILOT-830): read it from the hierarchy.
+    const before = (await readHooksMarker(device))?.text
     const epochBefore = Number(/epoch=(\d+)/.exec(before ?? "")?.[1] ?? "-1")
     expect(epochBefore).toBeGreaterThanOrEqual(0)
 

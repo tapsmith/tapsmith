@@ -28,6 +28,8 @@ export const GUARDED_PATHS = [
   "packages/tapsmith-core/src/ios/",
   // Where the daemon wires clearData, resets and restore to the ios/ helpers.
   "packages/tapsmith-core/src/grpc_server.rs",
+  // ...and the platform backends those handlers call.
+  "packages/tapsmith-core/src/grpc_server/",
   "packages/tapsmith-core/src/agent_comms.rs",
   // The XCUITest agent: the startup accessibility check and the dump error.
   "ios-agent/",

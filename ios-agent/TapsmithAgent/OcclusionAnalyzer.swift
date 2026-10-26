@@ -308,6 +308,55 @@ struct OcclusionAnalyzer {
         return CGRect(x: keyboard.minX, y: top, width: keyboard.width, height: keyboard.maxY - top)
     }
 
+    // MARK: - Keyboard first (PILOT-622)
+
+    /// What a touch on an element should do about the software keyboard.
+    enum KeyboardFirst: Equatable {
+        /// No keyboard on screen.
+        case noKeyboard
+        /// Touch the element with the keyboard up.
+        case touchAsIs
+        /// Put the keyboard away first: the touch would only close it.
+        case putKeyboardAway
+    }
+
+    /// What a React Native ScrollView or FlatList shows up as. Native tables
+    /// and collection views do not eat a touch to close the keyboard (and
+    /// their rows may be suggestions that only show while it is up), and a
+    /// web view's page sees the touch whatever the keyboard.
+    static let keyboardEatingScrollerTypes: Set<XCUIElement.ElementType> = [.scrollView]
+    static let textInputTypes: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .searchField, .textView]
+
+    /// Whether a touch on `target` would be spent on closing the keyboard.
+    /// A React Native ScrollView with the default
+    /// `keyboardShouldPersistTaps="never"` closes the keyboard on the first
+    /// touch after typing and gives the touch to nothing else — so when the
+    /// keyboard is up and the target sits in a scroll view, the keyboard goes
+    /// first. A text input is touched as is (focus moves, keyboard and all),
+    /// and so is a key of the keyboard and anything not found in the tree.
+    func keyboardFirst(_ target: Target) -> KeyboardFirst {
+        let windows = keyboardWindows()
+        // Any keyboard element with an on-screen part: a stale one left off
+        // screen by a keyboard-type switch can come before the real one.
+        let keyboardOnScreen = nodes.contains {
+            $0.elementType == .keyboard && !$0.frame.intersection(screen).isEmpty
+        }
+        guard keyboardOnScreen else { return .noKeyboard }
+        if let type = target.elementType, Self.textInputTypes.contains(type) { return .touchAsIs }
+        guard let t = locate(target) else { return .touchAsIs }
+        if Self.textInputTypes.contains(nodes[t].elementType) || isInKeyboard(t, keyboardWindows: windows) {
+            return .touchAsIs
+        }
+        // Web content handles its own touches, even inside a scroll view.
+        let up = ancestors(of: t)
+        if up.contains(where: { nodes[$0].elementType == .webView }) { return .touchAsIs }
+        // Part of a text input (its clear button): React Native leaves the
+        // keyboard up for a touch on the input, and blurring would hide it.
+        if up.contains(where: { Self.textInputTypes.contains(nodes[$0].elementType) }) { return .touchAsIs }
+        let inScrollView = up.contains { Self.keyboardEatingScrollerTypes.contains(nodes[$0].elementType) }
+        return inScrollView ? .putKeyboardAway : .touchAsIs
+    }
+
     // MARK: - Helpers
 
     static let barTypes: Set<XCUIElement.ElementType> = [.navigationBar, .tabBar, .toolbar]
@@ -337,13 +386,14 @@ struct OcclusionAnalyzer {
 
     /// `@tapsmith/react-native`'s test hooks marker: a screen-sized
     /// transparent text in a `pointerEvents="none"` wrapper, painted after all
-    /// content (plus a small visible copy in a corner). It exists to be seen
-    /// in the hierarchy and takes no touches — but on Xcode 26.6 it makes
-    /// XCUITest call every element under it unhittable, and as a labeled text
-    /// over every point it would otherwise be named the cover of all of them.
+    /// content (versions before PILOT-830 also drew a small visible copy in a
+    /// corner). It exists to be seen in the hierarchy and takes no touches —
+    /// but on Xcode 26.6 it makes XCUITest call every element under it
+    /// unhittable, and as a labeled text over every point it would otherwise
+    /// be named the cover of all of them.
     func isTapsmithHooksMarker(_ node: Node) -> Bool {
         node.elementType == .staticText
-            && (node.identifier == "tapsmith-hooks" || node.label.hasPrefix("tapsmith-hooks:"))
+            && (node.identifier == "tapsmith-hooks" || NonAppElements.isHooksMarker(node.label))
     }
 
     /// A scroll view's indicator ("Vertical scroll bar, 2 pages"): drawn over

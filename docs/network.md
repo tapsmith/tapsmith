@@ -11,9 +11,23 @@ Both features share the same underlying MITM proxy infrastructure.
 
 ## Prerequisites
 
-Network interception requires the MITM proxy to be active. The proxy starts automatically when tracing is enabled with `network: true` (the default). **Tracing is off by default** (`trace: "off"`), so out of the box no proxy runs: route handlers never fire and `waitForRequest`/`waitForResponse` never resolve. (`tapsmith init` writes `trace: { mode: 'retain-on-failure' }` when you enable network capture in the wizard.) [UI mode](ui-mode.md) turns tracing on when the config leaves it off, so a mock that works under `--ui` can still do nothing under `tapsmith test` until the config sets `trace`.
+Network interception runs on Tapsmith's MITM proxy, and mocking needs no config: the test runner starts the proxy on demand, on the first `device.route()`, `device.waitForRequest()`, `device.waitForResponse()` or `device.on('request' | 'response')` a test (or one of its hooks or fixtures) makes on a device. It then stays up for the rest of the session — drained after every test and released when the session ends — and every later test starts capture at its beginning, as a trace does. A test whose trace records network traffic starts it at the beginning of the test instead (see [Network Capture in Traces](#network-capture-in-traces)).
 
-Enable tracing in your config — any mode that records the test's first attempt (`"on"`, `"retain-on-failure"`, `"retain-on-first-failure"`, `"retain-on-failure-and-retries"`) starts the proxy for every test. `"on-first-retry"` and `"on-all-retries"` start it only for retries, so a test's first attempt has no proxy unless an earlier test's retry already started one (Tapsmith keeps it running for the rest of the session). Don't rely on that: use a mode that records first attempts if your tests mock the network:
+The startup `Config` line says which applies: `network: captured` when the trace records network for every test, `network: on demand` otherwise.
+
+**Register routes before the app sends the requests they mock.** The proxy only sees connections the app opens after it started. When the first route of a session starts it mid-test, the app may already hold a keep-alive connection to that server from an earlier request, and keeps using it — past the proxy — until the app is relaunched. Register routes (and start waits) at the top of the test, or in `beforeEach`/`beforeAll`, before navigating to the screen that fetches, as you would with Playwright's `page.route()` before `page.goto()`. A trace that records network (`trace: "retain-on-failure"`, which `tapsmith init` writes by default unless the only device set up is a Google Play-image emulator) starts the proxy with each test, so the app's connections go through it from the test's reset onwards.
+
+When a test fails and its routes were live but none of them fired, Tapsmith names the test and lists the possible reasons the capture shows: `device.route() handlers never fired: "…" registered route handlers and none of them fired. Possible reasons: …`. They are:
+
+- *HTTPS to `<hosts>` passed through the network proxy uncaptured* — the device cannot trust Tapsmith's CA (an Android emulator on a Google Play system image, see [Android emulator image requirements](#android-emulator-image-requirements)), the host is in `trace.networkPassthroughHosts`, or the app rejected Tapsmith's certificate;
+- *the network proxy started on demand during this test or its hooks* — the case above;
+- *the app never sent a request matching the route patterns* — check the pattern.
+
+A `waitForRequest()`/`waitForResponse()` that times out says when no capture was running on the device, or when the proxy only started with that wait. If the proxy cannot start (on iOS, for example, the Network Extension is not approved yet — see [iOS Network Capture](ios-network-capture.md)), `device.route()` throws `Network capture disabled: …` with the reason, and a waiter rejects at once with it. A failed start is tried again once per test, not on every call.
+
+Outside the test runner — a script that drives a `Device` itself — nothing starts the proxy, so route handlers never fire; at the end of a test that registered routes while no proxy was running, the runner prints a warning naming it.
+
+To record traffic in traces as well, enable tracing in your config — any mode that records the test's first attempt (`"on"`, `"retain-on-failure"`, `"retain-on-first-failure"`, `"retain-on-failure-and-retries"`) captures every test; `"on-first-retry"` and `"on-all-retries"` capture only retries, and a first attempt starts the proxy on demand:
 
 ```typescript
 import { defineConfig } from "tapsmith"
@@ -32,7 +46,7 @@ Or from the CLI:
 npx tapsmith test --trace on
 ```
 
-The `--trace on` flag enables tracing with all defaults, including `network: true`. To disable network capture while keeping other trace features, set `network: false` in the config's object form:
+The `--trace on` flag enables tracing with all defaults, including `network: true`. To keep network traffic out of traces while keeping other trace features, set `network: false` in the config's object form (mocking still works: the proxy then starts on demand):
 
 ```typescript
 export default defineConfig({
@@ -41,8 +55,6 @@ export default defineConfig({
 ```
 
 A `--trace <mode>` flag replaces the config's whole `trace` value, `network` included, so keep the mode in the config for this.
-
-When network capture is off, `device.route()` still registers the handler, but it can never fire because no traffic passes through the proxy. At the end of a test that registered a route (even one it removed again) while no proxy was running, Tapsmith prints a warning naming it: `device.route() handlers never fired: "…" registered route handlers, but network capture was not running`. When tracing is on but capture failed to start, `device.route()` itself throws `Network capture disabled: …` with the reason; only a route registered before the failed start (in `beforeAll`, say) reaches the end-of-test warning, which then says capture failed rather than suggesting the trace settings. Routes registered in a hook are reported against the first test that follows it.
 
 HTTP/2 traffic is intercepted when the client accepts Tapsmith's MITM CA — including gRPC, and including Firestore on Android. Clients that use embedded roots or certificate pinning reject external MITM certificates (Firestore on iOS always does); Tapsmith detects that rejection for HTTP/2-capable clients and tunnels later connections so the app keeps working, but route handlers and waiters cannot see the encrypted requests inside. See [HTTP/2, gRPC, and passthrough connections](#http2-grpc-and-passthrough-connections).
 
@@ -418,6 +430,9 @@ You rarely need to remove routes yourself. Tapsmith ties each route to the scope
 
 - A route registered in a test, in `beforeEach` or `afterEach`, or in a test-scoped fixture is removed when that test ends.
 - A route registered in `beforeAll` stays for every test in its `describe` block (or, at the top level, the whole file), including nested `describe` blocks and retries, and is removed when that block ends, after its `afterAll` hooks. A route registered in `afterAll` is removed at the same point.
+- A route registered in a worker-scoped fixture stays for the whole file and is removed when the file ends.
+
+`device.on('request' | 'response')` listeners follow the same lifetimes.
 
 ```typescript
 import { test, describe, beforeAll } from "tapsmith"
@@ -976,7 +991,7 @@ avdmanager create avd -n Tapsmith_Phone_API_36 \
   -k "system-images;android-36;google_apis;arm64-v8a" -d medium_phone
 ```
 
-`npx tapsmith doctor` flags any existing AVD that uses a Google Play image, and suggests a capture-capable AVD you already have or a new one to create. It never suggests overwriting yours. With network capture on, `npx tapsmith init` picks a capture-capable AVD when there is one, marks Play images "no HTTPS capture" in the wizard, and warns when it can only pick a Play image. When the AVD it sets up is a Play image, the wizard's network-capture question defaults to no (unless iOS is set up too), and its next steps name the capture-capable AVD to switch to, or the `create-avd` command for one (and, if you declined capture, the `trace` setting that turns it on).
+`npx tapsmith doctor` flags any existing AVD that uses a Google Play image, and suggests a capture-capable AVD you already have or a new one to create. It never suggests overwriting yours. With network capture on, `npx tapsmith init` picks a capture-capable AVD when there is one, marks Play images "no HTTPS capture" in the wizard, and warns when it can only pick a Play image. When the AVD it sets up is a Play image, the wizard's network-capture question defaults to no (unless iOS is set up too), as does `init --yes` without `--network-capture`, and its next steps name the capture-capable AVD to switch to, or the `create-avd` command for one (and, if you declined capture, the `trace` setting that turns it on).
 
 To check an existing AVD, look at `tag.id` in `~/.android/avd/<name>.avd/config.ini`: `google_apis` (or `default`/`aosp_atd`) supports HTTPS capture; `google_apis_playstore` does not.
 
@@ -984,7 +999,7 @@ Manually installing `~/.tapsmith/ca.pem` as a *user* CA does not help on a Play-
 
 ### When the app rejects Tapsmith's certificate
 
-Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time you capture. On rootable Android emulators it installs that CA into the device's system trust store when it first sets up capture on the device in a test session. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
+Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time a session selects an Android device or captures traffic. On rootable Android emulators it switches `adbd` to root and installs that CA into the device's system trust store when a test session selects the device, before the agent starts and the app launches. It does this whether or not the trace records network, since any test can start the proxy on demand. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.
 
 When an HTTPS client on the device still refuses Tapsmith's certificate, those requests do not appear in the trace and `device.route()` cannot intercept them. Tapsmith then names the hosts in the run output, once per run, and adds the same warning to each affected test's trace as a daemon console message. Hosts excluded by `networkHosts` or `networkIgnoreHosts` are left out, and there is no warning on the iOS simulator's macOS system-proxy fallback, where other Mac processes' traffic reaches the proxy too:
 

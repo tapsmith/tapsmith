@@ -581,8 +581,20 @@ function checkSimctl(report: Reporter, required: boolean, named: 'required' | 'o
 
 async function checkSimulatorXctestrun(report: Reporter): Promise<void> {
   try {
-    const { findSimulatorXctestrun, extractSdkVersion, getInstalledSimulatorSdkVersion } = await import('./ios-device-resolve.js');
+    const {
+      describeStaleSimulatorAgentCache, extractSdkVersion, findSimulatorXctestrun, getInstalledSimulatorSdkVersion,
+      inspectSimulatorAgentCache,
+    } = await import('./ios-device-resolve.js');
     const found = findSimulatorXctestrun();
+    const installedSdk = getInstalledSimulatorSdkVersion();
+    // An auto-build cache from another Tapsmith version is skipped (PILOT-485):
+    // name it, or "found" would silently mean a different build than last time.
+    const cache = inspectSimulatorAgentCache(installedSdk);
+    const staleCache = cache?.stale === 'version' ? describeStaleSimulatorAgentCache(cache) : undefined;
+    if (!found && staleCache) {
+      warn(report, 'ios-sim-agent', `Simulator xctestrun out of date: ${staleCache}`, 'Nothing to run now: your next iOS simulator test run rebuilds it from this version\'s agent source (a few minutes, needs Xcode)');
+      return;
+    }
     if (!found) {
       // The first simulator run builds it (ensureSimulatorAgent); the npm
       // package is an optional dependency for Node's arch only, so under
@@ -601,12 +613,13 @@ async function checkSimulatorXctestrun(report: Reporter): Promise<void> {
       : found.includes('agent-ios-simulator')
         ? '@tapsmith/agent-ios-simulator'
         : 'DerivedData';
-    const installedSdk = getInstalledSimulatorSdkVersion();
+    const builtBy = found === cache?.xctestrun && cache.builtBy ? `, built by Tapsmith ${cache.builtBy}` : '';
+    const skipped = staleCache ? ` (not the auto-build cache: ${staleCache})` : '';
 
     if (installedSdk && xctestrunSdk && xctestrunSdk !== installedSdk) {
-      warn(report, 'ios-sim-agent', `Simulator xctestrun built for iOS ${xctestrunSdk} but installed SDK is ${installedSdk} — will auto-build on first test run`);
+      warn(report, 'ios-sim-agent', `Simulator xctestrun built for iOS ${xctestrunSdk} but installed SDK is ${installedSdk} — will auto-build on first test run${skipped}`);
     } else {
-      pass(report, 'ios-sim-agent', 'Simulator xctestrun found', `${source}${sdkLabel}`);
+      pass(report, 'ios-sim-agent', 'Simulator xctestrun found', `${source}${sdkLabel}${builtBy}${skipped}`);
     }
   } catch {
     warn(report, 'ios-sim-agent', 'Could not check for simulator xctestrun');

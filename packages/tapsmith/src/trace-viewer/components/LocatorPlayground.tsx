@@ -38,6 +38,7 @@ const LOCATOR_TAB_STYLES = `
   .st-selector-error { padding: 6px 10px; font-size: 11px; color: var(--color-error); border-bottom: 1px solid var(--color-border); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; flex-shrink: 0; overflow-wrap: anywhere; }
   .st-strict-warning { padding: 6px 10px; font-size: 11px; color: var(--color-warning, #e2b340); border-bottom: 1px solid var(--color-border); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; flex-shrink: 0; }
   .st-strict-warning code { background: var(--color-bg-tertiary); padding: 1px 4px; border-radius: 3px; font-family: 'SF Mono', 'Cascadia Code', Consolas, monospace; font-size: 10px; }
+  .st-source-note { padding: 3px 10px; font-size: 10px; color: var(--color-text-muted); border-bottom: 1px solid var(--color-border); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; flex-shrink: 0; }
   .st-source-toggle { display: inline-flex; border: 1px solid var(--color-border); border-radius: 4px; overflow: hidden; flex-shrink: 0; }
   .st-source-btn { padding: 4px 8px; background: var(--color-bg); border: none; color: var(--color-text-muted); cursor: pointer; font-size: 10px; font-weight: 600; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; text-transform: uppercase; letter-spacing: 0.3px; }
   .st-source-btn + .st-source-btn { border-left: 1px solid var(--color-border); }
@@ -86,9 +87,23 @@ interface LocatorTabProps {
   onSourceChange?: (source: 'trace' | 'live') => void
   /** False when there is no live device to bind to (server disconnected). */
   liveSourceAvailable?: boolean
+  /**
+   * The device's answers while `source` is 'live' (PILOT-848): the locator's
+   * match count and the picked element's suggestions come from the agent,
+   * not this module's matcher, which only answers for recorded hierarchies.
+   */
+  live?: LiveLocatorAnswers
 }
 
-export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChange, source, onSourceChange, liveSourceAvailable }: LocatorTabProps) {
+/** What the device said about the Locator tab's locator and pick (UI mode, live source). */
+export interface LiveLocatorAnswers {
+  /** The latest evaluation of the current locator; null while none has arrived. */
+  evaluation: { count?: number; positional?: boolean; error?: string; webview?: boolean; bounds?: Bounds[] } | null
+  /** Suggestions for the live pick; null when nothing was picked on the device. */
+  suggestions: { suggestions: Array<{ code: string; label: string }>; note?: string; pending: boolean } | null
+}
+
+export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChange, source, onSourceChange, liveSourceAvailable, live }: LocatorTabProps) {
   injectStStyles();
 
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
@@ -98,7 +113,14 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
     [hierarchyXml],
   );
 
+  // Live source: the device answers; this module's matcher is for recorded
+  // hierarchies only (PILOT-848).
+  const liveAnswers = source === 'live' ? live : undefined;
+
   const generatedSelectors = useMemo<GeneratedSelector[]>(() => {
+    if (liveAnswers) {
+      return (liveAnswers.suggestions?.suggestions ?? []).map((s) => ({ ...s, priority: 0 }));
+    }
     // No hierarchy for this state (e.g. an action without a captured
     // snapshot) → nothing to validate against, so suggest nothing rather
     // than passing stale suggestions through unvalidated.
@@ -112,7 +134,7 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
     // an element that comes back on a later refresh brings them back.
     return disambiguateSelectors(roots, pickedNode, generateSelectors(pickedNode))
       .filter((s) => !s.mayNotMatch);
-  }, [pickedNode, roots]);
+  }, [pickedNode, roots, liveAnswers]);
 
   const isWebViewPick = pickedNode?.attributes.get('webview') === 'true';
 
@@ -123,17 +145,19 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
   // says so too, rather than showing no count at all (PILOT-717).
   const selectorError = useMemo(() => {
     if (!selector.trim()) return null;
+    if (liveAnswers) return liveAnswers.evaluation?.error ?? null;
     const parsed = parseSelectorString(selector);
     if (parsed) return parsedSelectorError(parsed);
     return locatorStringError(selector) ?? UNPARSEABLE_LOCATOR;
-  }, [selector]);
+  }, [selector, liveAnswers]);
 
   const matchCount = useMemo(() => {
+    if (liveAnswers) return selector.trim() ? liveAnswers.evaluation?.count ?? null : null;
     if (!selector.trim() || roots.length === 0 || selectorError) return null;
     const parsed = parseSelectorString(selector);
     if (!parsed) return null;
     return findMatchingNodes(roots, parsed).length;
-  }, [selector, roots, selectorError]);
+  }, [selector, roots, selectorError, liveAnswers]);
 
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -172,7 +196,10 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
 
   // Strict mode (PILOT-226): an ambiguous locator without a positional
   // chain will throw at runtime — warn here, where the user is composing it.
-  const hasPositionalChain = /\.(first|last)\(\)|\.nth\(\s*-?\d+\s*\)/.test(selector);
+  const hasPositionalChain = liveAnswers?.evaluation
+    ? Boolean(liveAnswers.evaluation.positional)
+    : /\.(first|last)\(\)|\.nth\(\s*-?\d+\s*\)/.test(selector);
+  const checking = Boolean(liveAnswers && selector.trim() && !liveAnswers.evaluation);
   const strictWarning = matchCount !== null && matchCount > 1 && !hasPositionalChain;
 
   return (
@@ -223,7 +250,12 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
             </button>
           )}
         </div>
-        <span class={countClass} data-testid="locator-match-count">{countLabel}</span>
+        <span class={countClass} data-testid="locator-match-count">{checking ? 'Checking…' : countLabel}</span>
+      </div>
+      <div class="st-source-note" data-testid="locator-source-note">
+        {liveAnswers
+          ? 'Matched by the device, as a test resolves it.'
+          : 'Matched against the recorded hierarchy: approximate. The device decides at run time.'}
       </div>
       {selectorError && (
         <div class="st-selector-error" role="alert" data-testid="locator-error">
@@ -266,7 +298,18 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
             ))}
           </>
         )}
-        {generatedSelectors.length === 0 && !selector && (
+        {liveAnswers?.suggestions?.pending && (
+          <div class="st-pick-hint" data-testid="locator-suggestions-pending">Checking locators on the device…</div>
+        )}
+        {liveAnswers && pickedNode && !liveAnswers.suggestions && (
+          <div class="st-pick-hint" data-testid="locator-live-pick-hint">
+            Pick the element on the device mirror for locators the device confirms.
+          </div>
+        )}
+        {liveAnswers?.suggestions?.note && (
+          <div class="st-pick-hint" data-testid="locator-suggestions-note">{liveAnswers.suggestions.note}</div>
+        )}
+        {generatedSelectors.length === 0 && !selector && !liveAnswers?.suggestions && (
           <div class="st-pick-hint">
             Click the <code>⊙</code> button on the screenshot{source ? ' or the device mirror' : ''} to pick an element, or type a locator above to highlight matches.
           </div>
@@ -278,4 +321,5 @@ export function LocatorTab({ hierarchyXml, pickedNode, selector, onSelectorChang
 
 // Pick/hover logic lives in selector-pick.ts (plain TS, unit-testable);
 // re-exported here for the UI entry points that import from this module.
-export { handlePickFromScreenshot, handleHoverFromScreenshot, isWebViewOverlayPending } from './selector-pick.js';
+export { handlePickFromScreenshot } from './selector-pick.js';
+export { handleHoverFromScreenshot, isWebViewOverlayPending, pickNodeAt } from './pick-node.js';

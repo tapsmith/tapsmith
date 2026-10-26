@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { simulatorChoices, type EnvScan } from './env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
-import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
+import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
 import { ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
@@ -32,7 +32,8 @@ export interface InitArgs {
   avd?: string;
   simulator?: string;
   deviceType?: DeviceType;
-  networkCapture: boolean;
+  /** `--network-capture` / `--no-network-capture`; unset takes the wizard's default (PILOT-775). */
+  networkCapture?: boolean;
   exampleTest: boolean;
   agentsMd: boolean;
   /** True when any setup-shaping flag was passed (implies non-interactive). */
@@ -118,7 +119,7 @@ export function initArgsFromOptions(opts: InitCommandOptions): InitArgs {
     exampleTest: opts.exampleTest,
     agentsMd: opts.agentsMd,
     anySetupFlag: valueFlags.some((v) => v !== undefined)
-      || opts.force || opts.networkCapture || !opts.exampleTest || !opts.agentsMd,
+      || opts.force || opts.networkCapture !== undefined || !opts.exampleTest || !opts.agentsMd,
   };
 }
 
@@ -263,11 +264,15 @@ export function resolveInitPlan(
     if (useEmulators && env.avds.length === 0 && (!avd || env.avdImages.length > 0)) {
       warnings.push(noAvdsListedMessage(env.avdImages, avd));
     }
-    if (useEmulators && avd && args.networkCapture) {
-      const warning = avdCaptureWarning(avd, env.avdImages);
-      if (warning) warnings.push(warning);
-    }
     android = { apkPath, packageName, useEmulators, usePhysicalDevices: deviceType === 'physical' || deviceType === 'both', avd };
+  }
+
+  // The wizard's default when no flag says (PILOT-775): on, except for an
+  // Android setup whose only emulator is a Google Play image.
+  const networkCapture = args.networkCapture ?? networkCaptureDefault(platforms, android, env.avdImages).initial;
+  if (android?.useEmulators && android.avd && networkCapture) {
+    const warning = avdCaptureWarning(android.avd, env.avdImages);
+    if (warning) warnings.push(warning);
   }
 
   let ios: IosConfig | undefined;
@@ -333,8 +338,8 @@ export function resolveInitPlan(
     ios = { appPath, bundleId, simulator, ...(simulatorDeviceType ? { simulatorDeviceType } : {}), usePhysicalDevice: false };
   }
 
-  const captureAvdStep = android?.useEmulators ? captureAvdNextStep(android.avd, env.avdImages, args.networkCapture) : undefined;
-  return { platforms, android, ios, networkCapture: args.networkCapture, warnings, captureAvdStep };
+  const captureAvdStep = android?.useEmulators ? captureAvdNextStep(android.avd, env.avdImages, networkCapture) : undefined;
+  return { platforms, android, ios, networkCapture, warnings, captureAvdStep };
 }
 
 /**

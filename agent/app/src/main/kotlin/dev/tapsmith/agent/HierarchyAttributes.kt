@@ -70,6 +70,52 @@ internal object HierarchyAttributes {
         return sb.toString()
     }
 
+    private val NODE_TAG = Regex("""<(/?)node\b([^>]*?)(/?)>""")
+    private val BOUNDS_ATTR = Regex("""\bbounds="([^"]*)"""")
+    private val PACKAGE_ATTR = Regex("""\bpackage="([^"]*)"""")
+
+    /** The key [markWindowRoots] joins a window's root node on: its dumped bounds and package. */
+    fun windowRootKey(
+        bounds: Box,
+        packageName: String?,
+    ): String = "${bounds.key()}|${packageName ?: ""}"
+
+    /**
+     * Add `[attribute]="true"` to every window root — a top-level `<node>`,
+     * one per window in the stock dump — whose [windowRootKey] is in [roots].
+     * Only window roots: a node deeper in another window can have the same
+     * bounds and package (an app header exactly where the status bar is).
+     */
+    fun markWindowRoots(
+        xml: String,
+        roots: Set<String>,
+        attribute: String,
+    ): String {
+        if (roots.isEmpty()) return xml
+        val sb = StringBuilder(xml.length + roots.size * (attribute.length + 10))
+        var lastEnd = 0
+        var depth = 0
+        for (match in NODE_TAG.findAll(xml)) {
+            if (match.groupValues[1] == "/") {
+                depth--
+                continue
+            }
+            if (depth == 0) {
+                val attrs = match.groupValues[2]
+                val bounds = BOUNDS_ATTR.find(attrs)?.groupValues?.get(1)
+                val pkg = PACKAGE_ATTR.find(attrs)?.groupValues?.get(1) ?: ""
+                if (bounds != null && "$bounds|$pkg" in roots) {
+                    val afterName = match.range.first + "<node".length
+                    sb.append(xml, lastEnd, afterName).append(' ').append(attribute).append("=\"true\"")
+                    lastEnd = afterName
+                }
+            }
+            if (match.groupValues[3] != "/") depth++
+        }
+        sb.append(xml, lastEnd, xml.length)
+        return sb.toString()
+    }
+
     private fun escapeXmlAttr(s: String): String =
         s
             .replace("&", "&amp;")

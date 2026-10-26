@@ -174,6 +174,21 @@ function projectDependencies(cwd: string): Record<string, unknown> | undefined {
   return { ...(isRecord(pkg['devDependencies']) ? pkg['devDependencies'] : {}), ...(isRecord(pkg['dependencies']) ? pkg['dependencies'] : {}) };
 }
 
+/**
+ * Whether the app that owns `dir` depends on `@tapsmith/react-native`. Walks
+ * up from `dir` (a Tapsmith config often sits in an `e2e/` folder with its own
+ * package.json) and stops at the first package.json that names the hooks
+ * package, `react-native` or `expo` — that one is the app's.
+ */
+export function appDependsOnTapsmithHooks(dir: string): boolean {
+  for (let current = path.resolve(dir); ; current = path.dirname(current)) {
+    const deps = projectDependencies(current);
+    if (deps && '@tapsmith/react-native' in deps) return true;
+    if (deps && ('react-native' in deps || 'expo' in deps)) return false;
+    if (path.dirname(current) === current) return false;
+  }
+}
+
 /** A React Native app (bare or Expo), which usually targets both platforms. */
 export function isReactNativeProject(cwd: string): boolean {
   const deps = projectDependencies(cwd);
@@ -207,8 +222,10 @@ const HOOKS_FLAG = 'EXPO_PUBLIC_TAPSMITH_HOOKS=1';
 /** What the hooks flag means for this project's test build, said beside the build command. */
 function expoHooksNote(expo: ExpoProject): string {
   return expo.usesTapsmithHooks
-    ? `${HOOKS_FLAG} keeps @tapsmith/react-native's warm-reset hooks on in a release build: set it for test builds only, never for store builds.`
-    : `For sub-second resets between tests, mount @tapsmith/react-native and build test builds with ${HOOKS_FLAG} (https://tapsmith.dev/guides/warm-reset/).`;
+    ? `${HOOKS_FLAG} keeps @tapsmith/react-native's warm-reset hooks on in a release build when the app passes `
+      + '`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` to <TapsmithTestHooks> '
+      + '(Expo does not inline EXPO_PUBLIC_* variables inside node_modules): set it for test builds only, never for store builds.'
+    : `For sub-second resets between tests, mount @tapsmith/react-native with \`enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}\` and build test builds with ${HOOKS_FLAG} (https://tapsmith.dev/guides/warm-reset/).`;
 }
 
 /** The build step for one platform, as a sentence. */

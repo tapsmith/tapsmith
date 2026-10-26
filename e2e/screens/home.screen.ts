@@ -4,12 +4,9 @@ export class HomeScreen {
   constructor(private device: Device) {}
 
   get header() { return this.device.getByText("Test Screens", { exact: true }) }
+  /** The navigation bar's title: the app's name, which is also the iOS application element's label. */
+  get navigationTitle() { return this.device.getByText("Tapsmith Test App", { exact: true }) }
 
-  /**
-   * The screen-sized carrier `@tapsmith/react-native` renders on every screen;
-   * its text is the hooks marker (`tapsmith-hooks:1;epoch=…;nav=…`).
-   */
-  get hooksMarker() { return this.device.getByTestId("tapsmith-hooks") }
 
   // Navigation cards
   get loginCard() { return this.device.getByText("Login Form", { exact: true }) }

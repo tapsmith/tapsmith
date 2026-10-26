@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -6,10 +6,14 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { selectorToProto } from '../selectors.js';
+import type { Selector } from '../selectors.js';
 import type { DeviceInfoProto, ElementInfo, TapsmithGrpcClient } from '../grpc-client.js';
 import type { TestDispatcher } from '../mcp/test-dispatcher.js';
 import { summarizeResult } from '../mcp/events.js';
 import { formatToolArgs } from '../ui-mode/components/tool-args.js';
+import { Device } from '../device.js';
+import { _setWebViewIdleCloseMs, beginTestRun, closeMcpWebViews, endTestRun, sdkDeviceFor, WEBVIEW_IDLE_CLOSE_MS, withEvaluatedLocator } from '../mcp/sdk-device.js';
+import type { WebViewHandle } from '../webview-handle.js';
 
 // The device-backed half of the MCP surface — snapshot, screenshot, tap, type,
 // swipe, press_key, launch_app, list_devices, test_locator, watch — had no
@@ -69,9 +73,13 @@ function makeElement(overrides: Partial<ElementInfo> = {}): ElementInfo {
 interface FakeDaemon {
   client: TapsmithGrpcClient
   findElements: ReturnType<typeof vi.fn>
+  evaluateSelectors: ReturnType<typeof vi.fn>
   tap: ReturnType<typeof vi.fn>
   typeText: ReturnType<typeof vi.fn>
   clearText: ReturnType<typeof vi.fn>
+  clearAndType: ReturnType<typeof vi.fn>
+  getCurrentPackage: ReturnType<typeof vi.fn>
+  listDevices: ReturnType<typeof vi.fn>
   swipe: ReturnType<typeof vi.fn>
   pressKey: ReturnType<typeof vi.fn>
   launchApp: ReturnType<typeof vi.fn>
@@ -90,6 +98,10 @@ function makeDaemon(options: {
   hierarchyXml?: string
   hierarchyError?: string
   findError?: string
+  /** What the agent matches per selector when evaluating; default: `elements`. */
+  evaluate?: (selector: Selector) => ElementInfo[] | Error
+  /** What findElements matches per selector; default: `elements`. */
+  find?: (selector: Selector) => ElementInfo[]
   screenshot?: Buffer
   screenshotError?: string
   actionError?: string
@@ -104,14 +116,25 @@ function makeDaemon(options: {
 
   const daemon = {
     calls,
-    findElements: vi.fn(async () => ({
+    findElements: vi.fn(async (selector: Selector) => ({
       requestId: '1',
-      elements: options.elements ?? [],
+      elements: options.find ? options.find(selector) : (options.elements ?? []),
       errorMessage: options.findError ?? '',
+    })),
+    listDevices: vi.fn(async () => ({ requestId: '1', devices: [], unusable: [] })),
+    getCurrentPackage: vi.fn(async () => ({ requestId: '1', packageName: 'com.example' })),
+    evaluateSelectors: vi.fn(async (selectors: Selector[]) => ({
+      requestId: '1',
+      errorMessage: options.findError ?? '',
+      results: options.findError ? [] : selectors.map((sel) => {
+        const r = options.evaluate ? options.evaluate(sel) : (options.elements ?? []);
+        return r instanceof Error ? { elements: [], errorMessage: r.message } : { elements: r, errorMessage: '' };
+      }),
     })),
     tap: action('tap'),
     typeText: action('typeText'),
     clearText: action('clearText'),
+    clearAndType: action('clearAndType'),
     swipe: action('swipe'),
     pressKey: action('pressKey'),
     launchApp: action('launchApp'),
@@ -179,9 +202,25 @@ function text(res: CallToolResult): string {
 /** The iOS sign-in screen the locator fixtures use, as agent hierarchy XML. */
 const SIGN_IN_XML = `
 <XCUIElementTypeApplication type="XCUIElementTypeApplication">
-  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="Sign in to continue to DreamSpinner" clickable="false" />
-  <XCUIElementTypeButton type="XCUIElementTypeButton" label="Sign in" clickable="true" />
+  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="Sign in to continue to DreamSpinner" clickable="false" bounds="[0,100][390,140]" />
+  <XCUIElementTypeButton type="XCUIElementTypeButton" label="Sign in" clickable="true" bounds="[20,200][370,250]" />
 </XCUIElementTypeApplication>`;
+
+/** The sign-in screen's two elements as the agent reports them. */
+const SIGN_IN_TEXT = { text: 'Sign in to continue to DreamSpinner', className: 'XCUIElementTypeStaticText', bounds: { left: 0, top: 100, right: 390, bottom: 140 } };
+const SIGN_IN_BUTTON = { text: 'Sign in', className: 'XCUIElementTypeButton', role: 'button', bounds: { left: 20, top: 200, right: 370, bottom: 250 } };
+
+/** A fake agent for the sign-in screen: substring text matches both, the rest is exact. */
+function signInAgent(sel: Selector): ElementInfo[] {
+  const k = sel.kind;
+  const all = [SIGN_IN_TEXT, SIGN_IN_BUTTON];
+  let hits: typeof all = [];
+  if (k.type === 'textContains') hits = all.filter((e) => e.text.toLowerCase().includes(k.value.toLowerCase()));
+  else if (k.type === 'text') hits = all.filter((e) => e.text === k.value);
+  else if (k.type === 'role') hits = k.value.role === 'button' && (!k.value.name || k.value.name === 'Sign in') ? [SIGN_IN_BUTTON] : [];
+  else if (k.type === 'className') hits = all.filter((e) => e.className === k.value);
+  return hits.map((h) => makeElement({ elementId: '', ...h }));
+}
 
 beforeEach(() => {
   hoisted.client = makeDaemon().client;
@@ -195,7 +234,7 @@ beforeEach(() => {
 
 describe('tapsmith_snapshot', () => {
   it('returns the tree and the locators an agent is meant to copy', async () => {
-    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML }).client;
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent }).client;
     const res = await callTool('tapsmith_snapshot');
     expect(res.isError).toBeFalsy();
     const out = text(res);
@@ -204,13 +243,97 @@ describe('tapsmith_snapshot', () => {
     expect(out).toContain('device.getByRole("button", { name: "Sign in" })');
   });
 
+  it('offers only what the agent resolves to that element (PILOT-848)', async () => {
+    // The agent finds no button here (as on Compose, PILOT-833): the role
+    // suggestion the hierarchy alone would make must not be offered.
+    const daemon = makeDaemon({
+      hierarchyXml: SIGN_IN_XML,
+      evaluate: (sel) => (sel.kind.type === 'role' ? [] : signInAgent(sel)),
+    });
+    hoisted.client = daemon.client;
+    const out = text(await callTool('tapsmith_snapshot'));
+    expect(out).not.toContain('getByRole("button"');
+    // The ambiguous substring is upgraded to the exact text the agent resolves uniquely.
+    expect(out).toContain('device.getByText("Sign in", { exact: true })');
+    expect(daemon.findElements).not.toHaveBeenCalled();
+  });
+
+  it('says the screen may have changed when the agent resolves nothing to its element', async () => {
+    // The dump and the agent's check saw different screens (a transition):
+    // every candidate resolves elsewhere.
+    const moved = (sel: Selector) => signInAgent(sel).map((e) => ({ ...e, bounds: { ...e.bounds!, top: e.bounds!.top + 300, bottom: e.bounds!.bottom + 300 } }));
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: moved }).client;
+    const res = await callTool('tapsmith_snapshot');
+    expect(res.isError).toBeFalsy();
+    const out = text(res);
+    expect(out).toContain('button "Sign in"');
+    expect(out).not.toContain('## Suggested Locators');
+    expect(out).toContain('the screen may have been changing. Take the snapshot again.');
+  });
+
+  it('says some listed elements were not on screen when the agent checked them (the screen changed)', async () => {
+    // The dump shows the sign-in screen; by the check the static text is gone.
+    const gone = (sel: Selector) => signInAgent(sel).filter((e) => e.text !== 'Sign in to continue to DreamSpinner');
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: gone }).client;
+    const out = text(await callTool('tapsmith_snapshot'));
+    expect(out).toContain('## Suggested Locators');
+    expect(out).toContain('(1 listed element was not on screen when the device agent checked it, so it has no suggested locator; the screen may have changed. Take the snapshot again.)');
+  });
+
+  it('checks a big iOS screen in one call (an iOS agent captures once per call)', async () => {
+    const rows = Array.from({ length: 30 }, (_, i) =>
+      `  <XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="Row ${i}" bounds="[0,${i * 50}][390,${i * 50 + 40}]" />`).join('\n');
+    // Shaped like the iOS agent's dump: wrapped in <hierarchy>, like Android's.
+    const daemon = makeDaemon({ hierarchyXml: `<?xml version="1.0" encoding="UTF-8"?>\n<hierarchy>\n<XCUIElementTypeApplication type="XCUIElementTypeApplication">\n${rows}\n</XCUIElementTypeApplication>\n</hierarchy>` });
+    hoisted.client = daemon.client;
+    await callTool('tapsmith_snapshot');
+    expect(daemon.evaluateSelectors.mock.calls[0][0].length).toBeGreaterThan(40);
+  });
+
+  it('says nothing about refs when the screen has no element to suggest for', async () => {
+    hoisted.client = makeDaemon({ hierarchyXml: '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][10,10]" /></hierarchy>' }).client;
+    expect(text(await callTool('tapsmith_snapshot'))).not.toContain('No suggested locators');
+  });
+
+  it('keeps the activity-feed count right when checking stopped partway', async () => {
+    const daemon = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent });
+    let calls = 0;
+    const real = daemon.evaluateSelectors.getMockImplementation() as (selectors: Selector[]) => Promise<unknown>;
+    daemon.evaluateSelectors.mockImplementation(async (selectors: Selector[]) => {
+      calls++;
+      // The first chunk is answered; checking stops at the next one.
+      return calls === 1 ? real(selectors) : { requestId: '1', results: [], errorMessage: 'Agent command timed out' };
+    });
+    hoisted.client = daemon.client;
+    const out = text(await callTool('tapsmith_snapshot'));
+    // The candidates were all checked; only the variants that would pin the
+    // ambiguous ones were not, so those fall back to a position.
+    expect(out).toContain('(Some suggestions are pinned by position (.first()/.nth()/.last()) because the device agent stopped checking more specific ones: Agent command timed out)');
+    expect(out).not.toContain('Some elements have no suggested locator');
+    const refs = out.split('\n').filter((l) => /^\[\d+\] /.test(l)).length;
+    expect(refs).toBeGreaterThan(0);
+    expect(summarizeResult('tapsmith_snapshot', out)).toMatch(new RegExp(`, ${refs} locators$`));
+  });
+
+  it('says why there are no refs when the agent cannot check them, and still shows the tree', async () => {
+    const daemon = makeDaemon({ hierarchyXml: SIGN_IN_XML });
+    daemon.evaluateSelectors.mockResolvedValue({ requestId: '1', results: [], errorMessage: 'Unknown method: evaluateSelectors' });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_snapshot');
+    expect(res.isError).toBeFalsy();
+    const out = text(res);
+    expect(out).toContain('button "Sign in"');
+    expect(out).not.toContain('## Suggested Locators');
+    expect(out).toContain('(No suggested locators: the device agent stopped checking them: Unknown method: evaluateSelectors)');
+  });
+
   // The section heading is a literal in two places: emitted by snapshot.ts and
   // parsed back out by summarizeResult (mcp/events.ts) for the activity feed.
   // Each side has its own test with its own copy of the string, so editing one
   // leaves both green while the feed silently reports 0 locators. Pipe the real
   // snapshot output through the real summariser so the two stay tied.
   it('produces output the activity-feed summariser can still count', async () => {
-    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML }).client;
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent }).client;
     const out = text(await callTool('tapsmith_snapshot'));
 
     // Parse the count rather than substring-matching it: '10 locators' contains
@@ -340,15 +463,55 @@ describe('tapsmith_tap', () => {
     expect(elementId).toBe('el-2');
   });
 
-  it('refuses a chained locator rather than tapping the unscoped getter (PILOT-660)', async () => {
-    const daemon = makeDaemon({ elements: [makeElement({ text: 'Save' })] });
+  it('taps the match a .filter() chain narrows to, as a test would (PILOT-660, PILOT-848)', async () => {
+    // PILOT-660 refused chains because the parser dropped them; built by the
+    // SDK they narrow exactly as in a test, so the draft "Save" is tapped.
+    const daemon = makeDaemon({
+      elements: [
+        makeElement({ elementId: 'el-1', text: 'Save' }),
+        makeElement({ elementId: 'el-2', text: 'Save draft' }),
+      ],
+    });
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Save").filter({ hasText: "draft" })' });
+    expect(res.isError).toBeFalsy();
+    expect(daemon.tap).toHaveBeenCalledTimes(1);
+    expect(daemon.tap.mock.calls[0][2]).toBe('el-2');
+  });
+
+  it('refuses a string that is not a locator and taps nothing', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Save' })] });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Save").tap()' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toContain('unsupported chained call .filter()');
+    expect(text(res)).toContain('.tap()');
     expect(daemon.findElements).not.toHaveBeenCalled();
     expect(daemon.tap).not.toHaveBeenCalled();
   });
+
+  it('does not send an agent whose WebView connection failed to inspect the screen', async () => {
+    hoisted.client = makeDaemon().client;
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockRejectedValue(new Error('Timed out waiting for WebView (15000ms): no debuggable WebView'));
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).not.toContain('tapsmith_snapshot');
+    vi.restoreAllMocks();
+  });
+
+  it('keeps a tap within the 5 s budget (only typing gets longer)', async () => {
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Go' })] });
+    hoisted.client = daemon.client;
+    await callTool('tapsmith_tap', { locator: 'device.getByText("Go")' });
+    expect(daemon.tap.mock.calls[0][1] as number).toBeLessThanOrEqual(5_000);
+  });
+
+  it('points an agent that missed its target at the inspection tools', async () => {
+    const daemon = makeDaemon({ elements: [] });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_tap', { locator: 'device.getByText("Nope")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('tapsmith_snapshot');
+  }, 15_000);
 
   it('surfaces a daemon failure rather than reporting OK', async () => {
     hoisted.client = makeDaemon({
@@ -391,7 +554,16 @@ describe('tapsmith_type', () => {
     expect(daemon.typeText.mock.calls[0][1]).toBe('sam@example.com');
   });
 
-  it('clears before typing when asked, in that order', async () => {
+  it('gives the action itself a test\'s budget once its element is there', async () => {
+    // Typing a long string on iOS outlasts 5 s; a wrong locator should not.
+    const daemon = makeDaemon({ elements: [makeElement({ text: 'Bio' })] });
+    hoisted.client = daemon.client;
+    await callTool('tapsmith_type', { locator: 'device.getByText("Bio")', text: 'x'.repeat(150) });
+    const budget = daemon.typeText.mock.calls[0][2] as number;
+    expect(budget).toBeGreaterThan(25_000);
+  });
+
+  it('clears and types in one step when asked', async () => {
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Email' })] });
     hoisted.client = daemon.client;
     await callTool('tapsmith_type', {
@@ -399,7 +571,20 @@ describe('tapsmith_type', () => {
       text: 'new',
       clear: true,
     });
-    expect(daemon.calls).toEqual(['clearText', 'typeText']);
+    expect(daemon.calls).toEqual(['clearAndType']);
+    expect(daemon.clearAndType.mock.calls[0][1]).toBe('new');
+  });
+
+  it('replaces a field found by its current text, resolving it once', async () => {
+    // Clearing and then typing re-resolved the locator after the clear had
+    // removed the very text it matched on, leaving the field empty.
+    // The field keeps "old value" until something clears it.
+    const field = makeElement({ elementId: 'el-1', text: 'old value' });
+    const daemon = makeDaemon({ find: () => (daemon.calls.some((c) => c.startsWith('clear')) ? [] : [field]) });
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_type', { locator: 'device.getByText("old value")', text: 'new', clear: true });
+    expect(text(res)).toBe('OK');
+    expect(daemon.clearAndType).toHaveBeenCalledTimes(1);
   });
 
   it('clears the same element it types into', async () => {
@@ -417,16 +602,15 @@ describe('tapsmith_type', () => {
       text: '2',
       clear: true,
     });
-    expect(daemon.clearText.mock.calls[0][0]).toBeUndefined();
-    expect(daemon.clearText.mock.calls[0][2]).toBe('el-2');
-    expect(daemon.typeText.mock.calls[0][4]).toBe('el-2');
+    expect(daemon.clearAndType.mock.calls[0][0]).toBeUndefined();
+    expect(daemon.clearAndType.mock.calls[0][4]).toBe('el-2');
   });
 
-  it('reports a clear that failed, and types nothing into the stale text', async () => {
+  it('reports a clear-and-type that failed, and types nothing separately', async () => {
     // Typing after a failed clear appends to the old value, and "OK" hid it:
     // the agent believed the field held exactly the new text (PILOT-267).
     const daemon = makeDaemon({ elements: [makeElement({ text: 'Email' })] });
-    daemon.clearText.mockResolvedValueOnce({
+    daemon.clearAndType.mockResolvedValueOnce({
       requestId: '1', success: false, errorType: 'ACTION_FAILED', errorMessage: 'field is read-only',
     });
     hoisted.client = daemon.client;
@@ -436,7 +620,6 @@ describe('tapsmith_type', () => {
       clear: true,
     });
     expect(res.isError).toBe(true);
-    expect(text(res)).toContain('clear');
     expect(text(res)).toContain('field is read-only');
     expect(daemon.typeText).not.toHaveBeenCalled();
   });
@@ -456,6 +639,338 @@ describe('tapsmith_type', () => {
     expect(res.isError).toBe(true);
     expect(daemon.typeText).not.toHaveBeenCalled();
     expect(daemon.clearText).not.toHaveBeenCalled();
+  });
+});
+
+// ─── The SDK Device behind the tools (PILOT-848) ───
+
+describe('sdkDeviceFor', () => {
+  const daemonListing = (platforms: string[]) => ({
+    listDevices: vi.fn(async () => ({
+      requestId: '1', unusable: [],
+      devices: platforms.map((platform, i) => ({ serial: `d${i}`, model: '', state: 'device', isEmulator: true, platform, osVersion: '' })),
+    })),
+  }) as unknown as TapsmithGrpcClient;
+  const platformOf = (d: Device) => (d as unknown as { _platform: string })._platform;
+
+  it('takes the platform of the resolved serial', async () => {
+    expect(platformOf(await sdkDeviceFor(daemonListing(['android', 'ios']), 'd1'))).toBe('ios');
+  });
+
+  it('on iOS, connects WebViews through the serial even when it is not listed', async () => {
+    const client = daemonListing(['ios', 'ios']);
+    (client as unknown as { getCurrentPackage: () => Promise<unknown> }).getCurrentPackage = async () => ({ requestId: '1', packageName: 'com.example' });
+    const device = await sdkDeviceFor(client, 'SIM-B');
+    const page = { getByText: vi.fn(() => ({})), _setTimeoutMs: vi.fn() };
+    const webview = vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page as unknown as WebViewHandle);
+    try {
+      await withEvaluatedLocator(device, client, 'webview.getByText("x")', async () => {});
+      expect((webview.mock.contexts[0] as unknown as { _simulatorUdid?: string })._simulatorUdid).toBe('SIM-B');
+    } finally {
+      webview.mockRestore();
+    }
+  });
+
+  it('without a serial, takes the platform every listed device shares', async () => {
+    expect(platformOf(await sdkDeviceFor(daemonListing(['ios', 'ios']), undefined))).toBe('ios');
+    expect(platformOf(await sdkDeviceFor(daemonListing(['android', 'ios']), undefined))).toBe('android');
+  });
+
+  it('never takes another device\'s identity for an unlisted serial, and keeps no guess', async () => {
+    const client = daemonListing(['android', 'ios']);
+    const first = await sdkDeviceFor(client, 'gone');
+    expect(platformOf(first)).toBe('android');
+    expect((first as unknown as { _simulatorUdid?: string })._simulatorUdid).toBeUndefined();
+    expect(await sdkDeviceFor(client, 'gone')).not.toBe(first);
+  });
+
+  it('keeps no platform taken from other devices for an unlisted serial', async () => {
+    const client = daemonListing(['ios', 'ios']);
+    expect(await sdkDeviceFor(client, 'unlisted')).not.toBe(await sdkDeviceFor(client, 'unlisted'));
+  });
+
+  it('builds one Device per client and serial', async () => {
+    const client = daemonListing(['android']);
+    expect(await sdkDeviceFor(client, 'd0')).toBe(await sdkDeviceFor(client, 'd0'));
+  });
+});
+
+// ─── WebView locators (PILOT-848) ───
+
+describe('webview.* locators in the action tools', () => {
+  // The page side is the SDK's WebView code; the seam is the device's connect (_webviewOfApp).
+  afterEach(async () => {
+    await closeMcpWebViews();
+    vi.restoreAllMocks();
+  });
+  function fakePage(value = '') {
+    const locator = { click: vi.fn(async () => {}), fill: vi.fn(async () => {}), inputValue: vi.fn(async () => value) };
+    const page = { getByText: vi.fn(() => locator), getByPlaceholder: vi.fn(() => locator), _setTimeoutMs: vi.fn() };
+    const webview = vi.spyOn(Device.prototype, '_webviewOfApp').mockResolvedValue(page as unknown as WebViewHandle);
+    return { locator, page, webview };
+  }
+
+  it('clicks a webview locator in the page, connecting to the app in the foreground', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { locator, page, webview } = fakePage();
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Submit", { exact: true })' });
+    expect(text(res)).toBe('OK');
+    expect(webview).toHaveBeenCalledWith('com.example');
+    expect(page.getByText).toHaveBeenCalledWith('Submit', { exact: true });
+    expect(locator.click).toHaveBeenCalledTimes(1);
+    expect(daemon.tap).not.toHaveBeenCalled();
+  });
+
+  it('connects an iOS WebView through the listed simulator', async () => {
+    const daemon = makeDaemon();
+    daemon.listDevices = vi.fn(async () => ({ requestId: '1', unusable: [], devices: [{ serial: 'SIM-1', model: '', state: 'Booted', isEmulator: true, platform: 'ios', osVersion: '' }] }));
+    hoisted.client = daemon.client;
+    const { webview } = fakePage();
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    const connectingDevice = webview.mock.contexts[0] as unknown as { _platform: string; _simulatorUdid?: string };
+    expect(connectingDevice._platform).toBe('ios');
+    expect(connectingDevice._simulatorUdid).toBe('SIM-1');
+  });
+
+  it('keeps one WebView connection for a burst of calls, with its own connect budget', async () => {
+    // Reconnecting costs ~10 s on iOS, so calls in a row share a connection.
+    hoisted.client = makeDaemon().client;
+    const { page, webview } = fakePage();
+    const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(webview.mock.contexts[1]).toBe(webview.mock.contexts[0]);
+    expect(dispose).not.toHaveBeenCalled();
+    expect((webview.mock.contexts[0] as unknown as { _defaultTimeoutMs: number })._defaultTimeoutMs).toBe(15_000);
+    expect(page._setTimeoutMs).toHaveBeenCalledWith(5_000);
+  });
+
+  it('closes an idle WebView connection, but never under a call still using it', async () => {
+    // An open session would wedge a test connecting to the same page (PILOT-288).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      hoisted.client = makeDaemon().client;
+      fakePage();
+      const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+      await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+      vi.advanceTimersByTime(WEBVIEW_IDLE_CLOSE_MS - 1);
+      expect(dispose).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('never closes the connection under a call still using it', async () => {
+    _setWebViewIdleCloseMs(40);
+    try {
+      hoisted.client = makeDaemon().client;
+      const { locator } = fakePage();
+      let release!: () => void;
+      const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+      await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' }); // arms the idle close
+      locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+      const slow = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' }); // in flight
+      await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(2));
+      await new Promise((r) => setTimeout(r, 120));
+      expect(dispose).not.toHaveBeenCalled();
+      release();
+      await slow;
+      await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1));
+    } finally {
+      _setWebViewIdleCloseMs(WEBVIEW_IDLE_CLOSE_MS);
+    }
+  });
+
+  it('refuses webview locators while a test run is in progress, and closes what it held', async () => {
+    hoisted.client = makeDaemon().client;
+    const { webview } = fakePage();
+    const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    beginTestRun();
+    try {
+      await vi.waitFor(() => expect(dispose).toHaveBeenCalledTimes(1));
+      const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('test run is in progress');
+      expect(webview).toHaveBeenCalledTimes(1);
+    } finally {
+      endTestRun();
+    }
+    const after = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(after.isError).toBeFalsy();
+  });
+
+  it('runs WebView calls one at a time, so parallel calls never connect twice', async () => {
+    hoisted.client = makeDaemon().client;
+    let live = 0;
+    let most = 0;
+    const page = { getByText: vi.fn(() => ({ click: vi.fn(async () => {}) })), _setTimeoutMs: vi.fn() };
+    vi.spyOn(Device.prototype, '_webviewOfApp').mockImplementation(async () => {
+      live++;
+      most = Math.max(most, live);
+      await new Promise((r) => setTimeout(r, 20));
+      live--;
+      return page as unknown as WebViewHandle;
+    });
+    await Promise.all([1, 2, 3].map(() => callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' })));
+    expect(most).toBe(1);
+  });
+
+  it('switches apps once the call using the old app\'s WebView finishes', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { locator, webview } = fakePage();
+    let release!: () => void;
+    locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    const slow = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(1));
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
+    const next = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(webview).toHaveBeenCalledTimes(1); // waiting its turn
+    release();
+    await slow;
+    expect((await next).isError).toBeFalsy();
+    expect(webview).toHaveBeenLastCalledWith('com.other');
+  });
+
+  it('refuses to connect when a run starts while the previous app\'s WebView is closing', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { webview } = fakePage();
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    let finishClose!: () => void;
+    vi.spyOn(Device.prototype, '_disposeWebViewManager').mockImplementationOnce(() => new Promise<void>((r) => { finishClose = r; }));
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
+    const call = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await vi.waitFor(() => expect(finishClose).toBeDefined());
+    beginTestRun();
+    try {
+      finishClose();
+      const res = await call;
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('test run is in progress');
+      expect(webview).toHaveBeenCalledTimes(1);
+    } finally {
+      endTestRun();
+    }
+  });
+
+  it('reads the current app after waiting its turn', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { locator, webview } = fakePage();
+    let release!: () => void;
+    locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    const first = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(1));
+    const queued = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await new Promise((r) => setTimeout(r, 20));
+    // The first call's click opened another app before the queued one ran.
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
+    release();
+    await first;
+    await queued;
+    expect(webview).toHaveBeenLastCalledWith('com.other');
+  });
+
+  it('refuses a queued WebView call once a test run has started', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage();
+    let release!: () => void;
+    locator.click.mockImplementationOnce(() => new Promise<void>((r) => { release = r; }));
+    const slow = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await vi.waitFor(() => expect(locator.click).toHaveBeenCalledTimes(1));
+    const queued = callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    beginTestRun();
+    try {
+      release();
+      await slow;
+      const res = await queued;
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('test run is in progress');
+    } finally {
+      endTestRun();
+    }
+  });
+
+  it('keeps a separate connection per Android device on one daemon client', async () => {
+    const client = makeDaemon().client;
+    (client as unknown as { listDevices: unknown }).listDevices = vi.fn(async () => ({
+      requestId: '1', unusable: [],
+      devices: ['e1', 'e2'].map((serial) => ({ serial, model: '', state: 'device', isEmulator: true, platform: 'android', osVersion: '' })),
+    }));
+    const { webview } = fakePage();
+    for (const serial of ['e1', 'e2']) {
+      const device = await sdkDeviceFor(client, serial);
+      await withEvaluatedLocator(device, client, 'webview.getByText("Go")', async () => {});
+    }
+    expect(webview.mock.contexts[1]).not.toBe(webview.mock.contexts[0]);
+  });
+
+  it('connects again when another app is current', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const { webview } = fakePage();
+    const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: 'com.other' }));
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(webview.mock.contexts[1]).not.toBe(webview.mock.contexts[0]);
+    expect(webview).toHaveBeenLastCalledWith('com.other');
+  });
+
+  it('closes the device tools\' WebView before a test run starts', async () => {
+    hoisted.client = makeDaemon().client;
+    fakePage();
+    const dispose = vi.spyOn(Device.prototype, '_disposeWebViewManager');
+    await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    await closeMcpWebViews();
+    expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('types into a page field: appends without clear, replaces with it', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage('sam@');
+    await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'example.com' });
+    expect(locator.fill).toHaveBeenLastCalledWith('sam@example.com');
+    await callTool('tapsmith_type', { locator: 'webview.getByPlaceholder("Email")', text: 'new', clear: true });
+    expect(locator.fill).toHaveBeenLastCalledWith('new');
+  });
+
+  it('counts a webview locator in the page for tapsmith_test_locator', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage();
+    (locator as unknown as { count: () => Promise<number> }).count = vi.fn(async () => 2);
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'webview.getByText("Submit")' })));
+    expect(result).toMatchObject({ matched: true, count: 2 });
+    expect(result.strictModeWarning).toBeDefined();
+  });
+
+  it.each(['android', 'ios'])('refuses to guess a WebView when the current app is unknown (%s)', async (platform) => {
+    // Both platforms fall back to the first WebView found (Chrome, Safari).
+    const daemon = makeDaemon();
+    daemon.getCurrentPackage = vi.fn(async () => ({ requestId: '1', packageName: '' }));
+    daemon.listDevices = vi.fn(async () => ({ requestId: '1', unusable: [], devices: [{ serial: 'd', model: '', state: 'device', isEmulator: true, platform, osVersion: '' }] }));
+    hoisted.client = daemon.client;
+    const webview = vi.spyOn(Device.prototype, '_webviewOfApp');
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('current');
+    expect(webview).not.toHaveBeenCalled();
+  });
+
+  it('reports a page failure as an error, not OK', async () => {
+    hoisted.client = makeDaemon().client;
+    const { locator } = fakePage();
+    locator.click.mockRejectedValueOnce(new Error('strict mode violation: webview.getByText("Go") resolved to 2 elements'));
+    const res = await callTool('tapsmith_tap', { locator: 'webview.getByText("Go")' });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('strict mode violation');
   });
 });
 
@@ -715,18 +1230,46 @@ describe('tapsmith_test_locator', () => {
     hoisted.client = daemon.client;
     const res = await callTool('tapsmith_test_locator', { locator: 'device.getByRole("heading", { name: "A", level: 2 })' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toBe('Invalid locator: "device.getByRole("heading", { name: "A", level: 2 })": unsupported option "level".');
+    expect(text(res)).toContain('unsupported option "level" for .getByRole()');
     expect(daemon.findElements).not.toHaveBeenCalled();
   });
 
-  it('refuses a chained call instead of counting the unscoped getter (PILOT-660)', async () => {
-    const daemon = makeDaemon({ elements: [makeElement({ role: 'list' }), makeElement({ elementId: 'el-2', role: 'list' })] });
+  it('resolves a chained call scoped to its parent, as a test would (PILOT-660, PILOT-848)', async () => {
+    const list = makeElement({ elementId: 'list', role: 'list', bounds: { left: 0, top: 0, right: 400, bottom: 500 } });
+    const inside = makeElement({ elementId: 'in', text: 'Row 2', bounds: { left: 0, top: 100, right: 400, bottom: 150 } });
+    const outside = makeElement({ elementId: 'out', text: 'Row 2', bounds: { left: 0, top: 700, right: 400, bottom: 750 } });
+    hoisted.client = makeDaemon({ find: (sel) => (sel.kind.type === 'role' ? [list] : [inside, outside]) }).client;
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByRole("list").getByText("Row 2")' })));
+    expect(result).toMatchObject({ matched: true, count: 1, elements: [{ text: 'Row 2', bounds: '[0,100][400,150]' }] });
+    expect(result.strictModeWarning).toBeUndefined();
+  });
+
+  it('re-reads a stale snapshot instead of reporting it, as count() does', async () => {
+    let reads = 0;
+    const row = makeElement({ elementId: 'r', text: 'Row' });
+    const daemon = makeDaemon();
+    daemon.findElements.mockImplementation(async () => (reads++ === 0
+      ? { requestId: '1', elements: [], errorMessage: 'element is stale (UI changed) during the read' }
+      : { requestId: '1', elements: [row], errorMessage: '' }));
     hoisted.client = daemon.client;
-    const locator = 'device.getByRole("list").getByText("x")';
-    const res = await callTool('tapsmith_test_locator', { locator });
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByText("Row")' })));
+    expect(result).toMatchObject({ matched: true, count: 1 });
+  });
+
+  it('applies .filter() as the SDK does', async () => {
+    const milk = makeElement({ elementId: 'a', role: 'listitem', text: 'Milk 2L' });
+    const bread = makeElement({ elementId: 'b', role: 'listitem', text: 'Bread' });
+    hoisted.client = makeDaemon({ find: () => [milk, bread] }).client;
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByRole("listitem").filter({ hasText: "Milk" })' })));
+    expect(result).toMatchObject({ matched: true, count: 1, elements: [{ text: 'Milk 2L' }] });
+  });
+
+  it('never runs a string that is not a locator', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const res = await callTool('tapsmith_test_locator', { locator: 'device.constructor.constructor("return process")()' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toBe(`Invalid locator: "${locator}": unsupported chained call .getByText() — `
-      + 'a locator string here is one getter, optionally followed by .first(), .last() or .nth(n).');
+    expect(text(res)).toContain('constructor');
     expect(daemon.findElements).not.toHaveBeenCalled();
   });
 
@@ -734,7 +1277,17 @@ describe('tapsmith_test_locator', () => {
     hoisted.client = makeDaemon({ findError: 'agent not responding' }).client;
     const res = await callTool('tapsmith_test_locator', { locator: 'device.getByText("Sign in")' });
     expect(res.isError).toBe(true);
-    expect(text(res)).toBe('Error: agent not responding');
+    expect(text(res)).toContain('agent not responding');
+  });
+
+  it('reads the matches once, without waiting for one to appear', async () => {
+    const daemon = makeDaemon();
+    hoisted.client = daemon.client;
+    const started = Date.now();
+    const result = JSON.parse(text(await callTool('tapsmith_test_locator', { locator: 'device.getByText("Not here yet")' })));
+    expect(result).toMatchObject({ matched: false, count: 0 });
+    expect(daemon.findElements).toHaveBeenCalledTimes(1);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
 

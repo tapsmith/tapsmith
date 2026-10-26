@@ -655,7 +655,7 @@ describe('generateExampleTest()', () => {
 
 describe('runInit() --json without --yes', () => {
   const opts = (over: Partial<InitCommandOptions> = {}): InitCommandOptions => ({
-    yes: false, json: true, force: false, networkCapture: false, exampleTest: true, agentsMd: true, ...over,
+    yes: false, json: true, force: false, exampleTest: true, agentsMd: true, ...over,
   });
   const ttyDescriptor = Object.getOwnPropertyDescriptor(process.stdin, 'isTTY');
 
@@ -730,7 +730,7 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('runIn
       vi.spyOn(console, 'log').mockImplementation(() => undefined);
       vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
       const exit = await runInit({
-        yes: true, json: true, force: false, networkCapture: false, exampleTest: true, agentsMd: true,
+        yes: true, json: true, force: false, exampleTest: true, agentsMd: true,
         platform: 'android', apk: 'app.apk', package: 'com.acme.app', avd: 'Pixel_9',
       }).then(() => undefined, (err: unknown) => (err as Error).message);
       expect(exit).toBe('exit 1');

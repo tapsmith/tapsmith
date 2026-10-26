@@ -1,5 +1,6 @@
-import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
-import { parseBounds, getNodeRole, isLabelField, webViewAriaLabel } from './hierarchy-utils.js';
+import type { HierarchyNode } from './hierarchy-utils.js';
+import { getNodeRole, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
+import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
@@ -458,11 +459,15 @@ const ANDROID_EDIT_TEXT_CLASSES = new Set([
 ]);
 const MAX_DESCENDANT_TEXT_DEPTH = 6;
 
-/** The Android agent's joined descendant text: each child's text, else its content-desc, else its own descendants'. */
+/**
+ * The Android agent's joined descendant text: each child's text, else its
+ * content-desc, else its own descendants'. A hooks marker gives none.
+ */
 function descendantText(node: HierarchyNode, depth = 0): string[] {
   if (depth >= MAX_DESCENDANT_TEXT_DEPTH) return [];
   const parts: string[] = [];
   for (const child of node.children) {
+    if (isHooksMarkerNode(child)) continue;
     const own = child.attributes.get('text') || child.attributes.get('content-desc');
     if (own) parts.push(own);
     else parts.push(...descendantText(child, depth + 1));
@@ -835,7 +840,9 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   const raw: HierarchyNode[] = [];
 
   function walk(node: HierarchyNode) {
-    if (nodeMatchesSelector(node, selector)) {
+    // What isn't the app's never matches (PILOT-756, non-app-nodes.ts).
+    if (isNonAppSubtree(node)) return;
+    if (!isNonAppNode(node) && nodeMatchesSelector(node, selector)) {
       raw.push(node);
     }
     for (const child of node.children) {
@@ -850,53 +857,6 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   return applyPositionalIndex(collapseSameTargetNodes(raw), selector.index);
 }
 
-export function getNodeBounds(node: HierarchyNode): Bounds | null {
-  const boundsStr = node.attributes.get('bounds');
-  if (!boundsStr) return null;
-  return parseBounds(boundsStr);
-}
-
-// ─── Hit Testing ───
-
-function boundsContains(bounds: Bounds, x: number, y: number): boolean {
-  return x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom;
-}
-
-function boundsArea(bounds: Bounds): number {
-  return (bounds.right - bounds.left) * (bounds.bottom - bounds.top);
-}
-
-export function hitTest(roots: HierarchyNode[], x: number, y: number): HierarchyNode | null {
-  let best: HierarchyNode | null = null;
-  let bestArea = Infinity;
-  let bestIsWebView = false;
-
-  function walk(node: HierarchyNode) {
-    const bounds = getNodeBounds(node);
-    if (bounds && boundsContains(bounds, x, y)) {
-      const area = boundsArea(bounds);
-      const isWv = node.attributes.get('webview') === 'true';
-      // Prefer WebView DOM nodes over native nodes at similar coordinates —
-      // UIAutomator2/XCUITest also expose web content as native elements,
-      // but the WebView DOM nodes produce better selectors (CSS-based).
-      const shouldReplace = isWv && !bestIsWebView
-        ? area <= bestArea * 1.5   // WebView node wins unless much larger
-        : !isWv && bestIsWebView
-          ? false                   // Never replace a WebView node with native
-          : area <= bestArea;        // Same category: smallest wins (equal picks deeper node)
-      if (shouldReplace) {
-        best = node;
-        bestArea = area;
-        bestIsWebView = isWv;
-      }
-    }
-    for (const child of node.children) {
-      walk(child);
-    }
-  }
-
-  for (const root of roots) {
-    walk(root);
-  }
-  return best;
-}
+// Geometry lives with the hierarchy model (no matching); re-exported for
+// existing importers.
+export { getNodeBounds, hitTest } from './hierarchy-utils.js';

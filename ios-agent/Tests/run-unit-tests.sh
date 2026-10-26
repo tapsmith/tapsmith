@@ -19,6 +19,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/OcclusionAnalyzerTests/main.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/occlusion-analyzer-tests"
@@ -42,6 +43,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   Tests/KeyboardDismissPlannerTests/main.swift \
   TapsmithAgent/KeyboardDismissPlanner.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/keyboard-dismiss-planner-tests"
@@ -74,3 +76,16 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/label-match-tests"
 "$OUT/label-match-tests" "../packages/tapsmith/src/__tests__/fixtures/label-conformance.json"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/NonAppElementsTests/main.swift \
+  TapsmithAgent/NonAppElements.swift \
+  -o "$OUT/non-app-elements-tests"
+"$OUT/non-app-elements-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/TypingFocusTests/main.swift \
+  TapsmithAgent/TypingFocus.swift \
+  -o "$OUT/typing-focus-tests"
+"$OUT/typing-focus-tests"

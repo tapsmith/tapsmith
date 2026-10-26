@@ -35,6 +35,11 @@ export class DevicePane {
     return this.page.getByRole("button", { name: /^(Pick an element|Picking element|Select a device tab)/ })
   }
 
+  /** The element a pick at the pointer would take, outlined on the mirror while picking. */
+  get pickHover() {
+    return this.page.getByTestId("mirror-pick-hover")
+  }
+
   get lockToggle() {
     return this.page.getByRole("button", { name: /^Interaction (locked|unlocked)/ })
   }

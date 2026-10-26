@@ -114,6 +114,8 @@ let _uiOwned: Set<string> = new Set();
  * A group config claimed one per member.
  */
 let _uiHeld: Set<string> = new Set();
+/** The UI server's in-process ownership answer; see `configureMcpConnection`. */
+let _uiDaemonPorts: (() => UiDaemonPorts) | undefined;
 
 /**
  * Configure the connection pool for the server that is about to use it.
@@ -124,9 +126,20 @@ let _uiHeld: Set<string> = new Set();
  * UI server asks the UI server what it is running. Both call sites state their
  * whole configuration; there is no merging of successive calls.
  */
-export function configureMcpConnection(options?: { configFile?: string; uiMode?: boolean }): void {
+export function configureMcpConnection(options?: {
+  configFile?: string
+  uiMode?: boolean
+  /**
+   * The UI server's own answer to "which daemons and devices are this
+   * session's", read in-process by its MCP endpoint (PILOT-564). Without it a
+   * UI-mode endpoint asks over HTTP via the per-project port file, which a
+   * second UI session in the project overwrites.
+   */
+  uiDaemonPorts?: () => UiDaemonPorts
+}): void {
   _configFile = options?.configFile;
   _uiMode = options?.uiMode ?? false;
+  _uiDaemonPorts = options?.uiDaemonPorts;
 }
 
 export function getSessionDeviceSerials(): Set<string> | null {
@@ -624,17 +637,23 @@ function giveBack(device: string, from?: DaemonConnection): void {
  */
 async function withoutOtherSessionsDaemons<T extends { client: TapsmithGrpcClient; address: string; source: DaemonSource; claimedDevice?: string }>(
   live: T[],
+  /** The config's platform, when it has one: a daemon serving another is not adopted. */
+  platform?: string,
 ): Promise<T[]> {
   const session = currentSession();
   const kept = await Promise.all(live.map(async (daemon) => {
-    let active: string | undefined;
+    let listed: DeviceInfoProto[] | undefined;
     let asked = false;
-    const activeDevice = async (): Promise<string | undefined> => {
+    const listedDevices = async (): Promise<DeviceInfoProto[] | undefined> => {
       if (!asked) {
         asked = true;
-        active = await daemon.client.listDevices().then(({ devices }) => activeDeviceOf(devices)).catch(() => undefined);
+        listed = await daemon.client.listDevices().then(({ devices }) => devices).catch(() => undefined);
       }
-      return active;
+      return listed;
+    };
+    const activeDevice = async (): Promise<string | undefined> => {
+      const devices = await listedDevices();
+      return devices ? activeDeviceOf(devices) : undefined;
     };
     const drop = (why: string): null => {
       log(`Ignoring ${daemon.address} — ${why}`);
@@ -643,6 +662,18 @@ async function withoutOtherSessionsDaemons<T extends { client: TapsmithGrpcClien
     };
     const holder = await daemonDriverElsewhere(daemon.address, activeDevice, session);
     if (holder) return drop(`another Tapsmith session is driving ${holder.device} through it`);
+    // A daemon found rather than started, serving another platform (PILOT-564).
+    // The claims above see only sessions that share this HOME and hold a
+    // claim right now; a session in its startup window, under another HOME, or
+    // a daemon driven by something else entirely is invisible to them. Adopting
+    // one for this config repointed it to our device and started our agent on
+    // it, so its owner's next action ran against the wrong platform — and it is
+    // no use to us anyway. A UI worker's platform is its session's, and one
+    // already pooled was judged when it joined.
+    if (platform && daemon.source !== 'ui' && !_connections.some((c) => c.address === daemon.address)) {
+      const why = otherPlatformReason(await listedDevices(), platform);
+      if (why) return drop(why);
+    }
     // UI workers' and peers' devices are their owners' to claim. A daemon
     // already pooled is re-listed by every discovery: what it serves was
     // claimed (or deliberately given back) when it was prepared.
@@ -657,6 +688,47 @@ async function withoutOtherSessionsDaemons<T extends { client: TapsmithGrpcClien
   return kept.filter((d): d is Awaited<T> => d !== null);
 }
 
+/**
+ * Why a daemon that lists `devices` cannot serve `platform`, or null when it
+ * can (or when it cannot be told: no listing, no platforms reported).
+ *
+ * It cannot when the device it is pointed at is another platform's — taking it
+ * would move it off that device — or when it lists devices but none of this
+ * platform's, as a daemon started with `--platform` for the other one does.
+ *
+ * @internal — exported for unit testing.
+ */
+export function otherPlatformReason(devices: DeviceInfoProto[] | undefined, platform: string): string | null {
+  if (!devices) return null;
+  const active = devices.find((d) => d.state === 'Active');
+  if (active?.platform && active.platform !== platform) {
+    return `it is driving ${active.serial}, an ${active.platform} device, and this session's config is for ${platform}`;
+  }
+  const platforms = [...new Set(devices.map((d) => d.platform).filter(Boolean))];
+  if (platforms.length > 0 && !platforms.includes(platform)) {
+    return `it serves ${platforms.join(' and ')} devices only, and this session's config is for ${platform}`;
+  }
+  return null;
+}
+
+/**
+ * The one platform every project of `config` runs on, or undefined when they
+ * span two. A config that names none runs on Android, as everywhere else.
+ *
+ * @internal — exported for unit testing.
+ */
+export function singlePlatformOf(config: Pick<TapsmithConfig, 'platform' | 'projects'>): string | undefined {
+  const root = config.platform ?? 'android';
+  const platforms = new Set((config.projects ?? []).map((p) => p.use?.platform ?? root));
+  if (platforms.size === 0) platforms.add(root);
+  return platforms.size === 1 ? [...platforms][0] : undefined;
+}
+
+/** Whether the config, or any of its projects, names a platform. */
+function namesAPlatform(config: Pick<TapsmithConfig, 'platform' | 'projects'> | null): boolean {
+  return Boolean(config?.platform || config?.projects?.some((p) => p.use?.platform));
+}
+
 async function discover(): Promise<void> {
   const generation = _sessionGeneration;
   _discoveryFailures = [];
@@ -664,6 +736,7 @@ async function discover(): Promise<void> {
   // tools report the load error.
   const config = await loadMcpConfig(_configFile).then((result) => result.config).catch(() => null);
   _discoveredConfig = config;
+  const sessionPlatform = config ? singlePlatformOf(config) : undefined;
 
   // Collect candidate addresses from all sources, remembering where each came
   // from — provenance decides whether we may repoint that daemon later.
@@ -701,6 +774,31 @@ async function discover(): Promise<void> {
   }
   if (uiDaemons.deviceSerials.size > 0) {
     _sessionDevices = uiDaemons.deviceSerials;
+  }
+  // The UI server's endpoint drives that session's daemons and no others
+  // (PILOT-564). Its config names the address the session *asked* for, but a
+  // UI run that found another session on that port started on a free one —
+  // so the address in the config is then someone else's daemon, which this
+  // endpoint adopted, claimed a device on and repointed. The session's own
+  // primary daemon is what it publishes in `owned`.
+  // In-process, the UI server's answer is always this session's; a failure of
+  // it is no reason to adopt whatever answers on the configured port.
+  const uiOwnsCandidates = _uiMode && (uiDaemons.reachable || _uiDaemonPorts !== undefined);
+  if (uiOwnsCandidates) {
+    const owned = new Set(uiDaemons.owned.map(normalizeDaemonAddress));
+    for (const [address, source] of [...candidates]) {
+      if (source !== 'ui' && !owned.has(normalizeDaemonAddress(address))) {
+        log(`Ignoring ${address} — it is not one of this UI session's daemons`);
+        candidates.delete(address);
+      }
+    }
+    const known = new Set([...candidates.keys()].map(normalizeDaemonAddress));
+    for (const address of uiDaemons.owned) {
+      if (!known.has(normalizeDaemonAddress(address))) {
+        known.add(normalizeDaemonAddress(address));
+        addCandidate(address, 'configured');
+      }
+    }
   }
 
   // 4. Include existing connections so re-discovery doesn't spawn redundant daemons
@@ -759,7 +857,7 @@ async function discover(): Promise<void> {
     return results.filter((r): r is LiveDaemon => r !== null);
   };
 
-  let live = await withoutOtherSessionsDaemons(await probeAll([...candidates]));
+  let live = await withoutOtherSessionsDaemons(await probeAll([...candidates]), sessionPlatform);
 
   // 6. Default address — a last resort, and one judged on what answered rather
   // than on how many addresses we had. Skipping it whenever the candidate list
@@ -772,9 +870,9 @@ async function discover(): Promise<void> {
   // falling through to 50051 because theirs is briefly down would hand the
   // session an unrelated daemon, classified `configured` and so treated as ours
   // to repoint and install this config's agent artifacts on.
-  if (live.length === 0 && !pinned && !candidates.has(DEFAULT_ADDRESS)
+  if (live.length === 0 && !pinned && !uiOwnsCandidates && !candidates.has(DEFAULT_ADDRESS)
       && !_uiOwned.has(normalizeDaemonAddress(DEFAULT_ADDRESS))) {
-    live = await withoutOtherSessionsDaemons(await probeAll([[DEFAULT_ADDRESS, 'configured']]));
+    live = await withoutOtherSessionsDaemons(await probeAll([[DEFAULT_ADDRESS, 'configured']]), sessionPlatform);
   }
   // Probing is the liveness check, so this is the moment we know which
   // registered daemons are gone. Drop them rather than re-probing dead ports
@@ -796,7 +894,13 @@ async function discover(): Promise<void> {
         // config's agent artifacts on its active device puts a different
         // platform's app on a device we do not own. An 'orphan' has no such
         // owner left, so recovering its agent here is exactly right.
-        if (isOurs(source)) {
+        //
+        // Not for a config spanning platforms either: its root config is no
+        // one platform's, and the daemon may be pointed at either. Each
+        // platform's target starts its own agent when it claims a daemon. Nor
+        // without a config, which says nothing of the platform and whose
+        // tools report its load error instead.
+        if (isOurs(source) && sessionPlatform) {
           const { agentConnected } = await client.ping();
           if (!agentConnected) await startAgentFromConfig(client, config);
         }
@@ -849,7 +953,15 @@ async function discover(): Promise<void> {
   // 7. No usable daemon — start our own
   let conn: DaemonConnection | null;
   try {
-    conn = await startDaemon(config?.platform);
+    // The session's one platform, Android included when the config names none:
+    // a daemon without `--platform` would pick any free device, including the
+    // other platform's that a found daemon was just refused over.
+    conn = await startDaemon(sessionPlatform ?? config?.platform);
+    // Device tools match a project to its device by this label, and a project
+    // that names no platform carries none — so a config that names none
+    // leaves it unset. One that names one labels it with the platform the
+    // daemon was started for, which is what its projects resolve to.
+    if (conn) conn.platform = namesAPlatform(config) ? sessionPlatform ?? config?.platform : undefined;
   } catch (err) {
     _discoveryFailures.push(err instanceof Error ? err.message : String(err));
     return;
@@ -953,7 +1065,7 @@ export async function startDaemon(
 ): Promise<DaemonConnection | null> {
   const generation = _sessionGeneration;
   const sessionClosed = (): boolean => generation !== _sessionGeneration;
-  log(platform ? `Starting a ${platform} daemon...` : 'No daemon found, starting one...');
+  log(platform ? `Starting an ${platform} daemon...` : 'No daemon found, starting one...');
   const port = String(await pickUnissuedPort());
   // Its own agent port, like every other daemon we spawn (see dispatcher.ts
   // and ui-server.ts). Daemons default to a shared one, which was harmless
@@ -996,7 +1108,7 @@ export async function startDaemon(
    */
   const startFailure = (outcome: DaemonStartFailed): Error => {
     const message = daemonStartFailure(
-      `Failed to start a ${platform ?? 'Tapsmith'} daemon${member ? ` for group member "${member}"` : ''}`,
+      `Failed to start ${platform ? `an ${platform}` : 'a Tapsmith'} daemon${member ? ` for group member "${member}"` : ''}`,
       {
         ...outcome,
         recentOutput: daemonLog ? readDaemonLogSince(daemonLog) : '',
@@ -1477,6 +1589,18 @@ async function findConnectionForPlatform(
     const choice = await pickDevice(conn, platform, wantedSerial, exclude);
     if (!choice) continue;
     if (conn.source === 'peer' && isRepointing(choice.activeSerial, choice.serial)) continue;
+    // A daemon this session did not start, pointed at another platform's
+    // device, is not moved across (PILOT-564): whoever pointed it there is
+    // likely still driving it. A multi-platform config keeps such a daemon at
+    // discovery for the platform it serves; this one starts its own.
+    // A project that names no platform runs on Android. Nor is another
+    // platform's device taken on it: a project that names none picks from
+    // every device the daemon lists, the one it is driving first.
+    if (conn.source !== 'started') {
+      const effective = platform ?? 'android';
+      if (crossesPlatform(choice, effective)) continue;
+      if (choice.platform && choice.platform !== effective) continue;
+    }
     if (!takesClaimedDaemon(conn, choice.serial)) continue;
     return { conn, serial: choice.serial };
   }
@@ -1507,6 +1631,21 @@ interface DeviceChoice {
   serial: string
   /** The device it is pointed at now, whoever pointed it there. */
   activeSerial?: string
+  /** That device's platform, when the daemon reports one. */
+  activePlatform?: string
+  /** The platform of `serial`, when the daemon reports one. */
+  platform?: string
+}
+
+/**
+ * Whether taking `choice` moves its daemon off a device of a platform other
+ * than `platform`.
+ *
+ * @internal — exported for unit testing.
+ */
+export function crossesPlatform(choice: DeviceChoice, platform: string | undefined): boolean {
+  if (!platform || !choice.activePlatform || choice.activePlatform === platform) return false;
+  return isRepointing(choice.activeSerial, choice.serial);
 }
 
 /**
@@ -1555,6 +1694,7 @@ export function chooseDevice(
 ): DeviceChoice | undefined {
   const { platform, wantedSerial, exclude = [], heldByUi = new Set<string>() } = opts;
   const activeSerial = activeDeviceOf(devices);
+  const activePlatform = devices.find((d) => d.serial === activeSerial)?.platform || undefined;
   const candidates = (platform ? devices.filter((d) => d.platform === platform) : devices)
     .filter((d) => !exclude.includes(d.serial) && !heldByUi.has(d.serial));
   const serial = wantedSerial
@@ -1564,7 +1704,8 @@ export function chooseDevice(
         ?? candidates.find((d) => d.state === 'Discovered')
         ?? candidates[0]
       )?.serial;
-  return serial ? { serial, activeSerial } : undefined;
+  const chosenPlatform = devices.find((d) => d.serial === serial)?.platform || undefined;
+  return serial ? { serial, activeSerial, activePlatform, platform: chosenPlatform } : undefined;
 }
 
 /**
@@ -1657,7 +1798,7 @@ async function prepareTarget(
   _deviceIndex.set(serial, conn);
 }
 
-interface UiDaemonRecord {
+export interface UiDaemonRecord {
   address: string
   deviceSerial?: string
   platform?: string
@@ -1734,7 +1875,37 @@ async function discoverFromUiServer(): Promise<UiDiscoveryResult> {
   // UI run refused as ambiguous over devices belonging to someone else's run,
   // and a UI worker retiring changed what the headless session thought it had.
   if (!_uiMode) return EMPTY_DISCOVERY;
+  if (_uiDaemonPorts) {
+    try {
+      return parseUiDaemonPorts(_uiDaemonPorts());
+    } catch (err) {
+      // Unanswered, not "no workers": the pool keeps the workers it has. And
+      // discovery still adopts nothing found (see `uiOwnsCandidates`).
+      log(`UI server discovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      return EMPTY_DISCOVERY;
+    }
+  }
   return queryUiServer();
+}
+
+/** What a UI server publishes at `/api/daemon-ports`. */
+export interface UiDaemonPorts {
+  daemons?: UiDaemonRecord[]
+  owned?: string[]
+  devices?: string[]
+}
+
+function parseUiDaemonPorts(data: UiDaemonPorts): UiDiscoveryResult {
+  if (!Array.isArray(data.daemons)) return EMPTY_DISCOVERY;
+  const daemons = data.daemons.filter((d) => Boolean(d.address));
+  const workerSerials = daemons.map(d => d.deviceSerial).filter(Boolean) as string[];
+  return {
+    reachable: true,
+    daemons,
+    deviceSerials: new Set(workerSerials),
+    owned: Array.isArray(data.owned) ? data.owned.filter((a) => typeof a === 'string') : daemons.map((d) => d.address),
+    heldDevices: Array.isArray(data.devices) ? data.devices.filter((s) => typeof s === 'string') : workerSerials,
+  };
 }
 
 function queryUiServer(): Promise<UiDiscoveryResult> {
@@ -1758,17 +1929,7 @@ async function queryUiServerAt(portFile: string): Promise<UiDiscoveryResult> {
     // device does the ios project run on?" — the one question routing a device
     // tool by project needs. Headless knows it from `conn.platform`; this is
     // the same fact from the other transport.
-    const data = JSON.parse(json) as { daemons?: UiDaemonRecord[]; owned?: string[]; devices?: string[] };
-    if (!Array.isArray(data.daemons)) return EMPTY_DISCOVERY;
-    const daemons = data.daemons.filter((d) => Boolean(d.address));
-    const workerSerials = daemons.map(d => d.deviceSerial).filter(Boolean) as string[];
-    return {
-      reachable: true,
-      daemons,
-      deviceSerials: new Set(workerSerials),
-      owned: Array.isArray(data.owned) ? data.owned.filter((a) => typeof a === 'string') : daemons.map((d) => d.address),
-      heldDevices: Array.isArray(data.devices) ? data.devices.filter((s) => typeof s === 'string') : workerSerials,
-    };
+    return parseUiDaemonPorts(JSON.parse(json) as UiDaemonPorts);
   } catch (err) {
     log(`UI server discovery failed: ${err instanceof Error ? err.message : String(err)}`);
     return EMPTY_DISCOVERY;
@@ -2262,9 +2423,13 @@ async function startAgentFromConfig(
  * exactly like every test run path (`resolveAgentArtifacts`): a missing
  * hand-set file is refused, and a physical device gets the device build — a
  * checkout's or the npm install's — instead of a simulator one (PILOT-264).
- * A simulator with nothing set keeps the plain lookup: the shared path would
- * build the simulator agent on demand, which logs to stdout (the stdio MCP
- * protocol channel) and holds the tool call for the whole xcodebuild.
+ * A simulator with nothing set resolves like a test run too, building the
+ * agent when nothing current exists (a first run, an upgrade — PILOT-485 —
+ * or an Xcode update), with its progress logged to stderr: stdout is the
+ * stdio MCP protocol channel. The build holds the tool call until it ends.
+ * With no device known (discovery recovering an orphaned daemon's agent,
+ * which may be a phone) it only looks: a build there would stall discovery
+ * for minutes, perhaps for nothing.
  */
 export async function iosXctestrunForAgentStart(
   config: TapsmithConfig,
@@ -2282,12 +2447,18 @@ export async function iosXctestrunForAgentStart(
   // No device known (recovering an orphaned daemon's agent), or a simulator.
   if (config.iosXctestrun) return path.resolve(config.rootDir, config.iosXctestrun);
   if (process.env.TAPSMITH_IOS_XCTESTRUN) return process.env.TAPSMITH_IOS_XCTESTRUN;
-  try {
-    const { findSimulatorXctestrun } = await import('../ios-device-resolve.js');
-    return findSimulatorXctestrun();
-  } catch {
-    return undefined; // not on macOS, or nothing built
+  if (!serial) {
+    try {
+      const { findSimulatorXctestrun } = await import('../ios-device-resolve.js');
+      return findSimulatorXctestrun();
+    } catch {
+      return undefined; // not on macOS, or nothing built
+    }
   }
+  // Not on macOS, no SDK, or a failed build throws: startAgentFromConfig
+  // names the reason (and fails a required start with it).
+  const { ensureSimulatorAgent } = await import('../ios-simulator-build.js');
+  return ensureSimulatorAgent({ onProgress: log });
 }
 
 // ─── Utilities ───

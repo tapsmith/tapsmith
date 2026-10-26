@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { androidHierarchyHasRenderedContent, androidHierarchyHasText, describeHierarchyForDiagnostics, ensureSessionReady, executeAppReset, launchConfiguredApp, probeResetCapabilities } from '../session-preflight.js';
 import type { AppResetPolicy } from '../app-reset.js';
 import { onActionProgress, type ActionProgressEvent } from '../action-progress.js';
@@ -1552,6 +1554,25 @@ describe('session-preflight', () => {
       expect(await probeResetCapabilities(ctx, { pollMs: 0 })).toEqual({ hooksDetected: false });
     });
 
+    it('a startup probe whose dumps all came back as errors still lets the next clear reset upgrade (PILOT-774)', async () => {
+      const ctx = makeContext({
+        config: { package: 'com.example.app', activity: '.MainActivity', platform: 'android' },
+      });
+      ctx.capabilities = {};
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: '', errorMessage: 'Interrupting test' });
+      await probeResetCapabilities(ctx, { pollMs: 0 });
+      expect(ctx.capabilities).toEqual({ hooksDetected: false });
+
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({
+        requestId: '1',
+        hierarchyXml: '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=exp://x/" /></hierarchy>',
+        errorMessage: '',
+      });
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(ctx.capabilities.hooksDetected).toBe(true);
+    });
+
     it('a clear reset under appReset auto re-reads the marker so a missed startup probe upgrades', async () => {
       const ctx = makeContext({
         config: { package: 'com.example.app', activity: '.MainActivity', platform: 'android' },
@@ -1566,6 +1587,159 @@ describe('session-preflight', () => {
       await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
 
       expect(ctx.capabilities.hooksDetected).toBe(true);
+    });
+
+    describe('warning when @tapsmith/react-native is installed but its hooks never show up (PILOT-774)', () => {
+      const NO_MARKER = '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>';
+      const MARKER = '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=exp://x/" /></hierarchy>';
+      const PROBE = { phase: 'file reset', hooksProbeMs: 0 };
+      let tmp: string;
+
+      function appDir(deps: Record<string, string>, devDeps: Record<string, string> = {}, dir = tmp): string {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ dependencies: deps, devDependencies: devDeps }));
+        return dir;
+      }
+      function hookedContext(rootDir: string | undefined, xml = NO_MARKER, extra: Record<string, unknown> = {}) {
+        const ctx = makeContext({
+          config: { package: 'com.example.app', activity: '.MainActivity', platform: 'android', rootDir, ...extra },
+        });
+        ctx.capabilities = { hooksDetected: false };
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: xml, errorMessage: '' });
+        return ctx;
+      }
+      // The runner passes a fresh spread of the session context to every reset.
+      const reset = (ctx: ReturnType<typeof hookedContext>, opts = PROBE) => executeAppReset({ ...ctx }, CLEAR_FILE, opts);
+      const hooksNotices = (ctx: ReturnType<typeof hookedContext>) => ctx.notices.filter((n) => n.kind === 'hooks-missing');
+      // Hierarchy reads a clear reset makes up to and including its single
+      // re-read, counted on an app without the dependency (no check follows).
+      async function countReadsBeforeCheck(): Promise<number> {
+        const counter = hookedContext(appDir({ expo: '~58.0.0' }, {}, path.join(tmp, 'count')));
+        await reset(counter);
+        return vi.mocked(counter.client.getUiHierarchy).mock.calls.length;
+      }
+
+      beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-warn-')); });
+      afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+      it('leaves one notice per session after clear resets still find no marker, naming the cause and the fix', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
+
+        await reset(ctx);
+        await reset(ctx);
+
+        const notices = hooksNotices(ctx);
+        expect(notices).toHaveLength(1);
+        expect(notices[0].message).toContain('enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}');
+        expect(notices[0].message).toContain('node_modules');
+        expect(notices[0].message).toContain('bare React Native');
+        expect(notices[0].message).toContain('https://tapsmith.dev/guides/warm-reset/');
+        expect(notices[0].message).toContain("appReset: 'clear'");
+        // MCP clips each warning line at 500 characters.
+        expect(notices[0].message.length).toBeLessThanOrEqual(500);
+      });
+
+      it('looks again before blaming the build: a marker that appears within the budget upgrades instead', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
+        const readsBeforeCheck = await countReadsBeforeCheck();
+        let calls = 0;
+        vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => {
+          calls += 1;
+          // Every read up to the reset's own re-read misses; the check's second look sees it.
+          const xml = calls <= readsBeforeCheck + 1 ? NO_MARKER : MARKER;
+          return { requestId: '1', hierarchyXml: xml, errorMessage: '' };
+        });
+
+        await reset(ctx, { phase: 'file reset', hooksProbeMs: 1_000 });
+
+        expect(calls).toBeGreaterThan(readsBeforeCheck + 1);
+        expect(ctx.capabilities?.hooksDetected).toBe(true);
+        expect(hooksNotices(ctx)).toEqual([]);
+      });
+
+      it('stays quiet on a bare probe, and when the check could not read the app (asks again next reset)', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
+        ctx.capabilities = {};
+        await probeResetCapabilities(ctx, { pollMs: 0 });
+        expect(ctx.capabilities).toEqual({ hooksDetected: false });
+        expect(hooksNotices(ctx)).toEqual([]);
+
+        // Only the check's own reads fail: everything up to and including the
+        // reset's single re-read succeeds.
+        const readsBeforeCheck = await countReadsBeforeCheck();
+        let calls = 0;
+        vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => {
+          calls += 1;
+          if (calls > readsBeforeCheck) throw new Error('agent settling');
+          return { requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' };
+        });
+        await reset(ctx);
+        expect(calls).toBeGreaterThan(readsBeforeCheck);
+        expect(hooksNotices(ctx)).toEqual([]);
+
+        // The agent can also answer with an error and no hierarchy instead of throwing.
+        calls = 0;
+        vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => {
+          calls += 1;
+          if (calls > readsBeforeCheck) return { requestId: '1', hierarchyXml: '', errorMessage: 'Interrupting test' };
+          return { requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' };
+        });
+        await reset(ctx);
+        expect(calls).toBeGreaterThan(readsBeforeCheck);
+        expect(hooksNotices(ctx)).toEqual([]);
+
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: NO_MARKER, errorMessage: '' });
+        await reset(ctx);
+        expect(hooksNotices(ctx)).toHaveLength(1);
+      });
+
+      it('checks after the startup launch too: a single-file session never reaches an inline reset', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }));
+        ctx.capabilities = {};
+
+        await launchConfiguredApp(ctx, 'startup launch', { freshInstall: true, hooksProbeMs: 0 });
+
+        expect(ctx.capabilities).toEqual({ hooksDetected: false });
+        expect(hooksNotices(ctx)).toHaveLength(1);
+      });
+
+      it('stays quiet when resetAppDeepLink makes auto resolve warm without the hooks', async () => {
+        const ctx = hookedContext(appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }), NO_MARKER, { resetAppDeepLink: 'app:///__reset' });
+        ctx.capabilities = {};
+
+        await launchConfiguredApp(ctx, 'startup launch', { freshInstall: true, hooksProbeMs: 0 });
+
+        expect(hooksNotices(ctx)).toEqual([]);
+      });
+
+      it('finds the app package.json above a config in a subfolder', async () => {
+        appDir({ expo: '~58.0.0' }, { '@tapsmith/react-native': '^0.7.1' });
+        const ctx = hookedContext(appDir({ tapsmith: '^0.7.1' }, {}, path.join(tmp, 'e2e')));
+
+        await reset(ctx);
+
+        expect(hooksNotices(ctx)).toHaveLength(1);
+      });
+
+      it('finds the app from its build path when the config sits outside the app (monorepo)', async () => {
+        appDir({ private: 'true' });
+        appDir({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }, {}, path.join(tmp, 'apps', 'mobile'));
+        const ctx = hookedContext(tmp, NO_MARKER, { apk: 'apps/mobile/android/app/build/outputs/apk/release/app-release.apk' });
+
+        await reset(ctx);
+
+        expect(hooksNotices(ctx)).toHaveLength(1);
+      });
+
+      it('stays quiet when the app does not depend on the package, without a rootDir, or with an explicit appReset', async () => {
+        const plain = hookedContext(appDir({ expo: '~58.0.0' }));
+        const noRoot = hookedContext(undefined);
+        const explicit = hookedContext(appDir({ '@tapsmith/react-native': '^0.7.1' }, {}, path.join(tmp, 'x')), NO_MARKER, { appReset: 'clear' });
+
+        for (const ctx of [plain, noRoot, explicit]) await reset(ctx);
+
+        expect([plain, noRoot, explicit].flatMap(hooksNotices)).toEqual([]);
+      });
     });
 
     it('an explicit appReset: clear does not spend a hierarchy read on hook detection', async () => {

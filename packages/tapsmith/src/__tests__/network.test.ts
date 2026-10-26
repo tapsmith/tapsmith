@@ -5,6 +5,7 @@ import {
   matchUrlPattern, patternsEqual, runInRouteScope, currentRouteScope, type RouteScope,
 } from '../network.js';
 import type { TapsmithGrpcClient } from '../grpc-client.js';
+import { currentAttemptToken, runInAttemptContext } from '../attempt-fence.js';
 
 // ─── matchUrlPattern (glob matching) ───
 
@@ -475,6 +476,76 @@ describe('NetworkRouteManager route scopes', () => {
     });
     await new Promise((r) => setTimeout(r, 1));
     expect(scopeInHandler).toBeUndefined();
+  });
+
+  it('counts requests handed to a route handler, and resets when taken (PILOT-775)', async () => {
+    const { manager, stream } = makeManager();
+    await manager.addRoute('**/a', (route) => route.continue());
+    const register = stream.writes.find(
+      (m): m is { registerRoute: { routeId: string } } => typeof m === 'object' && m !== null && 'registerRoute' in m,
+    )!;
+    expect(manager.takeHandlerCalls()).toBe(0);
+    for (const interceptId of ['i1', 'i2']) {
+      stream.emitData({ interceptedRequest: {
+        interceptId, routeId: register.registerRoute.routeId, method: 'GET',
+        url: 'https://example.com/a', headers: [], body: Buffer.alloc(0), isHttps: true,
+      } });
+    }
+    // A request for a route already removed reaches no handler.
+    stream.emitData({ interceptedRequest: {
+      interceptId: 'i3', routeId: 'gone', method: 'GET',
+      url: 'https://example.com/a', headers: [], body: Buffer.alloc(0), isHttps: true,
+    } });
+    await new Promise((r) => setTimeout(r, 1));
+    expect(manager.takeHandlerCalls()).toBe(2);
+    expect(manager.takeHandlerCalls()).toBe(0);
+  });
+
+  it('removes the listeners a test added at its end, keeping a suite hook\'s (PILOT-775)', async () => {
+    const { manager, stream } = makeManager();
+    const fromTest = vi.fn();
+    const fromHook = vi.fn();
+    manager.addRequestListener(fromTest);
+    await runInRouteScope({ label: 'Suite' }, async () => { manager.addResponseListener(fromHook); });
+
+    manager.removeTestListeners();
+    stream.emitData({ requestEvent: { method: 'GET', url: 'https://example.com/a', headers: [], body: Buffer.alloc(0), isHttps: true } });
+    stream.emitData({ responseEvent: { url: 'https://example.com/a', status: 200, headers: [], body: Buffer.alloc(0) } });
+    await new Promise((r) => setTimeout(r, 1));
+
+    expect(fromTest).not.toHaveBeenCalled();
+    expect(fromHook).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens the route stream outside the attempt of the test that first needs it (PILOT-775)', async () => {
+    // The stream outlives that test; its callbacks run in the context it was
+    // opened in, which would read as a closed attempt in every later test.
+    const stream = new AutoAckStream();
+    let tokenAtOpen: unknown = 'not opened';
+    const client = {
+      networkRouteStream: () => { tokenAtOpen = currentAttemptToken(); return stream; },
+    } as unknown as TapsmithGrpcClient;
+    const manager = new NetworkRouteManager(client);
+
+    await runInAttemptContext({ closed: false }, () => manager.addRoute('**/a', () => {}));
+
+    expect(tokenAtOpen).toBeUndefined();
+  });
+
+  it('removes the listeners a suite scope added once it ends (PILOT-775)', async () => {
+    const { manager, stream } = makeManager();
+    const scope: RouteScope = { label: 'Suite' };
+    const fromHook = vi.fn();
+    const fromOtherScope = vi.fn();
+    await runInRouteScope(scope, async () => { manager.addRequestListener(fromHook); });
+    await runInRouteScope({ label: 'Other' }, async () => { manager.addRequestListener(fromOtherScope); });
+
+    manager.removeScopeListeners(scope);
+    stream.emitData({ requestEvent: { method: 'GET', url: 'https://example.com/a', headers: [], body: Buffer.alloc(0), isHttps: true } });
+    await new Promise((r) => setTimeout(r, 1));
+
+    expect(fromHook).not.toHaveBeenCalled();
+    expect(fromOtherScope).toHaveBeenCalledTimes(1);
   });
 
   it('removeAllRoutes (device.unrouteAll) still removes scoped routes', async () => {

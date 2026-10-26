@@ -53,6 +53,19 @@ On Android, `device.getByText("Text inputs, buttons, focus/blur, keyboard")` fin
    // ✓ await expect(device.locator({ id: "last-gesture" })).toHaveText("Last gesture: Long press")
    ```
 
+### What locators never match
+
+Some of what is on the screen, and in the hierarchy the trace viewer shows, is not the app's own content. No locator matches it, on either platform:
+
+- **The software keyboard.** Its keys, its return, globe, emoji and dictation buttons, and the bar of typing predictions above it, so a *Done* button beside an open keyboard is not ambiguous with the keyboard's *Done* key. A toolbar the app shows above the keyboard (an input accessory view) is the app's, and matches.
+- **The iOS application element**, whose label is the app's name. `getByText("App")` does not match it in an app called *My App*.
+- **Android's status and navigation bars**: their clock, icons and *Back* / *Home* buttons.
+- **The `@tapsmith/react-native` hooks marker** ([warm reset](warm-reset.md)), which exists only for Tapsmith to read.
+
+Other windows on Android do match: a notification shade or quick settings panel you pull down (`device.openNotifications()`), a heads-up notification, the app's own overlay windows, system dialogs, and other apps' windows the app opens, such as a permission dialog.
+
+XPath (`locator({ xpath })`, Android only) is the exception: it evaluates the raw hierarchy dump.
+
 ## Priority 1 — Accessible Locators (Preferred)
 
 These match what real users and assistive technologies see. They should be your default choice.
@@ -255,11 +268,11 @@ await device.locator({
 
 > **Warning:** The ESLint plugin requires an explanatory comment on the same or preceding line whenever `locator({ xpath })` is used. If you find yourself reaching for XPath, consider whether adding accessibility attributes to the app would be a better long-term solution.
 
-An XPath locator is for use on its own. `and()`/`or()` refuse an XPath operand with an error, because the agent reports an XPath match's text and bounds from a different read path than every other selector, so it could never match the other operand. Narrowing (`filter()`, `first()`/`nth()`) and scoping a `getBy*` off one still answer queries, but **actions** through them fail at the agent, which cannot act on an XPath match by id.
+An XPath locator is for use on its own. `and()`/`or()` refuse an XPath operand with an error, because the agent reports an XPath match's text and bounds from a different read path than every other selector, so it could never match the other operand. Narrowing one (`filter()`, `first()`/`nth()`) and an XPath `locator()` chained off another locator still answer queries, but **actions** on the XPath match fail at the agent, which cannot act on an XPath match by id. A `getBy*` scoped off an XPath locator resolves its own match, so its actions work.
 
 ## Chaining and Scoping
 
-`getBy*` and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to its descendants — exactly like Playwright's `locator.locator(...)`.
+`getBy*` and `locator()` are also available on every `ElementHandle`. Calling them on a parent locator scopes the search to the elements inside it, like Playwright's `locator.locator(...)`: an element is inside when its centre lies within the parent's bounds and it is not a larger element around the parent; on iOS the parent itself matches when nothing inside it does (an accessible container's children are not exposed there). Bounds rather than the accessibility tree decide, because React Native's trees often make a container's children its siblings; see [ElementHandle Scoping](api-reference.md#scoping).
 
 ```typescript
 // Find "Item 3" inside a specific list (a FlatList with testID="cart-list")
@@ -290,21 +303,73 @@ Tapsmith includes an ESLint plugin that enforces locator best practices in your 
 
 ### Setup
 
+Install ESLint (9.22 or later) and [typescript-eslint](https://typescript-eslint.io), which lets ESLint parse TypeScript:
+
+```bash
+npm install --save-dev eslint typescript-eslint
+```
+
+Then create `eslint.config.mjs` in your project root:
+
 ```javascript
-// eslint.config.js (flat config)
+// eslint.config.mjs
+import { defineConfig } from "eslint/config"
+import tseslint from "typescript-eslint"
 import { eslintPlugin } from "tapsmith"
 
-export default [
+export default defineConfig({
+  // Where your Tapsmith tests and screen objects live
+  files: ["tests/**/*.ts"],
+  extends: [tseslint.configs.base, eslintPlugin.configs.recommended],
+  languageOptions: {
+    // Type information, so a missing `await` is caught
+    parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
+  },
+  rules: {
+    "@typescript-eslint/no-floating-promises": "error",
+  },
+})
+```
+
+Run it with `npx eslint tests/`. Change `files` to match where your tests are.
+
+- `tseslint.configs.base` sets the TypeScript parser. Without it, ESLint stops at the first type annotation with `Parsing error: Unexpected token :`.
+- `eslintPlugin.configs.recommended` registers the plugin and turns on its rules (below).
+- `@typescript-eslint/no-floating-promises` reports an action or assertion you forgot to `await`, such as `expect(item).toBeVisible()`. Without the `await`, the test does not wait for the action or assertion, so a failure can be missed or reported in the wrong test. This rule needs type information, so your `tsconfig.json` must include the test files. If ESLint reports a file "was not found by the project service", add that folder to the tsconfig's `include`.
+
+The `.mjs` extension makes Node load the config as an ES module whether or not your `package.json` has `"type": "module"`.
+
+#### Adding it to an existing config
+
+If your project already has an ESLint config, add the object to that config instead of creating a second file. ESLint reads only one config file, and it picks `eslint.config.js` before `eslint.config.mjs`, so a new file would be ignored.
+
+Expo's `npx expo lint` creates an `eslint.config.js` that uses `require`, and installs ESLint with `eslint-config-expo`, which already sets up typescript-eslint for `.ts` files. So in an Expo project, skip the install step above and add an object like this to the array passed to `defineConfig`:
+
+```javascript
+// eslint.config.js
+const { defineConfig } = require("eslint/config")
+const expoConfig = require("eslint-config-expo/flat")
+const { eslintPlugin } = require("tapsmith")
+
+module.exports = defineConfig([
+  expoConfig,
   {
-    plugins: {
-      tapsmith: eslintPlugin,
+    files: ["tests/**/*.ts"],
+    // No tseslint.configs.base: expoConfig already sets the TypeScript parser
+    extends: [eslintPlugin.configs.recommended],
+    languageOptions: {
+      parserOptions: { projectService: true, tsconfigRootDir: __dirname },
     },
     rules: {
-      ...eslintPlugin.configs.recommended.rules,
+      "@typescript-eslint/no-floating-promises": "error",
     },
   },
-]
+])
 ```
+
+The same applies to any config that already uses typescript-eslint: leave out `tseslint.configs.base`. If two copies of typescript-eslint's plugin are installed, registering both fails with `Cannot redefine plugin "@typescript-eslint"`.
+
+`require("tapsmith")` needs Node.js 22.12 or later. The object has to be inside `defineConfig()`, because a plain exported array does not accept the `extends` key.
 
 ### Rules
 

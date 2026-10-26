@@ -2,11 +2,10 @@ import { describe, it, expect } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { parseSelectorString, findMatchingNodes } from '../trace-viewer/components/selector-matching.js';
 import { parseSelectorParts } from '../trace-viewer/components/selector-parts.js';
-import { parseSelectorToInternal } from '../mcp/locator-helper.js';
 import { _label, _role, _textContains, formatSelector, selectorToProto } from '../selectors.js';
 
 // PILOT-520: RegExp locators in the trace-viewer / UI-mode locator playground
-// and the MCP locator parser. They must parse a RegExp literal and match it
+// (the MCP tools build them with the SDK, PILOT-848). They must parse a RegExp literal and match it
 // the way the agents do: getByText against the raw text, getByLabel against
 // the raw label, a role name against the whitespace-normalized name.
 
@@ -101,21 +100,6 @@ describe('playground RegExp locators (PILOT-520)', () => {
     expect(parseSelectorString('device.getByText(/(/)')).toBeNull();
     expect(parseSelectorString('device.getByTestId(/x/)')).toBeNull();
     expect(parseSelectorString('webview.getByText(/x/)')).toBeNull();
-  });
-});
-
-describe('MCP locator parsing of RegExp locators (PILOT-520)', () => {
-  it('builds the same selectors as the SDK', () => {
-    expect(selectorToProto(parseSelectorToInternal('device.getByText(/save\\s+draft/i)').selector))
-      .toEqual(selectorToProto(_textContains(/save\s+draft/i)));
-    expect(selectorToProto(parseSelectorToInternal('device.getByLabel(/name$/)').selector))
-      .toEqual(selectorToProto(_label(/name$/)));
-    expect(selectorToProto(parseSelectorToInternal('device.getByRole("button", { name: /save/i })').selector))
-      .toEqual(selectorToProto(_role('button', { name: /save/i })));
-  });
-
-  it('refuses an unsupported flag with the SDK\'s message', () => {
-    expect(() => parseSelectorToInternal('device.getByText(/x/y)')).toThrow(/does not support the RegExp flag "y"/);
   });
 });
 
