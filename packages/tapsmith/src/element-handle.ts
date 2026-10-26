@@ -32,6 +32,7 @@ import { tracedAction } from './trace/traced-action.js';
 import { sleep, isAbortError } from './abort.js';
 import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
+import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
 
 // ─── Public types ───
 
@@ -522,11 +523,20 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
     const shown = exact ? name : name.slice(0, 60);
     return `device.getByRole("${el.role}", { name: "${escapeJsString(shown)}"${exact ? ', exact: true' : ''} })`;
   }
-  if (el.text) {
+  // iOS: a control's name is a getByLabel field's name, never getByText's
+  // text; the value of anything but text is not text either (PILOT-794).
+  const isIos = el.className.startsWith('XCUIElementType');
+  if (isIos && IOS_NAME_ONLY_TYPES.has(el.className)) {
+    return el.contentDescription ? `device.getByLabel("${escapeJsString(el.contentDescription)}")` : undefined;
+  }
+  const text = isIos && !IOS_VALUE_TEXT_TYPES.has(el.className) && el.text !== el.contentDescription
+    ? el.contentDescription
+    : el.text;
+  if (text) {
     // Like the role name above: an exact match needs the whole text, so a
     // long one is suggested as its leading part, matched as a substring.
-    const exact = el.text.length <= 60;
-    const shown = exact ? el.text : el.text.slice(0, 60);
+    const exact = text.length <= 60;
+    const shown = exact ? text : text.slice(0, 60);
     return `device.getByText("${escapeJsString(shown)}"${exact ? ', { exact: true }' : ''})`;
   }
   if (nativeId) return `device.locator({ id: "${escapeJsString(nativeId)}" })`;

@@ -22,6 +22,12 @@ Whitespace is normalized on both sides before comparing a string, exact or not, 
 
 Without `exact`, a string `getByText` also ignores case, as `getByRole`'s `name` does. Case is folded with Unicode case mappings that don't depend on the device's locale, so `getByText("login")` finds `LOGIN` on a Turkish device too. A few special characters (such as `ß`) may fold differently per platform. The software keyboard's keys never match, so `getByText("Delete")` does not find the keyboard's `delete` key ([what locators never match](locators.md#what-locators-never-match)). `{ exact: true }`, `getByLabel`, `getByPlaceholder` and `getByDescription` are case-sensitive.
 
+On iOS, `getByText` returns the innermost element holding the text, as Playwright does: an element whose descendant also matches is left out, so `getByText("Dark Mode")` finds the label of a SwiftUI `Toggle` row, not the row and its label, and a list row or an alert gives way to the text inside it. Since an iOS element has an accessibility label and value rather than text content, `getByText` reads:
+
+- **the label (and title)**, except on a switch, slider or stepper, whose label is only its accessible name: find those with `getByLabel()` or `getByRole("switch", { name })`. SwiftUI draws a `Toggle`'s or `Stepper`'s label as separate text, which `getByText` finds.
+- **the value only of text and text inputs** (a field's typed text). A switch's `0`/`1`, a slider's or stepper's value, a button's value and React Native's `accessibilityValue` are not text, so `getByText("1")` doesn't match a switch that is on.
+- **a label without the part it repeats from its container**: a SwiftUI `Stepper`'s buttons are labelled `"Quantity: 1, Increment"`, and `getByText("Quantity: 1", { exact: true })` finds only the stepper's text.
+
 #### Regular expressions
 
 `getByText`, `getByLabel` and `getByRole`'s `name` accept a `RegExp`, as in Playwright. It is matched on the device with JavaScript's semantics, so it behaves the way it would in a browser:

@@ -189,13 +189,15 @@ Whitespace differences don't matter for a string: non-breaking spaces, line brea
 
 A `RegExp` (also accepted by `getByLabel` and `getByRole`'s `name`) is matched with JavaScript's semantics against the text as it is: `\s` covers non-breaking spaces, and `^`/`$` anchor the whole text unless you pass the `m` flag. See [Regular expressions](api-reference.md#regular-expressions) for the details.
 
+On iOS, `getByText` returns the innermost element holding the text, as Playwright does: a SwiftUI `Toggle` row, a `NavigationLink` or an alert gives way to the text inside it, so `getByText("Dark Mode")` finds one element. A control's value (a switch's `1`, a slider's `50%`) is not text.
+
 > **Strict mode:** because of the case-insensitive substring default, `getByText("Sign in")` also matches longer or differently-cased text such as `"Sign in to continue"` or a `"SIGN IN"` heading. A locator that resolves to more than one element throws a `strict mode violation` when you act or assert on it (instead of silently using the first match). Disambiguate with `{ exact: true }`, `getByRole(role, { name, exact: true })`, `getByTestId()`, or `.first()/.nth()/.last()`. Absence checks (`toBeHidden`, `not.toBeVisible`, `waitFor({ state: "hidden" })`) and multi-element APIs (`count()`, `all()`, `toHaveCount`) are exempt. See the [API reference](api-reference.md#strict-mode) for the full rules. WebView locators (`webview.getBy*`, `webview.locator(css)`) enforce the same rules.
 
 ### `getByDescription(text)`
 
 Find an element by its accessibility description. On Android this matches `contentDescription`; on iOS it matches `accessibilityLabel`. Use this for icon buttons, images, and elements where the accessible label differs from visible text.
 
-On iOS, `getByText` also matches `accessibilityLabel`, so both work for text-bearing elements. Prefer `getByDescription` for elements that have an explicit accessibility description but no visible text (e.g. icon-only buttons).
+On iOS, `getByText` also matches `accessibilityLabel`, so both work for text-bearing elements — except a switch, slider or stepper, whose label is its accessible name rather than text on screen ([what `getByText` reads on iOS](api-reference.md#devicegetbytexttext-string--regexp-options--exact-boolean--elementhandle)). Prefer `getByDescription` for elements that have an explicit accessibility description but no visible text (e.g. icon-only buttons).
 
 ```typescript
 // Tap an icon button with a description
