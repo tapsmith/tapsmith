@@ -66,7 +66,7 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
     // (and any `enabled` toggle) this effect's first pass is already disposed
     // by then, so that URL must be honoured regardless of `disposed` or a
     // cold-delivered reset is silently dropped.
-    const handle = async (url: string | null, initial = false) => {
+    const handle = async (url: string | null | undefined, initial = false) => {
       if (!url || (disposed && !initial)) return;
       // Every received URL bumps `nav` — the ack for plain navigation deep
       // links (a same-screen link changes nothing else observable).
