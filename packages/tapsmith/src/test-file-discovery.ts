@@ -12,7 +12,10 @@ import { Minimatch, minimatch } from 'minimatch';
  * headers back into `node_modules`, which a watcher would otherwise follow.
  *
  * Build directories are anchored under `ios/` and `android/`, so a `build`
- * directory elsewhere (one holding tests, say) is still searched.
+ * directory elsewhere (one holding tests, say) is still searched. A native
+ * project builds at its root (PILOT-832), so the trees Gradle and
+ * `xcodebuild -derivedDataPath build` write inside any `build/` are skipped
+ * by name instead.
  */
 export const DEFAULT_TEST_IGNORE = [
   '**/node_modules/**',
@@ -22,7 +25,17 @@ export const DEFAULT_TEST_IGNORE = [
   '**/ios/build/**',
   '**/DerivedData/**',
   '**/android/**/build/**',
-  '**/android/**/.cxx/**',
+  '**/.cxx/**',
+  // Gradle's (`<module>/build/…`) and xcodebuild's (`build/Build`, …) output
+  // in a native project, whose build directories are not under android/ or ios/.
+  '**/build/intermediates/**',
+  '**/build/tmp/**',
+  '**/build/generated/**',
+  '**/build/kotlin/**',
+  '**/build/outputs/**',
+  '**/build/Build/**',
+  '**/build/SourcePackages/**',
+  '**/build/Index.noindex/**',
   '**/.gradle/**',
   '**/.expo/**',
   // Bundler's gems (the React Native CLI template installs CocoaPods there)
