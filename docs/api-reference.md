@@ -105,13 +105,13 @@ Locate an element by its dedicated test identifier.
 device.getByTestId("submit-button")
 ```
 
-On Android the value is compared with the element's whole resource ID, which is what a React Native `testID` becomes. A native view's package-qualified ID (`com.myapp:id/submit`) is addressed with `device.locator({ id: "com.myapp:id/submit" })` instead.
+On Android the value is compared with the element's whole resource ID, which is what a React Native `testID` becomes. A native view's package-qualified ID (`com.myapp:id/submit`) is addressed with `device.locator({ id: "com.myapp:id/submit" })` instead. A Jetpack Compose `Modifier.testTag()` becomes a resource ID only where the app sets `Modifier.semantics { testTagsAsResourceId = true }` on it or an ancestor (once on the root of `setContent` covers the screen); a `getByTestId()` that finds nothing on Android says so in its error. See [Jetpack Compose](locators.md#jetpack-compose).
 
 ### `device.getByLabel(text: string | RegExp): ElementHandle`
 
 Locate an input element by its associated label text. Finds form controls (text fields, checkboxes, switches, etc.) whose accessible name matches the label.
 
-- **Android**: matches inputs (text fields, checkboxes, switches, radio buttons, seek bars and spinners) whose `contentDescription` equals the text, or inputs linked via `labelFor`/`labeledBy`.
+- **Android**: matches inputs (text fields, checkboxes, switches, radio buttons, seek bars and spinners) whose `contentDescription` equals the text, inputs linked via `labelFor`/`labeledBy`, or a Jetpack Compose text field whose `label` is the text (the label is a child of the field).
 - **iOS**: matches input elements (text fields, text views, switches, sliders, steppers, pickers, checkboxes and radio buttons, but not search fields) whose `accessibilityLabel` or title equals the text.
 
 The comparison normalizes whitespace like `getByText`. A [RegExp](#regular-expressions) is tested against the label text instead.
