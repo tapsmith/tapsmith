@@ -78,6 +78,38 @@ class HierarchyAttributesTest {
     }
 
     @Test
+    fun `a control's carried role replaces a same-bounds node's role, so it is written once`() {
+        val xml =
+            """<hierarchy><node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]">""" +
+                """<node index="0" text="Title" content-desc="" class="android.widget.TextView" bounds="[0,0][100,50]" />""" +
+                """<node index="1" text="" content-desc="" class="android.widget.Button" bounds="[0,10][100,40]" />""" +
+                """</node></hierarchy>"""
+        val box = Box(0, 0, 100, 50)
+        val out =
+            HierarchyAttributes.inject(
+                xml,
+                // The heading Text fills the control: its role joins by bounds.
+                mapOf("[0,0][100,50]" to mapOf("tapsmith-role" to "heading")),
+                HierarchyAttributes.ComposeMarks(
+                    carriers = setOf(HierarchyAttributes.nodeKey(Box(0, 10, 100, 40), "android.widget.Button")),
+                    carrierAttribute = "tapsmith-role-carrier",
+                    controlRoles = mapOf(HierarchyAttributes.nodeKey(box, "android.view.View") to "button"),
+                    roleAttribute = "tapsmith-role",
+                ),
+            )
+        assertEquals(
+            """<hierarchy><node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]" """ +
+                """tapsmith-role="button">""" +
+                """<node index="0" text="Title" content-desc="" class="android.widget.TextView" bounds="[0,0][100,50]" """ +
+                """tapsmith-role="heading" />""" +
+                """<node index="1" text="" content-desc="" class="android.widget.Button" bounds="[0,10][100,40]" """ +
+                """tapsmith-role-carrier="true" />""" +
+                """</node></hierarchy>""",
+            out,
+        )
+    }
+
+    @Test
     fun `injects each attribute after the bounds of every node with that key`() {
         val xml =
             """<hierarchy><node index="0" class="android.widget.Button" bounds="[0,0][100,50]" />""" +

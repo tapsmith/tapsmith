@@ -642,19 +642,32 @@ class ElementFinder(
                     examined++
                     val node = snapshotOf(candidate, fresh, refreshed)
                     val nonApp = node.windowId in excludedWindows || NonAppNodes.isHooksMarker(node.text, node.contentDescription)
-                    if (nonApp) null else candidate to node
+                    if (nonApp) null else Found(node) { candidate }
                 },
                 // A Compose role carrier stands for its parent, which getByRole
-                // matches with the carrier's role ([ComposeRoles]).
-                carrierParentOf = { (obj, node) ->
-                    if (selector.role != null) carrierParent(obj, node, fresh, refreshed) else null
+                // matches with the carrier's role ([ComposeRoles]). The
+                // parent's UiObject2 — a round-trip — is made only for a match.
+                carrierParentOf = { found ->
+                    if (selector.role == null) return@matchInTreeOrder null
+                    val parentNode = carrierParentNode(found.node, fresh) ?: return@matchInTreeOrder null
+                    val carrierObj = found.obj
+                    // A parent gone since the walk is a re-render: retry the find.
+                    Found(parentNode) { carrierObj.parent ?: throw StaleObjectException() }
                 },
-                key = { (_, node) -> node },
-                accepts = { (_, node), (_, roleNode) ->
-                    matchesSelector(node, selector, fresh, roleNode) && matchesStateFilters(node, selector)
+                key = { it.node },
+                accepts = { target, roleSource ->
+                    matchesSelector(target.node, selector, fresh, roleSource.node) && matchesStateFilters(target.node, selector)
                 },
             )
-        return matches.map { (obj, node) -> convert(obj, node) } to examined
+        return matches.map { convert(it.obj, it.node) } to examined
+    }
+
+    /** A candidate's snapshot [node], and its UiObject2, made when first needed. */
+    private class Found(
+        val node: AccessibilityNodeInfo,
+        objOf: () -> UiObject2,
+    ) {
+        val obj: UiObject2 by lazy(LazyThreadSafetyMode.NONE, objOf)
     }
 
     /**
@@ -1438,17 +1451,15 @@ class ElementFinder(
     }
 
     /**
-     * When [node] (the snapshot of [obj]) is a Compose role carrier
-     * ([ComposeRoles]), its parent — the control getByRole matches — and
-     * the parent's snapshot; null for any other node. Only a leaf of the
-     * carrier's shape costs a parent read.
+     * When [node] is a Compose role carrier ([ComposeRoles]), its parent's
+     * node — the control getByRole matches — read from the walk's snapshot
+     * (refreshed when the walk wasn't [fresh]); null for any other node.
+     * Only a leaf of the carrier's shape costs a parent read.
      */
-    private fun carrierParent(
-        obj: UiObject2,
+    private fun carrierParentNode(
         node: AccessibilityNodeInfo,
         fresh: Boolean,
-        refreshed: MutableMap<AccessibilityNodeInfo, AccessibilityNodeInfo>?,
-    ): Pair<UiObject2, AccessibilityNodeInfo>? {
+    ): AccessibilityNodeInfo? {
         var parentNode: AccessibilityNodeInfo? = null
         val carrier =
             ComposeRoles.isCarrier(
@@ -1464,9 +1475,7 @@ class ElementFinder(
                     p != null && p.getChild(p.childCount - 1) == node
                 },
             )
-        if (!carrier) return null
-        val parentObj = obj.parent ?: return null
-        return parentObj to snapshotOf(parentObj, fresh, refreshed)
+        return if (carrier) parentNode else null
     }
 
     /**

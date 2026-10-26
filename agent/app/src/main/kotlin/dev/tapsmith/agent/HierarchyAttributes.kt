@@ -83,8 +83,12 @@ internal object HierarchyAttributes {
             val end = match.range.last + 1
             sb.append(xml, lastEnd, end)
             val bounds = match.groupValues[2]
-            attributes[bounds]?.let { appendAttributes(sb, it) }
-            if (compose != null && !compose.isEmpty) appendComposeMarks(sb, xml, match.range.first, end, bounds, compose)
+            val composeMarks = if (compose != null && !compose.isEmpty) composeMarks(xml, match.range.first, end, bounds, compose) else null
+            // A control's carried role replaces a role joined by bounds alone
+            // (a same-bounds node's), so the node gets one.
+            val carriedRole = compose?.roleAttribute?.takeIf { composeMarks?.containsKey(it) == true }
+            attributes[bounds]?.let { appendAttributes(sb, if (carriedRole != null) it - carriedRole else it) }
+            composeMarks?.let { appendAttributes(sb, it) }
             lastEnd = end
         }
         sb.append(xml, lastEnd, xml.length)
@@ -97,25 +101,23 @@ internal object HierarchyAttributes {
         className: String?,
     ): String = "${bounds.key()}|${className ?: ""}"
 
-    /** [compose]'s marks for the `<node>` tag starting at [start], whose `bounds` end at [boundsEnd]. */
-    private fun appendComposeMarks(
-        sb: StringBuilder,
+    /** [compose]'s marks for the `<node>` tag starting at [start], whose `bounds` end at [boundsEnd]; null for none. */
+    private fun composeMarks(
         xml: String,
         start: Int,
         boundsEnd: Int,
         bounds: String,
         compose: ComposeMarks,
-    ) {
+    ): Map<String, String>? {
         val close = xml.indexOf('>', boundsEnd)
-        if (close <= 0) return
+        if (close <= 0) return null
         val tag = xml.substring(start, close)
         val key = "$bounds|${attrValue(CLASS_ATTR, tag)}"
-        val leaf = xml[close - 1] == '/'
-        if (leaf) {
+        return if (xml[close - 1] == '/') {
             val unnamed = attrValue(TEXT_ATTR, tag).isEmpty() && attrValue(CONTENT_DESC_ATTR, tag).isEmpty()
-            if (unnamed && key in compose.carriers) appendAttributes(sb, mapOf(compose.carrierAttribute to "true"))
+            if (unnamed && key in compose.carriers) mapOf(compose.carrierAttribute to "true") else null
         } else {
-            compose.controlRoles[key]?.let { appendAttributes(sb, mapOf(compose.roleAttribute to it)) }
+            compose.controlRoles[key]?.let { mapOf(compose.roleAttribute to it) }
         }
     }
 
