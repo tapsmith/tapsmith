@@ -14,10 +14,11 @@
 export interface TimeoutOptions {
   /**
    * Time in milliseconds for the whole call: the auto-wait for the element and
-   * the action itself. An element found just before the timeout still gets up
-   * to a second for the action, so a call can end shortly after it. Must be a
-   * positive, finite number. Defaults to the device timeout (the config's
-   * `timeout`, 30 s by default).
+   * the action itself. On a native locator, an element found just before the
+   * timeout still gets up to a second for the action, so a call can end
+   * shortly after it. Must be a positive, finite number. Defaults to the
+   * device timeout (the config's `timeout`, 30 s by default). On the
+   * non-waiting `isVisible()`/`isHidden()` it bounds only their retries.
    */
   timeout?: number;
 }
