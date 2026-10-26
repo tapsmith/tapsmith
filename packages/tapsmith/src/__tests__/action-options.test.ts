@@ -343,11 +343,16 @@ describe('wrong options throw at the call instead of being ignored (PILOT-840)',
     expect(c.tap).toHaveBeenCalledTimes(1);
   });
 
-  it('waitFor() checks its options, keeps timeout 0 as one check, and refuses an unknown state', async () => {
+  it('waitFor() checks its options, keeps timeout 0 (and a negative one) as one check, and refuses an unknown state', async () => {
     const handle = new ElementHandle(client(), _text('Go'), DEVICE_TIMEOUT);
     await expect(handle.waitFor({ timeout: 0 })).resolves.toBeUndefined();
     await expect(handle.waitFor({ timout: 5 } as { timeout?: number })).rejects.toThrow('waitFor(): unknown option "timout"');
-    await expect(handle.waitFor({ timeout: -5 })).rejects.toThrow(/waitFor\(\): timeout must be a positive, finite number/);
+    // A run-out computed budget is one check, as 0 is, not a TypeError.
+    await expect(handle.waitFor({ timeout: -5 })).resolves.toBeUndefined();
+    await expect(new ElementHandle(emptyClient(), _text('Go'), DEVICE_TIMEOUT).waitFor({ timeout: -5 }))
+      .rejects.not.toBeInstanceOf(TypeError);
+    await expect(handle.waitFor({ timeout: NaN })).rejects.toThrow(/waitFor\(\): timeout must be a positive, finite number/);
+    await expect(handle.waitFor({ timeout: '5' } as unknown as { timeout: number })).rejects.toThrow(/waitFor\(\): timeout must be/);
     await expect(handle.waitFor({ state: 'visibile' } as unknown as { state: 'visible' }))
       .rejects.toThrow(`waitFor(): unknown state "visibile". Use one of: 'visible', 'hidden', 'attached', 'detached'.`);
   });
