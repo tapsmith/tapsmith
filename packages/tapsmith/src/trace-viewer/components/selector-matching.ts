@@ -1,6 +1,7 @@
 import type { HierarchyNode } from './hierarchy-utils.js';
 import { getNodeRole, isLabelField, webViewAriaLabel, getNodeBounds } from './hierarchy-utils.js';
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
+import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
@@ -410,12 +411,11 @@ function mapWebViewMethod(method: string, value: string, name?: string, exact?: 
 // Android uses: text, content-desc, resource-id, hint, class
 // iOS uses: label, identifier, placeholderValue, type
 
-// iOS runtime text matching also accepts the element's value (and title), so
-// fall back to the `value` attribute the iOS agent emits. Remaining fidelity
-// gaps vs the on-device matcher (title attribute, auto-concatenated child
-// labels, trailing-punctuation tolerance) are accepted here — native selector
-// VALIDATION goes through the real runtime via findElements (tapsmith_test_locator);
-// this TS matcher only powers the browser-side trace viewer/playground.
+// A node's text: Android's `text`, else an iOS label or value. iOS getByText
+// reads the agent's text content rule instead (text-content.ts); this is
+// getByText on other nodes and the duplicate collapse's key. Native selector
+// VALIDATION goes through the real runtime (EvaluateSelectors); this TS matcher
+// only powers the offline trace playground.
 function getNodeText(node: HierarchyNode): string {
   return node.attributes.get('text') ?? node.attributes.get('label') ?? node.attributes.get('value') ?? '';
 }
@@ -530,8 +530,23 @@ function roleNameMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
  * Playwright tests the element's full text.
  */
 function textMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
-  if (node.attributes.has('class')) return re.test(node.attributes.get('text') ?? '');
-  return ['label', 'title', 'value'].some((key) => re.test(node.attributes.get(key) ?? ''));
+  return re.test(node.attributes.get('text') ?? '');
+}
+
+/** The getByText selector types, which on iOS read a node's text content (text-content.ts). */
+const TEXT_SELECTOR_TYPES: ReadonlySet<string> = new Set(['text', 'textContains', 'textRegex']);
+
+/**
+ * getByText on an iOS node (PILOT-794): its text content, as the agent's
+ * TextContent reads it. `containerLabel` is the nearest app ancestor's label.
+ */
+function iosNodeMatchesText(node: HierarchyNode, selector: ParsedSelector, containerLabel: string): boolean {
+  const texts = iosTexts(node, containerLabel);
+  switch (selector.type) {
+    case 'text': return iosTextMatchesExact(texts, selector.value);
+    case 'textContains': return iosTextMatchesSubstring(texts, selector.value);
+    default: return selector.regex !== undefined && iosTextMatchesRegex(texts, toJsRegExp(selector.regex));
+  }
 }
 
 /**
@@ -838,23 +853,44 @@ export function parsedSelectorError(selector: ParsedSelector): string | null {
 
 export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelector): HierarchyNode[] {
   const raw: HierarchyNode[] = [];
+  // iOS getByText, like the agent (PILOT-794): a node's text content depends
+  // on its container's label, and a match that contains another match gives
+  // way to it (innermost). `suppressed` holds those ancestors' raw indices.
+  const iosText = TEXT_SELECTOR_TYPES.has(selector.type);
+  const suppressed = new Set<number>();
+  const matchedAncestors: number[] = [];
 
-  function walk(node: HierarchyNode) {
+  function walk(node: HierarchyNode, containerLabel: string) {
     // What isn't the app's never matches (PILOT-756, non-app-nodes.ts).
     if (isNonAppSubtree(node)) return;
-    if (!isNonAppNode(node) && nodeMatchesSelector(node, selector)) {
+    const isIos = !node.attributes.has('class') && !isWebViewNode(node);
+    const appNode = !isNonAppNode(node);
+    const matches = appNode && (iosText && isIos
+      ? iosNodeMatchesText(node, selector, containerLabel)
+      : nodeMatchesSelector(node, selector));
+    let pushed = false;
+    if (matches) {
+      if (iosText && isIos) {
+        for (const index of matchedAncestors) suppressed.add(index);
+        matchedAncestors.push(raw.length);
+        pushed = true;
+      }
       raw.push(node);
     }
+    const label = node.attributes.get('label') ?? '';
+    const childContainer = isIos && appNode && label !== '' ? label : containerLabel;
     for (const child of node.children) {
-      walk(child);
+      walk(child, childContainer);
     }
+    if (pushed) matchedAncestors.pop();
   }
 
   for (const root of roots) {
-    walk(root);
+    walk(root, '');
   }
 
-  return applyPositionalIndex(collapseSameTargetNodes(raw), selector.index);
+  const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));
+  return applyPositionalIndex(collapseSameTargetNodes(kept), selector.index);
 }
 
 // Geometry lives with the hierarchy model (no matching); re-exported for

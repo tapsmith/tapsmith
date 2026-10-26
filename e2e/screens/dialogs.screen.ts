@@ -5,6 +5,10 @@ export class DialogsScreen {
 
   get heading() { return this.device.getByText("Dialogs & Overlays", { exact: true }) }
 
+  // Alerts (React Native's Alert.alert: a native alert on both platforms)
+  get showAlertButton() { return this.device.getByRole("button", { name: "Show alert" }) }
+  get alertOk() { return this.device.getByRole("button", { name: "OK", exact: true }) }
+
   // Toast
   get showToastButton() { return this.device.getByRole("button", { name: "Show toast" }) }
   get showErrorToastButton() { return this.device.getByRole("button", { name: "Show error toast" }) }

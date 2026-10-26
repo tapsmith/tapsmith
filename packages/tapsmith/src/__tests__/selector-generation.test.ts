@@ -618,10 +618,11 @@ describe('parseSelectorString getByText semantics', () => {
     expect(findMatchingNodes(wvRoots, parseSelectorString('webview.getByText("Add", { exact: true })')!)).toHaveLength(0);
   });
 
-  it('text matching falls back to the iOS value attribute', () => {
-    const slider = makeNode('XCUIElementTypeSlider', { type: 'XCUIElementTypeSlider', value: '50%' });
-    const matches = findMatchingNodes([slider], parseSelectorString('device.getByText("50%", { exact: true })')!);
-    expect(matches).toHaveLength(1);
+  it("text matching reads an iOS text field's value, not a control's (PILOT-794)", () => {
+    const field = makeNode('XCUIElementTypeTextField', { type: 'XCUIElementTypeTextField', label: '', value: 'nick' });
+    expect(findMatchingNodes([field], parseSelectorString('device.getByText("nick", { exact: true })')!)).toHaveLength(1);
+    const slider = makeNode('XCUIElementTypeSlider', { type: 'XCUIElementTypeSlider', label: 'Volume', value: '50%' });
+    expect(findMatchingNodes([slider], parseSelectorString('device.getByText("50%", { exact: true })')!)).toHaveLength(0);
   });
 });
 

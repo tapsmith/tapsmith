@@ -46,6 +46,12 @@ struct ElementSelector {
         (role != nil && hasNameFilter) || textRegex != nil || labelRegex != nil || textContains != nil
     }
 
+    /// Whether the selector is a getByText one, whose matches give way to a
+    /// matching descendant (innermost, TextContent, PILOT-794).
+    var matchesInnermostOnly: Bool {
+        text != nil || textContains != nil || textRegex != nil
+    }
+
     /// Whether a role-only selector's match is re-resolved by its own label
     /// too: the roles no element-type query can express (a heading's trait,
     /// an RN checkbox's description), whose type-query index would count

@@ -200,16 +200,17 @@ class SnapshotElementFinder {
         // Wrapper suppression happens inline via an ancestor stack so the
         // whole walk is O(N + wrapperMatches) rather than O(matches²).
         var matches: [([String: Any], CGRect)] = []
-        var otherAncestors: [WrapperAncestor] = []
+        var matchedAncestors: [WrapperAncestor] = []
         var suppressed = Set<Int>()
         var keyboardMatches: [UInt] = []
         var keyboardTop: CGFloat?
         findMatches(
             in: snapshotDict,
             inTabBar: false,
+            containerLabel: "",
             selector: selector,
             results: &matches,
-            otherAncestors: &otherAncestors,
+            matchedAncestors: &matchedAncestors,
             suppressed: &suppressed,
             keyboardMatches: &keyboardMatches,
             keyboardTop: &keyboardTop,
@@ -571,17 +572,6 @@ class SnapshotElementFinder {
     }
 
     // MARK: - Concatenated label matching
-
-    /// Check if two strings match when trailing punctuation is ignored.
-    /// iOS's accessibilityLabel often strips trailing punctuation from display text
-    /// (e.g., "Forgot password?" → "Forgot password"). This matcher catches those cases.
-    private func matchesIgnoringTrailingPunctuation(_ a: String, _ b: String) -> Bool {
-        guard !a.isEmpty && !b.isEmpty else { return false }
-        let punct = CharacterSet.punctuationCharacters.union(.symbols)
-        let trimA = a.unicodeScalars.reversed().drop(while: { punct.contains($0) })
-        let trimB = b.unicodeScalars.reversed().drop(while: { punct.contains($0) })
-        return String(String.UnicodeScalarView(trimA.reversed())) == String(String.UnicodeScalarView(trimB.reversed()))
-    }
 
     /// Check if `childText` appears as a child's text within an iOS auto-concatenated label.
     ///
@@ -1041,11 +1031,12 @@ class SnapshotElementFinder {
 
     // MARK: - Snapshot parsing and matching
 
-    /// Ancestor descriptor used during `findMatches` to mark generic
-    /// `.other` wrappers whose identifier or label is shadowed by a real
-    /// native descendant. Maintaining an ancestor stack keeps suppression
-    /// linear in the match count, instead of the O(N²) post-pass the
-    /// earlier implementation used.
+    /// A match on the path to the node `findMatches` is at, that a matching
+    /// descendant can suppress: a generic `.other` wrapper whose identifier
+    /// or label a real native descendant shadows, or any getByText match
+    /// with a matching descendant (innermost, TextContent). Maintaining an
+    /// ancestor stack keeps suppression linear in the match count, instead
+    /// of the O(N²) post-pass the earlier implementation used.
     private struct WrapperAncestor {
         let identifier: String
         let label: String
@@ -1067,6 +1058,7 @@ class SnapshotElementFinder {
     /// keyboard's, which the live queries see.
     private func matchingTypes(
         in nodeDict: [String: Any],
+        containerLabel: String,
         selector: ElementSelector,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
@@ -1076,6 +1068,7 @@ class SnapshotElementFinder {
         if matchesSelector(
             nodeDict,
             inTabBar: false,
+            containerLabel: containerLabel,
             selector: selector,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
@@ -1083,9 +1076,12 @@ class SnapshotElementFinder {
         ) {
             types.append(parseUInt(nodeDict["elementType"]) ?? 0)
         }
+        let ownLabel = nodeDict["label"] as? String ?? ""
+        let childContainerLabel = ownLabel.isEmpty ? containerLabel : ownLabel
         for child in nodeDict["children"] as? [[String: Any]] ?? [] {
             types += matchingTypes(
                 in: child,
+                containerLabel: childContainerLabel,
                 selector: selector,
                 keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
                 liveFocusedTextInput: liveFocusedTextInput,
@@ -1098,9 +1094,10 @@ class SnapshotElementFinder {
     private func findMatches(
         in nodeDict: [String: Any],
         inTabBar: Bool,
+        containerLabel: String,
         selector: ElementSelector,
         results: inout [([String: Any], CGRect)],
-        otherAncestors: inout [WrapperAncestor],
+        matchedAncestors: inout [WrapperAncestor],
         suppressed: inout Set<Int>,
         keyboardMatches: inout [UInt],
         keyboardTop: inout CGFloat?,
@@ -1130,6 +1127,7 @@ class SnapshotElementFinder {
             // match by its position sees the keyboard's nodes that match too.
             keyboardMatches += matchingTypes(
                 in: nodeDict,
+                containerLabel: containerLabel,
                 selector: selector,
                 keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
                 liveFocusedTextInput: liveFocusedTextInput,
@@ -1147,6 +1145,7 @@ class SnapshotElementFinder {
         if isAppNode, matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
+            containerLabel: containerLabel,
             selector: selector,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
             liveFocusedTextInput: liveFocusedTextInput,
@@ -1168,8 +1167,16 @@ class SnapshotElementFinder {
             // wrappers with matching labels), but a future `alert` /
             // `dialog` role that lands on `.other` would otherwise lose
             // its outer container.
-            if elType != .other {
-                for anc in otherAncestors {
+            //
+            // getByText goes further, like Playwright's text engine: every
+            // matching ancestor gives way to this match, whatever the types
+            // (TextContent, PILOT-794) — a Toggle row, a NavigationLink or
+            // an alert to the static text it holds.
+            let innermostOnly = selector.matchesInnermostOnly
+            if innermostOnly {
+                for anc in matchedAncestors { suppressed.insert(anc.resultIndex) }
+            } else if elType != .other {
+                for anc in matchedAncestors {
                     if !anc.identifier.isEmpty && anc.identifier == myId {
                         suppressed.insert(anc.resultIndex)
                     } else if anc.identifier.isEmpty && !anc.label.isEmpty && anc.label == myLabel {
@@ -1186,9 +1193,10 @@ class SnapshotElementFinder {
             let myIndex = results.count - 1
 
             // Push this node onto the ancestor stack if it's a generic
-            // wrapper — any matching non-`.other` descendant will suppress us.
-            if elType == .other {
-                otherAncestors.append(
+            // wrapper — any matching non-`.other` descendant will suppress
+            // us — or a getByText match, which any matching descendant does.
+            if elType == .other || innermostOnly {
+                matchedAncestors.append(
                     WrapperAncestor(identifier: myId, label: myLabel, resultIndex: myIndex)
                 )
                 pushedAncestor = true
@@ -1202,13 +1210,18 @@ class SnapshotElementFinder {
             let outerKeyboardTop = keyboardTop
             if nodeType == .window { keyboardTop = nil }
             defer { if nodeType == .window { keyboardTop = outerKeyboardTop } }
+            // The nearest labelled app node is the children's container
+            // (TextContent.ownLabel); the application's name is not.
+            let ownLabel = nodeDict["label"] as? String ?? ""
+            let childContainerLabel = ownLabel.isEmpty || !isAppNode ? containerLabel : ownLabel
             for child in children {
                 findMatches(
                     in: child,
                     inTabBar: childrenInTabBar,
+                    containerLabel: childContainerLabel,
                     selector: selector,
                     results: &results,
-                    otherAncestors: &otherAncestors,
+                    matchedAncestors: &matchedAncestors,
                     suppressed: &suppressed,
                     keyboardMatches: &keyboardMatches,
                     keyboardTop: &keyboardTop,
@@ -1220,13 +1233,14 @@ class SnapshotElementFinder {
         }
 
         if pushedAncestor {
-            otherAncestors.removeLast()
+            matchedAncestors.removeLast()
         }
     }
 
     private func matchesSelector(
         _ node: [String: Any],
         inTabBar: Bool,
+        containerLabel: String,
         selector: ElementSelector,
         keyboardVisibleInSnapshot: Bool,
         liveFocusedTextInput: () -> LiveFocusedTextInput?,
@@ -1242,46 +1256,17 @@ class SnapshotElementFinder {
         let isEnabled = node["enabled"] as? Bool ?? true
         let isSelected = node["selected"] as? Bool ?? false
 
-        // Text selector — exact match, OR match within iOS's auto-concatenated
-        // labels. iOS touchable components merge child text into a single label
-        // joined by ", ". This lets `text("Login Form")` match when the full
-        // label is "Login Form, Text inputs, buttons, focus/blur, keyboard",
-        // and also lets `text("Text inputs, buttons, focus/blur, keyboard")`
-        // match the second child's text.
-        //
-        // Also handles iOS stripping trailing punctuation from accessibilityLabel:
-        // React Native `accessibilityLabel="Forgot password"` + child Text
-        // "Forgot password?" → iOS label is "Forgot password" but test expects
-        // "Forgot password?". We match if one is a prefix of the other and
-        // the difference is only punctuation.
-        //
-        // Text and name comparisons are whitespace-normalized like Playwright
-        // (PILOT-510): a non-breaking space or line break in the label matches
-        // a plain space in the query.
-        if let text = selector.text {
-            let exactMatch = TextMatch.equals(label, text) || TextMatch.equals(title, text)
-                || TextMatch.equals(value, text)
-            let containsAsChild = !exactMatch
-                && (TextMatch.containsChildText(label, childText: text)
-                    || TextMatch.containsChildText(title, childText: text))
-            let punctuationMatch = !exactMatch && !containsAsChild
-                && matchesIgnoringTrailingPunctuation(TextMatch.normalize(label), TextMatch.normalize(text))
-            if !exactMatch && !containsAsChild && !punctuationMatch { return false }
-        }
-
-        // getByText(RegExp) (PILOT-520): tested against the raw label, title
-        // or value, as Playwright tests the element's full text. Not split
-        // into ", "-joined child labels: a RegExp sees the whole label.
-        if let textRegex = selector.textRegex {
-            if !textRegex.matches(label) && !textRegex.matches(title) && !textRegex.matches(value) {
-                return false
-            }
-        }
-
-        // TextContains selector
-        if let textContains = selector.textContains {
-            if !TextMatch.contains(label, textContains) && !TextMatch.contains(title, textContains)
-                && !TextMatch.contains(value, textContains) {
+        // getByText — exact, substring or RegExp — compares the node's text
+        // content: TextContent decides which of its label, title and value
+        // count (PILOT-794), and how a string matches. Whitespace is
+        // normalized like Playwright (PILOT-510).
+        if selector.text != nil || selector.textContains != nil || selector.textRegex != nil {
+            let texts = TextContent.texts(
+                elementType: elType, label: label, title: title, value: value, containerLabel: containerLabel
+            )
+            if let text = selector.text, !TextContent.matchesExact(texts, text) { return false }
+            if let textRegex = selector.textRegex, !TextContent.matchesRegex(texts, textRegex) { return false }
+            if let textContains = selector.textContains, !TextContent.matchesSubstring(texts, textContains) {
                 return false
             }
         }
