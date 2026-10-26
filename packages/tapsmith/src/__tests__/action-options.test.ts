@@ -148,6 +148,22 @@ describe('per-call { timeout } (PILOT-840)', () => {
     expect(budget).toBeGreaterThanOrEqual(900);
   });
 
+  it('dragTo() gives a stale-id retry what is left of its budget, not all of it again', async () => {
+    let calls = 0;
+    const dragAndDrop = vi.fn(async () => {
+      if (++calls > 1) return ok();
+      await new Promise((r) => setTimeout(r, 600));
+      return { ...ok(), success: false, errorType: 'ERROR', errorMessage: 'stale element reference' };
+    });
+    const c = client({ dragAndDrop: dragAndDrop as unknown as TapsmithGrpcClient['dragAndDrop'] });
+    // .first() makes both ends dispatch by element id, which can go stale.
+    const source = new ElementHandle(c, _text('Card'), DEVICE_TIMEOUT).first();
+    await source.dragTo(new ElementHandle(c, _text('Bin'), DEVICE_TIMEOUT).first(), { timeout: 5_000 });
+    const budgets = dragAndDrop.mock.calls.map((a) => (a as unknown[])[2] as number);
+    expect(budgets).toHaveLength(2);
+    expect(budgets[1]).toBeLessThanOrEqual(budgets[0] - 500);
+  });
+
   it('keeps the other options when a timeout is given', async () => {
     const c = client();
     const handle = new ElementHandle(c, _text('Field'), DEVICE_TIMEOUT);
@@ -385,6 +401,12 @@ describe('WebView { timeout } (PILOT-840)', () => {
     expect(await h.locator('#go').isHidden({ timeout: 1_000 })).toBe(true);
     await expect(h.locator('#go').isVisible({ timout: 1 } as { timeout?: number })).rejects.toThrow('isVisible(): unknown option "timout"');
     await expect(h.isHidden('#go', { timout: 1 } as { timeout?: number })).rejects.toThrow('webview.isHidden(): unknown option "timout"');
+  });
+
+  it('webview count()/all() refuse an argument, as native ones do', async () => {
+    const loc = emptyWebView().locator('li');
+    await expect((loc.count as (...a: unknown[]) => Promise<number>)({ timeout: 5000 })).rejects.toThrow(/count\(\) takes no arguments.*toHaveCount/);
+    await expect((loc.all as (...a: unknown[]) => Promise<unknown>)({ timeout: 5000 })).rejects.toThrow(/all\(\) takes no arguments/);
   });
 
   it.each(LOCATOR_CALLS)('webview %s() refuses an unknown option', async (_name, call) => {

@@ -1,5 +1,7 @@
 import type { WebViewHandle } from './webview-handle.js';
-import { checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
+import { checkNoArguments, checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
+
+const COUNT_HINT = 'It reads the page as it is now; to wait for the matches, use expect(locator).toHaveCount(n, { timeout }).';
 
 /**
  * Lazy reference to an element within a WebView.
@@ -99,12 +101,17 @@ export class WebViewLocator {
   // ─── Multi-element queries (strict mode exempt) ───
 
   /** Return the number of elements currently matching (no auto-wait). */
-  async count(): Promise<number> {
+  count(): Promise<number>;
+  // The arguments are only checked (PILOT-840), as on native locators.
+  async count(...args: unknown[]): Promise<number> {
+    checkNoArguments('count()', args, COUNT_HINT);
     return this._handle._countLocator(this);
   }
 
   /** Return one positionally-narrowed locator per current match (no auto-wait). */
-  async all(): Promise<WebViewLocator[]> {
+  all(): Promise<WebViewLocator[]>;
+  async all(...args: unknown[]): Promise<WebViewLocator[]> {
+    checkNoArguments('all()', args, COUNT_HINT);
     const n = await this.count();
     if (this._nthIndex !== undefined) {
       return n > 0 ? [this] : [];

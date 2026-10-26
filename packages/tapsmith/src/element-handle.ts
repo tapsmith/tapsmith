@@ -2747,11 +2747,13 @@ export class ElementHandle {
         dest,
       };
     });
+    // A stale-id retry gets what is left of the budget, not all of it again.
+    const budget = actionBudget(remainingMs);
     const dispatch = (st: ActionTarget, tt: ActionTarget): Promise<ActionResponse> =>
       this._client.dragAndDrop(
         'elementId' in st ? undefined : st.selector,
         'elementId' in tt ? undefined : tt.selector,
-        remainingMs,
+        budget(),
         {
           sourceElementId: 'elementId' in st ? st.elementId : undefined,
           targetElementId: 'elementId' in tt ? tt.elementId : undefined,

@@ -3349,7 +3349,7 @@ await device.getByRole("button", { name: "Continue" }).tap()
 
 ### WebViewHandle
 
-Returned by `device.webview()`. All methods use CSS selectors and auto-wait for elements. `click`, `fill`, `textContent`, `innerHTML`, `inputValue` and `getAttribute` take a last `options` argument with a per-call `timeout`, which bounds the wait and the action and overrides the WebView's timeout for that call (`webview.click("#login", { timeout: 5000 })`). Their options are checked as native actions' are ([Per-call timeout](#per-call-timeout)).
+Returned by `device.webview()`. All methods use CSS selectors and auto-wait for elements. `click`, `fill`, `textContent`, `innerHTML`, `inputValue` and `getAttribute` take a last `options` argument with a per-call `timeout`, which bounds the wait and the action and overrides the WebView's timeout for that call (`webview.click("#login", { timeout: 5000 })`). Their options are checked as native actions' are ([Per-call timeout](api-reference.md#per-call-timeout)).
 
 #### `webview.click(selector: string, options?): Promise<void>`
 
@@ -3389,13 +3389,13 @@ Get the current value of an input element.
 
 Get an attribute value from an element.
 
-#### `webview.isVisible(selector: string): Promise<boolean>`
+#### `webview.isVisible(selector: string, options?): Promise<boolean>`
 
 Check if an element is visible: it must be rendered (have layout boxes — an ancestor with `display: none` counts as hidden) and not have `display: none`, `visibility: hidden`, or `opacity: 0`.
 
-#### `webview.isHidden(selector: string): Promise<boolean>`
+#### `webview.isHidden(selector: string, options?): Promise<boolean>`
 
-The opposite of `isVisible(selector)`: `true` when nothing matches the selector or the match is not visible. One DOM read, no auto-wait. Both string forms appear as their own row in a trace, like the locator forms.
+The opposite of `isVisible(selector)`: `true` when nothing matches the selector or the match is not visible. One DOM read, no auto-wait. Both string forms appear as their own row in a trace, like the locator forms. Both take an `options` argument whose `timeout` is checked but, as in Playwright, has no effect.
 
 #### `webview.evaluate<T>(expression: string): Promise<T>`
 
@@ -3454,12 +3454,12 @@ Close the WebView connection. Usually called via `device.native()` instead.
 
 Lazy reference to an element within a WebView, created by `webview.locator()` or the `webview.getBy*` methods. Supports actions and assertions.
 
-**Actions & queries (strict):** `click(options?)`, `fill(value, options?)`, `textContent(options?)`, `innerHTML(options?)`, `inputValue(options?)`, `getAttribute(name, options?)` — each takes a per-call `timeout` like the native [actions](#per-call-timeout) (`webview.getByRole("button", { name: "Login" }).click({ timeout: 5000 })`) — and `isVisible(options?)`, `isHidden(options?)`, whose `timeout` is checked but, as in Playwright, has no effect (both a single DOM read with no auto-wait — the same non-waiting contract as on `ElementHandle`, minus the native probe's stale-snapshot re-reads, which a DOM query does not need)
+**Actions & queries (strict):** `click(options?)`, `fill(value, options?)`, `textContent(options?)`, `innerHTML(options?)`, `inputValue(options?)`, `getAttribute(name, options?)` — each takes a per-call `timeout` like the native [actions](api-reference.md#per-call-timeout) (`webview.getByRole("button", { name: "Login" }).click({ timeout: 5000 })`) — and `isVisible(options?)`, `isHidden(options?)`, whose `timeout` is checked but, as in Playwright, has no effect (both a single DOM read with no auto-wait — the same non-waiting contract as on `ElementHandle`, minus the native probe's stale-snapshot re-reads, which a DOM query does not need)
 
 **Narrowing & multi-element (strict-mode exempt):**
 
 - `.first()` / `.last()` / `.nth(index)` — narrow to one match positionally (negative `nth` counts from the end). Returns a new `WebViewLocator`.
-- `.count()` — number of elements currently matching (no auto-wait).
+- `.count()` — number of elements currently matching (no auto-wait). Like the native `count()` and `all()`, it throws when given an argument.
 - `.all()` — one positionally-narrowed locator per current match.
 
 WebView locators are [strict](#strict-mode): acting or asserting on a locator that resolves to more than one DOM element throws a `StrictModeViolationError` listing the matches.
