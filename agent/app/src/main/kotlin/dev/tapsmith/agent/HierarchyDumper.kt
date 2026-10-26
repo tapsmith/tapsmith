@@ -76,7 +76,7 @@ class HierarchyDumper internal constructor(
     private fun injectAttributes(xml: String): String {
         val collected = collectAttributeMap()
         return HierarchyAttributes.markWindowRoots(
-            HierarchyAttributes.inject(xml, collected.attributes, collected.leafAttributes),
+            HierarchyAttributes.inject(xml, collected.attributes, collected.carriers, ComposeRoles.CARRIER_DUMP_ATTRIBUTE),
             collected.nonAppWindowRoots,
             NonAppNodes.DUMP_ATTRIBUTE,
         )
@@ -84,15 +84,14 @@ class HierarchyDumper internal constructor(
 
     /**
      * What [collectAttributeMap] gathers: bounds → attributes to inject, and
-     * the attributes only a leaf with those bounds gets (a Compose role
-     * carrier's marker, as its parent can share its bounds), and
+     * the [HierarchyAttributes.carrierKey]s of the Compose role carriers, and
      * the [HierarchyAttributes.windowRootKey]s of the windows no locator
      * searches ([NonAppNodes]), whose root nodes the dump marks
      * `tapsmith-non-app="true"` so the trace viewer leaves them out too.
      */
     private class Collected(
         val attributes: Map<String, Map<String, String>>,
-        val leafAttributes: Map<String, Map<String, String>>,
+        val carriers: Set<String>,
         val nonAppWindowRoots: Set<String>,
     )
 
@@ -109,7 +108,7 @@ class HierarchyDumper internal constructor(
      */
     private fun collectAttributeMap(): Collected {
         val attrMap = mutableMapOf<String, MutableMap<String, String>>()
-        val leafMap = mutableMapOf<String, MutableMap<String, String>>()
+        val carriers = mutableSetOf<String>()
         val nonAppRoots = mutableSetOf<String>()
         try {
             val automation = instrumentation.uiAutomation
@@ -143,7 +142,7 @@ class HierarchyDumper internal constructor(
                         nonAppRoots.add(HierarchyAttributes.windowRootKey(rootBounds, root.packageName?.toString()))
                     }
                     try {
-                        walkNodeInfo(root, clip, attrMap, leafMap)
+                        walkNodeInfo(root, clip, attrMap, carriers)
                     } finally {
                         @Suppress("DEPRECATION")
                         root.recycle()
@@ -156,7 +155,7 @@ class HierarchyDumper internal constructor(
         } catch (e: Exception) {
             Log.w(TAG, "Failed to collect attributes from accessibility tree", e)
         }
-        return Collected(attrMap, leafMap, nonAppRoots)
+        return Collected(attrMap, carriers, nonAppRoots)
     }
 
     @Suppress("DEPRECATION")
@@ -164,7 +163,7 @@ class HierarchyDumper internal constructor(
         node: AccessibilityNodeInfo,
         clip: DumpClip,
         attrMap: MutableMap<String, MutableMap<String, String>>,
-        leafMap: MutableMap<String, MutableMap<String, String>>,
+        carriers: MutableSet<String>,
     ) {
         val children = (0 until node.childCount).map { node.getChild(it) }
         // A Compose control takes its role carrier's role (PILOT-828).
@@ -177,11 +176,11 @@ class HierarchyDumper internal constructor(
             expanded?.let { attrs["tapsmith-expanded"] = it.toString() }
         }
         carried?.second?.let { carrier ->
-            leafMap.getOrPut(dumpedBoundsKey(carrier, clip)) { mutableMapOf() }[ComposeRoles.CARRIER_DUMP_ATTRIBUTE] = "true"
+            carriers.add(HierarchyAttributes.carrierKey(dumpedBounds(carrier, clip), carrier.className?.toString()))
         }
         for (child in children) {
             if (child == null) continue
-            walkNodeInfo(child, clip, attrMap, leafMap)
+            walkNodeInfo(child, clip, attrMap, carriers)
             child.recycle()
         }
     }
@@ -207,16 +206,20 @@ class HierarchyDumper internal constructor(
     private fun dumpedBoundsKey(
         node: AccessibilityNodeInfo,
         clip: DumpClip,
-    ): String {
+    ): String = dumpedBounds(node, clip).key()
+
+    private fun dumpedBounds(
+        node: AccessibilityNodeInfo,
+        clip: DumpClip,
+    ): HierarchyAttributes.Box {
         val rect = Rect()
         node.getBoundsInScreen(rect)
-        return HierarchyAttributes
-            .dumpedBounds(
-                HierarchyAttributes.Box(rect.left, rect.top, rect.right, rect.bottom),
-                clip.displayWidth,
-                clip.displayHeight,
-                clip.window,
-            ).key()
+        return HierarchyAttributes.dumpedBounds(
+            HierarchyAttributes.Box(rect.left, rect.top, rect.right, rect.bottom),
+            clip.displayWidth,
+            clip.displayHeight,
+            clip.window,
+        )
     }
 
     /** The element's expanded state, as ElementFinder's `expanded` filter reads it. */

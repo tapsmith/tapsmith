@@ -12,8 +12,11 @@ import { parseSelectorString, findMatchingNodes } from '../trace-viewer/componen
 // dump (Material3 1.3.2, compose-ui 1.8.2, API 36) of a login screen: an
 // OutlinedTextField labelled "Email" with testTag "email_input", a bare
 // Checkbox beside the text "Remember me", a toggleable "Keep me signed in"
-// row, a Switch beside "Notifications", a "Sign in" Button and a
-// three-item NavigationBar. Each expected count is what the agent's
+// row, a Switch beside "Notifications", a "Sign in" Button, an IconButton
+// whose Icon is described "Favorite", a disabled Button, a Button with the
+// contentDescription "Submit form" around the text "Go", two selectable
+// RadioButton rows ("Small" selected, "Large"), a "Tags off" TextButton and
+// a three-item NavigationBar. Each expected count is what the agent's
 // getByRole / getByLabel / getByTestId returned on that screen.
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -27,8 +30,15 @@ const matches = (code: string): HierarchyNode[] => {
 
 describe('Compose controls in the trace playground agree with the device (PILOT-828)', () => {
   const DEVICE_COUNTS: Array<[string, number]> = [
-    ['device.getByRole("button")', 1],
+    ['device.getByRole("button")', 5],
     ['device.getByRole("button", { name: "Sign in" })', 1],
+    ['device.getByRole("button", { name: "Favorite" })', 1],
+    ['device.getByRole("button", { name: "Disabled", disabled: true })', 1],
+    ['device.getByRole("button", { name: "Submit form" })', 1],
+    ['device.getByRole("button", { name: "Go" })', 1],
+    ['device.getByRole("radiobutton")', 2],
+    ['device.getByRole("radiobutton", { name: "Large" })', 1],
+    ['device.getByRole("radiobutton", { checked: true })', 1],
     ['device.getByRole("tab")', 3],
     ['device.getByRole("tab", { name: "Items" })', 1],
     ['device.getByRole("tab", { selected: true })', 1],
@@ -65,8 +75,10 @@ describe('Compose controls in the trace playground agree with the device (PILOT-
       node.children.forEach(walk);
     };
     roots.forEach(walk);
-    // The Button's, the toggleable row's and the three tabs'.
-    expect(carriers).toHaveLength(5);
+    // The five buttons', the toggleable row's, the two radio rows' and the
+    // three tabs' — not the "Submit form" description's leaf beside a carrier.
+    expect(carriers).toHaveLength(11);
+    for (const carrier of carriers) expect(carrier.attributes.get('content-desc')).toBe('');
     for (const carrier of carriers) expect(getNodeRole(carrier)).toBe('');
   });
 });

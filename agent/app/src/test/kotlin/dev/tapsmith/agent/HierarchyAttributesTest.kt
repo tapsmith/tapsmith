@@ -40,24 +40,34 @@ class HierarchyAttributesTest {
     }
 
     @Test
-    fun `leaf attributes land only on a leaf with that key, not on a parent sharing its bounds`() {
-        // PILOT-828: a Compose NavigationBarItem and its role carrier have
-        // the same bounds; only the carrier (a leaf) is marked.
+    fun `the carrier marker lands only on an unnamed leaf of the carrier's class and bounds`() {
+        // PILOT-828: a Compose NavigationBarItem and its role carrier share
+        // bounds, and a Button with a contentDescription has a second fake
+        // leaf (the description) with the carrier's bounds. Only the carrier
+        // is marked.
         val xml =
-            """<hierarchy><node index="0" class="android.view.View" bounds="[0,0][100,50]">""" +
-                """<node index="0" class="android.widget.TextView" text="Items" bounds="[10,10][90,40]" />""" +
-                """<node index="1" class="android.view.View" bounds="[0,0][100,50]" /></node></hierarchy>"""
+            """<hierarchy><node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]">""" +
+                """<node index="0" text="" content-desc="Submit" class="android.view.View" bounds="[0,0][100,50]" />""" +
+                """<node index="1" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]" />""" +
+                """<node index="2" text="" content-desc="" class="android.widget.Button" bounds="[0,0][100,50]" />""" +
+                """</node></hierarchy>"""
         val out =
             HierarchyAttributes.inject(
                 xml,
                 mapOf("[0,0][100,50]" to mapOf("tapsmith-role" to "tab")),
-                leafAttributes = mapOf("[0,0][100,50]" to mapOf("tapsmith-role-carrier" to "true")),
+                carriers = setOf(HierarchyAttributes.carrierKey(Box(0, 0, 100, 50), "android.view.View")),
+                carrierAttribute = "tapsmith-role-carrier",
             )
         assertEquals(
-            """<hierarchy><node index="0" class="android.view.View" bounds="[0,0][100,50]" tapsmith-role="tab">""" +
-                """<node index="0" class="android.widget.TextView" text="Items" bounds="[10,10][90,40]" />""" +
-                """<node index="1" class="android.view.View" bounds="[0,0][100,50]" tapsmith-role="tab" """ +
-                """tapsmith-role-carrier="true" /></node></hierarchy>""",
+            """<hierarchy><node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]" """ +
+                """tapsmith-role="tab">""" +
+                """<node index="0" text="" content-desc="Submit" class="android.view.View" bounds="[0,0][100,50]" """ +
+                """tapsmith-role="tab" />""" +
+                """<node index="1" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]" """ +
+                """tapsmith-role="tab" tapsmith-role-carrier="true" />""" +
+                """<node index="2" text="" content-desc="" class="android.widget.Button" bounds="[0,0][100,50]" """ +
+                """tapsmith-role="tab" />""" +
+                """</node></hierarchy>""",
             out,
         )
     }

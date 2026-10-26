@@ -51,28 +51,41 @@ internal object HierarchyAttributes {
     /**
      * Inject [attributes] (bounds → name → value) into the stock XML: after
      * the `bounds` attribute of every `<node>` whose bounds have an entry.
-     * [leafAttributes] go only on a node without children (written `<node …/>`)
-     * — a parent can share its bounds with its last child (PILOT-828).
+     *
+     * [carriers] ([carrierKey]s) mark Compose role carriers
+     * `[carrierAttribute]="true"` (PILOT-828): only a node of that class and
+     * bounds that has no children, text or content-desc, as bounds alone
+     * would also mark the control a carrier can share them with, and the
+     * content-description leaf Compose can give the same control.
      */
     fun inject(
         xml: String,
         attributes: Map<String, Map<String, String>>,
-        leafAttributes: Map<String, Map<String, String>> = emptyMap(),
+        carriers: Set<String> = emptySet(),
+        carrierAttribute: String = "",
     ): String {
-        if (attributes.isEmpty() && leafAttributes.isEmpty()) return xml
-        val sb = StringBuilder(xml.length + (attributes.size + leafAttributes.size) * 30)
+        if (attributes.isEmpty() && carriers.isEmpty()) return xml
+        val sb = StringBuilder(xml.length + (attributes.size + carriers.size) * 30)
         var lastEnd = 0
         for (match in NODE_BOUNDS.findAll(xml)) {
             val end = match.range.last + 1
             sb.append(xml, lastEnd, end)
             val bounds = match.groupValues[2]
             attributes[bounds]?.let { appendAttributes(sb, it) }
-            leafAttributes[bounds]?.let { if (isLeafTag(xml, end)) appendAttributes(sb, it) }
+            if (carriers.isNotEmpty() && isUnnamedLeafIn(xml, match.range.first, end, bounds, carriers)) {
+                appendAttributes(sb, mapOf(carrierAttribute to "true"))
+            }
             lastEnd = end
         }
         sb.append(xml, lastEnd, xml.length)
         return sb.toString()
     }
+
+    /** The key [inject] marks a carrier by: its dumped bounds and its class. */
+    fun carrierKey(
+        bounds: Box,
+        className: String?,
+    ): String = "${bounds.key()}|${className ?: ""}"
 
     private fun appendAttributes(
         sb: StringBuilder,
@@ -88,18 +101,39 @@ internal object HierarchyAttributes {
         }
     }
 
-    /** Whether the `<node>` tag that continues at [from] closes itself (`/>`): a node without children. */
-    private fun isLeafTag(
+    /**
+     * Whether the `<node>` tag starting at [start] (its `bounds` ending at
+     * [boundsEnd]) closes itself — a node without children — has no text
+     * or content-desc, and has a [carrierKey] in [carriers].
+     */
+    private fun isUnnamedLeafIn(
         xml: String,
-        from: Int,
+        start: Int,
+        boundsEnd: Int,
+        bounds: String,
+        carriers: Set<String>,
     ): Boolean {
-        val close = xml.indexOf('>', from)
-        return close > 0 && xml[close - 1] == '/'
+        val close = xml.indexOf('>', boundsEnd)
+        if (close <= 0 || xml[close - 1] != '/') return false
+        val tag = xml.substring(start, close)
+        if ("$bounds|${attrValue(CLASS_ATTR, tag)}" !in carriers) return false
+        return attrValue(TEXT_ATTR, tag).isEmpty() && attrValue(CONTENT_DESC_ATTR, tag).isEmpty()
+    }
+
+    private fun attrValue(
+        attr: Regex,
+        tag: String,
+    ): String {
+        val match = attr.find(tag) ?: return ""
+        return match.groupValues[1]
     }
 
     private val NODE_TAG = Regex("""<(/?)node\b([^>]*?)(/?)>""")
     private val BOUNDS_ATTR = Regex("""\bbounds="([^"]*)"""")
     private val PACKAGE_ATTR = Regex("""\bpackage="([^"]*)"""")
+    private val CLASS_ATTR = Regex("""\sclass="([^"]*)"""")
+    private val TEXT_ATTR = Regex("""\stext="([^"]*)"""")
+    private val CONTENT_DESC_ATTR = Regex("""\scontent-desc="([^"]*)"""")
 
     /** The key [markWindowRoots] joins a window's root node on: its dumped bounds and package. */
     fun windowRootKey(
