@@ -778,9 +778,10 @@ function collapseSameTargetNodes(nodes: HierarchyNode[]): HierarchyNode[] {
   return result;
 }
 
-/** Whether two iOS nodes are one target exposed twice: the same label and the same bounds. */
+/** Whether two iOS nodes are one target exposed twice: the same type, label and bounds. */
 function isSameTargetDuplicate(outer: HierarchyNode, inner: HierarchyNode): boolean {
-  return normalizeWhitespace(outer.attributes.get('label') ?? '') === normalizeWhitespace(inner.attributes.get('label') ?? '')
+  return (outer.attributes.get('type') ?? outer.tagName) === (inner.attributes.get('type') ?? inner.tagName)
+    && normalizeWhitespace(outer.attributes.get('label') ?? '') === normalizeWhitespace(inner.attributes.get('label') ?? '')
     && outer.attributes.get('bounds') !== undefined
     && outer.attributes.get('bounds') === inner.attributes.get('bounds');
 }

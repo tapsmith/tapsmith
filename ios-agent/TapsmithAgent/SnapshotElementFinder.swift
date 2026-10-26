@@ -260,6 +260,9 @@ class SnapshotElementFinder {
             // A getByText match with no label is found again by the
             // selector's own query (cacheQueryElement), so index it there.
             if let substringMatched, queryNodes[ordinal].label.isEmpty {
+                // Matched in a way that query can't return (a joined title
+                // child, dropped punctuation): no index, no live element.
+                guard substringMatched[ordinal] else { return nil }
                 return QueryIndex.substringLiveIndex(
                     of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil, matched: substringMatched
                 )
@@ -1043,6 +1046,7 @@ class SnapshotElementFinder {
     private struct WrapperAncestor {
         let identifier: String
         let label: String
+        let elementType: XCUIElement.ElementType
         let frame: CGRect
         let resultIndex: Int
     }
@@ -1178,14 +1182,15 @@ class SnapshotElementFinder {
             // an alert to the static text it holds.
             //
             // Except a same-target duplicate — the inner copy of a static
-            // text iOS exposes twice, with the same label and frame: the
-            // outer one carries its traits and identifier, and the SDK's
-            // collapse keeps it (collapseSameTargetDuplicates, PILOT-226).
+            // text iOS exposes twice, with the same type, label and frame:
+            // the outer one carries its traits and identifier, and the SDK's
+            // collapse keeps it (collapseSameTargetDuplicates, PILOT-226). A
+            // generic wrapper of a native control still gives way to it.
             let innermostOnly = selector.matchesInnermostOnly
             let myFrame = parseFrame(nodeDict)
             if innermostOnly {
                 for anc in matchedAncestors
-                where !(anc.frame == myFrame && TextMatch.equals(anc.label, myLabel)) {
+                where !(anc.elementType == elType && anc.frame == myFrame && TextMatch.equals(anc.label, myLabel)) {
                     suppressed.insert(anc.resultIndex)
                 }
             } else if elType != .other {
@@ -1210,7 +1215,9 @@ class SnapshotElementFinder {
             // us — or a getByText match, which any matching descendant does.
             if elType == .other || innermostOnly {
                 matchedAncestors.append(
-                    WrapperAncestor(identifier: myId, label: myLabel, frame: myFrame, resultIndex: myIndex)
+                    WrapperAncestor(
+                        identifier: myId, label: myLabel, elementType: elType, frame: myFrame, resultIndex: myIndex
+                    )
                 )
                 pushedAncestor = true
             }
@@ -1595,8 +1602,12 @@ class SnapshotElementFinder {
                 )
                 if nodeIdentifier.isEmpty, let labelIndex {
                     element = labelQuery(predicate).element(boundBy: labelIndex)
-                } else {
+                } else if !nodeIdentifier.isEmpty {
                     element = resolve(labelQuery(predicate))
+                } else {
+                    // The query can't return this node (labelIndices):
+                    // cache nothing, so live-element actions fail loudly.
+                    element = nil
                 }
             }
         } else if let textContains = selector.textContains {
