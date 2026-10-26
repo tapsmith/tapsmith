@@ -206,7 +206,7 @@ A retry's trace shows only what ran before that attempt: under per-file scope, t
 
 When a test fails for the last time (after any retries), the test after it does not start on the screen the failure left. Playwright discards its worker after a failure and runs the rest of the file in a new one; Tapsmith does the same with the app, so one failure does not turn into a run of unrelated ones:
 
-- **The next test in the same `describe`** starts the way a retry does ([above](#retries-start-from-a-fresh-app)): the `afterAll` hooks of every enclosing `describe` run (innermost first), then each scope's reset (cold-launched on iOS simulators) and its `beforeAll` hooks (outermost first). Its trace shows that reset and those hooks in its **APP RESET** and **BEFORE ALL** sections, and the tests after it replay that setup in theirs rather than the one the file started with.
+- **The next test in the same `describe`** starts the way a retry does ([above](#retries-start-from-a-fresh-app)): the `afterAll` hooks of every enclosing `describe` run (innermost first), then each scope's reset (cold-launched on iOS simulators) and its `beforeAll` hooks (outermost first). Its trace shows those `afterAll` hooks in an **AFTER ALL** section, then that reset and those `beforeAll` hooks in its **APP RESET** and **BEFORE ALL** sections. The tests after it replay that setup (without the teardown) rather than the one the file started with.
 - **A `describe` that starts after the failure** gets the same fresh start from the scopes around it before its own reset and `beforeAll` hooks run, so they never run on the failed test's screen.
 - **A failing `beforeAll`** fails its scope's tests as before, and what runs after that scope starts fresh too.
 
