@@ -120,22 +120,35 @@ Tapsmith installs and launches a build of your app; it does not build it for you
 - **iOS Simulator**: a `.app` built for the simulator (`-sdk iphonesimulator`, under a `…-iphonesimulator/` products folder).
 - **iOS physical device**: a `.app` built for `iphoneos` and code-signed for the device. Simulator and device builds are not interchangeable; see [iOS physical devices](./ios-physical-devices.md).
 
-`tapsmith init` offers the builds it finds under `android/**/build/outputs/apk/` and `ios/**/*-iphonesimulator/` (or `*-iphoneos/`). A build anywhere else, such as Xcode's default DerivedData folder, can still be used: enter its path.
+`tapsmith init` recognises a React Native layout (`android/` and `ios/`) and a native one (a `settings.gradle` or `settings.gradle.kts` at the root, an `.xcodeproj` or `.xcworkspace` at the root or one folder down). It offers the builds it finds in any Gradle module's `build/outputs/apk/` and in any `*-iphonesimulator/` (or `*-iphoneos/`) products folder in the project, such as `app/build/outputs/apk/debug/` or `build/Build/Products/Debug-iphonesimulator/`. When the project holds no iOS build, it also looks in Xcode's default DerivedData folder for this project's builds. A build anywhere else can still be used: enter its path.
 
 ### Native projects
 
-```bash
-# Android: writes android/app/build/outputs/apk/debug/app-debug.apk
-cd android && ./gradlew assembleDebug
+A native Android or iOS project works with Tapsmith as it is. Tapsmith is an npm package, though, so your repository gains a `package.json`, a `node_modules/` folder, `tapsmith.config.ts` and a `tests/` folder. Put them at the root of the repository, beside `settings.gradle.kts` or the `.xcodeproj`: that is where `tapsmith init` looks for the project and its builds.
 
-# iOS Simulator: writes ios/build/Build/Products/Debug-iphonesimulator/MyApp.app
-cd ios && xcodebuild -workspace MyApp.xcworkspace -scheme MyApp \
+```bash
+npm init -y && npm install -D tapsmith   # creates package.json and node_modules/
+npx tapsmith init                        # adds node_modules/ to .gitignore if it isn't ignored yet
+```
+
+Then build the app at the root of the repository, which is also where CI builds it:
+
+```bash
+# Android (Android Studio project): writes app/build/outputs/apk/debug/app-debug.apk
+./gradlew assembleDebug
+
+# iOS Simulator (Xcode project): writes build/Build/Products/Debug-iphonesimulator/MyApp.app
+xcodebuild -project MyApp.xcodeproj -scheme MyApp \
   -configuration Debug -sdk iphonesimulator -derivedDataPath build build
 ```
 
-Without `-derivedDataPath`, Xcode (and a build from the Xcode UI) writes to
-`~/Library/Developer/Xcode/DerivedData/<MyApp>-<hash>/Build/Products/Debug-iphonesimulator/MyApp.app`.
-Passing `-derivedDataPath build` keeps the build at a stable path you can put in `app`.
+- **Android.** A native debug APK runs without any dev server, and Gradle signs it with the debug keystore, so it installs on any emulator or device. The release APK of Android Studio's project templates is unsigned and does not install: test the debug build, or configure release signing first. A module not named `app` writes to `<module>/build/outputs/apk/`.
+- **iOS.** If the project has an `.xcworkspace` (CocoaPods, or a workspace you created), build that with `-workspace MyApp.xcworkspace` instead of `-project`. `xcodebuild -list` shows the scheme names. With XcodeGen, run `xcodegen generate` first if the `.xcodeproj` isn't committed.
+- **Xcode's default build folder.** Without `-derivedDataPath`, Xcode (and a build from the Xcode UI) writes to `~/Library/Developer/Xcode/DerivedData/<MyApp>-<hash>/Build/Products/Debug-iphonesimulator/MyApp.app`. `tapsmith init` finds it there when the project has no build of its own, and warns that the path exists only on your Mac and changes when DerivedData is cleared. Build with `-derivedDataPath build` to get a stable path inside the project that teammates and CI share.
+
+Run `tapsmith init` in a subfolder instead (an `e2e/` folder with its own `package.json`, say) and it does not see the project or its builds: enter the build's path in the wizard, or pass `--apk` or `--app`.
+
+A React Native project keeps its native projects in `android/` and `ios/`, and needs a different build, described next.
 
 ### React Native and Expo
 
@@ -178,14 +191,14 @@ npx tapsmith init
 The wizard walks through these steps:
 
 1. **Environment detection** — checks for ADB, Xcode, simulators, emulators, and reports what's available
-2. **Platform selection** — choose Android, iOS, or both; the default is one that can run here (Android needs ADB, iOS needs Xcode and a simulator), following your project's `android/` and `ios/` folders
-3. **Android** — pick your APK from the builds the wizard finds under `android/` (the same ones `init --yes` looks for) or enter a path, which must exist; the wizard reads the package name from the APK and asks only when it can't (in an Expo project, with `expo.android.package` from the app config pre-filled). Then choose emulators, physical devices or both, and, for emulators, the AVD Tapsmith should launch (one that supports HTTPS capture is selected: Google Play images don't)
-4. **iOS** — choose simulators, physical devices or both. For simulators, pick your simulator `.app` the same way and the simulator to use, from every iOS simulator Xcode has (stock-named simulators come first, an already-booted one among them first and selected, as it saves a boot; simulators you renamed come last, marked `this Mac only`, since teammates and CI won't have them). For physical devices, the wizard runs a code-signing preflight, offers to build the device agent, and asks for your device-signed (`iphoneos`) `.app`. It reads each build's bundle ID and asks only when it can't (in an Expo project, with `expo.ios.bundleIdentifier` pre-filled). Choosing both writes two projects, `ios` (simulator) and `ios-device` (physical device), so `npx tapsmith test --project ios-device` runs on the device alone (the layout of [Running simulator and device together](./ios-physical-devices.md#running-simulator-and-device-together), with these project names)
+2. **Platform selection** — choose Android, iOS, or both; the default is one that can run here (Android needs ADB, iOS needs Xcode and a simulator), following your project's layout (`android/` and `ios/`, or a root `settings.gradle` and an Xcode project)
+3. **Android** — pick your APK from the builds the wizard finds in the project (the same ones `init --yes` looks for) or enter a path, which must exist; the wizard reads the package name from the APK and asks only when it can't (in an Expo project, with `expo.android.package` from the app config pre-filled). Then choose emulators, physical devices or both, and, for emulators, the AVD Tapsmith should launch (one that supports HTTPS capture is selected: Google Play images don't)
+4. **iOS** — choose simulators, physical devices or both. For simulators, pick your simulator `.app` the same way (a build from Xcode's DerivedData is marked `this Mac only`) and the simulator to use, from every iOS simulator Xcode has (stock-named simulators come first, an already-booted one among them first and selected, as it saves a boot; simulators you renamed come last, marked `this Mac only`, since teammates and CI won't have them). For physical devices, the wizard runs a code-signing preflight, offers to build the device agent, and asks for your device-signed (`iphoneos`) `.app`. It reads each build's bundle ID and asks only when it can't (in an Expo project, with `expo.ios.bundleIdentifier` pre-filled). Choosing both writes two projects, `ios` (simulator) and `ios-device` (physical device), so `npx tapsmith test --project ios-device` runs on the device alone (the layout of [Running simulator and device together](./ios-physical-devices.md#running-simulator-and-device-together), with these project names)
 5. **Network capture** — optionally record HTTP/HTTPS traffic; saying yes writes `trace: { mode: 'retain-on-failure' }`, which [`device.route()`](network.md#prerequisites) needs, and lists the per-platform setup still to do
 6. **iOS simulator agent** — if no simulator agent build is found, offers to build it now (~30 s)
 7. **Example test** — optionally creates `tests/example.tapsmith.ts`
 8. **AGENTS.md** — optionally adds a Tapsmith section to `AGENTS.md` for AI coding agents
-9. **Files** — writes `tapsmith.config.ts` with the app, its `package` and, for iOS, `platform: 'ios'` and the simulator, plus `testMatch: ['**/*.tapsmith.ts']` (see [Tapsmith tests and your unit tests](#tapsmith-tests-and-your-unit-tests)), the example test and the `AGENTS.md` section you asked for, and adds `tapsmith-results/` (traces and screenshots) and `tapsmith-report/` (the HTML report) to `.gitignore`. It checks it can write every file before writing any (and, before the platform questions, that it can write to the project directory at all), and writes the config last: if a file can't be written (a read-only directory, say), the wizard stops there with exit code 1, saying which file, how to fix it and which files, if any, it had already written
+9. **Files** — writes `tapsmith.config.ts` with the app, its `package` and, for iOS, `platform: 'ios'` and the simulator, plus `testMatch: ['**/*.tapsmith.ts']` (see [Tapsmith tests and your unit tests](#tapsmith-tests-and-your-unit-tests)), the example test and the `AGENTS.md` section you asked for, and adds `tapsmith-results/` (traces and screenshots), `tapsmith-report/` (the HTML report) and, if nothing ignores it yet, `node_modules/` to `.gitignore`. It checks it can write every file before writing any (and, before the platform questions, that it can write to the project directory at all), and writes the config last: if a file can't be written (a read-only directory, say), the wizard stops there with exit code 1, saying which file, how to fix it and which files, if any, it had already written
 10. **Install** — if the project doesn't have Tapsmith yet (you ran `npx tapsmith init` before installing it), offers to install it with your package manager (`npm i -D tapsmith`, `yarn add -D tapsmith`, …), since the config and example test import it. Decline and the command is the first of the next steps. In a folder with no `package.json` it doesn't offer: the command then starts with `npm init -y` (or your package manager's equivalent), because a bare `npm i -D tapsmith` would install into the nearest parent folder that has a `package.json`. Install Tapsmith first, as in [Installation](#installation): with no local install, `npx tapsmith init` runs whichever version npx downloads, not the one your project will use
 
 The wizard ends with your next steps: after the install, if it still needs doing, `npx tapsmith verify` (see below) comes first. It does not ask about workers; see [Parallel runs](#parallel-runs) to add them.
