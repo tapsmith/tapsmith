@@ -10,7 +10,8 @@ import XCTest
 ///   a Stepper's label as a separate static text, and a Slider's label isn't
 ///   drawn at all. getByLabel and getByRole's name find those controls.
 /// - A value is text content only where it is the text on screen
-///   (`valueTextTypes`): static text, and the typed text of a text input. A
+///   (`valueTextTypes`): static text, the typed text of a text input, a
+///   picker wheel's selected row. A
 ///   switch's "0"/"1", a stepper's or a slider's value, a button's value or
 ///   an accessibilityValue are not.
 /// - A label that starts with its nearest labelled ancestor's label and ", "
@@ -31,9 +32,10 @@ enum TextContent {
         .switch, .toggle, .slider, .stepper,
     ]
 
-    /// Element types whose value is the text they show.
+    /// Element types whose value is the text they show: a picker wheel's
+    /// selected row is only its value.
     static let valueTextTypes: Set<XCUIElement.ElementType> = [
-        .staticText, .textField, .secureTextField, .textView, .searchField,
+        .staticText, .textField, .secureTextField, .textView, .searchField, .pickerWheel,
     ]
 
     /// One node's text content, as getByText compares it.

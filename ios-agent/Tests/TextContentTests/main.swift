@@ -20,7 +20,7 @@ func expect(_ name: String, _ ok: Bool) {
 let typesByName: [String: XCUIElement.ElementType] = {
     let types: [XCUIElement.ElementType] = [
         .staticText, .button, .switch, .toggle, .slider, .stepper, .textField, .secureTextField,
-        .textView, .searchField, .other, .alert, .cell, .link, .progressIndicator,
+        .textView, .searchField, .other, .alert, .cell, .link, .progressIndicator, .pickerWheel,
     ]
     var map: [String: XCUIElement.ElementType] = [:]
     for type in types { map[RoleMapping.typeName(for: type)] = type }
@@ -28,6 +28,7 @@ let typesByName: [String: XCUIElement.ElementType] = {
 }()
 
 expect("a toggle has a dump type name", RoleMapping.typeName(for: .toggle) == "XCUIElementTypeToggle")
+expect("a picker wheel has a dump type name", RoleMapping.typeName(for: .pickerWheel) == "XCUIElementTypePickerWheel")
 expect("a progress indicator has a dump type name",
        RoleMapping.typeName(for: .progressIndicator) == "XCUIElementTypeProgressIndicator")
 

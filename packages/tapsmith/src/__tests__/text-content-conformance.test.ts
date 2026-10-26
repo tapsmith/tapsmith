@@ -21,7 +21,7 @@ import { translateRegex } from '../text-regex.js';
  *
  * The innermost rule (a match that contains another match is dropped) needs a
  * tree: it is tested below on the TypeScript side, and on devices by
- * e2e/native-ios and e2e/tests/text-content.ios.test.ts.
+ * e2e/native-ios/text-content.native.ts and e2e/tests/text-content.test.ts.
  */
 
 interface Case {
@@ -54,6 +54,7 @@ const T = {
   cell: 'XCUIElementTypeCell',
   link: 'XCUIElementTypeLink',
   progress: 'XCUIElementTypeProgressIndicator',
+  wheel: 'XCUIElementTypePickerWheel',
 } as const;
 
 const CASES: Case[] = [
@@ -86,6 +87,8 @@ const CASES: Case[] = [
   { why: "a text view's value", type: T.textView, label: 'Notes', value: 'Buy milk', query: { source: 'milk', flags: '' }, matches: true },
   { why: "a search field's value", type: T.search, label: 'Search', value: 'cats', query: { exact: 'cats' }, matches: true },
   { why: "static text's value", type: T.text, label: '', value: 'Hello', query: { exact: 'Hello' }, matches: true },
+  { why: "a picker wheel's selected row is its value", type: T.wheel, label: '', value: 'Medium', query: { exact: 'Medium' }, matches: true },
+  { why: 'a picker wheel by substring', type: T.wheel, label: '', value: 'Medium', query: { substring: 'med' }, matches: true },
   // A label read without the prefix it repeats from its container.
   { why: "a stepper button's label without the stepper's", type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { exact: 'Quantity: 1' }, matches: false },
   { why: 'nor by substring', type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { substring: 'quantity' }, matches: false },
@@ -254,6 +257,7 @@ describe('iOS text-content types match the agent\'s source (PILOT-794)', () => {
   });
 
   it('valueTextTypes', () => {
-    expect(typesOf('valueTextTypes')).toEqual([...IOS_VALUE_TEXT_TYPES].sort());
+    // Less the raw `XCUIElementType(<n>)` spelling older dumps carry.
+    expect(typesOf('valueTextTypes')).toEqual([...IOS_VALUE_TEXT_TYPES].filter((t) => !t.includes('(')).sort());
   });
 });

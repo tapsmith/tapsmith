@@ -1564,7 +1564,18 @@ class SnapshotElementFinder {
                 .excludingHooksMarker()
                 .element(boundBy: matchIndex + keyboardOffset)
         } else if let text = selector.text {
-            element = resolve(labelQuery(normalizedConcatenatedLabelPredicate(text)))
+            // The label query also returns what the walk left out — a match's
+            // ancestors, a switch named like the text (TextContent) — so
+            // re-resolve by the node's own label at its index among the nodes
+            // that query returns, as a substring match does. A node matched
+            // through its value alone (a text field's typed text) has no
+            // label to find it by.
+            let nodeLabel = snapshotNode?["label"] as? String ?? ""
+            if !nodeLabel.isEmpty, let labelIndex {
+                element = byOwnLabel(nodeLabel, at: labelIndex)
+            } else {
+                element = resolve(labelQuery(normalizedConcatenatedLabelPredicate(text)))
+            }
         } else if let textContains = selector.textContains {
             // A case-insensitive substring (PILOT-522) also matches other
             // elements, of any type, whose label holds the text; the

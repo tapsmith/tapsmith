@@ -260,6 +260,26 @@
       "matches": true
     },
     {
+      "why": "a picker wheel's selected row is its value",
+      "type": "XCUIElementTypePickerWheel",
+      "label": "",
+      "value": "Medium",
+      "query": {
+        "exact": "Medium"
+      },
+      "matches": true
+    },
+    {
+      "why": "a picker wheel by substring",
+      "type": "XCUIElementTypePickerWheel",
+      "label": "",
+      "value": "Medium",
+      "query": {
+        "substring": "med"
+      },
+      "matches": true
+    },
+    {
       "why": "a stepper button's label without the stepper's",
       "type": "XCUIElementTypeButton",
       "label": "Quantity: 1, Increment",
