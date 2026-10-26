@@ -25,7 +25,9 @@ class ActionExecutor(
 ) {
     /** Tracks ASCII control-char code points we've already warned about,
      *  so the log fires once per code point per agent lifetime. */
-    private val warnedDroppedControlChars = java.util.concurrent.ConcurrentHashMap.newKeySet<Int>()
+    private val warnedDroppedControlChars =
+        java.util.concurrent.ConcurrentHashMap
+            .newKeySet<Int>()
 
     private fun warnDroppedControlChar(code: Int) {
         if (warnedDroppedControlChars.add(code)) {
@@ -895,15 +897,14 @@ class ActionExecutor(
         }
     }
 
-    private fun parseDirection(direction: String): Direction {
-        return when (direction.lowercase()) {
+    private fun parseDirection(direction: String): Direction =
+        when (direction.lowercase()) {
             "up" -> Direction.UP
             "down" -> Direction.DOWN
             "left" -> Direction.LEFT
             "right" -> Direction.RIGHT
             else -> throw ActionFailedException("Unknown direction: $direction. Use up/down/left/right.")
         }
-    }
 
     /**
      * Double-tap on an element, at a point nothing covers (see [tap];
@@ -1073,7 +1074,11 @@ class ActionExecutor(
             // Tap the spinner to open it (see selectOption).
             tap(element, null, budget, expected, followUpMs = DROPDOWN_WAIT_TIMEOUT_MS + SPINNER_OPTION_TAP_MS)
             // Wait for a common dropdown container to appear
-            val popupSelector = By.clazz(java.util.regex.Pattern.compile(".*(ListView|RecyclerView|PopupWindow)$"))
+            val popupSelector =
+                By.clazz(
+                    java.util.regex.Pattern
+                        .compile(".*(ListView|RecyclerView|PopupWindow)$"),
+                )
             val popup =
                 device.wait(Until.findObject(popupSelector), DROPDOWN_WAIT_TIMEOUT_MS)
                     ?: device.wait(Until.findObject(By.scrollable(true)), SCROLLABLE_FALLBACK_TIMEOUT_MS)
@@ -1210,8 +1215,8 @@ class ActionExecutor(
         }
     }
 
-    private fun resolveKeyCode(key: String): Int {
-        return when (key.lowercase()) {
+    private fun resolveKeyCode(key: String): Int =
+        when (key.lowercase()) {
             "back" -> KeyEvent.KEYCODE_BACK
             "home" -> KeyEvent.KEYCODE_HOME
             "enter", "return" -> KeyEvent.KEYCODE_ENTER
@@ -1238,5 +1243,4 @@ class ActionExecutor(
                     ?: throw ActionFailedException("Unknown key: '$key'. Use named keys (back, home, enter, etc.) or numeric key codes.")
             }
         }
-    }
 }

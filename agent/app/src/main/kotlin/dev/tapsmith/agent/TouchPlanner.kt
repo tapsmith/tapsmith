@@ -76,7 +76,10 @@ interface GuardScreen {
 
 sealed class TouchPlan {
     /** Touch at ([x], [y]): a point nothing covers. */
-    data class Point(val x: Int, val y: Int) : TouchPlan()
+    data class Point(
+        val x: Int,
+        val y: Int,
+    ) : TouchPlan()
 
     /** No part of the element is on screen. */
     object OffScreen : TouchPlan() {
@@ -267,7 +270,9 @@ class TouchPlanner(
 /** A touch [TouchPlanner] refused to make. Action code rethrows these
  *  untouched: a fallback path retrying the touch would only hit the cover,
  *  or bury the error type in a generic ACTION_FAILED. */
-sealed class TouchRefusedException(message: String) : RuntimeException(message)
+sealed class TouchRefusedException(
+    message: String,
+) : RuntimeException(message)
 
 /** A touch on the element would land on something drawn over it, of [kind]. */
 class ElementCoveredException(

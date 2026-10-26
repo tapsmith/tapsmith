@@ -214,8 +214,8 @@ class CommandHandler(
         method: String,
         params: JSONObject,
         budget: ActionBudget,
-    ): JSONObject {
-        return when (method) {
+    ): JSONObject =
+        when (method) {
             "findElement" -> {
                 val selector = parseSelectorParams(params)
                 val parentId = params.optString("parentId", null)
@@ -544,7 +544,10 @@ class CommandHandler(
                     runOnMainThread {
                         try {
                             val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                            clipboard.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                            clipboard.primaryClip
+                                ?.getItemAt(0)
+                                ?.text
+                                ?.toString() ?: ""
                         } catch (e: Exception) {
                             Log.w(TAG, "ClipboardManager read failed: ${e.message}")
                             ""
@@ -566,7 +569,6 @@ class CommandHandler(
 
             else -> throw ActionFailedException("Unknown method: $method")
         }
-    }
 
     private fun parseSelectorParams(params: JSONObject): ElementSelector {
         // Handle "role" which can be either a string or a {"role": "...", "name": "..."} object
@@ -689,36 +691,44 @@ class CommandHandler(
     private fun successResponse(
         id: String?,
         result: JSONObject,
-    ): String {
-        return JSONObject().apply {
-            put("id", id ?: JSONObject.NULL)
-            put("result", result)
-        }.toString()
-    }
+    ): String =
+        JSONObject()
+            .apply {
+                put("id", id ?: JSONObject.NULL)
+                put("result", result)
+            }.toString()
 
     private fun errorResponse(
         id: String?,
         type: String,
         message: String,
-    ): String {
-        return JSONObject().apply {
-            put("id", id ?: JSONObject.NULL)
-            put(
-                "error",
-                JSONObject().apply {
-                    put("type", type)
-                    put("message", message)
-                },
-            )
-        }.toString()
-    }
+    ): String =
+        JSONObject()
+            .apply {
+                put("id", id ?: JSONObject.NULL)
+                put(
+                    "error",
+                    JSONObject().apply {
+                        put("type", type)
+                        put("message", message)
+                    },
+                )
+            }.toString()
 }
 
 // Custom exceptions for structured error handling
-class ElementNotFoundException(message: String) : RuntimeException(message)
+class ElementNotFoundException(
+    message: String,
+) : RuntimeException(message)
 
-class TimeoutException(message: String) : RuntimeException(message)
+class TimeoutException(
+    message: String,
+) : RuntimeException(message)
 
-class InvalidSelectorException(message: String) : RuntimeException(message)
+class InvalidSelectorException(
+    message: String,
+) : RuntimeException(message)
 
-class ActionFailedException(message: String) : RuntimeException(message)
+class ActionFailedException(
+    message: String,
+) : RuntimeException(message)

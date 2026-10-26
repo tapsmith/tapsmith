@@ -12,7 +12,9 @@ import org.junit.Test
  * a failed first attempt (PILOT-362).
  */
 class ActionRetryTest {
-    private class FakeClock(var nowMs: Long = 0) : GuardClock {
+    private class FakeClock(
+        var nowMs: Long = 0,
+    ) : GuardClock {
         override fun now() = nowMs
 
         override fun sleep(ms: Long) {

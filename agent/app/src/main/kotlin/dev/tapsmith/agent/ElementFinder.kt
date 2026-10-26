@@ -484,9 +484,7 @@ class ElementFinder(
     /**
      * Resolve the role for a given class name.
      */
-    private fun resolveRole(className: String): String {
-        return classToRoleMap[className] ?: ""
-    }
+    private fun resolveRole(className: String): String = classToRoleMap[className] ?: ""
 
     /**
      * For a normalized role, return the set of raw roleDescription values
@@ -494,14 +492,13 @@ class ElementFinder(
      * "searchfield", returns {"searchfield", "search"} so an app's own
      * roleDescription="search" is accepted.
      */
-    private fun acceptableRoleDescriptions(normalizedRole: String): Set<String> {
-        return buildSet {
+    private fun acceptableRoleDescriptions(normalizedRole: String): Set<String> =
+        buildSet {
             add(normalizedRole)
             for ((alias, target) in ROLE_ALIASES) {
                 if (target == normalizedRole) add(alias)
             }
         }
-    }
 
     /**
      * Find a single element matching the selector: the first match, in tree
@@ -738,8 +735,7 @@ class ElementFinder(
                         device.displayWidth,
                         device.displayHeight,
                     ) { rootPackageOf(window) }
-                }
-                .mapTo(HashSet()) { it.id }
+                }.mapTo(HashSet()) { it.id }
         } catch (e: Exception) {
             warnOnce("nonAppWindowIds", e)
             emptySet()
@@ -792,7 +788,8 @@ class ElementFinder(
                 roleClassMap["radiobutton"].orEmpty() +
                 roleClassMap["seekbar"].orEmpty() +
                 roleClassMap["spinner"].orEmpty()
-        java.util.regex.Pattern.compile(inputClasses.joinToString("|") { Regex.escape(it) })
+        java.util.regex.Pattern
+            .compile(inputClasses.joinToString("|") { Regex.escape(it) })
     }
 
     /**
@@ -815,7 +812,10 @@ class ElementFinder(
                         // match required because BySelector can't express
                         // desc-OR-text. The byName and role post-filters
                         // in matchesSelector handle precise matching.
-                        By.clazz(java.util.regex.Pattern.compile(".*"))
+                        By.clazz(
+                            java.util.regex.Pattern
+                                .compile(".*"),
+                        )
                     } else {
                         throw InvalidSelectorException("No valid selector criteria provided")
                     }
@@ -937,7 +937,11 @@ class ElementFinder(
                 // and falls back to class membership for dual-path roles.
             } else if (classNames != null) {
                 val pattern = classNames.joinToString("|") { Regex.escape(it) }
-                by = By.clazz(java.util.regex.Pattern.compile(pattern))
+                by =
+                    By.clazz(
+                        java.util.regex.Pattern
+                            .compile(pattern),
+                    )
             } else {
                 val known = (roleClassMap.keys + TRAIT_ONLY_ROLES + DUAL_PATH_ROLES).sorted()
                 throw InvalidSelectorException(
@@ -1353,17 +1357,18 @@ class ElementFinder(
         node: AccessibilityNodeInfo,
         fresh: Boolean,
     ): String =
-        FindRules.descendantTextParts(
-            node,
-            children = { visibleChildren(it, fresh) },
-            ownText = { child ->
-                child.text?.toString()?.takeIf { it.isNotEmpty() }
-                    ?: child.contentDescription?.toString()?.takeIf { it.isNotEmpty() }
-            },
-            // The hooks marker is no one's visible text ([NonAppNodes]).
-            skip = { child -> NonAppNodes.isHooksMarker(child.text, child.contentDescription) },
-            maxDepth = MAX_DESCENDANT_TEXT_DEPTH,
-        ).joinToString(" ")
+        FindRules
+            .descendantTextParts(
+                node,
+                children = { visibleChildren(it, fresh) },
+                ownText = { child ->
+                    child.text?.toString()?.takeIf { it.isNotEmpty() }
+                        ?: child.contentDescription?.toString()?.takeIf { it.isNotEmpty() }
+                },
+                // The hooks marker is no one's visible text ([NonAppNodes]).
+                skip = { child -> NonAppNodes.isHooksMarker(child.text, child.contentDescription) },
+                maxDepth = MAX_DESCENDANT_TEXT_DEPTH,
+            ).joinToString(" ")
 
     /**
      * [node]'s children visible to the user. Without a [fresh] walk each

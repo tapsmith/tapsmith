@@ -18,7 +18,9 @@ import org.junit.Test
 class TouchPlannerTest {
     // ─── Fakes ───
 
-    private class FakeClock(var nowMs: Long = 0) : GuardClock {
+    private class FakeClock(
+        var nowMs: Long = 0,
+    ) : GuardClock {
         val sleeps = mutableListOf<Long>()
 
         override fun now(): Long = nowMs
@@ -30,7 +32,9 @@ class TouchPlannerTest {
     }
 
     /** Windows as a function of time, so a cover can come and go. */
-    private class FakeScreen(private val clock: FakeClock) : GuardScreen {
+    private class FakeScreen(
+        private val clock: FakeClock,
+    ) : GuardScreen {
         var windowsAt: (Long) -> List<WindowSpec> = { listOf(APP) }
         override val bounds = SCREEN
 
@@ -67,7 +71,9 @@ class TouchPlannerTest {
     }
 
     /** A target read on each pass through [readAt] (null = unreadable). */
-    private class FakeTarget(private val clock: FakeClock) : GuardTarget {
+    private class FakeTarget(
+        private val clock: FakeClock,
+    ) : GuardTarget {
         var readAt: (Long) -> TargetSnapshot? = { snapshot(BUTTON) }
         var focused = false
         var reads = 0
@@ -262,8 +268,7 @@ class TouchPlannerTest {
 
     @Test
     fun `an unlabelled container whose content changes during a cover wait is not touched`() {
-        val unlabelled = {
-                content: String ->
+        val unlabelled = { content: String ->
             snapshot(LOW, contentDescription = null, className = "android.view.ViewGroup", content = content)
         }
         target.readAt = { now -> unlabelled(if (now < 300) "Covered action" else "Replacement action") }

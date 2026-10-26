@@ -19,7 +19,9 @@ import androidx.test.uiautomator.UiDevice
  *
  * Bounded idle-waiting is reserved for the explicit [waitForIdle] settle command.
  */
-class WaitEngine(private val device: UiDevice) {
+class WaitEngine(
+    private val device: UiDevice,
+) {
     companion object {
         private const val TAG = "TapsmithWait"
 

@@ -15,7 +15,9 @@ import org.junit.Test
 class KeyboardFirstTest {
     // ─── Fakes ───
 
-    private class FakeClock(var nowMs: Long = 0) : GuardClock {
+    private class FakeClock(
+        var nowMs: Long = 0,
+    ) : GuardClock {
         override fun now(): Long = nowMs
 
         override fun sleep(ms: Long) {
@@ -24,7 +26,9 @@ class KeyboardFirstTest {
     }
 
     /** The keyboard window is listed while [keyboardUp] says so. */
-    private class FakeScreen(private val keyboard: FakeKeyboard) : GuardScreen {
+    private class FakeScreen(
+        private val keyboard: FakeKeyboard,
+    ) : GuardScreen {
         var windowReads = 0
         override val bounds = SCREEN
 
@@ -35,7 +39,9 @@ class KeyboardFirstTest {
     }
 
     /** A keyboard that leaves [leavesAfterMs] after Back (null: never). */
-    private class FakeKeyboard(private val clock: FakeClock) : GuardKeyboard {
+    private class FakeKeyboard(
+        private val clock: FakeClock,
+    ) : GuardKeyboard {
         var up = true
         var reportsShown = true
         var leavesAfterMs: Long? = 120

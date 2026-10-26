@@ -45,8 +45,8 @@ class HierarchyDumper(
      * @return XML string representing the current UI hierarchy
      * @throws ActionFailedException if the hierarchy cannot be dumped
      */
-    fun dump(): String {
-        return try {
+    fun dump(): String =
+        try {
             val outputStream = ByteArrayOutputStream()
             device.dumpWindowHierarchy(outputStream)
             val xml = outputStream.toString(Charsets.UTF_8.name())
@@ -60,7 +60,6 @@ class HierarchyDumper(
             Log.e(TAG, "Failed to dump UI hierarchy", e)
             throw ActionFailedException("Failed to dump UI hierarchy: ${e.message}")
         }
-    }
 
     /**
      * Walk the AccessibilityNodeInfo tree to collect what the stock dump

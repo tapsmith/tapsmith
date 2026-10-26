@@ -72,7 +72,9 @@ internal object NonAppNodes {
         when (type) {
             AccessibilityWindowInfo.TYPE_INPUT_METHOD -> true
             AccessibilityWindowInfo.TYPE_SYSTEM ->
-                !focused && !active && isBar(bounds, displayWidth, displayHeight) &&
+                !focused &&
+                    !active &&
+                    isBar(bounds, displayWidth, displayHeight) &&
                     packageName()?.toString() == SYSTEM_UI_PACKAGE
             else -> false
         }

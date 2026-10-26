@@ -3,7 +3,12 @@ package dev.tapsmith.agent
 /** An integer screen rectangle, [left, right) × [top, bottom). A plain value
  *  type rather than android.graphics.Rect so the analyzer runs in JVM unit
  *  tests. */
-data class Box(val left: Int, val top: Int, val right: Int, val bottom: Int) {
+data class Box(
+    val left: Int,
+    val top: Int,
+    val right: Int,
+    val bottom: Int,
+) {
     val width: Int get() = right - left
     val height: Int get() = bottom - top
     val isEmpty: Boolean get() = width <= 0 || height <= 0
@@ -79,11 +84,18 @@ object OcclusionAnalyzer {
         /** Nothing covers ([x], [y]) — touch there. [visible] is the part of
          *  the element the windows above leave uncovered ([x], [y] is its
          *  center), for callers that want a different spot inside it. */
-        data class Clear(val x: Int, val y: Int, val visible: Box) : Verdict()
+        data class Clear(
+            val x: Int,
+            val y: Int,
+            val visible: Box,
+        ) : Verdict()
 
         /** The element is covered, by the thing [by] names ("the keyboard",
          *  `button "Overlay"`), of [kind]. */
-        data class Covered(val by: String, val kind: CoverKind) : Verdict()
+        data class Covered(
+            val by: String,
+            val kind: CoverKind,
+        ) : Verdict()
 
         /** No part of the element is on screen. */
         object OffScreen : Verdict() {
@@ -222,8 +234,7 @@ object OcclusionAnalyzer {
                         WindowKind.SYSTEM, WindowKind.APPLICATION -> targetLayer != null && w.layer > targetLayer
                         WindowKind.OTHER -> false
                     }
-            }
-            .sortedByDescending { it.layer }
+            }.sortedByDescending { it.layer }
     }
 
     private fun covered(window: WindowSpec) =
@@ -306,7 +317,9 @@ object OcclusionAnalyzer {
 
     /** Reads children while counting them against a shared budget; once it is
      *  spent every read returns null. */
-    private class BudgetedReader(private var left: Int) {
+    private class BudgetedReader(
+        private var left: Int,
+    ) {
         val exhausted: Boolean get() = left <= 0
 
         fun child(

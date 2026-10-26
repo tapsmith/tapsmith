@@ -1,10 +1,9 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
     id("org.jlleitschuh.gradle.ktlint")
 }
 
-val coreKtxVersion = "1.18.0"
+val coreKtxVersion = "1.19.1"
 val testRunnerVersion = "1.7.0"
 val testCoreVersion = "1.7.0"
 val uiautomatorVersion = "2.4.0"
@@ -13,7 +12,7 @@ val jsonVersion = "20240303"
 
 android {
     namespace = "dev.tapsmith.agent"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "dev.tapsmith.agent"
@@ -34,18 +33,6 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    sourceSets {
-        getByName("main") {
-            kotlin.srcDirs("src/main/kotlin")
-        }
-        getByName("androidTest") {
-            kotlin.srcDirs("src/androidTest/kotlin")
-        }
-        getByName("test") {
-            kotlin.srcDirs("src/test/kotlin")
-        }
     }
 }
 

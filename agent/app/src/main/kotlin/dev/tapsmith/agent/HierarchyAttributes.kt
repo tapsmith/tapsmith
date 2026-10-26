@@ -62,7 +62,12 @@ internal object HierarchyAttributes {
         for (match in NODE_BOUNDS.findAll(xml)) {
             sb.append(xml, lastEnd, match.range.last + 1)
             attributes[match.groupValues[2]]?.forEach { (name, value) ->
-                sb.append(' ').append(name).append("=\"").append(escapeXmlAttr(value)).append('"')
+                sb
+                    .append(' ')
+                    .append(name)
+                    .append("=\"")
+                    .append(escapeXmlAttr(value))
+                    .append('"')
             }
             lastEnd = match.range.last + 1
         }
@@ -106,7 +111,11 @@ internal object HierarchyAttributes {
                 val pkg = PACKAGE_ATTR.find(attrs)?.groupValues?.get(1) ?: ""
                 if (bounds != null && "$bounds|$pkg" in roots) {
                     val afterName = match.range.first + "<node".length
-                    sb.append(xml, lastEnd, afterName).append(' ').append(attribute).append("=\"true\"")
+                    sb
+                        .append(xml, lastEnd, afterName)
+                        .append(' ')
+                        .append(attribute)
+                        .append("=\"true\"")
                     lastEnd = afterName
                 }
             }

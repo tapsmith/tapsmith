@@ -187,7 +187,9 @@ class OcclusionGuard(
 
     /** [OcclusionAnalyzer.HitNode] over a live accessibility node, with its
      *  children read at most once per check. */
-    private class A11yHitNode(val node: AccessibilityNodeInfo) : OcclusionAnalyzer.HitNode {
+    private class A11yHitNode(
+        val node: AccessibilityNodeInfo,
+    ) : OcclusionAnalyzer.HitNode {
         override val bounds: Box by lazy { Rect().also(node::getBoundsInScreen).toBox() }
         override val drawingOrder: Int by lazy { if (Build.VERSION.SDK_INT >= 24) node.drawingOrder else 0 }
         override val isVisible: Boolean by lazy { node.isVisibleToUser }
