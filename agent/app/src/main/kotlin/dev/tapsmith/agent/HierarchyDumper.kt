@@ -82,7 +82,6 @@ class HierarchyDumper internal constructor(
                 HierarchyAttributes.ComposeMarks(
                     collected.carriers,
                     ComposeRoles.CARRIER_DUMP_ATTRIBUTE,
-                    collected.controlRoles,
                     "tapsmith-role",
                 ),
             ),
@@ -93,16 +92,15 @@ class HierarchyDumper internal constructor(
 
     /**
      * What [collectAttributeMap] gathers: bounds → attributes to inject, and
-     * the [HierarchyAttributes.nodeKey]s of the Compose role carriers and
-     * of the controls they give a role to (with that role), and
+     * the [HierarchyAttributes.nodeKey]s of the Compose role carriers, with
+     * the role each gives its parent, and
      * the [HierarchyAttributes.windowRootKey]s of the windows no locator
      * searches ([NonAppNodes]), whose root nodes the dump marks
      * `tapsmith-non-app="true"` so the trace viewer leaves them out too.
      */
     private class Collected(
         val attributes: Map<String, Map<String, String>>,
-        val carriers: Set<String>,
-        val controlRoles: Map<String, String>,
+        val carriers: Map<String, String>,
         val nonAppWindowRoots: Set<String>,
     )
 
@@ -119,8 +117,7 @@ class HierarchyDumper internal constructor(
      */
     private fun collectAttributeMap(): Collected {
         val attrMap = mutableMapOf<String, MutableMap<String, String>>()
-        val carriers = mutableSetOf<String>()
-        val controlRoles = mutableMapOf<String, String>()
+        val carriers = mutableMapOf<String, String>()
         val nonAppRoots = mutableSetOf<String>()
         try {
             val automation = instrumentation.uiAutomation
@@ -154,7 +151,7 @@ class HierarchyDumper internal constructor(
                         nonAppRoots.add(HierarchyAttributes.windowRootKey(rootBounds, root.packageName?.toString()))
                     }
                     try {
-                        walkNodeInfo(root, clip, attrMap, carriers, controlRoles)
+                        walkNodeInfo(root, clip, attrMap, carriers)
                     } finally {
                         @Suppress("DEPRECATION")
                         root.recycle()
@@ -167,7 +164,7 @@ class HierarchyDumper internal constructor(
         } catch (e: Exception) {
             Log.w(TAG, "Failed to collect attributes from accessibility tree", e)
         }
-        return Collected(attrMap, carriers, controlRoles, nonAppRoots)
+        return Collected(attrMap, carriers, nonAppRoots)
     }
 
     @Suppress("DEPRECATION")
@@ -175,8 +172,7 @@ class HierarchyDumper internal constructor(
         node: AccessibilityNodeInfo,
         clip: DumpClip,
         attrMap: MutableMap<String, MutableMap<String, String>>,
-        carriers: MutableSet<String>,
-        controlRoles: MutableMap<String, String>,
+        carriers: MutableMap<String, String>,
         isCarrier: Boolean = false,
     ) {
         val children = (0 until node.childCount).map { node.getChild(it) }
@@ -192,12 +188,11 @@ class HierarchyDumper internal constructor(
             expanded?.let { attrs["tapsmith-expanded"] = it.toString() }
         }
         carried?.let { (carriedRole, carrier) ->
-            controlRoles[HierarchyAttributes.nodeKey(dumpedBounds(node, clip), node.className?.toString())] = carriedRole
-            carriers.add(HierarchyAttributes.nodeKey(dumpedBounds(carrier, clip), carrier.className?.toString()))
+            carriers[HierarchyAttributes.nodeKey(dumpedBounds(carrier, clip), carrier.className?.toString())] = carriedRole
         }
         for (child in children) {
             if (child == null) continue
-            walkNodeInfo(child, clip, attrMap, carriers, controlRoles, isCarrier = child === carried?.second)
+            walkNodeInfo(child, clip, attrMap, carriers, isCarrier = child === carried?.second)
             child.recycle()
         }
     }

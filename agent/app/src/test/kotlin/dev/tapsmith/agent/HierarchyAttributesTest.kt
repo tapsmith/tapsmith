@@ -57,9 +57,8 @@ class HierarchyAttributesTest {
                 xml,
                 mapOf("[0,0][100,50]" to mapOf("tapsmith-expanded" to "false")),
                 HierarchyAttributes.ComposeMarks(
-                    carriers = setOf(HierarchyAttributes.nodeKey(box, "android.view.View")),
+                    carriers = mapOf(HierarchyAttributes.nodeKey(box, "android.view.View") to "tab"),
                     carrierAttribute = "tapsmith-role-carrier",
-                    controlRoles = mapOf(HierarchyAttributes.nodeKey(box, "android.view.View") to "tab"),
                     roleAttribute = "tapsmith-role",
                 ),
             )
@@ -84,16 +83,14 @@ class HierarchyAttributesTest {
                 """<node index="0" text="Title" content-desc="" class="android.widget.TextView" bounds="[0,0][100,50]" />""" +
                 """<node index="1" text="" content-desc="" class="android.widget.Button" bounds="[0,10][100,40]" />""" +
                 """</node></hierarchy>"""
-        val box = Box(0, 0, 100, 50)
         val out =
             HierarchyAttributes.inject(
                 xml,
                 // The heading Text fills the control: its role joins by bounds.
                 mapOf("[0,0][100,50]" to mapOf("tapsmith-role" to "heading")),
                 HierarchyAttributes.ComposeMarks(
-                    carriers = setOf(HierarchyAttributes.nodeKey(Box(0, 10, 100, 40), "android.widget.Button")),
+                    carriers = mapOf(HierarchyAttributes.nodeKey(Box(0, 10, 100, 40), "android.widget.Button") to "button"),
                     carrierAttribute = "tapsmith-role-carrier",
-                    controlRoles = mapOf(HierarchyAttributes.nodeKey(box, "android.view.View") to "button"),
                     roleAttribute = "tapsmith-role",
                 ),
             )
@@ -107,6 +104,53 @@ class HierarchyAttributesTest {
                 """</node></hierarchy>""",
             out,
         )
+    }
+
+    @Test
+    fun `a wrapper with the control's bounds and class does not take its role`() {
+        // A test-tagged Box around a Button is its own View node, with the
+        // Button's bounds and class; only the Button is the carrier's parent.
+        val xml =
+            """<hierarchy><node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]">""" +
+                """<node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]">""" +
+                """<node index="0" text="Sign in" content-desc="" class="android.widget.TextView" bounds="[10,10][90,40]" />""" +
+                """<node index="1" text="" content-desc="" class="android.widget.Button" bounds="[0,5][100,45]" />""" +
+                """</node></node></hierarchy>"""
+        val out =
+            HierarchyAttributes.inject(
+                xml,
+                emptyMap(),
+                HierarchyAttributes.ComposeMarks(
+                    carriers = mapOf(HierarchyAttributes.nodeKey(Box(0, 5, 100, 45), "android.widget.Button") to "button"),
+                    carrierAttribute = "tapsmith-role-carrier",
+                    roleAttribute = "tapsmith-role",
+                ),
+            )
+        assertEquals(
+            """<hierarchy><node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]">""" +
+                """<node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]" tapsmith-role="button">""" +
+                """<node index="0" text="Sign in" content-desc="" class="android.widget.TextView" bounds="[10,10][90,40]" />""" +
+                """<node index="1" text="" content-desc="" class="android.widget.Button" bounds="[0,5][100,45]" """ +
+                """tapsmith-role-carrier="true" />""" +
+                """</node></node></hierarchy>""",
+            out,
+        )
+    }
+
+    @Test
+    fun `a carrier-shaped leaf that is not its parent's last child is not a carrier`() {
+        val xml =
+            """<hierarchy><node index="0" text="" content-desc="" class="android.view.View" bounds="[0,0][100,50]">""" +
+                """<node index="0" text="" content-desc="" class="android.widget.Button" bounds="[0,5][100,45]" />""" +
+                """<node index="1" text="Sign in" content-desc="" class="android.widget.TextView" bounds="[10,10][90,40]" />""" +
+                """</node></hierarchy>"""
+        val marks =
+            HierarchyAttributes.ComposeMarks(
+                carriers = mapOf(HierarchyAttributes.nodeKey(Box(0, 5, 100, 45), "android.widget.Button") to "button"),
+                carrierAttribute = "tapsmith-role-carrier",
+                roleAttribute = "tapsmith-role",
+            )
+        assertEquals(xml, HierarchyAttributes.inject(xml, emptyMap(), marks))
     }
 
     @Test
