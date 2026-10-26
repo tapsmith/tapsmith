@@ -11,7 +11,7 @@
 
 import * as net from 'node:net';
 import { execSync } from 'node:child_process';
-import bplistParser from 'bplist-parser';
+import * as bplistParser from 'bplist-parser';
 import bplistCreator from 'bplist-creator';
 
 interface WebKitApp {
