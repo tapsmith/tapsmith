@@ -154,6 +154,24 @@ expect("substring fallback: second field counts the first",
        QueryIndex.substringLiveIndex(of: 2, in: emailScreen, scopeTypeRaw: textField, matched: emailMatched) == 1)
 expect("substring fallback: .any scope counts the header too",
        QueryIndex.substringLiveIndex(of: 1, in: emailScreen, scopeTypeRaw: nil, matched: emailMatched) == 1)
+// An exact getByText match found only through its value (a label-less
+// field's typed text) is re-resolved the same way, by the exact query
+// (PILOT-794): a static text with that label earlier on screen counts only
+// in an unscoped query, never as the field.
+let nickScreen = [
+    QueryNode(typeRaw: staticText, label: "nick", identifier: ""),
+    QueryNode(typeRaw: textField, label: "", identifier: "", title: "", value: "nickname"),
+    QueryNode(typeRaw: textField, label: "", identifier: "", title: "", value: "nick"),
+]
+let nickMatched = QueryIndex.exactMatches(in: nickScreen, query: "nick")
+expect("exact fallback: the query returns the text and the field with that value", nickMatched == [true, false, true])
+expect("exact fallback: the field is index 0 in the field query",
+       QueryIndex.substringLiveIndex(of: 2, in: nickScreen, scopeTypeRaw: textField, matched: nickMatched) == 0)
+expect("exact fallback: .any scope counts the text too",
+       QueryIndex.substringLiveIndex(of: 2, in: nickScreen, scopeTypeRaw: nil, matched: nickMatched) == 1)
+expect("exact fallback: whitespace-normalized",
+       QueryIndex.exactMatches(in: [QueryNode(typeRaw: textField, label: "", identifier: "", title: "", value: "a\u{00A0}b")], query: "a b") == [true])
+
 expect("contains: empty text holds only an empty query",
        !TextMatch.contains("", "email") && TextMatch.contains("", " "))
 

@@ -227,6 +227,19 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
     expect(matchTypes(wrapper, 'device.getByText("General", { exact: true })')).toEqual([`${T.other}:General`]);
   });
 
+  it('a same-target duplicate keeps its outer, attribute-carrying copy (PILOT-226)', () => {
+    const bounds = { bounds: '[16,100][200,140]' };
+    const pair = node(T.other, '', [
+      node(T.text, 'Test Screens', [node(T.text, 'Test Screens', [], bounds)], { ...bounds, identifier: 'title', 'tapsmith-role': 'heading' }),
+    ]);
+    const matched = findMatchingNodes([pair], parseSelectorString('device.getByText("Test Screens", { exact: true })')!);
+    expect(matched).toHaveLength(1);
+    expect(matched[0].attributes.get('identifier')).toBe('title');
+    // A container with other bounds still gives way.
+    const row = node(T.button, 'Test Screens', [node(T.text, 'Test Screens', [], bounds)], { bounds: '[0,90][400,150]' });
+    expect(matchTypes(row, 'device.getByText("Test Screens", { exact: true })')).toEqual([`${T.text}:Test Screens`]);
+  });
+
   it('siblings are both kept', () => {
     const siblings = node(T.other, '', [node(T.text, 'Save'), node(T.button, 'Save')]);
     expect(matchTypes(siblings, 'device.getByText("Save", { exact: true })')).toEqual([`${T.text}:Save`, `${T.button}:Save`]);

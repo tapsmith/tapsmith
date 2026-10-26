@@ -235,16 +235,19 @@ class SnapshotElementFinder {
             idSeen[id] = n + 1
             return n
         }
-        // A label-less substring-text match is re-resolved by the selector's
-        // own query: which numbered nodes that query returns, computed once
-        // and only when such a match exists.
+        // A label-less getByText match (substring or exact) is re-resolved by
+        // the selector's own query: which numbered nodes that query returns,
+        // computed once and only when such a match exists.
         var substringMatched: [Bool]?
-        if let textContains = selector.textContains, matches.contains(where: { (nodeDict, _) in
+        let hasLabelLessMatch = matches.contains(where: { (nodeDict, _) in
             guard let ordinal = nodeDict[SnapshotElementFinder.ordinalKey] as? Int,
                   ordinal < queryNodes.count else { return false }
             return queryNodes[ordinal].label.isEmpty
-        }) {
+        })
+        if hasLabelLessMatch, let textContains = selector.textContains {
             substringMatched = QueryIndex.substringMatches(in: queryNodes, query: textContains)
+        } else if hasLabelLessMatch, let text = selector.text {
+            substringMatched = QueryIndex.exactMatches(in: queryNodes, query: text)
         }
         // Each role+name match's index within the live query that
         // cacheQueryElement re-resolves it with (nil: no numbered node).
@@ -254,7 +257,7 @@ class SnapshotElementFinder {
             let raw = queryNodes[ordinal].typeRaw
             let type = XCUIElement.ElementType(rawValue: raw)
             let specific = type != nil && type != .other && type != .any
-            // A substring-text match with no label is found again by the
+            // A getByText match with no label is found again by the
             // selector's own query (cacheQueryElement), so index it there.
             if let substringMatched, queryNodes[ordinal].label.isEmpty {
                 return QueryIndex.substringLiveIndex(
@@ -1040,6 +1043,7 @@ class SnapshotElementFinder {
     private struct WrapperAncestor {
         let identifier: String
         let label: String
+        let frame: CGRect
         let resultIndex: Int
     }
 
@@ -1172,9 +1176,18 @@ class SnapshotElementFinder {
             // matching ancestor gives way to this match, whatever the types
             // (TextContent, PILOT-794) — a Toggle row, a NavigationLink or
             // an alert to the static text it holds.
+            //
+            // Except a same-target duplicate — the inner copy of a static
+            // text iOS exposes twice, with the same label and frame: the
+            // outer one carries its traits and identifier, and the SDK's
+            // collapse keeps it (collapseSameTargetDuplicates, PILOT-226).
             let innermostOnly = selector.matchesInnermostOnly
+            let myFrame = parseFrame(nodeDict)
             if innermostOnly {
-                for anc in matchedAncestors { suppressed.insert(anc.resultIndex) }
+                for anc in matchedAncestors
+                where !(anc.frame == myFrame && TextMatch.equals(anc.label, myLabel)) {
+                    suppressed.insert(anc.resultIndex)
+                }
             } else if elType != .other {
                 for anc in matchedAncestors {
                     if !anc.identifier.isEmpty && anc.identifier == myId {
@@ -1197,7 +1210,7 @@ class SnapshotElementFinder {
             // us — or a getByText match, which any matching descendant does.
             if elType == .other || innermostOnly {
                 matchedAncestors.append(
-                    WrapperAncestor(identifier: myId, label: myLabel, resultIndex: myIndex)
+                    WrapperAncestor(identifier: myId, label: myLabel, frame: myFrame, resultIndex: myIndex)
                 )
                 pushedAncestor = true
             }
@@ -1567,14 +1580,24 @@ class SnapshotElementFinder {
             // The label query also returns what the walk left out — a match's
             // ancestors, a switch named like the text (TextContent) — so
             // re-resolve by the node's own label at its index among the nodes
-            // that query returns, as a substring match does. A node matched
-            // through its value alone (a text field's typed text) has no
-            // label to find it by.
+            // that query returns, as a substring match does.
             let nodeLabel = snapshotNode?["label"] as? String ?? ""
             if !nodeLabel.isEmpty, let labelIndex {
                 element = byOwnLabel(nodeLabel, at: labelIndex)
             } else {
-                element = resolve(labelQuery(normalizedConcatenatedLabelPredicate(text)))
+                // Matched through its title or value: the selector's own
+                // exact query (label/title/value), at the node's index among
+                // the nodes that query returns (QueryIndex.exactMatches).
+                let pattern = TextMatch.exactPattern(text)
+                let predicate = NSPredicate(
+                    format: "label MATCHES %@ OR title MATCHES %@ OR value MATCHES %@",
+                    pattern, pattern, pattern
+                )
+                if nodeIdentifier.isEmpty, let labelIndex {
+                    element = labelQuery(predicate).element(boundBy: labelIndex)
+                } else {
+                    element = resolve(labelQuery(predicate))
+                }
             }
         } else if let textContains = selector.textContains {
             // A case-insensitive substring (PILOT-522) also matches other

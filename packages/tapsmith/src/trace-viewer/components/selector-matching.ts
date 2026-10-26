@@ -778,6 +778,13 @@ function collapseSameTargetNodes(nodes: HierarchyNode[]): HierarchyNode[] {
   return result;
 }
 
+/** Whether two iOS nodes are one target exposed twice: the same label and the same bounds. */
+function isSameTargetDuplicate(outer: HierarchyNode, inner: HierarchyNode): boolean {
+  return normalizeWhitespace(outer.attributes.get('label') ?? '') === normalizeWhitespace(inner.attributes.get('label') ?? '')
+    && outer.attributes.get('bounds') !== undefined
+    && outer.attributes.get('bounds') === inner.attributes.get('bounds');
+}
+
 /**
  * Resolve a positional chain (.first()/.last()/.nth(n), negative n counting
  * from the end) to a concrete index. May be out of range — callers decide
@@ -871,7 +878,11 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     let pushed = false;
     if (matches) {
       if (iosText && isIos) {
-        for (const index of matchedAncestors) suppressed.add(index);
+        // Not a same-target duplicate's outer copy (same label and bounds):
+        // collapseSameTargetNodes keeps that one, as the agent does.
+        for (const index of matchedAncestors) {
+          if (!isSameTargetDuplicate(raw[index], node)) suppressed.add(index);
+        }
         matchedAncestors.push(raw.length);
         pushed = true;
       }

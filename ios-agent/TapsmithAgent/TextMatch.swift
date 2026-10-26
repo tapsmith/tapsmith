@@ -171,9 +171,20 @@ enum QueryIndex {
         }
     }
 
+    /// Which `nodes` a live exact-text query
+    /// (`label/title/value MATCHES exactPattern(query)`, PILOT-794) returns,
+    /// ignoring its type scope: the whole text, whitespace-normalized.
+    static func exactMatches(in nodes: [QueryNode], query: String) -> [Bool] {
+        nodes.map {
+            TextMatch.equals($0.label, query) || TextMatch.equals($0.title, query)
+                || TextMatch.equals($0.value, query)
+        }
+    }
+
     /// The index of `nodes[ordinal]` within that query on the scoped type:
     /// every earlier node of that type it returns (`matched`, from
-    /// `substringMatches`) — for a match with no label to re-resolve it by.
+    /// `substringMatches` or `exactMatches`) — for a match with no label to
+    /// re-resolve it by.
     static func substringLiveIndex(of ordinal: Int, in nodes: [QueryNode], scopeTypeRaw: UInt?, matched: [Bool]) -> Int {
         var count = 0
         for i in 0..<ordinal where matched[i] && (scopeTypeRaw == nil || nodes[i].typeRaw == scopeTypeRaw) {
