@@ -132,6 +132,20 @@ function logResets(d: ReturnType<typeof makeDevice>, order: string[]): void {
   });
 }
 
+/** An action with a before-screenshot the collector owns, as a real capture leaves it. */
+function recordShot(action: string): void {
+  const c = getActiveTraceCollector()!;
+  const index = c.currentActionIndex;
+  const diskPath = path.join(c.tempDir, 'screenshots', screenshotFileName(index, 'before'));
+  fs.writeFileSync(diskPath, 'png');
+  (c as unknown as { _screenshots: Array<{ archivePath: string; diskPath: string; external?: boolean }> })
+    ._screenshots.push({ archivePath: screenshotArchivePath(index, 'before'), diskPath, external: false });
+  c.addActionEvent({
+    category: 'device', action, duration: 1, success: true,
+    hasScreenshotBefore: true, hasScreenshotAfter: false, hasHierarchyBefore: false, hasHierarchyAfter: false,
+  });
+}
+
 /** Parse a packaged trace's events. */
 function traceEvents(tracePath: string): Array<Record<string, unknown> & { type: string }> {
   const zip = unzipSync(fs.readFileSync(tracePath));
@@ -913,19 +927,6 @@ describe('runner app reset (declared isolation)', () => {
       const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-fresh-shots-'));
       const d = makeDevice();
       logResets(d, []);
-      /** An action with a before-screenshot the collector owns, as a real capture leaves it. */
-      const recordShot = (action: string): void => {
-        const c = getActiveTraceCollector()!;
-        const index = c.currentActionIndex;
-        const diskPath = path.join(c.tempDir, 'screenshots', screenshotFileName(index, 'before'));
-        fs.writeFileSync(diskPath, 'png');
-        (c as unknown as { _screenshots: Array<{ archivePath: string; diskPath: string; external?: boolean }> })
-          ._screenshots.push({ archivePath: screenshotArchivePath(index, 'before'), diskPath, external: false });
-        c.addActionEvent({
-          category: 'device', action, duration: 1, success: true,
-          hasScreenshotBefore: true, hasScreenshotAfter: false, hasHierarchyBefore: false, hasHierarchyAfter: false,
-        });
-      };
       try {
         pushContext();
         tapsmithBeforeAll(async () => { recordShot('openDeepLink'); });
@@ -1069,6 +1070,34 @@ describe('runner app reset (declared isolation)', () => {
         expect(afterAllRuns).toBeGreaterThanOrEqual(1);
         expect(reset.wallDuration as number).toBeLessThan(1000);
         expect((reset.gapBefore as number | undefined) ?? 0).toBeLessThan(1000);
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('a describe with setup of its own replays the enclosing setup\'s screenshots too', async () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-nested-shots-'));
+      const d = makeDevice();
+      logResets(d, []);
+      try {
+        pushContext();
+        tapsmithBeforeAll(async () => { recordShot('openDeepLink'); });
+        tapsmithDescribe('inner', () => {
+          tapsmithBeforeAll(async () => { recordShot('tap'); });
+          tapsmithTest('a', async () => {});
+          tapsmithTest('b', async () => {});
+        });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({
+          rootDir: tempRoot, trace: { ...traceOn, screenshots: true },
+        })));
+
+        for (const t of collectResults(result)) {
+          const zip = unzipSync(fs.readFileSync(t.tracePath!));
+          const rootAction = traceEvents(t.tracePath!).find((e) => e.type === 'action' && e.action === 'openDeepLink')!;
+          expect(Object.keys(zip)).toContain(screenshotArchivePath(rootAction.actionIndex as number, 'before'));
+        }
       } finally {
         fs.rmSync(tempRoot, { recursive: true, force: true });
       }

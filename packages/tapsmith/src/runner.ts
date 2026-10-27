@@ -1636,8 +1636,17 @@ function setupRecording(collector: TraceCollector, announced: string | undefined
     else entry.after = h.xml;
     hierarchies.set(idx, entry);
   }
+  // Screenshots replayed into this collector from an enclosing scope's
+  // recording live elsewhere on disk: bring them beside its own, so the
+  // whole recording replays from one directory.
+  const screenshotDir = path.join(collector.tempDir, 'screenshots');
+  for (const shot of collector.screenshots) {
+    const destination = path.join(screenshotDir, path.basename(shot.archivePath));
+    if (shot.diskPath === destination) continue;
+    try { fs.copyFileSync(shot.diskPath, destination); } catch { /* best-effort */ }
+  }
   return {
-    events: collector.events.slice(), screenshotDir: path.join(collector.tempDir, 'screenshots'), hierarchies,
+    events: collector.events.slice(), screenshotDir, hierarchies,
     actionCount: collector.currentActionIndex, announced,
   };
 }
