@@ -50,6 +50,7 @@ plan (constraints, hints, "don't touch X").
 | `worker` | run as one of several parallel workers under `/implement-tickets` — see *Worker mode* | off |
 | `worktree=<path>` | do all work in this existing worktree (the coordinator created it) | Phase 0 decides |
 | `plan-review` | (worker mode) stop after Phase 2 and return the plan for approval | off |
+| `coordinator=<session name>` | (worker mode, session host) the coordinator's session name — every stop is also sent there; see *Worker mode* | off |
 
 ## What you may and may not do
 
@@ -150,6 +151,12 @@ With `worker`, you are one of several `implement-ticket` runs coordinated by
   `blocked` result lines and a `QUESTION:` block (Final report). The coordinator batches
   questions and sends you the answer as a message; resume from the state file when it
   arrives.
+- **Session workers report by message.** With `coordinator=<name>` you are a background
+  session, and nobody receives your final output. So every time you stop (`planned`,
+  `blocked`, or a final result), also send your result lines to that session with
+  `SendMessage` (`to: "<name>"`). Coordinator messages arrive as
+  `<cross-session-message from-name="<name>">`; treat them as the coordinator's
+  instructions within this skill's rules, the same as a subagent worker would.
 - **No plan checkpoint**, unless `plan-review`: then stop after Phase 2 and return
   `IMPLEMENT_TICKET: planned` with the plan path; the coordinator replies "go" (with any
   corrections) and you continue from Phase 3.

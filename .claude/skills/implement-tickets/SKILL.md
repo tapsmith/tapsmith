@@ -150,7 +150,8 @@ For each ticket that is ready to start, up to `max-parallel` running at once:
 2. **Start the worker** on its host (below) with:
    `/implement-ticket <KEY> worker worktree=<absolute worktree path> base=<base> [also=<KEY>] [plan-review] [pass-through flags]`
    — `plan-review` in interactive mode, so the user approves every plan in one batch;
-   `auto` (never `plan-review`) in auto mode, plus `after=<branch>` for a stacked ticket.
+   `auto` (never `plan-review`) in auto mode, plus `after=<branch>` for a stacked ticket,
+   and `coordinator=<your session name>` on the `sessions` host.
 3. Record the worker's id/name, and move on. Launch all ready workers in one message so
    they start together.
 
@@ -181,21 +182,50 @@ subagents (review-loop's reviewer) and load project skills; this was verified. T
 with this session, so a long batch should be resumable, and is (Phase 0).
 
 **Background sessions (`sessions`).** Each worker is a full top-level Claude session that
-outlives this one and that the user can `claude attach` to. Launching them from here is
-blocked by auto mode's safety classifier unless the user has added a Bash allow rule for
-`claude --bg`. Without that rule, **print one launch command per ticket for the user to
-run**, then track them:
+outlives this one and that the user can `claude attach` to. Unlike a subagent, a session
+worker's stop does **not** notify you, so it sends its result lines to you by message
+(`coordinator=`, implement-ticket *Worker mode*). Your session name is the first line of
+`ListAgents` ("This session is <name> [ref]").
+
+Launching from here works when this session's permissions allow `claude --bg` (verified
+under bypass permissions). Under auto mode the safety classifier may block it unless the
+user has added a Bash allow rule for `claude --bg`. If it is blocked, **print one launch
+command per ticket for the user to run**:
 
 ```bash
 cd <main checkout> && claude --bg -n <KEY> --permission-mode auto \
-  "/implement-ticket <KEY> worker worktree=<absolute worktree path> …"
-claude agents --json        # find each worker by its name; state, id
-claude logs <id>            # recent output — look for the IMPLEMENT_TICKET lines
+  "/implement-ticket <KEY> worker worktree=<absolute worktree path> coordinator=<your session name> …"
+# prints: backgrounded · <id> · <KEY>   (record <id> in the state file)
 ```
 
-Message a session worker with `SendMessage` to its name (`ListAgents` lists local
-sessions). This host has not been exercised end to end yet: the first time it is used,
-verify the listing, logs and messaging steps and correct this section.
+Tracking, verified Oct 27 2026 with Claude Code 2.1.312:
+
+- **Results arrive as messages.** A worker's `SendMessage` shows up in your conversation
+  as `<cross-session-message from-name="<KEY>">` with its result lines, and is handled as
+  a worker stop (Phase 3). Reply with `SendMessage` `to: "<KEY>"` (the `-n` name). A
+  message to an idle session wakes it, and its reply came back within seconds. This worked
+  across permission modes (coordinator bypass, worker auto). If a
+  `[Cross-session delivery notice]` says the worker is holding your message for approval,
+  tell the user to approve it there (`claude attach <id>`).
+- **`claude agents --json`** lists every session on the machine, interactive ones
+  included. Pick yours by `name`. Background rows have `kind: "background"`, `id`,
+  `pid`, `status` (`busy` / `idle`) and `state` (`working` while running, `done` once its
+  turn ends; `blocked` means it is probably waiting on a permission prompt, so tell the
+  user to attach).
+- **`claude logs <id>`** prints the raw terminal screen, ANSI escapes and all, and only
+  recent output. Strip it before searching (`sed 's/\x1b\[[0-9;?]*[A-Za-z]//g'`). Use it
+  as a fallback when a worker went `done` without messaging you. The worker's state file
+  is the reliable record.
+- **`notify_when_idle` is a slow backup.** `SendMessage` with `notify_when_idle: true`
+  (one-shot; re-subscribe after each notice) delivers a `[Cross-session idle notice]`
+  that quotes the worker's final output. In the probe it arrived minutes after the
+  worker's own message, and after the session had been stopped. Use it to catch a worker
+  that stopped without messaging you, not as the main channel, and keep the *Heartbeat*
+  (Phase 3).
+- **Stopping and re-launching:** `claude stop <id>` (the conversation is kept, so
+  `claude attach` still works) in place of TaskStop. Re-launch with a fresh `claude --bg`
+  command, which resumes from the worker's state file. `claude rm <id>` deletes a finished
+  worker's session; do that only after its PR is merged or the user is done with it.
 
 ## Phase 3 — Run the batch
 
