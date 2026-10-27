@@ -34,8 +34,16 @@ One line per finding: id, where, kind and confidence, the reviewer's claim verba
 the reviewer said `NO FINDINGS`, print that and the round is clean.
 
 **2. The triage cards**, once every finding in the round has been triaged and before any
-fix is made. One card per finding, in the exact shape below, so the user can see why each
-one is or is not being fixed and object before the tree changes.
+fix is made, in ledger order:
+
+- **In full**, in the exact shape below, every card that will change the tree: each FIX,
+  each flipped verdict, and each verdict settled by a vote. These are the ones the user
+  must be able to object to before an edit lands.
+- **One line** for every other card (WON'T FIX, INVALID, OUT OF SCOPE, carried-forward
+  repeats): `R3-F4 — <claim> · WON'T FIX — <its one-sentence verdict reason>`. The full
+  card is in the ledger for anyone who wants it.
+
+Printed text stays in the conversation for every later turn, so print each card once.
 
 ## Repeat findings
 

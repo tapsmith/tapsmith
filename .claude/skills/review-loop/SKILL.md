@@ -12,7 +12,7 @@ findings back, invent the bad scenario for each, decide, fix, repeat. Everything
 copy-and-paste is now the ledger file; everything that was a second session is now a fresh
 subagent.
 
-Read `${CLAUDE_SKILL_DIR}/references/reviewer-prompt.md`, `verifier-prompt.md`,
+Read `${CLAUDE_SKILL_DIR}/references/reviewer-prompt.md`, `verifier-prompt.md` (how to spawn verifiers; they read `verifier-instructions.md` themselves),
 `triage.md` and `ledger.md` before round 1. They are short and they are the contract.
 
 ## Roles
@@ -156,9 +156,11 @@ Status `triaging`. Follow `references/triage.md` exactly:
    `Verdict by vote: <the two verdicts and their one sentences>`. For a first repeat,
    compare the fresh card's verdict with the old card's, as *Repeat findings* says.
 
-**When the round's triage is complete, print every card to the user** in the exact card
-format, in ledger order, before making any fix. This is the user's chance to read why
-each finding is or is not being fixed and to object before the tree changes. Do not wait
+**When the round's triage is complete, print the cards to the user**, in ledger order,
+before making any fix (`references/triage.md` *What the user sees*): the full card for
+every finding that will change the tree (a FIX, a flipped verdict, a vote), and one line
+for each of the rest. The ledger holds every card in full. This is the user's chance to
+read why each finding is or is not being fixed and to object before the tree changes. Do not wait
 for a reply — the loop continues. In Claude Code a typed message is queued until the
 current turn ends; only **Esc** interrupts, so say in one line after the cards that Esc is
 how to stop a fix before it lands. An objection that arrives after the fix has landed is
