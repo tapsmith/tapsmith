@@ -397,7 +397,9 @@ When the plan's slices are all built and the package checks are green:
 1. **`/review-loop` until clean**, unless the whole change is trivial (*When to review
    and QA*, Phase 5). Pass `commit` so its fixes land as commits, `worktree=<the checkout your
    branch is in>`, `base=origin/<base>` (after a fetch — local `<base>` may be stale, and
-   a stale base puts upstream commits in the reviewed diff), and
+   a stale base puts upstream commits in the reviewed diff),
+   `intent=<state dir>/plan.md` so its verifiers judge findings against the plan's ACs and
+   design choices, and
    `ledger=<state dir>/review-loop/` — the **same** ledger every time, so parallel
    workers never share one, and each later run continues it and carries earlier `final`
    verdicts forward instead of re-arguing them. Leave `max-rounds` at its default. Read

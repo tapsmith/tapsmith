@@ -1,6 +1,6 @@
 ---
 name: review-loop
-description: Review → triage → fix → repeat until a fresh reviewer finds nothing worth fixing. A fresh-context reviewer (Opus by default; model= picks another) reviews the branch diff; the main context prints the findings, then for each one verifies it, writes repro steps, expected and actual outcome, likelihood and impact, prints that card with its verdict, fixes every FIX verdict, runs the package-local checks, and starts the next round. Use when asked to review-loop, "review until clean", "loop review and fix", or to harden a just-implemented change before opening a PR.
+description: Review → triage → fix → repeat until a fresh reviewer finds nothing worth fixing. A fresh-context reviewer (Opus by default; model= picks another) reviews the branch diff; the main context prints the findings; fresh verifier subagents verify each one and write its card (repro steps, expected and actual outcome, likelihood and impact, verdict, other instances of the same bug class); the main context prints the cards, fixes every FIX verdict across its whole class, runs the package-local checks, and starts the next round. Use when asked to review-loop, "review until clean", "loop review and fix", or to harden a just-implemented change before opening a PR.
 ---
 
 # review-loop
@@ -12,8 +12,8 @@ findings back, invent the bad scenario for each, decide, fix, repeat. Everything
 copy-and-paste is now the ledger file; everything that was a second session is now a fresh
 subagent.
 
-Read `${CLAUDE_SKILL_DIR}/references/reviewer-prompt.md`, `triage.md` and `ledger.md`
-before round 1. They are short and they are the contract.
+Read `${CLAUDE_SKILL_DIR}/references/reviewer-prompt.md`, `verifier-prompt.md`,
+`triage.md` and `ledger.md` before round 1. They are short and they are the contract.
 
 ## Roles
 
@@ -25,9 +25,19 @@ before round 1. They are short and they are the contract.
   plausible defect comes back, because verification is the triage step's job. One
   reviewer per round, whole diff every round — fixes can break things the last round
   passed.
-- **You (main context)** — triage, fix, check, decide when to stop. You know the intent of
-  the change; the reviewer does not. That asymmetry is the point: the reviewer finds what
-  you are blind to, you judge what the reviewer cannot see.
+- **Verifiers** — fresh `general-purpose` Agents, same model as the reviewer, run in
+  parallel after each review. Each takes one finding (or a few that cite the same file),
+  verifies it against the code, searches for other instances of the same bug class, and
+  returns the triage card (`references/verifier-prompt.md`). They get the change brief and
+  the `intent=` files, so they judge against what the change is for. Verification runs
+  outside your context because it is mostly reading code, and in a long loop (or inside
+  `/implement-ticket`, whose context is already large) everything read there would be
+  re-read on every later turn. A verdict from a context that has not been arguing for the
+  change is also the more independent one.
+- **You (main context)** — match repeats against the ledger, dispatch the verifiers,
+  check their cards against what you know of the intent, fix, check, decide when to stop.
+  You know the intent of the change; the reviewer does not. That asymmetry is the point:
+  the reviewer finds what you are blind to, you judge what the reviewer cannot see.
 - **The user** — watches. Every round they see two printouts: the reviewer's findings
   list as it came back, and one triage card per finding (repro steps, expected, actual,
   likelihood, impact, verdict with reason) before any fix lands. Nothing is fixed or
@@ -47,6 +57,7 @@ text handed to the reviewer verbatim:
 | `max-rounds=<n>` | safety cap on rounds in this run | `10` |
 | `commit` | one commit per round with fixes, following the project's commit conventions (sign-off flag if the project requires DCO) | no commits; fixes stay in the working tree |
 | `worktree=<path>` | review the branch checked out at this path, and make every fix, check and commit there (`git -C <path>`, absolute paths) — for callers whose own shell sits in another checkout | the current checkout |
+| `intent=<path>[,<path>…]` | files that say what the change is for (a plan, a ticket export), read by every verifier along with the change brief — never given to the reviewer | none: verifiers get the change brief only |
 | `ledger=<dir>` | directory for the ledger and findings files — pass a distinct one whenever several loops can run in one session (e.g. parallel workers sharing a scratchpad) | `<session scratchpad>/review-loop/` |
 
 Unless an explicit `A..B` range was given, the diff is **merge-base → working tree**,
@@ -107,12 +118,24 @@ you have formed an opinion about any of it.
 
 ### 2. Triage
 
-Status `triaging`. Follow `references/triage.md` exactly: for each finding in order —
-first match it against the ledger (repeats are handled per that file's *Repeat findings*
-section), then verify by reading the code, write the repro steps, expected and actual
-outcome, the likelihood on the fixed scale with its condition, the impact, and the
-verdict with the one sentence that names what decided it. Write each card to the ledger
-before opening the next finding.
+Status `triaging`. Follow `references/triage.md` exactly:
+
+1. **Match repeats yourself**, against the ledger (*Repeat findings*). A repeat of a
+   `final` card or an `out-of-scope` one gets its one-line card now; no verifier.
+2. **Verify in parallel.** Spawn verifiers for every other finding in one message
+   (`references/verifier-prompt.md`): one finding each, or up to four that cite the same
+   file in one verifier, so the file is read once. A first repeat of a `won't-fix` or
+   `invalid` card goes to a verifier like a new finding. The verifier is never shown the
+   old card, which is exactly what *Repeat findings* asks for. Wait for every verifier to
+   return. Do not start reading the code yourself meanwhile.
+3. **Check each card, then write it to the ledger** in the reviewer's order. Read it
+   against the intent you know. If a card's verdict turns on a fact the verifier could
+   not know (a deliberate design choice, a constraint from the ticket), correct the card
+   and record `Verdict corrected by main context: <the fact>`. If you simply disagree with
+   its reading of the code or its likelihood, do not overrule it on your own: spawn one
+   more fresh verifier on that finding. Two out of three is the verdict, recorded as
+   `Verdict by vote: <the two verdicts and their one sentences>`. For a first repeat,
+   compare the fresh card's verdict with the old card's, as *Repeat findings* says.
 
 **When the round's triage is complete, print every card to the user** in the exact card
 format, in ledger order, before making any fix. This is the user's chance to read why
@@ -125,7 +148,9 @@ still honoured: revert that fix, and the card records `Verdict overridden by use
 ### 3. Fix
 
 Status `fixing`. Every `fix` verdict gets fixed in this round, in ledger order, with a
-regression test where `triage.md` requires one. Record files touched in the row.
+regression test where `triage.md` requires one. A fix covers **every instance** on the
+card's `Class:` line, not just the cited one (`triage.md` *Fixing*). Record files touched
+in the row.
 
 ### 4. Check
 
@@ -138,6 +163,17 @@ results in the ledger. If `commit` was given, commit now.
 
 If the round had at least one `fix`, status `done` and go to step 1. Otherwise status
 `clean` and terminate.
+
+**Design check after three fixing rounds in a row.** When this run's last three rounds
+each had a `fix` verdict, stop before the next review and read those rounds' FIX cards
+together. If they cluster on one mechanism, the design is usually the problem, not the
+details: a heuristic gaining a case per round, or a fix keeping a promise the change did
+not need to make. Then choose the principled rule, narrow the change, or drop the extra
+promise, rather than patching the next case. Write a `Design check after round <n>:`
+paragraph into the ledger saying what you looked at and what you decided, even when it is
+"no pattern, carry on". Print it, and if the design changes, re-check the change brief.
+Repeat the check after every further three fixing rounds. It never stops the loop or
+changes the bar; the next round runs as usual.
 
 ## Termination
 
@@ -172,6 +208,9 @@ Keep it to what changes the reader's next action. The ledger holds the detail.
 
 ## Ground rules
 
+- Verifiers are fresh too, and never see an earlier card for the finding they verify.
+  Never verify in the main context, except to correct an intent fact or to read a card
+  closely enough to check it.
 - The reviewer is **always** a fresh agent that believes it is the only review. Never
   `fork`, never review in the main context, never reuse a reviewer across rounds, never
   tell it what earlier reviewers found or what was decided. Independence is the whole

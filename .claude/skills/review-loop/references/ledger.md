@@ -41,6 +41,7 @@ Actual:   …
 Likelihood: <level> — <condition>
 Impact: …
 Verdict: FIX | WON'T FIX | OUT OF SCOPE | INVALID — <one sentence>
+Class: <pattern> — <other instances, or "none other"> (searched: …)   (real findings)
 Fixed in: <files>            (FIX only, appended after the fix)
 Test: <file, or why none>    (FIX only)
 
@@ -55,7 +56,9 @@ Checks after fixes: <commands run and result, or "none needed">
 ```
 
 Keep the `id` as `R<round>-F<n>` so a repeated finding can point at its earlier card
-(`repeats R1-F3`). A WON'T FIX / INVALID card gains `(final)` after its first independent
+(`repeats R1-F3`). `Verdict corrected by main context: …` and `Verdict by vote: …` lines (SKILL.md step 2)
+follow the verdict when they apply. A `Design check after round <n>:` paragraph sits
+between rounds (SKILL.md step 5). A WON'T FIX / INVALID card gains `(final)` after its first independent
 repeat has been re-examined and the verdict stood; later repeats are carried forward as
 one-line cards without re-triage. A flipped card keeps both the old and the new
 Likelihood lines so the flip is visible.
