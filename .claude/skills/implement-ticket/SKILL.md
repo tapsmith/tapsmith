@@ -52,7 +52,7 @@ plan (constraints, hints, "don't touch X").
 | `worktree=<path>` | do all work in this existing worktree (the coordinator created it) | Phase 0 decides |
 | `plan-review` | (worker mode) stop after Phase 2 and return the plan for approval | off |
 | `coordinator=<session name>` | (worker mode, session host) the coordinator's session name — every stop is also sent there; see *Worker mode* | off |
-| `no-handoff` | never hand off (*Context hand-off*): do every wait yourself. The coordinator passes it to workers on the `sessions` host, which it cannot relaunch without the user | off |
+| `no-handoff` | never hand off (*Context hand-off*): do every wait yourself. The coordinator passes it to `sessions`-host workers that the user has to launch, since it cannot relaunch those itself | off |
 | `continuation` | you are a fresh context that a standalone run handed Phases 6–8 to (*Context hand-off*): resume from the state file, never ask the user directly (return `blocked` with a `QUESTION:` block, as in worker mode), and never hand off again | off |
 
 ## What you may and may not do
@@ -241,7 +241,7 @@ With `worker`, you are one of several `implement-ticket` runs coordinated by
   question from the state file's *Blocked on*.
 - **Session workers report by message.** With `coordinator=<name>` you are a background
   session, and nobody receives your final output. So every time you stop (`planned`,
-  `blocked`, or a final result), also send your result lines to that session with
+  `blocked`, `handoff`, or a final result), also send your result lines to that session with
   `SendMessage` (`to: "<name>"`). Coordinator messages arrive as
   `<cross-session-message from-name="<name>">`; treat them as the coordinator's
   instructions within this skill's rules, the same as a subagent worker would.

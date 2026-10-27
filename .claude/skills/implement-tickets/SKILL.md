@@ -154,7 +154,8 @@ For each ticket that is ready to start, up to `max-parallel` running at once:
    `/implement-ticket <KEY> worker worktree=<absolute worktree path> base=<base> [also=<KEY>] [plan-review] [pass-through flags]`
    — `plan-review` in interactive mode, so the user approves every plan in one batch;
    `auto` (never `plan-review`) in auto mode, plus `after=<branch>` for a stacked ticket,
-   and `no-handoff coordinator=<your session name>` on the `sessions` host.
+   and `coordinator=<your session name>` on the `sessions` host (plus `no-handoff` when the
+   user has to run the launch commands: *Worker hosts*).
 3. Record the worker's id/name, and move on. Launch all ready workers in one message so
    they start together.
 
@@ -205,18 +206,28 @@ command per ticket for the user to run**:
 
 ```bash
 cd <main checkout> && claude --bg -n <KEY> --permission-mode auto \
-  "/implement-ticket <KEY> worker no-handoff worktree=<absolute worktree path> coordinator=<your session name> …"
+  "/implement-ticket <KEY> worker [no-handoff] worktree=<absolute worktree path> coordinator=<your session name> …"
 # prints: backgrounded · <id> · <KEY>   (record <id> in the state file)
 ```
 
-Session workers get `no-handoff`: relaunching one may need the user to run a command, so
-each does its own Phase 6–8 waits instead of handing off.
+Whether you can launch decides how session workers run:
+
+- **You launch them** (your `claude --bg` call succeeded): they run like subagent workers.
+  No `no-handoff`, so they hand off at each hand-off point, and from Phase 6 on every
+  relaunch (*Woken by*, an answer, *Main moved*) is a fresh `claude --bg`, never a
+  message to the old session. Name each relaunch `-n <KEY>-<n>` (`<KEY>-2`, `<KEY>-3`, …)
+  so the name you message is always the live worker, and record its id.
+- **The user launches them** (the call was blocked and you printed the commands): pass
+  `no-handoff`. You cannot relaunch these workers yourself, so each does its own
+  Phase 6–8 waits, and you **message** it in every phase. This is the one exception to
+  "fresh worker from Phase 6 on". Each message to a late-phase worker re-caches its whole
+  context (300–600k tokens), so batch what you send it.
 
 Tracking, verified Oct 27 2026 with Claude Code 2.1.312:
 
 - **Results arrive as messages.** A worker's `SendMessage` shows up in your conversation
   as `<cross-session-message from-name="<KEY>">` with its result lines, and is handled as
-  a worker stop (Phase 3). Reply with `SendMessage` `to: "<KEY>"` (the `-n` name). A
+  a worker stop (Phase 3). Message it with `SendMessage` `to:` its `-n` name, within the rules above. A
   message to an idle session wakes it, and its reply came back within seconds. This worked
   across permission modes (coordinator bypass, worker auto). If a
   `[Cross-session delivery notice]` says the worker is holding your message for approval,
@@ -248,7 +259,7 @@ On every worker stop, read its result lines, update the table, then act:
 | Result | Do |
 |---|---|
 | `planned` | Collect plans until every started worker has one (or a few minutes pass), then show them together: per ticket, the ACs, design choice, edge cases and open questions. Relay "go" with any corrections to each. |
-| `blocked` | Add its question to the pending list. When no running worker is likely to add another soon, ask the user all pending questions at once (AskUserQuestion takes up to four per call, with each worker's `OPTIONS` and recommended `DEFAULT`). Relay each answer to its worker (from Phase 6 on, as a fresh worker launch with the answer in its prompt: *Worker hosts*) and record it. `auto`: never ask — see *Auto mode*. |
+| `blocked` | Add its question to the pending list. When no running worker is likely to add another soon, ask the user all pending questions at once (AskUserQuestion takes up to four per call, with each worker's `OPTIONS` and recommended `DEFAULT`). Relay each answer to its worker (from Phase 6 on, as a fresh worker launch with the answer in its prompt, except for a `no-handoff` session worker, which you message: *Worker hosts*) and record it. `auto`: never ask — see *Auto mode*. |
 | `merged` (`merge`) | Record the merge commit; treat it as a merge (*Merges* below). Start the next queued ticket and any ticket waiting on this one. |
 | `ready-to-merge` | Record the PR; tell the user it can be merged (with `merge`: say why the worker could not). Start the next queued ticket. |
 | `ready-stacked` / `best-effort` / `held` (auto) | Record it and its reason; free the slot. Start any ticket stacked on it (not on a `held` one). |
