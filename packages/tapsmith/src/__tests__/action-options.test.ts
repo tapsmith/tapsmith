@@ -436,11 +436,11 @@ describe('WebView { timeout } (PILOT-840)', () => {
    * CDP / Inspector request does when the loop's last read starts with a few
    * milliseconds left.
    */
-  function slowEmptyWebView() {
+  function slowEmptyWebView(timeoutMessage = 'CDP message timed out (method=Runtime.evaluate, id=7)') {
     const handle = new WebViewHandle({} as TapsmithGrpcClient, 0, DEVICE_TIMEOUT);
     const read = async (timeoutMs: number | undefined) => {
       await new Promise((r) => setTimeout(r, Math.min(timeoutMs ?? 100, 100)));
-      if ((timeoutMs ?? 100) < 100) throw new Error('CDP message timed out (method=Runtime.evaluate, id=7)');
+      if ((timeoutMs ?? 100) < 100) throw new Error(timeoutMessage);
     };
     vi.spyOn(handle, '_probeLocator').mockImplementation(async (_loc, timeoutMs) => {
       await read(timeoutMs);
@@ -455,6 +455,12 @@ describe('WebView { timeout } (PILOT-840)', () => {
 
   it.each(LOCATOR_CALLS)('webview %s({ timeout }) reports the locator miss, not the transport timeout of its last read', async (_name, call) => {
     const err = await call(slowEmptyWebView(), { timeout: 600 }).catch((e: unknown) => e);
+    expect((err as Error).message).toMatch(/^Timed out waiting for (selector )?"#go" in WebView \(\d+ms\)$/);
+    expect((err as Error).message).not.toMatch(/CDP message timed out/);
+  });
+
+  it.each(LOCATOR_CALLS)('webview %s({ timeout }) on iOS reports the locator miss, not the WebKit Inspector timeout', async (_name, call) => {
+    const err = await call(slowEmptyWebView('WebKit Inspector message timed out (id=9)'), { timeout: 600 }).catch((e: unknown) => e);
     expect((err as Error).message).toMatch(/^Timed out waiting for (selector )?"#go" in WebView \(\d+ms\)$/);
     expect((err as Error).message).not.toMatch(/CDP message timed out/);
   });
