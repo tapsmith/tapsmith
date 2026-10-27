@@ -25,7 +25,8 @@ Read `${CLAUDE_SKILL_DIR}/references/reviewer-prompt.md`, `verifier-prompt.md`,
   plausible defect comes back, because verification is the triage step's job. One
   reviewer per round, whole diff every round — fixes can break things the last round
   passed.
-- **Verifiers** — fresh `general-purpose` Agents, same model as the reviewer, run in
+- **Verifiers** — fresh `general-purpose` Agents, always `opus` whatever `model=` says
+  (`model=` picks a different second opinion for finding, never a weaker judge), run in
   parallel after each review. Each takes one finding (or a few that cite the same file),
   verifies it against the code, searches for other instances of the same bug class, and
   returns the triage card (`references/verifier-prompt.md`). They get the change brief and
@@ -53,7 +54,7 @@ text handed to the reviewer verbatim:
 | `#123` or `pr 123` | review that PR's diff; base is the PR's base branch | current branch vs default branch |
 | `base=<ref>` | diff against this ref's merge-base with HEAD | repo default branch (`origin/HEAD`, else `main`, else `master`) |
 | `<A>..<B>` | explicit range, committed work only | — |
-| `model=<opus\|sonnet\|fable\|haiku>` | reviewer model | `opus` |
+| `model=<opus\|sonnet\|fable\|haiku>` | reviewer model (verifiers stay `opus`) | `opus` |
 | `max-rounds=<n>` | safety cap on rounds in this run | `10` |
 | `commit` | one commit per round with fixes, following the project's commit conventions (sign-off flag if the project requires DCO) | no commits; fixes stay in the working tree |
 | `worktree=<path>` | review the branch checked out at this path, and make every fix, check and commit there (`git -C <path>`, absolute paths) — for callers whose own shell sits in another checkout | the current checkout |
@@ -79,7 +80,8 @@ out of the reviewer's sight.
    rather than starting over: append a `## Run <k>` header with the new merge-base, a
    rewritten change brief and focus, keep numbering rounds from the last one (so card ids
    stay unique), and match repeats against every earlier card — so a `final` verdict
-   from an earlier run is carried forward, not re-argued. `max-rounds` counts this run's
+   from an earlier run is carried forward, not re-argued (unless its code has changed
+   since, as step 2 says). `max-rounds` counts this run's
    rounds only. A ledger whose last round is unfinished is a resume (Ground rules), not
    a new run. Reviewer findings files go beside it as
    `findings-<unix timestamp>.md` — never a name that reveals the round. Create the
@@ -121,17 +123,34 @@ you have formed an opinion about any of it.
 Status `triaging`. Follow `references/triage.md` exactly:
 
 1. **Match repeats yourself**, against the ledger (*Repeat findings*). A repeat of a
-   `final` card or an `out-of-scope` one gets its one-line card now; no verifier.
+   `final` card or an `out-of-scope` one gets its one-line card now, with no verifier,
+   **unless the code under it has changed**: a `final` card whose code the diff has
+   changed since it was marked final, or an `out-of-scope` card whose function or block the diff now
+   touches or makes more likely, goes to a verifier as a first repeat (step 2).
 2. **Verify in parallel.** Spawn verifiers for every other finding in one message
    (`references/verifier-prompt.md`): one finding each, or up to four that cite the same
    file in one verifier, so the file is read once. A first repeat of a `won't-fix` or
    `invalid` card goes to a verifier like a new finding. The verifier is never shown the
    old card, which is exactly what *Repeat findings* asks for. Wait for every verifier to
-   return. Do not start reading the code yourself meanwhile.
+   return. Do not start reading the code yourself meanwhile. A completion notification
+   can be lost, so keep one background heartbeat while the reviewer (step 1) or any
+   verifier is out (`for i in $(seq 1 10); do sleep 60; done; echo "WAIT_TIMEOUT: heartbeat"`,
+   unless one is already running; re-arm it while any agent is out). When it fires, an
+   agent still out is alive if its transcript changed in the last 10 minutes (the
+   `output_file` its Agent call returned: `stat` its modification time, never read it).
+   A reviewer or verifier never sits in a long wait, so 10 minutes of silence means
+   stuck, not slow: a long review that keeps working is left alone however long it takes.
+   A silent one gets one message to report; still silent at the next heartbeat, stop it
+   (TaskStop) and spawn a fresh one for the same work (`references/verifier-prompt.md`
+   for a verifier). Replace one agent at most twice; after that, stop and report it as an
+   environment problem rather than loop.
 3. **Check each card, then write it to the ledger** in the reviewer's order. Read it
-   against the intent you know. If a card's verdict turns on a fact the verifier could
-   not know (a deliberate design choice, a constraint from the ticket), correct the card
-   and record `Verdict corrected by main context: <the fact>`. If you simply disagree with
+   against the intent you know. If the card's repro, likelihood or impact rests on
+   something the verifier could not know (an input the ticket rules out, a caller that
+   never exists, a constraint stated outside the intent files), correct those lines, apply
+   the bar to the corrected card, and record `Verdict corrected by main context: <the
+   fact>`. That a choice was deliberate is never such a fact: deliberate choices are
+   judged on likelihood and impact like anything else (`triage.md` *Verify*). If you simply disagree with
    its reading of the code or its likelihood, do not overrule it on your own: spawn one
    more fresh verifier on that finding. Two out of three is the verdict, recorded as
    `Verdict by vote: <the two verdicts and their one sentences>`. For a first repeat,
@@ -209,8 +228,9 @@ Keep it to what changes the reader's next action. The ledger holds the detail.
 ## Ground rules
 
 - Verifiers are fresh too, and never see an earlier card for the finding they verify.
-  Never verify in the main context, except to correct an intent fact or to read a card
-  closely enough to check it.
+  Never verify in the main context, except to correct a fact that changes a card's repro,
+  likelihood or impact (never "it was deliberate"), or to read a card closely enough to
+  check it.
 - The reviewer is **always** a fresh agent that believes it is the only review. Never
   `fork`, never review in the main context, never reuse a reviewer across rounds, never
   tell it what earlier reviewers found or what was decided. Independence is the whole

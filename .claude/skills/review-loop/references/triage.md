@@ -63,7 +63,8 @@ against every earlier card by `where` and the substance of the claim:
   final (then treat it as a first repeat again): a one-line card `R<n>-F<m> — repeats R<a>-F<b>, verdict stands`. Spend no more
   time on it, and print it as that one line.
 - **Matches an `out-of-scope` card** — carry forward the same way; it is already in the
-  final report. Exception: if the current diff now touches the code involved, or makes
+  final report. Exception: if the current diff now touches the code involved (changes a line in the same function
+  or block), or makes
   the problem more likely or worse, it is no longer pre-existing — triage it normally.
 
 Repeats do not count as `fix` verdicts for the round unless they flipped, so a round of
@@ -172,7 +173,9 @@ here, is likely made elsewhere (the same unguarded call, the same missed run pat
 copy-pasted condition). Search the diff scope for every other instance, and the touched
 files around it, and list each one with its location and the search you ran. Write
 `Class: <pattern> — none other (searched: …)` when there is none. An instance in code
-the diff does not touch is pre-existing: list it with `(pre-existing)`, and it is not
+the diff does not touch (no changed line in the same function or block; unchanged lines
+inside a function the diff modifies are in scope, as the reviewer's scope rule says) is
+pre-existing: list it with `(pre-existing)`, and it is not
 fixed here unless the change makes it more likely. Instances share the card's verdict
 only if the same repro reaches them. One that needs a different repro, or has a lower
 likelihood, gets its own line saying so, and the fixer treats it as its own finding.

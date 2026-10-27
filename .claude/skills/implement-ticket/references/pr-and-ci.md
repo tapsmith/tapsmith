@@ -236,7 +236,10 @@ worker must act on, or once everything in `WAITING_ON` is done. Set `need`, `hea
 `since` from the `WAITING_ON` line:
 
 ```bash
-R=tapsmith/tapsmith; n=<pr>; head=<sha>; need="<ci e2e-ios, as WAITING_ON lists>"; since=<WAITING_ON's since time>
+R=tapsmith/tapsmith; n=<pr>; head=<sha>; need="<WAITING_ON's words: ci, e2e-ios, or ci e2e-ios>"; since=<WAITING_ON's since time>
+case " $need " in *" ci "*|*" e2e-ios "*) ;; *) echo "WAIT_TIMEOUT: need must name ci and/or e2e-ios, got '$need'"; exit 2;; esac
+[ ${#head} -ge 7 ] || { echo "WAIT_TIMEOUT: head must be a commit SHA, got '$head'"; exit 2; }
+errf=$(mktemp)
 # unresolved threads with a comment newer than the worker's last thread check
 thr() { gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){
   pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved comments(last:1){nodes{createdAt}}}}}}}' \
@@ -249,7 +252,7 @@ while :; do
       -q '"\(.headRefOid) \(.mergeable) \(.state) \(.reviewDecision)"' 2>/dev/null) || p=""
   if [ -n "$p" ]; then
     read -r ph pm ps pr <<<"$p"
-    [ "$ph" = "$head" ] || { echo "WAIT_DONE: head moved off $head"; exit 0; }
+    case "$ph" in "$head"*) head=$ph;; *) echo "WAIT_DONE: head moved off $head"; exit 0;; esac  # a short SHA is a prefix
     [ "$ps" = OPEN ] || { echo "WAIT_DONE: PR is $ps"; exit 0; }
     [ "$pm" = CONFLICTING ] && { echo "WAIT_DONE: PR conflicts with its base"; exit 0; }
     [ "$pr" = CHANGES_REQUESTED ] && { echo "WAIT_DONE: changes requested on $head"; exit 0; }
@@ -258,11 +261,13 @@ while :; do
   [ -n "$t" ] && [ "$t" -gt 0 ] && { echo "WAIT_DONE: review thread activity since $since"; exit 0; }
   pending=""
   case " $need " in *" ci "*)
-    b=$(gh pr checks $n -R $R --json workflow,bucket -q '[.[] | select(.workflow != "") | .bucket]' 2>/dev/null) || b=""
+    # a failed call is unknown (keep waiting); only "[]" or gh's "no checks reported" means none registered
+    b=$(gh pr checks $n -R $R --json workflow,bucket -q '[.[] | select(.workflow != "") | .bucket]' 2>"$errf") ||
+      { grep -q "no checks reported" "$errf" && b="[]" || b=""; }
     case "$b" in *'"fail"'*) echo "WAIT_DONE: a CI check failed on $head"; exit 0;;
-                 ""|"[]") [ $((SECONDS-start)) -ge 600 ] && { echo "WAIT_DONE: no CI checks registered for $head after 10 min"; exit 0; }
-                          pending="$pending ci";;
-                 *'"pending"'*) pending="$pending ci";; esac;;
+                 "[]") [ $((SECONDS-start)) -ge 600 ] && { echo "WAIT_DONE: no CI checks registered for $head after 10 min"; exit 0; }
+                       pending="$pending ci";;
+                 ""|*'"pending"'*) pending="$pending ci";; esac;;
   esac
   case " $need " in *" e2e-ios "*)
     r=$(gh run list -R $R --workflow e2e-ios.yml --commit $head --limit 10 --json status,conclusion -q "$q" 2>/dev/null) || r=""
@@ -280,8 +285,9 @@ done
 Each wait in it ends on its own deadline, matching the worker's recipes and the SKILL.md
 *Waiting* table: CI checks that never register end it after 10 minutes, and so does a head
 with no `E2E iOS` run at all (outside its `paths`; the `… done` line). Any reply or new
-thread since `since` ends it, so a thread posted while the worker was handing off is not
-missed, and neither is one hidden by another thread being resolved. The fresh worker
+thread since `since` ends it, so a comment posted after the worker's final thread query is
+not missed, and neither is one hidden by another thread being resolved. The worker's own
+replies are older than `since` (SKILL.md *Context hand-off* step 2), so they do not wake it. The fresh worker
 re-reads the real state on waking, as *Waiting* requires. On `WAIT_TIMEOUT`, the
 coordinator launches a fresh worker too: diagnosing a stuck run is the worker's job
 (SKILL.md *Waiting* table).

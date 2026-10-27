@@ -1,7 +1,7 @@
 # Verifier prompt template
 
 Spawn each verifier with the Agent tool, `subagent_type: "general-purpose"` (never `fork`),
-with the loop's reviewer model (default `opus`), in the background. Spawn every verifier for
+with model `opus` whatever the loop's `model=` is (it changes only the reviewer), in the background. Spawn every verifier for
 the round in one message, so they run in parallel. Fill every `{{placeholder}}`.
 
 A verifier, like the reviewer, sees **no history**: no round number, no earlier cards, no
@@ -61,5 +61,5 @@ not write them to a file; the parent records them.
 - Keep the reviewer's ids (`F1`, `F2`…) in `{{findings}}`. You rename each card to
   `R<round>-F<n>` when you write it to the ledger, so no round number reaches a verifier.
 - If a verifier's output does not follow the card format, send it one message asking for
-  the exact format before using it. If one fails or does not return, spawn a fresh one
-  for its findings. Never fill its cards in yourself.
+  the exact format before using it. If one fails, or the heartbeat finds it silent
+  (SKILL.md step 2), spawn a fresh one for its findings, at most twice per verifier. Never fill its cards in yourself.

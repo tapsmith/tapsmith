@@ -60,7 +60,8 @@ Keep the `id` as `R<round>-F<n>` so a repeated finding can point at its earlier 
 follow the verdict when they apply. A `Design check after round <n>:` paragraph sits
 between rounds (SKILL.md step 5). A WON'T FIX / INVALID card gains `(final)` after its first independent
 repeat has been re-examined and the verdict stood; later repeats are carried forward as
-one-line cards without re-triage. A flipped card keeps both the old and the new
+one-line cards without re-triage, unless the code under the card has changed since
+(`triage.md` *Repeat findings*). A flipped card keeps both the old and the new
 Likelihood lines so the flip is visible.
 
 The `Round N` heading's status word is what tells a resumed session where it was.
