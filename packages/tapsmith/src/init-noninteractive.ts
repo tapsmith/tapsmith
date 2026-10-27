@@ -10,7 +10,7 @@ import { simulatorChoices, type EnvScan } from './env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
-import { ignoreTestResultsOrWarn } from './init-gitignore.js';
+import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
 import * as detectDefaults from './init-detect.js';
 import type { InitCommandOptions } from './cli-program.js';
@@ -78,6 +78,8 @@ export interface DetectFns {
   detectIosBundleId: (appPath: string) => string | undefined;
   /** Optional so callers that stub the build detectors need not stub this too (PILOT-557). */
   detectExpoProject?: (cwd: string, readConfig?: (cwd: string) => unknown) => detectDefaults.ExpoProject | undefined;
+  /** This project's builds in Xcode's DerivedData (PILOT-832); optional like detectExpoProject. */
+  findDerivedDataApps?: (cwd: string, xcodeProjects: string[], sdk: 'iphonesimulator' | 'iphoneos') => string[];
 }
 
 // ─── Flag validation ───
@@ -125,6 +127,9 @@ export function initArgsFromOptions(opts: InitCommandOptions): InitArgs {
 
 // ─── Resolution ───
 
+const NO_APK_MESSAGE = 'No Android APK found in the project\'s build outputs (**/build/outputs/apk/)';
+const NO_IOS_APP_MESSAGE = 'No simulator .app bundle found in the project (**/*-iphonesimulator/*.app) or in Xcode\'s DerivedData';
+
 export function resolveInitPlan(
   args: InitArgs,
   env: EnvScan,
@@ -143,22 +148,25 @@ export function resolveInitPlan(
   };
 
   // Platform: explicit flag, else infer from the builds given and the
-  // project layout. A given build names its platform (PILOT-626) — an Expo
-  // managed project has no android/ or ios/ — and adds to, rather than
-  // replaces, what the directories imply, so `--apk` alone in a project with
-  // both never drops iOS. `--package`, an Android package (installed already
+  // project layout: android/ and ios/ (React Native), or a root
+  // settings.gradle and an Xcode project (native, PILOT-832). A given build
+  // names its platform (PILOT-626) — an Expo managed project has no android/
+  // or ios/ — and adds to, rather than replaces, what the layout implies, so
+  // `--apk` alone in a project with both never drops iOS. `--package`, an Android package (installed already
   // when there is no APK, PILOT-721), names Android too, unless something
-  // points at iOS (`--app`, an ios/ directory): the config's `package` key
+  // points at iOS (`--app`, an iOS project): the config's `package` key
   // also holds the iOS bundle id, so it may be meant as one. Beside
   // `--bundle-id` it can only be the Android package. `--app` off macOS is
   // an explicit iOS ask, refused below.
+  const layout = detectDefaults.detectProjectLayout(cwd);
+  const reactNative = detectDefaults.isReactNativeProject(cwd);
   let platforms = args.platforms;
   if (!platforms) {
     const inferred: Platform[] = [];
-    const iosDir = env.isMacOS && fs.existsSync(path.join(cwd, 'ios'));
-    const packageNamesAndroid = !!args.packageName && (!!args.bundleId || (!args.app && !iosDir));
-    if (args.apk || packageNamesAndroid || fs.existsSync(path.join(cwd, 'android'))) inferred.push('android');
-    if (args.app || iosDir) inferred.push('ios');
+    const iosProject = env.isMacOS && detectDefaults.hasIosProject(layout);
+    const packageNamesAndroid = !!args.packageName && (!!args.bundleId || (!args.app && !iosProject));
+    if (args.apk || packageNamesAndroid || detectDefaults.hasAndroidProject(layout)) inferred.push('android');
+    if (args.app || iosProject) inferred.push('ios');
     if (inferred.length === 0) {
       const expoProject = expo();
       if (expoProject) {
@@ -167,20 +175,20 @@ export function resolveInitPlan(
           fix: `Build the app, then re-run init. ${detectDefaults.expoBuildHint(buildable, expoProject, 'Or pass --platform with --apk/--app pointing at an existing build.')}`,
         });
       }
-      throw new InitError('NO_PLATFORM', 'Could not infer target platform (no android/ or ios/ directory found)', {
+      throw new InitError('NO_PLATFORM', 'Could not infer target platform (no android/ or ios/ directory, settings.gradle or Xcode project found)', {
         fix: 'Pass --platform android, --platform ios, or --platform android,ios',
       });
     }
     platforms = inferred;
     // A React Native app usually targets both, so an inferred Android-only
     // setup on a Mac says why iOS is missing and how to add it (PILOT-625).
-    if (env.isMacOS && !inferred.includes('ios') && detectDefaults.isReactNativeProject(cwd)) {
+    if (env.isMacOS && !inferred.includes('ios') && reactNative) {
       // The note needs only whether this is Expo, not the app config's ids,
       // so the config is not read: that would run the project's Expo CLI.
       const detectExpo = detect.detectExpoProject ?? detectDefaults.detectExpoProject;
       // Once ios/ exists, --package alone no longer names Android, so a
       // re-run it configured must name both platforms.
-      const packageOnly = packageNamesAndroid && !args.apk && !fs.existsSync(path.join(cwd, 'android'));
+      const packageOnly = packageNamesAndroid && !args.apk && !detectDefaults.hasAndroidProject(layout);
       warnings.push(iosLeftOutNote(detectExpo(cwd, () => undefined), args.apk, packageOnly));
     }
   }
@@ -209,12 +217,12 @@ export function resolveInitPlan(
         const installed = 'or --package <id> if the app is already installed on the device (a dev client, say)';
         const expoProject = expo();
         if (expoProject) {
-          throw new InitError('NO_APK', 'No Android APK found under android/**/build/outputs/apk/', {
+          throw new InitError('NO_APK', NO_APK_MESSAGE, {
             fix: detectDefaults.expoBuildHint(['android'], expoProject, `Or pass --apk <path>, ${installed}.`),
           });
         }
-        throw new InitError('NO_APK', 'No Android APK found under android/**/build/outputs/apk/', {
-          fix: `Build your app (e.g. cd android && ./gradlew assembleDebug; a React Native Debug build also needs Metro running, see https://tapsmith.dev/getting-started/#build-the-app-under-test), or pass --apk <path>, ${installed}`,
+        throw new InitError('NO_APK', NO_APK_MESSAGE, {
+          fix: `${detectDefaults.nativeBuildHint('android', layout, reactNative)}, or pass --apk <path>, ${installed}`,
         });
       }
       if (candidates.length > 1) {
@@ -289,25 +297,35 @@ export function resolveInitPlan(
 
     let appPath = args.app;
     if (!appPath) {
-      const candidates = detect.findIosAppCandidates(cwd);
+      let candidates = detect.findIosAppCandidates(cwd);
+      // Xcode's default output (a build from the Xcode UI), only when the
+      // project holds no build: that path is this Mac's alone (PILOT-832).
+      let fromDerivedData = false;
+      if (candidates.length === 0) {
+        candidates = (detect.findDerivedDataApps ?? detectDefaults.findDerivedDataApps)(cwd, layout.iosProjects, 'iphonesimulator');
+        fromDerivedData = candidates.length > 0;
+      }
       if (candidates.length === 0) {
         const expoProject = expo();
         if (expoProject) {
-          throw new InitError('NO_IOS_APP', 'No simulator .app bundle found under ios/', {
+          throw new InitError('NO_IOS_APP', NO_IOS_APP_MESSAGE, {
             fix: detectDefaults.expoBuildHint(['ios'], expoProject, 'Or pass --app <path>.'),
           });
         }
-        throw new InitError('NO_IOS_APP', 'No simulator .app bundle found under ios/', {
-          fix: 'Build your app for the simulator (in ios/: xcodebuild -workspace <App>.xcworkspace -scheme <App> -sdk iphonesimulator -derivedDataPath build; see https://tapsmith.dev/getting-started/#build-the-app-under-test), or pass --app <path>',
+        throw new InitError('NO_IOS_APP', NO_IOS_APP_MESSAGE, {
+          fix: `${detectDefaults.nativeBuildHint('ios', layout, reactNative)}, or pass --app <path>`,
         });
       }
       if (candidates.length > 1) {
-        throw new InitError('AMBIGUOUS_IOS_APP', `Found ${candidates.length} .app candidates`, {
-          fix: 'Pass --app <path> to choose one',
+        throw new InitError('AMBIGUOUS_IOS_APP', `Found ${candidates.length} .app candidates${fromDerivedData ? ' in Xcode\'s DerivedData' : ''}`, {
+          fix: fromDerivedData
+            ? `Pass --app <path> to choose one. These paths exist only on this Mac: for a config that works elsewhere, ${detectDefaults.nativeBuildHint('ios', layout, reactNative).replace(/^Build one for the simulator first/, 'build for the simulator')}`
+            : 'Pass --app <path> to choose one',
           candidates,
         });
       }
       appPath = candidates[0];
+      if (fromDerivedData) warnings.push(detectDefaults.derivedDataBuildWarning(appPath, layout, 'iphonesimulator', reactNative));
     }
 
     const appAbs = path.resolve(cwd, appPath);
@@ -583,6 +601,13 @@ export function executeInitPlan(
   const ignored = ignoreTestResultsOrWarn(cwd);
   if (ignored === 'created' || ignored === 'added') filesCreated.push('.gitignore');
   else if (typeof ignored === 'object') warnings.push(ignored.warning);
+  // A native project's .gitignore lacks node_modules/ (PILOT-832); one that
+  // could not be written above is not tried twice.
+  if (typeof ignored !== 'object') {
+    const deps = ignoreNodeModulesOrWarn(cwd);
+    if ((deps === 'created' || deps === 'added') && !filesCreated.includes('.gitignore')) filesCreated.push('.gitignore');
+    else if (typeof deps === 'object') warnings.push(deps.warning);
+  }
 
   if (exampleTestExisted) warnings.push(`${EXAMPLE_TEST_PATH} already exists — left untouched`);
   filesCreated.push(...written.filter((f) => f !== 'tapsmith.config.ts'));

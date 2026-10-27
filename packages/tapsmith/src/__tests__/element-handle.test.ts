@@ -1020,6 +1020,21 @@ describe('tap()', () => {
     expect(err.message).toContain('aka device.getByText("Terms", { exact: true })');
   });
 
+  it("never suggests getByText for an iOS control's value or name (PILOT-794)", () => {
+    // A SwiftUI Stepper reports its value as its text and has no role.
+    const err = buildStrictModeViolationError('getByRole("button")', [
+      makeElementInfo({ role: '', className: 'XCUIElementTypeStepper', text: '1', contentDescription: 'Quantity: 1' }),
+      makeElementInfo({ role: '', className: 'XCUIElementTypeOther', text: '65%', contentDescription: 'Upload progress' }),
+      makeElementInfo({ role: '', className: 'XCUIElementTypeTextField', text: 'nick', contentDescription: '' }),
+      makeElementInfo({ role: '', className: 'XCUIElementTypeOther', text: '65%', contentDescription: '' }),
+    ]);
+    expect(err.message).toMatch(/1\) XCUIElementTypeStepper "1".* aka device\.getByLabel\("Quantity: 1"\)/);
+    expect(err.message).toContain('aka device.getByText("Upload progress", { exact: true })');
+    expect(err.message).toContain('aka device.getByText("nick", { exact: true })');
+    expect(err.message).not.toContain('getByText("1"');
+    expect(err.message).not.toContain('getByText("65%"');
+  });
+
   it('suggests getByTestId only for an RN testID, never the name part of a native id (PILOT-659)', () => {
     const err = buildStrictModeViolationError('getByRole("image")', [
       makeElementInfo({ role: 'image', resourceId: 'avatar' }),

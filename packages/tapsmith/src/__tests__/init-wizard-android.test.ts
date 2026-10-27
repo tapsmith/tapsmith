@@ -153,8 +153,28 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
     expect(q?.type).toBe('input');
     expect(q?.initial).toBeUndefined();
     expect(q?.validate).toBeTypeOf('function');
-    expect(logged.join('\n')).toMatch(/No APK found under android\//);
+    expect(logged.join('\n')).toMatch(/No APK found in the project's build outputs/);
     expect(android.apkPath).toBe('./built/app.apk');
+  });
+
+  it('in an Android Studio project with no APK, says to run ./gradlew assembleDebug at the root, without Metro (PILOT-832)', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-native-'));
+    fs.writeFileSync(path.join(project, 'settings.gradle.kts'), '');
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+    script([
+      [/Where is your Android APK/, './built/app.apk'],
+      [/package name/, 'com.acme.app'],
+    ]);
+    try {
+      await configureAndroid(env);
+    } finally {
+      vi.mocked(process.cwd).mockRestore();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+    const out = logged.join('\n');
+    expect(out).toContain('`./gradlew assembleDebug`, which writes app/build/outputs/apk/debug/app-debug.apk');
+    expect(out).not.toContain('cd android');
+    expect(out).not.toContain('Metro');
   });
 
   it('never defaults the package name to a placeholder when it cannot be read', async () => {
@@ -196,12 +216,15 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
     script([[/Where is your Android APK/, DEBUG_APK]]);
     try {
       vi.stubEnv('ANDROID_HOME', sdk);
-      await configureAndroid({ ...env, adbVersion: undefined, androidHome: sdk });
+      await configureAndroid({ ...env, adbVersion: undefined, adbOffPath: platformTools, androidHome: sdk });
     } finally {
       fs.rmSync(sdk, { recursive: true, force: true });
     }
 
     const out = logged.join('\n');
+    // Says adb is off PATH, as the environment block does, not missing (PILOT-832).
+    expect(out).toContain('ADB is not on PATH — Tapsmith cannot reach');
+    expect(out).not.toContain('ADB not found');
     expect(out).toContain(`adb is in ${platformTools} but not on PATH`);
     expect(out).toContain(`export PATH="${platformTools}:$PATH"`);
     expect(out).not.toMatch(/Install Android platform-tools/);

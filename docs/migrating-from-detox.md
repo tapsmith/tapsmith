@@ -43,23 +43,23 @@ This guide is for teams with a Detox suite who want to move it to Tapsmith. Of t
 | `by.text("Delete").withAncestor(by.id("row-5"))` | [`device.getByTestId("row-5").getByText("Delete", { exact: true })`](api-reference.md#scoping) (scoping) |
 | `by.id("a").and(by.text("b"))` | [`device.getByTestId("a").and(device.getByText("b"))`](api-reference.md#elementhandleandother-elementhandle-elementhandle) |
 | `.atIndex(2)` | [`.nth(2)`](api-reference.md#elementhandlenthindex-number-elementhandle), `.first()`, `.last()` |
-| `element(…).getAttributes()` | [`locator.find()`](api-reference.md#elementhandlefind-promiseelementinfo), or `getText()`, `isEnabled()`, `boundingBox()`, … |
+| `element(…).getAttributes()` | [`locator.find()`](api-reference.md#elementhandlefindoptions-promiseelementinfo), or `getText()`, `isEnabled()`, `boundingBox()`, … |
 
 ### Actions
 
 | Detox | Tapsmith |
 |---|---|
-| `.tap()` | [`.tap()`](api-reference.md#elementhandletap-promisevoid) |
-| `.multiTap(2)` | [`.doubleTap()`](api-reference.md#elementhandledoubletapoptions--intervalms-number--promisevoid) |
-| `.longPress(1500)` | [`.longPress(1500)`](api-reference.md#elementhandlelongpressdurationms-number-promisevoid) |
-| `.typeText("hi")` | [`.type("hi")`](api-reference.md#elementhandletypetext-string-options--delay-number--promisevoid), into an empty field (into a field that already has text, `type()` replaces it on Android and adds to it on iOS) |
-| `.replaceText("hi")` | [`.clearAndType("hi")`](api-reference.md#elementhandleclearandtypetext-string-options--delay-number--promisevoid) (types it, so your `onChangeText` handlers run) |
-| `.clearText()` | [`.clear()`](api-reference.md#elementhandleclear-promisevoid) |
+| `.tap()` | [`.tap()`](api-reference.md#elementhandletapoptions-promisevoid) |
+| `.multiTap(2)` | [`.doubleTap()`](api-reference.md#elementhandledoubletapoptions-promisevoid) |
+| `.longPress(1500)` | [`.longPress(1500)`](api-reference.md#elementhandlelongpressoptions-promisevoid) |
+| `.typeText("hi")` | [`.type("hi")`](api-reference.md#elementhandletypetext-string-options-promisevoid), into an empty field (into a field that already has text, `type()` replaces it on Android and adds to it on iOS) |
+| `.replaceText("hi")` | [`.clearAndType("hi")`](api-reference.md#elementhandleclearandtypetext-string-options-promisevoid) (types it, so your `onChangeText` handlers run) |
+| `.clearText()` | [`.clear()`](api-reference.md#elementhandleclearoptions-promisevoid) |
 | `.tapReturnKey()` | [`device.pressKey("ENTER")`](api-reference.md#devicepresskeykey-string-promisevoid) |
-| `.scroll(200, "down")` | [`.scroll("down")`](api-reference.md#elementhandlescrolldirection-string-options--distance-number--promisevoid) scrolls the view by a step of its own size (no offset in points); to reach an element, prefer `scrollIntoView()` |
+| `.scroll(200, "down")` | [`.scroll("down")`](api-reference.md#elementhandlescrolldirection-string-options-promisevoid) scrolls the view by a step of its own size (no offset in points); to reach an element, prefer `scrollIntoView()` |
 | `waitFor(el).toBeVisible().whileElement(by.id("list")).scroll(50, "down")` | [`el.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid) |
 | `.swipe("up")` | [`device.swipe("up")`](api-reference.md#deviceswipedirection-string-options-swipeoptions-promisevoid) |
-| `.pinch(0.5)` (iOS) | [`.pinchIn()`](api-reference.md#elementhandlepinchinoptions--scale-number--promisevoid) / [`.pinchOut()`](api-reference.md#elementhandlepinchoutoptions--scale-number--promisevoid), on both platforms |
+| `.pinch(0.5)` (iOS) | [`.pinchIn()`](api-reference.md#elementhandlepinchinoptions-promisevoid) / [`.pinchOut()`](api-reference.md#elementhandlepinchoutoptions-promisevoid), on both platforms |
 
 ### Expectations to assertions
 

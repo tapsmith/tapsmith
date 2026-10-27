@@ -94,14 +94,14 @@ As in Playwright, `name` is a **case-insensitive substring match** by default, s
 await device.getByRole("button", { name: "Show overlay", exact: true }).tap()  // not "Show overlay briefly"
 ```
 
-Supported roles map to platform-native element types. On iOS, many React Native components render as `XCUIElementTypeOther` — Tapsmith identifies roles from accessibility traits (e.g. a `Pressable` with `accessibilityRole="button"` gets the button trait) and, for roles iOS has no trait for, from the role description React Native puts in the element's accessibility value (`"checkbox, unchecked"`). A plain `.other` element with neither is never matched by an unnamed `getByRole()`; a named one (`getByRole("alert", { name: "…" })`) still finds it by its name, unless a role trait or another of those descriptions marks it as a different role. React Native's new architecture publishes a description only for `checkbox` and `radio`, so an unnamed `alert`, `combobox` or generic-view role query (below) that finds nothing on iOS says so in its error and suggests the named form. Native iOS and Android apps use typed elements that map directly.
+Supported roles map to platform-native element types. On iOS, many React Native components render as `XCUIElementTypeOther` — Tapsmith identifies roles from accessibility traits (e.g. a `Pressable` with `accessibilityRole="button"` gets the button trait) and, for roles iOS has no trait for, from the role description React Native puts in the element's accessibility value (`"checkbox, unchecked"`). A plain `.other` element with neither is never matched by an unnamed `getByRole()`; a named one (`getByRole("alert", { name: "…" })`) still finds it by its name, unless a role trait or another of those descriptions marks it as a different role. React Native's new architecture publishes a description only for `checkbox` and `radio`, so an unnamed `alert`, `combobox` or generic-view role query (below) that finds nothing on iOS says so in its error and suggests the named form. Native UIKit and Android View apps use typed elements that map directly. Jetpack Compose builds its accessibility tree from semantics instead: see [Jetpack Compose](#jetpack-compose) below for how its controls are found.
 
 | Role | Android classes | iOS types |
 |---|---|---|
 | `button` | `Button`, `ImageButton`, `ToggleButton` (also RN `accessibilityRole="togglebutton"`), Material/AppCompat variants | `XCUIElementTypeButton`, `.other` with button trait (RN `togglebutton` too) |
 | `textfield` | `EditText` | `XCUIElementTypeTextField`, `XCUIElementTypeSecureTextField` |
 | `checkbox` | `CheckBox` | `XCUIElementTypeCheckBox`, `.other` described as a checkbox (RN), or a named `.other` |
-| `switch` | `Switch` | `XCUIElementTypeSwitch`, `XCUIElementTypeToggle` |
+| `switch` | `Switch`, `SwitchCompat`, `SwitchMaterial`, or the "Switch" role description (Compose `Switch`) | `XCUIElementTypeSwitch`, `XCUIElementTypeToggle` |
 | `radiobutton` / `radio` | `RadioButton` | `XCUIElementTypeRadioButton`, `.other` described as a radio button (RN), or a named `.other` |
 | `heading` | RN `accessibilityRole="header"` / native `isHeading` | any element with the header trait (plain static text is `text`, not a heading) |
 | `link` | RN `accessibilityRole="link"` | `XCUIElementTypeLink`, `.other` with link trait |
@@ -128,6 +128,36 @@ Role names are case-insensitive. Any other role throws as soon as the locator is
 > **React Native's generic-view roles:** `menu`, `menubar`, `menuitem`, `radiogroup`, `scrollbar`, `spinbutton`, `summary`, `timer` and (in React Native) `tablist` have no native widget. On Android, React Native publishes each as a role description, so `getByRole("menuitem")` finds every menu item. On iOS React Native publishes nothing Tapsmith reads for them, so give the query a name — `getByRole("menuitem", { name: "Copy" })` — which finds a generic view with that label, as for `alert` and `combobox`. iOS reports no role for those views, so `toHaveRole()` can't confirm one there, and it reports a React Native `Text` as static text whatever its role. A named `alert` query also matches static text, but these roles' queries don't (a named `menuitem` query would also match the label text beside one): put the role on an `accessible` `View` (`<View accessible accessibilityRole="timer" accessibilityLabel="Elapsed time">`) for iOS to find it. React Native publishes the descriptions in the device's language and Tapsmith reads only the English ones, so on Android run these queries on a device set to English (the same holds for `alert`, `combobox`, `tab`, `progressbar` and `toolbar`).
 
 > **Tabs:** `tab` matches a tab *item*, and `tablist` the bar that holds the items. On iOS a `UITabBar`'s items — expo-router `NativeTabs` (the `create-expo-app` template), UIKit's `UITabBarController`, SwiftUI's `TabView` — are buttons inside the bar, so `getByRole("tab", { name: "Explore" })` finds the item and `getByRole("tablist")` the bar. Those items still match `getByRole("button")` too, but `toHaveRole()` reports them as `tab`. On Android a tab item is known by the "Tab" role description React Native, Material's `TabLayout` and `BottomNavigationView`, and Compose publish. Each publishes it in the device's language and Tapsmith reads only the English word, so run `tab` queries on an Android device set to English. React Navigation's bottom tabs are `tab`s on Android, but on iOS React Navigation gives them the `button` role and a label like `"Settings, tab, 2 of 4"`, so `getByRole("button", { name: "Settings" })` finds them there. A tab bar whose items publish no role at all (a custom tab bar built from plain views) has no `tab` to find: use `getByText()` or `getByDescription()`.
+
+#### Jetpack Compose
+
+Compose controls are found by role and name the way TalkBack reads them. A Material3 `Button`, a `NavigationBarItem`, an `IconButton` or a row made toggleable with `Modifier.toggleable(role = Role.Checkbox)` is one element: its role comes from the control's `Role`, and its name from the text (or `contentDescription`) of what it contains. So `getByRole("button", { name: "Sign in" })` finds `Button(onClick) { Text("Sign in") }`, `getByRole("tab", { name: "Items" })` a navigation bar item, and `getByRole("checkbox", { name: "Remember me" })` the toggleable row below. `checked`, `selected` and `disabled` read the control's state, and `toHaveRole()` reports its role.
+
+A control's name is what it contains, so a `Checkbox` or `Switch` placed beside a separate `Text` has no name, for TalkBack as for Tapsmith (and for Playwright on a web page, where a checkbox needs a `<label>`). Put the text inside the control instead, which also gives the user a larger touch target:
+
+```kotlin
+Row(
+    Modifier.toggleable(value = remember, onValueChange = { remember = it }, role = Role.Checkbox),
+    verticalAlignment = Alignment.CenterVertically,
+) {
+    Checkbox(checked = remember, onCheckedChange = null) // the Row handles the click
+    Text("Remember me")
+}
+```
+
+A text field's `label = { Text("Email") }` is its label, so both `getByLabel("Email")` and `getByRole("textfield", { name: "Email" })` find it. Compose's `Switch` and `Tab` publish their role as a description in the device's language, which Tapsmith reads only in English, so run `switch` and `tab` queries on an Android device set to English.
+
+`Modifier.testTag()` is not a test id by default. Compose exposes test tags to UI Automator, and so to `getByTestId()`, only where `testTagsAsResourceId` is on. Set it once on the root of your content and every tag below it becomes a test id:
+
+```kotlin
+setContent {
+    MaterialTheme {
+        Surface(Modifier.semantics { testTagsAsResourceId = true }) {
+            App()
+        }
+    }
+}
+```
 
 > **React Native note:** RN components that set `accessibilityRole` (e.g. `accessibilityRole="button"`) expose the corresponding iOS accessibility trait, and `getByRole` will find them. Components that don't set `accessibilityRole` (common in many RN apps) render as generic `XCUIElementTypeOther` with no role — use `getByText`, `getByPlaceholder`, or `getByDescription` instead.
 
@@ -189,13 +219,15 @@ Whitespace differences don't matter for a string: non-breaking spaces, line brea
 
 A `RegExp` (also accepted by `getByLabel` and `getByRole`'s `name`) is matched with JavaScript's semantics against the text as it is: `\s` covers non-breaking spaces, and `^`/`$` anchor the whole text unless you pass the `m` flag. See [Regular expressions](api-reference.md#regular-expressions) for the details.
 
+On iOS, `getByText` returns the innermost element holding the text, as Playwright does: a SwiftUI `Toggle` row, a `NavigationLink` or an alert gives way to the text inside it, so `getByText("Dark Mode")` finds one element. A control's value (a switch's `1`, a slider's `50%`) is not text.
+
 > **Strict mode:** because of the case-insensitive substring default, `getByText("Sign in")` also matches longer or differently-cased text such as `"Sign in to continue"` or a `"SIGN IN"` heading. A locator that resolves to more than one element throws a `strict mode violation` when you act or assert on it (instead of silently using the first match). Disambiguate with `{ exact: true }`, `getByRole(role, { name, exact: true })`, `getByTestId()`, or `.first()/.nth()/.last()`. Absence checks (`toBeHidden`, `not.toBeVisible`, `waitFor({ state: "hidden" })`) and multi-element APIs (`count()`, `all()`, `toHaveCount`) are exempt. See the [API reference](api-reference.md#strict-mode) for the full rules. WebView locators (`webview.getBy*`, `webview.locator(css)`) enforce the same rules.
 
 ### `getByDescription(text)`
 
 Find an element by its accessibility description. On Android this matches `contentDescription`; on iOS it matches `accessibilityLabel`. Use this for icon buttons, images, and elements where the accessible label differs from visible text.
 
-On iOS, `getByText` also matches `accessibilityLabel`, so both work for text-bearing elements. Prefer `getByDescription` for elements that have an explicit accessibility description but no visible text (e.g. icon-only buttons).
+On iOS, `getByText` also matches `accessibilityLabel`, so both work for text-bearing elements — except a switch, slider or stepper, whose label is its accessible name rather than text on screen ([what `getByText` reads on iOS](api-reference.md#devicegetbytexttext-string--regexp-options--exact-boolean--elementhandle)). Prefer `getByDescription` for elements that have an explicit accessibility description but no visible text (e.g. icon-only buttons).
 
 ```typescript
 // Tap an icon button with a description
@@ -228,7 +260,7 @@ Find an element by a dedicated test identifier.
 await device.getByTestId("submit-button").tap()
 ```
 
-On Android, `getByTestId` matches React Native's `testID` prop, which becomes the element's whole resource ID; a native view's package-qualified ID (`com.myapp:id/submit`) is found with `locator({ id })` instead. On iOS, it matches the `accessibilityIdentifier`.
+On Android, `getByTestId` matches React Native's `testID` prop, which becomes the element's whole resource ID; a native view's package-qualified ID (`com.myapp:id/submit`) is found with `locator({ id })` instead. A Jetpack Compose `Modifier.testTag()` is a test id only where the app turns on `testTagsAsResourceId` ([Jetpack Compose](#jetpack-compose)). On iOS, it matches the `accessibilityIdentifier`.
 
 ### `locator({ id })`
 

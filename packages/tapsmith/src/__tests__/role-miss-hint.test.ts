@@ -96,3 +96,53 @@ describe("a role-only miss on iOS carries the hint", () => {
       .not.toContain("On iOS");
   });
 });
+
+// PILOT-828: a Jetpack Compose testTag reaches accessibility as a resource-id
+// only with testTagsAsResourceId, which a Compose developer has no reason to
+// know.
+const TEST_TAG_HINT = /[^.]\. On Android, a Jetpack Compose Modifier\.testTag\(\) is a test id only where the app sets Modifier\.semantics \{ testTagsAsResourceId = true \} on it or an ancestor — on the root of setContent, for the whole screen\.$/;
+
+describe("a getByTestId miss on Android carries the testTagsAsResourceId hint", () => {
+  const err = (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);
+
+  it("in actions, assertions and waitFor", async () => {
+    const d = device("android");
+    // After the off-screen hint, which stays true of an off-screen row.
+    const tap = await err(d.getByTestId("email_input").tap());
+    vitestExpect(tap).toMatch(TEST_TAG_HINT);
+    vitestExpect(tap).toContain("It may be off-screen in a scrollable list");
+    vitestExpect(await err(d.getByTestId("email_input").find())).toMatch(TEST_TAG_HINT);
+    vitestExpect(await err(tapsmithExpect(d.getByTestId("email_input")).toBeVisible({ timeout: 50 }))).toMatch(TEST_TAG_HINT);
+    vitestExpect(await err(d.getByTestId("email_input").waitFor({ timeout: 50 }))).toMatch(TEST_TAG_HINT);
+  });
+
+  it("not on iOS, nor for another locator", async () => {
+    vitestExpect(await err(device("ios").getByTestId("email_input").find())).not.toContain("testTag");
+    vitestExpect(await err(device("android").getByText("Email").find())).not.toContain("testTag");
+    vitestExpect(await err(device("android").getByTestId("form").getByText("Email").find())).not.toContain("testTag");
+  });
+});
+
+describe("the testTag hint is left out when the test id did match (PILOT-828)", () => {
+  it("not after an out-of-range nth()", async () => {
+    const row = (i: number): ElementInfo => ({
+      elementId: `r${i}`, className: "android.view.ViewGroup", text: `Row ${i}`, contentDescription: "", resourceId: "row",
+      enabled: true, visible: true, clickable: true, focusable: true, scrollable: false, hint: "",
+      checked: false, selected: false, focused: false, role: "", viewportRatio: 1,
+      bounds: { left: 0, top: i * 100, right: 500, bottom: i * 100 + 90 },
+    } as ElementInfo);
+    const rows = [row(0), row(1), row(2)];
+    const client = {
+      findElement: vi.fn(async () => ({ requestId: "1", found: true, element: rows[0], errorMessage: "" })),
+      findElements: vi.fn(async () => ({ requestId: "1", elements: rows, errorMessage: "" })),
+    } as unknown as TapsmithGrpcClient;
+    const d = new Device(client, { platform: "android", timeout: 50 });
+    const err = (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);
+    const tap = await err(d.getByTestId("row").nth(5).tap());
+    vitestExpect(tap).toContain("nth(5)");
+    vitestExpect(tap).not.toContain("testTag");
+    const find = await err(d.getByTestId("row").nth(5).find());
+    vitestExpect(find).toContain("nth(5)");
+    vitestExpect(find).not.toContain("testTag");
+  });
+});

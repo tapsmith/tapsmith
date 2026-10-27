@@ -20,6 +20,8 @@ permissions:
 jobs:
   deploy-preview:
     name: Deploy Preview
+    # Fork PRs get no secrets, so the Cloudflare deploy can't run for them.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     defaults:
       run:

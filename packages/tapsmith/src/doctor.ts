@@ -23,7 +23,7 @@ import { isTapsmithNotInstalledError, type TapsmithConfig } from './config.js';
 import { MIN_NODE_MAJOR, isSupportedNodeVersion } from './node-runtime.js';
 import { emulatorNotFoundMessage, resolveEmulatorBinary, type EmulatorBinary } from './emulator.js';
 import { hostArch, nodeUnderRosetta, ROSETTA_NODE_FIX } from './host-arch.js';
-import { adbMissingFix, XCODE_FIX } from './toolchain.js';
+import { adbMissingFix, androidHomeUnsetFix, XCODE_FIX } from './toolchain.js';
 import { mitmproxyRedirectorSource } from './setup-ios.js';
 import { isYarnPnp, YARN_PNP_FIX } from './yarn-pnp.js';
 
@@ -249,7 +249,7 @@ function checkAndroidHome(report: Reporter): void {
     if (sdk) {
       pass(report, 'android-home', sdk.name, sdk.path);
     } else {
-      warn(report, 'android-home', 'ANDROID_HOME not set', 'Set ANDROID_HOME to your Android SDK location');
+      warn(report, 'android-home', 'ANDROID_HOME not set', androidHomeUnsetFix());
     }
   } catch {
     warn(report, 'android-home', 'Could not check ANDROID_HOME');

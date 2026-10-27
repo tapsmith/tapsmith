@@ -1,4 +1,7 @@
 import type { WebViewHandle } from './webview-handle.js';
+import { checkNoArguments, checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
+
+const COUNT_HINT = 'It reads the page as it is now; to wait for a number of matches, use expect.poll(() => locator.count(), { timeout }).toBe(n).';
 
 /**
  * Lazy reference to an element within a WebView.
@@ -98,12 +101,17 @@ export class WebViewLocator {
   // ─── Multi-element queries (strict mode exempt) ───
 
   /** Return the number of elements currently matching (no auto-wait). */
-  async count(): Promise<number> {
+  count(): Promise<number>;
+  // The arguments are only checked (PILOT-840), as on native locators.
+  async count(...args: unknown[]): Promise<number> {
+    checkNoArguments('count()', args, COUNT_HINT);
     return this._handle._countLocator(this);
   }
 
   /** Return one positionally-narrowed locator per current match (no auto-wait). */
-  async all(): Promise<WebViewLocator[]> {
+  all(): Promise<WebViewLocator[]>;
+  async all(...args: unknown[]): Promise<WebViewLocator[]> {
+    checkNoArguments('all()', args, COUNT_HINT);
     const n = await this.count();
     if (this._nthIndex !== undefined) {
       return n > 0 ? [this] : [];
@@ -113,32 +121,75 @@ export class WebViewLocator {
 
   // ─── Actions and single-element queries (strict) ───
 
-  async click(): Promise<void> {
-    await this._handle._clickLocator(this);
+  /**
+   * Click the element, once exactly one element matches (or the positional
+   * one exists).
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the WebView's timeout.
+   */
+  async click(options?: TimeoutOptions): Promise<void> {
+    await this._handle._clickLocator(this, timedCall('click()', options));
   }
 
-  async fill(value: string): Promise<void> {
-    await this._handle._fillLocator(this, value);
+  /**
+   * Set the element's value to `value`, firing `input` and `change` events.
+   *
+   * @param options.timeout - Maximum time in milliseconds for the whole call,
+   *   auto-wait included. Defaults to the WebView's timeout.
+   */
+  async fill(value: string, options?: TimeoutOptions): Promise<void> {
+    await this._handle._fillLocator(this, value, timedCall('fill()', options));
   }
 
-  async textContent(): Promise<string> {
-    return this._handle._textContentLocator(this);
+  /**
+   * The element's `textContent`.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the WebView's timeout.
+   */
+  async textContent(options?: TimeoutOptions): Promise<string> {
+    return this._handle._textContentLocator(this, timedCall('textContent()', options));
   }
 
-  async innerHTML(): Promise<string> {
-    return this._handle._innerHTMLLocator(this);
+  /**
+   * The element's `innerHTML`.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the WebView's timeout.
+   */
+  async innerHTML(options?: TimeoutOptions): Promise<string> {
+    return this._handle._innerHTMLLocator(this, timedCall('innerHTML()', options));
   }
 
-  async inputValue(): Promise<string> {
-    return this._handle._inputValueLocator(this);
+  /**
+   * The value of the element's form control.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the WebView's timeout.
+   */
+  async inputValue(options?: TimeoutOptions): Promise<string> {
+    return this._handle._inputValueLocator(this, timedCall('inputValue()', options));
   }
 
-  async getAttribute(name: string): Promise<string | null> {
-    return this._handle._getAttributeLocator(this, name);
+  /**
+   * The value of the element's `name` attribute, or `null` when it has none.
+   *
+   * @param options.timeout - Maximum time in milliseconds to wait for the
+   *   element. Defaults to the WebView's timeout.
+   */
+  async getAttribute(name: string, options?: TimeoutOptions): Promise<string | null> {
+    return this._handle._getAttributeLocator(this, name, timedCall('getAttribute()', options));
   }
 
-  /** Whether the target is visible right now (single read, no auto-wait). */
-  async isVisible(): Promise<boolean> {
+  /**
+   * Whether the target is visible right now (single read, no auto-wait).
+   *
+   * @param options.timeout - Accepted, and checked, for Playwright parity;
+   *   like Playwright's, it has no effect, since the call never waits.
+   */
+  async isVisible(options?: TimeoutOptions): Promise<boolean> {
+    timedCall('isVisible()', options);
     return this._handle._isVisibleLocator(this);
   }
 
@@ -149,8 +200,17 @@ export class WebViewLocator {
    * Mirrors `ElementHandle.isHidden()` so native and WebView locators share
    * one reader vocabulary. (Goes through the handle rather than
    * `this.isVisible()` so the trace row is named `isHidden`.)
+   *
+   * @param options.timeout - Accepted, and checked, for Playwright parity;
+   *   it has no effect, since the call never waits.
    */
-  async isHidden(): Promise<boolean> {
+  async isHidden(options?: TimeoutOptions): Promise<boolean> {
+    timedCall('isHidden()', options);
     return !(await this._handle._isVisibleLocator(this, 'isHidden'));
   }
+}
+
+/** A WebView locator call's checked per-call timeout (PILOT-840), or undefined for the WebView's own. */
+function timedCall(method: string, options: TimeoutOptions | undefined): number | undefined {
+  return checkTimeout(method, checkOptions(method, options, ['timeout'])?.timeout);
 }

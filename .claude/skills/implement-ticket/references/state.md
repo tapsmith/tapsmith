@@ -17,7 +17,7 @@ push — never only at the end.
 - Mode: interactive | auto | worker (+auto) · flags: no-jira? leave-draft? merge? plan-review? after=<branch>? max-qa=<n>
 - Base: <base> · Branch: <branch> · Worktree: <path or "main checkout">
 - PR: <url or none> · draft? yes/no
-- Phase: 0-setup | 1-understand | 2-plan | 3-build | 4-review | 5-qa | 6-ci-threads | 7-gate | done | blocked | best-effort | held
+- Phase: 0-setup | 1-understand | 2-plan | 3-build | 4-review | 5-qa | 6-ci-threads | 7-gate | done | blocked (in <phase>) | best-effort | held
 - Head SHA: <sha> · pushed: yes/no
 
 ## Slices
@@ -40,6 +40,12 @@ push — never only at the end.
 ## Blocked on
 <only when Phase = blocked: exactly what is needed from whom>
 
+## Next
+<at a hand-off (SKILL.md *Context hand-off*): the exact `WAITING_ON:` line, then what to
+do when the wait ends, e.g.
+`WAITING_ON: ci on <full 40-character SHA> since 2026-10-26T14:05:00Z` — then gate pass 1 and `gh pr ready`.
+A fresh context starts here, and the coordinator re-arms its watch from this line>
+
 ## Gate
 <the SKILL.md Phase 7 checklist, ticked with evidence pointers>
 ```
@@ -55,9 +61,11 @@ On invocation, or after noticing the conversation was summarised:
    commits. Write the reconstructed state file before doing anything else.
 2. Check reality against it: the branch's head matches `Head SHA`; nothing uncommitted
    you did not expect; the PR's state. Reality wins — update the file.
-3. Continue from the recorded phase. A half-done slice restarts from its red test. A
+3. Continue from the recorded phase (for `blocked (in <phase>)`, that phase, once the
+   answer is in hand). A half-done slice restarts from its red test. A
    review-loop that was mid-round resumes from its own ledger (it has its own resume
    rule). A QA run that was interrupted is re-run from scratch — QA is always a full
-   retest anyway.
+   retest anyway. After a hand-off, start from *Next*, and let the *Loops* records stand
+   (SKILL.md *Context hand-off*): re-check reality (step 2), not the earlier phases' work.
 4. Never create a second branch or PR for the key, and never discard commits to "start
    clean".

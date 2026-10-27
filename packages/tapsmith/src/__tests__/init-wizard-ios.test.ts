@@ -37,11 +37,13 @@ vi.mock('enquirer', () => ({
 const bundleIds = new Map<string, string>();
 let simCandidates: string[] = [];
 let deviceCandidates: string[] = [];
+let derivedDataApps: Record<string, string[]> = {};
 vi.mock('../init-detect.js', async (importOriginal) => ({
   ...await importOriginal<typeof import('../init-detect.js')>(),
   detectAndroidPackage: () => undefined,
   findIosAppCandidates: () => simCandidates,
   findIosDeviceAppCandidates: () => deviceCandidates,
+  findDerivedDataApps: (_cwd: string, _projects: string[], sdk: string) => derivedDataApps[sdk] ?? [],
   detectIosBundleId: (appPath: string) => bundleIds.get(appPath),
 }));
 
@@ -96,6 +98,7 @@ describe('configureIos() (PILOT-251)', () => {
     bundleIds.clear();
     simCandidates = [];
     deviceCandidates = [];
+    derivedDataApps = {};
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
   });
 
@@ -432,5 +435,55 @@ describe('configureIos() simulator picker (PILOT-562)', () => {
 
     expect(picker()).toBeUndefined();
     expect(ios.simulator).toBe('iPhone 17');
+  });
+});
+
+describe('configureIos() with builds in Xcode\'s DerivedData (PILOT-832)', () => {
+  const DD_SIM = '/Users/me/Library/Developer/Xcode/DerivedData/MyApp-abc/Build/Products/Debug-iphonesimulator/MyApp.app';
+  const DD_DEVICE = '/Users/me/Library/Developer/Xcode/DerivedData/MyApp-abc/Build/Products/Debug-iphoneos/MyApp.app';
+
+  beforeEach(() => {
+    answers.clear();
+    asked.length = 0;
+    questions.length = 0;
+    bundleIds.clear();
+    simCandidates = [];
+    deviceCandidates = [];
+    derivedDataApps = { iphonesimulator: [DD_SIM], iphoneos: [DD_DEVICE] };
+    printed = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { printed.push(args.join(' ')); });
+  });
+  let printed: string[] = [];
+
+  it('offers them, marked this Mac only, when the project has no build of its own', async () => {
+    bundleIds.set(DD_SIM, 'com.example.sim');
+    bundleIds.set(DD_DEVICE, 'com.example.sim');
+    script('both', [[/simulator build\)/, DD_SIM], [/device build \.app/, DD_DEVICE]]);
+
+    const ios = await configureIos(env);
+
+    const sim = questions.find((q) => /simulator build\)/.test(q.message));
+    expect(sim?.type).toBe('select');
+    expect(sim?.choices?.[0]).toEqual({ name: DD_SIM, message: DD_SIM, hint: 'Xcode DerivedData: this Mac only' });
+    const device = questions.find((q) => /device build \.app/.test(q.message));
+    expect(device?.choices?.[0]).toMatchObject({ name: DD_DEVICE, hint: 'Xcode DerivedData: this Mac only' });
+    expect(ios.appPath).toBe(DD_SIM);
+    expect(ios.deviceAppPath).toBe(DD_DEVICE);
+    // Picking one says what init --yes says: this Mac only, and how to build into the project.
+    const out = printed.join('\n');
+    expect(out).toContain(`Using ${DD_SIM} from Xcode's DerivedData: only this Mac has that path`);
+    expect(out).toContain('-derivedDataPath build');
+    expect(out).toContain(`Using ${DD_DEVICE} from Xcode's DerivedData`);
+  });
+
+  it('leaves them out when the project has a build', async () => {
+    simCandidates = [SIM_APP];
+    bundleIds.set(SIM_APP, 'com.example.sim');
+    script('simulators');
+
+    await configureIos(env);
+
+    const sim = questions.find((q) => /simulator build\)/.test(q.message));
+    expect(sim?.choices?.map((c) => c.name)).toEqual([SIM_APP, 'Enter another path…']);
   });
 });

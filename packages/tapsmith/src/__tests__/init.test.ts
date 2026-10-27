@@ -372,7 +372,7 @@ describe('platformPrompt() (PILOT-721)', () => {
     simulators: [{ name: 'iPhone 17', udid: 'A', state: 'Shutdown', runtime: 'iOS 26.0' }],
     avds: [], avdImages: [], isMacOS: true, ...over,
   });
-  const none = { hasAndroidDir: false, hasIosDir: false };
+  const none = { hasAndroidProject: false, hasIosProject: false };
   const selected = (p: ReturnType<typeof platformPrompt>): string => p.choices[p.initial].name;
 
   it('defaults to iOS when adb is missing and Xcode is ready, hinting why Android is not', () => {
@@ -382,20 +382,20 @@ describe('platformPrompt() (PILOT-721)', () => {
   });
 
   it('defaults to iOS in a project with only ios/', () => {
-    expect(selected(platformPrompt(env(), { hasAndroidDir: false, hasIosDir: true }))).toBe('ios');
+    expect(selected(platformPrompt(env(), { hasAndroidProject: false, hasIosProject: true }))).toBe('ios');
   });
 
   it('defaults to Android in a project with only android/', () => {
-    expect(selected(platformPrompt(env(), { hasAndroidDir: true, hasIosDir: false }))).toBe('android');
+    expect(selected(platformPrompt(env(), { hasAndroidProject: true, hasIosProject: false }))).toBe('android');
   });
 
   it('defaults to both when the project has android/ and ios/ and both toolchains are ready', () => {
-    expect(selected(platformPrompt(env(), { hasAndroidDir: true, hasIosDir: true }))).toBe('both');
+    expect(selected(platformPrompt(env(), { hasAndroidProject: true, hasIosProject: true }))).toBe('both');
   });
 
   it('defaults to the usable one of a two-platform project', () => {
-    expect(selected(platformPrompt(env({ adbVersion: undefined }), { hasAndroidDir: true, hasIosDir: true }))).toBe('ios');
-    expect(selected(platformPrompt(env({ xcodeVersion: undefined }), { hasAndroidDir: true, hasIosDir: true }))).toBe('android');
+    expect(selected(platformPrompt(env({ adbVersion: undefined }), { hasAndroidProject: true, hasIosProject: true }))).toBe('ios');
+    expect(selected(platformPrompt(env({ xcodeVersion: undefined }), { hasAndroidProject: true, hasIosProject: true }))).toBe('android');
   });
 
   it('keeps Android first when both toolchains are ready and the layout says nothing', () => {
@@ -409,8 +409,18 @@ describe('platformPrompt() (PILOT-721)', () => {
     expect(platformPrompt(env({ simulators: [] }), none).choices.find((c) => c.name === 'ios')?.hint).toBe('no iOS simulators found');
   });
 
+  it('says adb is off PATH, not missing, when an Android SDK has it (PILOT-832)', () => {
+    const p = platformPrompt(env({ adbVersion: undefined, adbOffPath: '/Users/me/Library/Android/sdk/platform-tools' }), none);
+    expect(p.choices.find((c) => c.name === 'android')?.hint).toBe('adb not on PATH');
+  });
+
+  it('defaults a native Gradle project to Android even with adb off PATH (PILOT-832)', () => {
+    const p = platformPrompt(env({ adbVersion: undefined, adbOffPath: '/sdk/platform-tools' }), { hasAndroidProject: true, hasIosProject: false });
+    expect(selected(p)).toBe('android');
+  });
+
   it('offers only Android off macOS', () => {
-    const p = platformPrompt(env({ isMacOS: false, xcodeVersion: undefined, simulators: [], adbVersion: undefined }), { hasAndroidDir: false, hasIosDir: true });
+    const p = platformPrompt(env({ isMacOS: false, xcodeVersion: undefined, simulators: [], adbVersion: undefined }), { hasAndroidProject: false, hasIosProject: true });
     expect(p.choices.map((c) => c.name)).toEqual(['android']);
     expect(p.initial).toBe(0);
   });

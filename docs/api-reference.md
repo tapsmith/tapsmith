@@ -22,6 +22,12 @@ Whitespace is normalized on both sides before comparing a string, exact or not, 
 
 Without `exact`, a string `getByText` also ignores case, as `getByRole`'s `name` does. Case is folded with Unicode case mappings that don't depend on the device's locale, so `getByText("login")` finds `LOGIN` on a Turkish device too. A few special characters (such as `ß`) may fold differently per platform. The software keyboard's keys never match, so `getByText("Delete")` does not find the keyboard's `delete` key ([what locators never match](locators.md#what-locators-never-match)). `{ exact: true }`, `getByLabel`, `getByPlaceholder` and `getByDescription` are case-sensitive.
 
+On iOS, `getByText` returns the innermost element holding the text, as Playwright does: an element whose descendant also matches is left out, so `getByText("Dark Mode")` finds the label of a SwiftUI `Toggle` row, not the row and its label, and a list row or an alert gives way to the text inside it. Since an iOS element has an accessibility label and value rather than text content, `getByText` reads:
+
+- **the label (and title)**, except on a switch, slider or stepper, whose label is only its accessible name: find those with `getByLabel()` or `getByRole("switch", { name })`. SwiftUI draws a `Toggle`'s or `Stepper`'s label as separate text, which `getByText` finds.
+- **the value only of text and text inputs** (a field's typed text). A switch's `0`/`1`, a slider's or stepper's value, a button's value and React Native's `accessibilityValue` are not text, so `getByText("1")` doesn't match a switch that is on.
+- **a label without the part it repeats from its container**: a SwiftUI `Stepper`'s buttons are labelled `"Quantity: 1, Increment"`, and `getByText("Quantity: 1", { exact: true })` finds only the stepper's text.
+
 #### Regular expressions
 
 `getByText`, `getByLabel` and `getByRole`'s `name` accept a `RegExp`, as in Playwright. It is matched on the device with JavaScript's semantics, so it behaves the way it would in a browser:
@@ -105,13 +111,13 @@ Locate an element by its dedicated test identifier.
 device.getByTestId("submit-button")
 ```
 
-On Android the value is compared with the element's whole resource ID, which is what a React Native `testID` becomes. A native view's package-qualified ID (`com.myapp:id/submit`) is addressed with `device.locator({ id: "com.myapp:id/submit" })` instead.
+On Android the value is compared with the element's whole resource ID, which is what a React Native `testID` becomes. A native view's package-qualified ID (`com.myapp:id/submit`) is addressed with `device.locator({ id: "com.myapp:id/submit" })` instead. A Jetpack Compose `Modifier.testTag()` becomes a resource ID only where the app sets `Modifier.semantics { testTagsAsResourceId = true }` on it or an ancestor (once on the root of `setContent` covers the screen); a `getByTestId()` that finds nothing on Android says so in its error. See [Jetpack Compose](locators.md#jetpack-compose).
 
 ### `device.getByLabel(text: string | RegExp): ElementHandle`
 
 Locate an input element by its associated label text. Finds form controls (text fields, checkboxes, switches, etc.) whose accessible name matches the label.
 
-- **Android**: matches inputs (text fields, checkboxes, switches, radio buttons, seek bars and spinners) whose `contentDescription` equals the text, or inputs linked via `labelFor`/`labeledBy`.
+- **Android**: matches inputs (text fields, checkboxes, switches, radio buttons, seek bars and spinners) whose `contentDescription` equals the text, inputs linked via `labelFor`/`labeledBy`, or a Jetpack Compose text field whose `label` is the text (the label is a child of the field).
 - **iOS**: matches input elements (text fields, text views, switches, sliders, steppers, pickers, checkboxes and radio buttons, but not search fields) whose `accessibilityLabel` or title equals the text.
 
 The comparison normalizes whitespace like `getByText`. A [RegExp](#regular-expressions) is tested against the label text instead.
@@ -893,9 +899,9 @@ await acceptButton.tap();
 
 ### Queries
 
-#### `elementHandle.find(): Promise<ElementInfo>`
+#### `elementHandle.find(options?): Promise<ElementInfo>`
 
-Resolve the handle to an `ElementInfo` object. Throws if the element is not found within the timeout.
+Resolve the handle to an `ElementInfo` object. Throws if the element is not found within the timeout: the device timeout, or the [per-call timeout](#per-call-timeout) (`find({ timeout: 2000 })`).
 
 The `ElementInfo` object contains:
 
@@ -1083,7 +1089,9 @@ await device.getByTestId("lazy-section").waitFor({ state: "attached" });
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `state` | `'visible' \| 'hidden' \| 'attached' \| 'detached'` | `'visible'` | Target state to wait for |
-| `timeout` | `number` | Device timeout (30s) | Maximum time to wait in milliseconds |
+| `timeout` | `number` | Device timeout (30s) | Maximum time to wait in milliseconds. `0` (or any number under 1) checks once without waiting |
+
+Unknown options and states throw a `TypeError`, as for [actions](#per-call-timeout).
 
 **States:**
 
@@ -1096,12 +1104,29 @@ await device.getByTestId("lazy-section").waitFor({ state: "attached" });
 
 ### Actions
 
-#### `elementHandle.tap(): Promise<void>`
+#### Per-call timeout
+
+Every action except `scrollIntoView()` (bounded by its `maxScrolls`) and `highlight()`, and every reader that waits for its element (`find()`, `getText()`, `inputValue()`, `isEnabled()`, `isChecked()`, `isEditable()`, `boundingBox()`), takes a `timeout` option in milliseconds, as Playwright's do. The options type is exported as `TimeoutOptions` (`import type { TimeoutOptions } from "tapsmith"`). It bounds the whole call — the auto-wait for the element and the action itself — and overrides the device timeout (the config's `timeout`, 30 s by default) for that call only. It may be shorter or longer than the device timeout. As with the device timeout, an element found just before the timeout still gets up to a second for the action itself (and `setChecked()` up to a second to see its state change), so a call can end shortly after the timeout rather than give up on an element it has found. With tracing on, the screenshot and hierarchy captured before the action are not counted either, except by `setChecked()`, whose check that the state changed runs to the timeout counted from the start of the call.
+
+```typescript
+await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });
+await device.getByPlaceholder("Email").type("user@example.com", { delay: 50, timeout: 10_000 });
+const label = await device.getByTestId("status").getText({ timeout: 2000 });
+```
+
+The timeout must be a finite number of milliseconds, at least 1 (a value under 1 is refused as most likely meant in seconds). Unlike Playwright, `0` does not mean "no limit": it is refused, as is `Infinity`, so pass a long timeout instead.
+
+Options are checked when the call is made, so a mistake fails at once rather than being ignored. Tests usually run without a type check, so TypeScript does not catch these. An unknown option (`tap({ timout: 5000 })`), an options argument that is not an object (`tap(5000)`) and an invalid timeout throw a `TypeError` naming the method and the options it accepts. A Playwright option with no Tapsmith equivalent, such as `force`, `trial` or `position`, gets a message saying so. Options set to `undefined` are ignored. `exists()`, `count()`, `all()` and `allTextContents()` take no arguments, since they read the screen as it is: given one (`exists({ timeout: 5000 })`), they throw rather than answer at once as if they had waited, and the message names the waiting form to use.
+
+#### `elementHandle.tap(options?): Promise<void>`
 
 Tap this element.
 
+- `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
+
 ```typescript
 await device.getByRole("button", { name: "Submit" }).tap();
+await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });
 ```
 
 **Covered elements.** Like a Playwright click, a tap auto-waits for the element to be enabled and then for nothing to be drawn over it. If something covers the point it would tap, the tap waits for the cover to go away. Covers include the software keyboard, a bar or window drawn over the element, and another control painted on top of it (a button, link, text input, list cell, alert, sheet…). If the cover clears within the action timeout, the tap goes ahead. If it is still there at the timeout, the tap fails instead of tapping the cover: `Element is covered by the keyboard …` or `Element is covered by button "Overlay" …`. When the keyboard or a bar covers only part of the element, the tap lands on the visible part. `doubleTap()`, `longPress()`, and the tap that `type()`, `clear()` and `focus()` use to focus a field follow the same rules. A field that already has focus is not tapped at all when the keyboard, or a control on the same screen, covers it (typically its own keyboard): typing reaches it anyway. A dialog or other window over the field is waited out like any other cover, since it takes the input. If the element goes away, or turns into a different element, while its cover is being waited out, the action does not tap whatever replaced it: it looks the locator up again and fails as not found if nothing matches. If the keyboard covers an element that is not in a scroll view, dismiss it first (`device.hideKeyboard()`, or submit the field). A plain view that is not a control (for example an unlabeled backdrop) is not detected as a cover yet (PILOT-364).
@@ -1129,11 +1154,12 @@ An element that is off-screen auto-waits like any other, in case it scrolls or a
 
 On Android, an element that is *entirely* behind the keyboard is hidden from the accessibility tree. An action on it fails as not found (after waiting out the timeout) rather than as covered, and assertions such as `toBeVisible()` and `toHaveValue()` cannot see it until the keyboard is gone.
 
-#### `elementHandle.doubleTap(options?: { intervalMs?: number }): Promise<void>`
+#### `elementHandle.doubleTap(options?): Promise<void>`
 
 Double-tap this element.
 
 - `options.intervalMs?`: `number` — interval in milliseconds between the two taps. Overrides the global `doubleTapInterval` config for this call. Defaults to `100`. On iOS, the interval is used for the coordinate-based EventSynthesizer path; the XCUIElement path handles timing internally.
+- `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByText("Zoom here", { exact: true }).doubleTap();
@@ -1142,19 +1168,23 @@ await device.getByText("Zoom here", { exact: true }).doubleTap();
 await device.getByText("Zoom here").doubleTap({ intervalMs: 150 });
 ```
 
-#### `elementHandle.longPress(durationMs?: number): Promise<void>`
+#### `elementHandle.longPress(options?): Promise<void>`
 
 Long press this element.
 
+- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
+
 ```typescript
 await device.getByText("Item 1", { exact: true }).longPress(2000);
+await device.getByText("Item 1", { exact: true }).longPress({ duration: 2000, timeout: 5000 });
 ```
 
-#### `elementHandle.type(text: string, options?: { delay?: number }): Promise<void>`
+#### `elementHandle.type(text: string, options?): Promise<void>`
 
 Type text into this element.
 
 - `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay).
+- `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByPlaceholder("Email").type("user@example.com");
@@ -1169,19 +1199,20 @@ await device.getByPlaceholder("OTP").type("123456", { delay: 50 });
 > Enter key). Other ASCII control codes below `0x20` are dropped with
 > a one-shot warning log.
 
-#### `elementHandle.clearAndType(text: string, options?: { delay?: number }): Promise<void>`
+#### `elementHandle.clearAndType(text: string, options?): Promise<void>`
 
 Clear existing text and type new text.
 
 - `options.delay?`: `number` — delay in milliseconds between keystrokes. Same as `type()`.
+- `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.locator({ id: "search_box" }).clearAndType("new query");
 ```
 
-#### `elementHandle.clear(): Promise<void>`
+#### `elementHandle.clear(options?): Promise<void>`
 
-Clear the text content of this element.
+Clear the text content of this element. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 await device.locator({ id: "search_box" }).clear();
@@ -1196,9 +1227,9 @@ await device.locator({ id: "search_box" }).clear();
 > field can't hang the agent. Android uses the native `UiObject2.clear()`
 > API and isn't subject to this limit.
 
-#### `elementHandle.scroll(direction: string, options?: { distance?: number }): Promise<void>`
+#### `elementHandle.scroll(direction: string, options?): Promise<void>`
 
-Scroll this element in the given direction.
+Scroll this element in the given direction. Options: `distance` (below) and the [per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByTestId("product-list").scroll("down"); // a FlatList with testID="product-list"
@@ -1210,7 +1241,7 @@ The device agents don't apply `distance` yet: each call scrolls by a fixed step 
 
 Scroll the viewport until this element is visible on screen. Useful for reaching elements that are below the fold in a scrollable container.
 
-Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Taps do not scroll for you (see [Off-screen elements](#elementhandletap-promisevoid)), so call this first for an element that may be off-screen. It swipes up by default, which reveals what is below; pass `{ direction: "down" }` for an element above the screen, such as a row the list was scrolled past.
+Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Taps do not scroll for you (see [Off-screen elements](#elementhandletapoptions-promisevoid)), so call this first for an element that may be off-screen. It swipes up by default, which reveals what is below; pass `{ direction: "down" }` for an element above the screen, such as a row the list was scrolled past.
 
 If the element is already visible, this is a no-op — it returns without scrolling, so calling `scrollIntoView()` before every `tap()` is safe even when the target is on screen (an unnecessary swipe could otherwise shift it under a pinned app bar). When the element isn't found on the first check, Tapsmith waits for the UI to settle and re-checks before the first swipe, so a briefly stale accessibility tree (e.g. right after navigation) doesn't trigger a spurious scroll. A handle from `all()` is a live `.nth(i)` locator, so on a virtualised list the scroll stops on whatever row is at index `i` in the scrolled window — see the [`all()`](#elementhandleall-promiseelementhandle) section.
 
@@ -1231,9 +1262,9 @@ await device.getByDescription("Settings").tap();
 await device.getByText("Top Section", { exact: true }).scrollIntoView({ direction: "down" });
 ```
 
-#### `elementHandle.dragTo(target: ElementHandle): Promise<void>`
+#### `elementHandle.dragTo(target: ElementHandle, options?): Promise<void>`
 
-Drag this element to a target element.
+Drag this element to a target element. The [per-call timeout](#per-call-timeout) option is shared by the wait for both elements and the drag: each step gets what the earlier ones left of it. As for other actions, a step that starts with less than a second left still gets up to a second, so a call whose elements turn up late can end shortly after the timeout. Without the option, each element waits for its own locator's timeout.
 
 ```typescript
 const source = device.getByText("Item 1", { exact: true });
@@ -1241,52 +1272,54 @@ const target = device.getByText("Drop Zone", { exact: true });
 await source.dragTo(target);
 ```
 
-#### `elementHandle.setChecked(checked: boolean): Promise<void>`
+#### `elementHandle.setChecked(checked: boolean, options?): Promise<void>`
 
-Ensure a checkbox, switch, or radio button is in the desired state. Idempotent -- only taps if the current state differs from the desired state, and verifies the state changed after tapping. Like `tap()`, it does not scroll an off-screen element into view (see [Off-screen elements](#elementhandletap-promisevoid)).
+Ensure a checkbox, switch, or radio button is in the desired state. Idempotent -- only taps if the current state differs from the desired state, and verifies the state changed after tapping. The [per-call timeout](#per-call-timeout) option bounds the whole call, the check that the state changed included. Like `tap()`, it does not scroll an off-screen element into view (see [Off-screen elements](#elementhandletapoptions-promisevoid)).
 
 ```typescript
 await device.getByRole("switch", { name: "Dark Mode" }).setChecked(true);
 await device.getByRole("checkbox", { name: "Remember me" }).setChecked(false);
 ```
 
-#### `elementHandle.selectOption(option: string | { index: number }): Promise<void>`
+#### `elementHandle.selectOption(option: string | { index: number }, options?): Promise<void>`
 
-Select an option from a native spinner or dropdown. Abstracts the tap-spinner, wait-for-popup, tap-option pattern into a single action.
+Select an option from a native spinner or dropdown. Abstracts the tap-spinner, wait-for-popup, tap-option pattern into a single action. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 await device.getByRole("combobox").selectOption("Option 2");
 await device.getByRole("combobox").selectOption({ index: 1 });
 ```
 
-#### `elementHandle.focus(): Promise<void>`
+`option` is the option's text or `{ index }` (a non-negative integer). Anything else, including Playwright's `{ value }` and `{ label }` forms, throws a `TypeError`.
 
-Programmatically focus this element. For text fields, this shows the keyboard.
+#### `elementHandle.focus(options?): Promise<void>`
+
+Programmatically focus this element. For text fields, this shows the keyboard. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 await device.getByRole("textfield", { name: "Email" }).focus();
 ```
 
-#### `elementHandle.blur(): Promise<void>`
+#### `elementHandle.blur(options?): Promise<void>`
 
-Remove focus from this element by tapping outside its bounds.
+Remove focus from this element by tapping outside its bounds. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 await device.getByRole("textfield", { name: "Email" }).blur();
 ```
 
-#### `elementHandle.pinchIn(options?: { scale?: number }): Promise<void>`
+#### `elementHandle.pinchIn(options?): Promise<void>`
 
-Perform a pinch-in (zoom out) gesture on this element.
+Perform a pinch-in (zoom out) gesture on this element. Options: `scale` (default `0.5`) and the [per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByText("Map", { exact: true }).pinchIn();
 await device.getByText("Map", { exact: true }).pinchIn({ scale: 0.3 });
 ```
 
-#### `elementHandle.pinchOut(options?: { scale?: number }): Promise<void>`
+#### `elementHandle.pinchOut(options?): Promise<void>`
 
-Perform a pinch-out (zoom in) gesture on this element.
+Perform a pinch-out (zoom in) gesture on this element. Options: `scale` (default `2`) and the [per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByText("Map", { exact: true }).pinchOut();
@@ -1301,9 +1334,9 @@ Highlight this element for debugging. Validates that the element exists and is a
 await device.getByRole("button", { name: "Submit" }).highlight();
 ```
 
-#### `elementHandle.screenshot(): Promise<Buffer>`
+#### `elementHandle.screenshot(options?): Promise<Buffer>`
 
-Capture a screenshot cropped to this element's bounding box. Returns a `Buffer` containing PNG image data.
+Capture a screenshot cropped to this element's bounding box. Returns a `Buffer` containing PNG image data. Takes the [per-call timeout](#per-call-timeout) option.
 
 ```typescript
 const png = await device.getByRole("image", { name: "Profile" }).screenshot();
@@ -1311,16 +1344,16 @@ const png = await device.getByRole("image", { name: "Profile" }).screenshot();
 
 ### Info Accessors
 
-#### `elementHandle.getText(): Promise<string>`
+#### `elementHandle.getText(options?): Promise<string>`
 
-Get the visible text content of this element. Waits for the element like `find()`. To read the text of
+Get the visible text content of this element. Waits for the element like `find()`, for up to the [per-call timeout](#per-call-timeout) when one is given. To read the text of
 every match in one hierarchy read, use [`allTextContents()`](#elementhandlealltextcontents-promisestring).
 
 ```typescript
 const label = await device.locator({ id: "status_label" }).getText();
 ```
 
-#### `elementHandle.isVisible(): Promise<boolean>`
+#### `elementHandle.isVisible(options?): Promise<boolean>`
 
 Check whether this element is visible on screen **right now**.
 
@@ -1360,11 +1393,13 @@ for the handle's timeout and then throws a descriptive error, pointing at `expec
 > new screen is still appearing. To wait for visibility, use `await expect(x).toBeVisible()`; use
 > `isVisible()`/`isHidden()` only to branch on the current state.
 
+`isVisible()` and `isHidden()` take a `timeout` option, as Playwright's do, but it does not make them wait for the element (Playwright ignores the option altogether). It replaces the handle's timeout for the retries described above: re-reads of a screen caught mid-re-render, retries of a slow or faulty agent, and the settle wait before an absent answer, which is capped at the timeout — so a very short timeout can answer `false` before a lagging accessibility tree catches up.
+
 Only `isVisible()`, `isHidden()` and `exists()` are non-waiting. `isEnabled()`, `isChecked()` and `isEditable()`
 follow Playwright too: they wait for the element to be present and throw if it never appears, so a
 negative answer always describes a real element.
 
-#### `elementHandle.isHidden(): Promise<boolean>`
+#### `elementHandle.isHidden(options?): Promise<boolean>`
 
 The opposite of `isVisible()`: `true` when the element is not visible **or** does not exist. Does not
 wait for the element to appear or disappear. To wait for an element to go away, use
@@ -1386,47 +1421,47 @@ Do not use `isHidden()` to wait for a spinner or animation to finish: an animati
 what produces stale snapshots, so the probe would have to keep re-reading and, if the animation never
 stops, throws. `await expect(device.getByText("Loading…")).not.toBeVisible()` is the tool for that.
 
-#### `elementHandle.isEnabled(): Promise<boolean>`
+#### `elementHandle.isEnabled(options?): Promise<boolean>`
 
 Check whether this element is enabled (interactive). Waits for the element to be present (up to the
-handle's timeout) and throws if it never appears.
+handle's timeout, or the [per-call timeout](#per-call-timeout) when one is given) and throws if it never appears.
 
 ```typescript
 const enabled = await device.getByRole("button", { name: "Submit" }).isEnabled();
 ```
 
-#### `elementHandle.isChecked(): Promise<boolean>`
+#### `elementHandle.isChecked(options?): Promise<boolean>`
 
 Check whether this checkbox, switch, or radio button is in the checked state. Waits for the element to
-be present (up to the handle's timeout) and throws if it never appears.
+be present (up to the handle's timeout, or the [per-call timeout](#per-call-timeout) when one is given) and throws if it never appears.
 
 ```typescript
 const checked = await device.getByRole("switch", { name: "Notifications" }).isChecked();
 ```
 
-#### `elementHandle.isEditable(): Promise<boolean>`
+#### `elementHandle.isEditable(options?): Promise<boolean>`
 
 Check whether this element is an editable input field (text field role and enabled). Waits for the
-element to be present (up to the handle's timeout) and throws if it never appears.
+element to be present (up to the handle's timeout, or the [per-call timeout](#per-call-timeout) when one is given) and throws if it never appears.
 
 ```typescript
 const editable = await device.getByRole("textfield", { name: "Email" }).isEditable();
 ```
 
-#### `elementHandle.inputValue(): Promise<string>`
+#### `elementHandle.inputValue(options?): Promise<string>`
 
 Get the current value of an input field. On Android, this returns the element's text property. Waits
-for the element to be present (up to the handle's timeout, on every handle shape including
+for the element to be present (up to the handle's timeout or the [per-call timeout](#per-call-timeout), on every handle shape including
 `.first()`/`.nth()`/`.filter()`) and throws if it never appears.
 
 ```typescript
 const value = await device.getByRole("textfield", { name: "Email" }).inputValue();
 ```
 
-#### `elementHandle.boundingBox(): Promise<BoundingBox | null>`
+#### `elementHandle.boundingBox(options?): Promise<BoundingBox | null>`
 
 Get the element's position and dimensions. Returns `null` if the element has no bounds. Waits for the
-element to be present (up to the handle's timeout, on every handle shape including
+element to be present (up to the handle's timeout or the [per-call timeout](#per-call-timeout), on every handle shape including
 `.first()`/`.nth()`/`.filter()`) and throws if it never appears.
 
 ```typescript
@@ -2882,17 +2917,17 @@ npx tapsmith test --reporter json     # writes tapsmith-results/results.json
 
 ### `tapsmith init [options]`
 
-Set up a project. With no options, in a terminal, it runs the interactive wizard: it detects your environment (ADB, Xcode, simulators, emulators), offers the app builds it finds under `android/` and `ios/` (a typed path must exist), walks you through platform and app configuration, and generates a `tapsmith.config.ts`, an example test (`tests/example.tapsmith.ts`) and an `AGENTS.md` section. It adds `tapsmith-results/` (traces, screenshots, JSON and JUnit results) and `tapsmith-report/` (the HTML report) to the project's `.gitignore` (creating one if there is none), skipping any git already ignores (a `.gitignore` it cannot update is a warning, not an error). Before writing anything it checks it can write every file (and, before its setup questions or the iOS agent build, that it can write to the project directory), and it writes the config last, replacing any existing one only once the new one is complete: a file it cannot write stops init with exit code 1 and `WRITE_FAILED`, naming the file and anything already written, in the wizard as with `--yes`. Ctrl-C or Esc at a wizard question stops it with "Setup cancelled." and exit code 130, before it has written anything (at the install offer, which comes after the files are written, the message says so and gives the install command). In the wizard, the platform question defaults to one that can run here (Android needs ADB; iOS needs Xcode and a simulator), narrowed by the project's `android/` and `ios/` directories, and hints the ones that can't; it offers every iOS simulator, with a booted one selected unless it has a custom name (stock names such as `iPhone 16` come first, since a renamed simulator exists only on your Mac); and its next steps start with `npx tapsmith verify`. The AVD and simulator defaults below apply to the wizard's pre-selection too. Next steps and hints use the project's package manager to run Tapsmith (`pnpm exec tapsmith`, `yarn tapsmith` with Yarn 2 or later, `bunx tapsmith`, else `npx tapsmith`). The network capture summary checks mitmproxy as `doctor` does and lists only the iOS simulator step still missing. The config's `testMatch` is `['**/*.tapsmith.ts']`, a suffix Jest and Vitest don't run by default (outside a `__tests__` folder, where Jest runs every file), so the project's own unit-test run doesn't pick up Tapsmith tests and Tapsmith doesn't pick up its unit tests; when the project already has Tapsmith tests named `*.test.ts` or `*.spec.ts` (from an older init, say), init warns that the new config won't run them. Run outside a project that has Tapsmith installed (`npx tapsmith init` before `npm i -D tapsmith`, or a global install), it offers to install it with the project's package manager, since the files it writes import `tapsmith`; declined, it prints the command as the first next step. In a directory without a `package.json` it does not offer the install, since a bare `npm i -D tapsmith` would install into the nearest parent directory that has one (a monorepo root, say): it warns, naming that directory (run the install there if it is the project's root), and the next step creates the `package.json` first (`npm init -y && npm i -D tapsmith`, or the package manager's equivalent). `doctor`, `verify` and the config-load error give the same command. An install that exits non-zero but leaves `tapsmith` importable counts as done: pnpm 11 and later exit 1 over the dependency build scripts they skipped, and for pnpm init then prints the `allowBuilds` snippet that silences that error (see [Installation](getting-started.md#pnpm-err_pnpm_ignored_builds)). In an Expo project (`expo` among the dependencies, plus `app.json` or `app.config.*`) it gives the Expo build commands when it finds no build (`npx expo prebuild`, then a release `./gradlew assembleRelease` or `xcodebuild` build, with `EXPO_PUBLIC_TAPSMITH_HOOKS=1` when the app uses `@tapsmith/react-native`, which the app must pass to the hooks' `enabled` prop itself), and pre-fills the package and bundle ID prompts from the app config when it can't read them from the build.
+Set up a project. With no options, in a terminal, it runs the interactive wizard: it detects your environment (ADB, Xcode, simulators, emulators), offers the app builds it finds in the project (any Gradle module's `build/outputs/apk/`, any `*-iphonesimulator/` or `*-iphoneos/` products folder, searched in `android/` and `ios/` in a React Native project and from the root in a native one; with no build of the kind asked for (simulator or device) in the project, this project's builds in Xcode's default DerivedData, marked as this Mac's only; a typed path must exist), walks you through platform and app configuration, and generates a `tapsmith.config.ts`, an example test (`tests/example.tapsmith.ts`) and an `AGENTS.md` section. It adds `tapsmith-results/` (traces, screenshots, JSON and JUnit results), `tapsmith-report/` (the HTML report) and `node_modules/` (which a native iOS or Android project's `.gitignore` lacks) to the project's `.gitignore` (creating one if there is none), skipping any git already ignores (a `.gitignore` it cannot update is a warning, not an error). Before writing anything it checks it can write every file (and, before its setup questions or the iOS agent build, that it can write to the project directory), and it writes the config last, replacing any existing one only once the new one is complete: a file it cannot write stops init with exit code 1 and `WRITE_FAILED`, naming the file and anything already written, in the wizard as with `--yes`. Ctrl-C or Esc at a wizard question stops it with "Setup cancelled." and exit code 130, before it has written anything (at the install offer, which comes after the files are written, the message says so and gives the install command). In the wizard, the platform question defaults to one that can run here (Android needs ADB; iOS needs Xcode and a simulator), narrowed by the project's layout as `--platform` infers it below, and hints the ones that can't (`adb not on PATH` when an Android SDK has adb but PATH doesn't); it offers every iOS simulator, with a booted one selected unless it has a custom name (stock names such as `iPhone 16` come first, since a renamed simulator exists only on your Mac); and its next steps start with `npx tapsmith verify`. The AVD and simulator defaults below apply to the wizard's pre-selection too. Next steps and hints use the project's package manager to run Tapsmith (`pnpm exec tapsmith`, `yarn tapsmith` with Yarn 2 or later, `bunx tapsmith`, else `npx tapsmith`). The network capture summary checks mitmproxy as `doctor` does and lists only the iOS simulator step still missing. The config's `testMatch` is `['**/*.tapsmith.ts']`, a suffix Jest and Vitest don't run by default (outside a `__tests__` folder, where Jest runs every file), so the project's own unit-test run doesn't pick up Tapsmith tests and Tapsmith doesn't pick up its unit tests; when the project already has Tapsmith tests named `*.test.ts` or `*.spec.ts` (from an older init, say), init warns that the new config won't run them. Run outside a project that has Tapsmith installed (`npx tapsmith init` before `npm i -D tapsmith`, or a global install), it offers to install it with the project's package manager, since the files it writes import `tapsmith`; declined, it prints the command as the first next step. In a directory without a `package.json` it does not offer the install, since a bare `npm i -D tapsmith` would install into the nearest parent directory that has one (a monorepo root, say): it warns, naming that directory (run the install there if it is the project's root), and the next step creates the `package.json` first (`npm init -y && npm i -D tapsmith`, or the package manager's equivalent). `doctor`, `verify` and the config-load error give the same command. An install that exits non-zero but leaves `tapsmith` importable counts as done: pnpm 11 and later exit 1 over the dependency build scripts they skipped, and for pnpm init then prints the `allowBuilds` snippet that silences that error (see [Installation](getting-started.md#pnpm-err_pnpm_ignored_builds)). In an Expo project (`expo` among the dependencies, plus `app.json` or `app.config.*`) it gives the Expo build commands when it finds no build (`npx expo prebuild`, then a release `./gradlew assembleRelease` or `xcodebuild` build, with `EXPO_PUBLIC_TAPSMITH_HOOKS=1` when the app uses `@tapsmith/react-native`, which the app must pass to the hooks' `enabled` prop itself), and pre-fills the package and bundle ID prompts from the app config when it can't read them from the build.
 
 Pass `--yes` or any setup flag below (every flag but `--json`) to run non-interactively instead, for scripts and AI agents: anything not given is auto-detected, and a choice that cannot be made (two APKs, say) exits 1 naming the candidates and the flag that picks one. `--json` only changes the output, so an agent passes `--yes --json`. Without a terminal and without `--yes` or a setup flag, `init` exits 1 rather than waiting for input. iOS physical devices need the interactive wizard, for its code-signing preflight.
 
 | Flag | Meaning |
 | --- | --- |
 | `-y`, `--yes` | Accept auto-detected defaults for anything not specified |
-| `--platform <list>` | `android`, `ios`, or `android,ios` (default: inferred — Android when `--apk` is given, there is an `android/` directory, or `--package` is given beside `--bundle-id` or with nothing pointing at iOS (no `--app`, no `ios/` directory), iOS when `--app` is given or, on macOS, there is an `ios/` directory; in a React Native or Expo project on macOS that leaves iOS out, init warns, with how to add it) |
-| `--apk <path>` | Android APK (default: auto-detected under `android/**/build/outputs/apk/`) |
-| `--package <id>` | Android package name (default: read from the APK, else, in an Expo project, `expo.android.package` from the app config, with a warning). With no APK found, `--package` alone writes a config without `apk`, for an app already installed on the device (a dev client, say): Tapsmith launches and resets it but does not install it, and init warns. In a setup with no Android, init ignores `--package` with a warning that names `--bundle-id`, the iOS flag (and an unused `--bundle-id` likewise) |
-| `--app <path>` | iOS simulator `.app` bundle (default: auto-detected under `ios/`) |
+| `--platform <list>` | `android`, `ios`, or `android,ios` (default: inferred — Android when `--apk` is given, there is an Android project (an `android/` directory or a `settings.gradle`/`settings.gradle.kts` at the root), or `--package` is given beside `--bundle-id` or with nothing pointing at iOS (no `--app`, no iOS project), iOS when `--app` is given or, on macOS, there is an iOS project (an `ios/` directory, or an `.xcodeproj`/`.xcworkspace` at the root or one folder down); in a React Native or Expo project on macOS that leaves iOS out, init warns, with how to add it) |
+| `--apk <path>` | Android APK (default: auto-detected in any Gradle module's `build/outputs/apk/` of the Android project, such as `android/app/…` or `app/…`; instrumentation APKs are skipped) |
+| `--package <id>` | Android package name (default: read from the APK with `aapt2`, found on PATH or in the build-tools of `ANDROID_HOME`, `ANDROID_SDK_ROOT` or Android Studio's default SDK location, else, in an Expo project, `expo.android.package` from the app config, with a warning). With no APK found, `--package` alone writes a config without `apk`, for an app already installed on the device (a dev client, say): Tapsmith launches and resets it but does not install it, and init warns. In a setup with no Android, init ignores `--package` with a warning that names `--bundle-id`, the iOS flag (and an unused `--bundle-id` likewise) |
+| `--app <path>` | iOS simulator `.app` bundle (default: auto-detected in any `*-iphonesimulator/` products folder of the iOS project, such as `ios/build/…` or `build/Build/Products/…`, skipping XCUITest runners; with none there, this project's build in Xcode's default DerivedData, with a warning that the path exists only on this Mac) |
 | `--bundle-id <id>` | iOS bundle identifier (default: read from `Info.plist`, else, in an Expo project, `expo.ios.bundleIdentifier` from the app config, with a warning) |
 | `--avd <name>` | Android AVD to auto-launch (default: the first that supports HTTPS capture, else the first whose system image can't be read, else the first available — Google Play images don't support capture or `device.route()`, so with only those init suggests `create-avd`, and with capture on warns) |
 | `--simulator <name>` | iOS simulator name (default: a booted iOS simulator, else the newest available iPhone, preferring stock names such as `iPhone 16` to simulators you renamed; a renamed one exists only on your Mac, so when init writes one anyway, the config says so in a comment and init warns) |
@@ -3320,9 +3355,9 @@ await device.getByRole("button", { name: "Continue" }).tap()
 
 ### WebViewHandle
 
-Returned by `device.webview()`. All methods use CSS selectors and auto-wait for elements.
+Returned by `device.webview()`. All methods use CSS selectors and auto-wait for elements. `click`, `fill`, `textContent`, `innerHTML`, `inputValue` and `getAttribute` take a last `options` argument with a per-call `timeout`, which bounds the wait and the action and overrides the WebView's timeout for that call (`webview.click("#login", { timeout: 5000 })`). Their options are checked as native actions' are ([Per-call timeout](api-reference.md#per-call-timeout)).
 
-#### `webview.click(selector: string): Promise<void>`
+#### `webview.click(selector: string, options?): Promise<void>`
 
 Click an element in the WebView.
 
@@ -3331,7 +3366,7 @@ await webview.click("#login-button")
 await webview.click(".submit-btn")
 ```
 
-#### `webview.fill(selector: string, value: string): Promise<void>`
+#### `webview.fill(selector: string, value: string, options?): Promise<void>`
 
 Fill an input element with text. Dispatches `input` and `change` events.
 
@@ -3340,7 +3375,7 @@ await webview.fill("#email", "user@test.com")
 await webview.fill("#password", "secret123")
 ```
 
-#### `webview.textContent(selector: string): Promise<string>`
+#### `webview.textContent(selector: string, options?): Promise<string>`
 
 Get the text content of an element.
 
@@ -3348,25 +3383,25 @@ Get the text content of an element.
 const heading = await webview.textContent("h1")
 ```
 
-#### `webview.innerHTML(selector: string): Promise<string>`
+#### `webview.innerHTML(selector: string, options?): Promise<string>`
 
 Get the inner HTML of an element.
 
-#### `webview.inputValue(selector: string): Promise<string>`
+#### `webview.inputValue(selector: string, options?): Promise<string>`
 
 Get the current value of an input element.
 
-#### `webview.getAttribute(selector: string, name: string): Promise<string | null>`
+#### `webview.getAttribute(selector: string, name: string, options?): Promise<string | null>`
 
 Get an attribute value from an element.
 
-#### `webview.isVisible(selector: string): Promise<boolean>`
+#### `webview.isVisible(selector: string, options?): Promise<boolean>`
 
 Check if an element is visible: it must be rendered (have layout boxes — an ancestor with `display: none` counts as hidden) and not have `display: none`, `visibility: hidden`, or `opacity: 0`.
 
-#### `webview.isHidden(selector: string): Promise<boolean>`
+#### `webview.isHidden(selector: string, options?): Promise<boolean>`
 
-The opposite of `isVisible(selector)`: `true` when nothing matches the selector or the match is not visible. One DOM read, no auto-wait. Both string forms appear as their own row in a trace, like the locator forms.
+The opposite of `isVisible(selector)`: `true` when nothing matches the selector or the match is not visible. One DOM read, no auto-wait. Both string forms appear as their own row in a trace, like the locator forms. Both take an `options` argument whose `timeout` is checked but, as in Playwright, has no effect.
 
 #### `webview.evaluate<T>(expression: string): Promise<T>`
 
@@ -3425,12 +3460,12 @@ Close the WebView connection. Usually called via `device.native()` instead.
 
 Lazy reference to an element within a WebView, created by `webview.locator()` or the `webview.getBy*` methods. Supports actions and assertions.
 
-**Actions & queries (strict):** `click()`, `fill(value)`, `textContent()`, `innerHTML()`, `inputValue()`, `getAttribute(name)`, `isVisible()`, `isHidden()` (both a single DOM read with no auto-wait — the same non-waiting contract as on `ElementHandle`, minus the native probe's stale-snapshot re-reads, which a DOM query does not need)
+**Actions & queries (strict):** `click(options?)`, `fill(value, options?)`, `textContent(options?)`, `innerHTML(options?)`, `inputValue(options?)`, `getAttribute(name, options?)` — each takes a per-call `timeout` like the native [actions](api-reference.md#per-call-timeout) (`webview.getByRole("button", { name: "Login" }).click({ timeout: 5000 })`) — and `isVisible(options?)`, `isHidden(options?)`, whose `timeout` is checked but, as in Playwright, has no effect (both a single DOM read with no auto-wait — the same non-waiting contract as on `ElementHandle`, minus the native probe's stale-snapshot re-reads, which a DOM query does not need)
 
 **Narrowing & multi-element (strict-mode exempt):**
 
 - `.first()` / `.last()` / `.nth(index)` — narrow to one match positionally (negative `nth` counts from the end). Returns a new `WebViewLocator`.
-- `.count()` — number of elements currently matching (no auto-wait).
+- `.count()` — number of elements currently matching (no auto-wait). Like the native `count()` and `all()`, it throws when given an argument.
 - `.all()` — one positionally-narrowed locator per current match.
 
 WebView locators are [strict](#strict-mode): acting or asserting on a locator that resolves to more than one DOM element throws a `StrictModeViolationError` listing the matches.
