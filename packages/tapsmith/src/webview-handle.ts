@@ -549,17 +549,28 @@ export class WebViewHandle {
   async _waitForSelector(selector: string, timeoutMs?: number): Promise<void> {
     const timeout = timeoutMs ?? this._timeoutMs;
     const deadline = Date.now() + timeout;
+    let lastReadError: unknown;
     while (Date.now() < deadline) {
       const remaining = Math.max(1, deadline - Date.now());
-      const found = await this._evaluate(
-        `document.querySelector(${JSON.stringify(selector)}) !== null`,
-        remaining,
-      );
+      let found: unknown;
+      try {
+        found = await this._evaluate(
+          `document.querySelector(${JSON.stringify(selector)}) !== null`,
+          remaining,
+        );
+      } catch (err) {
+        // A read that ran into the deadline (its transport timed out) is a
+        // miss at the deadline, not an error of its own (PILOT-840).
+        if (Date.now() < deadline) throw err;
+        lastReadError = err;
+        break;
+      }
       if (found) return;
       await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
     }
     throw new Error(
       `Timed out waiting for selector "${selector}" in WebView (${timeout}ms)`,
+      lastReadError === undefined ? undefined : { cause: lastReadError },
     );
   }
 
@@ -631,9 +642,20 @@ export class WebViewHandle {
   async _resolveLocatorStrict(loc: WebViewLocator, timeoutMs?: number): Promise<void> {
     const timeout = timeoutMs ?? this._timeoutMs;
     const deadline = Date.now() + timeout;
+    let lastReadError: unknown;
     while (true) {
       const remaining = Math.max(1, deadline - Date.now());
-      const probe = await this._probeLocator(loc, remaining, { visibility: false });
+      let probe: WebViewLocatorProbe;
+      try {
+        probe = await this._probeLocator(loc, remaining, { visibility: false });
+      } catch (err) {
+        // The last read starts with what is left of the timeout, often a few
+        // milliseconds: its transport timing out means the locator was not
+        // found in time, and the error should say that (PILOT-840).
+        if (Date.now() < deadline) throw err;
+        lastReadError = err;
+        break;
+      }
       if (loc._nthIndex !== undefined) {
         const idx = normalizeNthIndex(loc._nthIndex, probe.count);
         if (idx >= 0 && idx < probe.count) return;
@@ -646,6 +668,7 @@ export class WebViewHandle {
     }
     throw new Error(
       `Timed out waiting for "${loc._selector}" in WebView (${timeout}ms)`,
+      lastReadError === undefined ? undefined : { cause: lastReadError },
     );
   }
 
