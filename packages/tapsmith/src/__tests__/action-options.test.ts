@@ -459,6 +459,32 @@ describe('WebView { timeout } (PILOT-840)', () => {
     expect((err as Error).message).not.toMatch(/CDP message timed out/);
   });
 
+  it('a WebView that never answers a read is reported as the transport error, not a locator miss', async () => {
+    const handle = new WebViewHandle({} as TapsmithGrpcClient, 0, DEVICE_TIMEOUT);
+    const hang = async (timeoutMs: number | undefined) => {
+      await new Promise((r) => setTimeout(r, timeoutMs ?? 0));
+      throw new Error('CDP message timed out (method=Runtime.evaluate, id=1)');
+    };
+    vi.spyOn(handle, '_probeLocator').mockImplementation(async (_loc, timeoutMs) => hang(timeoutMs));
+    vi.spyOn(handle, '_evaluate').mockImplementation(async (_e: string, timeoutMs?: number) => hang(timeoutMs));
+    await expect(handle.locator('#go').click({ timeout: 300 })).rejects.toThrow(/^CDP message timed out/);
+    await expect(handle.click('#go', { timeout: 300 })).rejects.toThrow(/^CDP message timed out/);
+  });
+
+  it('a WebView read that times out well before the deadline (CDP caps a request) is not reported as the miss', async () => {
+    const handle = new WebViewHandle({} as TapsmithGrpcClient, 0, DEVICE_TIMEOUT);
+    let reads = 0;
+    vi.spyOn(handle, '_probeLocator').mockImplementation(async () => {
+      if (++reads === 1) return { count: 0, anyVisible: false, targetVisible: false, sample: [] };
+      // The second read stalls past the transport's cap, far short of the 5 s timeout.
+      await new Promise((r) => setTimeout(r, 300));
+      throw new Error('CDP message timed out (method=Runtime.evaluate, id=2)');
+    });
+    const start = Date.now();
+    await expect(handle.locator('#go').click({ timeout: 5_000 })).rejects.toThrow(/^CDP message timed out/);
+    expect(Date.now() - start).toBeLessThan(2_000);
+  });
+
   it('webview wait loops still report a read that fails for another reason as itself', async () => {
     const handle = new WebViewHandle({} as TapsmithGrpcClient, 0, DEVICE_TIMEOUT);
     vi.spyOn(handle, '_probeLocator').mockImplementation(async () => {

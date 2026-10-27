@@ -94,14 +94,24 @@ function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string
  * data-testid, aria-label) mapped onto the ElementInfo shape.
  */
 /**
- * Whether `err` is a CDP or WebKit Inspector request timing out. A wait loop's
- * read is given what is left of the loop's timeout, so its timing out means the
- * deadline was reached: judged by the error, not the clock, since the
- * transport's timer and `Date.now()` can disagree by a millisecond. Any other
- * failure (a page JS error, a closed connection) is its own error.
+ * Slack for judging a failed read as having run into the deadline: the
+ * transport's timer and `Date.now()` can disagree by a millisecond or two.
  */
-function isReadTimeout(err: unknown): boolean {
-  return err instanceof Error && /^(CDP|WebKit Inspector) message timed out\b/.test(err.message);
+const DEADLINE_SLACK_MS = 250;
+
+/**
+ * Whether a wait loop's read that failed with `err` is the loop's deadline
+ * miss rather than an error of its own (PILOT-840). The last read starts with
+ * whatever is left of the timeout, often a few milliseconds, so its CDP or
+ * WebKit Inspector request times out: that means "not found in time". It is
+ * the miss only when the page has answered an earlier read (a connection that
+ * never answers is reported as itself, as the native loops report a stalled
+ * agent) and the deadline is reached (CDP caps a request at 30 s, so a read
+ * of a longer wait can time out early). Any other failure is its own error.
+ */
+function isDeadlineMiss(err: unknown, answered: boolean, deadline: number): boolean {
+  return answered && Date.now() >= deadline - DEADLINE_SLACK_MS &&
+    err instanceof Error && /^(CDP|WebKit Inspector) message timed out\b/.test(err.message);
 }
 
 function buildWebViewStrictError(loc: WebViewLocator, probe: WebViewLocatorProbe): StrictModeViolationError {
@@ -561,6 +571,7 @@ export class WebViewHandle {
     const timeout = timeoutMs ?? this._timeoutMs;
     const deadline = Date.now() + timeout;
     let lastReadError: unknown;
+    let answered = false;
     while (Date.now() < deadline) {
       const remaining = Math.max(1, deadline - Date.now());
       let found: unknown;
@@ -572,10 +583,11 @@ export class WebViewHandle {
       } catch (err) {
         // A read that ran into the deadline (its transport timed out) is a
         // miss at the deadline, not an error of its own (PILOT-840).
-        if (!isReadTimeout(err)) throw err;
+        if (!isDeadlineMiss(err, answered, deadline)) throw err;
         lastReadError = err;
         break;
       }
+      answered = true;
       if (found) return;
       await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
     }
@@ -654,6 +666,7 @@ export class WebViewHandle {
     const timeout = timeoutMs ?? this._timeoutMs;
     const deadline = Date.now() + timeout;
     let lastReadError: unknown;
+    let answered = false;
     while (true) {
       const remaining = Math.max(1, deadline - Date.now());
       let probe: WebViewLocatorProbe;
@@ -663,10 +676,11 @@ export class WebViewHandle {
         // The last read starts with what is left of the timeout, often a few
         // milliseconds: its transport timing out means the locator was not
         // found in time, and the error should say that (PILOT-840).
-        if (!isReadTimeout(err)) throw err;
+        if (!isDeadlineMiss(err, answered, deadline)) throw err;
         lastReadError = err;
         break;
       }
+      answered = true;
       if (loc._nthIndex !== undefined) {
         const idx = normalizeNthIndex(loc._nthIndex, probe.count);
         if (idx >= 0 && idx < probe.count) return;
