@@ -52,6 +52,7 @@ the session). `<batch-id>` is the start date plus the keys sorted numerically, e
 |---|---|---|---|---|---|---|---|
 | PILOT-12 | parallel | .claude/worktrees/pilot-12 | <agent id / session name> | 5-qa | #251 | — | — |
 | PILOT-15 | after PILOT-12 | — | — | queued | — | — | PILOT-12 merged |
+| PILOT-19 | parallel | .claude/worktrees/pilot-19 | — (handed off) | handoff | #253 | — | ci on <head sha> (watch <task id>) |
 
 ## Batch plan
 <lanes and the reason for each>
@@ -89,7 +90,9 @@ If a coordinator state file exists for these keys (match on the keys part of the
 branch or PR, **resume**: rebuild the table from the state file and from reality (each
 ticket's worktree state file at `<worktree>/.claude/state/implement-ticket/<KEY>/state.md`,
 its branch, its PR). Workers from an earlier session are gone, so re-launch any ticket
-that is not `ready-to-merge` — `implement-ticket` resumes from its own state. Never start a
+that is not `ready-to-merge` — `implement-ticket` resumes from its own state — except a
+ticket whose last result was `handoff`: re-arm its hand-off watch (Phase 3) from the
+`WAITING_ON:` line in its state file's *Next* section instead, and launch a worker only when the watch ends. Never start a
 second worktree, branch or PR for a ticket.
 
 ## Phase 1 — Plan the batch
@@ -155,7 +158,7 @@ For each ticket that is ready to start, up to `max-parallel` running at once:
    they start together.
 
 A slot is a worker that is **building**: `max-parallel` caps building workers, not
-started ones. A worker that returns `ready-to-merge`, `blocked` or `planned` is idle
+started ones. A worker that returns `ready-to-merge`, `blocked`, `planned` or `handoff` is idle
 and frees its slot. A ready worker may need resuming later (another PR merged and its
 PR now conflicts: it must merge `main` and re-run its gate); until it has, report it as
 `ready (conflicts with main)`, never plain `ready`. Resuming an idle
@@ -172,11 +175,19 @@ queue in lane order.
 > `<KEY> worker worktree=<path> …`, and follow that skill exactly. You are a worker in a
 > batch coordinated by another agent; never ask the user anything directly. End your
 > final message with the skill's result lines (`IMPLEMENT_TICKET:`, `PR:`, `STATE:`, and
-> `QUESTION:`/`OPTIONS:`/`DEFAULT:` when blocked).
+> `QUESTION:`/`OPTIONS:`/`DEFAULT:` when blocked, `WAITING_ON:` on a hand-off).
 
 You are notified when each worker stops. To answer or instruct a stopped worker, send it
 a message with `SendMessage` (its agent id is in the tool result; keep it in the state
-file) — it resumes with its context intact. Subagent workers can spawn their own
+file) — it resumes with its context intact. That suits a worker still in Phases 1–5,
+whose context is worth keeping. **From Phase 6 on** (the state file's `Phase:` line; for a blocked worker, the phase in
+`blocked (in <phase>)`),
+launch a **fresh worker** instead: a new `Agent` call with the same prompt plus one line
+saying why (*Woken by: …*, *Answer to your QUESTION: …*, *Main moved: …*, *Resume after
+an infra stop*). It resumes from the state file. A late-phase worker's context is
+300–600k tokens, and messaging it re-caches all of that before it does anything
+(implement-ticket *Context hand-off*). Never message a worker that returned `handoff`.
+Its successor is the next fresh worker. Subagent workers can spawn their own
 subagents (review-loop's reviewer) and load project skills; this was verified. They end
 with this session, so a long batch should be resumable, and is (Phase 0).
 
@@ -188,13 +199,14 @@ run**, then track them:
 
 ```bash
 cd <main checkout> && claude --bg -n <KEY> --permission-mode auto \
-  "/implement-ticket <KEY> worker worktree=<absolute worktree path> …"
+  "/implement-ticket <KEY> worker no-handoff worktree=<absolute worktree path> …"
 claude agents --json        # find each worker by its name; state, id
 claude logs <id>            # recent output — look for the IMPLEMENT_TICKET lines
 ```
 
-Message a session worker with `SendMessage` to its name (`ListAgents` lists local
-sessions). This host has not been exercised end to end yet: the first time it is used,
+Session workers get `no-handoff`: relaunching one needs the user to run a command, so
+each does its own Phase 6–8 waits instead of handing off. Message a session worker with
+`SendMessage` to its name (`ListAgents` lists local sessions). This host has not been exercised end to end yet: the first time it is used,
 verify the listing, logs and messaging steps and correct this section.
 
 ## Phase 3 — Run the batch
@@ -204,30 +216,42 @@ On every worker stop, read its result lines, update the table, then act:
 | Result | Do |
 |---|---|
 | `planned` | Collect plans until every started worker has one (or a few minutes pass), then show them together: per ticket, the ACs, design choice, edge cases and open questions. Relay "go" with any corrections to each. |
-| `blocked` | Add its question to the pending list. When no running worker is likely to add another soon, ask the user all pending questions at once (AskUserQuestion takes up to four per call, with each worker's `OPTIONS` and recommended `DEFAULT`). Relay each answer to its worker and record it. `auto`: never ask — see *Auto mode*. |
+| `blocked` | Add its question to the pending list. When no running worker is likely to add another soon, ask the user all pending questions at once (AskUserQuestion takes up to four per call, with each worker's `OPTIONS` and recommended `DEFAULT`). Relay each answer to its worker (from Phase 6 on, as a fresh worker launch with the answer in its prompt: *Worker hosts*) and record it. `auto`: never ask — see *Auto mode*. |
 | `merged` (`merge`) | Record the merge commit; treat it as a merge (*Merges* below). Start the next queued ticket and any ticket waiting on this one. |
 | `ready-to-merge` | Record the PR; tell the user it can be merged (with `merge`: say why the worker could not). Start the next queued ticket. |
 | `ready-stacked` / `best-effort` / `held` (auto) | Record it and its reason; free the slot. Start any ticket stacked on it (not on a `held` one). |
+| `handoff` | Not a result: the worker is waiting for something listed in `WAITING_ON`. Record that and the head SHA, free the slot, and start a **hand-off watch** for its PR: implement-ticket's `references/pr-and-ci.md` §*Hand-off watch*, in the background (Bash `timeout` 7200000), one per PR. When it ends (`WAIT_DONE` or `WAIT_TIMEOUT`), launch a fresh worker (*Worker hosts*) with *Woken by: <the watch's last line>*. Relaunches take the next free slot ahead of new tickets, since they are nearest to done. If no slot is free, set the row to `relaunch queued` with that line: its watch has done its job and is not re-armed, and the ticket gets exactly one fresh worker when a slot frees. |
 | `stopped-by-user` / error / no result lines | Read its state file; re-launch it once (it resumes); if it fails again, mark it held and tell the user. |
 
 Between events, keep an eye on the batch:
 
 - **Heartbeat.** Worker notifications can be missed, and a worker can hang in a wait
-  of its own. While any worker is running, keep one background heartbeat going —
-  `sleep 1800; echo "WAIT_TIMEOUT: heartbeat"` (Bash `timeout` above 30 min) — and
+  of its own. While any worker or hand-off watch is running, keep one background heartbeat going —
+  `for i in $(seq 1 30); do sleep 60; done; echo "WAIT_TIMEOUT: heartbeat"` (a loop of short sleeps: a single long `sleep` has been seen not to fire) — and
   re-arm it each time it fires. On every wake, whatever woke you, re-read reality: each
   worker's state file, branch head and PR (`gh pr view <n> --json state,headRefOid`).
-- **Silent workers.** A worker that has not returned, not changed its state file
-  (`<worktree>/.claude/state/implement-ticket/<KEY>/state.md` mtime) and not pushed for
-  **2 hours** is probably stuck in a wait: message it to report its phase and re-check
-  what it is waiting for (implement-ticket *Waiting*). No change within 30 more minutes →
-  stop it (TaskStop) and re-launch it once; it resumes from its state file. A second
-  hang → mark it held and say so.
+  Every handed-off ticket (not one marked `relaunch queued`) must have its hand-off
+  watch running; re-arm any that is not,
+  from the `WAITING_ON:` line in its state file's *Next* (never a guessed `since`).
+- **Silent workers.** (A handed-off ticket has no worker running; its watch's deadline
+  covers it.) A worker that has not returned, not pushed, and not changed anything in its
+  state dir for **2 hours** is probably stuck in a wait. The state dir is
+  `<worktree>/.claude/state/implement-ticket/<KEY>/`; check `state.md`, the review-loop
+  ledger and the `qa-*` report directories, since a long `/review-loop` or a QA subagent
+  writes there and not to `state.md`. Message it to report its phase and re-check what it
+  is waiting for (implement-ticket *Waiting*), in any phase: one probe costs far less than
+  killing work in progress. No change within 30 more minutes → stop it (TaskStop) and
+  re-launch it once; it resumes from its state file. Before the relaunch, check
+  `device-lease.sh list` for leases owned by `<KEY>`: a QA subagent the stopped worker
+  started may still be running under them. Wait up to 30 minutes for them to clear, so two
+  QA runs never share a device or worktree; if they do not, release them and say so in
+  *Events*. A second hang → mark it held and say so.
 
 - **Merges.** Without `merge`, nobody in the batch merges; still poll, since the user may.
   When a PR in the batch merges (`gh pr view <n> --json state`), check the other open
   PRs' `mergeable`: only a worker whose PR now **conflicts** merges `origin/<base>` and
-  re-runs its gate. Don't send the others round CI again just because `main` moved —
+  re-runs its gate. A handed-off ticket's watch already ends on `CONFLICTING`, so it needs
+  no message. Don't send the others round CI again just because `main` moved —
   `main`'s own CI on each merge commit tests the combination. Watch that run (`gh run list
   --branch main --commit <sha>`); if it goes red, find the PR whose change broke it and
   have that worker (or a new one) fix forward on a new PR. `E2E iOS` cancels an older
@@ -235,12 +259,16 @@ Between events, keep an eye on the batch:
   nor something to wait for: watch the newest `main` commit's run instead, which tests
   every merge since the last green one — if it goes red, the culprit is among those. Start any ticket whose lane was
   `after <KEY>`. A worker stacked on `<KEY>` merges `origin/<base>` (implement-ticket
-  *Stacked branches*) and re-gates. Unless `no-jira`, move the merged ticket to **Done**
+  *Stacked branches*) and re-gates. If that stacked ticket is handed off, its watch will
+  not notice the merge (the PR usually stays mergeable): stop the watch (TaskStop) and
+  launch a fresh worker with *Main moved: <KEY> merged*. Unless `no-jira`, move the merged ticket to **Done**
   (statuses are To Do, In Progress, Done) if it is not there already (a `merge` worker
   does this itself).
 - **Cross-ticket conflicts.** If two workers turn out to touch the same file after all
   (`git diff --stat` in each worktree), pause the later one with a message, and move it to
-  a serial lane.
+  a serial lane. A handed-off ticket has no worker to message: anything you need to tell
+  it (this, a merge it depends on) goes as a fresh worker launch with that line, after
+  stopping its watch.
 - **Devices.** `device-lease.sh list` (qa-this-branch scripts) shows who holds what; an
   expired lease is reaped automatically. A worker waiting on a device for hours means the
   pool is too small for the batch — lower parallelism for device-heavy tickets.

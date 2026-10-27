@@ -1,9 +1,12 @@
 # Triage: from finding to verdict
 
-Triage happens in the **main** context, one finding at a time, in the order the reviewer
-gave them. Every finding gets all four steps (verify, scenario, likelihood, verdict), and
-its card is written to the ledger before the next finding is opened. Do not
-batch-verdict ("F1–F4 all look fine").
+Triage is split. The **main** context matches repeats against the ledger, then hands
+every finding that needs a card to a fresh **verifier** subagent (`verifier-prompt.md`).
+Verifiers run in parallel and follow this file's *The card* and *Verdict* sections. The
+main context then checks each card against the intent (SKILL.md step 2) and writes them to
+the ledger in the reviewer's order. Every finding gets all the steps (verify, scenario,
+likelihood, verdict, class), each on its own card. Never batch-verdict ("F1–F4 all look
+fine").
 
 The reviewer is deliberately recall-biased: it was told to surface every plausible defect
 and let this step sort them out. Expect a longer list than a human reviewer would send
@@ -31,8 +34,16 @@ One line per finding: id, where, kind and confidence, the reviewer's claim verba
 the reviewer said `NO FINDINGS`, print that and the round is clean.
 
 **2. The triage cards**, once every finding in the round has been triaged and before any
-fix is made. One card per finding, in the exact shape below, so the user can see why each
-one is or is not being fixed and object before the tree changes.
+fix is made, in ledger order:
+
+- **In full**, in the exact shape below, every card that will change the tree: each FIX,
+  each flipped verdict, and each verdict settled by a vote. These are the ones the user
+  must be able to object to before an edit lands.
+- **One line** for every other card (WON'T FIX, INVALID, OUT OF SCOPE, carried-forward
+  repeats): `R3-F4 — <claim> · WON'T FIX — <its one-sentence verdict reason>`. The full
+  card is in the ledger for anyone who wants it.
+
+Printed text stays in the conversation for every later turn, so print each card once.
 
 ## Repeat findings
 
@@ -60,7 +71,8 @@ against every earlier card by `where` and the substance of the claim:
   final (then treat it as a first repeat again): a one-line card `R<n>-F<m> — repeats R<a>-F<b>, verdict stands`. Spend no more
   time on it, and print it as that one line.
 - **Matches an `out-of-scope` card** — carry forward the same way; it is already in the
-  final report. Exception: if the current diff now touches the code involved, or makes
+  final report. Exception: if the current diff now touches the code involved (changes a line in the same function
+  or block), or makes
   the problem more likely or worse, it is no longer pre-existing — triage it normally.
 
 Repeats do not count as `fix` verdicts for the round unless they flipped, so a round of
@@ -84,6 +96,9 @@ Likelihood: likely — any run with retries enabled and more than one failing fi
 Impact: a passing-on-retry test is reported as a hard failure; the run goes red and the
         developer chases a flake that the retry policy should have absorbed.
 Verdict: FIX — likely, wrong CI verdict, three-line fix with a unit test.
+Class: per-file counters kept on the worker instead of the file run — also
+       packages/tapsmith/src/runner.ts:240 (`_softFailures`); searched: every field the
+       worker resets in `startFile`.
 ```
 
 ### Verify
@@ -159,6 +174,20 @@ decided it>`.
   Exception: if the change makes the pre-existing problem *more* likely, it is FIX.
 - **INVALID** — set at the verify step; see above.
 
+### Class
+
+For a `real` finding, name the **pattern**, not just the line: the mistake that, made once
+here, is likely made elsewhere (the same unguarded call, the same missed run path, the same
+copy-pasted condition). Search the diff scope for every other instance, and the touched
+files around it, and list each one with its location and the search you ran. Write
+`Class: <pattern> — none other (searched: …)` when there is none. An instance in code
+the diff does not touch (no changed line in the same function or block; unchanged lines
+inside a function the diff modifies are in scope, as the reviewer's scope rule says) is
+pre-existing: list it with `(pre-existing)`, and it is not
+fixed here unless the change makes it more likely. Instances share the card's verdict
+only if the same repro reaches them. One that needs a different repro, or has a lower
+likelihood, gets its own line saying so, and the fixer treats it as its own finding.
+
 The bar is the same in round 1 and round 10. Never soften a FIX into WON'T FIX because
 the round is getting long, and never tighten it either — convergence comes from the bar,
 applied evenly, and from final verdicts carrying forward. The loop's job is to keep going.
@@ -167,13 +196,17 @@ applied evenly, and from final verdicts carrying forward. The loop's job is to k
 
 For every FIX in the round, in ledger order:
 
-1. Make the smallest change that removes the repro. Follow the project's conventions
-   (CLAUDE.md) and reuse existing helpers rather than adding parallel ones.
+1. Make the smallest change that removes the repro **at every instance on the `Class:`
+   line** that shares the verdict. Fixing one line of a class leaves the rest for later
+   rounds to find one at a time, which is how loops fail to converge. Follow the project's
+   conventions (CLAUDE.md) and reuse existing helpers rather than adding parallel ones.
 2. If the finding was a **bug** or **likely-bug**, add or extend a test whose steps are
    the card's Repro and whose assertion is the card's Expected — it fails without the fix
    and passes with it — unless the project has no test harness for that layer. A fix
    without a regression test must say why on the card.
-3. Append `Fixed in: <files>` and `Test: <file or reason none>` to the card.
+3. Append `Fixed in: <files>` and `Test: <file or reason none>` to the card. The test covers
+   the class where one test can, e.g. a table of every instance; otherwise it covers the
+   cited instance and the card says why the others have none.
 
 After the round's fixes, run the **cheapest checks that cover the touched files** — the
 package-local typecheck, lint, and the unit test files for that package, as CLAUDE.md
