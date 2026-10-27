@@ -154,8 +154,7 @@ For each ticket that is ready to start, up to `max-parallel` running at once:
    `/implement-ticket <KEY> worker worktree=<absolute worktree path> base=<base> [also=<KEY>] [plan-review] [pass-through flags]`
    — `plan-review` in interactive mode, so the user approves every plan in one batch;
    `auto` (never `plan-review`) in auto mode, plus `after=<branch>` for a stacked ticket,
-   and `coordinator=<your session name>` on the `sessions` host (plus `no-handoff` when the
-   user has to run the launch commands: *Worker hosts*).
+   and `no-handoff coordinator=<your session name>` on the `sessions` host (*Worker hosts*).
 3. Record the worker's id/name, and move on. Launch all ready workers in one message so
    they start together.
 
@@ -206,22 +205,17 @@ command per ticket for the user to run**:
 
 ```bash
 cd <main checkout> && claude --bg -n <KEY> --permission-mode auto \
-  "/implement-ticket <KEY> worker [no-handoff] worktree=<absolute worktree path> coordinator=<your session name> …"
+  "/implement-ticket <KEY> worker no-handoff worktree=<absolute worktree path> coordinator=<your session name> …"
 # prints: backgrounded · <id> · <KEY>   (record <id> in the state file)
 ```
 
-Whether you can launch decides how session workers run:
-
-- **You launch them** (your `claude --bg` call succeeded): they run like subagent workers.
-  No `no-handoff`, so they hand off at each hand-off point, and from Phase 6 on every
-  relaunch (*Woken by*, an answer, *Main moved*) is a fresh `claude --bg`, never a
-  message to the old session. Name each relaunch `-n <KEY>-<n>` (`<KEY>-2`, `<KEY>-3`, …)
-  so the name you message is always the live worker, and record its id.
-- **The user launches them** (the call was blocked and you printed the commands): pass
-  `no-handoff`. You cannot relaunch these workers yourself, so each does its own
-  Phase 6–8 waits, and you **message** it in every phase. This is the one exception to
-  "fresh worker from Phase 6 on". Each message to a late-phase worker re-caches its whole
-  context (300–600k tokens), so batch what you send it.
+Session workers always get `no-handoff`. The point of this host is workers that keep
+going without the coordinator, and a handed-off worker would sit idle until the
+coordinator's hand-off watch relaunched it. So each does its own Phase 6–8 waits, and you
+**message** it in every phase: the one exception to "fresh worker from Phase 6 on". That
+costs tokens. Each message to a late-phase worker re-caches its whole context (300–600k
+tokens), so batch what you send it. Use the subagent host when the token saving matters
+more than surviving the coordinator.
 
 Tracking, verified Oct 27 2026 with Claude Code 2.1.312:
 
