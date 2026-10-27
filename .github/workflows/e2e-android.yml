@@ -513,10 +513,12 @@ jobs:
             [ -e "$log" ] || continue
             cp "$log" e2e/tapsmith-results/
           done
-          adb logcat -d -v time TapsmithAgent:V TapsmithSocket:V TestRunner:V \
+          # Bounded: with no emulator (an earlier setup step failed) adb waits
+          # for a device until the job times out.
+          timeout 30 adb logcat -d -v time TapsmithAgent:V TapsmithSocket:V TestRunner:V \
             AndroidRuntime:E ActivityManager:I ReactNativeJS:V '*:W' \
             > "e2e/tapsmith-results/logcat-${{ matrix.shard }}.txt" 2>&1 || true
-          adb shell cat /data/local/tmp/tapsmith-agent.log \
+          timeout 30 adb shell cat /data/local/tmp/tapsmith-agent.log \
             > "e2e/tapsmith-results/am-instrument-${{ matrix.shard }}.txt" 2>/dev/null || true
 
       - name: Upload blob report
