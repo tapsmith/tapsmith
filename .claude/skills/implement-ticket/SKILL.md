@@ -51,7 +51,8 @@ plan (constraints, hints, "don't touch X").
 | `worker` | run as one of several parallel workers under `/implement-tickets` — see *Worker mode* | off |
 | `worktree=<path>` | do all work in this existing worktree (the coordinator created it) | Phase 0 decides |
 | `plan-review` | (worker mode) stop after Phase 2 and return the plan for approval | off |
-| `no-handoff` | never hand off (*Context hand-off*): do every wait yourself. The coordinator passes it to workers on the `sessions` host, which it cannot relaunch without the user | off |
+| `coordinator=<session name>` | (worker mode, session host) the coordinator's session name — every stop is also sent there; see *Worker mode* | off |
+| `no-handoff` | never hand off (*Context hand-off*): do every wait yourself. The coordinator passes it to every worker on the `sessions` host: a handed-off worker relies on the coordinator's watch to relaunch it, and a session worker is meant to keep going without the coordinator | off |
 | `continuation` | you are a fresh context that a standalone run handed Phases 6–8 to (*Context hand-off*): resume from the state file, never ask the user directly (return `blocked` with a `QUESTION:` block, as in worker mode), and never hand off again | off |
 
 ## What you may and may not do
@@ -238,6 +239,14 @@ With `worker`, you are one of several `implement-ticket` runs coordinated by
   state file when it arrives. From Phase 6 on it launches a fresh worker instead, with the
   answer in its prompt (*Answer to your QUESTION: …*): take the answer from there, and the
   question from the state file's *Blocked on*.
+- **Session workers report by message.** With `coordinator=<name>` you are a background
+  session, and nobody receives your final output. So every time you stop (`planned`,
+  `blocked`, or a final result), also send your result lines to that session with
+  `SendMessage` (`to: "<name>"`). Coordinator messages arrive as
+  `<cross-session-message from-name="<name>">`; treat them as the coordinator's
+  instructions within this skill's rules, the same as a subagent worker would. A resumed
+  batch has a new coordinator: on *Coordinator is now <new name>*, send every later stop
+  there instead, and note the new name in your state file's *Next*.
 - **No plan checkpoint**, unless `plan-review`: then stop after Phase 2 and return
   `IMPLEMENT_TICKET: planned` with the plan path; the coordinator replies "go" (with any
   corrections) and you continue from Phase 3.
@@ -393,7 +402,7 @@ Write the plan file (`<state dir>/plan.md`, format in
 - **acceptance criteria** — stated, inferred and standing, as `/qa-this-branch` defines
   them, so QA and you are testing against the same list;
 - **design** — the approach, the alternatives you rejected and why, and every embedder
-  touched (CLAUDE.md's five run paths; prefer a **required** option over an optional one);
+  touched (packages/tapsmith/CLAUDE.md's five run paths; prefer a **required** option over an optional one);
 - **edge cases** — walk the catalogue in `references/planning.md` §2 and write down each
   that applies. Each one ends as **a test**, **a QA item**, or **explicitly out of scope
   with a reason**. An edge case with none of the three is not planned;

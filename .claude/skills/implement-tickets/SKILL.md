@@ -89,11 +89,17 @@ If a coordinator state file exists for these keys (match on the keys part of the
 `*-<sorted keys>.md` — the date prefix is the start date, not today's), or any ticket already has a worktree,
 branch or PR, **resume**: rebuild the table from the state file and from reality (each
 ticket's worktree state file at `<worktree>/.claude/state/implement-ticket/<KEY>/state.md`,
-its branch, its PR). Workers from an earlier session are gone, so re-launch any ticket
+its branch, its PR). Subagent workers from an earlier session are gone, so re-launch any ticket
 that is not `ready-to-merge` — `implement-ticket` resumes from its own state — except a
 ticket whose last result was `handoff`: re-arm its hand-off watch (Phase 3) from the
 `WAITING_ON:` line in its state file's *Next* section instead, and launch a worker only when the watch ends. Never start a
 second worktree, branch or PR for a ticket.
+
+On the `sessions` host, workers do outlive the coordinator, so check before re-launching:
+`claude agents --json` rows with `kind: "background"`, `name: "<KEY>"` and a `pid` are a
+live worker. **Adopt** it instead of starting another in the same worktree: record its
+`id`, and message it (`to: "<KEY>"`) *Coordinator is now <your session name>* plus a
+request for its phase. Re-launch only the tickets with no live session.
 
 ## Phase 1 — Plan the batch
 
@@ -153,9 +159,11 @@ For each ticket that is ready to start, up to `max-parallel` running at once:
 2. **Start the worker** on its host (below) with:
    `/implement-ticket <KEY> worker worktree=<absolute worktree path> base=<base> [also=<KEY>] [plan-review] [pass-through flags]`
    — `plan-review` in interactive mode, so the user approves every plan in one batch;
-   `auto` (never `plan-review`) in auto mode, plus `after=<branch>` for a stacked ticket.
+   `auto` (never `plan-review`) in auto mode, plus `after=<branch>` for a stacked ticket,
+   and `no-handoff coordinator=<your session name>` on the `sessions` host (*Worker hosts*).
 3. Record the worker's id/name, and move on. Launch all ready workers in one message so
-   they start together.
+   they start together. On the `sessions` host, also subscribe to each worker's
+   `notify_when_idle` (*Worker hosts*), since its stop does not notify you.
 
 A slot is a worker that is **building**: `max-parallel` caps building workers, not
 started ones. A worker that returns `ready-to-merge`, `blocked`, `planned` or `handoff` is idle
@@ -192,22 +200,61 @@ subagents (review-loop's reviewer) and load project skills; this was verified. T
 with this session, so a long batch should be resumable, and is (Phase 0).
 
 **Background sessions (`sessions`).** Each worker is a full top-level Claude session that
-outlives this one and that the user can `claude attach` to. Launching them from here is
-blocked by auto mode's safety classifier unless the user has added a Bash allow rule for
-`claude --bg`. Without that rule, **print one launch command per ticket for the user to
-run**, then track them:
+outlives this one and that the user can `claude attach` to. Unlike a subagent, a session
+worker's stop does **not** notify you, so it sends its result lines to you by message
+(`coordinator=`, implement-ticket *Worker mode*). Your session name is the first line of
+`ListAgents` ("This session is <name> [ref]").
+
+Launching from here works when this session's permissions allow `claude --bg` (verified
+under bypass permissions). Under auto mode the safety classifier may block it unless the
+user has added a Bash allow rule for `claude --bg`. If it is blocked, **print one launch
+command per ticket for the user to run**:
 
 ```bash
 cd <main checkout> && claude --bg -n <KEY> --permission-mode auto \
-  "/implement-ticket <KEY> worker no-handoff worktree=<absolute worktree path> …"
-claude agents --json        # find each worker by its name; state, id
-claude logs <id>            # recent output — look for the IMPLEMENT_TICKET lines
+  "/implement-ticket <KEY> worker no-handoff worktree=<absolute worktree path> coordinator=<your session name> …"
+# prints: backgrounded · <id> · <KEY>   (record <id> in the state file)
 ```
 
-Session workers get `no-handoff`: relaunching one needs the user to run a command, so
-each does its own Phase 6–8 waits instead of handing off. Message a session worker with
-`SendMessage` to its name (`ListAgents` lists local sessions). This host has not been exercised end to end yet: the first time it is used,
-verify the listing, logs and messaging steps and correct this section.
+Session workers always get `no-handoff`. The point of this host is workers that keep
+going without the coordinator, and a handed-off worker would sit idle until the
+coordinator's hand-off watch relaunched it. So each does its own Phase 6–8 waits, and you
+**message** it in every phase: the one exception to "fresh worker from Phase 6 on". That
+costs tokens. Each message to a late-phase worker re-caches its whole context (300–600k
+tokens), so batch what you send it. Use the subagent host when the token saving matters
+more than surviving the coordinator.
+
+Tracking, verified Oct 27 2026 with Claude Code 2.1.312:
+
+- **Results arrive as messages.** A worker's `SendMessage` shows up in your conversation
+  as `<cross-session-message from-name="<KEY>">` with its result lines, and is handled as
+  a worker stop (Phase 3). Message it with `SendMessage` `to:` its `-n` name, within the rules above. A
+  message to an idle session wakes it, and its reply came back within seconds. This worked
+  across permission modes (coordinator bypass, worker auto). If a
+  `[Cross-session delivery notice]` says the worker is holding your message for approval,
+  tell the user to approve it there (`claude attach <id>`).
+- **`claude agents --json`** lists every session on the machine, interactive ones
+  included. Pick yours by `name`. Background rows have `kind: "background"`, `id`,
+  `pid`, `status` (`busy` / `idle`) and `state` (`working` while running, `done` once its
+  turn ends; `blocked` with a `pid` means it is probably waiting on a permission prompt,
+  so tell the user to attach; a stopped session has no `pid` and can also show `blocked`).
+- **`claude logs <id>`** prints the raw terminal screen, ANSI escapes and all, and only
+  recent output. Strip it before searching (`sed 's/\x1b\[[0-9;?]*[A-Za-z]//g'`). Use it
+  as a fallback when a worker stopped without messaging you. The worker's state file
+  is the reliable record.
+- **`notify_when_idle` is a slow backup.** `SendMessage` with `notify_when_idle: true`
+  (one-shot; re-subscribe after each notice) delivers a `[Cross-session idle notice]`
+  that quotes the worker's final output. In the probe it arrived minutes after the
+  worker's own message, and after the session had been stopped. It means a turn ended,
+  not that the worker stopped: a `no-handoff` worker ends turns while its background waits
+  run. On a notice, read the worker's state file and its row (*Heartbeat*, Phase 3); it is
+  not the main channel.
+- **Stopping and re-launching:** `claude stop <id>` (the conversation is kept, so
+  `claude attach` still works) in place of TaskStop. Re-launch with a fresh `claude --bg`
+  command, which resumes from the worker's state file. Before any re-launch, stop the
+  old session if its row still has a `pid`, so only one live session holds `<KEY>`.
+  `claude rm <id>` deletes a finished
+  worker's session; do that only after its PR is merged or the user is done with it.
 
 ## Phase 3 — Run the batch
 
@@ -216,12 +263,12 @@ On every worker stop, read its result lines, update the table, then act:
 | Result | Do |
 |---|---|
 | `planned` | Collect plans until every started worker has one (or a few minutes pass), then show them together: per ticket, the ACs, design choice, edge cases and open questions. Relay "go" with any corrections to each. |
-| `blocked` | Add its question to the pending list. When no running worker is likely to add another soon, ask the user all pending questions at once (AskUserQuestion takes up to four per call, with each worker's `OPTIONS` and recommended `DEFAULT`). Relay each answer to its worker (from Phase 6 on, as a fresh worker launch with the answer in its prompt: *Worker hosts*) and record it. `auto`: never ask — see *Auto mode*. |
+| `blocked` | Add its question to the pending list. When no running worker is likely to add another soon, ask the user all pending questions at once (AskUserQuestion takes up to four per call, with each worker's `OPTIONS` and recommended `DEFAULT`). Relay each answer to its worker (from Phase 6 on, as a fresh worker launch with the answer in its prompt, except for a `no-handoff` session worker, which you message: *Worker hosts*) and record it. `auto`: never ask — see *Auto mode*. |
 | `merged` (`merge`) | Record the merge commit; treat it as a merge (*Merges* below). Start the next queued ticket and any ticket waiting on this one. |
 | `ready-to-merge` | Record the PR; tell the user it can be merged (with `merge`: say why the worker could not). Start the next queued ticket. |
 | `ready-stacked` / `best-effort` / `held` (auto) | Record it and its reason; free the slot. Start any ticket stacked on it (not on a `held` one). |
 | `handoff` | Not a result: the worker is waiting for something listed in `WAITING_ON`. Record that and the head SHA, free the slot, and start a **hand-off watch** for its PR: implement-ticket's `references/pr-and-ci.md` §*Hand-off watch*, in the background (Bash `timeout` 7200000), one per PR. When it ends (`WAIT_DONE` or `WAIT_TIMEOUT`), launch a fresh worker (*Worker hosts*) with *Woken by: <the watch's last line>*. Relaunches take the next free slot ahead of new tickets, since they are nearest to done. If no slot is free, set the row to `relaunch queued` with that line: its watch has done its job and is not re-armed, and the ticket gets exactly one fresh worker when a slot frees. |
-| `stopped-by-user` / error / no result lines | Read its state file; re-launch it once (it resumes); if it fails again, mark it held and tell the user. |
+| `stopped-by-user` / error / no result lines | Read its state file; re-launch it once (it resumes; on the `sessions` host, `claude stop` it first if it still has a `pid`); if it fails again, mark it held and tell the user. |
 
 Between events, keep an eye on the batch:
 
@@ -230,6 +277,12 @@ Between events, keep an eye on the batch:
   `for i in $(seq 1 30); do sleep 60; done; echo "WAIT_TIMEOUT: heartbeat"` (a loop of short sleeps: a single long `sleep` has been seen not to fire) — and
   re-arm it each time it fires. On every wake, whatever woke you, re-read reality: each
   worker's state file, branch head and PR (`gh pr view <n> --json state,headRefOid`).
+  On the `sessions` host, also read each worker's `claude agents --json` row. No `pid`
+  and no result message from it is a stop with no result lines (Phase 3 table).
+  `state: blocked` with a `pid` is a permission prompt, so tell the user to attach. Any
+  other row with a `pid` is alive, `done` included: a worker ends its turn while a
+  background wait runs. If its state file holds a result it never sent you, handle that
+  result; otherwise *Silent workers* covers it.
   Every handed-off ticket (not one marked `relaunch queued`) must have its hand-off
   watch running; re-arm any that is not,
   from the `WAITING_ON:` line in its state file's *Next* (never a guessed `since`).

@@ -1,6 +1,6 @@
 # The run modes, and what only each one can break
 
-Seven user-facing modes, assembled by the **five embedders** CLAUDE.md lists (`cli.ts`,
+Seven user-facing modes, assembled by the **five embedders** packages/tapsmith/CLAUDE.md lists (`cli.ts`,
 `worker-runner.ts`, `ui-worker.ts`, `watch-run.ts`, `mcp/headless-dispatcher.ts` — UI watch
 and UI MCP run through UI mode's `ui-worker.ts`). A per-session concern (capabilities,
 install/preflight checks, passthrough hosts, a new config key) has to be wired through all
