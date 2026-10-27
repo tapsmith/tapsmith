@@ -196,6 +196,7 @@ async function handleInit(msg: UIWorkerInitMessage): Promise<void> {
     config,
     {
       claimSession: currentSession(),
+      runMode: 'ui',
       label: `UI Worker ${workerId}`,
       launchPhase: 'UI worker startup launch',
       forceInstall: msg.forceInstall,

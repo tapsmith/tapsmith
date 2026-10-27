@@ -881,6 +881,40 @@ describe('runner execution', () => {
     }
   });
 
+  it('does not stream device logs on macOS, which has none to stream yet', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-logs-macos-'));
+    const mockDevice = {
+      tracing: new Tracing(async () => undefined, async () => undefined),
+      waitForIdle: vi.fn(async () => {}),
+      _startDeviceLogStream: vi.fn(),
+      _stopDeviceLogStream: vi.fn(),
+      _startDaemonLogStream: vi.fn(),
+      _stopDaemonLogStream: vi.fn(),
+    };
+
+    try {
+      pushContext();
+      tapsmithTest('traced test on a Mac', async () => {});
+      const ctx = popContext();
+
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+        config: makeConfig({
+          platform: 'macos',
+          rootDir: tempRoot,
+          outputDir: 'out',
+          trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mock
+        devices: [{ name: 'device-1', device: mockDevice as any }],
+      }));
+
+      expect(result.tests.map((t) => t.status)).toEqual(['passed']);
+      expect(mockDevice._startDeviceLogStream).not.toHaveBeenCalled();
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it('starts group network capture one device at a time, requiring isolation, and drains only what started', async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-network-group-'));
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -2014,6 +2048,7 @@ describe('resolvePlatformFixture()', () => {
   it('returns the explicit platform when set', () => {
     expect(resolvePlatformFixture(makeConfig({ platform: 'ios' }))).toBe('ios');
     expect(resolvePlatformFixture(makeConfig({ platform: 'android' }))).toBe('android');
+    expect(resolvePlatformFixture(makeConfig({ platform: 'macos' }))).toBe('macos');
   });
 
   it('defaults to android when no platform indicators are present', () => {

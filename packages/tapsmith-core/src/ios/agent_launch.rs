@@ -177,6 +177,7 @@ async fn start_agent_impl(
         target_bundle_id,
         attach_to_running_app,
         agent_port,
+        &[],
     )
     .await
     .context("Failed to patch xctestrun file")?;
@@ -389,38 +390,49 @@ fn architecture_mismatch_hint(stdout_tail: &str, stderr_tail: &str) -> Option<&'
     )
 }
 
-type OutputTail = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+pub(crate) type OutputTail = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
 
-/// Spawn `xcodebuild test-without-building` for the agent and drain its
-/// stdout/stderr into rolling 20-line tails for error reporting.
-///
-/// The child is returned (not moved into a wait task) so the caller's timeout
-/// path can kill it explicitly. Without this, a timeout would leave xcodebuild
-/// orphaned until the next kill_existing_agents_on sweep — which may not
-/// happen for a long time, or ever, on a failed run.
-///
-/// It is returned registered with the daemon's agent registry, which stops it
-/// when the daemon shuts down and records its owner so a daemon that is killed
-/// outright has it reaped by the next one (PILOT-299). Spawning is refused once
-/// shutdown has begun.
+/// Spawn `xcodebuild test-without-building` for the agent on `udid`.
+/// See `spawn_tracked_xcodebuild`.
 async fn spawn_agent_xcodebuild(
     patched_xctestrun: &str,
     udid: &str,
     derived_data_path: &std::path::Path,
     is_physical: bool,
 ) -> Result<(TrackedAgent, OutputTail, OutputTail)> {
+    let args = [
+        "test-without-building".to_string(),
+        "-xctestrun".to_string(),
+        patched_xctestrun.to_string(),
+        "-destination".to_string(),
+        format!("id={udid}"),
+        "-derivedDataPath".to_string(),
+        derived_data_path.to_string_lossy().into_owned(),
+    ];
+    spawn_tracked_xcodebuild(&args, udid, is_physical).await
+}
+
+/// Spawn `xcodebuild` with `args` and drain its stdout/stderr into rolling
+/// 20-line tails for error reporting.
+///
+/// The child is returned (not moved into a wait task) so the caller's timeout
+/// path can kill it explicitly. Without this, a timeout would leave xcodebuild
+/// orphaned until the next kill_existing_agents_on sweep — which may not
+/// happen for a long time, or ever, on a failed run.
+///
+/// It is returned registered with the daemon's agent registry under `udid`,
+/// which stops it when the daemon shuts down and records its owner so a daemon
+/// that is killed outright has it reaped by the next one (PILOT-299). Spawning
+/// is refused once shutdown has begun.
+pub(crate) async fn spawn_tracked_xcodebuild(
+    args: &[String],
+    udid: &str,
+    is_physical: bool,
+) -> Result<(TrackedAgent, OutputTail, OutputTail)> {
     use std::sync::{Arc, Mutex};
 
     let mut cmd = Command::new("xcodebuild");
-    cmd.args([
-        "test-without-building",
-        "-xctestrun",
-        patched_xctestrun,
-        "-destination",
-        &format!("id={udid}"),
-        "-derivedDataPath",
-        &derived_data_path.to_string_lossy(),
-    ]);
+    cmd.args(args);
 
     // Capture stdout/stderr so we can diagnose failures.
     let mut child = cmd
@@ -515,11 +527,15 @@ pub async fn kill_existing_agents() {
 /// application bundle ID and the agent's environment variables.
 ///
 /// Uses PlistBuddy to modify a copy — the original file is left untouched.
-async fn patch_xctestrun(
+///
+/// `extra_env` is added to both environment dicts as well (the macOS agent
+/// takes the app's path as `TAPSMITH_TARGET_APP_PATH`).
+pub(crate) async fn patch_xctestrun(
     xctestrun_path: &str,
     target_bundle_id: &str,
     attach_to_running_app: bool,
     agent_port: u16,
+    extra_env: &[(&str, &str)],
 ) -> Result<String> {
     let mode = if attach_to_running_app {
         "attach"
@@ -582,6 +598,11 @@ async fn patch_xctestrun(
                 format!(":{base}:TestingEnvironmentVariables:TAPSMITH_ATTACH_TO_RUNNING_APP"),
                 "string 1".to_string(),
             ));
+        }
+        for (name, value) in extra_env {
+            for dict in ["EnvironmentVariables", "TestingEnvironmentVariables"] {
+                k.push((format!(":{base}:{dict}:{name}"), format!("string {value}")));
+            }
         }
         k
     };
@@ -939,7 +960,7 @@ async fn agent_port_listeners(port: u16) -> AgentPortListeners {
 }
 
 /// Ping the iOS agent to check if it's running.
-async fn ping_agent(port: u16) -> Result<()> {
+pub(crate) async fn ping_agent(port: u16) -> Result<()> {
     let addr = format!("127.0.0.1:{port}");
     let stream = tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(&addr))
         .await
@@ -1069,9 +1090,10 @@ mod tests {
     async fn patch_xctestrun_launch_mode_injects_bundle_id_and_port() {
         let (_dir, path) = write_fixture(FIXTURE_EMPTY).await;
 
-        let patched_path = patch_xctestrun(path.to_str().unwrap(), "com.example.app", false, 18800)
-            .await
-            .expect("patch should succeed");
+        let patched_path =
+            patch_xctestrun(path.to_str().unwrap(), "com.example.app", false, 18800, &[])
+                .await
+                .expect("patch should succeed");
 
         assert!(
             patched_path.ends_with(".launch.port18800.patched.xctestrun"),
@@ -1088,12 +1110,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn patch_adds_app_path_env() {
+        let (_dir, path) = write_fixture(FIXTURE_EMPTY).await;
+        let app = "/Users/q/My Apps/Mac App.app";
+
+        let patched_path = patch_xctestrun(
+            path.to_str().unwrap(),
+            "com.example.app",
+            false,
+            18800,
+            &[("TAPSMITH_TARGET_APP_PATH", app)],
+        )
+        .await
+        .expect("patch should succeed");
+
+        let plist = plist::Value::from_file(&patched_path).unwrap();
+        let target = plist
+            .as_dictionary()
+            .and_then(|d| d.get("TestConfigurations"))
+            .and_then(|v| v.as_array())
+            .and_then(|a| a[0].as_dictionary())
+            .and_then(|d| d.get("TestTargets"))
+            .and_then(|v| v.as_array())
+            .and_then(|a| a[0].as_dictionary())
+            .expect("first test target");
+        for dict in ["EnvironmentVariables", "TestingEnvironmentVariables"] {
+            let value = target
+                .get(dict)
+                .and_then(|v| v.as_dictionary())
+                .and_then(|d| d.get("TAPSMITH_TARGET_APP_PATH"))
+                .and_then(|v| v.as_string());
+            assert_eq!(value, Some(app), "{dict}");
+        }
+    }
+
+    #[tokio::test]
     async fn patch_xctestrun_attach_mode_sets_attach_flag() {
         let (_dir, path) = write_fixture(FIXTURE_EMPTY).await;
 
-        let patched_path = patch_xctestrun(path.to_str().unwrap(), "com.example.app", true, 19000)
-            .await
-            .expect("patch should succeed");
+        let patched_path =
+            patch_xctestrun(path.to_str().unwrap(), "com.example.app", true, 19000, &[])
+                .await
+                .expect("patch should succeed");
 
         assert!(
             patched_path.ends_with(".attach.port19000.patched.xctestrun"),
@@ -1111,10 +1169,15 @@ mod tests {
         // sequence — otherwise the runner would keep the wrong port/bundle id.
         let (_dir, path) = write_fixture(FIXTURE_WITH_STALE).await;
 
-        let patched_path =
-            patch_xctestrun(path.to_str().unwrap(), "com.fresh.bundle", false, 18800)
-                .await
-                .expect("patch should succeed");
+        let patched_path = patch_xctestrun(
+            path.to_str().unwrap(),
+            "com.fresh.bundle",
+            false,
+            18800,
+            &[],
+        )
+        .await
+        .expect("patch should succeed");
 
         let contents = tokio::fs::read_to_string(&patched_path).await.unwrap();
         assert!(contents.contains("com.fresh.bundle"));
@@ -1137,13 +1200,13 @@ mod tests {
         let (_dir, path) = write_fixture(FIXTURE_EMPTY).await;
         let src = path.to_str().unwrap();
 
-        let p1 = patch_xctestrun(src, "com.example.app", false, 18800)
+        let p1 = patch_xctestrun(src, "com.example.app", false, 18800, &[])
             .await
             .unwrap();
-        let p2 = patch_xctestrun(src, "com.example.app", false, 18801)
+        let p2 = patch_xctestrun(src, "com.example.app", false, 18801, &[])
             .await
             .unwrap();
-        let p3 = patch_xctestrun(src, "com.example.app", true, 18800)
+        let p3 = patch_xctestrun(src, "com.example.app", true, 18800, &[])
             .await
             .unwrap();
         assert_ne!(p1, p2);
@@ -1156,8 +1219,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bogus = dir.path().join("does-not-exist.xctestrun");
 
-        let result =
-            patch_xctestrun(bogus.to_str().unwrap(), "com.example.app", false, 18800).await;
+        let result = patch_xctestrun(
+            bogus.to_str().unwrap(),
+            "com.example.app",
+            false,
+            18800,
+            &[],
+        )
+        .await;
         assert!(result.is_err(), "expected error for missing source file");
     }
 

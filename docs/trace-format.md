@@ -16,12 +16,13 @@ The contract has two parts:
 
 ## Versioning
 
-`metadata.json` carries the format version in `version`. **The current format version is `2`.**
+`metadata.json` carries the format version in `version`. **The current format version is `3`.**
 
 | Version | Recorded by | Change |
 |---|---|---|
 | 1 | Releases up to and including 0.5.0 | Initial format. Local paths are absolute on the recording machine. |
-| 2 | Later releases | `testFile`, `appState`, stack-frame `file`s and `sources.json` keys are POSIX paths relative to the project's `rootDir`. |
+| 2 | Releases after 0.5.0 that predate macOS | `testFile`, `appState`, stack-frame `file`s and `sources.json` keys are POSIX paths relative to the project's `rootDir`. |
+| 3 | Later releases | Device `platform` may be `macos` (experimental: the Mac running the tests). Otherwise the same as 2. |
 
 Branch on `version`, never on `tapsmithVersion`. Builds from source between releases report the last release's number but write the current format.
 
@@ -112,7 +113,7 @@ A **device** has these fields:
   - `isEmulator`
 - **Optional:**
   - `name`: the device's group name, which events carry as `deviceId`
-  - `platform`: `android` or `ios`
+  - `platform`: `android`, `ios` or `macos`
   - `model`
   - `osVersion`
   - `screenResolution`: `{ width, height }`
@@ -190,7 +191,7 @@ A `routeAction` of `passthrough` marks a TLS connection that was tunneled withou
 
 ## Validating an archive
 
-The schema describes format version 2 only; it rejects a v1 archive's absolute paths. So check `metadata.version` before validating. Validate a v2 archive against the schema. Read a v1 archive knowing its paths are absolute, or skip it. Refuse anything newer.
+The schema describes format version 3 only; it rejects a v1 archive's absolute paths. So check `metadata.version` before validating. Validate a v3 archive against the schema. A v2 archive is a v3 one that cannot hold a `macos` device, so it validates once its `version` reads 3. Read a v1 archive knowing its paths are absolute, or skip it. Refuse anything newer.
 
 The schema's root describes an unzipped archive, with these keys:
 
@@ -223,7 +224,8 @@ const archive = {
   network: ndjson("network.json"),
   sources: files["sources.json"] ? JSON.parse(strFromU8(files["sources.json"])) : {},
 }
-if (archive.metadata.version !== 2) {
+if (archive.metadata.version === 2) archive.metadata.version = 3 // v3 only adds a platform
+if (archive.metadata.version !== 3) {
   // v1: absolute paths, not covered by this schema. Newer: refuse.
   throw new Error(`format version ${archive.metadata.version} is not validated by this schema`)
 }

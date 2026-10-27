@@ -42,7 +42,7 @@ export type RunMode = 'test' | 'test-parallel' | 'ui' | 'watch' | 'mcp';
 /** What a completed test-file run reports. Counts only — never names. */
 export interface TelemetryRunEvent {
   mode: RunMode;
-  platform: 'android' | 'ios';
+  platform: 'android' | 'ios' | 'macos';
   /** Size of the device group the file ran on (1 for ordinary projects). */
   devices: number;
   tests: number;
@@ -86,7 +86,7 @@ export interface TelemetryProperties {
   $process_person_profile: false;
   // `tapsmith run` only:
   mode?: RunMode;
-  platform?: 'android' | 'ios';
+  platform?: 'android' | 'ios' | 'macos';
   devices?: number;
   tests?: number;
   passed?: number;
@@ -619,7 +619,7 @@ export function telemetryNoticeText(): string {
   return [
     '',
     'Tapsmith collects anonymous usage data to guide development: SDK, Node and OS',
-    'versions, platform (Android/iOS), run mode, and pass/fail counts per run.',
+    'versions, platform (Android/iOS/macOS), run mode, and pass/fail counts per run.',
     'It never sends test names, locators, app identifiers, or file paths.',
     'Opt out with `tapsmith telemetry disable`, TAPSMITH_TELEMETRY=0, or',
     '`telemetry: false` in tapsmith.config.ts. `tapsmith telemetry status` shows the',

@@ -2700,8 +2700,9 @@ async function runSuiteContext(
           }
         }
 
-        // Start device log streaming if configured
-        if (traceConfig.deviceLogs && traceCollector) {
+        // Start device log streaming if configured. macOS (experimental) has no
+        // device log stream yet: asking would only fail, once per test.
+        if (traceConfig.deviceLogs && traceCollector && opts.config.platform !== 'macos') {
           for (const d of devices) {
             try {
               d._startDeviceLogStream(traceCollector);

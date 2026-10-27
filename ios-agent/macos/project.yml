@@ -1,0 +1,24 @@
+name: TapsmithMacAgent
+options:
+  bundleIdPrefix: dev.tapsmith
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+targets:
+  TapsmithMacAgentUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: ../TapsmithAgent
+        type: syncedFolder
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.tapsmith.macagent
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: ""
+        TEST_HOST: ""
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_ENTITLEMENTS: TapsmithMacAgent.entitlements
+        SWIFT_VERSION: "5.9"
+        SWIFT_OBJC_BRIDGING_HEADER: ../TapsmithAgent/TapsmithAgent-Bridging-Header.h

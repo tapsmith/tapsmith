@@ -16,6 +16,12 @@ describe('resolveAppResetPolicy', () => {
     expect(resolveAppResetPolicy(undefined, base)).toEqual({ mode: 'clear', scope: 'file' });
   });
 
+  it('auto resolves to clear · per file on macOS, which has no warm reset', () => {
+    // Hooks or a deep link would make it warm elsewhere: macOS has neither path.
+    expect(resolveAppResetPolicy(undefined, { ...base, platform: 'macos' }, { hooksDetected: true }))
+      .toEqual({ mode: 'clear', scope: 'file' });
+  });
+
   it('a configured reset deep link makes auto resolve to warm · per file', () => {
     expect(resolveAppResetPolicy(undefined, { ...base, resetAppDeepLink: 'app:///__reset' }))
       .toEqual({ mode: 'warm', scope: 'file' });

@@ -7,6 +7,7 @@
 
 import { deviceGroupSize, effectiveConfigForProject, pinnedDeviceSerials, resolveDeviceGroup, type DeviceGroupEntry, type TapsmithConfig, type ProjectConfig, type UseOptions } from './config.js';
 import { matchesTestFile } from './test-file-discovery.js';
+import type { RunMode } from './telemetry.js';
 
 // ─── Types ───
 
@@ -444,6 +445,33 @@ export function workerPlanNote(opts: {
 }
 
 /**
+ * How the sequential CLI runs a macOS config: the run mode its flags ask for
+ * (any but `test` is refused by `assertMacosRunMode`), and a note when a
+ * config-file `workers` is capped to the one worker macOS runs on. An explicit
+ * `--workers N` above one is a request the run cannot honour, so it is
+ * refused instead.
+ */
+export function macosRunPlan(opts: {
+  ui: boolean
+  watch: boolean
+  /** `--workers` on this command line, if given. */
+  cliWorkers: number | undefined
+  /** `workers` from the config file. */
+  configWorkers: number
+}): { runMode: RunMode; note?: string } {
+  if (opts.ui) return { runMode: 'ui' };
+  if (opts.watch) return { runMode: 'watch' };
+  if (opts.cliWorkers !== undefined) return { runMode: opts.cliWorkers > 1 ? 'test-parallel' : 'test' };
+  if (opts.configWorkers > 1) {
+    return {
+      runMode: 'test',
+      note: `config asks for ${countLabel(opts.configWorkers, 'worker')}; running 1 because macOS runs sequentially`,
+    };
+  }
+  return { runMode: 'test' };
+}
+
+/**
  * Scale an allocation map so its total matches `cap`. Handles both
  * directions: scales down when over budget, scales up when under.
  * Each active bucket keeps at least 1 worker; if `cap < active.length`
@@ -544,6 +572,32 @@ function validateProjectUse(name: string, use: UseOptions | undefined): void {
 }
 
 /**
+ * macOS (experimental) tests one app on this Mac: it needs the `.app` and its
+ * bundle ID. Checked on the effective config, so a project may inherit them
+ * from the root.
+ */
+function validateMacosConfig(where: string, config: TapsmithConfig): void {
+  if (config.platform !== 'macos') return;
+  for (const key of ['apk', 'avd', 'agentApk', 'agentTestApk', 'simulator', 'iosXctestrun'] as const) {
+    if (config[key] != null) {
+      throw new Error(`${where} sets platform: 'macos' but also \`${key}\`, which macOS does not use. Remove it.`);
+    }
+  }
+  if (config.appReset === 'warm') {
+    throw new Error(
+      `${where} sets platform: 'macos' but appReset: 'warm'. macOS has no warm reset (it needs in-app `
+      + `hooks, which are React Native only): use appReset: 'auto', 'clear' or 'restart'.`,
+    );
+  }
+  if (!config.app) {
+    throw new Error(`${where} sets platform: 'macos' but no \`app\`. platform: 'macos' needs \`app\`: the path to the .app to test.`);
+  }
+  if (!config.package) {
+    throw new Error(`${where} sets platform: 'macos' but no \`package\`. platform: 'macos' needs \`package\`: the app's bundle ID.`);
+  }
+}
+
+/**
  * The name to attribute a project's results to, or `undefined` when the
  * project is one Tapsmith invented rather than one the user declared.
  *
@@ -567,6 +621,7 @@ export function projectLabel(project: Pick<ResolvedProject, 'name' | 'synthesize
  */
 export function resolveProjects(config: TapsmithConfig): ResolvedProject[] {
   if (!config.projects || config.projects.length === 0) {
+    validateMacosConfig('The config', config);
     return [{
       name: 'default',
       synthesized: true,
@@ -617,8 +672,20 @@ export function resolveProjects(config: TapsmithConfig): ResolvedProject[] {
     validateProjectUse(p.name, p.use);
   }
 
+  // One session per run on macOS: a mobile project next to a macOS one would
+  // need a second daemon. Checked first, as the root's mobile fields would
+  // otherwise read as mistakes on the macOS project.
+  const macos = projects.map((p) => effectiveConfigForProject(config, p).platform === 'macos');
+  if (macos.includes(true) && macos.includes(false)) {
+    throw new Error(
+      `macOS projects can't share a run with android/ios projects yet. ` +
+      `Move the macOS projects to their own config file and run it with \`tapsmith test --config <file>\`.`,
+    );
+  }
+
   return projects.map((p) => {
     const effective = effectiveConfigForProject(config, p);
+    validateMacosConfig(`Project "${p.name}"`, effective);
     return {
       name: p.name,
       testMatch: p.testMatch ?? config.testMatch,

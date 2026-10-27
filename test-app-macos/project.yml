@@ -1,0 +1,19 @@
+name: TapsmithMacTestApp
+options:
+  bundleIdPrefix: dev.tapsmith
+  deploymentTarget:
+    macOS: "14.0"
+targets:
+  TapsmithMacTestApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: TapsmithMacTestApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.tapsmith.mactestapp
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_ENTITLEMENTS: TapsmithMacTestApp.entitlements
+        SWIFT_VERSION: "5.9"

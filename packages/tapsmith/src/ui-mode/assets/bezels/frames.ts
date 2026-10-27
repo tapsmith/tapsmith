@@ -75,6 +75,14 @@ const ASPECT_TOLERANCE = 0.18;
  *                      is rejected if its screen window is too different a shape,
  *                      which also catches tablets when formFactor is unknown.
  */
+/**
+ * The phone bezel to draw around a trace's screenshots, if any. A Mac
+ * (`macos`) screenshot is a desktop screen, so it is shown unframed.
+ */
+export function bezelPlatform(platform: DevicePlatform | 'macos' | undefined): DevicePlatform | undefined {
+  return platform === 'macos' ? undefined : platform;
+}
+
 export function selectDeviceFrame(opts: {
   platform?: DevicePlatform
   formFactor?: DeviceFormFactor

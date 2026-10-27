@@ -32,6 +32,7 @@
 		C048C935F21057EC5D0DD7B3 /* LabelMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEE6759B6CA6EB49336588B1 /* LabelMatch.swift */; };
 		D5E40A0B14F5160B7AD6580F /* TextContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9271E89B7B65041D9FF1F5E4 /* TextContent.swift */; };
 		A75600000000000000000001 /* NonAppElements.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75600000000000000000002 /* NonAppElements.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* PlatformCompat.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1B2C3D4E5F60718293A4B5C /* PlatformCompat.swift */; };
 		4C1A7E0D9B2F4E6A8D3C5B01 /* LaunchAccessibilityCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */; };
 /* End PBXBuildFile section */
 
@@ -55,6 +56,7 @@
 		CEE6759B6CA6EB49336588B1 /* LabelMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelMatch.swift; sourceTree = "<group>"; };
 		9271E89B7B65041D9FF1F5E4 /* TextContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextContent.swift; sourceTree = "<group>"; };
 		A75600000000000000000002 /* NonAppElements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NonAppElements.swift; sourceTree = "<group>"; };
+		B1B2C3D4E5F60718293A4B5C /* PlatformCompat.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformCompat.swift; sourceTree = "<group>"; };
 		4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAccessibilityCheck.swift; sourceTree = "<group>"; };
 		B20F42F1DA77FBEEC0F04F60 /* SocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketServer.swift; sourceTree = "<group>"; };
 		B4047824F41AA54563A432DC /* RoleMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleMapping.swift; sourceTree = "<group>"; };
@@ -94,6 +96,7 @@
 				CEE6759B6CA6EB49336588B1 /* LabelMatch.swift */,
 				9271E89B7B65041D9FF1F5E4 /* TextContent.swift */,
 				A75600000000000000000002 /* NonAppElements.swift */,
+				B1B2C3D4E5F60718293A4B5C /* PlatformCompat.swift */,
 				4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */,
 				C511FD447184FAEDC3739DB9 /* TouchSynthesizer.h */,
 				03BBAA69CD44B39C3AD6DA0F /* TouchSynthesizer.m */,
@@ -207,6 +210,7 @@
 				C048C935F21057EC5D0DD7B3 /* LabelMatch.swift in Sources */,
 				D5E40A0B14F5160B7AD6580F /* TextContent.swift in Sources */,
 				A75600000000000000000001 /* NonAppElements.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* PlatformCompat.swift in Sources */,
 				4C1A7E0D9B2F4E6A8D3C5B01 /* LaunchAccessibilityCheck.swift in Sources */,
 				17687791BBF6102D034AB942 /* TouchSynthesizer.m in Sources */,
 				6C50B1ECB9A19432E1A89D91 /* WaitEngine.swift in Sources */,

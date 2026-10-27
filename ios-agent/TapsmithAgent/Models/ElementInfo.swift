@@ -182,7 +182,7 @@ struct ElementInfo {
             || elType == .textView
             || elType == .searchField
         let placeholderValue = isTextInput ? (element.placeholderValue ?? "") : ""
-        let value = element.value as? String
+        let value = PlatformCompat.valueString(element.value)
 
         let className = RoleMapping.typeName(for: elType)
         let traits = ElementInfo.extractTraits(from: element)
@@ -212,7 +212,7 @@ struct ElementInfo {
             bounds: bounds,
             isEnabled: element.isEnabled,
             isChecked: isChecked,
-            isFocused: element.hasFocus,
+            isFocused: element.tapsmithHasFocus,
             isClickable: bounds.width > 0 && bounds.height > 0,
             isFocusable: true,
             isScrollable: elType == .scrollView

@@ -329,7 +329,7 @@ export function iosDescribedRole(value: string | undefined): string {
  */
 export function iosUnnamedRoleMissHint(
   role: { role: string; name: string; nameRegex?: unknown },
-  platform: 'android' | 'ios' | undefined,
+  platform: 'android' | 'ios' | 'macos' | undefined,
 ): string {
   if (platform !== 'ios' || role.name !== '' || role.nameRegex !== undefined) return '';
   const canonical = normalizeRole(role.role);

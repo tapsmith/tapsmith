@@ -12,6 +12,7 @@ mod hid_injector;
 mod ios;
 #[cfg(target_os = "macos")]
 mod ios_redirect;
+mod macos;
 mod mitm_ca;
 mod network_proxy;
 mod pac;
@@ -93,8 +94,11 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> CliArgs {
                     platform = Some(match val.as_str() {
                         "ios" => Platform::Ios,
                         "android" => Platform::Android,
+                        "macos" => Platform::MacOs,
                         _ => {
-                            eprintln!("Invalid platform: {val} (expected 'ios' or 'android')");
+                            eprintln!(
+                                "Invalid platform: {val} (expected 'ios', 'android' or 'macos')"
+                            );
                             std::process::exit(1);
                         }
                     });
@@ -113,7 +117,7 @@ fn parse_args_from(mut args: impl Iterator<Item = String>) -> CliArgs {
                 eprintln!("  --port PORT         gRPC listen port (default: 50051)");
                 eprintln!("  --agent-port PORT   Local port for ADB forwarding to on-device agent (default: 18700)");
                 eprintln!(
-                    "  --platform PLATFORM Only discover devices of this platform (ios or android)"
+                    "  --platform PLATFORM Only discover devices of this platform (ios, android or macos)"
                 );
                 eprintln!("  --outlive-parent    Keep running after the process that started the daemon exits");
                 eprintln!(
@@ -297,6 +301,7 @@ async fn main() -> Result<()> {
     let cleanup = async {
         service_handle.cleanup_network_proxy().await;
         service_handle.cleanup_webview_state().await;
+        service_handle.end_macos_run().await;
     };
     let _ = tokio::join!(agent_teardown, cleanup);
 
@@ -360,5 +365,11 @@ mod tests {
         assert!(args.outlive_parent);
         assert_eq!(args.port, 50051);
         assert_eq!(args.platform, Some(Platform::Ios));
+    }
+
+    #[test]
+    fn platform_accepts_macos() {
+        let args = parse(&["--platform", "macos"]);
+        assert_eq!(args.platform, Some(Platform::MacOs));
     }
 }

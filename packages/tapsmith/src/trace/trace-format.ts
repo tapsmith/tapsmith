@@ -26,8 +26,9 @@
  *  - 1: initial format. Paths (`testFile`, stack frames, `sources.json` keys)
  *       were absolute on the recording machine.
  *  - 2: those paths are POSIX, relative to the project's `rootDir`.
+ *  - 3: device `platform` may be `macos` (the Mac running the tests).
  */
-export const TRACE_FORMAT_VERSION = 2;
+export const TRACE_FORMAT_VERSION = 3;
 
 /**
  * Why a reader built for {@link TRACE_FORMAT_VERSION} cannot read an archive

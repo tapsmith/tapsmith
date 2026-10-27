@@ -29,6 +29,7 @@ use crate::screenshot;
 mod android_backend;
 mod device_backend;
 mod ios_backend;
+mod macos_backend;
 
 use device_backend::{DeviceBackend, PermissionChange};
 
@@ -211,7 +212,8 @@ pub struct TapsmithServiceImpl {
     /// stable for the daemon session (load_or_create), so once installed on
     /// a UDID it stays trusted.
     ios_ca_cert_installed: Arc<RwLock<std::collections::HashSet<String>>>,
-    /// iOS agent launch config (stored for restart on launchApp).
+    /// iOS agent launch config (stored for restart on launchApp). Also the
+    /// macOS agent's: the iOS-only paths reading it check `Platform::Ios`.
     ios_agent_config: Arc<RwLock<Option<IosAgentConfig>>>,
     /// Startup inputs for the currently connected agent. Used to make
     /// StartAgent idempotent when the daemon is already connected to the same
@@ -457,7 +459,9 @@ impl TapsmithServiceImpl {
     fn embedded_root_defaults_for(platform: Option<Platform>) -> EmbeddedRootDefaults {
         match platform {
             Some(Platform::Android) => EmbeddedRootDefaults::Skip,
-            Some(Platform::Ios) | None => EmbeddedRootDefaults::Apply,
+            // macOS: network capture is not supported there yet, so take the
+            // conservative default.
+            Some(Platform::Ios) | Some(Platform::MacOs) | None => EmbeddedRootDefaults::Apply,
         }
     }
 
@@ -633,7 +637,9 @@ impl TapsmithServiceImpl {
             return false;
         }
 
-        let is_ios = desired.platform == Platform::Ios;
+        // The connection's `is_ios` means "reached on localhost, no adb
+        // forward": true for the host-local macOS agent as well.
+        let is_ios = desired.platform != Platform::Android;
         let host_port = {
             let agent = self.agent.read().await;
             agent.connected_host_port_for(&desired.serial, is_ios)
@@ -1581,6 +1587,43 @@ impl TapsmithServiceImpl {
 
         if let Some(proxy) = proxy {
             let _ = proxy.stop().await;
+        }
+    }
+
+    /// macOS, on shutdown: quit the app under test, then restore the data
+    /// this run backed up. The agent launched the app, and stopping the agent
+    /// stops only its runner, so the app would otherwise stay open after the
+    /// run. Only that `.app`, by its path, is stopped. A backup is never
+    /// restored under a running app: if the app cannot be named, the next
+    /// macOS run restores it instead.
+    pub async fn end_macos_run(&self) {
+        let on_mac = matches!(
+            self.device_manager.read().await.active_device(),
+            Some(d) if d.platform == Platform::MacOs
+        );
+        if !on_mac {
+            return;
+        }
+        let app_path = self
+            .ios_agent_config
+            .read()
+            .await
+            .as_ref()
+            .and_then(|c| c.app_path.clone());
+        let Some(app_path) = app_path else {
+            return;
+        };
+        crate::macos::agent_launch::stop_app(std::path::Path::new(&app_path)).await;
+        match crate::macos::app_data::finish_run().await {
+            Ok(restored) => {
+                for id in restored {
+                    info!("Restored {id}'s data as it was before the run");
+                }
+            }
+            Err(e) => warn!(
+                "Could not restore the app data backed up for this run ({e:#}); the next macOS \
+                 run restores it"
+            ),
         }
     }
 
@@ -6369,6 +6412,11 @@ mod tests {
         // iOS compiles its gRPC roots into the app binary — keep tunneling.
         assert_eq!(
             TapsmithServiceImpl::embedded_root_defaults_for(Some(Platform::Ios)),
+            EmbeddedRootDefaults::Apply
+        );
+        // macOS has no network capture yet: the conservative default.
+        assert_eq!(
+            TapsmithServiceImpl::embedded_root_defaults_for(Some(Platform::MacOs)),
             EmbeddedRootDefaults::Apply
         );
         // No device selected: tunnel rather than risk breaking the app.

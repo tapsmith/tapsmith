@@ -68,6 +68,7 @@ pub async fn start(
     match platform {
         Platform::Android => start_android(serial, size).await,
         Platform::Ios => start_ios(serial, size).await,
+        Platform::MacOs => bail!("Video recording is not supported on macOS yet"),
     }
 }
 

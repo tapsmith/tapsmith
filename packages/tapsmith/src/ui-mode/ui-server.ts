@@ -29,7 +29,7 @@ import { isPlannedTest, planRunAll, type PlannedFile } from './run-all-plan.js';
 import { pickResolvedDeviceName } from '../mcp/tools/device-target.js';
 
 import type { TestDispatcher, TestRunResult, TestResultEntry, TestTreeEntry, SessionInfo, DiscoveryError, DeviceTarget } from '../mcp/index.js';
-import type { DeviceGroupEntry, TapsmithConfig } from '../config.js';
+import type { DeviceGroupEntry, Platform, TapsmithConfig } from '../config.js';
 import { findDaemonBin } from '../daemon-bin.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed } from '../daemon-start.js';
 import { resolveChildLoader } from '../child-scripts.js';
@@ -72,7 +72,7 @@ import type {
 } from './ui-protocol.js';
 import { encodeScreenFrame, mirrorKey, type TestNodeStatus, type WorkerDeviceInfo } from './ui-protocol.js';
 import { deviceGroupSize, deviceGroupNames } from '../config.js';
-import { runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js';
+import { assertMacosRunMode, runDeviceCount, startDaemon, waitForDaemon } from '../device-session.js';
 import { projectTreeUse } from './tree-use.js';
 import { RunQueue } from '../watch-queue.js';
 import { DeviceReadiness, toWireReadiness, type Candidate, type ReadinessCommand, type ReadinessEvent, type StaleReason } from './device-readiness.js';
@@ -131,7 +131,13 @@ function cachedScreenScale(udid: string, platform?: 'android' | 'ios'): number |
  * worker daemon.
  */
 function resolveDevicePlatform(ctx: UIServerContext, udid: string): 'android' | 'ios' | undefined {
-  return ctx.configByDevice?.get(udid)?.platform ?? ctx.config.platform;
+  return uiPlatform(ctx.configByDevice?.get(udid)?.platform ?? ctx.config.platform);
+}
+
+/** UI mode drives Android and iOS only: macOS is refused with the standard message. */
+function uiPlatform(platform: Platform | undefined): 'android' | 'ios' | undefined {
+  assertMacosRunMode(platform, 'ui');
+  return platform === 'macos' ? undefined : platform;
 }
 
 function resolveWorkerPlatform(
@@ -885,8 +891,8 @@ export async function startUIServer(
   // per-project, so we also infer from device lookups and project configs.
   const { singleWorkerDisplayName, singleWorkerPlatform } = (() => {
     const serial = ctx.deviceSerial;
-    const fallback = { singleWorkerDisplayName: serial, singleWorkerPlatform: ctx.config.platform };
-    if (!serial) return { singleWorkerDisplayName: undefined, singleWorkerPlatform: ctx.config.platform };
+    const fallback = { singleWorkerDisplayName: serial, singleWorkerPlatform: uiPlatform(ctx.config.platform) };
+    if (!serial) return { singleWorkerDisplayName: undefined, singleWorkerPlatform: uiPlatform(ctx.config.platform) };
 
     // iOS simulator: simctl lists all available sims regardless of root config.
     // Guard on macOS (these commands don't exist on Linux/Windows) and on an
@@ -910,7 +916,7 @@ export async function startUIServer(
     // Fall back to root config, then project configs
     if (ctx.config.platform) return fallback;
     const projectPlatform = ctx.projects?.find((p) => p.effectiveConfig.platform)?.effectiveConfig.platform;
-    if (projectPlatform) return { singleWorkerDisplayName: serial, singleWorkerPlatform: projectPlatform };
+    if (projectPlatform) return { singleWorkerDisplayName: serial, singleWorkerPlatform: uiPlatform(projectPlatform) };
     return fallback;
   })();
 
@@ -2258,7 +2264,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       process: child,
       deviceSerial,
       members,
-      platform: workerConfig.platform,
+      platform: uiPlatform(workerConfig.platform),
       displayName: deviceSerial,
       daemonPort,
       agentPort,

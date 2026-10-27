@@ -44,7 +44,7 @@ export default defineConfig({
     {
       name: "default",
       testMatch: ["**/*.test.ts"],
-      testIgnore: ["**/multi-device/**", "**/app-state.test.ts", "**/auth-gate.test.ts", "**/*.android.test.ts"],
+      testIgnore: ["**/multi-device/**", "**/macos/**", "**/app-state.test.ts", "**/auth-gate.test.ts", "**/*.android.test.ts"],
     },
     {
       name: "authenticated",

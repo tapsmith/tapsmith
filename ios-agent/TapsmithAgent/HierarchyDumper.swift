@@ -79,7 +79,7 @@ class HierarchyDumper {
 
         let label = escapeXML(node["label"] as? String ?? "")
         let identifier = escapeXML(node["identifier"] as? String ?? "")
-        let value = escapeXML(node["value"] as? String ?? "")
+        let value = escapeXML(PlatformCompat.valueString(node["value"]) ?? "")
         let placeholder = escapeXML(node["placeholderValue"] as? String ?? "")
         let title = node["title"] as? String ?? ""
         let isEnabled = node["enabled"] as? Bool ?? true
@@ -186,7 +186,7 @@ class HierarchyDumper {
 
         let label = escapeXML(element.label)
         let identifier = escapeXML(element.identifier)
-        let value = escapeXML((element.value as? String) ?? "")
+        let value = escapeXML(PlatformCompat.valueString(element.value) ?? "")
         let placeholder = escapeXML(element.placeholderValue ?? "")
 
         // Extract traits via KVC for role resolution in the fallback path.
@@ -217,7 +217,7 @@ class HierarchyDumper {
         xml += " enabled=\"\(element.isEnabled)\""
         xml += " visible=\"\(element.exists && frame.width > 0 && frame.height > 0)\""
         xml += " selected=\"\(element.isSelected)\""
-        xml += " hasFocus=\"\(element.hasFocus)\""
+        xml += " hasFocus=\"\(element.tapsmithHasFocus)\""
         xml += " bounds=\"\(bounds)\""
 
         let children = element.children(matching: .any)

@@ -30,7 +30,7 @@ project's `use`) stops the command with every problem and the file's path:
 ```text
 Invalid config file /path/to/tapsmith.config.ts:
   - unknown option 'timout' (did you mean 'timeout'?)
-  - platform must be 'android' or 'ios' (got "iOS"; did you mean 'ios'?)
+  - platform must be one of 'android', 'ios', 'macos' (got "iOS"; did you mean 'ios'?)
 ```
 
 `apk` lets Tapsmith install the app under test itself, and `package` is what it
@@ -44,7 +44,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `platform` | `"android" \| "ios"` | `"android"` | Target platform. **Required for iOS**: it is not inferred from `app`, and a config (or project `use`) that sets `app`, `simulator` or `iosXctestrun` without `platform` is treated as Android: the run looks for an Android device (and fails there when there is none), and is refused when tests start (`tapsmith doctor` flags it as `config-platform`). |
+| `platform` | `"android" \| "ios" \| "macos"` | `"android"` | Target platform. `"macos"` is experimental: see [Minimal (macOS)](#minimal-macos-experimental). **Required for iOS**: it is not inferred from `app`, and a config (or project `use`) that sets `app`, `simulator` or `iosXctestrun` without `platform` is treated as Android: the run looks for an Android device (and fails there when there is none), and is refused when tests start (`tapsmith doctor` flags it as `config-platform`). |
 | `apk` | `string` | `undefined` | Path to the APK under test (Android). |
 | `app` | `string` | `undefined` | Path to the .app bundle under test (iOS). For simulators, build a simulator-slice `.app`. For physical devices, the `.app` must be code-signed with a profile matching the device — see [iOS physical devices](./ios-physical-devices.md). |
 | `package` | `string` | `undefined` | Package name (Android) or bundle identifier (iOS) of the app under test. Tapsmith launches the app before tests and resets it between test files only when this is set; without it, tests start on whatever is on screen. |
@@ -305,6 +305,50 @@ export default defineConfig({
 `platform` and `simulator` are both required here: Tapsmith infers neither. See
 [Build the app under test](getting-started.md#build-the-app-under-test) for where
 the `.app` comes from.
+
+### Minimal (macOS, experimental)
+
+Tests a macOS app on the Mac running Tapsmith:
+
+```typescript
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  platform: "macos",
+  app: "./build/Build/Products/Debug/MyApp.app",
+  package: "com.example.mymacapp",
+});
+```
+
+`app` (the built `.app`) and `package` (its bundle ID) are both required, and
+the mobile-only options (`apk`, `avd`, `agentApk`, `agentTestApk`, `simulator`,
+`iosXctestrun`) are refused. macOS support is experimental:
+
+- **Sequential `tapsmith test` only.** `--ui`, `--watch`, `--workers` above 1
+  and the MCP server refuse a macOS config. A `workers` value in the config runs
+  as one worker, with a note.
+- **One platform per run.** A config can't mix macOS projects with Android or iOS
+  ones: give the macOS projects their own config file and run it with
+  `tapsmith test --config <file>`.
+- **The tests drive this Mac.** Leave it alone while they run, unlocked and
+  awake: if another app keeps focus, the app under test can't come to the front
+  and the run fails to start. Tests that set the clipboard replace yours.
+- **App data is cleared between files, and yours is put back afterwards.**
+  `appReset` clears the app's data as it does on other platforms (`'warm'` is
+  refused: it needs React Native hooks). Before the run, Tapsmith backs up the
+  app's data (its sandbox container, or its preferences and the folders named
+  after its bundle ID), and restores it when the run ends, so your own data for
+  that app is unchanged. A run that is killed leaves its backup, and the next
+  macOS run restores it before it starts. Keychain items, App Group containers
+  and data stored elsewhere are neither cleared nor backed up.
+- **Screenshots show the whole screen**, so traces and failure screenshots
+  include any other windows that are open. Traces don't include device logs yet.
+- **Network capture isn't supported yet**, and a run with it on is refused at
+  agent start. Every trace mode captures the network by default, so turn it off
+  when you record traces: `trace: { mode: "retain-on-failure", network: false }`.
+- On the first run, XCUITest may need Automation Mode. To allow it without a
+  password prompt (CI machines need this), run
+  `sudo automationmodetool enable-automationmode-without-authentication` once.
 
 ### Custom Timeout
 

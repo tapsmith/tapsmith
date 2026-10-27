@@ -83,14 +83,20 @@ describe('config validation at load (PILOT-552)', () => {
   });
 
   describe('enum values', () => {
+    it("accepts platform 'macos'", async () => {
+      writeConfig('export default { platform: "macos", app: "./My.app", package: "com.example.mac" }\n');
+      const config = await loadConfig(root);
+      expect(config.platform).toBe('macos');
+    });
+
     it("rejects platform 'iOS' and suggests the right case", async () => {
       const err = await loadError('{ platform: "iOS" }');
-      expect(err.message).toContain(`platform must be 'android' or 'ios' (got "iOS"; did you mean 'ios'?)`);
+      expect(err.message).toContain(`platform must be one of 'android', 'ios', 'macos' (got "iOS"; did you mean 'ios'?)`);
     });
 
     it('rejects an unknown platform without a suggestion when nothing is close', async () => {
       const err = await loadError('{ platform: "windows" }');
-      expect(err.message).toContain(`platform must be 'android' or 'ios' (got "windows")`);
+      expect(err.message).toContain(`platform must be one of 'android', 'ios', 'macos' (got "windows")`);
       expect(err.message).not.toContain('did you mean');
     });
 
@@ -195,7 +201,7 @@ describe('config validation at load (PILOT-552)', () => {
       ['appReset', "appReset must be one of 'auto'"],
       ['devices', 'devices must be a positive integer'],
       ['emulatorLaunchOptions', 'emulatorLaunchOptions must be an object (got null)'],
-      ['platform', "platform must be 'android' or 'ios' (got null)"],
+      ['platform', "platform must be one of 'android', 'ios', 'macos' (got null)"],
       ['timeout', 'timeout must be a positive number of milliseconds (got null)'],
     ])('rejects %s: null at load', async (key, expected) => {
       const err = await loadError(`{ ${key}: null }`);
@@ -205,7 +211,7 @@ describe('config validation at load (PILOT-552)', () => {
 
     it('rejects a null in a project `use` at load, not at project resolution', async () => {
       expect((await loadError('{ projects: [{ name: "p", use: { appReset: null, platform: null } }] }')).message)
-        .toMatch(/projects\[0\]\.use\.appReset must be one of[\s\S]*projects\[0\]\.use\.platform must be 'android' or 'ios' \(got null\)/);
+        .toMatch(/projects\[0\]\.use\.appReset must be one of[\s\S]*projects\[0\]\.use\.platform must be one of 'android', 'ios', 'macos' \(got null\)/);
     });
 
     it('reads null, false and empty reporter and grep values as unset, as their consumers always have', async () => {
@@ -294,7 +300,7 @@ describe('config validation at load (PILOT-552)', () => {
 
     it('validates `use` values and keys the same way as the root', async () => {
       const err = await loadError('{ projects: [{ name: "ios", use: { platform: "iOS", simulater: "iPhone 16", timeout: "1" } }] }');
-      expect(err.message).toContain("projects[0].use.platform must be 'android' or 'ios' (got \"iOS\"; did you mean 'ios'?)");
+      expect(err.message).toContain("projects[0].use.platform must be one of 'android', 'ios', 'macos' (got \"iOS\"; did you mean 'ios'?)");
       expect(err.message).toContain("unknown option 'projects[0].use.simulater' (did you mean 'projects[0].use.simulator'?)");
       expect(err.message).toContain('projects[0].use.timeout must be a positive number of milliseconds (got "1")');
     });
@@ -371,7 +377,7 @@ describe('defineConfig()', () => {
     expect(isConfigValidationError(err)).toBe(true);
     expect((err as ConfigValidationError).issues).toEqual([
       "unknown option 'timout' (did you mean 'timeout'?)",
-      "platform must be 'android' or 'ios' (got \"iOS\"; did you mean 'ios'?)",
+      "platform must be one of 'android', 'ios', 'macos' (got \"iOS\"; did you mean 'ios'?)",
       "appReset must be one of 'auto', 'clear', 'restart', 'warm', 'none' (got \"cold\")",
     ]);
   });

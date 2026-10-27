@@ -266,6 +266,22 @@ describe('formatLaunchTable', () => {
   });
 });
 
+describe('createUiLaunchSteps on macOS', () => {
+  it('describes this Mac, the .app and the macOS agent, never Android', () => {
+    const steps = createUiLaunchSteps({
+      config: baseConfig({ platform: 'macos', app: './build/My.app', package: 'com.example.mac', workers: 1 }),
+      testFileCount: 1,
+      workerCount: 1,
+    });
+    const detail = (id: string) => steps.find((s) => s.id === id)!.detail;
+
+    expect(detail('primary-device')).toBe('use this Mac');
+    expect(detail('app-install')).toBe('run My.app in place (no install)');
+    expect(detail('agent')).toBe('build or reuse the macOS agent and start it');
+    expect(steps.map((s) => s.detail).join('\n')).not.toContain('Android');
+  });
+});
+
 describe('UiLaunchProgress', () => {
   it('streams row updates without an initial table in non-interactive output', () => {
     const stream = new CaptureStream();

@@ -423,7 +423,7 @@ message DeviceInfo {
   string model = 2;
   string state = 3;
   bool is_emulator = 4;
-  string platform = 5;  // "android" or "ios"
+  string platform = 5;  // "android", "ios" or "macos" (the host Mac, listed only under --platform macos)
   // Human-friendly OS version ("14", "18.1", "26.2.1"). Empty when unknown.
   // Android: ro.build.version.release. iOS sim: runtime version. iOS physical:
   // filled CLI-side from devicectl (daemon leaves blank).
@@ -479,11 +479,12 @@ message StartAgentRequest {
   string target_package = 2;
   string agent_apk_path = 3;       // host path to agent APK (auto-install, Android)
   string agent_test_apk_path = 4;  // host path to agent test APK (auto-install, Android)
-  string ios_xctestrun_path = 5;   // host path to .xctestrun file (iOS)
+  string ios_xctestrun_path = 5;   // host path to .xctestrun file (iOS; the macOS agent's too)
   // host path to the .app bundle installed on the device. Used by the
   // daemon on physical iOS devices to reinstall the app on clearAppData
   // calls (devicectl has no host-side app container access, so reinstall
   // is the only way to reset persistent state). Empty for simulators.
+  // Required for macOS: the agent launches the app from this .app path.
   string ios_app_path = 6;
   // Same semantics as SetDeviceRequest.network_tracing_enabled — gates
   // `ensure_ios_physical_proxy` pre-arming on the start_agent path.

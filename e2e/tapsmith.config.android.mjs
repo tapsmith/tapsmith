@@ -22,7 +22,7 @@ export default defineConfig({
     {
       name: "default",
       testMatch: ["**/*.test.ts"],
-      testIgnore: ["**/multi-device/**", 
+      testIgnore: ["**/multi-device/**", "**/macos/**", 
         "**/app-state.test.ts",
         "**/auth-gate.test.ts",
         "**/webview*.test.ts",

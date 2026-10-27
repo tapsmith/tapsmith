@@ -3,6 +3,7 @@ use tracing::{debug, info, warn};
 
 use crate::adb;
 use crate::ios;
+use crate::macos;
 use crate::platform::Platform;
 
 /// Connection state of a tracked device.
@@ -106,14 +107,25 @@ impl DeviceManager {
         }
     }
 
-    /// Refresh the list of devices from ADB and iOS simulators/devices.
+    /// Whether discovery should list devices of `platform`. With no filter
+    /// that is Android and iOS only: the host Mac is always there, so listing
+    /// it unasked would break single-device auto-pick (see `auto_pick`).
+    fn wants(&self, platform: Platform) -> bool {
+        match self.platform_filter {
+            Some(filter) => filter == platform,
+            None => platform != Platform::MacOs,
+        }
+    }
+
+    /// Refresh the list of devices from ADB, iOS simulators/devices and, under
+    /// `--platform macos`, the host Mac.
     pub async fn refresh(&mut self) -> Result<&[DeviceInfo]> {
-        // Collect all current device serials from both platforms
+        // Collect the serials of every device present, across the wanted platforms
         let mut current_serials: Vec<String> = Vec::new();
         let mut unusable: Vec<UnusableDevice> = Vec::new();
 
         // ─── Android devices via ADB ───
-        if self.platform_filter != Some(Platform::Ios) {
+        if self.wants(Platform::Android) {
             if let Ok(adb_devices) = adb::list_devices().await {
                 let (online, not_usable) = partition_adb_devices(adb_devices);
                 unusable = not_usable;
@@ -157,7 +169,7 @@ impl DeviceManager {
         }
 
         // ─── iOS devices via xcrun simctl / devicectl ───
-        if self.platform_filter != Some(Platform::Android) {
+        if self.wants(Platform::Ios) {
             // Surface listing errors instead of silently swallowing — a broken
             // simctl install or hung devicectl call would otherwise produce a
             // mysteriously empty device list with no clue why.
@@ -193,6 +205,24 @@ impl DeviceManager {
                         os_version: ios_dev.os_version.clone(),
                     });
                     debug!(serial = %ios_dev.udid, name = %ios_dev.name, "New iOS device discovered");
+                }
+            }
+        }
+
+        // ─── This Mac (only when asked for: see `wants`) ───
+        if self.wants(Platform::MacOs) {
+            let serial = macos::device::HOST_SERIAL;
+            if self.devices.iter().any(|d| d.serial == serial) {
+                // The host never goes away; no need to re-read its model.
+                current_serials.push(serial.to_string());
+            } else {
+                match macos::device::host_device().await {
+                    Ok(host) => {
+                        current_serials.push(host.serial.clone());
+                        debug!(model = %host.model, "macOS host device discovered");
+                        self.devices.push(host);
+                    }
+                    Err(e) => warn!(error = %e, "Failed to describe the macOS host device"),
                 }
             }
         }
@@ -358,6 +388,32 @@ mod tests {
             platform: Platform::Android,
             os_version: String::new(),
         }
+    }
+
+    #[test]
+    fn macos_filter_wants_only_macos() {
+        let dm = DeviceManager::with_platform_filter(Some(Platform::MacOs));
+        assert!(!dm.wants(Platform::Android));
+        assert!(!dm.wants(Platform::Ios));
+        assert!(dm.wants(Platform::MacOs));
+    }
+
+    #[test]
+    fn no_filter_never_wants_macos() {
+        // The host Mac is always present, so listing it unasked would turn
+        // every single-device auto-pick into "2 devices connected".
+        let dm = DeviceManager::with_platform_filter(None);
+        assert!(dm.wants(Platform::Android));
+        assert!(dm.wants(Platform::Ios));
+        assert!(!dm.wants(Platform::MacOs));
+    }
+
+    #[test]
+    fn ios_filter_wants_only_ios() {
+        let dm = DeviceManager::with_platform_filter(Some(Platform::Ios));
+        assert!(!dm.wants(Platform::Android));
+        assert!(dm.wants(Platform::Ios));
+        assert!(!dm.wants(Platform::MacOs));
     }
 
     #[test]

@@ -6,6 +6,7 @@
  */
 
 import { execFileSync, spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import { createServer } from 'node:net';
 
 /**
@@ -107,9 +108,16 @@ const DAEMON_PROGRAM = 'tapsmith-core';
  * The pids of the `tapsmith-core` daemons in `ps -A -ww -o pid=,args=` output
  * whose agent port is `port` (`--agent-port`, else the default), leaving out
  * `excludePids`. The program may be a path, spaces and all; only its basename
- * has to be the daemon's.
+ * has to be the daemon's. `ps` joins arguments with spaces, so a path is only
+ * taken for the program when `isDaemonBinary` finds that file: a shell running
+ * `TAPSMITH_DAEMON_BIN=/path/tapsmith-core tapsmith test` names one too.
  */
-export function parseDaemonsOnAgentPort(ps: string, port: number, excludePids: ReadonlySet<number>): number[] {
+export function parseDaemonsOnAgentPort(
+  ps: string,
+  port: number,
+  excludePids: ReadonlySet<number>,
+  isDaemonBinary: (file: string) => boolean,
+): number[] {
   const pids: number[] = [];
   for (const raw of ps.split('\n')) {
     const match = /^\s*(\d+)\s+(.*)$/.exec(raw);
@@ -121,7 +129,8 @@ export function parseDaemonsOnAgentPort(ps: string, port: number, excludePids: R
     for (let i = command.indexOf(DAEMON_PROGRAM); i !== -1; i = command.indexOf(DAEMON_PROGRAM, i + 1)) {
       const prefix = command.slice(0, i);
       const rest = command.slice(i + DAEMON_PROGRAM.length);
-      if ((prefix === '' || (prefix.startsWith('/') && prefix.endsWith('/'))) && (rest === '' || rest.startsWith(' '))) {
+      const isPath = prefix.startsWith('/') && prefix.endsWith('/') && isDaemonBinary(prefix + DAEMON_PROGRAM);
+      if ((prefix === '' || isPath) && (rest === '' || rest.startsWith(' '))) {
         at = i;
         break;
       }
@@ -138,6 +147,14 @@ export function parseDaemonsOnAgentPort(ps: string, port: number, excludePids: R
   return pids;
 }
 
+function isFile(file: string): boolean {
+  try {
+    return fs.statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The running daemons whose agent port is `port` — other sessions' (a
  * sequential run on a custom `daemonAddress` uses the default agent port
@@ -147,7 +164,7 @@ export function parseDaemonsOnAgentPort(ps: string, port: number, excludePids: R
 export function daemonsOnAgentPort(port: number, excludePids: ReadonlySet<number>): number[] | undefined {
   try {
     const ps = execFileSync('ps', ['-A', '-ww', '-o', 'pid=,args='], { encoding: 'utf-8', timeout: 5_000 });
-    return parseDaemonsOnAgentPort(ps, port, new Set([...excludePids, process.pid]));
+    return parseDaemonsOnAgentPort(ps, port, new Set([...excludePids, process.pid]), isFile);
   } catch {
     return undefined;
   }

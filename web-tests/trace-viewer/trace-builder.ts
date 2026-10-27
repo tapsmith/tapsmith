@@ -48,7 +48,7 @@ const BASE_TIME = 1_700_000_000_000
 
 export function defaultMetadata(): TraceMetadata {
   return {
-    version: 2,
+    version: 3,
     tapsmithVersion: "0.5.0",
     testFile: "e2e/tests/gestures.test.ts",
     testName: "Gestures screen > double tap registers double tap gesture",

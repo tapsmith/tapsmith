@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Tapsmith trace archive — format version 2",
+  "title": "Tapsmith trace archive — format version 3",
   "description": "A parsed Tapsmith trace archive (.zip). The root describes what a reader gets after unzipping: `members` is the archive's member names, `metadata` is metadata.json, `events` is trace.json (NDJSON, one event per line), `network` is network.json (NDJSON), and `sources` is sources.json. Readers must ignore fields, event types and members they do not recognise; only a change an existing reader could misread bumps `metadata.version`. Cross-references (a body path naming a member, a stack frame naming a sources key) are not expressible here — see docs/trace-format.md.",
   "type": "object",
   "required": ["members", "metadata", "events"],
@@ -77,7 +77,7 @@
       "properties": {
         "serial": { "type": "string" },
         "name": { "description": "Device group name; matches events' `deviceId`.", "type": "string" },
-        "platform": { "enum": ["android", "ios"] },
+        "platform": { "enum": ["android", "ios", "macos"] },
         "model": { "type": "string" },
         "osVersion": { "type": "string" },
         "screenResolution": {
@@ -100,7 +100,7 @@
         "startTime", "endTime", "device", "traceConfig", "actionCount", "screenshotCount"
       ],
       "properties": {
-        "version": { "description": "Archive format version.", "const": 2 },
+        "version": { "description": "Archive format version.", "const": 3 },
         "tapsmithVersion": { "type": "string" },
         "testFile": {
           "description": "Test file, as a projectPath. Empty for a manual `device.tracing` trace recorded outside the test runner.",

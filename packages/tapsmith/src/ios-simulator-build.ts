@@ -98,7 +98,7 @@ function processAlive(pid: number): boolean {
  * "xcodebuild exited with": that is the daemon's agent-launch failure text,
  * which worker-protocol.ts retries as an infrastructure error.
  */
-async function runXcodebuild(args: string[], logPath: string, timeoutMs: number | undefined): Promise<void> {
+export async function runXcodebuild(args: string[], logPath: string, timeoutMs: number | undefined): Promise<void> {
   const log = fs.createWriteStream(logPath);
   let logWritable = true;
   let exited = false;

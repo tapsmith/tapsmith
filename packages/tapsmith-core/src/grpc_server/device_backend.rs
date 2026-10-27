@@ -10,6 +10,7 @@
 
 use super::android_backend::AndroidBackend;
 use super::ios_backend::IosBackend;
+use super::macos_backend::MacOsBackend;
 use super::*;
 
 pub(super) type ActionResult = Result<Response<proto::ActionResponse>, Status>;
@@ -262,5 +263,6 @@ pub(super) fn for_platform(
     match platform {
         Platform::Android => Box::new(AndroidBackend { svc }),
         Platform::Ios => Box::new(IosBackend { svc }),
+        Platform::MacOs => Box::new(MacOsBackend { svc }),
     }
 }

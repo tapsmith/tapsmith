@@ -223,7 +223,7 @@ class SnapshotElementFinder {
                 .compactMap { (i, m) in suppressed.contains(i) ? nil : m }
         }
 
-        let screenSize = self.screenSize
+        let screenRect = self.screenRect
 
         // For each match, its index AMONG matches sharing the same identifier
         // (document order). Used to resolve same-identifier elements positionally
@@ -294,7 +294,7 @@ class SnapshotElementFinder {
             let inTabBar = nodeDict[SnapshotElementFinder.inTabBarKey] as? Bool ?? false
             let role = RoleMapping.resolveRole(for: elType, traits: traits, inTabBar: inTabBar)
             let isEnabled = nodeDict["enabled"] as? Bool ?? true
-            let value = nodeDict["value"] as? String
+            let value = PlatformCompat.valueString(nodeDict["value"])
             let isSelected = nodeDict["selected"] as? Bool ?? false
             let isChecked = checkedState(
                 for: elType,
@@ -380,7 +380,7 @@ class SnapshotElementFinder {
                 displayText = nil
             }
 
-            let viewportRatio = computeViewportRatio(bounds, screenSize: screenSize)
+            let viewportRatio = computeViewportRatio(bounds, screenRect: screenRect)
 
             return ElementInfo(
                 elementId: elementId,
@@ -841,7 +841,7 @@ class SnapshotElementFinder {
                 label: children[i]["label"] as? String ?? "",
                 identifier: children[i]["identifier"] as? String ?? "",
                 title: children[i]["title"] as? String ?? "",
-                value: children[i]["value"] as? String ?? ""
+                value: PlatformCompat.valueString(children[i]["value"]) ?? ""
             ))
             numberDescendants(of: &children[i], into: &nodes)
         }
@@ -994,7 +994,7 @@ class SnapshotElementFinder {
                     value: child["value"] as? String ?? ""
                 ) { continue }
                 let ownText: String?
-                if let v = child["value"] as? String, !v.isEmpty {
+                if let v = PlatformCompat.valueString(child["value"]), !v.isEmpty {
                     ownText = v
                 } else if let t = child["title"] as? String, !t.isEmpty {
                     ownText = t
@@ -1272,7 +1272,7 @@ class SnapshotElementFinder {
         let label = node["label"] as? String ?? ""
         let title = node["title"] as? String ?? ""
         let identifier = node["identifier"] as? String ?? ""
-        let value = node["value"] as? String ?? ""
+        let value = PlatformCompat.valueString(node["value"]) ?? ""
         let placeholderValue = node["placeholderValue"] as? String ?? ""
         let elTypeRaw = parseUInt(node["elementType"]) ?? 0
         let elType = XCUIElement.ElementType(rawValue: elTypeRaw) ?? .other
@@ -1491,7 +1491,7 @@ class SnapshotElementFinder {
             elementType: parseUInt(dict["elementType"]) ?? 0,
             label: (dict["label"] as? String) ?? (dict["title"] as? String ?? ""),
             identifier: dict["identifier"] as? String ?? "",
-            value: (dict["value"] as? String) ?? "",
+            value: PlatformCompat.valueString(dict["value"]) ?? "",
             placeholderValue: dict["placeholderValue"] as? String ?? "",
             isEnabled: dict["enabled"] as? Bool ?? true,
             frame: parseFrame(dict),
@@ -1710,43 +1710,52 @@ class SnapshotElementFinder {
 
     // MARK: - Helpers
 
-    private var _screenSize: CGSize?
+    private var _screenRect: CGRect?
 
-    var screenSize: CGSize {
+    var screenSize: CGSize { screenRect.size }
+
+    /// The visible area in snapshot coordinates. On iOS the main window is
+    /// always full-screen, so this is the screen from the origin. On macOS it
+    /// is the app's main window frame, which is in global screen coordinates
+    /// with a non-zero origin (element frames are global too); the
+    /// application element's own frame is null there.
+    var screenRect: CGRect {
         lock.lock()
-        if let cached = _screenSize {
+        if let cached = _screenRect {
             lock.unlock()
             return cached
         }
         lock.unlock()
 
         // Get actual screen size from the app's main window frame.
-        // On iOS the main window is always full-screen.
         let frame = app.windows.firstMatch.frame
-        let size: CGSize
+        let rect: CGRect
         if frame.width > 0 && frame.height > 0 {
-            size = frame.size
+            #if os(macOS)
+            rect = frame
+            #else
+            rect = CGRect(origin: .zero, size: frame.size)
+            #endif
         } else {
             NSLog("[TapsmithSnapshot] WARNING: Could not determine screen size from window frame (\(frame)), using fallback 393x852")
-            size = CGSize(width: 393, height: 852)
+            rect = CGRect(x: 0, y: 0, width: 393, height: 852)
         }
 
         lock.lock()
-        _screenSize = size
+        _screenRect = rect
         lock.unlock()
-        return size
+        return rect
     }
 
     /// Invalidate the cached screen size. Call after orientation changes
     /// so the next access re-reads from the window frame.
     func invalidateScreenSize() {
         lock.lock()
-        _screenSize = nil
+        _screenRect = nil
         lock.unlock()
     }
 
-    private func computeViewportRatio(_ bounds: ElementBounds, screenSize: CGSize) -> Float {
-        let screenRect = CGRect(x: 0, y: 0, width: screenSize.width, height: screenSize.height)
+    private func computeViewportRatio(_ bounds: ElementBounds, screenRect: CGRect) -> Float {
         let elemRect = CGRect(
             x: CGFloat(bounds.left), y: CGFloat(bounds.top),
             width: CGFloat(bounds.width), height: CGFloat(bounds.height)
@@ -1765,7 +1774,7 @@ class SnapshotElementFinder {
             right: Int(frame.origin.x + frame.size.width),
             bottom: Int(frame.origin.y + frame.size.height)
         )
-        let viewportRatio = computeViewportRatio(bounds, screenSize: screenSize)
+        let viewportRatio = computeViewportRatio(bounds, screenRect: screenRect)
         // Delegated to the shared factory in ElementInfo.swift so the
         // sibling ElementFinder.swift path can't drift on text /
         // checked / role / hint derivation.

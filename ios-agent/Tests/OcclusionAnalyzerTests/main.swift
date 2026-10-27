@@ -462,6 +462,51 @@ checkKF("a web view is not a React Native scroll view: touched as is",
 
 check("off screen", analyzer(screenRows()).analyze(button("Gone", R(16, 900, 370, 56)), isHittable: false),
       .offScreen)
+
+// macOS: the screen is the app's main window, whose frame is in global screen
+// coordinates with a non-zero origin (the application element's own frame is
+// null). Built through the snapshot initializer, the one the agent uses.
+final class FakeSnapshot: NSObject, XCUIElementSnapshot {
+    let elementType: XCUIElement.ElementType
+    let frame: CGRect
+    let label: String
+    let identifier: String
+    let children: [XCUIElementSnapshot]
+    init(_ type: XCUIElement.ElementType, _ frame: CGRect, label: String = "", children: [XCUIElementSnapshot] = []) {
+        self.elementType = type
+        self.frame = frame
+        self.label = label
+        self.identifier = ""
+        self.children = children
+    }
+    var value: Any? { nil }
+    var title: String { "" }
+    var isEnabled: Bool { true }
+    var horizontalSizeClass: XCUIElement.SizeClass { .unspecified }
+    var verticalSizeClass: XCUIElement.SizeClass { .unspecified }
+    var placeholderValue: String? { nil }
+    var isSelected: Bool { false }
+    var dictionaryRepresentation: [XCUIElement.AttributeName: Any] { [:] }
+}
+
+let macWindow = R(306, 256, 900, 450)
+let macGreeting = R(713, 453, 85, 24)
+let macApp = FakeSnapshot(.application, .null, label: "TapsmithMacTestApp", children: [
+    FakeSnapshot(.window, macWindow, children: [
+        FakeSnapshot(.staticText, macGreeting, label: "Hello, nobody"),
+    ]),
+])
+let macAnalyzer = OcclusionAnalyzer(snapshot: macApp, screen: macWindow)
+let macVerdict = macAnalyzer.analyze(
+    .init(frame: macGreeting, elementType: .staticText, label: "Hello, nobody", identifier: ""), isHittable: true)
+if macVerdict != .offScreen { print("ok   offset screen keeps an element inside it on screen") } else {
+    failures += 1; print("FAIL offset screen keeps an element inside it on screen: got \(macVerdict)")
+}
+check("element left of an offset screen is off screen",
+      macAnalyzer.analyze(.init(frame: R(100, 300, 50, 20), elementType: .button, label: "Left", identifier: ""),
+                          isHittable: true),
+      .offScreen)
+
 let piece = OcclusionAnalyzer.subtract(R(0, 50, 100, 10), from: R(0, 0, 100, 100))
 if piece == R(0, 0, 100, 50) { print("ok   subtract keeps the largest piece") } else {
     failures += 1; print("FAIL subtract keeps the largest piece: got \(piece)")

@@ -1168,6 +1168,11 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * while re-resolving a *healthy* platform would throw away a working target.
    */
   private async _ensureTargetForProject(projectName?: string): Promise<PlatformTarget> {
+    const project = projectName ? this._projects.find((p) => p.name === projectName) : undefined;
+    if ((project?.effectiveConfig.platform ?? this._config?.platform) === 'macos') {
+      const { assertMacosRunMode } = await import('../device-session.js');
+      assertMacosRunMode('macos', 'mcp');
+    }
     const key = platformKeyForProject(this._projects, projectName, this._config?.platform);
     // A device tool's or a run_tests `device`'s retry may be resolving this
     // target now: wait for it rather than resolve it a second time.

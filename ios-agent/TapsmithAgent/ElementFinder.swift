@@ -82,15 +82,15 @@ class ElementFinder {
             if let wantChecked = selector.checked {
                 let isChecked = checkedState(
                     for: elem.elementType,
-                    value: elem.value as? String,
+                    value: PlatformCompat.valueString(elem.value),
                     selected: elem.isSelected
                 )
                 if isChecked != wantChecked { return false }
             }
-            if let wantFocused = selector.focused, elem.hasFocus != wantFocused { return false }
+            if let wantFocused = selector.focused, elem.tapsmithHasFocus != wantFocused { return false }
             if let wantSelected = selector.selected, elem.isSelected != wantSelected { return false }
             if let wantExpanded = selector.expanded {
-                let val = (elem.value as? String ?? "").lowercased()
+                let val = (PlatformCompat.valueString(elem.value) ?? "").lowercased()
                 let isExpanded = val.contains("expanded")
                 if isExpanded != wantExpanded { return false }
             }

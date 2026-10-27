@@ -76,7 +76,7 @@ Every event's `properties` carry:
 | Property | Example | Why |
 |---|---|---|
 | `mode` | `"test"` | Which run path executed the file: `test` (sequential CLI), `test-parallel` (`--workers N`), `ui` (UI mode), `watch` (headless watch mode), `mcp` (the MCP server's `tapsmith_run_tests`). |
-| `platform` | `"android"` | `android` or `ios`. |
+| `platform` | `"android"` | `android`, `ios` or `macos` (experimental). |
 | `devices` | `1` | Size of the device group the file ran on (`use.devices`). |
 | `tests` / `passed` / `failed` / `skipped` | `12` / `11` / `1` / `0` | Counts only. |
 | `duration_ms` | `48211` | How long the file took. |

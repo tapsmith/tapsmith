@@ -28,7 +28,16 @@ export const APP_RESET_MODES: readonly AppResetMode[] = ['auto', 'clear', 'resta
 export const APP_RESET_SCOPES: readonly AppResetScope[] = ['auto', 'file', 'test'];
 /** Default for {@link TapsmithConfig.appResetColdEvery}. */
 export const DEFAULT_APP_RESET_COLD_EVERY = 10;
-export type Platform = 'android' | 'ios';
+/** `macos` is experimental: this Mac, sequential `tapsmith test` only. */
+export type Platform = 'android' | 'ios' | 'macos';
+/**
+ * Whether a config targets Android, which an unset `platform` always has.
+ * Say this rather than `platform !== 'ios'`: with macOS that no longer means
+ * Android, and a Mac would run adb work against a device adb doesn't know.
+ */
+export function isAndroid(platform: Platform | undefined): boolean {
+  return (platform ?? 'android') === 'android';
+}
 
 export type { TraceMode, TraceConfig, VideoMode, VideoConfig };
 
@@ -1041,7 +1050,7 @@ function recordingOption(key: 'trace' | 'video', known: Readonly<Record<string, 
 }
 
 const ROOT_CHECKS: { readonly [K in keyof TapsmithConfig]-?: KeyCheck } = {
-  platform: oneOf(['android', 'ios']),
+  platform: oneOf(['android', 'ios', 'macos']),
   apk: optionalString,
   app: optionalString,
   activity: optionalString,

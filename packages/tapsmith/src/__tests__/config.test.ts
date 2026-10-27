@@ -1210,3 +1210,13 @@ describe('findConfigFile', () => {
     expect(findConfigFile(root)).toBeUndefined();
   });
 });
+
+describe('isAndroid()', () => {
+  it('is Android when unset or android, never for iOS or macOS', async () => {
+    const { isAndroid } = await import('../config.js');
+    expect(isAndroid(undefined)).toBe(true);
+    expect(isAndroid('android')).toBe(true);
+    expect(isAndroid('ios')).toBe(false);
+    expect(isAndroid('macos')).toBe(false);
+  });
+});

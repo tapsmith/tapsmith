@@ -61,7 +61,7 @@ export default defineConfig({
       name: "android",
       workers: 1,
       testMatch: ["**/*.test.ts"],
-      testIgnore: ["**/multi-device/**", "**/app-state.test.ts", "**/auth-gate.test.ts", "**/*.ios.test.ts"],
+      testIgnore: ["**/multi-device/**", "**/macos/**", "**/app-state.test.ts", "**/auth-gate.test.ts", "**/*.ios.test.ts"],
       use: ANDROID_USE,
     },
     {
@@ -81,7 +81,7 @@ export default defineConfig({
       name: "ios",
       workers: 1,
       testMatch: ["**/*.test.ts"],
-      testIgnore: ["**/multi-device/**", 
+      testIgnore: ["**/multi-device/**", "**/macos/**", 
         "**/app-state.test.ts",
         "**/auth-gate.test.ts",
         "**/*.android.test.ts",

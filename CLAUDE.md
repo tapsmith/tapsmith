@@ -9,12 +9,13 @@ Mobile app testing framework with a Playwright-inspired API. Three-tier architec
 packages/tapsmith/        # TypeScript SDK — locators, element handles, assertions, runner, CLI
 packages/tapsmith-core/   # Rust daemon — gRPC server, ADB/simctl bridge, device management
 agent/                    # Android Kotlin agent — UIAutomator2 instrumentation
-ios-agent/                # iOS Swift agent — XCUITest instrumentation
+ios-agent/                # iOS Swift agent — XCUITest instrumentation (ios-agent/macos: the same sources as a macOS agent)
 proto/tapsmith.proto      # gRPC contract (single proto file, buf for linting)
 npm-packages/             # Platform-specific npm packages (@tapsmith/core-{os}-{arch}) for daemon binary distribution
 docs/                     # User-facing documentation
 test-app/                 # React Native (Expo) test app for E2E testing
 native-ios-test-app/      # Plain SwiftUI fixture app (xcodegen; build.sh) — e2e/native-ios/*.native.ts, not in CI yet
+test-app-macos/           # SwiftUI test app for the experimental macOS target (e2e/macos)
 e2e/                      # E2E test suite run against the test app
 .claude/skills/           # Claude Code project skills (implement-ticket(s), review-loop, qa-this-branch); .claude/ otherwise git-ignored
 ```
@@ -63,6 +64,15 @@ npx tapsmith ios build-agent                    # auto-detects team ID from Xcod
 ```
 
 See `docs/ios-physical-devices.md` for the full physical-device walkthrough.
+
+### macOS agent and test app (experimental `platform: 'macos'`)
+```bash
+# Built by CI in the rust-macos job; the SDK builds and caches the agent itself on first use.
+cd ios-agent/macos && xcodebuild build-for-testing -project TapsmithMacAgent.xcodeproj \
+  -scheme TapsmithMacAgentUITests -destination platform=macOS
+./test-app-macos/build.sh                    # → test-app-macos/build/Build/Products/Debug/
+cd e2e && npx tapsmith test -c tapsmith.config.macos.mjs   # leave the Mac alone while it runs
+```
 
 ### Proto (`proto/`)
 ```bash

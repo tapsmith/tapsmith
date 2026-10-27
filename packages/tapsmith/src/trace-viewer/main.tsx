@@ -40,6 +40,7 @@ import {
   isMultiDevice,
   laneStripMinHeight,
 } from "./components/device-frames.js";
+import { bezelPlatform } from "../ui-mode/assets/bezels/frames.js";
 import type { HierarchyNode, Bounds } from "./components/hierarchy-utils.js";
 import { traceViewerStyles } from "./styles/trace-viewer.css.js";
 
@@ -668,7 +669,7 @@ function App() {
           hasTrace={true}
           testName={trace.metadata.testName}
           testStatus={trace.metadata.testStatus}
-          platform={platform}
+          platform={bezelPlatform(platform)}
         />
         <ResizeHandle direction="horizontal" onResize={handleRightResize} />
         <div

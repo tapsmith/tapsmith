@@ -15,6 +15,10 @@ class TapsmithAgentRunner: XCTestCase {
     private static let envTargetBundleId = "TAPSMITH_TARGET_BUNDLE_ID"
     private static let envPort = "TAPSMITH_AGENT_PORT"
     private static let envAttachToRunningApp = "TAPSMITH_ATTACH_TO_RUNNING_APP"
+    #if os(macOS)
+    /// Absolute path to the target `.app` bundle (macOS only).
+    private static let envTargetAppPath = "TAPSMITH_TARGET_APP_PATH"
+    #endif
 
     private var socketServer: SocketServer?
 
@@ -30,11 +34,26 @@ class TapsmithAgentRunner: XCTestCase {
 
         // Create the XCUIApplication for the target app
         let app: XCUIApplication
+        #if os(macOS)
+        // On macOS, XCUIApplication(bundleIdentifier:) only finds apps in indexed
+        // locations (/Applications, ~/Applications). A build output anywhere else
+        // fails with "The app representing <id> could not be found", so launch
+        // by file path when the daemon provides one.
+        let appPath = ProcessInfo.processInfo.environment[Self.envTargetAppPath] ?? ""
+        if !appPath.isEmpty {
+            app = XCUIApplication(url: URL(fileURLWithPath: appPath))
+        } else if bundleId.isEmpty {
+            app = XCUIApplication()
+        } else {
+            app = XCUIApplication(bundleIdentifier: bundleId)
+        }
+        #else
         if bundleId.isEmpty {
             app = XCUIApplication()
         } else {
             app = XCUIApplication(bundleIdentifier: bundleId)
         }
+        #endif
 
         // Disable XCUITest's quiescence waiting — this is the single biggest
         // performance win. Without this, every action (tap, type, swipe) blocks

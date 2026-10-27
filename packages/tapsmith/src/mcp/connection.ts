@@ -1063,6 +1063,11 @@ export async function startDaemon(
   /** The group member it is for, named in the failure. */
   member?: string,
 ): Promise<DaemonConnection | null> {
+  // Every MCP daemon starts here: refuse macOS before one is spawned.
+  if (platform === 'macos') {
+    const { assertMacosRunMode } = await import('../device-session.js');
+    assertMacosRunMode('macos', 'mcp');
+  }
   const generation = _sessionGeneration;
   const sessionClosed = (): boolean => generation !== _sessionGeneration;
   log(platform ? `Starting an ${platform} daemon...` : 'No daemon found, starting one...');

@@ -99,7 +99,10 @@ struct OcclusionAnalyzer {
         self.screen = screen
     }
 
-    init(snapshot: XCUIElementSnapshot, screenSize: CGSize) {
+    /// `screen` is the visible area in the snapshot's coordinates: the whole
+    /// screen from the origin on iOS, the app's main window (global
+    /// coordinates, non-zero origin) on macOS.
+    init(snapshot: XCUIElementSnapshot, screen: CGRect) {
         var nodes: [Node] = []
         func walk(_ s: XCUIElementSnapshot, window: Int?, parent: Int?) {
             let index = nodes.count
@@ -117,7 +120,7 @@ struct OcclusionAnalyzer {
             nodes[index].subtreeEnd = nodes.count
         }
         walk(snapshot, window: nil, parent: nil)
-        self.init(nodes: nodes, screen: CGRect(origin: .zero, size: screenSize))
+        self.init(nodes: nodes, screen: screen)
     }
 
     // MARK: - Verdict

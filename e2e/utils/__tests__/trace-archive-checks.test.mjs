@@ -71,7 +71,7 @@ function crc32(buf) {
 }
 
 const T0 = 1_700_000_000_000
-/** rootDir-relative, as a format v2 archive records every local path. */
+/** rootDir-relative, as a format v2 and later archive records every local path. */
 const TEST_FILE = "tests/api-calls.test.ts"
 const SCREEN_FILE = "screens/api-calls.screen.ts"
 
@@ -100,7 +100,7 @@ function hierarchy(...labels) {
 function buildArchive(mutate = () => {}) {
   const parts = {
     metadata: {
-      version: 2,
+      version: 3,
       tapsmithVersion: "0.5.0",
       testFile: TEST_FILE,
       testName: "API Calls screen > fetches and displays user",
@@ -262,7 +262,7 @@ test("a well-formed real-device archive passes every check", () => {
     assert.ok(notes.some((n) => /1 cross-checked/.test(n)), notes.join("\n"))
     assert.ok(notes.some((n) => /1 element boxes checked/.test(n)), notes.join("\n"))
     assert.ok(notes.some((n) => /4 screenshots at 1080x2400, 4 distinct/.test(n)), notes.join("\n"))
-    assert.ok(notes.some((n) => /format v2: schema-valid, 4 stack frames resolved/.test(n)), notes.join("\n"))
+    assert.ok(notes.some((n) => /format v3: schema-valid, 4 stack frames resolved/.test(n)), notes.join("\n"))
   } finally {
     fs.rmSync(path.dirname(zipPath), { recursive: true, force: true })
   }
@@ -291,8 +291,8 @@ test("catches a failed or empty test being passed off as verified", () => {
 // ─── format contract (PILOT-331) ───
 
 test("catches an archive in a format version other than the one the schema describes", () => {
-  assertFails((p) => { p.metadata.version = 1 }, /metadata\.version should be 2, got 1/)
-  assertFails((p) => { p.metadata.version = 3 }, /metadata\.version should be 2, got 3/)
+  assertFails((p) => { p.metadata.version = 1 }, /metadata\.version should be 3, got 1/)
+  assertFails((p) => { p.metadata.version = 4 }, /metadata\.version should be 3, got 4/)
 })
 
 test("reports each schema violation with the path that broke it", () => {

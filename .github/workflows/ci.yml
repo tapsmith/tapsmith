@@ -157,7 +157,9 @@ jobs:
     # path (src/ios_redirect.rs, transparent-TCP MITM, vendored mitmproxy
     # IPC proto) is exercised by CI. The Linux rust job above can't catch
     # cfg(target_os = "macos") regressions on its own. Also the one macOS job
-    # without a simulator, so it runs the iOS agent's host-side unit tests.
+    # without a simulator, so it runs the iOS agent's host-side unit tests, and
+    # builds the macOS agent (which shares the iOS agent's Swift sources) and
+    # the macOS test app, so a change that breaks either fails here.
     name: Rust (macOS)
     runs-on: macos-latest
     defaults:
@@ -169,6 +171,19 @@ jobs:
       - name: iOS agent unit tests
         working-directory: ios-agent
         run: Tests/run-unit-tests.sh
+
+      - name: Build macOS agent
+        working-directory: ios-agent/macos
+        run: >-
+          xcodebuild build-for-testing
+          -project TapsmithMacAgent.xcodeproj
+          -scheme TapsmithMacAgentUITests
+          -destination platform=macOS
+          -derivedDataPath "$RUNNER_TEMP/macos-agent"
+
+      - name: Build macOS test app
+        working-directory: test-app-macos
+        run: ./build.sh
 
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:

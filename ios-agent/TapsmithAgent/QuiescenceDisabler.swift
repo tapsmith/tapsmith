@@ -247,12 +247,17 @@ enum EventSynthesizer {
     /// Detect the current interface orientation for event synthesis records.
     /// Falls back to `.portrait` if the orientation can't be determined.
     private static var currentOrientation: Int {
+        #if os(macOS)
+        // macOS has no interface orientation; 1 is UIInterfaceOrientation.portrait.
+        return 1
+        #else
         var orientation = UIInterfaceOrientation.portrait
         if let scene = UIApplication.shared.connectedScenes
             .compactMap({ $0 as? UIWindowScene }).first {
             orientation = scene.interfaceOrientation
         }
         return orientation.rawValue
+        #endif
     }
 
     /// Tap at a screen coordinate. Returns true if synthesis succeeded.

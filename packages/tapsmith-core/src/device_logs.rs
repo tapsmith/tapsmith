@@ -1,7 +1,7 @@
 use std::io::BufRead;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
@@ -37,6 +37,7 @@ pub async fn start(
         Platform::Ios => {
             tokio::spawn(stream_ios(serial, package_name, tx, cancel_rx));
         }
+        Platform::MacOs => bail!("Device logs are not supported on macOS yet"),
     }
 
     Ok(LogStreamHandle {

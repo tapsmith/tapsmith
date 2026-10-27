@@ -4,7 +4,7 @@ import {
   inferDeviceFormFactor,
   resolveDeviceSkin,
 } from '../ui-mode/ui-protocol.js';
-import { selectDeviceFrame } from '../ui-mode/assets/bezels/frames.js';
+import { bezelPlatform, selectDeviceFrame } from '../ui-mode/assets/bezels/frames.js';
 
 describe('inferDeviceFormFactor', () => {
   it('treats tablet model names as tablets regardless of ratio', () => {
@@ -67,6 +67,15 @@ describe('selectDeviceFrame', () => {
     expect(selectDeviceFrame({ platform: 'ios', contentAspect: 0.75 })).toBeUndefined();
     // iPhone SE (squarer 16:9) → rejected.
     expect(selectDeviceFrame({ platform: 'ios', contentAspect: 750 / 1334 })).toBeUndefined();
+  });
+});
+
+describe('bezelPlatform', () => {
+  it('draws a Mac screenshot with no phone bezel', () => {
+    expect(bezelPlatform('macos')).toBeUndefined();
+    expect(bezelPlatform('ios')).toBe('ios');
+    expect(bezelPlatform('android')).toBe('android');
+    expect(bezelPlatform(undefined)).toBeUndefined();
   });
 });
 

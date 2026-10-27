@@ -213,16 +213,31 @@ describe('parseDaemonsOnAgentPort', () => {
     '  106 /repo/target/release/tapsmith-core-helper --port 50053',
     '  107 /repo/tapsmith-core --agent-port=18700 --port 50054',
   ].join('\n');
+  // The daemon binaries that exist on this fake disk.
+  const binaries = new Set([
+    '/usr/local/lib/node_modules/@tapsmith/core-darwin-arm64/tapsmith-core',
+    '/repo/target/release/tapsmith-core',
+    '/Users/me/My Tools/tapsmith-core',
+    '/repo/tapsmith-core',
+  ]);
+  const isDaemonBinary = (file: string) => binaries.has(file);
 
   it('finds daemons on the default agent port and on an explicit one', () => {
     // 101 and 105 take the default; 102 and 107 name it; 104 is not a daemon; 106 is another binary.
-    expect(parseDaemonsOnAgentPort(ps, 18700, new Set())).toEqual([101, 102, 105, 107]);
-    expect(parseDaemonsOnAgentPort(ps, 18800, new Set())).toEqual([103]);
-    expect(parseDaemonsOnAgentPort(ps, 18900, new Set())).toEqual([]);
+    expect(parseDaemonsOnAgentPort(ps, 18700, new Set(), isDaemonBinary)).toEqual([101, 102, 105, 107]);
+    expect(parseDaemonsOnAgentPort(ps, 18800, new Set(), isDaemonBinary)).toEqual([103]);
+    expect(parseDaemonsOnAgentPort(ps, 18900, new Set(), isDaemonBinary)).toEqual([]);
+  });
+
+  it('does not take a shell whose command line names the daemon binary for a daemon', () => {
+    // A shell running `TAPSMITH_DAEMON_BIN=<path> tapsmith test`: the text before
+    // `tapsmith-core` starts and ends with "/", like a path, but names no binary.
+    const shell = '  12386 /bin/zsh -c TAPSMITH_DAEMON_BIN=/repo/target/release/tapsmith-core npx tapsmith test';
+    expect(parseDaemonsOnAgentPort(shell, 18700, new Set(), isDaemonBinary)).toEqual([]);
   });
 
   it('leaves out the excluded pids', () => {
-    expect(parseDaemonsOnAgentPort(ps, 18700, new Set([101, 105]))).toEqual([102, 107]);
+    expect(parseDaemonsOnAgentPort(ps, 18700, new Set([101, 105]), isDaemonBinary)).toEqual([102, 107]);
   });
 });
 

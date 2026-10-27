@@ -4,7 +4,7 @@ import type { ActionTraceEvent, AssertionTraceEvent } from '../../trace/types.js
 import type { ContainerSummary } from '../types.js';
 import { findNearestScreenshot } from '../../ui-mode/hooks/use-trace-data.js';
 import { inferDeviceFormFactor } from '../../ui-mode/ui-protocol.js';
-import { selectDeviceFrame, screenWindowStyle, screenMaskStyle } from '../../ui-mode/assets/bezels/frames.js';
+import { bezelPlatform, selectDeviceFrame, screenWindowStyle, screenMaskStyle } from '../../ui-mode/assets/bezels/frames.js';
 import {
   actingDevice,
   frameIndexForDevice,
@@ -551,7 +551,7 @@ export function ScreenshotPanel({ event, screenshots, highlightBounds, selectorH
                   active={isActive}
                   url={url}
                   stage={tab}
-                  platform={d.platform ?? platform}
+                  platform={bezelPlatform(d.platform) ?? platform}
                   devicePixelRatio={d.devicePixelRatio}
                   bounds={isActing && tab === 'action' ? bounds : undefined}
                   point={isActing && tab === 'action' ? point : undefined}

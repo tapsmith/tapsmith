@@ -10,7 +10,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { claimBanner, printsBanner, runCli, type CliHandlers, type TestCommandArgs } from './cli-program.js';
-import { loadConfig, configPathOf, normalizeGrep, resolveDeviceStrategy, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
+import { loadConfig, configPathOf, normalizeGrep, resolveDeviceStrategy, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, isAndroid, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
 import figlet from 'figlet';
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
@@ -19,7 +19,9 @@ import { runnerClaimsUnhandledRejection } from './unhandled-errors.js';
 import { telemetry, readSdkVersion, ensureSessionEnv } from './telemetry.js';
 import { createReporters, ReporterDispatcher, type FullResult } from './reporter.js';
 import { ensureSessionReady } from './session-preflight.js';
+import { macosTargetSerial } from './macos-host.js';
 import {
+  assertMacosRunMode,
   closeDeviceSession,
   sessionsForRun,
   consumePrepared,
@@ -601,7 +603,7 @@ async function setupSequentialDeviceClaimed(
 
   // Pre-flight: verify device is responsive before doing anything slow (Android only).
   // Skip in CI — the workflow already verified boot_completed=1 and disabled animations.
-  if (cfg.platform !== 'ios' && !isCI) {
+  if (isAndroid(cfg.platform) && !isCI) {
     progress?.update('primary-device', { state: 'running', detail: `checking ${deviceSerial}` });
     await checkDeviceHealth(deviceSerial, progress);
   }
@@ -679,7 +681,7 @@ async function setupSequentialDeviceClaimed(
     const { notifyLegacySudoersIfPresent } = await import('./legacy-cleanup.js');
     notifyLegacySudoersIfPresent();
   }
-  if (cfg.platform !== 'ios' && traceConfig.mode !== 'off' && traceConfig.network) {
+  if (isAndroid(cfg.platform) && traceConfig.mode !== 'off' && traceConfig.network) {
     const restarted = ensureAdbRoot(deviceSerial);
     if (restarted) {
       if (progress) progress.note('Enabled adb root for network capture.');
@@ -709,6 +711,7 @@ async function setupSequentialDeviceClaimed(
       cfg,
       {
         claimSession: currentSession(),
+        runMode: 'test',
         label: 'Device',
         client,
         forceInstall,
@@ -885,7 +888,7 @@ async function openGroupMembersOnFreshDaemons(
   try {
     for (const [i, entry] of members.entries()) {
       const serial = provisioned.serials[i];
-      if (cfg.platform !== 'ios' && traceConfig.mode !== 'off' && traceConfig.network) {
+      if (isAndroid(cfg.platform) && traceConfig.mode !== 'off' && traceConfig.network) {
         // Same as the primary: capture needs adb root on Android.
         ensureAdbRoot(serial);
       }
@@ -916,6 +919,7 @@ async function openGroupMembersOnFreshDaemons(
 
     const sessions = await openDeviceGroup(specs, cfg, {
       claimSession: currentSession(),
+      runMode: 'test',
       label: 'Device',
       forceInstall,
       launchPhase: 'startup launch',
@@ -1017,6 +1021,12 @@ async function ensureSequentialTargetDevice(
   // The first `use.devices` member's pin, or root `device` — not `config.device`
   // alone, which left a group pinning both members with its primary auto-picked.
   const pinned = primaryDevicePin(config);
+  // macOS (experimental) runs on this Mac: nothing to find, boot or launch.
+  if (config.platform === 'macos') {
+    const serial = macosTargetSerial(pinned);
+    claimDeviceOrThrow(serial, currentSession());
+    return { selectedSerial: serial, launched: [] };
+  }
   if (pinned) {
     // Claimed before anything touches it (the health check may restart adb,
     // network capture restarts adbd as root): a device another session drives
@@ -2248,7 +2258,23 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // so reporters can correctly suppress file headings / show project tags
   // when buckets or per-project `workers:` push the actual concurrency above
   // the global `config.workers` value.
-  const { allocateBucketWorkers, bucketizeProjects, pinnedBucketSignatures, sharedDeviceGroup, targetSessionConfig, workerPlanNote, platformOfSerial, scopeDevicePinToPlatform, devicePinWorkersConflict, devicesPinnedByManyBuckets } = await import('./project.js');
+  const { allocateBucketWorkers, bucketizeProjects, pinnedBucketSignatures, sharedDeviceGroup, targetSessionConfig, workerPlanNote, platformOfSerial, scopeDevicePinToPlatform, devicePinWorkersConflict, devicesPinnedByManyBuckets, macosRunPlan } = await import('./project.js');
+  // macOS (experimental) runs through sequential `tapsmith test` only: refuse
+  // the other modes here, before any device or daemon is touched, and run
+  // one worker. (resolveProjects refuses a run mixing it with mobile projects.)
+  const runsMacos = projects.some((p) => p.effectiveConfig.platform === 'macos');
+  let macosWorkersNote: string | undefined;
+  if (runsMacos) {
+    const plan = macosRunPlan({ ui: !!args.ui, watch: !!args.watch, cliWorkers: args.workers, configWorkers: config.workers });
+    try {
+      assertMacosRunMode('macos', plan.runMode);
+    } catch (err) {
+      console.error(red((err as Error).message));
+      process.exit(1);
+    }
+    macosWorkersNote = plan.note;
+    config.workers = 1;
+  }
   // A root `device` (from `--device` or the config) reached every project,
   // the other platform's too, whose bucket then counted as pinned to a serial
   // it cannot drive. Keep it on the projects of the device's own platform.
@@ -2282,7 +2308,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     ));
     process.exit(1);
   }
-  const totalWorkers = sharedPins.length > 0 ? 1 : [...allocation.values()].reduce((s, n) => s + n, 0);
+  const totalWorkers = runsMacos || sharedPins.length > 0 ? 1 : [...allocation.values()].reduce((s, n) => s + n, 0);
   const maxFilesInAnyWave = Math.max(...projectWaves.map((wave) =>
     wave.reduce((sum, p) => sum + p.testFiles.length, 0),
   ));
@@ -2306,7 +2332,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // with `--device` looks like parallelism silently stopped working.
   // The shared-pin note only when it changed something: a one-worker run
   // already runs its projects one after another.
-  const workerPlanWarning = sharedPins.length > 0
+  const workerPlanWarning = macosWorkersNote ?? (sharedPins.length > 0
     ? (config.workers > 1
       ? `running one worker: ${describeSharedPins} — a device pinned by several projects runs them one after another`
       : undefined)
@@ -2319,7 +2345,7 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     pins: [...new Set(runBuckets
       .filter((b) => (allocation.get(b.signature) ?? 0) > 0)
       .flatMap((b) => pinnedSignatures.get(b.signature)?.pins ?? []))],
-  });
+  }));
 
   // Reflect the effective parallelism on the config so reporters see the
   // real worker count. Downstream dispatcher paths pass `workers` explicitly,

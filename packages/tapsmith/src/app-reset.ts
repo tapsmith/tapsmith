@@ -90,15 +90,19 @@ export interface AppResetReport {
  */
 export function resolveAppResetPolicy(
   scopeOptions: { appState?: string } | undefined,
-  config: Pick<TapsmithConfig, 'appReset' | 'appResetScope' | 'resetAppDeepLink' | 'rootDir'>,
+  config: Pick<TapsmithConfig, 'appReset' | 'appResetScope' | 'resetAppDeepLink' | 'rootDir' | 'platform'>,
   caps: ResetCapabilities = {},
 ): AppResetPolicy {
   const warmAvailable = !!caps.hooksDetected || !!config.resetAppDeepLink;
 
   const requestedMode = config.appReset ?? 'auto';
-  const mode: ResolvedAppResetMode = requestedMode === 'auto'
-    ? (warmAvailable ? 'warm' : 'clear')
-    : requestedMode;
+  // macOS (experimental) has no warm reset: it always clears (the daemon
+  // backs the app's data up for the run and restores it afterwards). An
+  // explicit warm is refused at config load.
+  const autoMode: ResolvedAppResetMode = config.platform === 'macos'
+    ? 'clear'
+    : (warmAvailable ? 'warm' : 'clear');
+  const mode: ResolvedAppResetMode = requestedMode === 'auto' ? autoMode : requestedMode;
 
   // `auto` isolation is per-file: one reset at scope entry. Even a warm
   // reset costs ~1-2 s, and most suites navigate to their screen per test

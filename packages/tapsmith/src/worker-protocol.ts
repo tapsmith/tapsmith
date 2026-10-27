@@ -8,7 +8,7 @@
 
 import type { TestResult, SuiteResult, RunOptions } from './runner.js';
 import type { GrepFilters } from './test-filter.js';
-import { normalizeGrep, type AppResetMode, type AppResetScope, type TapsmithConfig } from './config.js';
+import { normalizeGrep, type AppResetMode, type AppResetScope, type Platform, type TapsmithConfig } from './config.js';
 
 // ─── Main → Worker messages ───
 
@@ -345,7 +345,7 @@ export interface SerializedConfig {
   agentTestApk?: string
   trace?: string | Record<string, unknown>
   video?: string | Record<string, unknown>
-  platform?: 'android' | 'ios'
+  platform?: Platform
   app?: string
   iosXctestrun?: string
   simulator?: string

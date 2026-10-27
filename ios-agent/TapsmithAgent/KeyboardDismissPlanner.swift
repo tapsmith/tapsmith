@@ -154,7 +154,7 @@ struct KeyboardDismissPlanner {
     }
 
     init(snapshot: XCUIElementSnapshot, screenSize: CGSize) {
-        self.init(analyzer: OcclusionAnalyzer(snapshot: snapshot, screenSize: screenSize))
+        self.init(analyzer: OcclusionAnalyzer(snapshot: snapshot, screen: CGRect(origin: .zero, size: screenSize)))
     }
 
     // MARK: - Keyboard

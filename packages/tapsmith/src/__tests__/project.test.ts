@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers as allocateWithPins, bucketizeProjects, pinnedBucketSignatures, workerPlanNote, devicePinWorkersConflict, platformOfSerial, scopeDevicePinToPlatform, devicesPinnedByManyBuckets, shardProjects, targetSessionConfig, type ResolvedProject } from '../project.js';
+import { macosRunPlan, resolveProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers as allocateWithPins, bucketizeProjects, pinnedBucketSignatures, workerPlanNote, devicePinWorkersConflict, platformOfSerial, scopeDevicePinToPlatform, devicesPinnedByManyBuckets, shardProjects, targetSessionConfig, type ResolvedProject } from '../project.js';
 import { serializeConfig } from '../worker-protocol.js';
 import { effectiveConfigForProject, type TapsmithConfig } from '../config.js';
 
@@ -103,6 +103,68 @@ describe('resolveProjects()', () => {
         { name: 'c', dependencies: ['b'] },
       ],
     }))).toThrow('Circular dependency');
+  });
+});
+
+describe('resolveProjects() with macOS', () => {
+  const mac = { platform: 'macos', app: '/a/My.app', package: 'com.example.mac' } as const;
+
+  it('requires the app path', () => {
+    expect(() => resolveProjects(makeConfig({ ...mac, app: undefined })))
+      .toThrow(`platform: 'macos' needs \`app\`: the path to the .app to test`);
+  });
+
+  it('requires the bundle ID, inherited or not', () => {
+    expect(() => resolveProjects(makeConfig({ ...mac, package: undefined })))
+      .toThrow(`platform: 'macos' needs \`package\`: the app's bundle ID`);
+    expect(() => resolveProjects(makeConfig({
+      app: '/a/My.app',
+      package: 'com.example.mac',
+      projects: [{ name: 'mac', use: { platform: 'macos' } }],
+    }))).not.toThrow();
+  });
+
+  it.each(['apk', 'avd', 'agentApk', 'agentTestApk', 'simulator', 'iosXctestrun'] as const)(
+    'refuses the mobile-only `%s`',
+    (key) => {
+      expect(() => resolveProjects(makeConfig({ ...mac, [key]: 'x' })))
+        .toThrow(`sets platform: 'macos' but also \`${key}\`, which macOS does not use`);
+    },
+  );
+
+  it('refuses appReset: warm, which macOS has no way to do', () => {
+    expect(() => resolveProjects(makeConfig({ ...mac, appReset: 'warm' })))
+      .toThrow("sets platform: 'macos' but appReset: 'warm'. macOS has no warm reset");
+    for (const appReset of ['clear', 'restart', 'auto'] as const) {
+      expect(() => resolveProjects(makeConfig({ ...mac, appReset }))).not.toThrow();
+    }
+  });
+
+  it('refuses a run mixing macOS and mobile projects, before any per-project check', () => {
+    expect(() => resolveProjects(makeConfig({
+      apk: './app.apk',
+      package: 'com.example',
+      projects: [
+        { name: 'android', use: { platform: 'android' } },
+        { name: 'mac', use: { platform: 'macos', app: '/a/My.app' } },
+      ],
+    }))).toThrow(`macOS projects can't share a run with android/ios projects yet`);
+  });
+});
+
+describe('macosRunPlan()', () => {
+  it('names the run mode the CLI asked for, so the session layer refuses it', () => {
+    expect(macosRunPlan({ ui: true, watch: false, cliWorkers: undefined, configWorkers: 1 }).runMode).toBe('ui');
+    expect(macosRunPlan({ ui: false, watch: true, cliWorkers: undefined, configWorkers: 1 }).runMode).toBe('watch');
+    expect(macosRunPlan({ ui: false, watch: false, cliWorkers: 2, configWorkers: 1 }).runMode).toBe('test-parallel');
+    expect(macosRunPlan({ ui: false, watch: false, cliWorkers: 1, configWorkers: 4 })).toEqual({ runMode: 'test' });
+  });
+
+  it('caps a config-file `workers` to one with a note, rather than refusing', () => {
+    expect(macosRunPlan({ ui: false, watch: false, cliWorkers: undefined, configWorkers: 4 })).toEqual({
+      runMode: 'test',
+      note: 'config asks for 4 workers; running 1 because macOS runs sequentially',
+    });
   });
 });
 

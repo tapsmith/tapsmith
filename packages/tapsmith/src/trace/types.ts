@@ -287,7 +287,7 @@ export interface TraceDeviceInfo {
    * every entry of `TraceMetadata.devices`; undefined on the legacy `device`.
    */
   name?: string
-  platform?: 'android' | 'ios'
+  platform?: 'android' | 'ios' | 'macos'
   model?: string
   osVersion?: string
   screenResolution?: { width: number; height: number }

@@ -189,7 +189,7 @@ async function handleRun(msg: WatchRunMessage): Promise<void> {
       })),
     ],
     config,
-    { claimSession: currentSession(), label, adoptVerify: !config.package, connectTimeoutMs: 5_000 },
+    { claimSession: currentSession(), runMode: msg.runMode, label, adoptVerify: !config.package, connectTimeoutMs: 5_000 },
   );
 
   // Created BEFORE preflight so a stop that lands during wake/unlock/app-reset

@@ -67,7 +67,8 @@ class CommandHandler {
         springboard: XCUIApplication? = nil,
         timeout: TimeInterval = 0.0
     ) -> Bool {
-        let sb = springboard ?? XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        // No system UI app (macOS): no dialog can be covering the app.
+        guard let sb = springboard ?? PlatformCompat.systemUIApp() else { return false }
         let openButton = sb.buttons["Open"]
         var exists = false
         _ = ObjCExceptionCatcher.catchException {
@@ -144,7 +145,7 @@ class CommandHandler {
     /// must NOT treat "no dialog" as success, or a never-launched app would be
     /// reported as ready and the next action would run against SpringBoard.
     private func waitForDeepLinkDestination(_ app: XCUIApplication, timeout: TimeInterval) -> Bool {
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let springboard = PlatformCompat.systemUIApp()
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
             // One SpringBoard query per iteration: acceptOpenInAppDialogIfPresent
@@ -212,7 +213,7 @@ class CommandHandler {
         bootBefore: String?,
         timeout: TimeInterval
     ) -> Bool {
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let springboard = PlatformCompat.systemUIApp()
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
             if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
@@ -255,7 +256,7 @@ class CommandHandler {
         bootBefore: String?,
         timeout: TimeInterval
     ) -> HooksEpochOutcome {
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let springboard = PlatformCompat.systemUIApp()
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
             if self.acceptOpenInAppDialogIfPresent(springboard: springboard, timeout: 0.0) {
@@ -304,7 +305,7 @@ class CommandHandler {
         before: String,
         timeout: TimeInterval
     ) -> Bool {
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let springboard = PlatformCompat.systemUIApp()
         let dumper = HierarchyDumper(app: app)
         let deadline = Date(timeIntervalSinceNow: timeout)
         while Date() < deadline {
@@ -349,8 +350,8 @@ class CommandHandler {
     /// samples; a false positive merely costs a cold relaunch, never a
     /// wrong verdict.
     private func displayAppearsBlack() -> Bool {
-        let image = XCUIScreen.main.screenshot().image
-        guard let cgImage = image.cgImage, cgImage.width > 8, cgImage.height > 8 else {
+        guard let cgImage = PlatformCompat.screenshotCGImage(XCUIScreen.main.screenshot()),
+              cgImage.width > 8, cgImage.height > 8 else {
             return false
         }
         let sampleWidth = 64
@@ -453,11 +454,12 @@ class CommandHandler {
             return true
         }
 
-        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-        let sweeps: [(XCUIApplication, [String])] = [
+        var sweeps: [(XCUIApplication, [String])] = [
             (app, SystemDialogPolicy.dismissButtonLabels),
-            (springboard, SystemDialogPolicy.allowButtonLabels + SystemDialogPolicy.dismissButtonLabels),
         ]
+        if let springboard = PlatformCompat.systemUIApp() {
+            sweeps.append((springboard, SystemDialogPolicy.allowButtonLabels + SystemDialogPolicy.dismissButtonLabels))
+        }
         for (source, labels) in sweeps {
             for label in labels {
                 let button = source.buttons[label]
@@ -835,10 +837,10 @@ class CommandHandler {
                 isLive: false
             )
         }
-        let screenSize = snapshotFinder.screenSize
+        let screen = snapshotFinder.screenRect
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
-        return OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+        return OcclusionAnalyzer(snapshot: appSnapshot, screen: screen)
             .analyze(target, isHittable: isHittable)
     }
 
@@ -1036,7 +1038,11 @@ class CommandHandler {
             guard xcElem.isHittable else {
                 throw AgentError.actionFailed("Element is not hittable — cannot type text")
             }
+            #if os(macOS)
+            xcElem.click()
+            #else
             xcElem.tap()
+            #endif
             snapshotFinder.recordFocusedTextInputHint(element)
             if waitForTypingFocus(target, tappedAt: nil, focusedBefore: focusedBefore,
                                   maxWait: focusWait, settleTime: settleTime) { return }
@@ -1103,6 +1109,9 @@ class CommandHandler {
     }
 
     private func waitForKeyboardAppearance(maxWait: TimeInterval) {
+        #if os(macOS)
+        // No software keyboard on macOS: waiting would only spend `maxWait`.
+        #else
         let deadline = CFAbsoluteTimeGetCurrent() + maxWait
         while CFAbsoluteTimeGetCurrent() < deadline {
             let snap = try? app.snapshot()
@@ -1110,6 +1119,7 @@ class CommandHandler {
             if hasKeyboardInSnapshot(dict) { return }
             Thread.sleep(forTimeInterval: 0.15)
         }
+        #endif
     }
 
     /// Type through EventSynthesizer, but don't advance to the next grapheme
@@ -1238,7 +1248,20 @@ class CommandHandler {
 
     // MARK: - Dispatch
 
+    #if os(macOS)
+    /// Coordinate gestures with no public macOS API behind them: the agent
+    /// synthesizes them through XCTest's private event IPC, which macOS lacks
+    /// (and which reports success there without delivering anything).
+    private static let unsupportedOnMacOS: Set<String> = [
+        "longPress", "swipe", "scroll", "dragAndDrop", "pinchZoom",
+        "touchDown", "touchMove", "touchUp",
+    ]
+    #endif
+
     private func dispatch(method: String, params: [String: Any]) throws -> [String: Any] {
+        #if os(macOS)
+        if Self.unsupportedOnMacOS.contains(method) { throw PlatformCompat.unsupportedOnMacOS(method) }
+        #endif
         switch method {
 
         // ─── Element Finding ───
@@ -1402,6 +1425,9 @@ class CommandHandler {
                     waitForKeyboardAppearance(maxWait: 1.0)
                 }
                 let element = try resolveElement(selectorParams)
+                // macOS: XCUIElement.typeText does not focus the element (it
+                // fails "Neither element nor any descendant has keyboard
+                // focus"), so this focusing click is required there too.
                 if !isFocusedOnlySelector {
                     // Half the budget at most for a cover, so the typing
                     // after it still fits the daemon's read timeout.
@@ -1475,7 +1501,7 @@ class CommandHandler {
             if (element.text ?? "").isEmpty {
                 let xc = try? getXCUIElement(element.elementId)
                 if let xc = xc {
-                    let live = (xc.value as? String) ?? ""
+                    let live = PlatformCompat.valueString(xc.value) ?? ""
                     if live.isEmpty || live == (element.hint ?? "") {
                         return ["success": true]
                     }
@@ -1502,7 +1528,11 @@ class CommandHandler {
                 actionExecutor.tapCoordinates(x: Int(area.midX.rounded()), y: Int(area.midY.rounded()))
                 Thread.sleep(forTimeInterval: 0.1)
             } else if let xcElem = try? getXCUIElement(element.elementId), xcElem.isHittable {
+                #if os(macOS)
+                xcElem.click()
+                #else
                 xcElem.tap()
+                #endif
                 // Match the snapshot path's 0.1s wait so the upcoming
                 // Cmd+A / backspace keypress doesn't race the field
                 // becoming first-responder.
@@ -1534,7 +1564,15 @@ class CommandHandler {
             // Sending Delete after a failed selection would either
             // forward-delete (data loss past the cursor) or no-op
             // depending on the IME, hence the safer backspace.
-            if EventSynthesizer.keyPress(key: "a", modifiers: .command) {
+            #if os(macOS)
+            // No event-synthesis IPC on macOS: Cmd+A through the public API
+            // into the focused field (typeTextWithoutFocus maps backspace to
+            // the Delete key there).
+            let selectedAll = actionExecutor.selectAllInFocusedElement()
+            #else
+            let selectedAll = EventSynthesizer.keyPress(key: "a", modifiers: .command)
+            #endif
+            if selectedAll {
                 Thread.sleep(forTimeInterval: 0.1)
                 actionExecutor.typeTextWithoutFocus("\u{8}")
                 Thread.sleep(forTimeInterval: 0.15)
@@ -1931,11 +1969,11 @@ class CommandHandler {
         case "setClipboard":
             let text = params["text"] as? String ?? ""
             lastClipboardText = text
-            UIPasteboard.general.string = text
+            PlatformCompat.setClipboard(text)
             return ["success": true]
 
         case "getClipboard":
-            let text = UIPasteboard.general.string ?? lastClipboardText
+            let text = PlatformCompat.clipboardText() ?? lastClipboardText
             return ["text": text]
 
         // ─── App Lifecycle ───
@@ -1948,9 +1986,7 @@ class CommandHandler {
             targetApp.activate()
             Thread.sleep(forTimeInterval: 0.5)
             // Dismiss "Save Password?" dialog from iOS Passwords framework.
-            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
-            let notNow = springboard.buttons["Not Now"]
-            if notNow.exists {
+            if let notNow = PlatformCompat.systemUIApp()?.buttons["Not Now"], notNow.exists {
                 notNow.tap()
                 Thread.sleep(forTimeInterval: 0.1)
             }
@@ -1990,7 +2026,10 @@ class CommandHandler {
             let state: String
             switch targetApp.state {
             case .notRunning: state = "stopped"
-            case .runningBackground, .runningBackgroundSuspended: state = "background"
+            case .runningBackground: state = "background"
+            #if os(iOS)
+            case .runningBackgroundSuspended: state = "background"
+            #endif
             case .runningForeground: state = "foreground"
             case .unknown: state = "stopped"
             @unknown default: state = "stopped"
@@ -2177,7 +2216,7 @@ class CommandHandler {
             return ["success": true, "dismissed": dismissed]
 
         case "dismissSystemDialogs":
-            let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+            guard let springboard = PlatformCompat.systemUIApp() else { return ["success": true] }
             for label in ["Open", "Allow", "OK", "Not Now", "Allow While Using App"] {
                 let btn = springboard.buttons[label]
                 if btn.waitForExistence(timeout: 0.3) {
@@ -2190,6 +2229,9 @@ class CommandHandler {
         // ─── Orientation ───
 
         case "setOrientation":
+            #if os(macOS)
+            throw PlatformCompat.unsupportedOnMacOS("setOrientation")
+            #else
             let orientation = params["orientation"] as? String ?? "portrait"
             let target: UIDeviceOrientation
             switch orientation.lowercased() {
@@ -2216,14 +2258,19 @@ class CommandHandler {
             }
             snapshotFinder.invalidateScreenSize()
             return ["success": true]
+            #endif
 
         case "getOrientation":
+            #if os(macOS)
+            throw PlatformCompat.unsupportedOnMacOS("getOrientation")
+            #else
             let orientation: String
             switch XCUIDevice.shared.orientation {
             case .landscapeLeft, .landscapeRight: orientation = "landscape"
             default: orientation = "portrait"
             }
             return ["orientation": orientation]
+            #endif
 
         // ─── Keyboard ───
 
@@ -2246,8 +2293,7 @@ class CommandHandler {
             // attaches (see `dismissOpenURLDialogAndWaitForContent`).
             guard let kbSnapshot = try? snapshotFinder.takeSnapshot() else {
                 let appState = safeAppState(app)
-                if appState == .notRunning || appState == .runningBackground
-                    || appState == .runningBackgroundSuspended {
+                if appState == .notRunning || appState.isBackground {
                     snapshotFinder.clearFocusedTextInputHint()
                     return ["success": true]
                 }
@@ -2286,13 +2332,7 @@ class CommandHandler {
             return ["success": true]
 
         case "getColorScheme":
-            let style = UITraitCollection.current.userInterfaceStyle
-            let scheme: String
-            switch style {
-            case .dark: scheme = "dark"
-            default: scheme = "light"
-            }
-            return ["scheme": scheme]
+            return ["scheme": PlatformCompat.isDarkMode() ? "dark" : "light"]
 
         // ─── Permissions ───
 
@@ -2385,7 +2425,7 @@ class CommandHandler {
               let stepDeadline = KeyboardFirstGate.stepDeadline(now: Date(), readDeadline: commandReadDeadline)
         else { return }
         guard let snapshot = try? snapshotFinder.takeSnapshot() else { return }
-        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+        let analyzer = OcclusionAnalyzer(snapshot: snapshot, screen: snapshotFinder.screenRect)
         switch analyzer.keyboardFirst(cachedTarget(element)) {
         case .noKeyboard:
             keyboardFirstGate.sawNoKeyboard()

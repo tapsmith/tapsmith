@@ -188,6 +188,7 @@ function networkSummary(
 }
 
 function describeDeviceTarget(config: TapsmithConfig): string {
+  if (config.platform === "macos") return "use this Mac";
   if (config.platform === "ios") {
     if (config.device) return `use iOS device ${config.device}`;
     if (config.simulator)
@@ -202,6 +203,9 @@ function describeDeviceTarget(config: TapsmithConfig): string {
 }
 
 function describeAppInstall(config: TapsmithConfig): string {
+  if (config.platform === "macos") {
+    return `run ${basenameMaybe(config.app) ?? "the app"} in place (no install)`;
+  }
   const artifact = basenameMaybe(
     config.platform === "ios" ? config.app : config.apk,
   );
@@ -211,6 +215,7 @@ function describeAppInstall(config: TapsmithConfig): string {
 }
 
 function describeAgent(config: TapsmithConfig): string {
+  if (config.platform === "macos") return "build or reuse the macOS agent and start it";
   if (config.platform === "ios") {
     const xctestrun = basenameMaybe(config.iosXctestrun);
     return xctestrun

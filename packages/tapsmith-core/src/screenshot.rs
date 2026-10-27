@@ -3,10 +3,11 @@ use tracing::debug;
 
 use crate::adb;
 use crate::ios;
+use crate::macos;
 use crate::platform::Platform;
 
 /// Capture a screenshot from the given device, returning PNG bytes.
-/// Routes to ADB (Android) or simctl (iOS) based on platform.
+/// Routes to ADB (Android), simctl (iOS) or screencapture (macOS).
 pub async fn capture(serial: &str, platform: Platform) -> Result<Vec<u8>> {
     match platform {
         Platform::Android => {
@@ -16,6 +17,10 @@ pub async fn capture(serial: &str, platform: Platform) -> Result<Vec<u8>> {
         Platform::Ios => {
             debug!(serial, "Capturing screenshot via simctl");
             ios::screenshot::capture(serial).await
+        }
+        Platform::MacOs => {
+            debug!("Capturing screenshot via screencapture");
+            macos::screenshot::capture().await
         }
     }
 }

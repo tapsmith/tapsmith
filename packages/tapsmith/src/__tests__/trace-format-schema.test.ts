@@ -159,6 +159,15 @@ describe('trace-format.schema.json', () => {
     expect(errorsOf(withAttachment)).toEqual([]);
   });
 
+  it('accepts a macOS device (format version 3)', () => {
+    const mac = { serial: 'macos-host', name: 'mac', platform: 'macos', isEmulator: false };
+    const onMac = variant((a) => {
+      a.metadata.device = mac;
+      a.metadata.devices = [mac];
+    });
+    expect(errorsOf(onMac)).toEqual([]);
+  });
+
   describe('forward compatibility — additive changes must not need a version bump', () => {
     it('accepts unknown fields on metadata, events, network entries and devices', () => {
       const extended = variant((a) => {
