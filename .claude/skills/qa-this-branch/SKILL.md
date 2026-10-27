@@ -14,7 +14,7 @@ readable and parseable.
 Six failure modes to design against, all of which have happened here before:
 
 1. **A mode was never exercised.** Tapsmith has seven user-facing run modes, assembled by
-   five separately wired embedders (CLAUDE.md), and CI only drives the sequential
+   five separately wired embedders (packages/tapsmith/CLAUDE.md), and CI only drives the sequential
    headless one on a device. A change that
    works in `tapsmith test` can be inert or broken in UI-mode MCP.
 2. **A probe ran but proved nothing.** "The suite went green" does not prove the new code
@@ -212,7 +212,7 @@ against an inferred one is reported with the inference visible and the question 
    - **(c) at-risk existing behaviour** — derived mechanically: look each changed path up
      in `references/surface-map.md` and ask what used to flow through that code that still
      must. Especially shared helpers with callers in other modes, per-session wiring (the
-     five embedders in CLAUDE.md), proto changes, and default/fallback branches.
+     five embedders in packages/tapsmith/CLAUDE.md), proto changes, and default/fallback branches.
 3. **Matrix**: rows = inventory items, columns = the dimensions from triage (modes from
    `references/modes.md`, split by platform where device behaviour differs; panes; CLI
    subcommands; docs pages). Each cell is one of:

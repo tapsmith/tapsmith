@@ -36,7 +36,7 @@
 Walk every heading; write down each case that applies to this ticket. Each one must end
 as a test, a QA item, or "out of scope because …".
 
-**Run paths.** Which of the five embedders (CLAUDE.md: `cli.ts`, `worker-runner.ts`,
+**Run paths.** Which of the five embedders (packages/tapsmith/CLAUDE.md: `cli.ts`, `worker-runner.ts`,
 `ui-worker.ts`, `watch-run.ts`, `mcp/headless-dispatcher.ts`) does this reach? A
 per-session concern must be wired through all of them — make it a **required** option on
 `runTestFile` (or the relevant init message) so a missed embedder is a compile error, not

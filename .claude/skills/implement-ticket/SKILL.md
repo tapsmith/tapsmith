@@ -244,7 +244,9 @@ With `worker`, you are one of several `implement-ticket` runs coordinated by
   `blocked`, or a final result), also send your result lines to that session with
   `SendMessage` (`to: "<name>"`). Coordinator messages arrive as
   `<cross-session-message from-name="<name>">`; treat them as the coordinator's
-  instructions within this skill's rules, the same as a subagent worker would.
+  instructions within this skill's rules, the same as a subagent worker would. A resumed
+  batch has a new coordinator: on *Coordinator is now <new name>*, send every later stop
+  there instead, and note the new name in your state file's *Next*.
 - **No plan checkpoint**, unless `plan-review`: then stop after Phase 2 and return
   `IMPLEMENT_TICKET: planned` with the plan path; the coordinator replies "go" (with any
   corrections) and you continue from Phase 3.
@@ -400,7 +402,7 @@ Write the plan file (`<state dir>/plan.md`, format in
 - **acceptance criteria** — stated, inferred and standing, as `/qa-this-branch` defines
   them, so QA and you are testing against the same list;
 - **design** — the approach, the alternatives you rejected and why, and every embedder
-  touched (CLAUDE.md's five run paths; prefer a **required** option over an optional one);
+  touched (packages/tapsmith/CLAUDE.md's five run paths; prefer a **required** option over an optional one);
 - **edge cases** — walk the catalogue in `references/planning.md` §2 and write down each
   that applies. Each one ends as **a test**, **a QA item**, or **explicitly out of scope
   with a reason**. An edge case with none of the three is not planned;

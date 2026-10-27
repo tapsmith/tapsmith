@@ -1,5 +1,8 @@
 # TypeScript SDK (`packages/tapsmith/`)
 
+Checks (CI's `typescript` job runs all of them): `npm run typecheck`, `npm run lint`,
+`npm run test` (unit tests, no device), `npm run knip` (unused code), `npm run build`.
+
 ## TypeScript conventions
 
 - **ESM with `.js` extensions** in all imports (even for `.ts` files) — required by Node16 module resolution
