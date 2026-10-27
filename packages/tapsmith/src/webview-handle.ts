@@ -89,11 +89,6 @@ function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string
 }
 
 /**
- * Build a StrictModeViolationError for a WebView locator, reusing the native
- * message format. Element descriptions come from the DOM (tag, text, id,
- * data-testid, aria-label) mapped onto the ElementInfo shape.
- */
-/**
  * Slack for judging a failed read as having run into the deadline: the
  * transport's timer and `Date.now()` can disagree by a millisecond or two.
  */
@@ -114,6 +109,11 @@ function isDeadlineMiss(err: unknown, answered: boolean, deadline: number): bool
     err instanceof Error && /^(CDP|WebKit Inspector) message timed out\b/.test(err.message);
 }
 
+/**
+ * Build a StrictModeViolationError for a WebView locator, reusing the native
+ * message format. Element descriptions come from the DOM (tag, text, id,
+ * data-testid, aria-label) mapped onto the ElementInfo shape.
+ */
 function buildWebViewStrictError(loc: WebViewLocator, probe: WebViewLocatorProbe): StrictModeViolationError {
   const elements: ElementInfo[] = probe.sample.map((d) => ({
     elementId: '',
