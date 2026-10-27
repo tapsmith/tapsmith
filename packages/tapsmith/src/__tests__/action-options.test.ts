@@ -459,6 +459,20 @@ describe('WebView { timeout } (PILOT-840)', () => {
     expect((err as Error).message).not.toMatch(/CDP message timed out/);
   });
 
+  it('webview wait loops still report a read that fails for another reason as itself', async () => {
+    const handle = new WebViewHandle({} as TapsmithGrpcClient, 0, DEVICE_TIMEOUT);
+    vi.spyOn(handle, '_probeLocator').mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      throw new Error('WebView JS error: SyntaxError: bad selector');
+    });
+    vi.spyOn(handle, '_evaluate').mockImplementation(async () => {
+      await new Promise((r) => setTimeout(r, 400));
+      throw new Error('WebView JS error: SyntaxError: bad selector');
+    });
+    await expect(handle.locator('a[bad').click({ timeout: 300 })).rejects.toThrow('WebView JS error: SyntaxError');
+    await expect(handle.click('a[bad', { timeout: 300 })).rejects.toThrow('WebView JS error: SyntaxError');
+  });
+
   it.each(LOCATOR_CALLS)('webview %s() refuses an unknown option', async (_name, call) => {
     const err = await call(emptyWebView(), { timout: 300 } as { timeout?: number }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(TypeError);

@@ -93,6 +93,17 @@ function suggestWebViewSelectorFor(d: WebViewDomDescription | undefined): string
  * message format. Element descriptions come from the DOM (tag, text, id,
  * data-testid, aria-label) mapped onto the ElementInfo shape.
  */
+/**
+ * Whether `err` is a CDP or WebKit Inspector request timing out. A wait loop's
+ * read is given what is left of the loop's timeout, so its timing out means the
+ * deadline was reached: judged by the error, not the clock, since the
+ * transport's timer and `Date.now()` can disagree by a millisecond. Any other
+ * failure (a page JS error, a closed connection) is its own error.
+ */
+function isReadTimeout(err: unknown): boolean {
+  return err instanceof Error && /^(CDP|WebKit Inspector) message timed out\b/.test(err.message);
+}
+
 function buildWebViewStrictError(loc: WebViewLocator, probe: WebViewLocatorProbe): StrictModeViolationError {
   const elements: ElementInfo[] = probe.sample.map((d) => ({
     elementId: '',
@@ -561,7 +572,7 @@ export class WebViewHandle {
       } catch (err) {
         // A read that ran into the deadline (its transport timed out) is a
         // miss at the deadline, not an error of its own (PILOT-840).
-        if (Date.now() < deadline) throw err;
+        if (!isReadTimeout(err)) throw err;
         lastReadError = err;
         break;
       }
@@ -652,7 +663,7 @@ export class WebViewHandle {
         // The last read starts with what is left of the timeout, often a few
         // milliseconds: its transport timing out means the locator was not
         // found in time, and the error should say that (PILOT-840).
-        if (Date.now() < deadline) throw err;
+        if (!isReadTimeout(err)) throw err;
         lastReadError = err;
         break;
       }
