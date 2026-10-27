@@ -30,7 +30,7 @@ jobs:
           RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
         run: |
           if [ -z "$RELEASE_SSH_KEY" ]; then
-            echo "::error::RELEASE_SSH_KEY secret is not set. It is the private half of a repo deploy key (write access); the release branch is pushed with it so CI runs on the PR (a push made with the default GITHUB_TOKEN does not trigger workflows). See CLAUDE.md > Releases."
+            echo "::error::RELEASE_SSH_KEY secret is not set. It is the private half of a repo deploy key (write access); the release branch is pushed with it so CI runs on the PR (a push made with the default GITHUB_TOKEN does not trigger workflows). See .github/releasing.md."
             exit 1
           fi
 

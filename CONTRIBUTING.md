@@ -282,6 +282,8 @@ need updating if you've changed a user-facing workflow.
 Maintainers may ask for changes to keep the API consistent with Playwright's shape -- that's
 about the project's constraints, not the quality of your work.
 
+Maintainers cutting a release: see [`.github/releasing.md`](.github/releasing.md).
+
 ## Reporting bugs
 
 Open an issue including:

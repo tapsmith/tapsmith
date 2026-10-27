@@ -24,7 +24,7 @@ jobs:
           RELEASE_SSH_KEY: ${{ secrets.RELEASE_SSH_KEY }}
         run: |
           if [ -z "$RELEASE_SSH_KEY" ]; then
-            echo "::error::RELEASE_SSH_KEY secret is not set; a tag pushed with GITHUB_TOKEN will not trigger release.yml. Add the deploy key (see CLAUDE.md > Releases), then push the tag manually: git tag vX.Y.Z <merge-sha> && git push origin vX.Y.Z"
+            echo "::error::RELEASE_SSH_KEY secret is not set; a tag pushed with GITHUB_TOKEN will not trigger release.yml. Add the deploy key (see .github/releasing.md), then push the tag manually: git tag vX.Y.Z <merge-sha> && git push origin vX.Y.Z"
             exit 1
           fi
 

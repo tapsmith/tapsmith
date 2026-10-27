@@ -33,9 +33,9 @@ import type { TapsmithConfig } from './config.js';
 // ─── Types ───
 
 /**
- * Which embedder ran the file. One value per run path (see CLAUDE.md, "The
- * five run paths"); UI mode's own watch and MCP re-runs all go through the
- * UI worker and so count as `ui`.
+ * Which embedder ran the file. One value per run path (see
+ * packages/tapsmith/CLAUDE.md, "The five run paths"); UI mode's own watch and
+ * MCP re-runs all go through the UI worker and so count as `ui`.
  */
 export type RunMode = 'test' | 'test-parallel' | 'ui' | 'watch' | 'mcp';
 
