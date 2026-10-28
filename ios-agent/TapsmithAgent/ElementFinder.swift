@@ -129,15 +129,31 @@ class ElementFinder {
                 results.append(contentsOf: matches)
             }
 
-            // Filter by accessible name if provided
+            // Filter by accessible name if provided: the label or title, or a
+            // label-less text input's placeholder (RoleName, PILOT-834). The
+            // placeholder is read only when it can name the element.
+            func placeholder(_ elem: XCUIElement, _ label: String, _ title: String) -> String {
+                RoleName.placeholderNamedTypes.contains(elem.elementType)
+                    && TextMatch.normalize(label).isEmpty && TextMatch.normalize(title).isEmpty
+                    ? elem.placeholderValue ?? "" : ""
+            }
             if let name = selector.name {
                 results = results.filter { elem in
-                    TextMatch.nameMatches(elem.label, name, exact: selector.nameExact)
-                        || TextMatch.nameMatches(elem.title, name, exact: selector.nameExact)
+                    let label = elem.label
+                    let title = elem.title
+                    return RoleName.matches(
+                        elementType: elem.elementType, label: label, title: title,
+                        placeholder: placeholder(elem, label, title), name: name, exact: selector.nameExact
+                    )
                 }
             } else if let nameRegex = selector.nameRegex {
                 results = results.filter { elem in
-                    nameRegex.nameMatches(elem.label) || nameRegex.nameMatches(elem.title)
+                    let label = elem.label
+                    let title = elem.title
+                    return RoleName.matches(
+                        elementType: elem.elementType, label: label, title: title,
+                        placeholder: placeholder(elem, label, title), regex: nameRegex
+                    )
                 }
             }
             return results

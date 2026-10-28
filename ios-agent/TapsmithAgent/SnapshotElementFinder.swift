@@ -267,6 +267,12 @@ class SnapshotElementFinder {
                     of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil, matched: substringMatched
                 )
             }
+            // A role+name match named by its placeholder (RoleName) is found
+            // again by that placeholder, so index it there.
+            if selector.role != nil, selector.hasNameFilter, let type,
+               SnapshotElementFinder.placeholderNamed(queryNodes[ordinal], type: type) {
+                return QueryIndex.placeholderLiveIndex(of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil)
+            }
             return QueryIndex.liveIndex(of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil)
         }
 
@@ -829,6 +835,13 @@ class SnapshotElementFinder {
     /// Key under which numberDescendants stores a node's pre-order ordinal.
     static let ordinalKey = "tapsmithQueryOrdinal"
 
+    /// Whether a numbered node is named by its placeholder (RoleName, PILOT-834).
+    static func placeholderNamed(_ node: QueryNode, type: XCUIElement.ElementType) -> Bool {
+        RoleName.placeholderName(
+            elementType: type, label: node.label, title: node.title, placeholder: node.placeholder
+        ) != nil
+    }
+
     /// Number every descendant of `dict` (not `dict` itself — XCUIElement
     /// `descendants` queries exclude the root) in pre-order, storing the
     /// ordinal under `ordinalKey` and the node's query fields in `nodes`.
@@ -841,7 +854,8 @@ class SnapshotElementFinder {
                 label: children[i]["label"] as? String ?? "",
                 identifier: children[i]["identifier"] as? String ?? "",
                 title: children[i]["title"] as? String ?? "",
-                value: children[i]["value"] as? String ?? ""
+                value: children[i]["value"] as? String ?? "",
+                placeholder: children[i]["placeholderValue"] as? String ?? ""
             ))
             numberDescendants(of: &children[i], into: &nodes)
         }
@@ -1337,18 +1351,24 @@ class SnapshotElementFinder {
                 return false
             }
 
-            // Filter by name if provided
+            // Filter by name if provided: the label or title, or a label-less
+            // text input's placeholder (RoleName, PILOT-834).
             // Like Playwright: a case-insensitive substring by default, a
             // case-sensitive whole-string match with `exact` (PILOT-549).
             if let name = selector.name {
-                let exact = selector.nameExact
-                if !TextMatch.nameMatches(label, name, exact: exact)
-                    && !TextMatch.nameMatches(title, name, exact: exact) {
+                if !RoleName.matches(
+                    elementType: elType, label: label, title: title, placeholder: placeholderValue,
+                    name: name, exact: selector.nameExact
+                ) {
                     return false
                 }
             } else if let nameRegex = selector.nameRegex {
                 // A RegExp tests the whitespace-normalized name (PILOT-520).
-                if !nameRegex.nameMatches(label) && !nameRegex.nameMatches(title) { return false }
+                if !RoleName.matches(
+                    elementType: elType, label: label, title: title, placeholder: placeholderValue, regex: nameRegex
+                ) {
+                    return false
+                }
             }
         }
 
@@ -1658,7 +1678,26 @@ class SnapshotElementFinder {
             // (and identifier), at its index among every node of the tree
             // this query returns (QueryIndex.liveIndex).
             let nodeLabel = snapshotNode?["label"] as? String ?? ""
-            if !nodeLabel.isEmpty, let labelIndex {
+            let nodePlaceholder = snapshotNode.flatMap { node -> String? in
+                guard selector.role != nil, let type = nodeElType else { return nil }
+                return RoleName.placeholderName(
+                    elementType: type,
+                    label: nodeLabel,
+                    title: node["title"] as? String ?? "",
+                    placeholder: node["placeholderValue"] as? String ?? ""
+                )
+            }
+            if let nodePlaceholder, let labelIndex {
+                // Named by its placeholder (a SwiftUI TextField, PILOT-834):
+                // find it by that placeholder, at its index among the nodes
+                // that query returns (QueryIndex.placeholderLiveIndex).
+                var predicates = [NSPredicate(format: "placeholderValue == %@", nodePlaceholder)]
+                if !nodeIdentifier.isEmpty {
+                    predicates.append(NSPredicate(format: "identifier == %@", nodeIdentifier))
+                }
+                element = labelQuery(NSCompoundPredicate(andPredicateWithSubpredicates: predicates))
+                    .element(boundBy: labelIndex)
+            } else if !nodeLabel.isEmpty, let labelIndex {
                 element = byOwnLabel(nodeLabel, at: labelIndex)
             } else {
                 // Matched through its title with an empty label: no label
