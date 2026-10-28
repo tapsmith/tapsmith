@@ -52,6 +52,24 @@ export function isYarnPnp(env: PnpEnv = processEnv()): boolean {
   return hasPnpManifestAbove(env.cwd) && declaresTapsmith(env.cwd) && !isTapsmithResolvableFrom(env.cwd);
 }
 
+/**
+ * Whether `tapsmith init` is setting up a Plug'n'Play project (PILOT-778):
+ * {@link isYarnPnp}, or the project's own `.pnp.cjs` — before Tapsmith is
+ * added, which is when init usually runs, isYarnPnp cannot tell a project
+ * from one under a stray parent `.pnp.cjs`, but a `.pnp.cjs` beside it is the
+ * project's own install.
+ */
+export function projectUsesYarnPnp(env: PnpEnv = processEnv()): boolean {
+  return isYarnPnp(env) || fs.existsSync(path.join(env.cwd, '.pnp.cjs'));
+}
+
+/** What init says in a Plug'n'Play project, before anything else goes wrong (PILOT-778). */
+export const YARN_PNP_INIT_WARNING = "This is a Yarn Plug'n'Play install, where Tapsmith can't run tests: it starts tsx, its "
+  + 'daemon and its device agents from files on disk. Add `nodeLinker: node-modules` to .yarnrc.yml and run `yarn install` before running tests.';
+
+/** init's next step for a Plug'n'Play project. */
+export const YARN_PNP_INIT_STEP = 'add `nodeLinker: node-modules` to .yarnrc.yml, then run `yarn install`';
+
 /** Whether the nearest package.json at or above `dir` depends on tapsmith. */
 function declaresTapsmith(dir: string): boolean {
   for (let current = path.resolve(dir); ; current = path.dirname(current)) {

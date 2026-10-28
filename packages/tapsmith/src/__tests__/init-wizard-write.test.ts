@@ -209,3 +209,16 @@ describe('init wizard with a build skipped (PILOT-778)', () => {
     expect(output).not.toContain('--project');
   });
 });
+
+describe('init wizard in a Yarn Plug\'n\'Play project (PILOT-778)', () => {
+  it('warns right after the environment scan and leads the next steps with the nodeLinker fix', async () => {
+    fs.writeFileSync(path.join(dir, '.pnp.cjs'), '');
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    const warning = output.indexOf("This is a Yarn Plug'n'Play install");
+    expect(warning).toBeGreaterThan(output.indexOf('Environment'));
+    expect(output.slice(warning)).toContain('nodeLinker: node-modules');
+    const next = output.slice(output.indexOf('Next steps'));
+    expect(next).toMatch(/Next steps\n\s+Switch Yarn to node_modules:\s+add `nodeLinker: node-modules` to \.yarnrc\.yml, then run `yarn install`/);
+  });
+});

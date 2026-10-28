@@ -37,6 +37,7 @@ import { DEFAULT_TEST_IGNORE } from './test-file-discovery.js';
 import { confirmQuestion } from './confirm-prompt.js';
 import { isPromptCancel, tolerateClosedReadline } from './prompt-cancel.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
+import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 
 const DIM = '\x1b[2m';
 const BOLD = '\x1b[1m';
@@ -1188,14 +1189,24 @@ export function placeholderNextStep(keys: string[]): string | undefined {
  */
 export function wizardNextSteps(
   cli: string,
-  installStep: string | undefined,
-  captureStep?: { label: string; action: string; optional: boolean },
-  appStep?: string,
+  steps: {
+    /** The install command, when Tapsmith is not installed (PILOT-551). */
+    install?: string;
+    /** A Play-image AVD's step (PILOT-711). */
+    capture?: { label: string; action: string; optional: boolean };
+    /** What the config still needs: {@link placeholderNextStep} (PILOT-778). */
+    app?: string;
+    /** A Yarn Plug'n'Play project, which must switch linker before running tests (PILOT-778). */
+    yarnPnp?: boolean;
+  } = {},
 ): Array<[string, string]> {
+  const { install: installStep, capture: captureStep, app: appStep, yarnPnp } = steps;
   // A Play-image AVD (PILOT-711): the AVD to switch to — before the first
   // run when capture is on, else last, as an option.
   const capture = captureStep ? [[captureStep.label, withTapsmithCommand(captureStep.action, cli)] as [string, string]] : [];
   return [
+    // Before the install, so that installs into node_modules.
+    ...(yarnPnp ? [['Switch Yarn to node_modules', YARN_PNP_INIT_STEP] as [string, string]] : []),
     ...(installStep ? [['Install Tapsmith', installStep] as [string, string]] : []),
     ...(appStep ? [['Point it at your app', appStep] as [string, string]] : []),
     ...(captureStep?.optional ? [] : capture),
@@ -1358,6 +1369,12 @@ async function runInitInner(): Promise<void> {
   const env = scanEnvironment();
   const expo = detectExpoProject(process.cwd());
   displayEnvironment(env, expo);
+  // Said before the questions: `verify`, the first next step, refuses there (PILOT-778).
+  const yarnPnp = projectUsesYarnPnp({ versions: process.versions, cwd });
+  if (yarnPnp) {
+    console.log(`  ${YELLOW}⚠${RESET} ${YARN_PNP_INIT_WARNING}`);
+    console.log();
+  }
 
   // Step 2: Platform selection, defaulting to one that can run (PILOT-721)
   const layout = detectProjectLayout(cwd);
@@ -1472,7 +1489,12 @@ async function runInitInner(): Promise<void> {
   console.log(`  ${bold('Next steps')}`);
   const projects = generatedProjects(selectedPlatforms, iosConfig);
   const captureStep = androidConfig?.useEmulators ? captureAvdNextStep(androidConfig.avd, env.avdImages, enableNetwork) : undefined;
-  const steps = wizardNextSteps(cli, installStep, captureStep, placeholderNextStep(placeholderKeys(selectedPlatforms, androidConfig, iosConfig)));
+  const steps = wizardNextSteps(cli, {
+    install: installStep,
+    capture: captureStep,
+    app: placeholderNextStep(placeholderKeys(selectedPlatforms, androidConfig, iosConfig)),
+    yarnPnp,
+  });
   const width = Math.max(...[...steps.map(([l]) => l), ...projects.map((p) => p.label)].map((l) => l.length)) + 3;
   const step = (label: string, cmd: string): void => console.log(`  ${`${label}:`.padEnd(width)}${green(cmd)}`);
   for (const [label, cmd] of steps) step(label, cmd);

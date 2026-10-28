@@ -773,26 +773,26 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('runIn
 
 describe('wizardNextSteps() (PILOT-562)', () => {
   it('leads with `tapsmith verify`, as getting-started does, and never shows a person --json', () => {
-    const steps = wizardNextSteps('npx tapsmith', undefined);
+    const steps = wizardNextSteps('npx tapsmith');
     expect(steps[0]).toEqual(['Verify your setup', 'npx tapsmith verify']);
     expect(steps.map(([, cmd]) => cmd)).toEqual(['npx tapsmith verify', 'npx tapsmith test', 'npx tapsmith list-devices', 'npx tapsmith doctor']);
   });
 
   it('puts a declined install first (PILOT-551)', () => {
-    const steps = wizardNextSteps('npx tapsmith', 'npm i -D tapsmith');
+    const steps = wizardNextSteps('npx tapsmith', { install: 'npm i -D tapsmith' });
     expect(steps[0]).toEqual(['Install Tapsmith', 'npm i -D tapsmith']);
     expect(steps[1][1]).toBe('npx tapsmith verify');
   });
 
   it('points a Play-image AVD at HTTPS-capable one before verify when capture is on (PILOT-711)', () => {
-    const steps = wizardNextSteps('npx tapsmith', 'npm i -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd', optional: false });
+    const steps = wizardNextSteps('npx tapsmith', { install: 'npm i -D tapsmith', capture: { label: 'Capture HTTPS', action: 'npx tapsmith create-avd', optional: false } });
     expect(steps[0][0]).toBe('Install Tapsmith');
     expect(steps[1]).toEqual(['Capture HTTPS', 'npx tapsmith create-avd']);
     expect(steps[2][1]).toBe('npx tapsmith verify');
   });
 
   it('names the project\'s own runner, in the capture step too (PILOT-721)', () => {
-    const steps = wizardNextSteps('pnpm exec tapsmith', 'pnpm add -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd, then change avd', optional: false });
+    const steps = wizardNextSteps('pnpm exec tapsmith', { install: 'pnpm add -D tapsmith', capture: { label: 'Capture HTTPS', action: 'npx tapsmith create-avd, then change avd', optional: false } });
     expect(steps.map(([, cmd]) => cmd)).toEqual([
       'pnpm add -D tapsmith',
       'pnpm exec tapsmith create-avd, then change avd',
@@ -804,7 +804,7 @@ describe('wizardNextSteps() (PILOT-562)', () => {
   });
 
   it('lists it last, as an option, when capture is off', () => {
-    const steps = wizardNextSteps('npx tapsmith', undefined, { label: 'Optional, to capture HTTPS', action: 'npx tapsmith create-avd', optional: true });
+    const steps = wizardNextSteps('npx tapsmith', { capture: { label: 'Optional, to capture HTTPS', action: 'npx tapsmith create-avd', optional: true } });
     expect(steps[0][1]).toBe('npx tapsmith verify');
     expect(steps[steps.length - 1]).toEqual(['Optional, to capture HTTPS', 'npx tapsmith create-avd']);
   });
@@ -894,7 +894,7 @@ describe('a setup with no build yet (PILOT-778)', () => {
     expect(placeholderNextStep([])).toBeUndefined();
     expect(placeholderNextStep(['package'])).toBe('build your app, then set package in tapsmith.config.ts');
     expect(placeholderNextStep(['apk', 'package', 'app'])).toBe('build your app, then set apk, package and app in tapsmith.config.ts');
-    const steps = wizardNextSteps('npx tapsmith', 'npm i -D tapsmith', undefined, placeholderNextStep(['apk', 'package']));
+    const steps = wizardNextSteps('npx tapsmith', { install: 'npm i -D tapsmith', app: placeholderNextStep(['apk', 'package']) });
     expect(steps[0][0]).toBe('Install Tapsmith');
     expect(steps[1]).toEqual(['Point it at your app', 'build your app, then set apk and package in tapsmith.config.ts']);
     expect(steps[2][1]).toBe('npx tapsmith verify');
