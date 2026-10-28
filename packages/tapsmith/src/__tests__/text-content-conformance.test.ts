@@ -103,9 +103,31 @@ const CASES: Case[] = [
   { why: 'a joined middle child', type: T.other, label: 'A, B, C', query: { exact: 'B' }, matches: true },
   { why: 'a joined last child', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Text inputs' }, matches: true },
   { why: 'part of a child is no exact match', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Login' }, matches: false },
-  // iOS drops trailing punctuation from some labels.
+  // A label can lack its text's trailing punctuation (a React Native
+  // touchable's accessibilityLabel hides the text it wraps).
   { why: 'a label without the trailing "?"', type: T.button, label: 'Forgot password', query: { exact: 'Forgot password?' }, matches: true },
   { why: 'trailing punctuation only', type: T.button, label: 'Forgot password', query: { exact: 'Forgot' }, matches: false },
+  // A substring match finds whatever an exact one does (PILOT-880): a React
+  // Native link labelled "Forgot password" around its "Forgot password?" text.
+  { why: 'a substring without the trailing "?"', type: T.link, label: 'Forgot password', query: { substring: 'Forgot password?' }, matches: true },
+  { why: 'a substring without the trailing "?", ignoring case', type: T.link, label: 'Forgot password', query: { substring: 'FORGOT PASSWORD?' }, matches: true },
+  { why: 'a suffix without the trailing "?"', type: T.link, label: 'Forgot password', query: { substring: 'password?' }, matches: true },
+  { why: 'other trailing punctuation on the label', type: T.button, label: 'Forgot password.', query: { substring: 'password?' }, matches: true },
+  { why: 'the dropped "?" is only at the end of the label', type: T.link, label: 'Forgot password reset', query: { substring: 'Forgot password?' }, matches: false },
+  { why: 'a prefix without the trailing "?" is no match', type: T.link, label: 'Forgot password', query: { substring: 'Forgot pass?' }, matches: false },
+  { why: 'punctuation alone is no match', type: T.link, label: 'Forgot password', query: { substring: '?' }, matches: false },
+  { why: 'nor a title without the trailing "?"', type: T.button, label: '', title: 'Forgot password', query: { substring: 'Forgot password?' }, matches: false },
+  // A substring is literal: ICU pattern characters match only themselves.
+  { why: 'a "?" in the label', type: T.text, label: 'Forgot password? Reset it', query: { substring: 'password? reset' }, matches: true },
+  { why: '"?" is not optional', type: T.text, label: 'Ready', query: { substring: 'x?Ready' }, matches: false },
+  { why: 'a "*" in the label', type: T.text, label: 'Rating: 5*', query: { substring: '5*' }, matches: true },
+  { why: '"*" is not a repeat', type: T.text, label: 'aab', query: { substring: 'a*b' }, matches: false },
+  { why: 'a "\\" in the label', type: T.text, label: 'C:\\Users\\ada', query: { substring: ':\\users' }, matches: true },
+  { why: '"\\d" is not a digit class', type: T.text, label: 'a1', query: { substring: 'a\\d' }, matches: false },
+  { why: 'a "[" in the label', type: T.text, label: 'Items [3]', query: { substring: '[3]' }, matches: true },
+  { why: '"[...]" is not a character class', type: T.text, label: 'a', query: { substring: '[ab]' }, matches: false },
+  { why: '"." is not any character', type: T.text, label: 'abc', query: { substring: 'a.c' }, matches: false },
+  { why: 'exact is literal too', type: T.text, label: 'aab', query: { exact: 'a*b' }, matches: false },
   // Whitespace and case, as before (PILOT-510, PILOT-522).
   { why: 'NBSP is a space', type: T.text, label: 'Welcome to\u00a0Expo', query: { exact: 'Welcome to Expo' }, matches: true },
   { why: 'exact is case-sensitive', type: T.text, label: 'GET STARTED', query: { exact: 'get started' }, matches: false },

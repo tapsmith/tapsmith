@@ -416,6 +416,169 @@
       "matches": false
     },
     {
+      "why": "a substring without the trailing \"?\"",
+      "type": "XCUIElementTypeLink",
+      "label": "Forgot password",
+      "query": {
+        "substring": "Forgot password?"
+      },
+      "matches": true
+    },
+    {
+      "why": "a substring without the trailing \"?\", ignoring case",
+      "type": "XCUIElementTypeLink",
+      "label": "Forgot password",
+      "query": {
+        "substring": "FORGOT PASSWORD?"
+      },
+      "matches": true
+    },
+    {
+      "why": "a suffix without the trailing \"?\"",
+      "type": "XCUIElementTypeLink",
+      "label": "Forgot password",
+      "query": {
+        "substring": "password?"
+      },
+      "matches": true
+    },
+    {
+      "why": "other trailing punctuation on the label",
+      "type": "XCUIElementTypeButton",
+      "label": "Forgot password.",
+      "query": {
+        "substring": "password?"
+      },
+      "matches": true
+    },
+    {
+      "why": "the dropped \"?\" is only at the end of the label",
+      "type": "XCUIElementTypeLink",
+      "label": "Forgot password reset",
+      "query": {
+        "substring": "Forgot password?"
+      },
+      "matches": false
+    },
+    {
+      "why": "a prefix without the trailing \"?\" is no match",
+      "type": "XCUIElementTypeLink",
+      "label": "Forgot password",
+      "query": {
+        "substring": "Forgot pass?"
+      },
+      "matches": false
+    },
+    {
+      "why": "punctuation alone is no match",
+      "type": "XCUIElementTypeLink",
+      "label": "Forgot password",
+      "query": {
+        "substring": "?"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor a title without the trailing \"?\"",
+      "type": "XCUIElementTypeButton",
+      "label": "",
+      "title": "Forgot password",
+      "query": {
+        "substring": "Forgot password?"
+      },
+      "matches": false
+    },
+    {
+      "why": "a \"?\" in the label",
+      "type": "XCUIElementTypeStaticText",
+      "label": "Forgot password? Reset it",
+      "query": {
+        "substring": "password? reset"
+      },
+      "matches": true
+    },
+    {
+      "why": "\"?\" is not optional",
+      "type": "XCUIElementTypeStaticText",
+      "label": "Ready",
+      "query": {
+        "substring": "x?Ready"
+      },
+      "matches": false
+    },
+    {
+      "why": "a \"*\" in the label",
+      "type": "XCUIElementTypeStaticText",
+      "label": "Rating: 5*",
+      "query": {
+        "substring": "5*"
+      },
+      "matches": true
+    },
+    {
+      "why": "\"*\" is not a repeat",
+      "type": "XCUIElementTypeStaticText",
+      "label": "aab",
+      "query": {
+        "substring": "a*b"
+      },
+      "matches": false
+    },
+    {
+      "why": "a \"\\\" in the label",
+      "type": "XCUIElementTypeStaticText",
+      "label": "C:\\Users\\ada",
+      "query": {
+        "substring": ":\\users"
+      },
+      "matches": true
+    },
+    {
+      "why": "\"\\d\" is not a digit class",
+      "type": "XCUIElementTypeStaticText",
+      "label": "a1",
+      "query": {
+        "substring": "a\\d"
+      },
+      "matches": false
+    },
+    {
+      "why": "a \"[\" in the label",
+      "type": "XCUIElementTypeStaticText",
+      "label": "Items [3]",
+      "query": {
+        "substring": "[3]"
+      },
+      "matches": true
+    },
+    {
+      "why": "\"[...]\" is not a character class",
+      "type": "XCUIElementTypeStaticText",
+      "label": "a",
+      "query": {
+        "substring": "[ab]"
+      },
+      "matches": false
+    },
+    {
+      "why": "\".\" is not any character",
+      "type": "XCUIElementTypeStaticText",
+      "label": "abc",
+      "query": {
+        "substring": "a.c"
+      },
+      "matches": false
+    },
+    {
+      "why": "exact is literal too",
+      "type": "XCUIElementTypeStaticText",
+      "label": "aab",
+      "query": {
+        "exact": "a*b"
+      },
+      "matches": false
+    },
+    {
       "why": "NBSP is a space",
       "type": "XCUIElementTypeStaticText",
       "label": "Welcome to Expo",

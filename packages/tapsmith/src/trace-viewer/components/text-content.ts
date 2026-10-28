@@ -58,7 +58,7 @@ function containsChildText(label: string, query: string): boolean {
 
 const TRAILING_PUNCTUATION = /[\p{P}\p{S}]+$/u;
 
-/** Equal once trailing punctuation and symbols are dropped from both (iOS drops a "?" from a label). */
+/** Equal once trailing punctuation and symbols are dropped from both (a label without its text's "?"). */
 function equalIgnoringTrailingPunctuation(a: string, b: string): boolean {
   if (a === '' || b === '') return false;
   return a.replace(TRAILING_PUNCTUATION, '') === b.replace(TRAILING_PUNCTUATION, '');
@@ -72,10 +72,26 @@ export function iosTextMatchesExact(texts: IosTexts, query: string): boolean {
   return equalIgnoringTrailingPunctuation(normalize(texts.label), q);
 }
 
-/** getByText(string) on iOS: a case-insensitive substring of the label, title or value. */
+/**
+ * getByText(string) on iOS: a case-insensitive substring of the label, title
+ * or value — or, so that it finds whatever the exact form finds (PILOT-880),
+ * the end of a label that lacks the query's trailing punctuation.
+ */
 export function iosTextMatchesSubstring(texts: IosTexts, query: string): boolean {
   const q = normalize(query).toLowerCase();
-  return [texts.label, texts.title, texts.value].some((t) => normalize(t).toLowerCase().includes(q));
+  if ([texts.label, texts.title, texts.value].some((t) => normalize(t).toLowerCase().includes(q))) return true;
+  return endsWithIgnoringTrailingPunctuation(normalize(texts.label).toLowerCase(), q);
+}
+
+/**
+ * Whether `text` ends with `query` once trailing punctuation and symbols are
+ * dropped from both: the substring form of equalIgnoringTrailingPunctuation.
+ * Only for a query that ends in punctuation, and never for punctuation alone.
+ */
+function endsWithIgnoringTrailingPunctuation(text: string, query: string): boolean {
+  const q = query.replace(TRAILING_PUNCTUATION, '');
+  if (q === '' || q === query) return false;
+  return text.replace(TRAILING_PUNCTUATION, '').endsWith(q);
 }
 
 /** getByText(RegExp) on iOS: tested against the raw label, title or value. */

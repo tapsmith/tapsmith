@@ -75,8 +75,9 @@ enum TextContent {
     /// getByText(string, { exact: true }): the whole label, title or value
     /// (whitespace-normalized), one ", "-joined child of the label or title
     /// (React Native merges a touchable's child texts into its label), or
-    /// the label without trailing punctuation iOS dropped ("Forgot password"
-    /// for "Forgot password?").
+    /// the label without the text's trailing punctuation ("Forgot password"
+    /// for "Forgot password?": a React Native touchable's accessibilityLabel
+    /// hides the text it wraps).
     static func matchesExact(_ texts: Texts, _ query: String) -> Bool {
         if TextMatch.equals(texts.label, query) || TextMatch.equals(texts.title, query)
             || TextMatch.equals(texts.value, query) {
@@ -89,10 +90,18 @@ enum TextContent {
         return matchesIgnoringTrailingPunctuation(TextMatch.normalize(texts.label), TextMatch.normalize(query))
     }
 
-    /// getByText(string): a case-insensitive substring of the label, title or value.
+    /// getByText(string): a case-insensitive substring of the label, title or
+    /// value — or, so that it finds whatever `matchesExact` finds
+    /// (PILOT-880), the end of a label without the query's trailing
+    /// punctuation: "Forgot password?" in a link labelled "Forgot password".
     static func matchesSubstring(_ texts: Texts, _ query: String) -> Bool {
-        TextMatch.contains(texts.label, query) || TextMatch.contains(texts.title, query)
-            || TextMatch.contains(texts.value, query)
+        if TextMatch.contains(texts.label, query) || TextMatch.contains(texts.title, query)
+            || TextMatch.contains(texts.value, query) {
+            return true
+        }
+        return endsWithIgnoringTrailingPunctuation(
+            TextMatch.normalize(texts.label).lowercased(), TextMatch.normalize(query).lowercased()
+        )
     }
 
     /// getByText(RegExp): tested against the raw label, title or value.
@@ -104,9 +113,22 @@ enum TextContent {
     /// are dropped from both.
     static func matchesIgnoringTrailingPunctuation(_ a: String, _ b: String) -> Bool {
         guard !a.isEmpty && !b.isEmpty else { return false }
+        return droppingTrailingPunctuation(a) == droppingTrailingPunctuation(b)
+    }
+
+    /// Whether `text` ends with `query` once trailing punctuation and symbols
+    /// are dropped from both: the substring form of
+    /// `matchesIgnoringTrailingPunctuation`. Only for a query that ends in
+    /// punctuation, and never for punctuation alone.
+    static func endsWithIgnoringTrailingPunctuation(_ text: String, _ query: String) -> Bool {
+        let trimmedQuery = droppingTrailingPunctuation(query)
+        guard !trimmedQuery.isEmpty, trimmedQuery != query else { return false }
+        return droppingTrailingPunctuation(text).hasSuffix(trimmedQuery)
+    }
+
+    private static func droppingTrailingPunctuation(_ s: String) -> String {
         let punct = CharacterSet.punctuationCharacters.union(.symbols)
-        let trimA = a.unicodeScalars.reversed().drop(while: { punct.contains($0) })
-        let trimB = b.unicodeScalars.reversed().drop(while: { punct.contains($0) })
-        return String(String.UnicodeScalarView(trimA.reversed())) == String(String.UnicodeScalarView(trimB.reversed()))
+        let trimmed = s.unicodeScalars.reversed().drop(while: { punct.contains($0) })
+        return String(String.UnicodeScalarView(trimmed.reversed()))
     }
 }
