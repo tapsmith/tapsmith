@@ -174,6 +174,31 @@ export function findApkCandidates(cwd: string): string[] {
   }).sort();
 }
 
+/** A literal `applicationId "com.x"` (Groovy) or `applicationId = "com.x"` (Kotlin DSL). */
+const APPLICATION_ID = /^\s*applicationId\s*(?:=\s*)?\(?\s*["']([A-Za-z][\w]*(?:\.[A-Za-z][\w]*)+)["']/m;
+
+/**
+ * The app module's `applicationId` from `app/build.gradle(.kts)` in the
+ * project's Gradle root, the package an APK built from it will carry
+ * (before any build variant's suffix): the wizard's package prefill when there is
+ * no APK to read (PILOT-778). Only a literal: an id computed from a variable
+ * is left for the user to type.
+ */
+export function detectGradleApplicationId(cwd: string, layout: ProjectLayout = detectProjectLayout(cwd)): string | undefined {
+  if (layout.androidRoot === undefined) return undefined;
+  for (const file of ['build.gradle.kts', 'build.gradle']) {
+    let source: string;
+    try {
+      source = fs.readFileSync(path.join(cwd, layout.androidRoot, 'app', file), 'utf8');
+    } catch {
+      continue;
+    }
+    const id = APPLICATION_ID.exec(source)?.[1];
+    if (id) return id;
+  }
+  return undefined;
+}
+
 /** Prefer debug builds when the glob found both debug and release artifacts. */
 export function preferDebugApk(candidates: string[]): string[] {
   const debug = candidates.filter((c) => /debug/i.test(c));

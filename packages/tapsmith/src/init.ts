@@ -9,6 +9,7 @@ import type { SeStatus } from './setup-ios.js';
 import {
   detectAndroidPackage,
   detectExpoProject,
+  detectGradleApplicationId,
   detectIosBundleId,
   derivedDataBuildWarning,
   detectProjectLayout,
@@ -153,8 +154,9 @@ export function validateBuildPath(val: string, kind: BuildKind, cwd: string = pr
   return true;
 }
 
-// The name is what enquirer echoes once chosen, so it is the label itself.
+// The names are what enquirer echoes once chosen, so they are the labels themselves.
 const OTHER_PATH = 'Enter another path…';
+const SKIP_BUILD = 'Skip for now';
 
 /**
  * The path to write into the config for a typed build path: read as a shell
@@ -172,8 +174,10 @@ export function typedBuildPath(val: string, cwd: string = process.cwd()): string
 
 /**
  * Ask for a build: the builds detection found, as a select (with a way out to
- * type another path), or a validated path prompt with no placeholder default
- * when it found none, after a hint on how to build one.
+ * type another path, and one to skip), or a validated path prompt with no
+ * placeholder default when it found none, after a hint on how to build one.
+ * Undefined when the user skips it — Enter at a path prompt, or "Skip for
+ * now" — so a project with no build yet never dead-ends here (PILOT-778).
  */
 async function askBuildPath(opts: {
   kind: BuildKind;
@@ -183,11 +187,15 @@ async function askBuildPath(opts: {
   hints?: ReadonlyMap<string, string>;
   noneFound: string;
   typeMessage: string;
-}): Promise<string> {
-  const validate = (val: string): true | string => validateBuildPath(val, opts.kind);
+}): Promise<string | undefined> {
+  const validate = (val: string): true | string => normalizeTypedPath(val).length === 0 || validateBuildPath(val, opts.kind);
+  const typed = async (message: string): Promise<string | undefined> => {
+    const val = await ask<string>({ type: 'input', message: `${message} ${dim('(Enter to skip)')}`, validate });
+    return normalizeTypedPath(val).length === 0 ? undefined : typedBuildPath(val);
+  };
   if (opts.candidates.length === 0) {
     console.log(dim(`  ${opts.noneFound}`));
-    return typedBuildPath(await ask<string>({ type: 'input', message: opts.message, validate }));
+    return typed(opts.message);
   }
   const picked = await ask<string>({
     type: 'select',
@@ -198,10 +206,12 @@ async function askBuildPath(opts: {
         return { name: c, message: c, ...(hint ? { hint } : {}) };
       }),
       { name: OTHER_PATH, message: OTHER_PATH },
+      { name: SKIP_BUILD, message: SKIP_BUILD, hint: 'set it in tapsmith.config.ts later' },
     ],
   });
+  if (picked === SKIP_BUILD) return undefined;
   if (picked !== OTHER_PATH) return picked;
-  return typedBuildPath(await ask<string>({ type: 'input', message: opts.typeMessage, validate }));
+  return typed(opts.typeMessage);
 }
 
 /**
@@ -373,20 +383,27 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
     typeMessage: 'Path to your Android APK:',
   });
 
-  let packageName: string | undefined;
-  const detected = detectAndroidPackage(apkPath);
-  if (detected) {
-    packageName = detected;
-    console.log(dim(`  Detected package: ${detected}`));
-  }
-  if (!packageName) {
-    console.log(dim(`  Could not read the package name from ${apkPath} (needs aapt2 from the Android SDK build-tools).`));
+  let packageName = apkPath ? detectAndroidPackage(apkPath) : undefined;
+  if (packageName) {
+    console.log(dim(`  Detected package: ${packageName}`));
+  } else {
+    console.log(dim(apkPath
+      ? `  Could not read the package name from ${apkPath} (needs aapt2 from the Android SDK build-tools).`
+      : '  No APK yet. If the app is installed on the device already, give its package name: Tapsmith launches it by that.'));
+    // The app config's id, else the Gradle module's (PILOT-778): either is
+    // what a build of this project carries, so Enter takes it.
+    const initial = expo?.androidPackage ?? detectGradleApplicationId(cwd);
     packageName = (await ask<string>({
       type: 'input',
-      message: 'What is your app\'s package name?',
-      ...(expo?.androidPackage ? { initial: expo.androidPackage } : {}),
-      validate: (val: string) => val.trim().length > 0 || 'Package name is required',
-    })).trim();
+      message: `What is your app's package name? ${dim('(Enter to skip)')}`,
+      ...(initial ? { initial } : {}),
+    })).trim() || undefined;
+  }
+  if (!apkPath && packageName) {
+    // As `init --yes --package` says it (PILOT-721).
+    console.log(`  ${YELLOW}⚠${RESET} No APK, so the config has no apk: Tapsmith will launch and reset ${packageName} but cannot install it — install the app on the device yourself, or add apk: '<path>' to tapsmith.config.ts`);
+  } else if (!packageName) {
+    console.log(dim(`  tapsmith.config.ts gets a placeholder for the ${apkPath ? 'package name' : 'APK and package name'}: set ${apkPath ? 'it' : 'them'} once you have built the app.`));
   }
 
   const deviceType = await ask<string>({
@@ -459,8 +476,8 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
         : `No simulator build (.app) found in the project or Xcode's DerivedData. ${nativeBuildHint('ios', detectProjectLayout(cwd), isReactNativeProject(cwd))}, or enter its path.`,
       typeMessage: 'Path to your simulator build (.app):',
     });
-    if (builds.hints.has(appPath)) console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(appPath, detectProjectLayout(cwd), 'iphonesimulator', isReactNativeProject(cwd))}`);
-    simBundleId = detectBundleId(appPath);
+    if (appPath && builds.hints.has(appPath)) console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(appPath, detectProjectLayout(cwd), 'iphonesimulator', isReactNativeProject(cwd))}`);
+    simBundleId = appPath ? detectBundleId(appPath) : undefined;
   }
 
   let simulator: string | undefined;
@@ -554,23 +571,22 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
         : 'No device build (.app) found in the project or Xcode\'s DerivedData — build one for iphoneos first (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.',
       typeMessage: 'Path to your device build (iphoneos .app):',
     });
-    if (deviceBuilds.hints.has(deviceAppPath)) {
+    if (deviceAppPath && deviceBuilds.hints.has(deviceAppPath)) {
       console.log(`  ${YELLOW}⚠${RESET} ${derivedDataBuildWarning(deviceAppPath, detectProjectLayout(process.cwd()), 'iphoneos')}`);
     }
-    deviceBundleIdRead = detectBundleId(deviceAppPath);
+    deviceBundleIdRead = deviceAppPath ? detectBundleId(deviceAppPath) : undefined;
   }
 
   // Each build's id is read from its Info.plist, else asked for. Simulator
   // and device builds can carry different ids (Debug vs Release), so one
   // never silently stands in for the other; the unread one's prompt is only
-  // pre-filled with it.
+  // pre-filled with it. Enter with nothing typed leaves it for later (PILOT-778).
   const both = useSimulators && usePhysicalDevice;
-  const askBundleId = async (message: string, initial: string | undefined): Promise<string> => (await ask<string>({
+  const askBundleId = async (message: string, initial: string | undefined): Promise<string | undefined> => (await ask<string>({
     type: 'input',
-    message,
+    message: `${message} ${dim('(Enter to skip)')}`,
     ...(initial ? { initial } : {}),
-    validate: (val: string) => val.trim().length > 0 || 'Bundle ID is required',
-  })).trim();
+  })).trim() || undefined;
   if (useSimulators && !simBundleId) {
     simBundleId = await askBundleId(
       both ? 'What is your simulator build\'s bundle identifier?' : 'What is your app\'s bundle identifier?',
@@ -585,6 +601,14 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
   }
   const bundleId = simBundleId ?? deviceBundleIdRead;
   const deviceBundleId = both && deviceBundleIdRead !== simBundleId ? deviceBundleIdRead : undefined;
+  const missing = [
+    ...(useSimulators && !appPath ? ['simulator build'] : []),
+    ...(usePhysicalDevice && !deviceAppPath ? ['device build'] : []),
+    ...(!bundleId ? ['bundle identifier'] : []),
+  ];
+  if (missing.length > 0) {
+    console.log(dim(`  tapsmith.config.ts gets a placeholder for the ${missing.join(' and ')}: set ${missing.length === 1 ? 'it' : 'them'} once you have built the app.`));
+  }
 
   return { appPath, bundleId, deviceBundleId, simulator, ...(simulatorDeviceType ? { simulatorDeviceType } : {}), usePhysicalDevice, deviceAppPath };
 }
@@ -658,7 +682,7 @@ async function setupNetworkCapture(
     }
   }
 
-  if (iosConfig?.appPath && env.isMacOS) {
+  if (iosConfig?.simulator && env.isMacOS) {
     // doctor's detection (PILOT-721), and only the step still missing.
     const { checkSeStatus, mitmproxyRedirectorSource } = await import('./setup-ios.js');
     const source = mitmproxyRedirectorSource();
@@ -806,14 +830,60 @@ const PNPM_IGNORED_BUILDS_HINT = [
 /**
  * The iOS targets the user picked. A scope with no `simulator` is a
  * physical-device run (the runner auto-detects the paired device), so a
- * simulator target needs both the simulator build and a simulator, and the
- * device target must not inherit either.
+ * simulator target is one with a simulator (set only when the user chose
+ * simulators), and the device target must not inherit it. Either target's
+ * build may be missing: the user skipped it (PILOT-778), and the config gets
+ * a placeholder for it.
  */
-function iosTargets(ios: IosConfig | undefined): { sim?: { app: string; simulator: string }; deviceApp?: string } {
+function iosTargets(ios: IosConfig | undefined): { sim?: { app?: string; simulator: string }; device?: { app?: string } } {
   return {
-    sim: ios?.appPath && ios.simulator ? { app: ios.appPath, simulator: ios.simulator } : undefined,
-    deviceApp: ios?.usePhysicalDevice ? ios.deviceAppPath : undefined,
+    sim: ios?.simulator ? { app: ios.appPath, simulator: ios.simulator } : undefined,
+    device: ios?.usePhysicalDevice ? { app: ios.deviceAppPath } : undefined,
   };
+}
+
+/**
+ * A platform the user set up with neither a build nor an app id: they skipped
+ * both (PILOT-778), so its config scope can only hold placeholders.
+ */
+export function isUnconfigured(platform: Platform, android: AndroidConfig | undefined, ios: IosConfig | undefined): boolean {
+  if (platform === 'android') return !android?.apkPath && !android?.packageName;
+  return !ios?.appPath && !ios?.deviceAppPath && !ios?.bundleId;
+}
+
+/**
+ * The platforms the config keeps (PILOT-778): of two, one with nothing set up
+ * is left out — a placeholder scope there would fail the first `verify` or
+ * `test` that runs every project. A lone platform, or both when neither is set
+ * up, stays, with placeholders the next steps point at.
+ */
+export function platformsToWrite(
+  platforms: Platform[],
+  android: AndroidConfig | undefined,
+  ios: IosConfig | undefined,
+): { platforms: Platform[]; dropped: Platform[] } {
+  const dropped = platforms.filter((p) => isUnconfigured(p, android, ios));
+  if (dropped.length === 0 || dropped.length === platforms.length) return { platforms, dropped: [] };
+  return { platforms: platforms.filter((p) => !dropped.includes(p)), dropped };
+}
+
+/**
+ * The config keys the generated config leaves as placeholders, for the next
+ * step that says to fill them in (PILOT-778); empty when nothing is missing.
+ * A package-only Android setup is complete (PILOT-721).
+ */
+export function placeholderKeys(platforms: Platform[], android: AndroidConfig | undefined, ios: IosConfig | undefined): string[] {
+  const keys = new Set<string>();
+  if (platforms.includes('android') && android) {
+    if (!android.apkPath && !android.packageName) keys.add('apk');
+    if (!android.packageName) keys.add('package');
+  }
+  if (platforms.includes('ios') && ios) {
+    const { sim, device } = iosTargets(ios);
+    if ((sim && !sim.app) || (device && !device.app)) keys.add('app');
+    if (!ios.bundleId) keys.add('package');
+  }
+  return [...keys];
 }
 
 /**
@@ -833,8 +903,8 @@ export function generatedProjects(
   platforms: Platform[],
   ios: IosConfig | undefined,
 ): Array<{ name: string; label: string }> {
-  const { sim, deviceApp } = iosTargets(ios);
-  const device = !!deviceApp;
+  const { sim, device: deviceTarget } = iosTargets(ios);
+  const device = !!deviceTarget;
   const multi = platforms.length > 1;
   if (!multi && !(platforms[0] === 'ios' && sim && device)) return [];
   const out: Array<{ name: string; label: string }> = [];
@@ -884,11 +954,38 @@ export function generateConfig(
     `${indent}simulator: '${esc(simulator)}',`,
   ];
 
+  // What the user skipped (PILOT-778), commented out under one line saying
+  // what to do; the wizard's next steps point here.
+  const placeholders = (indent: string, keys: Array<[string, string]>): string[] => (keys.length === 0 ? [] : [
+    `${indent}// Not set up yet: build your app, then uncomment and fill in.`,
+    ...keys.map(([key, value]) => `${indent}// ${key}: '${value}',`),
+  ]);
+  const APP_ID = (platform: Platform): [string, string] => ['package', platform === 'android' ? '<applicationId>' : '<bundle identifier>'];
+
   lines.push(...GENERATED_TEST_MATCH_LINES);
   if (enableNetwork) lines.push("  trace: { mode: 'retain-on-failure' },");
 
-  const { sim: iosSim, deviceApp: iosDeviceApp } = iosTargets(ios);
+  const { sim: iosSim, device: iosDevice } = iosTargets(ios);
   const iosDevicePkg = ios?.deviceBundleId ?? ios?.bundleId;
+
+  /** An Android scope's keys; a package-only scope is complete (PILOT-721). */
+  const androidLines = (indent: string, a: AndroidConfig): string[] => [
+    ...(a.packageName ? [`${indent}package: '${esc(a.packageName)}',`] : []),
+    ...(a.apkPath ? [`${indent}apk: '${esc(a.apkPath)}',`] : []),
+    ...placeholders(indent, [
+      ...(!a.apkPath && !a.packageName ? [['apk', '<path to your .apk>'] as [string, string]] : []),
+      ...(!a.packageName ? [APP_ID('android')] : []),
+    ]),
+    ...(a.useEmulators && a.avd ? [`${indent}avd: '${esc(a.avd)}',`] : []),
+  ];
+  /** An iOS scope's `package` and `app`, or placeholders for the missing ones. */
+  const iosAppLines = (indent: string, pkg: string | undefined, app: string | undefined, appPlaceholder: string): string[] => [
+    ...(pkg ? [`${indent}package: '${esc(pkg)}',`] : []),
+    ...(app ? [`${indent}app: '${esc(app)}',`] : []),
+    ...placeholders(indent, [...(!pkg ? [APP_ID('ios')] : []), ...(!app ? [['app', appPlaceholder] as [string, string]] : [])]),
+  ];
+  const SIM_APP_PLACEHOLDER = '<path to your simulator build>.app';
+  const DEVICE_APP_PLACEHOLDER = '<path to your iphoneos build>.app';
 
   const iosProjects = (out: string[], iosCfg: IosConfig): void => {
     if (iosSim) {
@@ -896,35 +993,29 @@ export function generateConfig(
       out.push("      name: 'ios',");
       out.push('      use: {');
       out.push("        platform: 'ios',");
-      if (iosCfg.bundleId) out.push(`        package: '${esc(iosCfg.bundleId)}',`);
-      out.push(`        app: '${esc(iosSim.app)}',`);
+      out.push(...iosAppLines('        ', iosCfg.bundleId, iosSim.app, SIM_APP_PLACEHOLDER));
       out.push(...simulatorLines('        ', iosCfg, iosSim.simulator));
       out.push('      },');
       out.push('    },');
     }
-    if (iosDeviceApp) {
+    if (iosDevice) {
       out.push('    {');
       out.push("      name: 'ios-device',");
       out.push('      workers: 1,');
       out.push('      use: {');
       out.push("        platform: 'ios',");
-      if (iosDevicePkg) out.push(`        package: '${esc(iosDevicePkg)}',`);
-      out.push(`        app: '${esc(iosDeviceApp)}',`);
+      out.push(...iosAppLines('        ', iosDevicePkg, iosDevice.app, DEVICE_APP_PLACEHOLDER));
       out.push('      },');
       out.push('    },');
     }
   };
 
-  if (platforms.length === 1 && android) {
-    if (android.packageName) lines.push(`  package: '${esc(android.packageName)}',`);
-    if (android.apkPath) lines.push(`  apk: '${esc(android.apkPath)}',`);
-    if (android.useEmulators && android.avd) {
-      lines.push(`  avd: '${esc(android.avd)}',`);
-    }
+  if (platforms.length === 1 && platforms[0] === 'android' && android) {
+    lines.push(...androidLines('  ', android));
   }
 
-  if (platforms.length === 1 && ios) {
-    if (iosSim && iosDeviceApp) {
+  if (platforms.length === 1 && platforms[0] === 'ios' && ios) {
+    if (iosSim && iosDevice) {
       // Simulator and device: one project each, as in the multi-platform
       // config and docs/ios-physical-devices.md.
       lines.push('  projects: [');
@@ -932,13 +1023,11 @@ export function generateConfig(
       lines.push('  ],');
     } else {
       lines.push("  platform: 'ios',");
-      const pkg = iosDeviceApp ? iosDevicePkg : ios.bundleId;
-      if (pkg) lines.push(`  package: '${esc(pkg)}',`);
-      if (iosDeviceApp) {
-        lines.push(`  app: '${esc(iosDeviceApp)}',`);
-      } else if (ios.appPath) {
-        lines.push(`  app: '${esc(ios.appPath)}',`);
-        if (ios.simulator) lines.push(...simulatorLines('  ', ios, ios.simulator));
+      if (iosDevice) {
+        lines.push(...iosAppLines('  ', iosDevicePkg, iosDevice.app, DEVICE_APP_PLACEHOLDER));
+      } else if (iosSim) {
+        lines.push(...iosAppLines('  ', ios.bundleId, iosSim.app, SIM_APP_PLACEHOLDER));
+        lines.push(...simulatorLines('  ', ios, iosSim.simulator));
       }
     }
   }
@@ -950,11 +1039,7 @@ export function generateConfig(
     lines.push("      name: 'android',");
     lines.push('      use: {');
     lines.push("        platform: 'android',");
-    if (android.packageName) lines.push(`        package: '${esc(android.packageName)}',`);
-    if (android.apkPath) lines.push(`        apk: '${esc(android.apkPath)}',`);
-    if (android.useEmulators && android.avd) {
-      lines.push(`        avd: '${esc(android.avd)}',`);
-    }
+    lines.push(...androidLines('        ', android));
     lines.push('      },');
     lines.push('    },');
 
@@ -1085,21 +1170,31 @@ export function testsOutsideGeneratedMatchWarning(files: string[]): string | und
 
 // ─── Main wizard ───
 
+/** The next step for a config with placeholders (PILOT-778), or undefined when it has none. */
+export function placeholderNextStep(keys: string[]): string | undefined {
+  if (keys.length === 0) return undefined;
+  const named = keys.length === 1 ? keys[0] : `${keys.slice(0, -1).join(', ')} and ${keys[keys.length - 1]}`;
+  return `build your app, then set ${named} in tapsmith.config.ts`;
+}
+
 /**
  * The wizard's Next steps as `[label, command]`: a declined install first
- * (PILOT-551), then `tapsmith verify`, which getting-started has a new user
+ * (PILOT-551), then what the config still needs (a build the user skipped,
+ * PILOT-778), then `tapsmith verify`, which getting-started has a new user
  * run before writing tests (PILOT-562). Plain commands: `--json` is for agents.
  */
 export function wizardNextSteps(
   cli: string,
   installStep: string | undefined,
   captureStep?: { label: string; action: string; optional: boolean },
+  appStep?: string,
 ): Array<[string, string]> {
   // A Play-image AVD (PILOT-711): the AVD to switch to — before the first
   // run when capture is on, else last, as an option.
   const capture = captureStep ? [[captureStep.label, withTapsmithCommand(captureStep.action, cli)] as [string, string]] : [];
   return [
     ...(installStep ? [['Install Tapsmith', installStep] as [string, string]] : []),
+    ...(appStep ? [['Point it at your app', appStep] as [string, string]] : []),
     ...(captureStep?.optional ? [] : capture),
     ['Verify your setup', `${cli} verify`],
     ['Run your tests', `${cli} test`],
@@ -1271,7 +1366,7 @@ async function runInitInner(): Promise<void> {
     initial: platforms.initial,
   });
 
-  const selectedPlatforms: Platform[] = platformChoice === 'both'
+  const chosenPlatforms: Platform[] = platformChoice === 'both'
     ? ['android', 'ios']
     : [platformChoice as Platform];
 
@@ -1279,11 +1374,20 @@ async function runInitInner(): Promise<void> {
   let androidConfig: AndroidConfig | undefined;
   let iosConfig: IosConfig | undefined;
 
-  if (selectedPlatforms.includes('android')) {
+  if (chosenPlatforms.includes('android')) {
     androidConfig = await configureAndroid(env, expo, cli);
   }
-  if (selectedPlatforms.includes('ios')) {
+  if (chosenPlatforms.includes('ios')) {
     iosConfig = await configureIos(env, expo, cli);
+  }
+
+  // A platform with nothing set up, beside one that is, is left out (PILOT-778).
+  const { platforms: selectedPlatforms, dropped } = platformsToWrite(chosenPlatforms, androidConfig, iosConfig);
+  for (const p of dropped) {
+    const name = p === 'android' ? 'Android' : 'iOS';
+    console.log(`  ${YELLOW}⚠${RESET} ${name} left out of the config: it has no build or ${p === 'android' ? 'package name' : 'bundle identifier'} yet. Once you have built it, run \`${cli} init\` again to add it.`);
+    if (p === 'android') androidConfig = undefined;
+    else iosConfig = undefined;
   }
 
   // Step 5: Network capture
@@ -1357,7 +1461,7 @@ async function runInitInner(): Promise<void> {
   console.log(`  ${bold('Next steps')}`);
   const projects = generatedProjects(selectedPlatforms, iosConfig);
   const captureStep = androidConfig?.useEmulators ? captureAvdNextStep(androidConfig.avd, env.avdImages, enableNetwork) : undefined;
-  const steps = wizardNextSteps(cli, installStep, captureStep);
+  const steps = wizardNextSteps(cli, installStep, captureStep, placeholderNextStep(placeholderKeys(selectedPlatforms, androidConfig, iosConfig)));
   const width = Math.max(...[...steps.map(([l]) => l), ...projects.map((p) => p.label)].map((l) => l.length)) + 3;
   const step = (label: string, cmd: string): void => console.log(`  ${`${label}:`.padEnd(width)}${green(cmd)}`);
   for (const [label, cmd] of steps) step(label, cmd);

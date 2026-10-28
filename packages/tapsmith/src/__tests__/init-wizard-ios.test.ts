@@ -281,7 +281,7 @@ describe('configureIos() build detection (PILOT-513)', () => {
   it('lists several simulator builds, and takes a typed path from "another path"', async () => {
     simCandidates = ['ios/a/Debug-iphonesimulator/A.app', 'ios/b/Debug-iphonesimulator/B.app'];
     script('simulators', [
-      [/simulator build\)/, (q: Question) => q.choices?.at(-1)?.name],
+      [/simulator build\)/, (q: Question) => q.choices?.at(-2)?.name],
       [/Path to your simulator build/, ' ./custom/My.app '],
       [/bundle identifier/, 'com.acme.typed'],
     ]);
@@ -484,6 +484,65 @@ describe('configureIos() with builds in Xcode\'s DerivedData (PILOT-832)', () =>
     await configureIos(env);
 
     const sim = questions.find((q) => /simulator build\)/.test(q.message));
-    expect(sim?.choices?.map((c) => c.name)).toEqual([SIM_APP, 'Enter another path…']);
+    expect(sim?.choices?.map((c) => c.name)).toEqual([SIM_APP, 'Enter another path…', 'Skip for now']);
+  });
+});
+
+describe('configureIos() with no build yet (PILOT-778)', () => {
+  const question = (pattern: RegExp): Question | undefined => questions.find((q) => pattern.test(q.message));
+  beforeEach(() => {
+    answers.clear();
+    asked.length = 0;
+    questions.length = 0;
+    bundleIds.clear();
+    simCandidates = [];
+    deviceCandidates = [];
+    derivedDataApps = {};
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  });
+
+  it('Enter at the simulator build and bundle id prompts skips them, keeping the simulator', async () => {
+    script('simulators', [[/simulator build\)/, ''], [/bundle identifier/, '']]);
+
+    const ios = await configureIos(env);
+
+    const q = question(/simulator build\)/);
+    expect(q?.message).toMatch(/Enter to skip/);
+    expect(q?.validate?.('')).toBe(true);
+    expect(question(/bundle identifier/)?.message).toMatch(/Enter to skip/);
+    expect(ios.appPath).toBeUndefined();
+    expect(ios.bundleId).toBeUndefined();
+    expect(ios.simulator).toBe('iPhone 17');
+  });
+
+  it('a skipped simulator build keeps a typed bundle id', async () => {
+    script('simulators', [[/simulator build\)/, ''], [/bundle identifier/, 'com.acme.installed']]);
+
+    const ios = await configureIos(env);
+
+    expect(ios.appPath).toBeUndefined();
+    expect(ios.bundleId).toBe('com.acme.installed');
+  });
+
+  it('offers "Skip for now" beside the simulator builds it found', async () => {
+    simCandidates = [SIM_APP];
+    bundleIds.set(SIM_APP, 'com.acme.sim');
+    script('simulators', [[/simulator build\)/, (q: Question) => q.choices?.find((c) => /Skip/.test(c.name))?.name], [/bundle identifier/, '']]);
+
+    const ios = await configureIos(env);
+
+    expect(question(/simulator build\)/)?.choices?.at(-1)?.name).toMatch(/^Skip for now/);
+    expect(ios.appPath).toBeUndefined();
+  });
+
+  it('Enter at the device build prompt skips it', async () => {
+    script('physical', [[/device build \.app/, ''], [/bundle identifier/, '']]);
+
+    const ios = await configureIos(env);
+
+    expect(question(/device build \.app/)?.validate?.('')).toBe(true);
+    expect(ios.usePhysicalDevice).toBe(true);
+    expect(ios.deviceAppPath).toBeUndefined();
+    expect(ios.bundleId).toBeUndefined();
   });
 });
