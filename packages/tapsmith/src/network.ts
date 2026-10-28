@@ -1246,7 +1246,7 @@ export interface NetworkResponseEventData {
   headers: Record<string, string>
   /** The response body, or `null` when it has none. */
   body: Buffer | null
-  /** What a matching `device.route()` handler did (`continue`, `fulfill`, `fetch` or `abort`), when one ran. */
+  /** What a matching `device.route()` handler did: `continued`, `mocked` (fulfilled) or `aborted`; unset when none ran. */
   routeAction?: string
 }
 

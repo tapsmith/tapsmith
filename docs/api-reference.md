@@ -262,7 +262,7 @@ import type { DeviceKey, Role, SwipeDirection } from "tapsmith";
 | `SwipeDirection` | `device.swipe()`, `scroll()`, `scrollIntoView({ direction })` | `"up"`, `"down"`, `"left"`, `"right"` |
 | `DeviceKey` | `device.pressKey()` | `BACK`, `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `FORWARD_DELETE`, `ESCAPE` / `ESC`, `MENU`, `SEARCH`, `VOLUME_UP`, `VOLUME_DOWN`, `POWER`, `CAMERA`, `DPAD_UP`, `DPAD_DOWN`, `DPAD_LEFT`, `DPAD_RIGHT`, `DPAD_CENTER`, `SPACE`, `RECENTS` / `APP_SWITCH` |
 
-All names are case-insensitive. Every `DeviceKey` works on Android. iOS supports `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (which submits, like `ENTER`), `SPACE` and `BACK` (which taps the navigation bar's back button), and types any single character.
+All names are case-insensitive. `device.swipe()` and `scrollIntoView()` take the way the finger moves (`"up"` reveals what is below), while `scroll()` takes the way the view scrolls (`"down"` reveals what is below). Every `DeviceKey` works on Android. iOS supports `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (which submits, like `ENTER`), `SPACE` and `BACK` (which taps the navigation bar's back button), and types any single character.
 
 ### `device.pressBack(): Promise<void>` *(Android only)*
 
@@ -316,7 +316,7 @@ const screenshot = await device.takeScreenshot();
 
 ### `device.waitForIdle(timeoutMs?: number): Promise<void>`
 
-Wait until the device UI is idle (no animations, no pending layout passes). Uses the configured default timeout if none is specified.
+Give the app's UI a moment to settle. On Android it waits for accessibility events to go quiet, up to `timeoutMs` (the configured default timeout if none is specified); on iOS it pauses briefly (a quarter of a second at most). It does not prove the screen is idle, so wait for what you need with an assertion.
 
 ```typescript
 await device.waitForIdle();
@@ -1247,7 +1247,7 @@ await device.locator({ id: "search_box" }).clear();
 
 #### `elementHandle.scroll(direction: SwipeDirection, options?): Promise<void>`
 
-Scroll this element in the given direction. Options: `distance` (below) and the [per-call timeout](#per-call-timeout).
+Scroll this element in the given direction: the way the view scrolls, so `"down"` reveals what is below (the opposite of `device.swipe()`). Options: `distance` (below) and the [per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByTestId("product-list").scroll("down"); // a FlatList with testID="product-list"
@@ -3472,7 +3472,7 @@ await expect(webview.getByText("Welcome back")).toBeVisible()
 
 #### `webview.close(): Promise<void>`
 
-Close the WebView connection. Usually called via `device.native()` instead.
+Close the WebView connection. `device.native()` switches back to the native context but keeps the connection open for reuse; the runner closes it at the end of the test file.
 
 ### WebViewLocator
 

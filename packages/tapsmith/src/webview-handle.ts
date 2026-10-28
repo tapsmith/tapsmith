@@ -1296,7 +1296,10 @@ export class WebViewHandle {
     return this._ws !== null && this._ws.readyState === WebSocket.OPEN;
   }
 
-  /** Close the connection to the WebView. `device.native()` does this for you. */
+  /**
+   * Close the connection to the WebView. `device.native()` keeps it open for
+   * reuse; the runner closes it at the end of the test file.
+   */
   async close(): Promise<void> {
     if (this._closed) return;
     this._closed = true;

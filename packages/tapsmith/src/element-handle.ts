@@ -2774,7 +2774,8 @@ export class ElementHandle {
   }
 
   /**
-   * Scroll inside this element in `direction`.
+   * Scroll inside this element in `direction`: the way the view scrolls, so
+   * `"down"` reveals what is below (the opposite of `device.swipe()`).
    *
    * @param options.distance - Fraction of the element to scroll across.
    * @param options.timeout - Maximum time in milliseconds for the whole call,

@@ -77,7 +77,8 @@ export const ROLE_ALIASES: Readonly<Record<string, string>> = ROLE_ALIAS_MAP;
 /**
  * A role name `getByRole()` and `toHaveRole()` accept: a native role or one of
  * its React Native aliases (`header`, `slider`, `search`, `radio`). Matching is
- * case-insensitive, and an unknown role throws with the supported list.
+ * case-insensitive. `getByRole()` throws at once on an unknown role, with the
+ * supported list.
  */
 export type Role = NativeRole | keyof typeof ROLE_ALIAS_MAP;
 

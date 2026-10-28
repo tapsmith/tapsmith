@@ -609,8 +609,10 @@ export class Device {
   }
 
   /**
-   * Wait until the app's UI is idle (no running animations or pending layout).
-   * Throws if it is not idle within `timeoutMs` (default: the device timeout).
+   * Give the app's UI a moment to settle. On Android it waits for the
+   * accessibility events to go quiet, up to `timeoutMs` (default: the device
+   * timeout); on iOS it pauses briefly (a quarter of a second at most). It does
+   * not prove the screen is idle: wait for what you need with an assertion.
    */
   async waitForIdle(timeoutMs?: number): Promise<void> {
     const res = await this._client.waitForIdle(timeoutMs ?? this._defaultTimeoutMs);

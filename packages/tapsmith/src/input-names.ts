@@ -8,14 +8,16 @@
  *
  * **Parity contract:** `DEVICE_KEYS` is exactly the set of names the Android
  * agent's `resolveKeyCode` (`agent/.../ActionExecutor.kt`) accepts, uppercased.
- * `device-keys.test.ts` reads the agents' sources and fails on drift.
+ * `typed-params.test.ts` reads the agents' sources and fails on drift.
  */
 
 // ─── Swipe directions ───
 
 /**
- * A swipe or scroll direction: the way the finger moves. `"up"` reveals what
- * is below, `"down"` what is above. Case-insensitive.
+ * A swipe or scroll direction, case-insensitive. `device.swipe()` and
+ * `scrollIntoView()` take the way the finger moves (`"up"` reveals what is
+ * below); `locator.scroll()` takes the way the view scrolls (`"down"` reveals
+ * what is below).
  */
 export type SwipeDirection = 'up' | 'down' | 'left' | 'right';
 

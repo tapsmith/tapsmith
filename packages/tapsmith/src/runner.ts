@@ -775,7 +775,10 @@ function collectFixtureRegistries(ctx: SuiteContext, registries: Set<FixtureRegi
 export interface TestFn<Fixtures extends object = TestFixtures> {
   /** Declare a test. `fn` receives the fixtures (`device`, …). */
   (name: string, fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)): void;
-  /** Declare a focused test: while any test or group is focused, only those run. */
+  /**
+   * Declare a focused test: its siblings in the same describe block (or file)
+   * that are not focused are skipped.
+   */
   only: (name: string, fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
   /** Skip a test, a scope or the running test; see `SkipFn`. */
   skip: SkipFn<Fixtures>;
@@ -817,9 +820,15 @@ export interface TestFn<Fixtures extends object = TestFixtures> {
   extend: <T extends Record<string, unknown>>(
     definitions: FixtureDefinitions<T, Fixtures & T>,
   ) => TestFn<Fixtures & T>;
-  /** Run `fn` once before the tests of the enclosing describe block (or file). */
+  /**
+   * Run `fn` once before the tests of the enclosing describe block (or file),
+   * and again when a failed test's retry or a later test starts from a fresh app.
+   */
   beforeAll: (fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
-  /** Run `fn` once after the tests of the enclosing describe block (or file). */
+  /**
+   * Run `fn` once after the tests of the enclosing describe block (or file),
+   * and also before a failed test's retry or a later test starts from a fresh app.
+   */
   afterAll: (fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
   /** Run `fn` before each test of the enclosing describe block (or file). */
   beforeEach: (fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
@@ -881,7 +890,10 @@ export interface DescribeConfigureOptions {
 export interface DescribeFn {
   /** Declare a group of tests; `fn` declares them synchronously. */
   (name: string, fn: () => void): void;
-  /** Declare a focused group: while any test or group is focused, only those run. */
+  /**
+   * Declare a focused group: its siblings in the same describe block (or file)
+   * that are not focused are skipped.
+   */
   only: (name: string, fn: () => void) => void;
   /** Declare a group whose tests are all reported as skipped. */
   skip: (name: string, fn: () => void) => void;
@@ -1142,12 +1154,18 @@ defineStandIns(describe, {
 /** Declare a test: `test(title, async ({ device }) => { … })`. */
 export const test: TestFn = createTestFn(getActiveFixtureRegistry());
 
-/** Run `fn` once before the tests of the enclosing describe block (or file). */
+/**
+ * Run `fn` once before the tests of the enclosing describe block (or file),
+ * and again when a failed test's retry or a later test starts from a fresh app.
+ */
 export function beforeAll(fn: HookFn): void {
   currentContext().beforeAll.push({ fn, location: hookLocation() });
 }
 
-/** Run `fn` once after the tests of the enclosing describe block (or file). */
+/**
+ * Run `fn` once after the tests of the enclosing describe block (or file),
+ * and also before a failed test's retry or a later test starts from a fresh app.
+ */
 export function afterAll(fn: HookFn): void {
   currentContext().afterAll.push({ fn, location: hookLocation() });
 }
