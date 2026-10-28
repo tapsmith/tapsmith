@@ -150,13 +150,14 @@ describe("a not-found error lists the near misses the agent finds", () => {
     (client.findElements as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ requestId: "1", elements: rows, errorMessage: "" }));
     const d = new Device(client, { platform: "android", timeout: 50 });
     const row = () => d.getByText("Row").nth(5);
+    // One at a time: each is started only when it is awaited, so none rejects unobserved.
     for (const failure of [
-      tapsmithExpect(row()).toBeVisible({ timeout: 50 }),
-      tapsmithExpect(row()).toExist({ timeout: 50 }),
-      tapsmithExpect(row()).toHaveCount(1, { timeout: 50 }),
-      row().waitFor({ timeout: 50 }),
+      () => tapsmithExpect(row()).toBeVisible({ timeout: 50 }),
+      () => tapsmithExpect(row()).toExist({ timeout: 50 }),
+      () => tapsmithExpect(row()).toHaveCount(1, { timeout: 50 }),
+      () => row().waitFor({ timeout: 50 }),
     ]) {
-      const message = await err(failure);
+      const message = await err(failure());
       vitestExpect(message).not.toBe("");
       vitestExpect(message).not.toContain(LOCATOR_PICKER_HINT);
     }
