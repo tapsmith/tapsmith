@@ -21,7 +21,7 @@ import { ElementHandle, ELEMENT_HANDLE_BRAND, isStrictModeViolation, isRetryable
 import type { ElementInfo } from "./grpc-client.js";
 import { formatSelector } from "./selectors.js";
 import { ANDROID_ROLE_CLASSES, normalizeRole, type Role } from "./roles.js";
-import { extractStack, getActiveTraceCollector } from "./trace/trace-collector.js";
+import { extractStack, getActiveTraceCollector, isFrameworkFrame } from "./trace/trace-collector.js";
 import { WebViewLocator, WEBVIEW_LOCATOR_BRAND } from "./webview-locator.js";
 import { defineStandIns, notSupportedYet } from "./not-supported.js";
 import { elementAccessibleName } from "./accessible-name.js";
@@ -552,12 +552,10 @@ function createAssertions(
     if (source.stack) {
       const frames = source.stack.split('\n').slice(1);
       // Move user frames (non-Tapsmith-internal) to the top so the test file
-      // location is the first thing developers see.
-      const isInternal = (line: string) =>
-        line.includes('/packages/tapsmith/') ||
-        line.includes('node:internal/');
-      const userFrames = frames.filter((l) => !isInternal(l));
-      const internalFrames = frames.filter((l) => isInternal(l));
+      // location is the first thing developers see — in every install
+      // layout, not only the monorepo's packages/tapsmith (PILOT-841).
+      const userFrames = frames.filter((l) => !isFrameworkFrame(l));
+      const internalFrames = frames.filter((l) => isFrameworkFrame(l));
       const reordered = [...userFrames, ...internalFrames];
       err.stack = `Error: ${message}\n${reordered.join('\n')}`;
     }

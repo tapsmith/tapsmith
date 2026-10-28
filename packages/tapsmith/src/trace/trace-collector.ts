@@ -147,6 +147,49 @@ export function hierarchyArchivePath(actionIndex: number, position: 'before' | '
 const STACK_FRAME_RE = /at\s+(?:.+\s+)?\(?(.+):(\d+):(\d+)\)?$/;
 
 /**
+ * A stack frame's file as a plain forward-slash path: ESM frames reference
+ * modules by file:// URL — the runner loads tests via
+ * import(pathToFileURL(absPath).href), so user-code frames look like
+ * `file:///Users/.../test.ts` — and Windows frames use backslashes.
+ * Undefined for a URL that is not a valid file URL.
+ */
+function frameFilePath(rawFile: string): string | undefined {
+  let file = rawFile;
+  if (file.startsWith('file://')) {
+    try {
+      // Strip any ?query / #fragment first — ESM loaders (tsx, vite, jiti)
+      // append cache-busting queries like `?t=123` to import URLs, and
+      // fileURLToPath would otherwise fold them into the path so the file
+      // can't be found on disk. Clear search/hash on the URL object and let
+      // fileURLToPath do the conversion rather than rebuilding the string.
+      const url = new URL(file);
+      url.search = '';
+      url.hash = '';
+      file = fileURLToPath(url);
+    } catch {
+      return undefined;
+    }
+  }
+  return file.replace(/\\/g, '/');
+}
+
+/**
+ * The SDK's own files, in every layout: `packages/tapsmith/(src|dist)` in the
+ * monorepo, `node_modules/tapsmith/` for npm, yarn and pnpm installs (its
+ * `dist/*.js`, or `src/*.ts` once source maps apply). The `(^|/)` anchor
+ * matches both absolute and relative paths; the `i` flag keeps it robust on
+ * case-insensitive filesystems (macOS/Windows) where the path's casing can
+ * vary with how the project was cloned/navigated. Matching these exact
+ * directories (not bare "tapsmith") avoids misclassifying a user project that
+ * happens to be named "tapsmith".
+ */
+const TAPSMITH_FILE_RE = /(^|\/)(packages\/tapsmith\/(src|dist)|node_modules\/tapsmith)\//i;
+
+function isNodeInternal(file: string): boolean {
+  return file.startsWith('node:') || file.startsWith('internal/');
+}
+
+/**
  * Extract all user-code frames from a stack trace, top frame first.
  * Skips frames inside the tapsmith SDK, node_modules, and node internals.
  */
@@ -155,38 +198,51 @@ export function extractStack(stack: string): SourceLocation[] {
   for (const line of stack.split('\n')) {
     const match = STACK_FRAME_RE.exec(line.trim());
     if (!match) continue;
-    let file = match[1];
-    // ESM stack frames reference modules by file:// URL — the runner loads
-    // tests via import(pathToFileURL(absPath).href), so user-code frames look
-    // like `file:///Users/.../test.ts`. Convert to a plain absolute path so
-    // fs.statSync/readFileSync can later read the file off disk.
-    if (file.startsWith('file://')) {
-      try {
-        // Strip any ?query / #fragment first — ESM loaders (tsx, vite, jiti)
-        // append cache-busting queries like `?t=123` to import URLs, and
-        // fileURLToPath would otherwise fold them into the path so the file
-        // can't be found on disk. Clear search/hash on the URL object and let
-        // fileURLToPath do the conversion rather than rebuilding the string.
-        const url = new URL(file);
-        url.search = '';
-        url.hash = '';
-        file = fileURLToPath(url);
-      } catch {
-        continue;
-      }
-    }
-    file = file.replace(/\\/g, '/');
-    // Filter out frames inside the SDK itself and dependencies. The `(^|/)`
-    // anchor matches both absolute and relative paths; the `i` flag keeps it
-    // robust on case-insensitive filesystems (macOS/Windows) where the path's
-    // casing can vary with how the project was cloned/navigated. Matching
-    // packages/tapsmith/(src|dist) specifically (not bare "tapsmith") avoids
-    // misclassifying a user project that happens to be named "tapsmith".
-    if (/(^|\/)(packages\/tapsmith\/(src|dist)|node_modules)\//i.test(file)) continue;
-    if (file.startsWith('node:') || file.startsWith('internal/')) continue;
+    const file = frameFilePath(match[1]);
+    if (file === undefined) continue;
+    // A source location is the user's own code, so every dependency is
+    // skipped here, not only the SDK.
+    if (TAPSMITH_FILE_RE.test(file) || /(^|\/)node_modules\//i.test(file)) continue;
+    if (isNodeInternal(file)) continue;
     frames.push({ file, line: parseInt(match[2], 10), column: parseInt(match[3], 10) });
   }
   return frames;
+}
+
+/**
+ * The stack lines worth showing a user under a failure (PILOT-841): every
+ * frame except Tapsmith's own and Node's internals, and those with no file
+ * at all (`at new Promise (<anonymous>)`). Third-party dependency frames stay,
+ * as in Playwright's filtered stacks — only the framework hides itself. Lines
+ * that are not frames (`Caused by: …`) stay too. When no frame would be left —
+ * an error raised inside Tapsmith with no test code on the stack, like a
+ * runner timeout — the lines come back unchanged, so a failure never prints
+ * an empty stack.
+ *
+ * Filter before capping how many frames to print: an npm install's
+ * assertion error carries three or more SDK frames above the test's.
+ */
+export function userStackFrames(lines: readonly string[]): string[] {
+  const kept = lines.filter((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('at ')) return true;
+    const match = STACK_FRAME_RE.exec(trimmed);
+    if (!match) return false;
+    const file = frameFilePath(match[1]);
+    return file !== undefined && !TAPSMITH_FILE_RE.test(file) && !isNodeInternal(file);
+  });
+  return kept.some((line) => line.trim().startsWith('at ')) ? kept : [...lines];
+}
+
+/**
+ * Whether one raw stack line is a frame of Tapsmith itself or of Node's
+ * internals — the frames {@link userStackFrames} hides.
+ */
+export function isFrameworkFrame(line: string): boolean {
+  const match = STACK_FRAME_RE.exec(line.trim());
+  if (!match) return false;
+  const file = frameFilePath(match[1]);
+  return file !== undefined && (TAPSMITH_FILE_RE.test(file) || isNodeInternal(file));
 }
 
 /**

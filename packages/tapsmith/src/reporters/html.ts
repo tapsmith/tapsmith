@@ -11,6 +11,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { extractStack } from '../trace/trace-collector.js';
+import { errorStackFrames } from './base.js';
 import type { TapsmithReporter, FullResult } from '../reporter.js';
 import type { TapsmithConfig } from '../config.js';
 type OpenMode = 'always' | 'never' | 'on-failure'
@@ -120,7 +121,7 @@ function generateHtml(
       flaky: t.status === 'passed' && (t.retry ?? 0) > 0,
       duration: t.durationMs,
       error: displayError ? escapeHtml(displayError.message) : null,
-      stack: displayError?.stack ? escapeHtml(displayError.stack.split('\n').slice(1, 6).join('\n')) : null,
+      stack: displayError?.stack ? escapeHtml(errorStackFrames(displayError, 5).join('\n')) || null : null,
       codeSnippet: displayError?.stack ? extractCodeSnippetForHtml(displayError) : null,
       screenshot: screenshotFile,
       trace: traceFile,

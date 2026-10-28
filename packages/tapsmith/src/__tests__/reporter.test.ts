@@ -1048,6 +1048,37 @@ describe('HtmlReporter', () => {
   });
 });
 
+describe('HtmlReporter stack (PILOT-841)', () => {
+  it('shows the user frames under the message, not the SDK frames or the message again', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const os = await import('node:os');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-html-'));
+    const { HtmlReporter } = await import('../reporters/html.js');
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const err = new Error('Expected: 1\nReceived: 2');
+      err.stack = [
+        'Error: Expected: 1',
+        'Received: 2',
+        ...Array.from({ length: 5 }, (_, i) => `    at f${i} (/proj/node_modules/tapsmith/dist/expect.js:${i + 1}:1)`),
+        '    at async Object.fn (/proj/tests/login.test.ts:12:7)',
+      ].join('\n');
+      const reporter = new HtmlReporter({ outputFolder: tmpDir, open: 'never' });
+      reporter.onRunStart!(makeConfig({ rootDir: '/' }), 1);
+      await reporter.onRunEnd!(makeFullResult({
+        tests: [makeTestResult({ status: 'failed', fullName: 'test b', error: err })],
+      }));
+      const html = fs.readFileSync(path.join(tmpDir, 'index.html'), 'utf-8');
+      expect(html).toContain('/proj/tests/login.test.ts:12:7');
+      expect(html).not.toContain('tapsmith/dist/expect.js');
+    } finally {
+      stderrSpy.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+});
+
 describe('BlobReporter', () => {
   it('writes a blob file and can be merged', async () => {
     const fs = await import('node:fs');
@@ -1180,6 +1211,46 @@ describe('base formatting utilities', () => {
     expect(plain.split('\n').filter((l) => l.includes('Received: 2'))).toHaveLength(1);
     expect(plain).toContain('at one (/x/a.js:1:1)');
     expect(plain).toContain('at two (/x/b.js:2:2)');
+  });
+
+  it('formatError shows the user frame of an npm install, not the first three SDK frames (PILOT-841)', async () => {
+    const { formatError } = await import('../reporters/base.js');
+    const err = new Error('Expected element getByText("x") to be visible, but it was not.');
+    err.stack = [
+      `Error: ${err.message}`,
+      '    at fail (/proj/node_modules/tapsmith/src/expect.ts:548:17)',
+      '    at Object.toBeVisible (/proj/node_modules/tapsmith/src/expect.ts:632:9)',
+      '    at async Object.toBeVisible (/proj/node_modules/tapsmith/src/expect.ts:475:7)',
+      '    at async Object.fn (/proj/tests/tabs.tapsmith.ts:6:5)',
+      '    at async testFn (/proj/node_modules/tapsmith/dist/runner.js:2167:33)',
+      '    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)',
+    ].join('\n');
+    const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('at async Object.fn (/proj/tests/tabs.tapsmith.ts:6:5)');
+    expect(plain).not.toContain('expect.ts');
+    expect(plain).not.toContain('runner.js');
+    expect(plain).not.toContain('node:internal');
+  });
+
+  it('formatError caps the user frames at three', async () => {
+    const { formatError } = await import('../reporters/base.js');
+    const err = new Error('boom');
+    err.stack = ['Error: boom', ...[1, 2, 3, 4].map((n) => `    at f${n} (/proj/tests/h${n}.ts:${n}:1)`)].join('\n');
+    const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('h3.ts');
+    expect(plain).not.toContain('h4.ts');
+  });
+
+  it('formatError still prints frames for an error with no user frame (a runner timeout)', async () => {
+    const { formatError } = await import('../reporters/base.js');
+    const err = new Error('Test timed out after 90000ms');
+    err.stack = [
+      'Error: Test timed out after 90000ms',
+      '    at Timeout.check (/proj/node_modules/tapsmith/dist/runner.js:1701:115)',
+      '    at listOnTimeout (node:internal/timers:585:17)',
+    ].join('\n');
+    const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('at Timeout.check (/proj/node_modules/tapsmith/dist/runner.js:1701:115)');
   });
 
   it('formatError renders the snippet from the user frame, skipping npm-installed framework frames', async () => {
