@@ -17,7 +17,7 @@ This guide is for teams with a Maestro suite who want to move it to Tapsmith. It
 |---|---|
 | Flow file (`login.yaml`) | Test file (`login.tapsmith.ts`) containing one or more [`test()`](api-reference.md#testname-string-fn-fixtures-testfixtures--promisevoid-void) calls |
 | `appId:` in the flow header | `package` in [`tapsmith.config.ts`](configuration.md) (one config for the whole suite) |
-| `tapOn: "Sign in"` | [`device.getByText("Sign in").tap()`](api-reference.md#elementhandletapoptions-promisevoid), or better [`device.getByRole("button", { name: "Sign in" }).tap()`](api-reference.md#devicegetbyrolerole-string-options-elementhandle) |
+| `tapOn: "Sign in"` | [`device.getByText("Sign in").tap()`](api-reference.md#elementhandletapoptions-promisevoid), or better [`device.getByRole("button", { name: "Sign in" }).tap()`](api-reference.md#devicegetbyrolerole-role-options-elementhandle) |
 | `tapOn: { id: "email-input" }` | [`device.getByTestId("email-input").tap()`](api-reference.md#devicegetbytestidtestid-string-elementhandle) |
 | `tapOn: { point: "50%,50%" }` | [`device.tapXY(x, y)`](api-reference.md#devicetapxyx-number-y-number-promisevoid) (in screen coordinates, not percentages: pixels on Android, points on iOS) |
 | `doubleTapOn` / `longPressOn` | [`.doubleTap()`](api-reference.md#elementhandledoubletapoptions-promisevoid) / [`.longPress()`](api-reference.md#elementhandlelongpressoptions-promisevoid) |
@@ -26,10 +26,10 @@ This guide is for teams with a Maestro suite who want to move it to Tapsmith. It
 | `assertVisible` / `assertNotVisible` | [`await expect(locator).toBeVisible()`](api-reference.md#tobevisibleoptions-promisevoid) / [`.toBeHidden()`](api-reference.md#tobehiddenoptions-promisevoid) |
 | `extendedWaitUntil` | `expect(locator).toBeVisible({ timeout: 60_000 })`, or [`locator.waitFor()`](api-reference.md#elementhandlewaitforoptions-promisevoid) |
 | `assertTrue` | [`expect(value)`](api-reference.md#expectvalue-unknown-genericassertions) with any generic matcher, or [`expect.poll()`](api-reference.md#expectpollfn---unknown--promiseunknown-options-polloptions-genericassertions) for a value that changes |
-| `scroll` / `swipe` | [`device.swipe("up")`](api-reference.md#deviceswipedirection-string-options-swipeoptions-promisevoid), or [`locator.scroll()`](api-reference.md#elementhandlescrolldirection-string-options-promisevoid) on a scroll view |
-| `scrollUntilVisible` | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid) |
+| `scroll` / `swipe` | [`device.swipe("up")`](api-reference.md#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid), or [`locator.scroll()`](api-reference.md#elementhandlescrolldirection-swipedirection-options-promisevoid) on a scroll view |
+| `scrollUntilVisible` | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid) |
 | `hideKeyboard` | [`device.hideKeyboard()`](api-reference.md#devicehidekeyboard-promisevoid) |
-| `back` / `pressKey` | [`device.pressBack()`](api-reference.md#devicepressback-promisevoid-android-only) (Android) / [`device.pressKey(key)`](api-reference.md#devicepresskeykey-string-promisevoid) |
+| `back` / `pressKey` | [`device.pressBack()`](api-reference.md#devicepressback-promisevoid-android-only) (Android) / [`device.pressKey(key)`](api-reference.md#devicepresskeykey-devicekey-promisevoid) |
 | `openLink` | [`device.openDeepLink(url)`](api-reference.md#deviceopendeeplinkuri-string-options-opendeeplinkoptions-promisevoid) |
 | `launchApp` | Automatic before each test file; [`device.launchApp(pkg)`](api-reference.md#devicelaunchapppackagename-string-options-launchappoptions-promisevoid) when you need it mid-test |
 | `launchApp: { clearState: true }` / `clearState` | The default [`appReset`](writing-tests.md#test-isolation) policy; [`device.resetApp({ mode: "clear" })`](api-reference.md#deviceresetappoptions-promiseappresetresult) mid-test |

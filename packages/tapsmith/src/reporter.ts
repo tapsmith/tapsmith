@@ -14,16 +14,21 @@ import type { TestResult, SuiteResult } from './runner.js';
 
 // ─── Reporter types ───
 
+/** The whole run's outcome, passed to `onRunEnd()`. */
 export interface FullResult {
+  /** `'failed'` if any test failed, `'passed'` otherwise. */
   status: 'passed' | 'failed'
   /** Total wall-clock time including setup and tests. */
   duration: number
   /** Time spent on device provisioning, APK install, agent startup, etc. */
   setupDuration?: number
+  /** Every test's result, flat. */
   tests: TestResult[]
+  /** One root suite per test file, its describe blocks nested under it. */
   suites: SuiteResult[]
 }
 
+/** Extra context for `onRunStart()`. */
 export interface RunStartInfo {
   /**
    * True when `tapsmith merge-reports` is replaying shards' blob reports: no
@@ -37,14 +42,30 @@ export interface TestStartInfo {
   project?: string
 }
 
+/**
+ * A custom reporter: implement the callbacks you need. Each is optional and
+ * is called as the run progresses; a callback that throws is logged and
+ * does not stop the run.
+ */
 export interface TapsmithReporter {
+  /** Called once before any test runs, with the resolved config and the number of test files. */
   onRunStart?(config: TapsmithConfig, fileCount: number, info?: RunStartInfo): void
+  /** Called when a test file starts running. */
   onTestFileStart?(filePath: string): void
+  /** Called when a test starts, with its full title (describe titles joined with " > "). */
   onTestStart?(fullName: string, filePath?: string, info?: TestStartInfo): void
+  /** Called when a test ends, with its result. */
   onTestEnd?(test: TestResult): void
+  /** Called when a test file finishes, with its tests' results. */
   onTestFileEnd?(filePath: string, results: TestResult[]): void
+  /**
+   * Called when a file is run again from the start after an infrastructure
+   * error; the `discardedCount` results already reported for it are replaced.
+   */
   onTestFileRetry?(filePath: string, discardedCount: number): void
+  /** Called once after the last test; the run waits for a returned promise. */
   onRunEnd?(result: FullResult): Promise<void> | void
+  /** Called for an error that is not a test's own failure. */
   onError?(error: Error): void
 }
 

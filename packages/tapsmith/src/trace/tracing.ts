@@ -20,6 +20,7 @@ import * as os from 'node:os';
 
 // ─── Types ───
 
+/** Options for `device.tracing.start()`. */
 export interface TracingStartOptions {
   /** Enable screenshot capture. Default: true. */
   screenshots?: boolean
@@ -31,6 +32,7 @@ export interface TracingStartOptions {
   title?: string
 }
 
+/** Options for `device.tracing.stop()`. */
 export interface TracingStopOptions {
   /** Path to write the trace zip. If not specified, uses default output dir. */
   path?: string
@@ -38,6 +40,10 @@ export interface TracingStopOptions {
 
 // ─── Tracing class ───
 
+/**
+ * Record a trace programmatically (`device.tracing`), as Playwright's
+ * `context.tracing` does, in addition to the config's `trace` option.
+ */
 export class Tracing {
   private _collector: TraceCollector | null = null;
   private _startTime = 0;

@@ -23,7 +23,8 @@ import {
   _xpath,
   _label,
 } from './selectors.js';
-import { iosUnnamedRoleMissHint, unknownRoleMessage } from './roles.js';
+import { iosUnnamedRoleMissHint, unknownRoleMessage, type Role } from './roles.js';
+import type { SwipeDirection } from './input-names.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
@@ -39,10 +40,15 @@ import { elementAccessibleName } from './accessible-name.js';
 
 // ─── Public types ───
 
+/** An element's position and size on screen, in logical points. */
 export interface BoundingBox {
+  /** Left edge. */
   x: number;
+  /** Top edge. */
   y: number;
+  /** Width. */
   width: number;
+  /** Height. */
   height: number;
 }
 
@@ -98,6 +104,7 @@ export interface LocatorOptions {
 
 // ─── Filter options for .filter() ───
 
+/** Options for `locator.filter()`: each one narrows the matches further. */
 export interface FilterOptions {
   /** Keep elements whose text contains this string or matches this RegExp. */
   hasText?: string | RegExp;
@@ -808,6 +815,13 @@ function isStaleElementError(message: string | undefined): boolean {
 /** @internal Brand key for cross-instance type checks (CJS/ESM dual-package). */
 export const ELEMENT_HANDLE_BRAND = Symbol.for('tapsmith.ElementHandle');
 
+/**
+ * A locator: a lazy query for an element, as in Playwright. Building one
+ * looks nothing up; each action or assertion resolves it afresh, auto-waits
+ * for the element up to the timeout, and throws on more than one match
+ * (strict mode). Tap-like actions (`tap`, `doubleTap`, `longPress`,
+ * `setChecked`) also wait for it to be enabled and uncovered.
+ */
 export class ElementHandle {
   /** @internal */
   readonly [ELEMENT_HANDLE_BRAND] = true;
@@ -852,8 +866,12 @@ export class ElementHandle {
     return this._scoped(options?.exact ? _text(text) : _textContains(text));
   }
 
-  /** Locate a descendant by accessibility role, optionally filtering by name or state. */
-  getByRole(role: string, options?: RoleLocatorOptions): ElementHandle {
+  /**
+   * Locate a descendant by accessibility role, optionally filtering by name or
+   * state. Takes the same role names as `device.getByRole()`; lazy, like
+   * every locator.
+   */
+  getByRole(role: Role | (string & {}), options?: RoleLocatorOptions): ElementHandle {
     return this._scoped(_role(role, options));
   }
 
@@ -2130,7 +2148,8 @@ export class ElementHandle {
    * modifier applies — filter/and/or/scope and the positional index — so
    * `first().count()` is 1 or 0, like Playwright. Always a live read: on a
    * handle from `all()` (a plain `nth(i)` locator) it is 1 while a row is at
-   * that index and 0 once the list has shrunk.
+   * that index and 0 once the list has shrunk. Does not wait for matches: to
+   * wait for a number of them, use `expect(locator).toHaveCount(n)`.
    */
   count(): Promise<number>;
   // The arguments are only checked (PILOT-840): under tsx an option passed
@@ -2157,7 +2176,8 @@ export class ElementHandle {
    * the action it guards always describe the same element — whatever is at
    * index `i` when each runs (PILOT-346). Every modifier applies, as for
    * `count()`: `list.first().all()` (or `.nth(i)`/`.last()`) is that one
-   * positional locator, or an empty array.
+   * positional locator, or an empty array. Like `count()`, it reads the
+   * screen as it is now and does not wait for matches.
    */
   all(): Promise<ElementHandle[]>;
   // The arguments are only checked (PILOT-840): under tsx an option passed
@@ -2650,6 +2670,11 @@ export class ElementHandle {
    * the whole call (defaults to the device timeout).
    */
   longPress(duration?: number, options?: TimeoutOptions): Promise<void>;
+  /**
+   * Long-press this element, once it is enabled and nothing covers it, for
+   * `duration` milliseconds (the agent's default when omitted). `timeout`
+   * bounds the whole call, auto-wait included (default: the device timeout).
+   */
   longPress(options: TimeoutOptions & { duration?: number }): Promise<void>;
   async longPress(
     options?: number | (TimeoutOptions & { duration?: number }),
@@ -2750,13 +2775,14 @@ export class ElementHandle {
   }
 
   /**
-   * Scroll inside this element in `direction`.
+   * Scroll inside this element in `direction`: the way the view scrolls, so
+   * `"down"` reveals what is below (the opposite of `device.swipe()`).
    *
    * @param options.distance - Fraction of the element to scroll across.
    * @param options.timeout - Maximum time in milliseconds for the whole call,
    *   auto-wait included. Defaults to the device timeout.
    */
-  async scroll(direction: string, options?: TimeoutOptions & { distance?: number }): Promise<void> {
+  async scroll(direction: SwipeDirection | (string & {}), options?: TimeoutOptions & { distance?: number }): Promise<void> {
     const call = this._forCall('scroll()', options, ['distance', 'timeout']);
     if (call !== this) return call.scroll(direction, { distance: options?.distance });
     const { target, remainingMs } = await this._tracedResolve('scroll', 'scroll', async () => {
@@ -3145,7 +3171,8 @@ export class ElementHandle {
   }
 
   /**
-   * Draw a highlight over this element on the device (a debugging aid).
+   * Draw a highlight over this element on the device (a debugging aid),
+   * once it is present (waits up to the device timeout).
    *
    * @param options.durationMs - How long the highlight stays, in milliseconds.
    */
@@ -3516,7 +3543,7 @@ export class ElementHandle {
    * @param options.speed - Swipe speed in pixels/second. Default `2000`.
    */
   async scrollIntoView(options?: {
-    direction?: string;
+    direction?: SwipeDirection | (string & {});
     maxScrolls?: number;
     speed?: number;
   }): Promise<void> {

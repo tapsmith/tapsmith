@@ -18,8 +18,7 @@
 
 // ─── Role set ───
 
-/** Canonical native role names, sorted. */
-export const NATIVE_ROLES: readonly string[] = [
+const NATIVE_ROLE_NAMES = [
   'alert',
   'button',
   'checkbox',
@@ -49,13 +48,19 @@ export const NATIVE_ROLES: readonly string[] = [
   'textfield',
   'timer',
   'toolbar',
-];
+] as const;
+
+/** A canonical native role name, as `getByRole()` and `toHaveRole()` take it. */
+export type NativeRole = typeof NATIVE_ROLE_NAMES[number];
+
+/** Canonical native role names, sorted. */
+export const NATIVE_ROLES: readonly string[] = NATIVE_ROLE_NAMES;
 
 /**
  * Cross-platform aliases: the React Native spelling → the canonical role.
  * Both agents normalize these the same way.
  */
-export const ROLE_ALIASES: Readonly<Record<string, string>> = {
+const ROLE_ALIAS_MAP = {
   header: 'heading',
   slider: 'seekbar',
   // React Native's spelling of the search field role. On Android RN
@@ -64,7 +69,18 @@ export const ROLE_ALIASES: Readonly<Record<string, string>> = {
   search: 'searchfield',
   // React Native's and ARIA's spelling of a radio button (PILOT-664).
   radio: 'radiobutton',
-};
+} as const satisfies Record<string, NativeRole>;
+
+/** Cross-platform role aliases (React Native spellings), by alias. */
+export const ROLE_ALIASES: Readonly<Record<string, string>> = ROLE_ALIAS_MAP;
+
+/**
+ * A role name `getByRole()` and `toHaveRole()` accept: a native role or one of
+ * its React Native aliases (`header`, `slider`, `search`, `radio`). Matching is
+ * case-insensitive. `getByRole()` throws at once on an unknown role, with the
+ * supported list.
+ */
+export type Role = NativeRole | keyof typeof ROLE_ALIAS_MAP;
 
 /**
  * Playwright ARIA (and React Native) role names whose native counterpart has

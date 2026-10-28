@@ -20,7 +20,7 @@
 import { ElementHandle, ELEMENT_HANDLE_BRAND, isStrictModeViolation, isRetryableResolutionError, isStaleSnapshotError, POLL_INTERVAL_MS } from "./element-handle.js";
 import type { ElementInfo } from "./grpc-client.js";
 import { formatSelector } from "./selectors.js";
-import { ANDROID_ROLE_CLASSES, normalizeRole } from "./roles.js";
+import { ANDROID_ROLE_CLASSES, normalizeRole, type Role } from "./roles.js";
 import { extractStack, getActiveTraceCollector } from "./trace/trace-collector.js";
 import { WebViewLocator, WEBVIEW_LOCATOR_BRAND } from "./webview-locator.js";
 import { defineStandIns, notSupportedYet } from "./not-supported.js";
@@ -158,6 +158,11 @@ const CLASS_TO_ROLE_MAP: Record<string, string> = (() => {
 
 // ─── Assertion object ───
 
+/**
+ * Assertions on a native locator, from `expect(locator)`. Each one retries
+ * until it passes or its `timeout` runs out (default: the device timeout),
+ * re-resolving the locator every time, as Playwright's web-first assertions do.
+ */
 export interface TapsmithAssertions {
   /** Negate the following assertion. */
   not: TapsmithAssertions;
@@ -230,7 +235,7 @@ export interface TapsmithAssertions {
   ): Promise<void>;
 
   /** Assert the element has a specific accessibility role. */
-  toHaveRole(role: string, options?: { timeout?: number }): Promise<void>;
+  toHaveRole(role: Role | (string & {}), options?: { timeout?: number }): Promise<void>;
 
   /** Assert an input field contains a specific value. */
   toHaveValue(value: string, options?: { timeout?: number }): Promise<void>;
@@ -1102,6 +1107,11 @@ function classNameToRole(className: string): string {
 
 // ─── PILOT-42: Generic value assertions ───
 
+/**
+ * Assertions on a plain value. From `expect(value)` they check once and do
+ * not wait. From `expect.poll(fn)` each one re-runs `fn` until it passes or
+ * the poll's timeout runs out, and returns a promise to `await`.
+ */
 export interface GenericAssertions {
   /** Negate the following assertion. */
   not: GenericAssertions;
@@ -1639,8 +1649,11 @@ function createSoftGenericAssertions(actual: unknown, negated: boolean): Generic
 
 // ─── PILOT-44: Poll assertions ───
 
+/** Options for `expect.poll()`. */
 export interface PollOptions {
+  /** How long to keep retrying, in milliseconds. Default 5000. */
   timeout?: number;
+  /** Milliseconds to wait between tries, in order; the last one repeats. Default `[250]`. */
   intervals?: number[];
 }
 
@@ -1732,15 +1745,27 @@ function createPollAssertions(
 
 // ─── WebView Assertions (PILOT-116) ───
 
+/**
+ * Assertions on a WebView locator, from `expect(webview.locator(…))`. Each one
+ * retries until it passes or its `timeout` runs out (default: the locator's
+ * timeout), re-querying the DOM every time.
+ */
 export interface WebViewAssertions {
+  /** Negate the following assertion. */
   not: WebViewAssertions;
   /** With `visible: false`, asserts the element is hidden, like toBeHidden(). */
   toBeVisible(options?: { timeout?: number; visible?: boolean }): Promise<void>;
+  /** Assert the element is hidden or not in the DOM. */
   toBeHidden(options?: { timeout?: number }): Promise<void>;
+  /** Assert the element is in the DOM, visible or not. */
   toExist(options?: { timeout?: number }): Promise<void>;
+  /** Assert the element's text equals `expected` (a string) or matches it (a RegExp). */
   toHaveText(expected: string | RegExp, options?: { timeout?: number }): Promise<void>;
+  /** Assert the element's text contains `expected` (a string) or matches it (a RegExp). */
   toContainText(expected: string | RegExp, options?: { timeout?: number }): Promise<void>;
+  /** Assert the element's attribute `name` equals `value`. */
   toHaveAttribute(name: string, value: string, options?: { timeout?: number }): Promise<void>;
+  /** Assert an input's value equals `expected`. */
   toHaveValue(expected: string, options?: { timeout?: number }): Promise<void>;
 }
 
@@ -2081,10 +2106,13 @@ function isWebViewLocator(value: unknown): value is WebViewLocator {
 }
 
 /**
- * Create assertions for an ElementHandle, WebViewLocator, or a plain value.
+ * Assertions on a native locator. They auto-wait: each retries until it
+ * passes or its timeout runs out (default: the device timeout).
  */
 export function expect(handle: ElementHandle): TapsmithAssertions;
+/** Assertions on a WebView locator. They auto-wait, as native ones do. */
 export function expect(locator: WebViewLocator): WebViewAssertions;
+/** Assertions on a plain value. They check once; `expect.poll()` retries. */
 export function expect(value: unknown): GenericAssertions;
 export function expect(value: unknown): TapsmithAssertions | WebViewAssertions | GenericAssertions {
   if (isElementHandle(value)) {

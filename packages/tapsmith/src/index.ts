@@ -24,6 +24,8 @@ export {
   type LocatorOptions,
 } from './element-handle.js';
 export type { TimeoutOptions } from './action-options.js';
+export type { SwipeDirection, DeviceKey } from './input-names.js';
+export type { Role, NativeRole } from './roles.js';
 
 // Assertions
 export { expect, flushSoftErrors, type TapsmithAssertions, type WebViewAssertions, type GenericAssertions, type PollOptions } from './expect.js';

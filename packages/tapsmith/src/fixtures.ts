@@ -13,6 +13,7 @@ import type { APIRequestContext } from './api-request.js';
 
 // ─── Types ───
 
+/** How long a fixture's value lives: one test (`'test'`) or the whole worker (`'worker'`). */
 export type FixtureScope = 'test' | 'worker'
 
 /** The `use` callback provided to fixture functions. */
@@ -50,8 +51,11 @@ export interface ResolvedFixture<T = unknown> {
 
 // ─── Built-in fixtures ───
 
+/** The fixtures Tapsmith provides to every test. */
 export interface BuiltinFixtures {
+  /** The device under test. */
   device: Device
+  /** An HTTP client for calling APIs from a test (Playwright's `request`). */
   request: APIRequestContext
 }
 

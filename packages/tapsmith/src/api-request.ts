@@ -13,6 +13,7 @@ import { getActiveTraceCollector, extractStack } from './trace/trace-collector.j
 
 // ─── Types ───
 
+/** Options for one `request.get()` / `post()` / … call. */
 export interface APIRequestOptions {
   /** Request body. Objects are JSON-serialized automatically. */
   data?: unknown
@@ -33,10 +34,15 @@ export interface APIRequestOptions {
  * times (unlike the native single-read `Response` stream).
  */
 export class TapsmithAPIResponse {
+  /** The HTTP status code. */
   readonly status: number;
+  /** The HTTP status text. */
   readonly statusText: string;
+  /** Whether the status is in the 200–299 range. */
   readonly ok: boolean;
+  /** The final URL of the response, after redirects. */
   readonly url: string;
+  /** The response headers. */
   readonly headers: Headers;
 
   private _body: Buffer;

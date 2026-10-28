@@ -51,9 +51,11 @@ Any other value (a number, `null`, …) throws a `TypeError`.
 
 > Because the default is a case-insensitive substring match, `getByText("Sign in")` also matches longer or differently-cased text like `"Sign in to continue"` or a `"SIGN IN"` heading. When that happens, acting on the locator throws a [strict mode](#strict-mode) violation — add `{ exact: true }` or use `getByRole(role, { name, exact: true })` to pin a single element.
 
-### `device.getByRole(role: string, options?): ElementHandle`
+### `device.getByRole(role: Role, options?): ElementHandle`
 
 Locate an element by its accessibility role, optionally filtered by accessible name or state.
+
+`role` is typed as [`Role`](api-reference.md#role-swipedirection-and-devicekey), so your editor autocompletes the native role names and their aliases. Any other string still compiles; at run time an unknown role throws at once with the supported list, and matching is case-insensitive.
 
 ```typescript
 device.getByRole("button", { name: "Submit" })
@@ -218,9 +220,9 @@ if (device.platform === "android") {
 }
 ```
 
-### `device.swipe(direction: string, options?: SwipeOptions): Promise<void>`
+### `device.swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<void>`
 
-Perform a swipe gesture across the screen in the given direction.
+Perform a swipe gesture across the screen in the given direction: `"up"`, `"down"`, `"left"` or `"right"` (the way the finger moves, so `"up"` reveals what is below; case-insensitive). See [`SwipeDirection`](api-reference.md#role-swipedirection-and-devicekey).
 
 On Android, `swipe()` (like `dragXY()`) returns once any scrolling it started has come to rest: it waits until no scroll along the swipe's axis has been reported for 300 ms, at most 3 s. A scroll view that is still flinging takes the next touch as "stop scrolling", so a `tap()` made straight after the swipe would otherwise be lost.
 
@@ -237,15 +239,31 @@ await device.swipe("left", { speed: 500, distance: 0.5 });
 | `distance` | `number` | Swipe distance as a fraction of screen size (0-1) |
 | `timeoutMs` | `number` | Override the default timeout |
 
-### `device.pressKey(key: string): Promise<void>`
+### `device.pressKey(key: DeviceKey): Promise<void>`
 
-Press a device key.
+Press a device key by name, case-insensitive. The names are typed as [`DeviceKey`](api-reference.md#role-swipedirection-and-devicekey) for autocompletion; any other string still compiles, since Android also takes a numeric key code (`"66"`) and iOS a single character to type. A name the platform does not support throws.
 
 ```typescript
 await device.pressKey("ENTER");
 await device.pressKey("HOME");
 await device.pressKey("VOLUME_UP");
 ```
+
+### Role, SwipeDirection and DeviceKey
+
+The role, direction and key parameters are typed as unions of their known names, so your editor autocompletes them. Each parameter also takes any other string (it is typed `Role | (string & {})` and so on). `getByRole()` throws at once on an unknown role; `toHaveRole()` does not check the name, it compares it with the element's role; the agents reject an unknown direction or key when the action runs.
+
+```typescript
+import type { DeviceKey, Role, SwipeDirection } from "tapsmith";
+```
+
+| Type | Used by | Names |
+|---|---|---|
+| `Role` | `getByRole()`, `toHaveRole()` | The native roles in the [role table](locators.md#getbyrolerole--name-), plus the React Native aliases `header`, `slider`, `search` and `radio`. Also exported: `NativeRole`, the native roles alone. |
+| `SwipeDirection` | `device.swipe()`, `scroll()`, `scrollIntoView({ direction })` | `"up"`, `"down"`, `"left"`, `"right"` |
+| `DeviceKey` | `device.pressKey()` | `BACK`, `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `FORWARD_DELETE`, `ESCAPE` / `ESC`, `MENU`, `SEARCH`, `VOLUME_UP`, `VOLUME_DOWN`, `POWER`, `CAMERA`, `DPAD_UP`, `DPAD_DOWN`, `DPAD_LEFT`, `DPAD_RIGHT`, `DPAD_CENTER`, `SPACE`, `RECENTS` / `APP_SWITCH` |
+
+All names are case-insensitive. `device.swipe()` and `scrollIntoView()` take the way the finger moves (`"up"` reveals what is below), while `scroll()` takes the way the view scrolls (`"down"` reveals what is below). Every `DeviceKey` works on Android. iOS supports `HOME`, `ENTER` / `RETURN`, `TAB`, `DELETE` / `BACKSPACE`, `ESCAPE` / `ESC` (which submits, like `ENTER`), `SPACE` and `BACK` (which taps the navigation bar's back button), and types any single character.
 
 ### `device.pressBack(): Promise<void>` *(Android only)*
 
@@ -299,7 +317,7 @@ const screenshot = await device.takeScreenshot();
 
 ### `device.waitForIdle(timeoutMs?: number): Promise<void>`
 
-Wait until the device UI is idle (no animations, no pending layout passes). Uses the configured default timeout if none is specified.
+Give the app's UI a moment to settle. On Android it waits for accessibility events to go quiet, up to `timeoutMs` (the configured default timeout if none is specified); on iOS it pauses briefly (a quarter of a second at most). It does not prove the screen is idle, so wait for what you need with an assertion.
 
 ```typescript
 await device.waitForIdle();
@@ -385,7 +403,7 @@ back to a cold relaunch with the URL.
 
 ### `device.currentPackage(): Promise<string>`
 
-Returns the package name of the foreground app.
+Returns the package name of the foreground app. On iOS it always returns the configured app's bundle ID, whichever app is in front.
 
 ```typescript
 const pkg = await device.currentPackage(); // "com.example.myapp"
@@ -425,7 +443,7 @@ await device.sendToBackground();
 
 ### `device.bringToForeground(packageName: string): Promise<void>`
 
-Bring a backgrounded app back to the foreground.
+Bring the app back to the foreground. On Android this resumes a backgrounded app (or launches it if it is stopped). On iOS it relaunches the app, so in-memory state such as form input and the navigation stack is lost.
 
 ```typescript
 await device.bringToForeground("com.example.myapp");
@@ -1139,7 +1157,7 @@ await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });
 
 The app's `keyboardShouldPersistTaps` can't be seen from outside it, so a scroll view set to `"handled"` or `"always"`, whose taps would have got through, gets the same treatment. A list that only shows while the keyboard is up or the field has focus (React Native suggestions) can close before its row is tapped: on iOS because the field loses focus, on Android if the list hides when the keyboard does. To tap such a row with the keyboard up, tap its coordinates: `const box = (await row.boundingBox())!; await device.tapXY(box.x + box.width / 2, box.y + box.height / 2);`. Before Android 11 (API 30), React Native may still swallow the tap while the field has focus, even with the keyboard gone; submit the field from the keyboard (`device.pressKey("enter")`) there instead.
 
-**Off-screen elements.** Unlike a Playwright click, a tap does not scroll its element into view. This is by design, so taps behave the same on both platforms: Android's accessibility tree generally holds only on-screen elements, so a tap there cannot see a row that is scrolled away, let alone scroll to it. Scroll to the element first with [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid), then tap it:
+**Off-screen elements.** Unlike a Playwright click, a tap does not scroll its element into view. This is by design, so taps behave the same on both platforms: Android's accessibility tree generally holds only on-screen elements, so a tap there cannot see a row that is scrolled away, let alone scroll to it. Scroll to the element first with [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid), then tap it:
 
 ```typescript
 const row = device.getByText("Item 40", { exact: true });
@@ -1228,17 +1246,17 @@ await device.locator({ id: "search_box" }).clear();
 > field can't hang the agent. Android uses the native `UiObject2.clear()`
 > API and isn't subject to this limit.
 
-#### `elementHandle.scroll(direction: string, options?): Promise<void>`
+#### `elementHandle.scroll(direction: SwipeDirection, options?): Promise<void>`
 
-Scroll this element in the given direction. Options: `distance` (below) and the [per-call timeout](#per-call-timeout).
+Scroll this element in the given direction: the way the view scrolls, so `"down"` reveals what is below (the opposite of `device.swipe()`). Options: `distance` (below) and the [per-call timeout](#per-call-timeout).
 
 ```typescript
 await device.getByTestId("product-list").scroll("down"); // a FlatList with testID="product-list"
 ```
 
-The device agents don't apply `distance` yet: each call scrolls by a fixed step of the element's size, whatever `distance` says. To reach a particular element, use [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid).
+The device agents don't apply `distance` yet: each call scrolls by a fixed step of the element's size, whatever `distance` says. To reach a particular element, use [`scrollIntoView()`](#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid).
 
-#### `elementHandle.scrollIntoView(options?: { direction?: string; maxScrolls?: number; speed?: number }): Promise<void>`
+#### `elementHandle.scrollIntoView(options?: { direction?: SwipeDirection; maxScrolls?: number; speed?: number }): Promise<void>`
 
 Scroll the viewport until this element is visible on screen. Useful for reaching elements that are below the fold in a scrollable container.
 
@@ -1708,7 +1726,7 @@ Assert that the element has the given accessible description. On Android, this m
 await expect(device.getByRole("image")).toHaveAccessibleDescription("Profile photo");
 ```
 
-#### `.toHaveRole(role: string, options?): Promise<void>`
+#### `.toHaveRole(role: Role, options?): Promise<void>`
 
 Assert that the element has a specific accessibility role.
 
@@ -3455,7 +3473,7 @@ await expect(webview.getByText("Welcome back")).toBeVisible()
 
 #### `webview.close(): Promise<void>`
 
-Close the WebView connection. Usually called via `device.native()` instead.
+Close the WebView connection. `device.native()` switches back to the native context but keeps the connection open for reuse; the runner closes it at the end of the test file.
 
 ### WebViewLocator
 

@@ -18,6 +18,7 @@ import type { ReporterConfig } from './reporter.js';
 import type { TraceMode, TraceConfig } from './trace/types.js';
 import type { VideoMode, VideoConfig } from './video/types.js';
 
+/** When to save a screenshot at the end of a test (the config's `screenshot`). */
 export type ScreenshotMode = 'always' | 'only-on-failure' | 'never';
 export type DeviceStrategy = 'prefer-connected' | 'avd-only';
 /** How the app is reset before tests — see {@link TapsmithConfig.appReset}. */
@@ -51,6 +52,7 @@ export interface DeviceGroupEntry {
   device?: string;
 }
 
+/** The configuration `tapsmith.config.ts` exports with `defineConfig()`. */
 export interface TapsmithConfig {
   /**
    * Target platform. Required for iOS; defaults to Android behavior when unset.
@@ -429,6 +431,7 @@ export function effectiveConfigForProject(
 
 // ─── Projects ───
 
+/** One entry of the config's `projects`: a named set of tests with its own options. */
 export interface ProjectConfig {
   /** Unique project name, used for dependency references and reporter output. */
   name: string;
@@ -2005,6 +2008,11 @@ async function importConfigModuleWithTsx(configPath: string, nativeError: unknow
   }
 }
 
+/**
+ * Load and validate the Tapsmith config: `configFile` (relative to `dir`), or
+ * the `tapsmith.config.*` file found in `dir` (default: the working directory),
+ * or the defaults when there is none.
+ */
 export async function loadConfig(dir?: string, configFile?: string): Promise<TapsmithConfig> {
   const root = dir ?? process.cwd();
 
