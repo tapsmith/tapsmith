@@ -125,7 +125,12 @@ export async function runBounded<T>(fn: () => Promise<T>, o: BoundedRunOptions):
             ));
             return;
           }
-          timer = setTimeout(check, Math.min(1_000, timeoutMs));
+          // Re-arm for what is left of the budget, not a whole budget: a
+          // timer may fire a millisecond before Date.now() says its delay has
+          // passed, and a full re-arm then let a run overrun by up to the
+          // whole budget again and finish as if it had been in time.
+          const remainingMs = Math.min(timeoutMs - countedMs, timeoutMs * WALL_CAP_MULTIPLIER - wallMs);
+          timer = setTimeout(check, Math.max(1, Math.min(1_000, remainingMs)));
         };
         timer = setTimeout(check, Math.min(1_000, timeoutMs));
       }),
