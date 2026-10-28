@@ -144,6 +144,53 @@ describe("a not-found error lists the near misses the agent finds", () => {
     vitestExpect(evaluateSelectors).not.toHaveBeenCalled();
   });
 
+  it("says nothing more after an out-of-range nth() in assertions and waitFor either", async () => {
+    const rows = [element("a", "Row 1"), element("b", "Row 2", 100)];
+    const { client, evaluateSelectors } = missingClient();
+    (client.findElements as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ requestId: "1", elements: rows, errorMessage: "" }));
+    const d = new Device(client, { platform: "android", timeout: 50 });
+    const row = () => d.getByText("Row").nth(5);
+    for (const failure of [
+      tapsmithExpect(row()).toBeVisible({ timeout: 50 }),
+      tapsmithExpect(row()).toExist({ timeout: 50 }),
+      tapsmithExpect(row()).toHaveCount(1, { timeout: 50 }),
+      row().waitFor({ timeout: 50 }),
+    ]) {
+      const message = await err(failure);
+      vitestExpect(message).not.toBe("");
+      vitestExpect(message).not.toContain(LOCATOR_PICKER_HINT);
+    }
+    vitestExpect(evaluateSelectors).not.toHaveBeenCalled();
+  });
+
+  it("keeps a no-wait read to one read: no near-miss check, the picker only", async () => {
+    const { client, evaluateSelectors } = missingClient(() => [element("x", "Allow")]);
+    // A device timeout of 0 is the explicit no-wait mode (an action's
+    // { timeout: 0 } is refused).
+    const d = new Device(client, { platform: "ios", timeout: 0 });
+    vitestExpect(await err(d.getByText("Allow", { exact: true }).find())).toBe(
+      `Element not found: getByText("Allow", { exact: true }). ${LOCATOR_PICKER_HINT}`,
+    );
+    vitestExpect(await err(tapsmithExpect(d.getByText("Allow", { exact: true })).toBeVisible({ timeout: 0 })))
+      .toContain(`but it was not. ${LOCATOR_PICKER_HINT}`);
+    vitestExpect(evaluateSelectors).not.toHaveBeenCalled();
+  });
+
+  it("checks for near misses no longer than the locator waited", async () => {
+    const never = vi.fn(() => new Promise<EvaluateSelectorsResponse>(() => {}));
+    const client = {
+      findElement: vi.fn(async () => ({ requestId: "1", found: false, errorMessage: "" })),
+      findElements: vi.fn(async () => ({ requestId: "1", elements: [] as ElementInfo[], errorMessage: "" })),
+      evaluateSelectors: never,
+    } as unknown as TapsmithGrpcClient;
+    const d = new Device(client, { platform: "android", timeout: 50 });
+    const started = Date.now();
+    vitestExpect(await err(d.getByText("Gone").waitFor({ timeout: 50 }))).toContain(LOCATOR_PICKER_HINT);
+    vitestExpect(never).toHaveBeenCalledTimes(1);
+    // 50 ms of waiting, then at most 50 ms of checking — far below the 2 s cap.
+    vitestExpect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it("not for a negated assertion that fails", async () => {
     const { client, evaluateSelectors } = missingClient();
     (client.findElements as ReturnType<typeof vi.fn>).mockImplementation(async () => ({ requestId: "1", elements: [element("a", "Hi")], errorMessage: "" }));
