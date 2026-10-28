@@ -2244,7 +2244,7 @@ describe('last()', () => {
     // index the user never wrote and "found 0" adds nothing to "not found".
     const handle = new ElementHandle(client, _role('listitem'), 300);
     const err = await withFakeClock(5000, () => handle.last().find()).catch((e) => e);
-    expect(err.message).toMatch(/was not found after waiting 300ms$/);
+    expect(err.message).toMatch(/was not found after waiting 300ms\. To find a locator that matches, pick the element in UI mode/);
   });
 });
 
@@ -4316,7 +4316,7 @@ describe('boundingBox()', () => {
   it('reports a timed-out wait on a modified handle, not a single-read positional miss (review follow-up)', async () => {
     const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse([])) });
     await expect(withFakeClock(5000, () => new ElementHandle(client, _role('button'), 1000).first().boundingBox()))
-      .rejects.toThrow(/was not found after waiting 1000ms$/);
+      .rejects.toThrow(/was not found after waiting 1000ms\. To find a locator that matches, pick the element in UI mode/);
   });
 });
 

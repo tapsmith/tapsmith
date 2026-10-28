@@ -623,7 +623,7 @@ function createAssertions(
 
       if (!negated && !result) {
         // The hint explains a miss, not a match that isn't visible.
-        const hint = lastCount === 0 ? handle._missHint() : '';
+        const hint = lastCount === 0 ? await handle._locatorMissHelp() : '';
         fail(`Expected element ${desc} to be visible, but it was not${hint}`);
       }
       if (negated && result) {
@@ -697,7 +697,7 @@ function createAssertions(
       }, timeout, negated);
 
       if (!negated && !result) {
-        const hint = handle._missHint();
+        const hint = await handle._locatorMissHelp();
         fail(`Expected element ${desc} to exist, but it did not${hint}`);
       }
       if (negated && result) {
@@ -849,9 +849,9 @@ function createAssertions(
 
       if (!negated && !result) {
         handle._assertionResult = { expected: String(count), actual: String(lastCount) };
-        const hint = handle._missHint();
+        const hint = lastCount === 0 ? await handle._locatorMissHelp() : '';
         fail(
-          `Expected element ${desc} to have count ${count}, but found ${lastCount}${lastCount === 0 ? hint : ''}`,
+          `Expected element ${desc} to have count ${count}, but found ${lastCount}${hint}`,
         );
       }
       if (negated && result) {
