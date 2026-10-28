@@ -27,6 +27,7 @@ On iOS, `getByText` returns the innermost element holding the text, as Playwrigh
 - **the label (and title)**, except on a switch, slider or stepper, whose label is only its accessible name: find those with `getByLabel()` or `getByRole("switch", { name })`. SwiftUI draws a `Toggle`'s or `Stepper`'s label as separate text, which `getByText` finds.
 - **the value only of text and text inputs** (a field's typed text). A switch's `0`/`1`, a slider's or stepper's value, a button's value and React Native's `accessibilityValue` are not text, so `getByText("1")` doesn't match a switch that is on.
 - **a label without the part it repeats from its container**: a SwiftUI `Stepper`'s buttons are labelled `"Quantity: 1, Increment"`, and `getByText("Quantity: 1", { exact: true })` finds only the stepper's text.
+- **a label that lacks its text's trailing punctuation**: a React Native touchable with `accessibilityLabel="Forgot password"` hides the `"Forgot password?"` text inside it, so iOS shows only the label. `getByText("Forgot password?")` finds it, with or without `exact`, as it finds the text on Android. A query ending in punctuation matches such a label only at its end, and punctuation alone never does.
 
 #### Regular expressions
 
