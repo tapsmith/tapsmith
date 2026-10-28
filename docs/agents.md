@@ -96,7 +96,7 @@ An agent that writes locators from one look at the screen, and finds out at run 
 3. `tapsmith_test_locator` with it. Repeat until it counts exactly 1 match, or the one `.first()`/`.nth()` picks is the element you meant.
 4. Only then put it in test code. **Never put a locator in a test that `tapsmith_test_locator` hasn't confirmed.**
 5. `tapsmith_run_tests` on the file.
-6. On a failure, `tapsmith_read_trace` on its trace. If a locator matched nothing, the error lists the locators that match the same words, and the run's report ends with the next step. Go back to step 1 for that locator; don't edit and re-run blind.
+6. On a failure, `tapsmith_read_trace` on its trace. If a locator matched nothing, the error can list locators that match the same words (it lists none when nothing near matches, or for a locator the check doesn't cover), and the run's report ends with the next step. Go back to step 1 for that locator; don't edit and re-run blind.
 
 `tapsmith_tap` and `tapsmith_type` act exactly as a test would, so they are for getting the app to the screen under test, not for checking a locator: their misses wait out a timeout first.
 

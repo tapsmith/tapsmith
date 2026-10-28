@@ -54,7 +54,7 @@ Follow it for every locator you write:
 3. \`tapsmith_test_locator\` with it, until it counts exactly 1 match (or the element a deliberate \`.first()\`/\`.nth()\` picks).
 4. Only then put it in test code. Never put a locator in a test that \`tapsmith_test_locator\` hasn't confirmed.
 5. \`tapsmith_run_tests\`.
-6. On failure, \`tapsmith_read_trace\`. A locator that matched nothing lists the locators that match the same words: go back to step 1 for it instead of guessing again.
+6. On failure, \`tapsmith_read_trace\`. A locator that matched nothing may list locators that match the same words; either way, go back to step 1 for it instead of guessing again.
 
 Without MCP, ask the user to pick the element in UI mode (\`npx tapsmith test --ui\`, pick button in the device mirror); its Locator tab lists locators the device has checked.
 

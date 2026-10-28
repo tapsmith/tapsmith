@@ -183,7 +183,7 @@ Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` i
 | `timeout` | number | No | How long the tap may take, waiting for the element included, in milliseconds (default 5000, at most 120000), as `tap({ timeout })` in a test (a tap on an element found just before it still gets up to a second). |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
 
-When nothing matches the locator, the error is the one a test gets, listing the locators that match the same words on screen (see [Locators that match nothing](locators.md#locators-that-match-nothing)), and it ends by asking you to check a locator with `tapsmith_test_locator` before acting on it. `tapsmith_type` answers a miss the same way.
+When nothing matches the locator, the error is the one a test gets, which can list locators that match the same words on screen (see [Locators that match nothing](locators.md#locators-that-match-nothing)), and it ends by asking you to check a locator with `tapsmith_test_locator` before acting on it. `tapsmith_type` answers a miss the same way.
 
 #### `tapsmith_type`
 
