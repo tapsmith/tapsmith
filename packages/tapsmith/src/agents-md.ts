@@ -45,6 +45,19 @@ Do not start a long-lived UI session yourself unless the user asks you to. Prefe
 
 When using MCP, inspect before editing: \`tapsmith_snapshot\` for the accessibility tree and suggested locators, \`tapsmith_test_locator\` to prove a locator is unique, \`tapsmith_screenshot\` when the tree is not enough, \`tapsmith_list_tests\` before \`tapsmith_run_tests\`, and \`tapsmith_read_trace\` for failures.
 
+### The locator loop
+
+Follow it for every locator you write:
+
+1. \`tapsmith_snapshot\` on the screen under test.
+2. Pick a suggested locator, or write one.
+3. \`tapsmith_test_locator\` with it, until it counts exactly 1 match (or the element a deliberate \`.first()\`/\`.nth()\` picks).
+4. Only then put it in test code. Never put a locator in a test that \`tapsmith_test_locator\` hasn't confirmed.
+5. \`tapsmith_run_tests\`.
+6. On failure, \`tapsmith_read_trace\`. A locator that matched nothing lists the locators that match the same words: go back to step 1 for it instead of guessing again.
+
+Without MCP, ask the user to pick the element in UI mode (\`npx tapsmith test --ui\`, pick button in the device mirror); its Locator tab lists locators the device has checked.
+
 ### Writing tests
 
 - Prefer a custom fixture module once the suite has shared screen objects, setup, or helpers (for example \`tests/fixtures.ts\` or \`e2e/fixtures.ts\`). Export \`test\`, \`expect\`, and shared fixtures from that module, and import from it consistently instead of importing directly from \`tapsmith\` in each spec.
@@ -67,6 +80,16 @@ When using MCP, inspect before editing: \`tapsmith_snapshot\` for the accessibil
 - Use \`getByTestId()\` or \`locator({ id })\` only when no user-visible or accessibility locator can uniquely identify the element. Treat \`locator({ xpath })\` as a last resort; it is Android-only and should have an explanatory comment.
 - Assertions auto-wait: prefer \`await expect(locator).toBeVisible()\`, \`toHaveText()\`, \`toBeEnabled()\`, etc. Avoid fixed sleeps and broad timeouts; wait on the UI state, route, response, or traceable app signal that matters.
 - Remember strict mode: if a locator can match multiple elements, disambiguate with role/name, \`{ exact: true }\`, a test id, or \`.first()/.nth()\` only when that ordering is intentional.
+
+### Coming from Playwright
+
+Tapsmith's API is Playwright-shaped, but these differ:
+
+- \`.click()\` → \`.tap()\` (also \`.doubleTap()\`, \`.longPress()\`).
+- \`.fill(text)\` → \`.clearAndType(text)\` to replace a field's text, or \`.type(text)\` to add to it.
+- \`.check()\` / \`.uncheck()\` → \`.setChecked(true)\` / \`.setChecked(false)\`.
+- \`page\` → the \`device\` fixture: \`device.getByRole(...)\`.
+- Taps do not scroll: call \`await locator.scrollIntoView()\` before tapping an element further down a list.
 
 ### Anti-patterns
 

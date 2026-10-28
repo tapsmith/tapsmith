@@ -40,6 +40,25 @@ describe('renderAgentsSection()', () => {
   });
 });
 
+describe('the locator loop and Playwright habits (PILOT-849)', () => {
+  it('states the loop as a rule', () => {
+    const section = renderAgentsSection();
+    expect(section).toContain('### The locator loop');
+    expect(section).toContain("Never put a locator in a test that \`tapsmith_test_locator\` hasn't confirmed.");
+    const order = ['tapsmith_snapshot\` on the screen under test', 'tapsmith_test_locator\` with it', 'Only then put it in test code', 'tapsmith_run_tests\`.', 'On failure, \`tapsmith_read_trace\`'];
+    const at = order.map((s) => section.indexOf(s));
+    expect(at.every((i) => i >= 0)).toBe(true);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+  });
+
+  it('maps the Playwright methods agents reach for to Tapsmith\'s', () => {
+    const section = renderAgentsSection();
+    expect(section).toContain('\`.click()\` → \`.tap()\`');
+    expect(section).toContain('\`.fill(text)\` → \`.clearAndType(text)\`');
+    expect(section).toContain('\`.check()\` / \`.uncheck()\` → \`.setChecked(true)\` / \`.setChecked(false)\`');
+  });
+});
+
 describe('mergeAgentsMd()', () => {
   const section = renderAgentsSection();
 

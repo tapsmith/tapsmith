@@ -78,7 +78,7 @@ The `AGENTS.md` section `tapsmith init` writes tells your agent the same.
 
 Key tools: `tapsmith_snapshot` (accessibility tree with suggested locators),
 `tapsmith_test_locator`, `tapsmith_run_tests`, `tapsmith_read_trace`,
-`tapsmith_screenshot`. The full API reference is exposed as the MCP resource
+`tapsmith_screenshot`. [The locator loop](#the-locator-loop) says how they fit together. The full API reference is exposed as the MCP resource
 `tapsmith://api-reference`.
 
 **Running a single test:** pass the `test` argument to `tapsmith_run_tests`. It's
@@ -86,6 +86,19 @@ a case-insensitive substring of the full test name (`"Describe > test name"`), s
 a bare fragment like `"submits the form"` is enough. If it matches nothing the
 tool returns an *error* listing the available tests — it never silently reports a
 green run. Use `tapsmith_list_tests` to see exact names.
+
+## The locator loop
+
+An agent that writes locators from one look at the screen, and finds out at run time, pays a full timeout for every wrong guess. Follow this loop instead, for every locator:
+
+1. `tapsmith_snapshot` on the screen the test is about: the accessibility tree, with locators the device has checked for each element.
+2. Take a suggested locator, or write one.
+3. `tapsmith_test_locator` with it. Repeat until it counts exactly 1 match, or the one `.first()`/`.nth()` picks is the element you meant.
+4. Only then put it in test code. **Never put a locator in a test that `tapsmith_test_locator` hasn't confirmed.**
+5. `tapsmith_run_tests` on the file.
+6. On a failure, `tapsmith_read_trace` on its trace. If a locator matched nothing, the error lists the locators that match the same words, and the run's report ends with the next step. Go back to step 1 for that locator; don't edit and re-run blind.
+
+`tapsmith_tap` and `tapsmith_type` act exactly as a test would, so they are for getting the app to the screen under test, not for checking a locator: their misses wait out a timeout first.
 
 ## Writing good tests (locator philosophy)
 

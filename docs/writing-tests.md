@@ -326,6 +326,8 @@ export default defineConfig({
 
 Locators determine how your tests find UI elements. The right locator makes tests resilient to refactors. The wrong one makes them break whenever a developer moves a button.
 
+To get a locator that matches, pick the element in UI mode or ask your coding agent over MCP instead of guessing: see [Finding locators](locators.md#finding-locators).
+
 ### Priority hierarchy
 
 Use the most accessible locator that uniquely identifies the element:
