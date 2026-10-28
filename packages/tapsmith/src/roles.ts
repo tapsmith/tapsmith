@@ -358,8 +358,10 @@ export function iosDescribedRole(value: string | undefined): string {
  * What to add to a "not found" failure of `getByRole(role)` with no name on
  * iOS, for a role React Native publishes nothing for there — alert, combobox
  * and the undescribed generic-view roles but tablist — so the miss is explained instead of
- * looking like a flaky screen (PILOT-718). Empty in every other case. Leads
- * with a space, ready to append to a sentence.
+ * looking like a flaky screen (PILOT-718). For a role that also has a native
+ * iOS type (a Stepper is a spinbutton, PILOT-702) it says the name is needed
+ * only for the React Native view. Empty in every other case. Leads with a
+ * space, ready to append to a sentence.
  */
 export function iosUnnamedRoleMissHint(
   role: { role: string; name: string; nameRegex?: unknown },
@@ -372,6 +374,8 @@ export function iosUnnamedRoleMissHint(
     || (IOS_UNDESCRIBED_OTHER_ROLES.has(canonical) && canonical !== 'tablist');
   if (!nameOnly) return '';
   const quoted = JSON.stringify(role.role);
-  return ` On iOS, React Native publishes no ${quoted} role that getByRole(${quoted}) can see without a name: ` +
+  const native = IOS_ROLE_TYPES[canonical]?.map((t) => t.replace(/^XCUIElementType/, '')).join(' or ');
+  const unnamed = native ? ` (a native ${native} matches without one)` : '';
+  return ` On iOS, React Native publishes no ${quoted} role that getByRole(${quoted}) can see without a name${unnamed}: ` +
     `pass the element's name — getByRole(${quoted}, { name: "…" }) — or use getByText() or getByTestId().`;
 }

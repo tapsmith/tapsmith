@@ -36,6 +36,13 @@ describe("iosUnnamedRoleMissHint()", () => {
     }
   });
 
+  it("says a native control with the role needs no name (PILOT-702)", () => {
+    vitestExpect(iosUnnamedRoleMissHint(role("spinbutton"), "ios"))
+      .toContain('can see without a name (a native Stepper matches without one): pass the element\'s name');
+    vitestExpect(iosUnnamedRoleMissHint(role("menuitem"), "ios")).toContain("(a native MenuItem matches without one)");
+    vitestExpect(iosUnnamedRoleMissHint(role("timer"), "ios")).not.toContain("a native");
+  });
+
   it("says nothing for a named query, another platform, or a role iOS can see", () => {
     vitestExpect(iosUnnamedRoleMissHint(role("alert", "Failed"), "ios")).toBe("");
     vitestExpect(iosUnnamedRoleMissHint({ role: "alert", name: "", nameRegex: { source: "x", flags: "" } }, "ios")).toBe("");

@@ -69,6 +69,10 @@ export class NativeDialogsScreen {
   get copyLink() { return this.device.getByRole("button", { name: "Copy Link" }) }
   get sheetContent() { return this.device.getByText("Sheet content", { exact: true }) }
   get sheetDone() { return this.device.getByRole("button", { name: "Done" }) }
+
+  get actionsMenu() { return this.device.getByRole("button", { name: "Actions" }) }
+  /** An open SwiftUI Menu's items are buttons, not menu items (docs/locators.md, PILOT-702). */
+  menuItem(name: string) { return this.device.getByRole("button", { name, exact: true }) }
 }
 
 export class NativeScrollScreen {

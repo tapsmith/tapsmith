@@ -33,9 +33,10 @@ internal object ComposeRoles {
      * description, …). Anything else on an unnamed last leaf — a progress
      * indicator's ProgressBar class, an empty `Text("")` — is that node's
      * own role, not a carried one. `Role.ValuePicker`'s NumberPicker class
-     * has no role here yet.
+     * is a spinbutton (PILOT-702).
      */
-    private val CARRIED_ROLES = setOf("button", "checkbox", "radiobutton", "image", "spinner", "tab", "switch")
+    private val CARRIED_ROLES =
+        setOf("button", "checkbox", "radiobutton", "image", "spinner", "spinbutton", "tab", "switch")
 
     /**
      * What the rule reads of one node. [role] is the role the finder gives

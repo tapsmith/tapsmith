@@ -38,6 +38,13 @@ describe("Native: alerts, confirmation dialogs and sheets", () => {
     await expect(dialogs.result("Sheet closed")).toBeVisible()
   })
 
+  // docs/locators.md: XCUITest shows an open Menu's items as buttons (PILOT-702).
+  test("an open Menu's items are buttons", async ({ dialogs }) => {
+    await dialogs.actionsMenu.tap()
+    await expect(dialogs.menuItem("Rename")).toBeVisible()
+    await expect(dialogs.menuItem("Duplicate")).toBeVisible()
+  })
+
   test("a button behind the sheet is not visible", async ({ dialogs }) => {
     await dialogs.showSheet.tap()
     await expect(dialogs.sheetContent).toBeVisible()

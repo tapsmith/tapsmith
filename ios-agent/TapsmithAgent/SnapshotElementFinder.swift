@@ -1722,8 +1722,9 @@ class SnapshotElementFinder {
             } else if let types = try? RoleMapping.elementTypes(for: role), let firstType = types.first {
                 // Role-only: match by type — every type the role lists, so
                 // a progressbar that is an activity indicator (PILOT-797) or
-                // a list that is a collection view is indexed among the
-                // role's matches, not looked for among the first type's.
+                // a list that is a collection view is indexed among all of
+                // the role's types, not looked for among the first type's.
+                // (A trait-matched `.other` is in no type query.)
                 if types.count == 1 {
                     element = resolve(app.descendants(matching: firstType))
                 } else {
