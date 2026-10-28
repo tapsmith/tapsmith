@@ -1232,6 +1232,26 @@ describe('base formatting utilities', () => {
     expect(plain).not.toContain('node:internal');
   });
 
+  it('formatError skips a multi-line message under any error name, even after a worker rebuilt the error as a plain Error (PILOT-841)', async () => {
+    // --workers and watch send errors across a process boundary as
+    // { message, stack } and rebuild them with new Error(message): the name
+    // is lost, but the stack still opens with the original one.
+    const { formatError } = await import('../reporters/base.js');
+    const message = 'strict mode violation: getByText(/^Item/) resolved to 3 elements:\n  1) text "Item 1"\n  2) text "Item 2"\n  3) text "Item 3"';
+    for (const header of ['StrictModeViolationError', 'TypeError', 'TypeError [ERR_INVALID_ARG_TYPE]']) {
+      const err = Object.assign(new Error(message), {
+        stack: [
+          `${header}: ${message}`,
+          '    at ElementHandle.tap (/proj/node_modules/tapsmith/src/element-handle.ts:2651:37)',
+          '    at async Object.fn (/proj/tests/strict.test.ts:5:3)',
+        ].join('\n'),
+      });
+      const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+      expect(plain, header).toContain('at async Object.fn (/proj/tests/strict.test.ts:5:3)');
+      expect(plain.split('\n').filter((l) => l.includes('text "Item 2"')), header).toHaveLength(1);
+    }
+  });
+
   it('formatError caps the user frames at three', async () => {
     const { formatError } = await import('../reporters/base.js');
     const err = new Error('boom');

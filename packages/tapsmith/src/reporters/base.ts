@@ -130,6 +130,9 @@ export function projectTag(project: string | undefined): string {
   return dim(`[${project}]`) + ' ';
 }
 
+/** An error stack's opening `<Name>: ` or `<Name> [<code>]: ` (Node's `TypeError [ERR_X]: `). */
+const STACK_HEADER_NAME_RE = /^[A-Za-z_$][\w$.]*(?: \[[^\]\n]*\])?: /;
+
 /**
  * The first `max` frames of an error's stack worth showing under its message:
  * Tapsmith's own and Node's internal frames filtered out *before* the cap, so
@@ -139,9 +142,13 @@ export function projectTag(project: string | undefined): string {
 export function errorStackFrames(error: Error, max: number): string[] {
   if (!error.stack) return [];
   // The stack opens with "<name>: <message>" — every line of the message,
-  // which the reporter prints on its own. Only what follows is frames.
-  const opensWithMessage = error.stack.startsWith(`${error.name}: ${error.message}`)
-    || error.stack.startsWith(`Error: ${error.message}`);
+  // which the reporter prints on its own. Only what follows is frames. Match
+  // any name, not only error.name: --workers, watch and merged reports
+  // rebuild errors as new Error(message), so a StrictModeViolationError's
+  // stack no longer opens with its error.name, and its message lines would
+  // otherwise fill the frame cap.
+  const prefix = STACK_HEADER_NAME_RE.exec(error.stack)?.[0];
+  const opensWithMessage = prefix !== undefined && error.stack.startsWith(error.message, prefix.length);
   const header = opensWithMessage ? error.message.split('\n').length : 1;
   return userStackFrames(error.stack.split('\n').slice(header)).slice(0, max);
 }
