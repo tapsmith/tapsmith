@@ -1345,7 +1345,8 @@ class ElementFinder(
     /**
      * Whether [node]'s accessible name matches the selector's role name:
      * its contentDescription, its text, or its joined descendant text (read
-     * only when the first two don't match).
+     * only when the first two don't match) — or, for an EditText with no
+     * other name, its hint (PILOT-834).
      */
     private fun matchesAccessibleName(
         node: AccessibilityNodeInfo,
@@ -1358,11 +1359,11 @@ class ElementFinder(
         val text = node.text?.toString()
         val contentDescription = node.contentDescription?.toString()
         // An empty EditText reports its hint as its text; that hint is a
-        // name, not a typed value.
-        val textIsValue =
-            text != null &&
-                EDIT_TEXT_HINT_CLASS_PATTERN.matcher(node.className?.toString() ?: "").matches() &&
-                text != extractHint(node)
+        // name, not a typed value. A typed one with no other name is still
+        // named by its hint (PILOT-834).
+        val isEditText = EDIT_TEXT_HINT_CLASS_PATTERN.matcher(node.className?.toString() ?: "").matches()
+        val hint = if (isEditText) extractHint(node) else null
+        val textIsValue = text != null && isEditText && text != hint
         if (regex != null) {
             return TextMatch.accessibleNameMatches(
                 contentDescription = contentDescription,
@@ -1370,6 +1371,7 @@ class ElementFinder(
                 textIsValue = textIsValue,
                 descendantText = { collectDescendantText(node, fresh) },
                 regex = regex,
+                hint = hint,
             )
         }
         return TextMatch.accessibleNameMatches(
@@ -1379,6 +1381,7 @@ class ElementFinder(
             descendantText = { collectDescendantText(node, fresh) },
             name = name!!,
             exact = selector.nameExact,
+            hint = hint,
         )
     }
 

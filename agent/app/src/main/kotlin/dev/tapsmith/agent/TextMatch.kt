@@ -60,6 +60,12 @@ object TextMatch {
      * of the accessible name (Playwright; the iOS agent checks label/title
      * only), so it is still compared whole: typing "email me later" into
      * Notes must not make that field match name "Email".
+     *
+     * [hint] is an editable field's hint (null for any other node): it names
+     * the field when it has no content description, as Playwright names an
+     * input with no label by its placeholder (PILOT-834). An empty field
+     * reports its hint as its text, so that text is the hint, not a name of
+     * its own: a described field is named by its description alone.
      */
     fun accessibleNameMatches(
         contentDescription: CharSequence?,
@@ -68,10 +74,35 @@ object TextMatch {
         descendantText: () -> CharSequence?,
         name: String,
         exact: Boolean,
+        hint: CharSequence? = null,
     ): Boolean =
         nameMatches(contentDescription, name, exact) ||
-            nameMatches(text, name, exact || textIsValue) ||
-            nameMatches(descendantText(), name, exact)
+            (!textIsHint(text, hint) && nameMatches(text, name, exact || textIsValue)) ||
+            descendantText().let { descendants ->
+                nameMatches(descendants, name, exact) ||
+                    (isBlank(descendants) && nameMatches(hintName(contentDescription, hint), name, exact))
+            }
+
+    /**
+     * The [hint] that names an editable field with no content description, or
+     * null (see [accessibleNameMatches]).
+     */
+    fun hintName(
+        contentDescription: CharSequence?,
+        hint: CharSequence?,
+    ): CharSequence? {
+        if (hint.isNullOrEmpty()) return null
+        if (!isBlank(contentDescription)) return null
+        return hint
+    }
+
+    /** Whether [text] is an empty field's [hint], reported as its text. */
+    private fun textIsHint(
+        text: CharSequence?,
+        hint: CharSequence?,
+    ): Boolean = !hint.isNullOrEmpty() && text != null && text.toString() == hint.toString()
+
+    private fun isBlank(value: CharSequence?): Boolean = value == null || normalize(value.toString()).isEmpty()
 
     /**
      * [accessibleNameMatches] for a getByRole `{ name: RegExp }` (PILOT-520):
@@ -85,9 +116,18 @@ object TextMatch {
         textIsValue: Boolean,
         descendantText: () -> CharSequence?,
         regex: TextRegex,
+        hint: CharSequence? = null,
     ): Boolean {
         val test = { value: CharSequence? -> value != null && regex.matches(normalize(value.toString())) }
-        return test(contentDescription) || (!textIsValue && test(text)) || test(descendantText())
+        val descendants = descendantText()
+        // A hint-named field is tested against its hint alone: its blank
+        // description and descendant text are not its name, so a RegExp
+        // that matches "" does not match it.
+        val hintName = if (isBlank(descendants)) hintName(contentDescription, hint) else null
+        if (hintName != null) return test(hintName)
+        return test(contentDescription) ||
+            (!textIsValue && !textIsHint(text, hint) && test(text)) ||
+            test(descendants)
     }
 
     /** Full-match pattern: the text equals [query] after normalizing both. */

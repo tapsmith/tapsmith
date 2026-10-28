@@ -3,6 +3,7 @@ import { getNodeRole, isComposeRoleCarrier, isLabelField, webViewAriaLabel, getN
 import { isHooksMarkerNode, isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
 import { iosTexts, iosTextMatchesExact, iosTextMatchesRegex, iosTextMatchesSubstring } from './text-content.js';
 import { toJsRegExp } from '../../text-regex.js';
+import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES } from '../../accessible-name.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
 import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, IOS_STATIC_TEXT_ROLES, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../../roles.js';
@@ -450,13 +451,7 @@ function normalizeWhitespace(s: string): string {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-// The Android agent's EDIT_TEXT_HINT_CLASS_PATTERN and MAX_DESCENDANT_TEXT_DEPTH.
-const ANDROID_EDIT_TEXT_CLASSES = new Set([
-  'android.widget.EditText',
-  'android.widget.AutoCompleteTextView',
-  'com.google.android.material.textfield.TextInputEditText',
-  'androidx.appcompat.widget.AppCompatEditText',
-]);
+// The Android agent's MAX_DESCENDANT_TEXT_DEPTH.
 const MAX_DESCENDANT_TEXT_DEPTH = 6;
 
 /**
@@ -483,6 +478,8 @@ function descendantText(node: HierarchyNode, depth = 0): string[] {
  * `exact` (on iOS, also one whole child of a ", "-joined label). An Android
  * EditText's text is its typed value unless it equals the hint (an empty
  * field reports its hint as text), and a typed value is only compared whole.
+ * A text field with no other name is named by its placeholder
+ * ({@link placeholderName}, PILOT-834).
  */
 function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boolean {
   const query = normalizeWhitespace(name);
@@ -500,9 +497,42 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
   return matches(node.attributes.get('content-desc'), exact)
     || matches(node.attributes.get('label'), exact)
     || matches(node.attributes.get('title'), exact)
-    || matches(text, exact || textIsValue)
+    || (!textIsHint(node) && matches(text, exact || textIsValue))
     || (!isAndroid && (iosChildLabel(node.attributes.get('label')) || iosChildLabel(node.attributes.get('title'))))
-    || (isAndroid && matches(descendantText(node).join(' '), exact));
+    || (isAndroid && matches(descendantText(node).join(' '), exact))
+    || matches(placeholderName(node), exact);
+}
+
+/**
+ * Whether an Android EditText's text is its hint — what an empty field
+ * reports as its text — which names it only through {@link placeholderName},
+ * so a described field is named by its description alone (PILOT-834).
+ */
+function textIsHint(node: HierarchyNode): boolean {
+  const hint = node.attributes.get('hint');
+  return !!hint && ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '')
+    && node.attributes.get('text') === hint;
+}
+
+/**
+ * The placeholder a text field is named by when it has no other name, as
+ * Playwright names an input with no label (PILOT-834), or '' — the agents'
+ * fallback: an iOS text input (RoleName.placeholderNamedTypes) whose label and
+ * title are empty is named by its placeholderValue; an Android EditText with
+ * no content-desc or descendant text by its hint (an empty one reports its
+ * hint as its text).
+ */
+export function placeholderName(node: HierarchyNode): string {
+  const blank = (value: string | undefined): boolean => normalizeWhitespace(value ?? '') === '';
+  const className = node.attributes.get('class');
+  if (className !== undefined) {
+    if (!ANDROID_EDIT_TEXT_CLASSES.has(className) || !blank(node.attributes.get('content-desc'))) return '';
+    if (!blank(descendantText(node).join(' '))) return '';
+    return node.attributes.get('hint') ?? '';
+  }
+  if (!IOS_PLACEHOLDER_NAMED_TYPES.has(node.attributes.get('type') ?? node.tagName)) return '';
+  if (!blank(node.attributes.get('label')) || !blank(node.attributes.get('title'))) return '';
+  return node.attributes.get('placeholderValue') ?? '';
 }
 
 /**
@@ -520,8 +550,9 @@ function roleNameMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
   return test(node.attributes.get('content-desc'))
     || test(node.attributes.get('label'))
     || test(node.attributes.get('title'))
-    || (!textIsValue && test(text))
-    || (isAndroid && test(descendantText(node).join(' ')));
+    || (!textIsValue && !textIsHint(node) && test(text))
+    || (isAndroid && test(descendantText(node).join(' ')))
+    || test(placeholderName(node));
 }
 
 /**

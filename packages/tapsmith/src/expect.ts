@@ -24,6 +24,7 @@ import { ANDROID_ROLE_CLASSES, normalizeRole } from "./roles.js";
 import { extractStack, getActiveTraceCollector } from "./trace/trace-collector.js";
 import { WebViewLocator, WEBVIEW_LOCATOR_BRAND } from "./webview-locator.js";
 import { defineStandIns, notSupportedYet } from "./not-supported.js";
+import { elementAccessibleName } from "./accessible-name.js";
 
 const DEFAULT_ASSERTION_TIMEOUT_MS = 5_000;
 // Short server-side timeout for element lookups inside assertion polls.
@@ -899,8 +900,9 @@ function createAssertions(
       const result = await poll(async () => {
         const els = await resolveTick(handle, true);
         if (els.length > 0) {
-          // On Android, accessible name is contentDescription if set, otherwise text
-          lastName = els[0].contentDescription || els[0].text;
+          // The content description if set; else a text field's placeholder
+          // (PILOT-834); else the text.
+          lastName = elementAccessibleName(els[0]);
           return matchesExact(lastName, name);
         }
         return false;

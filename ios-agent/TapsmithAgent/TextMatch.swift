@@ -137,6 +137,7 @@ struct QueryNode {
     let identifier: String
     var title: String = ""
     var value: String = ""
+    var placeholder: String = ""
 }
 
 /// Positional bookkeeping for re-resolving a role+name snapshot match through
@@ -154,6 +155,23 @@ enum QueryIndex {
         var count = 0
         for node in nodes[..<ordinal]
         where node.label == target.label
+            && (target.identifier.isEmpty || node.identifier == target.identifier)
+            && (scopeTypeRaw == nil || node.typeRaw == scopeTypeRaw) {
+            count += 1
+        }
+        return count
+    }
+
+    /// The index of `nodes[ordinal]` — a text field named by its placeholder
+    /// (RoleName, PILOT-834) — within the live query that re-finds it by
+    /// that placeholder (`placeholderValue == p`, and its identifier when it
+    /// has one), scoped like `liveIndex`. That query returns labelled fields
+    /// with the same placeholder too, so they count.
+    static func placeholderLiveIndex(of ordinal: Int, in nodes: [QueryNode], scopeTypeRaw: UInt?) -> Int {
+        let target = nodes[ordinal]
+        var count = 0
+        for node in nodes[..<ordinal]
+        where node.placeholder == target.placeholder
             && (target.identifier.isEmpty || node.identifier == target.identifier)
             && (scopeTypeRaw == nil || node.typeRaw == scopeTypeRaw) {
             count += 1

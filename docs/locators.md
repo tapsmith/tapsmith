@@ -243,6 +243,8 @@ await expect(device.getByDescription("Profile photo")).toBeVisible()
 
 Find an input by its placeholder / hint text. Useful for text fields that do not have a separate visible label.
 
+A field with no label (and no title) is also *named* by its placeholder, as in Playwright, so `getByRole("textfield", { name: "Email" })` finds SwiftUI's `TextField("Email", text: $email)` too. `getByPlaceholder` still finds a field whose label differs from its placeholder.
+
 ```typescript
 await device.getByPlaceholder("Enter your email").type("user@example.com")
 await device.getByPlaceholder("Password").type("secret123")

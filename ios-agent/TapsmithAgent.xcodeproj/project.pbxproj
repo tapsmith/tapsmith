@@ -31,6 +31,7 @@
 		5E9B5E90B9CB725D9CE8F179 /* TextMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = EC71D08D700ACC6A3E02220B /* TextMatch.swift */; };
 		C048C935F21057EC5D0DD7B3 /* LabelMatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = CEE6759B6CA6EB49336588B1 /* LabelMatch.swift */; };
 		D5E40A0B14F5160B7AD6580F /* TextContent.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9271E89B7B65041D9FF1F5E4 /* TextContent.swift */; };
+		A1B2C3D4E5F6A7B8C9D0E1F2 /* RoleName.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */; };
 		A75600000000000000000001 /* NonAppElements.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75600000000000000000002 /* NonAppElements.swift */; };
 		4C1A7E0D9B2F4E6A8D3C5B01 /* LaunchAccessibilityCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */; };
 /* End PBXBuildFile section */
@@ -54,6 +55,7 @@
 		EC71D08D700ACC6A3E02220B /* TextMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextMatch.swift; sourceTree = "<group>"; };
 		CEE6759B6CA6EB49336588B1 /* LabelMatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LabelMatch.swift; sourceTree = "<group>"; };
 		9271E89B7B65041D9FF1F5E4 /* TextContent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TextContent.swift; sourceTree = "<group>"; };
+		F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleName.swift; sourceTree = "<group>"; };
 		A75600000000000000000002 /* NonAppElements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NonAppElements.swift; sourceTree = "<group>"; };
 		4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAccessibilityCheck.swift; sourceTree = "<group>"; };
 		B20F42F1DA77FBEEC0F04F60 /* SocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketServer.swift; sourceTree = "<group>"; };
@@ -93,6 +95,7 @@
 				EC71D08D700ACC6A3E02220B /* TextMatch.swift */,
 				CEE6759B6CA6EB49336588B1 /* LabelMatch.swift */,
 				9271E89B7B65041D9FF1F5E4 /* TextContent.swift */,
+				F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */,
 				A75600000000000000000002 /* NonAppElements.swift */,
 				4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */,
 				C511FD447184FAEDC3739DB9 /* TouchSynthesizer.h */,
@@ -206,6 +209,7 @@
 				5E9B5E90B9CB725D9CE8F179 /* TextMatch.swift in Sources */,
 				C048C935F21057EC5D0DD7B3 /* LabelMatch.swift in Sources */,
 				D5E40A0B14F5160B7AD6580F /* TextContent.swift in Sources */,
+				A1B2C3D4E5F6A7B8C9D0E1F2 /* RoleName.swift in Sources */,
 				A75600000000000000000001 /* NonAppElements.swift in Sources */,
 				4C1A7E0D9B2F4E6A8D3C5B01 /* LaunchAccessibilityCheck.swift in Sources */,
 				17687791BBF6102D034AB942 /* TouchSynthesizer.m in Sources */,

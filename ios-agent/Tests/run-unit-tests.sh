@@ -79,6 +79,16 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
 
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/RoleNameTests/main.swift \
+  TapsmithAgent/RoleName.swift \
+  TapsmithAgent/TextMatch.swift \
+  TapsmithAgent/RoleMapping.swift \
+  TapsmithAgent/Models/AgentError.swift \
+  -o "$OUT/role-name-tests"
+"$OUT/role-name-tests" "../packages/tapsmith/src/__tests__/fixtures/role-name-conformance.json"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/TextContentTests/main.swift \
   TapsmithAgent/TextContent.swift \
   TapsmithAgent/TextMatch.swift \

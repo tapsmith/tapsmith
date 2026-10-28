@@ -83,7 +83,7 @@ device.getByRole("button", { name: "Details", expanded: true })
 Unknown role "row". Supported: alert, button, checkbox, combobox, heading, image, link, list, listitem, menu, menubar, menuitem, progressbar, radiobutton, radiogroup, scrollbar, scrollview, searchfield, seekbar, spinbutton, spinner, summary, switch, tab, tablist, text, textfield, timer, toolbar (aliases: header → heading, slider → seekbar, search → searchfield, radio → radiobutton). For an element with no supported role, use getByText(), getByTestId() or getByDescription().
 ```
 
-The accessible name is the element's content description / accessibility label, its text, or — on Android — the joined text of its descendants. Because the default is a case-insensitive substring match, a name can match more than one element (`{ name: "Show overlay" }` also matches *Show overlay briefly*); acting on such a locator throws a [strict mode](#strict-mode) violation — add `exact: true`. The case-insensitive default also covers platform casing differences, such as React Native's `<Button title="Sign In">`, which Android renders as `SIGN IN`.
+The accessible name is the element's content description / accessibility label, its text, or — on Android — the joined text of its descendants. A text field with none of those (and, on iOS, no title) is named by its placeholder, as in Playwright: SwiftUI's `TextField("Title", text: $title)` has an empty accessibility label, so `getByRole("textfield", { name: "Title" })` finds it by its placeholder, and an Android `EditText` keeps its hint as its name after text is typed into it. A field with a label or title is named by it alone. Because the default is a case-insensitive substring match, a name can match more than one element (`{ name: "Show overlay" }` also matches *Show overlay briefly*); acting on such a locator throws a [strict mode](#strict-mode) violation — add `exact: true`. The case-insensitive default also covers platform casing differences, such as React Native's `<Button title="Sign In">`, which Android renders as `SIGN IN`.
 
 ### `device.getByDescription(text: string): ElementHandle`
 
@@ -1692,7 +1692,7 @@ await expect(device.getByText("Item", { exact: true })).toHaveAttribute("classNa
 
 #### `.toHaveAccessibleName(name: string | RegExp, options?): Promise<void>`
 
-Assert that the element has the given accessible name. On Android, this is the `contentDescription` if set, otherwise the `text` property.
+Assert that the element has the given accessible name: its content description (iOS: accessibility label) if set; otherwise, for a text field, its placeholder (a field's text is its typed value, not its name); otherwise its text.
 
 ```typescript
 await expect(device.getByRole("button")).toHaveAccessibleName("Submit form");
