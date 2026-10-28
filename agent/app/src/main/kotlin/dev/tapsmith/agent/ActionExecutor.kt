@@ -4,9 +4,7 @@ import android.app.Instrumentation
 import android.graphics.Rect
 import android.os.SystemClock
 import android.util.Log
-import android.view.InputDevice
 import android.view.KeyEvent
-import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.Direction
@@ -22,6 +20,8 @@ class ActionExecutor(
     private val device: UiDevice,
     private val instrumentation: Instrumentation,
     private val occlusionGuard: OcclusionGuard,
+    /** Every touch and key goes through here, never UiDevice/UiObject2 (PILOT-789). */
+    private val input: AgentInput,
 ) {
     /** Tracks ASCII control-char code points we've already warned about,
      *  so the log fires once per code point per agent lifetime. */
@@ -55,7 +55,7 @@ class ActionExecutor(
         /** Upper bound on a swipe's settle, for a scroll view that keeps moving. */
         private const val SWIPE_SETTLE_MAX_MS = 3000L
 
-        /** How long each press of an injected tap is held (see injectTap). */
+        /** How long each press of a double tap (and a retried tap) is held. */
         private const val TAP_PRESS_MS = 50L
 
         /** Time reserved after a focusing tap for the work that follows it
@@ -197,7 +197,7 @@ class ActionExecutor(
         x: Int,
         y: Int,
     ) {
-        if (!device.click(x, y)) {
+        if (!input.click(x, y)) {
             throw ActionFailedException("Failed to tap at ($x, $y)")
         }
     }
@@ -228,7 +228,7 @@ class ActionExecutor(
             // and the daemon's HID route (long_press_resolve_budget).
             val point =
                 planGesturePoint(element, bounds, budget.shortenedBy(durationMs), expected, "long press", reserveMs = durationMs)
-            device.swipe(point.x, point.y, point.x, point.y, (durationMs / 5).toInt().coerceAtLeast(1))
+            input.swipe(point.x, point.y, point.x, point.y, (durationMs / 5).toInt().coerceAtLeast(1))
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ActionFailedException) {
@@ -264,16 +264,16 @@ class ActionExecutor(
     /**
      * Tap at a planned point. A refused injection (the input dispatcher
      * dropping the event during a window transition on a loaded device) is
-     * retried once through the instrumentation injector at the same point —
-     * never by the node click, which would ignore what covers the element.
+     * retried once, with a shorter press, at the same point — never by the
+     * node click, which would ignore what covers the element.
      */
     private fun clickAt(
         point: TouchPlan.Point,
         what: String,
     ) {
-        if (device.click(point.x, point.y)) return
+        if (input.click(point.x, point.y)) return
         Log.w(TAG, "$what: click at (${point.x}, ${point.y}) was refused; retrying once")
-        if (!injectTap(point.x, point.y)) {
+        if (!input.click(point.x, point.y, TAP_PRESS_MS)) {
             throw ActionFailedException("Failed to $what at (${point.x}, ${point.y})")
         }
     }
@@ -309,7 +309,7 @@ class ActionExecutor(
         durationMs: Long = 1000L,
     ) {
         // swipe from point to same point with steps proportional to duration
-        device.swipe(x, y, x, y, (durationMs / 5).toInt().coerceAtLeast(1))
+        input.swipe(x, y, x, y, (durationMs / 5).toInt().coerceAtLeast(1))
     }
 
     /**
@@ -612,7 +612,7 @@ class ActionExecutor(
     ) {
         val dir = parseDirection(direction)
         try {
-            element.swipe(dir, distance.toFloat(), speed)
+            input.swipe(element, direction, distance.toFloat(), speed)
             settleAfterSwipe(vertical = dir == Direction.UP || dir == Direction.DOWN)
         } catch (e: StaleObjectException) {
             throw e
@@ -640,19 +640,19 @@ class ActionExecutor(
         when (direction.lowercase()) {
             "up" -> {
                 swipeLength = (h * distance).toInt()
-                device.swipe(cx, cy + swipeLength / 2, cx, cy - swipeLength / 2, steps)
+                input.swipe(cx, cy + swipeLength / 2, cx, cy - swipeLength / 2, steps)
             }
             "down" -> {
                 swipeLength = (h * distance).toInt()
-                device.swipe(cx, cy - swipeLength / 2, cx, cy + swipeLength / 2, steps)
+                input.swipe(cx, cy - swipeLength / 2, cx, cy + swipeLength / 2, steps)
             }
             "left" -> {
                 swipeLength = (w * distance).toInt()
-                device.swipe(cx + swipeLength / 2, cy, cx - swipeLength / 2, cy, steps)
+                input.swipe(cx + swipeLength / 2, cy, cx - swipeLength / 2, cy, steps)
             }
             "right" -> {
                 swipeLength = (w * distance).toInt()
-                device.swipe(cx - swipeLength / 2, cy, cx + swipeLength / 2, cy, steps)
+                input.swipe(cx - swipeLength / 2, cy, cx + swipeLength / 2, cy, steps)
             }
             else -> throw ActionFailedException("Unknown swipe direction: $direction. Use up/down/left/right.")
         }
@@ -737,7 +737,7 @@ class ActionExecutor(
     ) {
         // UIAutomator swipe is step-based (~5ms/step). Convert duration to steps.
         val steps = (durationMs / 5).coerceIn(5L, 200L).toInt()
-        device.swipe(x1, y1, x2, y2, steps)
+        input.swipe(x1, y1, x2, y2, steps)
         settleAfterSwipe(vertical = kotlin.math.abs(y2 - y1) >= kotlin.math.abs(x2 - x1))
     }
 
@@ -751,21 +751,13 @@ class ActionExecutor(
     private var touchActive = false
 
     private fun injectTouch(
-        action: Int,
+        action: TouchAction,
         x: Int,
         y: Int,
-        eventTime: Long,
     ) {
-        val event = MotionEvent.obtain(touchDownTime, eventTime, action, x.toFloat(), y.toFloat(), 0)
-        event.source = InputDevice.SOURCE_TOUCHSCREEN
-        try {
-            // sync=false: fire-and-forget keeps the move stream low-latency.
-            // Use the agent's own Instrumentation (this process is a custom
-            // Instrumentation, not registered with InstrumentationRegistry).
-            instrumentation.uiAutomation.injectInputEvent(event, false)
-        } finally {
-            event.recycle()
-        }
+        // Sent without waiting for the app: fire-and-forget keeps the move
+        // stream low-latency.
+        input.gestures.streamTouch(action, touchDownTime, x, y)
     }
 
     fun touchDown(
@@ -774,7 +766,7 @@ class ActionExecutor(
     ) {
         touchDownTime = SystemClock.uptimeMillis()
         touchActive = true
-        injectTouch(MotionEvent.ACTION_DOWN, x, y, touchDownTime)
+        injectTouch(TouchAction.DOWN, x, y)
     }
 
     fun touchMove(
@@ -782,7 +774,7 @@ class ActionExecutor(
         y: Int,
     ) {
         if (!touchActive) return
-        injectTouch(MotionEvent.ACTION_MOVE, x, y, SystemClock.uptimeMillis())
+        injectTouch(TouchAction.MOVE, x, y)
     }
 
     fun touchUp(
@@ -790,13 +782,13 @@ class ActionExecutor(
         y: Int,
     ) {
         if (!touchActive) return
-        injectTouch(MotionEvent.ACTION_UP, x, y, SystemClock.uptimeMillis())
+        injectTouch(TouchAction.UP, x, y)
         touchActive = false
     }
 
     fun touchCancel() {
         if (!touchActive) return
-        injectTouch(MotionEvent.ACTION_CANCEL, 0, 0, SystemClock.uptimeMillis())
+        injectTouch(TouchAction.CANCEL, 0, 0)
         touchActive = false
     }
 
@@ -813,7 +805,7 @@ class ActionExecutor(
             scrollUntilVisible(element, dir, targetSelector)
         } else {
             try {
-                element.scroll(dir, 1.0f)
+                input.scroll(element, dir, 1.0f)
             } catch (e: StaleObjectException) {
                 throw e
             } catch (e: Exception) {
@@ -874,7 +866,7 @@ class ActionExecutor(
             if (found != null) return
 
             CommandCancellation.checkpoint()
-            val canScroll = container.scroll(direction, 0.8f)
+            val canScroll = input.scroll(container, direction, 0.8f)
             if (!canScroll) {
                 throw ElementNotFoundException(
                     "Could not find target element after scrolling to the end. " +
@@ -892,7 +884,7 @@ class ActionExecutor(
      */
     fun pressKey(key: String) {
         val keyCode = resolveKeyCode(key)
-        if (!device.pressKeyCode(keyCode)) {
+        if (!input.pressKey(keyCode)) {
             throw ActionFailedException("Failed to press key: $key")
         }
     }
@@ -910,10 +902,9 @@ class ActionExecutor(
      * Double-tap on an element, at a point nothing covers (see [tap];
      * PILOT-362).
      *
-     * Injects the four motion events directly (down/up, pause, down/up) instead
-     * of calling device.click() twice: click() blocks waiting for the device to
-     * go idle after each tap, so under load the gap between the two taps can
-     * exceed the app's double-tap window and register as two single taps.
+     * Makes the two taps with short presses and a fixed gap, so under load the
+     * gap between them stays inside the app's double-tap window rather than
+     * registering as two single taps.
      */
     fun doubleTap(
         element: UiObject2,
@@ -955,60 +946,20 @@ class ActionExecutor(
         intervalMs: Long = DOUBLE_TAP_INTERVAL_MS,
     ) {
         val interval = if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS
-        if (injectTap(x, y)) {
+        if (input.click(x, y, TAP_PRESS_MS)) {
             SystemClock.sleep(interval)
-            if (injectTap(x, y)) return
-            // First tap already landed — complete the gesture with a UiDevice
-            // click rather than leaving a lone single tap behind.
-            if (device.click(x, y)) return
+            if (input.click(x, y, TAP_PRESS_MS)) return
+            // First tap already landed — complete the gesture with one more
+            // try rather than leaving a lone single tap behind.
+            if (input.click(x, y)) return
             throw ActionFailedException("Failed to double tap at ($x, $y)")
         }
-        // Injection unavailable — fall back to UiDevice clicks (waits for idle
-        // between taps, so timing is less precise).
-        device.click(x, y)
+        // The first tap was refused: try the pair once more.
+        input.click(x, y)
         SystemClock.sleep(interval)
-        if (!device.click(x, y)) {
+        if (!input.click(x, y)) {
             throw ActionFailedException("Failed to double tap at ($x, $y)")
         }
-    }
-
-    /** Inject a full tap (down + up) synchronously without waiting for idle. */
-    private fun injectTap(
-        x: Int,
-        y: Int,
-        tapDurationMs: Long = TAP_PRESS_MS,
-    ): Boolean {
-        val downTime = SystemClock.uptimeMillis()
-        val down = MotionEvent.obtain(downTime, downTime, MotionEvent.ACTION_DOWN, x.toFloat(), y.toFloat(), 0)
-        down.source = InputDevice.SOURCE_TOUCHSCREEN
-        val downOk =
-            try {
-                instrumentation.uiAutomation.injectInputEvent(down, true)
-            } finally {
-                down.recycle()
-            }
-        if (!downOk) return false
-        SystemClock.sleep(tapDurationMs)
-        val up = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, x.toFloat(), y.toFloat(), 0)
-        up.source = InputDevice.SOURCE_TOUCHSCREEN
-        val upOk =
-            try {
-                instrumentation.uiAutomation.injectInputEvent(up, true)
-            } finally {
-                up.recycle()
-            }
-        if (!upOk) {
-            // Don't leave the pointer down — a dangling contact would turn the
-            // caller's fallback click into a long-press/multi-touch gesture.
-            val cancel = MotionEvent.obtain(downTime, SystemClock.uptimeMillis(), MotionEvent.ACTION_CANCEL, x.toFloat(), y.toFloat(), 0)
-            cancel.source = InputDevice.SOURCE_TOUCHSCREEN
-            try {
-                instrumentation.uiAutomation.injectInputEvent(cancel, true)
-            } finally {
-                cancel.recycle()
-            }
-        }
-        return upOk
     }
 
     /**
@@ -1022,7 +973,7 @@ class ActionExecutor(
             val tgtBounds = target.visibleBounds
             // The bounds read can be slow on a busy app (PILOT-605).
             CommandCancellation.checkpoint()
-            source.drag(android.graphics.Point(tgtBounds.centerX(), tgtBounds.centerY()))
+            input.drag(source, ScreenPoint(tgtBounds.centerX(), tgtBounds.centerY()))
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: Exception) {
@@ -1049,7 +1000,7 @@ class ActionExecutor(
                     ?: throw ElementNotFoundException("Option '$optionText' not found in dropdown")
             // The dropdown wait cannot be cut short (PILOT-605).
             CommandCancellation.checkpoint()
-            option.click()
+            input.click(option)
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ElementNotFoundException) {
@@ -1092,7 +1043,7 @@ class ActionExecutor(
             }
             // The popup wait cannot be cut short (PILOT-605).
             CommandCancellation.checkpoint()
-            children[index].click()
+            input.click(children[index])
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ActionFailedException) {
@@ -1116,11 +1067,11 @@ class ActionExecutor(
             if (scale > 1.0f) {
                 // Pinch out (zoom in) — percentage is how far apart fingers end
                 val percent = ((scale - 1.0f) * 100).coerceIn(10f, 100f) / 100f
-                element.pinchOpen(percent)
+                input.pinch(element, open = true, percent)
             } else {
                 // Pinch in (zoom out) — percentage is how far fingers move inward
                 val percent = ((1.0f - scale) * 100).coerceIn(10f, 100f) / 100f
-                element.pinchClose(percent)
+                input.pinch(element, open = false, percent)
             }
         } catch (e: StaleObjectException) {
             throw e
@@ -1185,7 +1136,7 @@ class ActionExecutor(
 
             // The bounds read can be slow on a busy app (PILOT-605).
             CommandCancellation.checkpoint()
-            device.click(tapX, tapY)
+            input.click(tapX, tapY)
             device.waitForIdle(FOCUS_IDLE_TIMEOUT_MS)
         } catch (e: StaleObjectException) {
             throw e

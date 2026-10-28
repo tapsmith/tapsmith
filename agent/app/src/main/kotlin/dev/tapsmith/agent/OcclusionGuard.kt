@@ -31,6 +31,7 @@ class OcclusionGuard(
     private val device: UiDevice,
     private val instrumentation: Instrumentation,
     private val nodeInfoOf: (UiObject2) -> AccessibilityNodeInfo?,
+    private val input: AgentInput,
 ) {
     companion object {
         private const val TAG = "TapsmithOcclusion"
@@ -64,7 +65,7 @@ class OcclusionGuard(
                 }
 
             override fun dismiss() {
-                device.pressBack()
+                input.pressBack()
             }
         }
 
@@ -215,4 +216,4 @@ class OcclusionGuard(
     }
 }
 
-private fun Rect.toBox() = Box(left, top, right, bottom)
+internal fun Rect.toBox() = Box(left, top, right, bottom)
