@@ -63,7 +63,7 @@ const TRAILING_PUNCTUATION = /[\p{P}\p{S}]+$/u;
 function wordProbes(needle: string, skip: Selector['kind']['type'][]): Probe[] {
   const kinds = (['textContains', 'label', 'hint', 'contentDesc'] as const).filter((k) => !skip.includes(k));
   const probes: Probe[] = kinds.map((type) => ({ selector: makeSelector({ type, value: needle }) }));
-  const bare = needle.replace(TRAILING_PUNCTUATION, '').trim();
+  const bare = needle.trim().replace(TRAILING_PUNCTUATION, '').trim();
   if (bare !== '' && bare !== needle.trim()) {
     probes.push(...(['textContains', 'contentDesc'] as const).map((type) => ({ selector: makeSelector({ type, value: bare }) })));
   }

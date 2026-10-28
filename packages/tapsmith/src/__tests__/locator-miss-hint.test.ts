@@ -68,6 +68,9 @@ describe("nearMissProbes()", () => {
       'getByText("Forgot password")', 'getByDescription("Forgot password")',
     ]);
     vitestExpect(codes(_text("Done!")).slice(-2)).toEqual(['getByText("Done")', 'getByDescription("Done")']);
+    vitestExpect(codes(_textContains("Forgot password? ")).slice(-2)).toEqual([
+      'getByText("Forgot password")', 'getByDescription("Forgot password")',
+    ]);
     vitestExpect(codes(_role("link", { name: "Help?" })).slice(-3)).toEqual([
       'getByText("Help")', 'getByDescription("Help")', 'getByRole("link")',
     ]);
