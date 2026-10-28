@@ -3,6 +3,9 @@ import { checkNoArguments, checkOptions, checkTimeout, type TimeoutOptions } fro
 
 const COUNT_HINT = 'It reads the page as it is now; to wait for a number of matches, use expect.poll(() => locator.count(), { timeout }).toBe(n).';
 
+/** @internal Brand key for cross-instance type checks (CJS/ESM dual-package). */
+export const WEBVIEW_LOCATOR_BRAND = Symbol.for('tapsmith.WebViewLocator');
+
 /**
  * Lazy reference to an element within a WebView.
  *
@@ -19,9 +22,6 @@ const COUNT_HINT = 'It reads the page as it is now; to wait for a number of matc
  * element throws a StrictModeViolationError. Narrow with `.first()`,
  * `.last()`, or `.nth(n)` to target one match positionally.
  */
-/** @internal Brand key for cross-instance type checks (CJS/ESM dual-package). */
-export const WEBVIEW_LOCATOR_BRAND = Symbol.for('tapsmith.WebViewLocator');
-
 export class WebViewLocator {
   /** @internal */
   readonly [WEBVIEW_LOCATOR_BRAND] = true;

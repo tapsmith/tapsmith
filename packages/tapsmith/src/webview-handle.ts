@@ -166,6 +166,10 @@ interface CDPTarget {
   type: string
 }
 
+/**
+ * A connection to the app's WebView, from `device.webview()`. Its locators
+ * and selector methods query the DOM and auto-wait, as native ones do.
+ */
 export class WebViewHandle {
   private _ws: WebSocket | null = null;
   private _msgId = 0;
@@ -1169,22 +1173,32 @@ export class WebViewHandle {
     return result as boolean;
   }
 
+  /**
+   * Run a JavaScript expression in the WebView's page and return its value.
+   * Does not wait for anything first.
+   */
   async evaluate<T = unknown>(expression: string): Promise<T> {
     return this._traced('evaluate', undefined, async (deadline) => {
       return (await this._evaluate(expression, remainingUntil(deadline))) as T;
     });
   }
 
+  /**
+   * Navigate the WebView to `url`. Resolves once navigation starts, not when
+   * the page has loaded: assert on the new page's content to wait for it.
+   */
   async goto(url: string): Promise<void> {
     return this._traced('goto', url, async (deadline) => {
       await this._send('Page.navigate', { url }, remainingUntil(deadline));
     });
   }
 
+  /** The page's `document.title`, read now. */
   async title(): Promise<string> {
     return (await this._evaluate('document.title')) as string;
   }
 
+  /** The page's current URL, read now. */
   async url(): Promise<string> {
     return (await this._evaluate('window.location.href')) as string;
   }
@@ -1282,6 +1296,7 @@ export class WebViewHandle {
     return this._ws !== null && this._ws.readyState === WebSocket.OPEN;
   }
 
+  /** Close the connection to the WebView. `device.native()` does this for you. */
   async close(): Promise<void> {
     if (this._closed) return;
     this._closed = true;

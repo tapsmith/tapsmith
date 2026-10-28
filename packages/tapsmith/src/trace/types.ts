@@ -346,8 +346,10 @@ export const TRACE_MODES = [
   'retain-on-failure-and-retries',
 ] as const;
 
+/** When to record a trace (the config's `trace`), as in Playwright. */
 export type TraceMode = (typeof TRACE_MODES)[number]
 
+/** The object form of the config's `trace` option. */
 export interface TraceConfig {
   /** Trace recording mode. */
   mode: TraceMode

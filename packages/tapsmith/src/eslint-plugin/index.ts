@@ -360,6 +360,10 @@ interface TapsmithPlugin {
   configs: { recommended: RecommendedConfig };
 }
 
+/**
+ * Tapsmith's ESLint plugin: its `rules`, and `configs.recommended` to enable
+ * them in `eslint.config.mjs`.
+ */
 const plugin = { rules } as TapsmithPlugin;
 
 /**

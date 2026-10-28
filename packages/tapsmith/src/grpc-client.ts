@@ -215,16 +215,24 @@ export interface ForwardWebViewPortResponse {
   errorMessage: string;
 }
 
+/** An app's run state, as `device.getAppState()` reports it. */
 export type AppState = 'not_installed' | 'stopped' | 'background' | 'foreground';
+/** A screen orientation. */
 export type Orientation = 'portrait' | 'landscape';
+/** A system color scheme. */
 export type ColorScheme = 'dark' | 'light';
 
+/** Options for `device.launchApp()`. */
 export interface LaunchAppOptions {
+  /** The Activity to launch, e.g. `".settings.ProfileActivity"`. Android only. */
   activity?: string;
+  /** Clear the app's data before launching it. Default `false`. */
   clearData?: boolean;
+  /** Wait for the UI to settle after launch. Default `true`. */
   waitForIdle?: boolean;
 }
 
+/** Options for `device.openDeepLink()`. */
 export interface OpenDeepLinkOptions {
   /**
    * Skip the warm in-process delivery attempt on iOS simulators and
@@ -376,6 +384,11 @@ function daemonReadHeadroomMs(): number {
   return 5_000;
 }
 
+/**
+ * The low-level gRPC client `Device` wraps, one method per daemon RPC. For
+ * advanced use only: its calls do not auto-wait or appear in traces. Tests
+ * use `Device` and its locators instead.
+ */
 export class TapsmithGrpcClient {
   // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
   private client: grpc.Client & Record<string, Function>;

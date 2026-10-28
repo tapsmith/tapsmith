@@ -158,6 +158,12 @@ export interface SwipeOptions {
   timeoutMs?: number;
 }
 
+/**
+ * The device under test: the `device` fixture every test receives.
+ * Locators come from its `getBy*()` methods and auto-wait when acted on;
+ * the device-level actions here (keys, swipes, app control) act at once,
+ * each bounded by the device timeout (the config's `timeout`).
+ */
 export class Device {
   /** @internal */
   readonly _client: TapsmithGrpcClient;
@@ -594,10 +600,18 @@ export class Device {
 
   // ── Utilities ──
 
+  /**
+   * Capture the whole screen as PNG bytes (`data`). Does not wait for anything
+   * first; check `success` and `errorMessage` before using `data`.
+   */
   async takeScreenshot(): Promise<ScreenshotResponse> {
     return this._client.takeScreenshot();
   }
 
+  /**
+   * Wait until the app's UI is idle (no running animations or pending layout).
+   * Throws if it is not idle within `timeoutMs` (default: the device timeout).
+   */
   async waitForIdle(timeoutMs?: number): Promise<void> {
     const res = await this._client.waitForIdle(timeoutMs ?? this._defaultTimeoutMs);
     if (!res.success) {
@@ -605,6 +619,7 @@ export class Device {
     }
   }
 
+  /** Install an APK from a host path on the device. Android only. */
   async installApk(apkPath: string): Promise<void> {
     const res = await this._client.installApk(apkPath);
     if (!res.success) {
@@ -612,10 +627,19 @@ export class Device {
     }
   }
 
+  /**
+   * List the devices the daemon can see: `devices` it can target and, on
+   * Android, `unusableDevices` adb lists but cannot use (unauthorized, offline).
+   */
   async listDevices() {
     return this._client.listDevices();
   }
 
+  /**
+   * Select the device this `Device` drives by serial (an iOS simulator's UDID).
+   * The runner does this for you; it does not check other sessions' device
+   * claims, so switching devices mid-test is up to the test.
+   */
   async setDevice(
     serial: string,
     networkTracingEnabled = false,
@@ -644,6 +668,10 @@ export class Device {
     this._deviceSerial = serial;
   }
 
+  /**
+   * Start the on-device agent for the app `targetPackage`. The runner does this
+   * for you; call it only when driving a `Device` outside the test runner.
+   */
   async startAgent(
     targetPackage: string,
     agentApkPath?: string,
@@ -679,7 +707,15 @@ export class Device {
     return resolved;
   }
 
+  /**
+   * Force-stop and relaunch the config's app, keeping its data on disk. Waits
+   * for the UI to settle after launch unless `waitForIdle: false`.
+   */
   async restartApp(options?: { waitForIdle?: boolean }): Promise<void>;
+  /**
+   * Force-stop and relaunch the app `packageName`, keeping its data on disk.
+   * Waits for the UI to settle after launch unless `waitForIdle: false`.
+   */
   async restartApp(packageName: string, options?: { waitForIdle?: boolean }): Promise<void>;
   async restartApp(
     packageOrOptions?: string | { waitForIdle?: boolean },
@@ -695,6 +731,10 @@ export class Device {
         'Restart app failed'));
   }
 
+  /**
+   * Launch the app `packageName` (the mobile `page.goto()`). Waits for the UI to
+   * settle after launch unless `waitForIdle: false`; `clearData` starts it fresh.
+   */
   async launchApp(packageName: string, options?: LaunchAppOptions): Promise<void> {
     return withActionProgress('launchApp', packageName,
       () => this._tracedAction('launchApp', 'navigation', undefined,
@@ -752,6 +792,11 @@ export class Device {
     return toAppResetResult(mode, response!);
   }
 
+  /**
+   * Open a deep link or app link in the app, warm when possible. Resolves once
+   * the link is delivered; on an iOS simulator a warm delivery that does not
+   * land in time falls back to a cold relaunch with the URL.
+   */
   async openDeepLink(uri: string, options?: OpenDeepLinkOptions): Promise<void> {
     // On retry attempts the runner forces every deep link cold (see
     // _setForceColdDeepLinks); an explicit forceColdLaunch option can only
@@ -782,6 +827,7 @@ export class Device {
     this._forceColdDeepLinks = force;
   }
 
+  /** The package name (iOS: bundle ID) of the app in the foreground. */
   async currentPackage(): Promise<string> {
     const res = await this._client.getCurrentPackage();
     return res.packageName;
@@ -793,6 +839,7 @@ export class Device {
     return res.activity;
   }
 
+  /** Force-stop an app (default: the config's app). Its data is kept. */
   async terminateApp(packageName?: string): Promise<void> {
     const pkg = packageName ?? this.requirePackageName();
     return withActionProgress('terminateApp', pkg,
@@ -801,6 +848,11 @@ export class Device {
         'Terminate app failed'));
   }
 
+  /**
+   * Whether an app is `not_installed`, `stopped`, in the `background` or the
+   * `foreground`. A snapshot: it does not wait for a state. `timeout` bounds the
+   * query.
+   */
   async getAppState(packageName: string, options?: { timeout?: number }): Promise<AppState> {
     const res = await this._client.getAppState(packageName, options?.timeout);
     return res.state as AppState;
@@ -811,10 +863,16 @@ export class Device {
     return this.pressKey('HOME');
   }
 
+  /** Bring a backgrounded app back to the foreground (launches it if stopped). */
   async bringToForeground(packageName: string): Promise<void> {
     return this.launchApp(packageName);
   }
 
+  /**
+   * Stop the app and save its persisted data (and, on an iOS simulator, the
+   * keychain) to a tar.gz archive at `path` on the host, for `restoreAppState()`.
+   * An archive is not portable across devices.
+   */
   async saveAppState(packageName: string, path: string): Promise<void> {
     const pkg = this.requirePackageName(packageName);
     return withActionProgress('saveAppState', `${pkg} → ${nodePath.basename(path)}`,
@@ -823,6 +881,10 @@ export class Device {
         'Save app state failed'));
   }
 
+  /**
+   * Replace the app's persisted data with an archive `saveAppState()` wrote.
+   * The app's data is cleared first; restore on the device that saved it.
+   */
   async restoreAppState(packageName: string, path: string): Promise<void> {
     const pkg = this.requirePackageName(packageName);
     return withActionProgress('restoreAppState', `${pkg} → ${nodePath.basename(path)}`,
@@ -853,45 +915,59 @@ export class Device {
       'Revoke permission failed');
   }
 
+  /** Set the device clipboard's text. */
   async setClipboard(text: string): Promise<void> {
     return this._tracedAction('setClipboard', 'device', undefined,
       () => this._client.setClipboard(text),
       'Set clipboard failed');
   }
 
+  /** Read the device clipboard's text. */
   async getClipboard(): Promise<string> {
     const res = await this._client.getClipboard();
     return res.text;
   }
 
+  /** Rotate the device to `"portrait"` or `"landscape"`. */
   async setOrientation(orientation: Orientation): Promise<void> {
     return this._tracedAction('setOrientation', 'device', undefined,
       () => this._client.setOrientation(orientation),
       'Set orientation failed');
   }
 
+  /** The device's current orientation, `"portrait"` or `"landscape"`. */
   async getOrientation(): Promise<Orientation> {
     const res = await this._client.getOrientation();
     return res.orientation as Orientation;
   }
 
+  /** Whether the soft keyboard is showing right now. Does not wait. */
   async isKeyboardShown(): Promise<boolean> {
     const res = await this._client.isKeyboardShown();
     return res.shown;
   }
 
+  /**
+   * Dismiss the soft keyboard if it is showing; resolves at once when it is not.
+   * Throws if the keyboard is still up after every way of dismissing it.
+   */
   async hideKeyboard(): Promise<void> {
     return this._tracedAction('hideKeyboard', 'device', undefined,
       () => this._client.hideKeyboard(),
       'Hide keyboard failed');
   }
 
+  /** Turn the screen on if it is off. */
   async wake(): Promise<void> {
     return this._tracedAction('wake', 'device', undefined,
       () => this._client.wakeDevice(),
       'Wake device failed');
   }
 
+  /**
+   * Wake the screen and dismiss a lock screen with no PIN or pattern. Sends
+   * nothing to the app when the device is already unlocked.
+   */
   async unlock(): Promise<void> {
     return this._tracedAction('unlock', 'device', undefined,
       () => this._client.unlockDevice(),
@@ -929,6 +1005,7 @@ export class Device {
       'Set color scheme failed');
   }
 
+  /** The system color scheme, `"dark"` or `"light"`. */
   async getColorScheme(): Promise<ColorScheme> {
     const res = await this._client.getColorScheme();
     return res.scheme as ColorScheme;
@@ -1423,8 +1500,15 @@ export class Device {
     }
   }
 
-  /** Subscribe to network request/response events. */
+  /**
+   * Call `handler` for each network request the app makes. Starts network
+   * capture if it is not running.
+   */
   on(event: 'request', handler: (request: TapsmithRequest) => void): void;
+  /**
+   * Call `handler` for each network response the app receives, once the
+   * response arrives. Starts network capture if it is not running.
+   */
   on(event: 'response', handler: (response: NetworkResponseEventData) => void): void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overload implementation
   on(event: string, handler: (...args: any[]) => void): void {
@@ -1439,8 +1523,9 @@ export class Device {
     }
   }
 
-  /** Unsubscribe from network events. */
+  /** Stop calling `handler` for network requests. */
   off(event: 'request', handler: (request: TapsmithRequest) => void): void;
+  /** Stop calling `handler` for network responses. */
   off(event: 'response', handler: (response: NetworkResponseEventData) => void): void;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overload implementation
   off(event: string, handler: (...args: any[]) => void): void {
@@ -2046,6 +2131,10 @@ export class Device {
     });
   }
 
+  /**
+   * Close this device's connection to the daemon and everything it started
+   * (WebView connections, network capture). The runner does this for you.
+   */
   async close(): Promise<void> {
     await this._close({ closeClient: true });
   }
@@ -2109,6 +2198,7 @@ function formatPattern(url: string | RegExp | ((url: URL) => boolean)): string {
 
 // ─── App reset types ───
 
+/** Options for `device.resetApp()`. */
 export interface AppResetOptions {
   /** How far to reset. Default `'warm'` (falls back per `fallback`). */
   mode?: 'warm' | 'restart' | 'clear';
@@ -2142,20 +2232,27 @@ export interface InternalAppResetOptions extends AppResetOptions {
   fallbackToClear?: boolean;
 }
 
+/** What `device.resetApp()` did: the rung that ran, why, and how long it took. */
 export interface AppResetResult {
+  /** The rung that was asked for. */
   modeRequested: 'warm' | 'restart' | 'clear';
   /** The rung that actually ran. */
   modeUsed: 'warm' | 'restart' | 'clear';
+  /** A lower rung ran because a higher one failed. */
   fellBack: boolean;
   /** The app process was recreated (cold delivery, restart or clear). */
   coldLaunch: boolean;
   /** Why a fallback or cold relaunch happened, when it did. */
   reason?: string;
+  /** Wall time of the whole reset ladder, in milliseconds. */
   durationMs: number;
   /** `@tapsmith/react-native` reset hooks were detected in the app. */
   hooksDetected: boolean;
+  /** The app's in-app reset counter before the reset (with reset hooks only). */
   epochBefore?: number;
+  /** The app's in-app reset counter after the reset (with reset hooks only). */
   epochAfter?: number;
+  /** Each rung tried, with its timing and outcome. */
   steps: Array<{ name: string; durationMs: number; ok: boolean; detail?: string }>;
 }
 

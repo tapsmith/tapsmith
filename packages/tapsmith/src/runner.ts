@@ -470,14 +470,22 @@ function _warnUnfiredRoutes(
   );
 }
 
+/** How a test ended. */
 export type TestStatus = 'passed' | 'failed' | 'skipped';
 
+/** One test's outcome, as reporters receive it. */
 export interface TestResult {
+  /** The test's own title. */
   name: string;
+  /** The titles of its describe blocks and the test, joined with " > ". */
   fullName: string;
+  /** Whether the test passed, failed or was skipped. */
   status: TestStatus;
+  /** How long the test took, in milliseconds, setup and hooks included. */
   durationMs: number;
+  /** The error that failed the test, when it failed. */
   error?: Error;
+  /** Path to the screenshot taken for this test, if one was kept. */
   screenshotPath?: string;
   /** Path to the trace archive, if recorded. */
   tracePath?: string;
@@ -529,15 +537,21 @@ export interface TestResult {
   fileLevelFailure?: boolean;
 }
 
+/** A describe block's results: its tests and nested blocks. */
 export interface SuiteResult {
+  /** The describe block's title. */
   name: string;
+  /** Results of the tests declared directly in this block. */
   tests: TestResult[];
+  /** Results of the nested describe blocks. */
   suites: SuiteResult[];
+  /** Total time of the block's tests, in milliseconds. */
   durationMs: number;
 }
 
 // ─── Fixtures ───
 
+/** The built-in fixtures every test and hook receives. */
 export interface TestFixtures {
   /** The primary device — an alias for `devices[0]`. */
   device: Device;
@@ -754,9 +768,16 @@ function collectFixtureRegistries(ctx: SuiteContext, registries: Set<FixtureRegi
 
 // ─── Public registration API ───
 
+/**
+ * The `test` function: declares a test, and carries `test.describe`,
+ * `test.use`, `test.extend`, `test.skip` and the hooks.
+ */
 export interface TestFn<Fixtures extends object = TestFixtures> {
+  /** Declare a test. `fn` receives the fixtures (`device`, …). */
   (name: string, fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)): void;
+  /** Declare a focused test: while any test or group is focused, only those run. */
   only: (name: string, fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
+  /** Skip a test, a scope or the running test; see `SkipFn`. */
   skip: SkipFn<Fixtures>;
   /**
    * Override configuration options for all tests in the current describe scope.
@@ -796,9 +817,13 @@ export interface TestFn<Fixtures extends object = TestFixtures> {
   extend: <T extends Record<string, unknown>>(
     definitions: FixtureDefinitions<T, Fixtures & T>,
   ) => TestFn<Fixtures & T>;
+  /** Run `fn` once before the tests of the enclosing describe block (or file). */
   beforeAll: (fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
+  /** Run `fn` once after the tests of the enclosing describe block (or file). */
   afterAll: (fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
+  /** Run `fn` before each test of the enclosing describe block (or file). */
   beforeEach: (fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
+  /** Run `fn` after each test of the enclosing describe block (or file). */
   afterEach: (fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
 }
 
@@ -844,6 +869,7 @@ export type DescribeMode = 'default' | 'parallel' | 'serial';
 
 /** Options for `test.describe.configure()` (Playwright's shape). */
 export interface DescribeConfigureOptions {
+  /** How the scope's tests relate: `'default'`, `'serial'` or `'parallel'`. */
   mode?: DescribeMode;
   /** Retry count for failed tests in this scope — same as `test.use({ retries })`. */
   retries?: number;
@@ -851,9 +877,13 @@ export interface DescribeConfigureOptions {
   timeout?: number;
 }
 
+/** The `describe` function (also `test.describe`): groups tests under a title. */
 export interface DescribeFn {
+  /** Declare a group of tests; `fn` declares them synchronously. */
   (name: string, fn: () => void): void;
+  /** Declare a focused group: while any test or group is focused, only those run. */
   only: (name: string, fn: () => void) => void;
+  /** Declare a group whose tests are all reported as skipped. */
   skip: (name: string, fn: () => void) => void;
   /**
    * Declare a group of tests that depend on each other: when one fails, the
@@ -1084,6 +1114,7 @@ function configureDescribe(options: DescribeConfigureOptions): void {
   }
 }
 
+/** Group tests under a title. Same as `test.describe`. */
 export const describe: DescribeFn = Object.assign(
   (...args: unknown[]) => { registerSuite('test.describe', args, { only: false, skip: false }); },
   {
@@ -1108,20 +1139,25 @@ defineStandIns(describe, {
   ),
 });
 
+/** Declare a test: `test(title, async ({ device }) => { … })`. */
 export const test: TestFn = createTestFn(getActiveFixtureRegistry());
 
+/** Run `fn` once before the tests of the enclosing describe block (or file). */
 export function beforeAll(fn: HookFn): void {
   currentContext().beforeAll.push({ fn, location: hookLocation() });
 }
 
+/** Run `fn` once after the tests of the enclosing describe block (or file). */
 export function afterAll(fn: HookFn): void {
   currentContext().afterAll.push({ fn, location: hookLocation() });
 }
 
+/** Run `fn` before each test of the enclosing describe block (or file). */
 export function beforeEach(fn: HookFn): void {
   currentContext().beforeEach.push({ fn, location: hookLocation() });
 }
 
+/** Run `fn` after each test of the enclosing describe block (or file). */
 export function afterEach(fn: HookFn): void {
   currentContext().afterEach.push({ fn, location: hookLocation() });
 }

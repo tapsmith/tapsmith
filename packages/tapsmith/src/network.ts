@@ -19,10 +19,15 @@ import type { SourceLocation } from './trace/types.js';
 
 /** An intercepted HTTP request. */
 export class TapsmithRequest {
+  /** The HTTP method, e.g. `"GET"`. */
   readonly method: string;
+  /** The full request URL. */
   readonly url: string;
+  /** The request headers, with lowercased names. */
   readonly headers: Record<string, string>;
+  /** The request body, or `null` when it has none. */
   readonly postData: Buffer | null;
+  /** Whether the request was made over HTTPS. */
   readonly isHttps: boolean;
 
   /** @internal */
@@ -46,17 +51,25 @@ export class TapsmithRequest {
 
 /** Options for `route.continue()`. */
 export interface RouteContinueOptions {
+  /** Send the request to this URL instead. */
   url?: string
+  /** Send the request with this HTTP method instead. */
   method?: string
+  /** Send these request headers instead. */
   headers?: Record<string, string>
+  /** Send this request body instead. */
   postData?: string | Buffer
 }
 
 /** Options for `route.fulfill()`. */
 export interface RouteFulfillOptions {
+  /** The response status code. Default 200. */
   status?: number
+  /** The response headers. */
   headers?: Record<string, string>
+  /** The response body. */
   body?: string | Buffer
+  /** The response's Content-Type header. */
   contentType?: string
   /** Convenience: serialize as JSON and set content-type. */
   json?: unknown
@@ -243,7 +256,9 @@ export class Route {
 
 /** Response returned by `route.fetch()` — wraps the real upstream response. */
 export class FetchedAPIResponse {
+  /** The upstream response's HTTP status code. */
   readonly status: number;
+  /** The upstream response's headers. */
   readonly headers: Record<string, string>;
   private readonly _body: Buffer;
 
@@ -253,14 +268,17 @@ export class FetchedAPIResponse {
     this._body = body;
   }
 
+  /** The response body as bytes. */
   body(): Buffer {
     return this._body;
   }
 
+  /** The response body decoded as UTF-8 text. */
   text(): string {
     return this._body.toString('utf-8');
   }
 
+  /** The response body parsed as JSON; throws if it is not JSON. */
   json(): unknown {
     return JSON.parse(this.text());
   }
@@ -1218,11 +1236,17 @@ export class NetworkRouteManager {
 
 /** Data emitted for response events. */
 export interface NetworkResponseEventData {
+  /** The request's HTTP method. */
   method: string
+  /** The request URL. */
   url: string
+  /** The response's HTTP status code. */
   status: number
+  /** The response headers. */
   headers: Record<string, string>
+  /** The response body, or `null` when it has none. */
   body: Buffer | null
+  /** What a matching `device.route()` handler did (`continue`, `fulfill`, `fetch` or `abort`), when one ran. */
   routeAction?: string
 }
 
