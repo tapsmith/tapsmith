@@ -87,8 +87,8 @@ describe("UIKit: UIAlertController", () => {
     await expect(uikitDialogs.result("Removed")).toBeVisible()
   })
 
-  // BUG PILOT-791: tapped while the popover is still animating in.
-  test.skip("action sheet action, tapped straight away", async ({ uikitDialogs }) => {
+  // Tapped while the popover is still animating in (PILOT-791).
+  test("action sheet action, tapped straight away", async ({ uikitDialogs }) => {
     await uikitDialogs.showSheet.tap()
     await uikitDialogs.exportPdf.tap()
     await expect(uikitDialogs.result("PDF")).toBeVisible()
