@@ -37,7 +37,7 @@ This guide is for teams with a Detox suite who want to move it to Tapsmith. Of t
 | `element(by.id("submit"))` | [`device.getByTestId("submit")`](api-reference.md#devicegetbytestidtestid-string-elementhandle) |
 | `element(by.text("Sign in"))` | [`device.getByText("Sign in", { exact: true })`](api-reference.md#devicegetbytexttext-string--regexp-options--exact-boolean--elementhandle) (without `exact`, a substring match) |
 | `element(by.label("Close"))` | [`device.getByDescription("Close")`](api-reference.md#devicegetbydescriptiontext-string-elementhandle), or `getByRole(role, { name: "Close" })` |
-| `element(by.traits(["button"]))` (iOS) | [`device.getByRole("button")`](api-reference.md#devicegetbyrolerole-string-options-elementhandle), on both platforms |
+| `element(by.traits(["button"]))` (iOS) | [`device.getByRole("button")`](api-reference.md#devicegetbyrolerole-role-options-elementhandle), on both platforms |
 | `element(by.type("RCTTextInput"))` | [`device.locator({ className: … })`](api-reference.md#devicelocatoroptions-locatoroptions-elementhandle) (native class names differ per platform) |
 | `by.id("row").withDescendant(by.text("Premium"))` | [`device.getByTestId("row").filter({ has: device.getByText("Premium", { exact: true }) })`](api-reference.md#elementhandlefiltercriteria-filteroptions-elementhandle) |
 | `by.text("Delete").withAncestor(by.id("row-5"))` | [`device.getByTestId("row-5").getByText("Delete", { exact: true })`](api-reference.md#scoping) (scoping) |
@@ -55,10 +55,10 @@ This guide is for teams with a Detox suite who want to move it to Tapsmith. Of t
 | `.typeText("hi")` | [`.type("hi")`](api-reference.md#elementhandletypetext-string-options-promisevoid), into an empty field (into a field that already has text, `type()` replaces it on Android and adds to it on iOS) |
 | `.replaceText("hi")` | [`.clearAndType("hi")`](api-reference.md#elementhandleclearandtypetext-string-options-promisevoid) (types it, so your `onChangeText` handlers run) |
 | `.clearText()` | [`.clear()`](api-reference.md#elementhandleclearoptions-promisevoid) |
-| `.tapReturnKey()` | [`device.pressKey("ENTER")`](api-reference.md#devicepresskeykey-string-promisevoid) |
-| `.scroll(200, "down")` | [`.scroll("down")`](api-reference.md#elementhandlescrolldirection-string-options-promisevoid) scrolls the view by a step of its own size (no offset in points); to reach an element, prefer `scrollIntoView()` |
-| `waitFor(el).toBeVisible().whileElement(by.id("list")).scroll(50, "down")` | [`el.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid) |
-| `.swipe("up")` | [`device.swipe("up")`](api-reference.md#deviceswipedirection-string-options-swipeoptions-promisevoid) |
+| `.tapReturnKey()` | [`device.pressKey("ENTER")`](api-reference.md#devicepresskeykey-devicekey-promisevoid) |
+| `.scroll(200, "down")` | [`.scroll("down")`](api-reference.md#elementhandlescrolldirection-swipedirection-options-promisevoid) scrolls the view by a step of its own size (no offset in points); to reach an element, prefer `scrollIntoView()` |
+| `waitFor(el).toBeVisible().whileElement(by.id("list")).scroll(50, "down")` | [`el.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid) |
+| `.swipe("up")` | [`device.swipe("up")`](api-reference.md#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid) |
 | `.pinch(0.5)` (iOS) | [`.pinchIn()`](api-reference.md#elementhandlepinchinoptions-promisevoid) / [`.pinchOut()`](api-reference.md#elementhandlepinchoutoptions-promisevoid), on both platforms |
 
 ### Expectations to assertions

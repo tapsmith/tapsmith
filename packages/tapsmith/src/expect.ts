@@ -20,7 +20,7 @@
 import { ElementHandle, ELEMENT_HANDLE_BRAND, isStrictModeViolation, isRetryableResolutionError, isStaleSnapshotError, POLL_INTERVAL_MS } from "./element-handle.js";
 import type { ElementInfo } from "./grpc-client.js";
 import { formatSelector } from "./selectors.js";
-import { ANDROID_ROLE_CLASSES, normalizeRole } from "./roles.js";
+import { ANDROID_ROLE_CLASSES, normalizeRole, type Role } from "./roles.js";
 import { extractStack, getActiveTraceCollector } from "./trace/trace-collector.js";
 import { WebViewLocator, WEBVIEW_LOCATOR_BRAND } from "./webview-locator.js";
 import { defineStandIns, notSupportedYet } from "./not-supported.js";
@@ -230,7 +230,7 @@ export interface TapsmithAssertions {
   ): Promise<void>;
 
   /** Assert the element has a specific accessibility role. */
-  toHaveRole(role: string, options?: { timeout?: number }): Promise<void>;
+  toHaveRole(role: Role | (string & {}), options?: { timeout?: number }): Promise<void>;
 
   /** Assert an input field contains a specific value. */
   toHaveValue(value: string, options?: { timeout?: number }): Promise<void>;

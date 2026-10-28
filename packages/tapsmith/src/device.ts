@@ -32,6 +32,8 @@ import {
   type DaemonLogEntry, type ResetAppRequestOptions, type ResetAppResponse } from './grpc-client.js';
 import * as nodePath from 'node:path';
 import { ElementHandle, locatorOptionsToSelector, type LocatorOptions } from './element-handle.js';
+import type { DeviceKey, SwipeDirection } from './input-names.js';
+import type { Role } from './roles.js';
 import { withActionProgress } from './action-progress.js';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import { Tracing } from './trace/tracing.js';
@@ -460,8 +462,14 @@ export class Device {
     return this._handle(options?.exact ? _text(text) : _textContains(text));
   }
 
-  /** Locate an element by accessibility role, optionally filtering by name or state. */
-  getByRole(role: string, options?: RoleLocatorOptions): ElementHandle {
+  /**
+   * Locate an element by accessibility role, optionally filtering by name or
+   * state. `role` is a native role name or a React Native alias (`header`,
+   * `slider`, `search`, `radio`), case-insensitive; an unknown role throws at
+   * once with the supported list. Lazy: nothing is looked up until an action
+   * or assertion runs, and those auto-wait.
+   */
+  getByRole(role: Role | (string & {}), options?: RoleLocatorOptions): ElementHandle {
     return this._handle(_role(role, options));
   }
 
@@ -528,13 +536,26 @@ export class Device {
 
   // ── Device-level actions ──
 
-  async swipe(direction: string, options?: SwipeOptions): Promise<void> {
+  /**
+   * Swipe across the screen in `direction` (the way the finger moves, so
+   * `"up"` reveals what is below). Not tied to an element, so nothing is
+   * waited for first; on Android it returns once any scroll it started has
+   * settled. `options.timeoutMs` bounds the gesture (default: the device
+   * timeout).
+   */
+  async swipe(direction: SwipeDirection | (string & {}), options?: SwipeOptions): Promise<void> {
     return this._tracedAction('swipe', 'swipe', undefined,
       () => this._client.swipe(direction, { ...options, timeoutMs: options?.timeoutMs ?? this._defaultTimeoutMs }),
       'Swipe failed');
   }
 
-  async pressKey(key: string): Promise<void> {
+  /**
+   * Press a device key by name (`"ENTER"`, `"HOME"`, `"BACK"`, …),
+   * case-insensitive. Android also takes a numeric key code, iOS a single
+   * character to type; a name the platform does not support throws. Does not
+   * wait for anything first.
+   */
+  async pressKey(key: DeviceKey | (string & {})): Promise<void> {
     return this._tracedAction('pressKey', 'press-key', undefined,
       () => this._client.pressKey(key), 'Press key failed');
   }

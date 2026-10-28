@@ -40,12 +40,12 @@ Appium has clients in many languages. The examples here use [WebdriverIO](https:
 
 | Appium (WebdriverIO) | Tapsmith |
 |---|---|
-| `$("~Sign in")` (accessibility id) | [`device.getByRole("button", { name: "Sign in" })`](api-reference.md#devicegetbyrolerole-string-options-elementhandle), or [`device.getByDescription("Sign in")`](api-reference.md#devicegetbydescriptiontext-string-elementhandle) |
+| `$("~Sign in")` (accessibility id) | [`device.getByRole("button", { name: "Sign in" })`](api-reference.md#devicegetbyrolerole-role-options-elementhandle), or [`device.getByDescription("Sign in")`](api-reference.md#devicegetbydescriptiontext-string-elementhandle) |
 | `$("id=com.example:id/submit")` (resource id) | [`device.locator({ id: "com.example:id/submit" })`](api-reference.md#devicelocatoroptions-locatoroptions-elementhandle); a React Native `testID` is [`device.getByTestId("submit")`](api-reference.md#devicegetbytestidtestid-string-elementhandle) |
 | `$('//*[@text="Welcome"]')` (XPath) | [`device.getByText("Welcome", { exact: true })`](api-reference.md#devicegetbytexttext-string--regexp-options--exact-boolean--elementhandle) |
 | `$('android=new UiSelector().textContains("Wel")')` | `device.getByText("Wel")` (substring by default, ignoring case) |
 | `$("-ios predicate string:label == 'Done'")` | `device.getByText("Done", { exact: true })`, or `getByRole(role, { name: "Done", exact: true })` |
-| `$("android.widget.Switch")` (class name) | [`device.getByRole("switch")`](api-reference.md#devicegetbyrolerole-string-options-elementhandle), or `device.locator({ className: "android.widget.Switch" })` |
+| `$("android.widget.Switch")` (class name) | [`device.getByRole("switch")`](api-reference.md#devicegetbyrolerole-role-options-elementhandle), or `device.locator({ className: "android.widget.Switch" })` |
 | `$$(selector)` | [`locator.all()`](api-reference.md#elementhandleall-promiseelementhandle) or [`locator.count()`](api-reference.md#elementhandlecount-promisenumber) |
 | `$$(selector)[2]` | [`locator.nth(2)`](api-reference.md#elementhandlenthindex-number-elementhandle) |
 | `parent.$(child)` | [`parent.getByText(…)`](api-reference.md#scoping) and the other `getBy*` methods (scoping) |
@@ -65,13 +65,13 @@ Appium has clients in many languages. The examples here use [WebdriverIO](https:
 | `el.waitForDisplayed({ reverse: true })` | `await expect(locator).toBeHidden()` |
 | `el.waitForEnabled()` | `await expect(locator).toBeEnabled()`, or nothing: `tap()` already waits for the element to be enabled |
 | `driver.pause(2000)` | Nothing: delete it |
-| `mobile: scroll` / `mobile: scrollGesture` / UiScrollable | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-string-maxscrolls-number-speed-number--promisevoid), or [`locator.scroll()`](api-reference.md#elementhandlescrolldirection-string-options-promisevoid) on a scroll view |
-| `mobile: swipeGesture`, W3C actions | [`device.swipe()`](api-reference.md#deviceswipedirection-string-options-swipeoptions-promisevoid), [`locator.dragTo()`](api-reference.md#elementhandledragtotarget-elementhandle-options-promisevoid), [`device.dragXY()`](api-reference.md#devicedragxyfrom--x-number-y-number--to--x-number-y-number--options--duration-number--promisevoid) |
+| `mobile: scroll` / `mobile: scrollGesture` / UiScrollable | [`locator.scrollIntoView()`](api-reference.md#elementhandlescrollintoviewoptions--direction-swipedirection-maxscrolls-number-speed-number--promisevoid), or [`locator.scroll()`](api-reference.md#elementhandlescrolldirection-swipedirection-options-promisevoid) on a scroll view |
+| `mobile: swipeGesture`, W3C actions | [`device.swipe()`](api-reference.md#deviceswipedirection-swipedirection-options-swipeoptions-promisevoid), [`locator.dragTo()`](api-reference.md#elementhandledragtotarget-elementhandle-options-promisevoid), [`device.dragXY()`](api-reference.md#devicedragxyfrom--x-number-y-number--to--x-number-y-number--options--duration-number--promisevoid) |
 | `mobile: longClickGesture` / `mobile: doubleClickGesture` | [`locator.longPress()`](api-reference.md#elementhandlelongpressoptions-promisevoid) / [`locator.doubleTap()`](api-reference.md#elementhandledoubletapoptions-promisevoid) |
 | `mobile: pinchOpenGesture` / `mobile: pinchCloseGesture` | [`locator.pinchOut()`](api-reference.md#elementhandlepinchoutoptions-promisevoid) / [`locator.pinchIn()`](api-reference.md#elementhandlepinchinoptions-promisevoid) |
 | Tap at coordinates (W3C actions) | [`device.tapXY(x, y)`](api-reference.md#devicetapxyx-number-y-number-promisevoid) |
 | `mobile: hideKeyboard` | [`device.hideKeyboard()`](api-reference.md#devicehidekeyboard-promisevoid) |
-| `mobile: pressKey` / `driver.back()` | [`device.pressKey()`](api-reference.md#devicepresskeykey-string-promisevoid) / [`device.pressBack()`](api-reference.md#devicepressback-promisevoid-android-only) (Android) |
+| `mobile: pressKey` / `driver.back()` | [`device.pressKey()`](api-reference.md#devicepresskeykey-devicekey-promisevoid) / [`device.pressBack()`](api-reference.md#devicepressback-promisevoid-android-only) (Android) |
 
 ### App and device management
 

@@ -23,7 +23,8 @@ import {
   _xpath,
   _label,
 } from './selectors.js';
-import { iosUnnamedRoleMissHint, unknownRoleMessage } from './roles.js';
+import { iosUnnamedRoleMissHint, unknownRoleMessage, type Role } from './roles.js';
+import type { SwipeDirection } from './input-names.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
@@ -852,8 +853,12 @@ export class ElementHandle {
     return this._scoped(options?.exact ? _text(text) : _textContains(text));
   }
 
-  /** Locate a descendant by accessibility role, optionally filtering by name or state. */
-  getByRole(role: string, options?: RoleLocatorOptions): ElementHandle {
+  /**
+   * Locate a descendant by accessibility role, optionally filtering by name or
+   * state. Takes the same role names as `device.getByRole()`; lazy, like
+   * every locator.
+   */
+  getByRole(role: Role | (string & {}), options?: RoleLocatorOptions): ElementHandle {
     return this._scoped(_role(role, options));
   }
 
@@ -2756,7 +2761,7 @@ export class ElementHandle {
    * @param options.timeout - Maximum time in milliseconds for the whole call,
    *   auto-wait included. Defaults to the device timeout.
    */
-  async scroll(direction: string, options?: TimeoutOptions & { distance?: number }): Promise<void> {
+  async scroll(direction: SwipeDirection | (string & {}), options?: TimeoutOptions & { distance?: number }): Promise<void> {
     const call = this._forCall('scroll()', options, ['distance', 'timeout']);
     if (call !== this) return call.scroll(direction, { distance: options?.distance });
     const { target, remainingMs } = await this._tracedResolve('scroll', 'scroll', async () => {
@@ -3516,7 +3521,7 @@ export class ElementHandle {
    * @param options.speed - Swipe speed in pixels/second. Default `2000`.
    */
   async scrollIntoView(options?: {
-    direction?: string;
+    direction?: SwipeDirection | (string & {});
     maxScrolls?: number;
     speed?: number;
   }): Promise<void> {
