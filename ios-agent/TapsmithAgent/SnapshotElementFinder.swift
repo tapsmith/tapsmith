@@ -261,7 +261,7 @@ class SnapshotElementFinder {
             // selector's own query (cacheQueryElement), so index it there.
             if let substringMatched, queryNodes[ordinal].label.isEmpty {
                 // Matched in a way that query can't return (a joined title
-                // child, dropped punctuation): no index, no live element.
+                // child): no index, no live element.
                 guard substringMatched[ordinal] else { return nil }
                 return QueryIndex.substringLiveIndex(
                     of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil, matched: substringMatched

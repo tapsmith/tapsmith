@@ -103,9 +103,30 @@ const CASES: Case[] = [
   { why: 'a joined middle child', type: T.other, label: 'A, B, C', query: { exact: 'B' }, matches: true },
   { why: 'a joined last child', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Text inputs' }, matches: true },
   { why: 'part of a child is no exact match', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Login' }, matches: false },
-  // iOS drops trailing punctuation from some labels.
-  { why: 'a label without the trailing "?"', type: T.button, label: 'Forgot password', query: { exact: 'Forgot password?' }, matches: true },
-  { why: 'trailing punctuation only', type: T.button, label: 'Forgot password', query: { exact: 'Forgot' }, matches: false },
+  // A label that lacks the text's trailing punctuation is not that text
+  // (PILOT-880): a React Native touchable's accessibilityLabel hides the text
+  // it wraps, and an alert's "Log out" button is not its "Log out?" title.
+  // Exact and substring agree.
+  { why: 'a label without the trailing "?"', type: T.link, label: 'Forgot password', query: { exact: 'Forgot password?' }, matches: false },
+  { why: 'nor by substring', type: T.link, label: 'Forgot password', query: { substring: 'Forgot password?' }, matches: false },
+  { why: 'the label is found by its own text', type: T.link, label: 'Forgot password', query: { substring: 'forgot password' }, matches: true },
+  { why: 'a label with trailing punctuation the query lacks', type: T.button, label: 'Done!', query: { exact: 'Done' }, matches: false },
+  { why: 'contains that query as a substring', type: T.button, label: 'Done!', query: { substring: 'done' }, matches: true },
+  { why: 'a symbol is no stand-in for another', type: T.button, label: '👍', query: { substring: '👎' }, matches: false },
+  { why: 'a query ending in symbols is literal', type: T.text, label: 'Music', query: { substring: 'C++' }, matches: false },
+  { why: 'a query ending in "%" is literal', type: T.text, label: 'Volume 50', query: { substring: '50%' }, matches: false },
+  { why: 'a query ending in "%" in the label', type: T.text, label: 'Volume 50%', query: { substring: '50%' }, matches: true },
+  // A substring is literal: ICU pattern characters match only themselves.
+  { why: 'a "?" in the label', type: T.text, label: 'Forgot password? Reset it', query: { substring: 'password? reset' }, matches: true },
+  { why: '"?" is not optional', type: T.text, label: 'Ready', query: { substring: 'x?Ready' }, matches: false },
+  { why: 'a "*" in the label', type: T.text, label: 'Rating: 5*', query: { substring: '5*' }, matches: true },
+  { why: '"*" is not a repeat', type: T.text, label: 'aab', query: { substring: 'a*b' }, matches: false },
+  { why: 'a "\\" in the label', type: T.text, label: 'C:\\Users\\ada', query: { substring: ':\\users' }, matches: true },
+  { why: '"\\d" is not a digit class', type: T.text, label: 'a1', query: { substring: 'a\\d' }, matches: false },
+  { why: 'a "[" in the label', type: T.text, label: 'Items [3]', query: { substring: '[3]' }, matches: true },
+  { why: '"[...]" is not a character class', type: T.text, label: 'a', query: { substring: '[ab]' }, matches: false },
+  { why: '"." is not any character', type: T.text, label: 'abc', query: { substring: 'a.c' }, matches: false },
+  { why: 'exact is literal too', type: T.text, label: 'aab', query: { exact: 'a*b' }, matches: false },
   // Whitespace and case, as before (PILOT-510, PILOT-522).
   { why: 'NBSP is a space', type: T.text, label: 'Welcome to\u00a0Expo', query: { exact: 'Welcome to Expo' }, matches: true },
   { why: 'exact is case-sensitive', type: T.text, label: 'GET STARTED', query: { exact: 'get started' }, matches: false },
@@ -259,6 +280,26 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
   it("the application's name is no container label", () => {
     const app = node('XCUIElementTypeApplication', 'Notes', [node(T.button, 'Notes, Add')]);
     expect(matchTypes(app, 'device.getByText("Notes", { exact: true })')).toEqual([`${T.button}:Notes, Add`]);
+  });
+});
+
+describe('iOS getByText is literal about trailing punctuation (PILOT-880)', () => {
+  // A confirmation alert titled "Log out?" over the screen whose "Log out"
+  // button opened it, and that screen once the alert is dismissed.
+  const alert = node(T.other, '', [
+    node(T.button, 'Log out'),
+    node(T.alert, 'Log out?', [node(T.other, '', [node(T.text, 'Log out?'), node(T.button, 'Cancel'), node(T.button, 'Log out')])]),
+  ]);
+  const screen = node(T.other, '', [node(T.button, 'Log out')]);
+
+  it('finds the alert title, not the buttons named like it', () => {
+    expect(matchTypes(alert, 'device.getByText("Log out?")')).toEqual([`${T.text}:Log out?`]);
+    expect(matchTypes(alert, 'device.getByText("Log out?", { exact: true })')).toEqual([`${T.text}:Log out?`]);
+  });
+
+  it('finds nothing once the alert is gone', () => {
+    expect(matchTypes(screen, 'device.getByText("Log out?")')).toEqual([]);
+    expect(matchTypes(screen, 'device.getByText("Log out?", { exact: true })')).toEqual([]);
   });
 });
 

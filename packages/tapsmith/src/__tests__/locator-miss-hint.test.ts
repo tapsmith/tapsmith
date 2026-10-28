@@ -61,6 +61,24 @@ describe("nearMissProbes()", () => {
     vitestExpect(codes(_textContains("Hi"))).toEqual(['getByLabel("Hi")', 'getByPlaceholder("Hi")', 'getByDescription("Hi")']);
   });
 
+  it("also checks words ending in punctuation without it, as text and description (PILOT-880)", () => {
+    // On iOS a React Native link labelled "Forgot password" hides its "Forgot password?" text.
+    vitestExpect(codes(_textContains("Forgot password?"))).toEqual([
+      'getByLabel("Forgot password?")', 'getByPlaceholder("Forgot password?")', 'getByDescription("Forgot password?")',
+      'getByText("Forgot password")', 'getByDescription("Forgot password")',
+    ]);
+    vitestExpect(codes(_text("Done!")).slice(-2)).toEqual(['getByText("Done")', 'getByDescription("Done")']);
+    vitestExpect(codes(_textContains("Forgot password? ")).slice(-2)).toEqual([
+      'getByText("Forgot password")', 'getByDescription("Forgot password")',
+    ]);
+    vitestExpect(codes(_role("link", { name: "Help?" })).slice(-3)).toEqual([
+      'getByText("Help")', 'getByDescription("Help")', 'getByRole("link")',
+    ]);
+    // Punctuation alone, or none, adds nothing.
+    vitestExpect(codes(_textContains("?"))).toEqual(['getByLabel("?")', 'getByPlaceholder("?")', 'getByDescription("?")']);
+    vitestExpect(codes(_textContains("Hi")).length).toBe(3);
+  });
+
   it("checks nothing for a scoped selector, an id, or a RegExp text, and only the role for a RegExp name", () => {
     vitestExpect(codes(withParent(_text("Row"), _role("list")))).toEqual([]);
     vitestExpect(codes(_testId("submit"))).toEqual([]);
@@ -115,6 +133,18 @@ describe("a not-found error lists the near misses the agent finds", () => {
     vitestExpect(await err(tapsmithExpect(d.getByPlaceholder("Email")).toExist({ timeout: 50 }))).toContain(near);
     vitestExpect(await err(tapsmithExpect(d.getByPlaceholder("Email")).toHaveCount(1, { timeout: 50 }))).toContain(near);
     vitestExpect(await err(d.getByPlaceholder("Email").waitFor({ timeout: 50 }))).toContain(near);
+  });
+
+  it("names the description that fits a label without the text's \"?\" (PILOT-880)", async () => {
+    const { client } = missingClient((s) =>
+      (s.kind.type === "contentDesc" || s.kind.type === "textContains") && s.kind.value === "Forgot password"
+        ? [element("l", "Forgot password")]
+        : []);
+    const d = new Device(client, { platform: "ios", timeout: 50 });
+    vitestExpect(await err(d.getByText("Forgot password?", { exact: true }).tap())).toContain(
+      'Nothing matches it, but on screen now these locators match: ' +
+        'getByText("Forgot password") (1 element), getByDescription("Forgot password") (1 element).',
+    );
   });
 
   it("only the picker when nothing near matches", async () => {

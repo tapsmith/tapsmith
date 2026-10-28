@@ -56,20 +56,11 @@ function containsChildText(label: string, query: string): boolean {
   return l === q || l.startsWith(`${q}, `) || l.endsWith(`, ${q}`) || l.includes(`, ${q}, `);
 }
 
-const TRAILING_PUNCTUATION = /[\p{P}\p{S}]+$/u;
-
-/** Equal once trailing punctuation and symbols are dropped from both (iOS drops a "?" from a label). */
-function equalIgnoringTrailingPunctuation(a: string, b: string): boolean {
-  if (a === '' || b === '') return false;
-  return a.replace(TRAILING_PUNCTUATION, '') === b.replace(TRAILING_PUNCTUATION, '');
-}
-
-/** getByText(string, { exact: true }) on iOS. */
+/** getByText(string, { exact: true }) on iOS: literal, like the substring form (PILOT-880). */
 export function iosTextMatchesExact(texts: IosTexts, query: string): boolean {
   const q = normalize(query);
   if ([texts.label, texts.title, texts.value].some((t) => normalize(t) === q)) return true;
-  if (containsChildText(texts.label, query) || containsChildText(texts.title, query)) return true;
-  return equalIgnoringTrailingPunctuation(normalize(texts.label), q);
+  return containsChildText(texts.label, query) || containsChildText(texts.title, query);
 }
 
 /** getByText(string) on iOS: a case-insensitive substring of the label, title or value. */

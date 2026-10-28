@@ -28,6 +28,21 @@ describe("Login screen", () => {
     await expect(loginScreen.forgotPasswordLink).toBeVisible()
   })
 
+  test("PILOT-880: substring and exact getByText agree on text ending in \"?\"", async ({ loginScreen }) => {
+    await expect(loginScreen.forgotPasswordLink).toBeVisible()
+    // Android shows the text; on iOS the link's label hides it, and neither
+    // form finds a label that only lacks the "?".
+    const exact = await loginScreen.forgotPasswordTextExact.count()
+    await expect(loginScreen.forgotPasswordText).toHaveCount(exact)
+  })
+
+  test("forgot password link opens the reset alert", async ({ loginScreen }) => {
+    await loginScreen.forgotPasswordLink.tap()
+    await expect(loginScreen.resetAlertMessage).toBeVisible()
+    await loginScreen.resetAlertOk.tap()
+    await expect(loginScreen.resetAlertMessage).toBeHidden()
+  })
+
   // ─── Text Input ───
 
   test("can type into email field", async ({ loginScreen }) => {

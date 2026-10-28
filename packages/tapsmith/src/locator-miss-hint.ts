@@ -51,10 +51,23 @@ function loosenedRole(rv: RoleSelectorValue): RoleSelectorValue | undefined {
     : { role: rv.role, name: rv.name };
 }
 
-/** The getters that read the same words in another attribute, in the order they are recommended. */
+const TRAILING_PUNCTUATION = /[\p{P}\p{S}]+$/u;
+
+/**
+ * The getters that read the same words in another attribute, in the order
+ * they are recommended. Words ending in punctuation are also checked without
+ * it, as text and as a description (PILOT-880): on iOS a React Native
+ * touchable's accessibilityLabel "Forgot password" hides the "Forgot
+ * password?" text it wraps, and getByText matches text literally.
+ */
 function wordProbes(needle: string, skip: Selector['kind']['type'][]): Probe[] {
   const kinds = (['textContains', 'label', 'hint', 'contentDesc'] as const).filter((k) => !skip.includes(k));
-  return kinds.map((type) => ({ selector: makeSelector({ type, value: needle }) }));
+  const probes: Probe[] = kinds.map((type) => ({ selector: makeSelector({ type, value: needle }) }));
+  const bare = needle.trim().replace(TRAILING_PUNCTUATION, '').trim();
+  if (bare !== '' && bare !== needle.trim()) {
+    probes.push(...(['textContains', 'contentDesc'] as const).map((type) => ({ selector: makeSelector({ type, value: bare }) })));
+  }
+  return probes;
 }
 
 /**
