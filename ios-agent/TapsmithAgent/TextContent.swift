@@ -73,12 +73,16 @@ enum TextContent {
     }
 
     /// getByText(string, { exact: true }): the whole label, title or value
-    /// (whitespace-normalized), one ", "-joined child of the label or title
-    /// (React Native merges a touchable's child texts into its label), or
-    /// the label without the text's trailing punctuation ("Forgot password"
-    /// for "Forgot password?": a React Native touchable's accessibilityLabel
-    /// hides the text it wraps).
-    static func matchesExact(_ texts: Texts, _ query: String) -> Bool {
+    /// (whitespace-normalized), or one ", "-joined child of the label or
+    /// title (React Native merges a touchable's child texts into its label).
+    ///
+    /// `labelFallback` is the second pass of the walk, run only when no node
+    /// matched the query (PILOT-880): then a label that lacks the text's
+    /// trailing punctuation matches too ("Forgot password" for "Forgot
+    /// password?": a React Native touchable's accessibilityLabel hides the
+    /// text it wraps). Only as a fallback, so an alert titled "Log out?"
+    /// is found without its "Log out" button.
+    static func matchesExact(_ texts: Texts, _ query: String, labelFallback: Bool) -> Bool {
         if TextMatch.equals(texts.label, query) || TextMatch.equals(texts.title, query)
             || TextMatch.equals(texts.value, query) {
             return true
@@ -87,19 +91,19 @@ enum TextContent {
             || TextMatch.containsChildText(texts.title, childText: query) {
             return true
         }
-        return matchesIgnoringTrailingPunctuation(TextMatch.normalize(texts.label), TextMatch.normalize(query))
+        return labelFallback
+            && matchesIgnoringTrailingPunctuation(TextMatch.normalize(texts.label), TextMatch.normalize(query))
     }
 
-    /// getByText(string): a case-insensitive substring of the label, title or
-    /// value — or, so that it finds whatever `matchesExact` finds
-    /// (PILOT-880), the end of a label without the query's trailing
-    /// punctuation: "Forgot password?" in a link labelled "Forgot password".
-    static func matchesSubstring(_ texts: Texts, _ query: String) -> Bool {
+    /// getByText(string): a case-insensitive substring of the label, title
+    /// or value. `labelFallback` as for `matchesExact`, ignoring case, so a
+    /// substring finds whatever the exact form finds.
+    static func matchesSubstring(_ texts: Texts, _ query: String, labelFallback: Bool) -> Bool {
         if TextMatch.contains(texts.label, query) || TextMatch.contains(texts.title, query)
             || TextMatch.contains(texts.value, query) {
             return true
         }
-        return endsWithIgnoringTrailingPunctuation(
+        return labelFallback && matchesIgnoringTrailingPunctuation(
             TextMatch.normalize(texts.label).lowercased(), TextMatch.normalize(query).lowercased()
         )
     }
@@ -113,22 +117,9 @@ enum TextContent {
     /// are dropped from both.
     static func matchesIgnoringTrailingPunctuation(_ a: String, _ b: String) -> Bool {
         guard !a.isEmpty && !b.isEmpty else { return false }
-        return droppingTrailingPunctuation(a) == droppingTrailingPunctuation(b)
-    }
-
-    /// Whether `text` ends with `query` once trailing punctuation and symbols
-    /// are dropped from both: the substring form of
-    /// `matchesIgnoringTrailingPunctuation`. Only for a query that ends in
-    /// punctuation, and never for punctuation alone.
-    static func endsWithIgnoringTrailingPunctuation(_ text: String, _ query: String) -> Bool {
-        let trimmedQuery = droppingTrailingPunctuation(query)
-        guard !trimmedQuery.isEmpty, trimmedQuery != query else { return false }
-        return droppingTrailingPunctuation(text).hasSuffix(trimmedQuery)
-    }
-
-    private static func droppingTrailingPunctuation(_ s: String) -> String {
         let punct = CharacterSet.punctuationCharacters.union(.symbols)
-        let trimmed = s.unicodeScalars.reversed().drop(while: { punct.contains($0) })
-        return String(String.UnicodeScalarView(trimmed.reversed()))
+        let trimA = a.unicodeScalars.reversed().drop(while: { punct.contains($0) })
+        let trimB = b.unicodeScalars.reversed().drop(while: { punct.contains($0) })
+        return String(String.UnicodeScalarView(trimA.reversed())) == String(String.UnicodeScalarView(trimB.reversed()))
     }
 }

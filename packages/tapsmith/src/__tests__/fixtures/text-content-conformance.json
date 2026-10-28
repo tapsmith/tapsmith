@@ -404,7 +404,8 @@
       "query": {
         "exact": "Forgot password?"
       },
-      "matches": true
+      "matches": true,
+      "fallbackOnly": true
     },
     {
       "why": "trailing punctuation only",
@@ -416,13 +417,33 @@
       "matches": false
     },
     {
+      "why": "a label with trailing punctuation the query lacks",
+      "type": "XCUIElementTypeButton",
+      "label": "Done!",
+      "query": {
+        "exact": "Done"
+      },
+      "matches": true,
+      "fallbackOnly": true
+    },
+    {
+      "why": "exact stays case-sensitive in the fallback",
+      "type": "XCUIElementTypeButton",
+      "label": "Log Out",
+      "query": {
+        "exact": "Log out?"
+      },
+      "matches": false
+    },
+    {
       "why": "a substring without the trailing \"?\"",
       "type": "XCUIElementTypeLink",
       "label": "Forgot password",
       "query": {
         "substring": "Forgot password?"
       },
-      "matches": true
+      "matches": true,
+      "fallbackOnly": true
     },
     {
       "why": "a substring without the trailing \"?\", ignoring case",
@@ -431,28 +452,30 @@
       "query": {
         "substring": "FORGOT PASSWORD?"
       },
-      "matches": true
-    },
-    {
-      "why": "a suffix without the trailing \"?\"",
-      "type": "XCUIElementTypeLink",
-      "label": "Forgot password",
-      "query": {
-        "substring": "password?"
-      },
-      "matches": true
+      "matches": true,
+      "fallbackOnly": true
     },
     {
       "why": "other trailing punctuation on the label",
       "type": "XCUIElementTypeButton",
       "label": "Forgot password.",
       "query": {
-        "substring": "password?"
+        "substring": "Forgot password?"
       },
-      "matches": true
+      "matches": true,
+      "fallbackOnly": true
     },
     {
-      "why": "the dropped \"?\" is only at the end of the label",
+      "why": "only the whole label stands in for the text",
+      "type": "XCUIElementTypeLink",
+      "label": "Forgot password",
+      "query": {
+        "substring": "password?"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor a label that only starts with it",
       "type": "XCUIElementTypeLink",
       "label": "Forgot password reset",
       "query": {
@@ -485,6 +508,42 @@
       "title": "Forgot password",
       "query": {
         "substring": "Forgot password?"
+      },
+      "matches": false
+    },
+    {
+      "why": "a query ending in symbols is no suffix of a word",
+      "type": "XCUIElementTypeStaticText",
+      "label": "Music",
+      "query": {
+        "substring": "C++"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor is one ending in \"+\"",
+      "type": "XCUIElementTypeStaticText",
+      "label": "Camera",
+      "query": {
+        "substring": "A+"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor is one ending in \"%\"",
+      "type": "XCUIElementTypeStaticText",
+      "label": "Volume 50",
+      "query": {
+        "substring": "50%"
+      },
+      "matches": false
+    },
+    {
+      "why": "nor a word ending in the query",
+      "type": "XCUIElementTypeStaticText",
+      "label": "Already",
+      "query": {
+        "substring": "ready?"
       },
       "matches": false
     },

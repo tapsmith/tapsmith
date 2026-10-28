@@ -168,6 +168,21 @@ class SnapshotElementFinder {
         in snapshotDict: inout [String: Any],
         register: Bool
     ) throws -> [ElementInfo] {
+        let found = try findElementsInOnePass(selector, in: &snapshotDict, register: register)
+        // A getByText string that matched nothing gets a second pass, in
+        // which a label without the text's trailing punctuation matches
+        // (TextContent.matchesExact, PILOT-880).
+        if found.isEmpty, let fallback = selector.withTextLabelFallback {
+            return try findElementsInOnePass(fallback, in: &snapshotDict, register: register)
+        }
+        return found
+    }
+
+    private func findElementsInOnePass(
+        _ selector: ElementSelector,
+        in snapshotDict: inout [String: Any],
+        register: Bool
+    ) throws -> [ElementInfo] {
         if let regexError = selector.regexError {
             throw AgentError.invalidSelector(regexError)
         }
@@ -1301,9 +1316,13 @@ class SnapshotElementFinder {
             let texts = TextContent.texts(
                 elementType: elType, label: label, title: title, value: value, containerLabel: containerLabel
             )
-            if let text = selector.text, !TextContent.matchesExact(texts, text) { return false }
+            if let text = selector.text,
+               !TextContent.matchesExact(texts, text, labelFallback: selector.textLabelFallback) {
+                return false
+            }
             if let textRegex = selector.textRegex, !TextContent.matchesRegex(texts, textRegex) { return false }
-            if let textContains = selector.textContains, !TextContent.matchesSubstring(texts, textContains) {
+            if let textContains = selector.textContains,
+               !TextContent.matchesSubstring(texts, textContains, labelFallback: selector.textLabelFallback) {
                 return false
             }
         }

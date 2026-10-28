@@ -571,11 +571,16 @@ const TEXT_SELECTOR_TYPES: ReadonlySet<string> = new Set(['text', 'textContains'
  * getByText on an iOS node (PILOT-794): its text content, as the agent's
  * TextContent reads it. `containerLabel` is the nearest app ancestor's label.
  */
-function iosNodeMatchesText(node: HierarchyNode, selector: ParsedSelector, containerLabel: string): boolean {
+function iosNodeMatchesText(
+  node: HierarchyNode,
+  selector: ParsedSelector,
+  containerLabel: string,
+  labelFallback: boolean,
+): boolean {
   const texts = iosTexts(node, containerLabel);
   switch (selector.type) {
-    case 'text': return iosTextMatchesExact(texts, selector.value);
-    case 'textContains': return iosTextMatchesSubstring(texts, selector.value);
+    case 'text': return iosTextMatchesExact(texts, selector.value, labelFallback);
+    case 'textContains': return iosTextMatchesSubstring(texts, selector.value, labelFallback);
     default: return selector.regex !== undefined && iosTextMatchesRegex(texts, toJsRegExp(selector.regex));
   }
 }
@@ -902,6 +907,21 @@ export function parsedSelectorError(selector: ParsedSelector): string | null {
 }
 
 export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelector): HierarchyNode[] {
+  let found = findMatchingNodesInOnePass(roots, selector, false);
+  // A getByText string that matched nothing literally gets the agent's
+  // fallback pass (PILOT-880): a label without the text's trailing punctuation.
+  // Decided before any positional index, as the agent never sees one.
+  if (found.length === 0 && (selector.type === 'text' || selector.type === 'textContains')) {
+    found = findMatchingNodesInOnePass(roots, selector, true);
+  }
+  return applyPositionalIndex(found, selector.index);
+}
+
+function findMatchingNodesInOnePass(
+  roots: HierarchyNode[],
+  selector: ParsedSelector,
+  labelFallback: boolean,
+): HierarchyNode[] {
   const raw: HierarchyNode[] = [];
   // iOS getByText, like the agent (PILOT-794): a node's text content depends
   // on its container's label, and a match that contains another match gives
@@ -916,7 +936,7 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     const isIos = !node.attributes.has('class') && !isWebViewNode(node);
     const appNode = !isNonAppNode(node);
     const matches = appNode && (iosText && isIos
-      ? iosNodeMatchesText(node, selector, containerLabel)
+      ? iosNodeMatchesText(node, selector, containerLabel, labelFallback)
       : nodeMatchesSelector(node, selector));
     let pushed = false;
     if (matches) {
@@ -945,7 +965,7 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   }
 
   const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));
-  return applyPositionalIndex(collapseSameTargetNodes(kept), selector.index);
+  return collapseSameTargetNodes(kept);
 }
 
 // Geometry lives with the hierarchy model (no matching); re-exported for

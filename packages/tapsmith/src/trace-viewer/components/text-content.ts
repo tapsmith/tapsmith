@@ -64,34 +64,27 @@ function equalIgnoringTrailingPunctuation(a: string, b: string): boolean {
   return a.replace(TRAILING_PUNCTUATION, '') === b.replace(TRAILING_PUNCTUATION, '');
 }
 
-/** getByText(string, { exact: true }) on iOS. */
-export function iosTextMatchesExact(texts: IosTexts, query: string): boolean {
+/**
+ * getByText(string, { exact: true }) on iOS. `labelFallback` is the second
+ * pass, run only when no node matched (PILOT-880): a label that lacks the
+ * text's trailing punctuation also matches, as a React Native touchable's
+ * accessibilityLabel hides the text it wraps.
+ */
+export function iosTextMatchesExact(texts: IosTexts, query: string, labelFallback: boolean): boolean {
   const q = normalize(query);
   if ([texts.label, texts.title, texts.value].some((t) => normalize(t) === q)) return true;
   if (containsChildText(texts.label, query) || containsChildText(texts.title, query)) return true;
-  return equalIgnoringTrailingPunctuation(normalize(texts.label), q);
+  return labelFallback && equalIgnoringTrailingPunctuation(normalize(texts.label), q);
 }
 
 /**
  * getByText(string) on iOS: a case-insensitive substring of the label, title
- * or value — or, so that it finds whatever the exact form finds (PILOT-880),
- * the end of a label that lacks the query's trailing punctuation.
+ * or value. `labelFallback` as for iosTextMatchesExact, ignoring case.
  */
-export function iosTextMatchesSubstring(texts: IosTexts, query: string): boolean {
+export function iosTextMatchesSubstring(texts: IosTexts, query: string, labelFallback: boolean): boolean {
   const q = normalize(query).toLowerCase();
   if ([texts.label, texts.title, texts.value].some((t) => normalize(t).toLowerCase().includes(q))) return true;
-  return endsWithIgnoringTrailingPunctuation(normalize(texts.label).toLowerCase(), q);
-}
-
-/**
- * Whether `text` ends with `query` once trailing punctuation and symbols are
- * dropped from both: the substring form of equalIgnoringTrailingPunctuation.
- * Only for a query that ends in punctuation, and never for punctuation alone.
- */
-function endsWithIgnoringTrailingPunctuation(text: string, query: string): boolean {
-  const q = query.replace(TRAILING_PUNCTUATION, '');
-  if (q === '' || q === query) return false;
-  return text.replace(TRAILING_PUNCTUATION, '').endsWith(q);
+  return labelFallback && equalIgnoringTrailingPunctuation(normalize(texts.label).toLowerCase(), q);
 }
 
 /** getByText(RegExp) on iOS: tested against the raw label, title or value. */
