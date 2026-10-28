@@ -168,7 +168,9 @@ interface CDPTarget {
 
 /**
  * A connection to the app's WebView, from `device.webview()`. Its locators
- * and selector methods query the DOM and auto-wait, as native ones do.
+ * and selector methods query the DOM. Actions and value reads, such as
+ * `click()` and `textContent()`, auto-wait, as native ones do; snapshot
+ * reads, such as `isVisible()` and `isHidden()`, and `evaluate()` do not.
  */
 export class WebViewHandle {
   private _ws: WebSocket | null = null;
