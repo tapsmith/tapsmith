@@ -63,8 +63,9 @@ class TapsmithAgent : Instrumentation() {
         val port = arguments?.getString(ARG_PORT)?.toIntOrNull() ?: DEFAULT_PORT
 
         val elementFinder = ElementFinder(device, this)
-        val occlusionGuard = OcclusionGuard(device, this, elementFinder::nodeInfoFor)
-        val actionExecutor = ActionExecutor(device, this, occlusionGuard)
+        val input = AgentInput(device, this)
+        val occlusionGuard = OcclusionGuard(device, this, elementFinder::nodeInfoFor, input)
+        val actionExecutor = ActionExecutor(device, this, occlusionGuard, input)
         val waitEngine = WaitEngine(device)
         val hierarchyDumper = HierarchyDumper(device, this, elementFinder::composeShapeOf)
         val commandHandler =
