@@ -959,7 +959,8 @@ export class Device {
 
   /**
    * Dismiss the soft keyboard if it is showing; resolves at once when it is not.
-   * Throws if the keyboard is still up after every way of dismissing it.
+   * On Android it presses BACK. On iOS it tries each way of dismissing it and
+   * throws if the keyboard is still up after all of them.
    */
   async hideKeyboard(): Promise<void> {
     return this._tracedAction('hideKeyboard', 'device', undefined,
@@ -967,7 +968,7 @@ export class Device {
       'Hide keyboard failed');
   }
 
-  /** Turn the screen on if it is off. */
+  /** Turn the screen on if it is off. Android only: on iOS it does nothing. */
   async wake(): Promise<void> {
     return this._tracedAction('wake', 'device', undefined,
       () => this._client.wakeDevice(),
@@ -975,8 +976,8 @@ export class Device {
   }
 
   /**
-   * Wake the screen and dismiss a lock screen with no PIN or pattern. Sends
-   * nothing to the app when the device is already unlocked.
+   * Wake the screen and dismiss a lock screen with no PIN or pattern. Android
+   * only: on iOS it does nothing.
    */
   async unlock(): Promise<void> {
     return this._tracedAction('unlock', 'device', undefined,
@@ -2142,8 +2143,9 @@ export class Device {
   }
 
   /**
-   * Close this device's connection to the daemon and everything it started
-   * (WebView connections, network capture). The runner does this for you.
+   * Close this device's connection to the daemon, stopping the network
+   * capture and the active WebView connection it started. The runner does
+   * this for you.
    */
   async close(): Promise<void> {
     await this._close({ closeClient: true });
