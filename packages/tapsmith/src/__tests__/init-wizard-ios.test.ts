@@ -557,8 +557,9 @@ describe('configureIos() with no build yet (PILOT-778)', () => {
 
   it('both: a skipped device id never takes the simulator build\'s id', async () => {
     simCandidates = [SIM_APP];
+    deviceCandidates = [DEVICE_APP];
     bundleIds.set(SIM_APP, 'com.acme.app.dev');
-    script('both', [[/simulator build\)/, SIM_APP], [/device build \.app/, ''], [/device build's bundle identifier/, 'Skip for now']]);
+    script('both', [[/simulator build\)/, SIM_APP], [/device build \.app/, DEVICE_APP], [/device build's bundle identifier/, 'Skip for now']]);
 
     const ios = await configureIos(env);
 
@@ -567,13 +568,46 @@ describe('configureIos() with no build yet (PILOT-778)', () => {
     const device = text.slice(text.indexOf("name: 'ios-device'"));
     expect(device).not.toContain("package: 'com.acme.app.dev'");
     expect(device).toContain("// package: '<bundle identifier>',");
-    expect(placeholderKeys(['ios'], undefined, ios)).toEqual(['app', 'package']);
+    expect(placeholderKeys(['ios'], undefined, ios)).toEqual(['package']);
   });
 
-  it('both: a skipped simulator id never takes the device build\'s id', async () => {
+  it('both: a device target with nothing set up is left out beside a simulator one, and said so', async () => {
+    const logged: string[] = [];
+    vi.mocked(console.log).mockImplementation((...args: unknown[]) => { logged.push(args.join(' ')); });
+    simCandidates = [SIM_APP];
+    bundleIds.set(SIM_APP, 'com.acme.app.dev');
+    script('both', [[/simulator build\)/, SIM_APP], [/device build \.app/, ''], [/device build's bundle identifier/, 'Skip for now']]);
+
+    const ios = await configureIos(env);
+
+    expect(ios.usePhysicalDevice).toBe(false);
+    expect(ios.deviceBundleId).toBeUndefined();
+    const text = generateConfig(['ios'], undefined, ios, false);
+    expect(text).not.toContain('ios-device');
+    expect(text).not.toContain('projects');
+    expect(placeholderKeys(['ios'], undefined, ios)).toEqual([]);
+    expect(logged.join('\n')).toContain('iOS physical devices left out of the config');
+  });
+
+  it('both: a simulator target with nothing set up is left out beside a device one', async () => {
     deviceCandidates = [DEVICE_APP];
     bundleIds.set(DEVICE_APP, 'com.acme.app');
     script('both', [[/simulator build\)/, ''], [/device build \.app/, DEVICE_APP], [/simulator build's bundle identifier/, 'Skip for now']]);
+
+    const ios = await configureIos(env);
+
+    expect(ios.simulator).toBeUndefined();
+    const text = generateConfig(['ios'], undefined, ios, false);
+    expect(text).not.toContain('projects');
+    expect(text).toContain("  package: 'com.acme.app',");
+    expect(text).not.toContain('simulator:');
+  });
+
+  it('both: a skipped simulator id never takes the device build\'s id', async () => {
+    simCandidates = [SIM_APP];
+    deviceCandidates = [DEVICE_APP];
+    bundleIds.set(DEVICE_APP, 'com.acme.app');
+    script('both', [[/simulator build\)/, SIM_APP], [/device build \.app/, DEVICE_APP], [/simulator build's bundle identifier/, 'Skip for now']]);
 
     const ios = await configureIos(env);
 
@@ -583,7 +617,7 @@ describe('configureIos() with no build yet (PILOT-778)', () => {
     expect(sim).not.toContain("package: 'com.acme.app'");
     expect(sim).toContain("// package: '<bundle identifier>',");
     expect(device).toContain("package: 'com.acme.app',");
-    expect(placeholderKeys(['ios'], undefined, ios)).toEqual(['app', 'package']);
+    expect(placeholderKeys(['ios'], undefined, ios)).toEqual(['package']);
   });
 
   it('physical only, build skipped and id typed: one config with the id and an app placeholder', async () => {

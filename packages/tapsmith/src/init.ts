@@ -432,7 +432,7 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
     const gradleId = expo?.androidPackage ? undefined : detectGradleApplicationId(cwd);
     const suggested = expo?.androidPackage
       ? { id: expo.androidPackage, source: 'from the Expo app config' }
-      : gradleId ? { id: gradleId, source: 'applicationId in app/build.gradle' } : undefined;
+      : gradleId ? { id: gradleId, source: "the app module's applicationId" } : undefined;
     packageName = await askAppId('What is your app\'s package name?', suggested);
   }
   if (!apkPath && packageName) {
@@ -631,13 +631,35 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
       suggest(simBundleId, "the simulator build's id"),
     );
   }
+  // Of simulators and devices, a target with neither build nor id is left
+  // out beside one set up, as a platform is (PILOT-778): its placeholder-only
+  // project would fail the first run of every project.
+  let keepSim = useSimulators;
+  let keepDevice = usePhysicalDevice;
+  if (both) {
+    const simEmpty = !appPath && simBundleId === undefined;
+    const deviceEmpty = !deviceAppPath && deviceBundleIdRead === undefined;
+    if (simEmpty !== deviceEmpty) {
+      if (simEmpty) keepSim = false;
+      else keepDevice = false;
+      const left = simEmpty ? 'simulators' : 'physical devices';
+      console.log(`  ${YELLOW}⚠${RESET} iOS ${left} left out of the config: no ${simEmpty ? 'simulator' : 'device'} build or bundle identifier yet. Once you have one, run \`${cli} init\` again to add ${simEmpty ? 'them' : 'it'}.`);
+    }
+  }
+  const bothKept = keepSim && keepDevice;
   // With both, each target keeps its own id, a skipped one too (PILOT-778).
-  const bundleId = useSimulators ? simBundleId : deviceBundleIdRead;
-  const deviceBundleId = !both ? undefined
+  const bundleId = keepSim ? simBundleId : deviceBundleIdRead;
+  const deviceBundleId = !bothKept ? undefined
     : deviceBundleIdRead === undefined ? (simBundleId === undefined ? undefined : null)
     : deviceBundleIdRead !== simBundleId ? deviceBundleIdRead : undefined;
 
-  return { appPath, bundleId, deviceBundleId, simulator, ...(simulatorDeviceType ? { simulatorDeviceType } : {}), usePhysicalDevice, deviceAppPath };
+  return {
+    ...(keepSim ? { appPath, simulator, ...(simulatorDeviceType ? { simulatorDeviceType } : {}) } : {}),
+    bundleId,
+    deviceBundleId,
+    usePhysicalDevice: keepDevice,
+    ...(keepDevice ? { deviceAppPath } : {}),
+  };
 }
 
 /**

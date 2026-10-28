@@ -616,7 +616,7 @@ export function executeInitPlan(
   filesCreated.push(...written.filter((f) => f !== 'tapsmith.config.ts'));
 
   if (missingTapsmith) {
-    warnings.push(`Tapsmith isn't installed in this project, and the files init wrote import it: run ${missingTapsmith.display} before anything else${missingTapsmith.note ? `. ${missingTapsmith.note}` : ''}`);
+    warnings.push(`Tapsmith isn't installed in this project, and the files init wrote import it: run ${missingTapsmith.display} ${yarnPnp ? 'once Yarn is switched to node_modules (above)' : 'before anything else'}${missingTapsmith.note ? `. ${missingTapsmith.note}` : ''}`);
   }
 
   const captureStep = plan.captureAvdStep;

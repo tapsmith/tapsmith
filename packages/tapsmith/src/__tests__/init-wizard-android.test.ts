@@ -435,7 +435,7 @@ describe('configureAndroid() with no build yet (PILOT-778)', () => {
       vi.mocked(process.cwd).mockRestore();
       fs.rmSync(project, { recursive: true, force: true });
     }
-    expect(question(/package name/)?.choices?.[0]).toMatchObject({ name: 'com.acme.gradle', hint: 'applicationId in app/build.gradle' });
+    expect(question(/package name/)?.choices?.[0]).toMatchObject({ name: 'com.acme.gradle', hint: "the app module's applicationId" });
     expect(android.packageName).toBe('com.acme.gradle');
   });
 });
