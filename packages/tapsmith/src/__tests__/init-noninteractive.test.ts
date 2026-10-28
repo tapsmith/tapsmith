@@ -795,6 +795,27 @@ describe('executeInitPlan()', () => {
     }
   });
 
+  it('in a Yarn Plug\'n\'Play project, warns up front and leads the next steps with the nodeLinker fix (PILOT-778)', () => {
+    const tmp = makeTmp();
+    try {
+      fs.writeFileSync(path.join(tmp, '.pnp.cjs'), '');
+      const args = initArgs({ yes: true, json: true, platform: 'android' });
+      const install = { command: 'yarn', args: ['add', '-D', 'tapsmith'], display: 'yarn add -D tapsmith' };
+      const result = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), args, tmp, install);
+      expect(result.warnings.find((w) => w.includes("Plug'n'Play"))).toContain('nodeLinker: node-modules');
+      expect(result.nextSteps[0]).toMatch(/nodeLinker: node-modules.*yarn install/);
+      expect(result.nextSteps[1]).toContain('yarn add -D tapsmith');
+      // The install comes after the linker switch, not "before anything else".
+      expect(result.warnings.find((w) => w.includes('yarn add -D tapsmith'))).toContain('once Yarn is switched to node_modules');
+      fs.rmSync(path.join(tmp, '.pnp.cjs'));
+      const plain = executeInitPlan(resolveInitPlan({ ...args, force: true }, baseEnv, detectStubs, tmp), { ...args, force: true }, tmp);
+      expect(plain.warnings.some((w) => w.includes("Plug'n'Play"))).toBe(false);
+      expect(plain.nextSteps.some((s) => s.includes('nodeLinker'))).toBe(false);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   // `init --yes` in a project without tapsmith (PILOT-551): never installs
   // (that changes package.json and the lockfile unasked), but the install
   // comes first in Next steps and a warning says why.

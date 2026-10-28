@@ -164,3 +164,87 @@ describe('init wizard when a file cannot be written (PILOT-624)', () => {
     expect(fs.readFileSync(path.join(dir, 'tapsmith.config.ts'), 'utf8')).toBe('// existing');
   });
 });
+
+describe('init wizard with a build skipped (PILOT-778)', () => {
+  const answer = (pattern: RegExp, value: unknown): void => {
+    for (const key of [...answers.keys()]) if (key.source === pattern.source) answers.delete(key);
+    // Ahead of the defaults: the first matching pattern answers.
+    const rest = [...answers];
+    answers.clear();
+    answers.set(pattern, value);
+    for (const [k, v] of rest) answers.set(k, v);
+  };
+
+  afterEach(() => {
+    Object.assign(env, { isMacOS: false, xcodeVersion: undefined, simulators: [] });
+  });
+
+  it('a lone platform with nothing set up still gets a config, with placeholders and a next step to fill them', async () => {
+    answer(/Where is your Android APK/, 'Skip for now');
+    answer(/package name/, '');
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    const config = fs.readFileSync(path.join(dir, 'tapsmith.config.ts'), 'utf8');
+    expect(config).toContain("// apk: '<path to your .apk>',");
+    expect(config).toContain("// package: '<applicationId>',");
+    expect(output).toContain('tapsmith.config.ts gets placeholders for apk, package: set them once you have built the app.');
+    expect(output).toMatch(/Point it at your app:\s+build your app, then set apk and package in tapsmith\.config\.ts/);
+    expect(output.indexOf('Point it at your app')).toBeLessThan(output.indexOf('Verify your setup'));
+  });
+
+  it('Both with the iOS build and bundle id skipped writes an Android-only config and says why iOS is missing', async () => {
+    Object.assign(env, { isMacOS: true, xcodeVersion: '26.0', simulators: [{ name: 'iPhone 17', udid: 'SIM-1', state: 'Shutdown', runtime: 'iOS 26.0' }] });
+    answer(/Which platform/, 'both');
+    answer(/How will you run iOS tests/, 'simulators');
+    answer(/simulator build\)/, '');
+    answer(/Which simulator/, 'iPhone 17');
+    answer(/bundle identifier/, '');
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    const config = fs.readFileSync(path.join(dir, 'tapsmith.config.ts'), 'utf8');
+    expect(config).not.toContain('projects');
+    expect(config).not.toContain("platform: 'ios'");
+    expect(config).toContain("package: 'com.acme.app',");
+    expect(output).toContain('iOS left out of the config: it has no build or bundle identifier yet');
+    // Never first told it gets placeholders.
+    expect(output).not.toContain('placeholder');
+    expect(output).not.toContain('Point it at your app');
+    expect(output).not.toContain('--project');
+  });
+
+  it('a package suggested from build.gradle can be skipped, and Android is then left out beside iOS', async () => {
+    fs.writeFileSync(path.join(dir, 'settings.gradle'), '');
+    fs.mkdirSync(path.join(dir, 'app'));
+    fs.writeFileSync(path.join(dir, 'app', 'build.gradle'), 'android { defaultConfig { applicationId "com.acme.gradle" } }\n');
+    Object.assign(env, { isMacOS: true, xcodeVersion: '26.0', simulators: [{ name: 'iPhone 17', udid: 'SIM-1', state: 'Shutdown', runtime: 'iOS 26.0' }] });
+    answer(/Which platform/, 'both');
+    answer(/Where is your Android APK/, 'Skip for now');
+    answer(/package name/, 'Skip for now');
+    answer(/How will you run iOS tests/, 'simulators');
+    answer(/simulator build\)/, '');
+    answer(/Which simulator/, 'iPhone 17');
+    answer(/bundle identifier/, 'com.acme.ios');
+    answer(/No iOS simulator agent found/, false);
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    const config = fs.readFileSync(path.join(dir, 'tapsmith.config.ts'), 'utf8');
+    expect(config).not.toContain('com.acme.gradle');
+    expect(config).toContain("platform: 'ios',");
+    expect(config).toContain("package: 'com.acme.ios',");
+    expect(output).toContain('Android left out of the config');
+  });
+});
+
+
+describe('init wizard in a Yarn Plug\'n\'Play project (PILOT-778)', () => {
+  it('warns right after the environment scan and leads the next steps with the nodeLinker fix', async () => {
+    fs.writeFileSync(path.join(dir, '.pnp.cjs'), '');
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    const warning = output.indexOf("This is a Yarn Plug'n'Play install");
+    expect(warning).toBeGreaterThan(output.indexOf('Environment'));
+    expect(output.slice(warning)).toContain('nodeLinker: node-modules');
+    const next = output.slice(output.indexOf('Next steps'));
+    expect(next).toMatch(/Next steps\n\s+Switch Yarn to node_modules:\s+add `nodeLinker: node-modules` to \.yarnrc\.yml, then run `yarn install`/);
+  });
+});

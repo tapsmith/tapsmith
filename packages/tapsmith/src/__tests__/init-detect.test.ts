@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { derivedDataBuildWarning, detectProjectLayout, findDerivedDataApps, nativeBuildHint, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
+import { derivedDataBuildWarning, detectGradleApplicationId, detectProjectLayout, findDerivedDataApps, nativeBuildHint, parseAapt2Badging, findApkCandidates, findIosAppCandidates, findIosDeviceAppCandidates, preferDebugApk, resolveAapt2 } from '../init-detect.js';
 
 describe('parseAapt2Badging()', () => {
   it('extracts the package name', () => {
@@ -460,4 +460,40 @@ describe('iOS build search stays inside the Xcode project\'s folder (PILOT-832)'
       'iosApp/build/Build/Products/Debug-iphonesimulator/App.app',
     ]);
   }));
+});
+
+describe('detectGradleApplicationId() (PILOT-778)', () => {
+  let root: string;
+  beforeEach(() => { root = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-gradle-id-')); });
+  afterEach(() => { fs.rmSync(root, { recursive: true, force: true }); });
+
+  const write = (rel: string, text: string): void => {
+    fs.mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+    fs.writeFileSync(path.join(root, rel), text);
+  };
+
+  it('reads a Groovy applicationId from a React Native android/app/build.gradle', () => {
+    write('android/settings.gradle', '');
+    write('android/app/build.gradle', 'android {\n    defaultConfig {\n        applicationId "com.acme.rn"\n    }\n}\n');
+    expect(detectGradleApplicationId(root)).toBe('com.acme.rn');
+  });
+
+  it('reads a Kotlin DSL applicationId from a native app/build.gradle.kts', () => {
+    write('settings.gradle.kts', '');
+    write('app/build.gradle.kts', 'android {\n  defaultConfig {\n    applicationId = "com.acme.compose"\n  }\n}\n');
+    expect(detectGradleApplicationId(root)).toBe('com.acme.compose');
+  });
+
+  it('reads an id on the same line as its block', () => {
+    write('settings.gradle', '');
+    write('app/build.gradle', 'android { defaultConfig { applicationId "com.acme.oneline" } }\n');
+    expect(detectGradleApplicationId(root)).toBe('com.acme.oneline');
+  });
+
+  it('ignores an id computed from a variable, a commented-out line, and a project with no Gradle root', () => {
+    write('settings.gradle', '');
+    write('app/build.gradle', '// applicationId "com.acme.old"\nandroid { defaultConfig { applicationId rootProject.ext.appId } }\n');
+    expect(detectGradleApplicationId(root)).toBeUndefined();
+    expect(detectGradleApplicationId(fs.mkdtempSync(path.join(root, 'empty-')))).toBeUndefined();
+  });
 });

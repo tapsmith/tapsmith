@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { EXAMPLE_TEST_PATH, GENERATED_TEST_MATCH, androidEmulatorCaptureLine, avdPickerChoices, normalizeTypedPath, typedBuildPath, validateBuildPath, generateConfig, generatedProjects, generateExampleTest, iosSimulatorCaptureLine, networkCaptureDefault, platformPrompt, runInit, wizardNextSteps } from '../init.js';
+import { EXAMPLE_TEST_PATH, GENERATED_TEST_MATCH, androidEmulatorCaptureLine, avdPickerChoices, normalizeTypedPath, typedBuildPath, validateBuildPath, generateConfig, generatedProjects, generateExampleTest, iosSimulatorCaptureLine, networkCaptureDefault, platformPrompt, placeholderKeys, placeholderNextStep, platformsToWrite, runInit, wizardNextSteps } from '../init.js';
 import type { EnvScan } from '../env-scan.js';
 import type { AndroidConfig, IosConfig, Platform } from '../init.js';
 import { platformlessIosFields } from '../doctor.js';
@@ -223,7 +223,7 @@ describe('generateConfig()', () => {
     expect(physical.package).toBe('com.example.app');
   });
 
-  it('omits package when no bundle id is known', () => {
+  it('leaves package as a placeholder when no bundle id is known (PILOT-778)', () => {
     const config = generateConfig(
       ['ios'],
       undefined,
@@ -231,7 +231,8 @@ describe('generateConfig()', () => {
       false,
     );
 
-    expect(config).not.toContain('package');
+    expect(evaluateConfig(config).package).toBeUndefined();
+    expect(config).toContain("  // package: '<bundle identifier>',");
     expect(config).not.toContain('undefined');
   });
 
@@ -391,6 +392,19 @@ describe('platformPrompt() (PILOT-721)', () => {
 
   it('defaults to both when the project has android/ and ios/ and both toolchains are ready', () => {
     expect(selected(platformPrompt(env(), { hasAndroidProject: true, hasIosProject: true }))).toBe('both');
+  });
+
+  it('narrows Both to the platform that has a build (PILOT-778)', () => {
+    const both = { hasAndroidProject: true, hasIosProject: true };
+    expect(selected(platformPrompt(env(), both, { android: true, ios: false }))).toBe('android');
+    expect(selected(platformPrompt(env(), both, { android: false, ios: true }))).toBe('ios');
+    expect(selected(platformPrompt(env(), both, { android: true, ios: true }))).toBe('both');
+    // Neither built yet: the layout still says what the project is.
+    expect(selected(platformPrompt(env(), both, { android: false, ios: false }))).toBe('both');
+  });
+
+  it('a build never overrides a missing toolchain', () => {
+    expect(selected(platformPrompt(env({ adbVersion: undefined }), { hasAndroidProject: true, hasIosProject: true }, { android: true, ios: false }))).toBe('ios');
   });
 
   it('defaults to the usable one of a two-platform project', () => {
@@ -759,26 +773,26 @@ describe.skipIf(process.platform === 'win32' || process.getuid?.() === 0)('runIn
 
 describe('wizardNextSteps() (PILOT-562)', () => {
   it('leads with `tapsmith verify`, as getting-started does, and never shows a person --json', () => {
-    const steps = wizardNextSteps('npx tapsmith', undefined);
+    const steps = wizardNextSteps('npx tapsmith');
     expect(steps[0]).toEqual(['Verify your setup', 'npx tapsmith verify']);
     expect(steps.map(([, cmd]) => cmd)).toEqual(['npx tapsmith verify', 'npx tapsmith test', 'npx tapsmith list-devices', 'npx tapsmith doctor']);
   });
 
   it('puts a declined install first (PILOT-551)', () => {
-    const steps = wizardNextSteps('npx tapsmith', 'npm i -D tapsmith');
+    const steps = wizardNextSteps('npx tapsmith', { install: 'npm i -D tapsmith' });
     expect(steps[0]).toEqual(['Install Tapsmith', 'npm i -D tapsmith']);
     expect(steps[1][1]).toBe('npx tapsmith verify');
   });
 
   it('points a Play-image AVD at HTTPS-capable one before verify when capture is on (PILOT-711)', () => {
-    const steps = wizardNextSteps('npx tapsmith', 'npm i -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd', optional: false });
+    const steps = wizardNextSteps('npx tapsmith', { install: 'npm i -D tapsmith', capture: { label: 'Capture HTTPS', action: 'npx tapsmith create-avd', optional: false } });
     expect(steps[0][0]).toBe('Install Tapsmith');
     expect(steps[1]).toEqual(['Capture HTTPS', 'npx tapsmith create-avd']);
     expect(steps[2][1]).toBe('npx tapsmith verify');
   });
 
   it('names the project\'s own runner, in the capture step too (PILOT-721)', () => {
-    const steps = wizardNextSteps('pnpm exec tapsmith', 'pnpm add -D tapsmith', { label: 'Capture HTTPS', action: 'npx tapsmith create-avd, then change avd', optional: false });
+    const steps = wizardNextSteps('pnpm exec tapsmith', { install: 'pnpm add -D tapsmith', capture: { label: 'Capture HTTPS', action: 'npx tapsmith create-avd, then change avd', optional: false } });
     expect(steps.map(([, cmd]) => cmd)).toEqual([
       'pnpm add -D tapsmith',
       'pnpm exec tapsmith create-avd, then change avd',
@@ -790,8 +804,99 @@ describe('wizardNextSteps() (PILOT-562)', () => {
   });
 
   it('lists it last, as an option, when capture is off', () => {
-    const steps = wizardNextSteps('npx tapsmith', undefined, { label: 'Optional, to capture HTTPS', action: 'npx tapsmith create-avd', optional: true });
+    const steps = wizardNextSteps('npx tapsmith', { capture: { label: 'Optional, to capture HTTPS', action: 'npx tapsmith create-avd', optional: true } });
     expect(steps[0][1]).toBe('npx tapsmith verify');
     expect(steps[steps.length - 1]).toEqual(['Optional, to capture HTTPS', 'npx tapsmith create-avd']);
+  });
+});
+
+// ─── Skipped builds (PILOT-778) ───
+
+describe('a setup with no build yet (PILOT-778)', () => {
+  const noAndroid: AndroidConfig = { useEmulators: true, usePhysicalDevices: false, avd: 'Pixel_7' };
+  const noIosSim: IosConfig = { simulator: 'iPhone 17', usePhysicalDevice: false };
+  const android: AndroidConfig = { apkPath: './app.apk', packageName: 'com.example.android', useEmulators: true, usePhysicalDevices: false };
+  const iosSim: IosConfig = { appPath: './MyApp.app', bundleId: 'com.example.ios', simulator: 'iPhone 17', usePhysicalDevice: false };
+
+  it('an Android setup with neither APK nor package writes commented placeholders, and keeps the AVD', () => {
+    const text = generateConfig(['android'], noAndroid, undefined, false);
+    expect(text).toContain("  // apk: '<path to your .apk>',");
+    expect(text).toContain("  // package: '<applicationId>',");
+    expect(text).toMatch(/\/\/ Not set up yet: build your app/);
+    const parsed = evaluateConfig(text);
+    expect(parsed.apk).toBeUndefined();
+    expect(parsed.package).toBeUndefined();
+    expect(parsed.avd).toBe('Pixel_7');
+    expect(placeholderKeys(['android'], noAndroid, undefined)).toEqual(['apk', 'package']);
+  });
+
+  it('an APK whose package was skipped gets only the package placeholder', () => {
+    const a: AndroidConfig = { apkPath: './app.apk', useEmulators: false, usePhysicalDevices: true };
+    const text = generateConfig(['android'], a, undefined, false);
+    expect(text).toContain("apk: './app.apk',");
+    expect(text).not.toContain('// apk:');
+    expect(text).toContain("// package: '<applicationId>',");
+    expect(placeholderKeys(['android'], a, undefined)).toEqual(['package']);
+  });
+
+  it('a package-only Android setup is complete: no placeholder (PILOT-721)', () => {
+    const a: AndroidConfig = { packageName: 'com.example.installed', useEmulators: false, usePhysicalDevices: true };
+    expect(generateConfig(['android'], a, undefined, false)).not.toContain('Not set up yet');
+    expect(placeholderKeys(['android'], a, undefined)).toEqual([]);
+  });
+
+  it('an iOS simulator setup with no build keeps the simulator and platform, with app and package placeholders', () => {
+    const text = generateConfig(['ios'], undefined, noIosSim, false);
+    const parsed = evaluateConfig(text);
+    expect(parsed.platform).toBe('ios');
+    expect(parsed.simulator).toBe('iPhone 17');
+    expect(parsed.app).toBeUndefined();
+    expect(text).toContain("  // app: '<path to your simulator build>.app',");
+    expect(text).toContain("  // package: '<bundle identifier>',");
+    expect(platformlessIosFields(parsed)).toEqual([]);
+    expect(placeholderKeys(['ios'], undefined, noIosSim)).toEqual(['app', 'package']);
+  });
+
+  it('an iOS bundle id without a build is a package-only simulator setup with an app placeholder', () => {
+    const ios: IosConfig = { ...noIosSim, bundleId: 'com.example.installed' };
+    const parsed = evaluateConfig(generateConfig(['ios'], undefined, ios, false));
+    expect(parsed.package).toBe('com.example.installed');
+    expect(parsed.simulator).toBe('iPhone 17');
+    expect(placeholderKeys(['ios'], undefined, ios)).toEqual(['app']);
+  });
+
+  it('simulator and device with the device build skipped: both projects, the device one with an app placeholder', () => {
+    const ios: IosConfig = { ...iosSim, usePhysicalDevice: true };
+    const text = generateConfig(['ios'], undefined, ios, false);
+    const parsed = evaluateConfig(text);
+    expect(parsed.projects?.map((p) => p.name)).toEqual(['ios', 'ios-device']);
+    expect(parsed.projects?.[1].use?.app).toBeUndefined();
+    expect(text).toContain("// app: '<path to your iphoneos build>.app',");
+    expect(generatedProjects(['ios'], ios).map((p) => p.name)).toEqual(['ios', 'ios-device']);
+  });
+
+  it('of two platforms, the one with nothing set up is left out', () => {
+    expect(platformsToWrite(['android', 'ios'], android, noIosSim)).toEqual({ platforms: ['android'], dropped: ['ios'] });
+    expect(platformsToWrite(['android', 'ios'], noAndroid, iosSim)).toEqual({ platforms: ['ios'], dropped: ['android'] });
+    // An id alone is something set up.
+    expect(platformsToWrite(['android', 'ios'], android, { ...noIosSim, bundleId: 'com.x' }).dropped).toEqual([]);
+  });
+
+  it('a lone platform, or both when neither is set up, is kept', () => {
+    expect(platformsToWrite(['ios'], undefined, noIosSim)).toEqual({ platforms: ['ios'], dropped: [] });
+    expect(platformsToWrite(['android', 'ios'], noAndroid, noIosSim)).toEqual({ platforms: ['android', 'ios'], dropped: [] });
+    const text = generateConfig(['android', 'ios'], noAndroid, noIosSim, false);
+    expect(evaluateConfig(text).projects?.map((p) => p.name)).toEqual(['android', 'ios']);
+    expect(placeholderKeys(['android', 'ios'], noAndroid, noIosSim)).toEqual(['apk', 'package', 'app']);
+  });
+
+  it('the next steps lead with the keys to fill in, after a declined install', () => {
+    expect(placeholderNextStep([])).toBeUndefined();
+    expect(placeholderNextStep(['package'])).toBe('build your app, then set package in tapsmith.config.ts');
+    expect(placeholderNextStep(['apk', 'package', 'app'])).toBe('build your app, then set apk, package and app in tapsmith.config.ts');
+    const steps = wizardNextSteps('npx tapsmith', { install: 'npm i -D tapsmith', app: placeholderNextStep(['apk', 'package']) });
+    expect(steps[0][0]).toBe('Install Tapsmith');
+    expect(steps[1]).toEqual(['Point it at your app', 'build your app, then set apk and package in tapsmith.config.ts']);
+    expect(steps[2][1]).toBe('npx tapsmith verify');
   });
 });

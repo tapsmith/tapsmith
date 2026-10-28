@@ -106,7 +106,8 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
     expect(q?.type).toBe('select');
     expect(q?.choices?.map((c) => c.name)[0]).toBe(RELEASE_APK);
     // enquirer echoes the chosen choice's name, so "another path" must read as its label.
-    expect(q?.choices?.at(-1)).toEqual({ name: 'Enter another path…', message: 'Enter another path…' });
+    expect(q?.choices?.at(-2)).toEqual({ name: 'Enter another path…', message: 'Enter another path…' });
+    expect(q?.choices?.at(-1)?.name).toBe('Skip for now');
     expect(android.apkPath).toBe(RELEASE_APK);
     expect(android.packageName).toBe('com.acme.app');
     expect(question(/package name/)).toBeUndefined();
@@ -126,8 +127,8 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
   it('asks for a typed path, validated and trimmed, when the user picks another path', async () => {
     apkCandidates = [RELEASE_APK];
     script([
-      // The last choice is "Enter another path…".
-      [/Where is your Android APK/, (q: Question) => q.choices?.at(-1)?.name],
+      // The next-to-last choice is "Enter another path…".
+      [/Where is your Android APK/, (q: Question) => q.choices?.at(-2)?.name],
       [/Path to your Android APK/, '  ./custom/app.apk  '],
       [/package name/, 'com.acme.custom'],
     ]);
@@ -188,7 +189,6 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
 
     const q = question(/package name/);
     expect(q?.initial).toBeUndefined();
-    expect(q?.validate?.('   ')).not.toBe(true);
     expect(android.packageName).toBe('com.acme.typed');
     expect(JSON.stringify(questions)).not.toContain('com.example');
   });
@@ -290,12 +290,14 @@ describe('configureAndroid() on an Expo project (PILOT-557)', () => {
     apkCandidates = [RELEASE_APK];
     script([
       [/Where is your Android APK/, RELEASE_APK],
-      [/package name/, (q: Question) => q.initial],
+      [/package name/, (q: Question) => q.choices?.[0].name],
     ]);
 
     const android = await configureAndroid(env, expo);
 
-    expect(question(/package name/)?.initial).toBe('com.acme.expo');
+    // A select, the id first: an input's initial would make Enter take it, so it could not be skipped (PILOT-778).
+    expect(question(/package name/)?.type).toBe('select');
+    expect(question(/package name/)?.choices?.map((c) => c.name)).toEqual(['com.acme.expo', 'Enter another…', 'Skip for now']);
     expect(android.packageName).toBe('com.acme.expo');
   });
 
@@ -308,5 +310,132 @@ describe('configureAndroid() on an Expo project (PILOT-557)', () => {
 
     expect(android.packageName).toBe('com.acme.built');
     expect(question(/package name/)).toBeUndefined();
+  });
+});
+
+describe('configureAndroid() with no build yet (PILOT-778)', () => {
+  beforeEach(() => {
+    answers.clear();
+    questions.length = 0;
+    packages.clear();
+    apkCandidates = [];
+    logged = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logged.push(stripAnsi(args.join(' '))); });
+  });
+
+  it('Enter at the APK prompt skips it, and an empty package name skips that too', async () => {
+    script([
+      [/Where is your Android APK/, ''],
+      [/package name/, '   '],
+    ]);
+
+    const android = await configureAndroid(env);
+
+    const apk = question(/Where is your Android APK/);
+    expect(apk?.message).toMatch(/Enter to skip/);
+    expect(apk?.validate?.('')).toBe(true);
+    expect(apk?.validate?.('   ')).toBe(true);
+    expect(question(/package name/)?.message).toMatch(/Enter to skip/);
+    // Nothing to validate: any answer, empty included, moves on.
+    expect(question(/package name/)?.validate).toBeUndefined();
+    expect(android.apkPath).toBeUndefined();
+    expect(android.packageName).toBeUndefined();
+  });
+
+  it('a suggested package can still be skipped, by "Skip for now" (PILOT-778)', async () => {
+    const expo: ExpoProject = { androidPackage: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false };
+    script([
+      [/Where is your Android APK/, ''],
+      [/package name/, 'Skip for now'],
+    ]);
+
+    const android = await configureAndroid(env, expo);
+
+    expect(android.packageName).toBeUndefined();
+  });
+
+  it('"Enter another…" beside a suggested package types one, and an empty one skips', async () => {
+    const expo: ExpoProject = { androidPackage: 'com.acme.expo', hasAndroidDir: false, hasIosDir: false, usesTapsmithHooks: false };
+    script([
+      [/Where is your Android APK/, ''],
+      [/package name\? \S*\(Enter to skip/, ' com.acme.typed '],
+      [/package name/, 'Enter another…'],
+    ]);
+
+    expect((await configureAndroid(env, expo)).packageName).toBe('com.acme.typed');
+  });
+
+  it('a skipped APK with a package name is a package-only setup, said as --yes says it (PILOT-721)', async () => {
+    script([
+      [/Where is your Android APK/, ''],
+      [/package name/, 'com.acme.installed'],
+    ]);
+
+    const android = await configureAndroid(env);
+
+    expect(android.apkPath).toBeUndefined();
+    expect(android.packageName).toBe('com.acme.installed');
+    expect(logged.join('\n')).toContain('cannot install it');
+  });
+
+  it('offers "Skip for now" beside the APKs it found', async () => {
+    apkCandidates = [DEBUG_APK];
+    script([
+      [/Where is your Android APK/, (q: Question) => q.choices?.find((c) => /Skip/.test(c.name))?.name],
+      [/package name/, ''],
+    ]);
+
+    const android = await configureAndroid(env);
+
+    expect(question(/Where is your Android APK/)?.choices?.at(-1)?.name).toMatch(/^Skip for now/);
+    expect(android.apkPath).toBeUndefined();
+  });
+
+  it('an empty typed path after "Enter another path…" skips too', async () => {
+    apkCandidates = [DEBUG_APK];
+    script([
+      [/Where is your Android APK/, 'Enter another path…'],
+      [/Path to your Android APK/, ''],
+      [/package name/, ''],
+    ]);
+
+    const android = await configureAndroid(env);
+
+    expect(question(/Path to your Android APK/)?.validate?.('')).toBe(true);
+    expect(android.apkPath).toBeUndefined();
+  });
+
+  it('an APK whose package cannot be read may leave the package for later', async () => {
+    apkCandidates = [DEBUG_APK];
+    script([
+      [/Where is your Android APK/, DEBUG_APK],
+      [/package name/, ''],
+    ]);
+
+    const android = await configureAndroid(env);
+
+    expect(android.apkPath).toBe(DEBUG_APK);
+    expect(android.packageName).toBeUndefined();
+  });
+
+  it('prefills the package from app/build.gradle\'s applicationId (PILOT-778)', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-native-'));
+    fs.writeFileSync(path.join(project, 'settings.gradle.kts'), '');
+    fs.mkdirSync(path.join(project, 'app'));
+    fs.writeFileSync(path.join(project, 'app', 'build.gradle.kts'), 'android {\n  defaultConfig {\n    applicationId = "com.acme.gradle"\n  }\n}\n');
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+    script([
+      [/Where is your Android APK/, ''],
+      [/package name/, (q: Question) => q.choices?.[0].name],
+    ]);
+    let android;
+    try {
+      android = await configureAndroid(env);
+    } finally {
+      vi.mocked(process.cwd).mockRestore();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+    expect(question(/package name/)?.choices?.[0]).toMatchObject({ name: 'com.acme.gradle', hint: "the app module's applicationId" });
+    expect(android.packageName).toBe('com.acme.gradle');
   });
 });

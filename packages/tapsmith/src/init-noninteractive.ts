@@ -15,6 +15,7 @@ import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAv
 import * as detectDefaults from './init-detect.js';
 import type { InitCommandOptions } from './cli-program.js';
 import type { InstallCommand } from './config.js';
+import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 
 // ─── Types ───
 
@@ -583,7 +584,9 @@ export function executeInitPlan(
   cli = 'npx tapsmith',
 ): InitResult {
   const filesCreated: string[] = [];
-  const warnings = [...plan.warnings];
+  // Plug'n'Play first: `verify`, the next step, would refuse there (PILOT-778).
+  const yarnPnp = projectUsesYarnPnp({ versions: process.versions, cwd });
+  const warnings = [...(yarnPnp ? [YARN_PNP_INIT_WARNING] : []), ...plan.warnings];
 
   const configPath = path.join(cwd, 'tapsmith.config.ts');
   const { written, exampleTestExisted } = writeInitFiles({
@@ -613,11 +616,13 @@ export function executeInitPlan(
   filesCreated.push(...written.filter((f) => f !== 'tapsmith.config.ts'));
 
   if (missingTapsmith) {
-    warnings.push(`Tapsmith isn't installed in this project, and the files init wrote import it: run ${missingTapsmith.display} before anything else${missingTapsmith.note ? `. ${missingTapsmith.note}` : ''}`);
+    warnings.push(`Tapsmith isn't installed in this project, and the files init wrote import it: run ${missingTapsmith.display} ${yarnPnp ? 'once Yarn is switched to node_modules (above)' : 'before anything else'}${missingTapsmith.note ? `. ${missingTapsmith.note}` : ''}`);
   }
 
   const captureStep = plan.captureAvdStep;
   const nextSteps = [
+    // Before the install, so that installs into node_modules.
+    ...(yarnPnp ? [`Switch Yarn to node_modules: ${YARN_PNP_INIT_STEP}`] : []),
     ...(missingTapsmith ? [`Install Tapsmith in this project: ${missingTapsmith.display}`] : []),
     // A Play-image AVD: the AVD to switch to before the first run (PILOT-711),
     // or, when capture is off, an option listed last.

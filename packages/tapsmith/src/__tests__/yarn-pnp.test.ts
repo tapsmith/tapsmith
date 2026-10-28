@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { isYarnPnp, yarnPnpRefusal } from '../yarn-pnp.js';
+import { isYarnPnp, projectUsesYarnPnp, yarnPnpRefusal } from '../yarn-pnp.js';
 
 // Yarn's `.pnp.cjs` runtime sets `process.versions.pnp` (to "3" on Yarn 2-4)
 // in every process it is loaded into, which is how `yarn tapsmith …` runs.
@@ -81,5 +81,22 @@ describe('isYarnPnp() without the PnP runtime', () => {
 
   it('is false with no .pnp.cjs anywhere above', () => {
     expect(isYarnPnp({ versions: PLAIN_VERSIONS, cwd: dir })).toBe(false);
+  });
+});
+
+describe('projectUsesYarnPnp() (PILOT-778)', () => {
+  it('is true under Yarn\'s runtime, and for a project with its own .pnp.cjs before tapsmith is added', () => {
+    expect(projectUsesYarnPnp(PNP())).toBe(true);
+    expect(projectUsesYarnPnp(PLAIN())).toBe(false);
+    fs.writeFileSync(path.join(dir, '.pnp.cjs'), '');
+    expect(projectUsesYarnPnp(PLAIN())).toBe(true);
+  });
+
+  it('ignores a stray .pnp.cjs in a parent directory of a project that has not added tapsmith', () => {
+    fs.writeFileSync(path.join(dir, '.pnp.cjs'), '');
+    const project = path.join(dir, 'app');
+    fs.mkdirSync(project);
+    fs.writeFileSync(path.join(project, 'package.json'), '{}');
+    expect(projectUsesYarnPnp({ versions: PLAIN_VERSIONS, cwd: project })).toBe(false);
   });
 });
