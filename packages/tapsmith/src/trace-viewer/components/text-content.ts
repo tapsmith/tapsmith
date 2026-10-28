@@ -56,35 +56,17 @@ function containsChildText(label: string, query: string): boolean {
   return l === q || l.startsWith(`${q}, `) || l.endsWith(`, ${q}`) || l.includes(`, ${q}, `);
 }
 
-const TRAILING_PUNCTUATION = /[\p{P}\p{S}]+$/u;
-
-/** Equal once trailing punctuation and symbols are dropped from both (a label without its text's "?"). */
-function equalIgnoringTrailingPunctuation(a: string, b: string): boolean {
-  if (a === '' || b === '') return false;
-  return a.replace(TRAILING_PUNCTUATION, '') === b.replace(TRAILING_PUNCTUATION, '');
-}
-
-/**
- * getByText(string, { exact: true }) on iOS. `labelFallback` is the second
- * pass, run only when no node matched (PILOT-880): a label that lacks the
- * text's trailing punctuation also matches, as a React Native touchable's
- * accessibilityLabel hides the text it wraps.
- */
-export function iosTextMatchesExact(texts: IosTexts, query: string, labelFallback: boolean): boolean {
+/** getByText(string, { exact: true }) on iOS: literal, like the substring form (PILOT-880). */
+export function iosTextMatchesExact(texts: IosTexts, query: string): boolean {
   const q = normalize(query);
   if ([texts.label, texts.title, texts.value].some((t) => normalize(t) === q)) return true;
-  if (containsChildText(texts.label, query) || containsChildText(texts.title, query)) return true;
-  return labelFallback && equalIgnoringTrailingPunctuation(normalize(texts.label), q);
+  return containsChildText(texts.label, query) || containsChildText(texts.title, query);
 }
 
-/**
- * getByText(string) on iOS: a case-insensitive substring of the label, title
- * or value. `labelFallback` as for iosTextMatchesExact, ignoring case.
- */
-export function iosTextMatchesSubstring(texts: IosTexts, query: string, labelFallback: boolean): boolean {
+/** getByText(string) on iOS: a case-insensitive substring of the label, title or value. */
+export function iosTextMatchesSubstring(texts: IosTexts, query: string): boolean {
   const q = normalize(query).toLowerCase();
-  if ([texts.label, texts.title, texts.value].some((t) => normalize(t).toLowerCase().includes(q))) return true;
-  return labelFallback && equalIgnoringTrailingPunctuation(normalize(texts.label).toLowerCase(), q);
+  return [texts.label, texts.title, texts.value].some((t) => normalize(t).toLowerCase().includes(q));
 }
 
 /** getByText(RegExp) on iOS: tested against the raw label, title or value. */

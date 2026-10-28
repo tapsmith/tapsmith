@@ -60,7 +60,7 @@ export class LoginScreen {
   get emailField() { return this.device.getByRole("textfield", { name: "Email" }) }
   get passwordField() { return this.device.getByRole("textfield", { name: "Password" }) }
   get signInButton() { return this.device.getByRole("button", { name: "Sign in" }) }
-  get forgotPasswordLink() { return this.device.getByText("Forgot password?", { exact: true }) }
+  get forgotPasswordLink() { return this.device.getByDescription("Forgot password") }
 
   async login(email: string, password: string) {
     await this.emailField.clearAndType(email)

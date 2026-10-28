@@ -55,17 +55,10 @@ if let data = FileManager.default.contents(atPath: fixturePath),
         )
         let want = c["matches"] as? Bool ?? false
         let query = c["query"] as? [String: Any] ?? [:]
-        // Alone in the tree, a node that matches nothing literally gets the
-        // fallback pass too (PILOT-880).
-        let wantLiteral = want && !(c["fallbackOnly"] as? Bool ?? false)
         if let exact = query["exact"] as? String {
-            expect("exact \(why)", TextContent.matchesExact(texts, exact, labelFallback: true) == want)
-            expect("exact \(why), literal pass",
-                   TextContent.matchesExact(texts, exact, labelFallback: false) == wantLiteral)
+            expect("exact \(why)", TextContent.matchesExact(texts, exact) == want)
         } else if let substring = query["substring"] as? String {
-            expect("substring \(why)", TextContent.matchesSubstring(texts, substring, labelFallback: true) == want)
-            expect("substring \(why), literal pass",
-                   TextContent.matchesSubstring(texts, substring, labelFallback: false) == wantLiteral)
+            expect("substring \(why)", TextContent.matchesSubstring(texts, substring) == want)
         } else if let pattern = query["pattern"] as? String {
             let source = query["source"] as? String ?? ""
             let flags = query["flags"] as? String ?? ""

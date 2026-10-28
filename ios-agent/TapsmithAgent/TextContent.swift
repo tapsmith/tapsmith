@@ -75,51 +75,28 @@ enum TextContent {
     /// getByText(string, { exact: true }): the whole label, title or value
     /// (whitespace-normalized), or one ", "-joined child of the label or
     /// title (React Native merges a touchable's child texts into its label).
-    ///
-    /// `labelFallback` is the second pass of the walk, run only when no node
-    /// matched the query (PILOT-880): then a label that lacks the text's
-    /// trailing punctuation matches too ("Forgot password" for "Forgot
-    /// password?": a React Native touchable's accessibilityLabel hides the
-    /// text it wraps). Only as a fallback, so an alert titled "Log out?"
-    /// is found without its "Log out" button.
-    static func matchesExact(_ texts: Texts, _ query: String, labelFallback: Bool) -> Bool {
+    /// Literal, like the substring form (PILOT-880): a label that lacks the
+    /// text's trailing punctuation — a React Native touchable's
+    /// accessibilityLabel "Forgot password" hiding its "Forgot password?"
+    /// text — is not that text, as an alert's "Log out" button is not its
+    /// "Log out?" title.
+    static func matchesExact(_ texts: Texts, _ query: String) -> Bool {
         if TextMatch.equals(texts.label, query) || TextMatch.equals(texts.title, query)
             || TextMatch.equals(texts.value, query) {
             return true
         }
-        if TextMatch.containsChildText(texts.label, childText: query)
-            || TextMatch.containsChildText(texts.title, childText: query) {
-            return true
-        }
-        return labelFallback
-            && matchesIgnoringTrailingPunctuation(TextMatch.normalize(texts.label), TextMatch.normalize(query))
+        return TextMatch.containsChildText(texts.label, childText: query)
+            || TextMatch.containsChildText(texts.title, childText: query)
     }
 
-    /// getByText(string): a case-insensitive substring of the label, title
-    /// or value. `labelFallback` as for `matchesExact`, ignoring case, so a
-    /// substring finds whatever the exact form finds.
-    static func matchesSubstring(_ texts: Texts, _ query: String, labelFallback: Bool) -> Bool {
-        if TextMatch.contains(texts.label, query) || TextMatch.contains(texts.title, query)
-            || TextMatch.contains(texts.value, query) {
-            return true
-        }
-        return labelFallback && matchesIgnoringTrailingPunctuation(
-            TextMatch.normalize(texts.label).lowercased(), TextMatch.normalize(query).lowercased()
-        )
+    /// getByText(string): a case-insensitive substring of the label, title or value.
+    static func matchesSubstring(_ texts: Texts, _ query: String) -> Bool {
+        TextMatch.contains(texts.label, query) || TextMatch.contains(texts.title, query)
+            || TextMatch.contains(texts.value, query)
     }
 
     /// getByText(RegExp): tested against the raw label, title or value.
     static func matchesRegex(_ texts: Texts, _ regex: TextRegex) -> Bool {
         regex.matches(texts.label) || regex.matches(texts.title) || regex.matches(texts.value)
-    }
-
-    /// Whether two strings are equal once trailing punctuation and symbols
-    /// are dropped from both.
-    static func matchesIgnoringTrailingPunctuation(_ a: String, _ b: String) -> Bool {
-        guard !a.isEmpty && !b.isEmpty else { return false }
-        let punct = CharacterSet.punctuationCharacters.union(.symbols)
-        let trimA = a.unicodeScalars.reversed().drop(while: { punct.contains($0) })
-        let trimB = b.unicodeScalars.reversed().drop(while: { punct.contains($0) })
-        return String(String.UnicodeScalarView(trimA.reversed())) == String(String.UnicodeScalarView(trimB.reversed()))
     }
 }

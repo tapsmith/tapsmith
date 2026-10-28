@@ -7,7 +7,6 @@ import { parseSelectorString, findMatchingNodes } from '../trace-viewer/componen
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from '../ios-text-content.js';
 import { escapeJsString } from '../js-string-escape.js';
 import { translateRegex } from '../text-regex.js';
-import { iosTexts, iosTextMatchesExact, iosTextMatchesSubstring } from '../trace-viewer/components/text-content.js';
 
 /**
  * iOS getByText conformance (PILOT-794): which of a node's label, title and
@@ -37,11 +36,6 @@ interface Case {
   /** exact: getByText(q, { exact: true }); substring: getByText(q); or a RegExp as source + flags. */
   query: { exact: string } | { substring: string } | { source: string; flags: string }
   matches: boolean
-  /**
-   * Matches only in the fallback pass (PILOT-880), which runs when no node
-   * matched literally: a label that lacks the text's trailing punctuation.
-   */
-  fallbackOnly?: true
 }
 
 const T = {
@@ -109,26 +103,19 @@ const CASES: Case[] = [
   { why: 'a joined middle child', type: T.other, label: 'A, B, C', query: { exact: 'B' }, matches: true },
   { why: 'a joined last child', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Text inputs' }, matches: true },
   { why: 'part of a child is no exact match', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Login' }, matches: false },
-  // A label can lack its text's trailing punctuation: a React Native
-  // touchable's accessibilityLabel hides the text it wraps. Only when no
-  // element matches the text itself (the fallback pass, PILOT-880) does such
-  // a label stand in for it, exact or substring, and only as a whole label.
-  { why: 'a label without the trailing "?"', type: T.button, label: 'Forgot password', query: { exact: 'Forgot password?' }, matches: true, fallbackOnly: true },
-  { why: 'trailing punctuation only', type: T.button, label: 'Forgot password', query: { exact: 'Forgot' }, matches: false },
-  { why: 'a label with trailing punctuation the query lacks', type: T.button, label: 'Done!', query: { exact: 'Done' }, matches: true, fallbackOnly: true },
-  { why: 'exact stays case-sensitive in the fallback', type: T.button, label: 'Log Out', query: { exact: 'Log out?' }, matches: false },
-  { why: 'a substring without the trailing "?"', type: T.link, label: 'Forgot password', query: { substring: 'Forgot password?' }, matches: true, fallbackOnly: true },
-  { why: 'a substring without the trailing "?", ignoring case', type: T.link, label: 'Forgot password', query: { substring: 'FORGOT PASSWORD?' }, matches: true, fallbackOnly: true },
-  { why: 'other trailing punctuation on the label', type: T.button, label: 'Forgot password.', query: { substring: 'Forgot password?' }, matches: true, fallbackOnly: true },
-  { why: 'only the whole label stands in for the text', type: T.link, label: 'Forgot password', query: { substring: 'password?' }, matches: false },
-  { why: 'nor a label that only starts with it', type: T.link, label: 'Forgot password reset', query: { substring: 'Forgot password?' }, matches: false },
-  { why: 'a prefix without the trailing "?" is no match', type: T.link, label: 'Forgot password', query: { substring: 'Forgot pass?' }, matches: false },
-  { why: 'punctuation alone is no match', type: T.link, label: 'Forgot password', query: { substring: '?' }, matches: false },
-  { why: 'nor a title without the trailing "?"', type: T.button, label: '', title: 'Forgot password', query: { substring: 'Forgot password?' }, matches: false },
-  { why: 'a query ending in symbols is no suffix of a word', type: T.text, label: 'Music', query: { substring: 'C++' }, matches: false },
-  { why: 'nor is one ending in "+"', type: T.text, label: 'Camera', query: { substring: 'A+' }, matches: false },
-  { why: 'nor is one ending in "%"', type: T.text, label: 'Volume 50', query: { substring: '50%' }, matches: false },
-  { why: 'nor a word ending in the query', type: T.text, label: 'Already', query: { substring: 'ready?' }, matches: false },
+  // A label that lacks the text's trailing punctuation is not that text
+  // (PILOT-880): a React Native touchable's accessibilityLabel hides the text
+  // it wraps, and an alert's "Log out" button is not its "Log out?" title.
+  // Exact and substring agree.
+  { why: 'a label without the trailing "?"', type: T.link, label: 'Forgot password', query: { exact: 'Forgot password?' }, matches: false },
+  { why: 'nor by substring', type: T.link, label: 'Forgot password', query: { substring: 'Forgot password?' }, matches: false },
+  { why: 'the label is found by its own text', type: T.link, label: 'Forgot password', query: { substring: 'forgot password' }, matches: true },
+  { why: 'a label with trailing punctuation the query lacks', type: T.button, label: 'Done!', query: { exact: 'Done' }, matches: false },
+  { why: 'contains that query as a substring', type: T.button, label: 'Done!', query: { substring: 'done' }, matches: true },
+  { why: 'a symbol is no stand-in for another', type: T.button, label: '👍', query: { substring: '👎' }, matches: false },
+  { why: 'a query ending in symbols is literal', type: T.text, label: 'Music', query: { substring: 'C++' }, matches: false },
+  { why: 'a query ending in "%" is literal', type: T.text, label: 'Volume 50', query: { substring: '50%' }, matches: false },
+  { why: 'a query ending in "%" in the label', type: T.text, label: 'Volume 50%', query: { substring: '50%' }, matches: true },
   // A substring is literal: ICU pattern characters match only themselves.
   { why: 'a "?" in the label', type: T.text, label: 'Forgot password? Reset it', query: { substring: 'password? reset' }, matches: true },
   { why: '"?" is not optional', type: T.text, label: 'Ready', query: { substring: 'x?Ready' }, matches: false },
@@ -208,14 +195,6 @@ describe('iOS getByText conformance (PILOT-794)', () => {
     expect(parsed).not.toBeNull();
     const matched = findMatchingNodes([treeFor(c)], parsed!).filter((n) => n.attributes.get('type') === c.type);
     expect(matched.length).toBe(c.matches ? 1 : 0);
-  });
-
-  it.each(CASES.filter((c) => !('source' in c.query)))('$why: literal pass', (c) => {
-    const texts = iosTexts(nodeFor(c), c.container ?? '');
-    const literal = 'exact' in c.query
-      ? iosTextMatchesExact(texts, c.query.exact, false)
-      : iosTextMatchesSubstring(texts, (c.query as { substring: string }).substring, false);
-    expect(literal).toBe(c.matches && !c.fallbackOnly);
   });
 
   it('the agent\'s fixture is the current table', () => {
@@ -304,27 +283,23 @@ describe('iOS getByText keeps the innermost match (PILOT-794)', () => {
   });
 });
 
-describe('iOS getByText reads a label without its text\'s punctuation only as a fallback (PILOT-880)', () => {
-  // A confirmation alert titled "Log out?" with a "Log out" button, over the
-  // screen whose "Log out" button opened it.
+describe('iOS getByText is literal about trailing punctuation (PILOT-880)', () => {
+  // A confirmation alert titled "Log out?" over the screen whose "Log out"
+  // button opened it, and that screen once the alert is dismissed.
   const alert = node(T.other, '', [
     node(T.button, 'Log out'),
     node(T.alert, 'Log out?', [node(T.other, '', [node(T.text, 'Log out?'), node(T.button, 'Cancel'), node(T.button, 'Log out')])]),
   ]);
-  // The same screen once the alert is dismissed.
   const screen = node(T.other, '', [node(T.button, 'Log out')]);
-  // A React Native link labelled "Forgot password" around "Forgot password?".
-  const login = node(T.other, '', [node(T.text, 'Sign In'), node(T.link, 'Forgot password')]);
 
-  it('the text itself wins over a label without its "?"', () => {
+  it('finds the alert title, not the buttons named like it', () => {
     expect(matchTypes(alert, 'device.getByText("Log out?")')).toEqual([`${T.text}:Log out?`]);
     expect(matchTypes(alert, 'device.getByText("Log out?", { exact: true })')).toEqual([`${T.text}:Log out?`]);
   });
 
-  it('a label without the "?" stands in when nothing shows the text', () => {
-    expect(matchTypes(login, 'device.getByText("Forgot password?")')).toEqual([`${T.link}:Forgot password`]);
-    expect(matchTypes(login, 'device.getByText("Forgot password?", { exact: true })')).toEqual([`${T.link}:Forgot password`]);
-    expect(matchTypes(screen, 'device.getByText("Log out?")')).toEqual([`${T.button}:Log out`]);
+  it('finds nothing once the alert is gone', () => {
+    expect(matchTypes(screen, 'device.getByText("Log out?")')).toEqual([]);
+    expect(matchTypes(screen, 'device.getByText("Log out?", { exact: true })')).toEqual([]);
   });
 });
 

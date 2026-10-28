@@ -28,9 +28,6 @@ struct ElementSelector {
     var focused: Bool?
     var selected: Bool?
     var expanded: Bool?
-    /// The getByText fallback pass (PILOT-880): a label that lacks the
-    /// text's trailing punctuation matches too (TextContent.matchesExact).
-    var textLabelFallback: Bool = false
 
     /// Whether a role selector filters by name, as a string or a RegExp.
     var hasNameFilter: Bool { name != nil || nameRegex != nil }
@@ -56,15 +53,6 @@ struct ElementSelector {
     /// matching descendant (innermost, TextContent, PILOT-794).
     var matchesInnermostOnly: Bool {
         text != nil || textContains != nil || textRegex != nil
-    }
-
-    /// This getByText string selector for the fallback pass, run when the
-    /// literal pass matched nothing; nil for every other selector.
-    var withTextLabelFallback: ElementSelector? {
-        guard !textLabelFallback, text != nil || textContains != nil else { return nil }
-        var fallback = self
-        fallback.textLabelFallback = true
-        return fallback
     }
 
     /// Whether a role-only selector's match is re-resolved by its own label

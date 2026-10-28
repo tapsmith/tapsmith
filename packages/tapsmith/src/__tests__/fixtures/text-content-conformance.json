@@ -399,22 +399,30 @@
     },
     {
       "why": "a label without the trailing \"?\"",
-      "type": "XCUIElementTypeButton",
+      "type": "XCUIElementTypeLink",
       "label": "Forgot password",
       "query": {
         "exact": "Forgot password?"
       },
-      "matches": true,
-      "fallbackOnly": true
+      "matches": false
     },
     {
-      "why": "trailing punctuation only",
-      "type": "XCUIElementTypeButton",
+      "why": "nor by substring",
+      "type": "XCUIElementTypeLink",
       "label": "Forgot password",
       "query": {
-        "exact": "Forgot"
+        "substring": "Forgot password?"
       },
       "matches": false
+    },
+    {
+      "why": "the label is found by its own text",
+      "type": "XCUIElementTypeLink",
+      "label": "Forgot password",
+      "query": {
+        "substring": "forgot password"
+      },
+      "matches": true
     },
     {
       "why": "a label with trailing punctuation the query lacks",
@@ -423,96 +431,28 @@
       "query": {
         "exact": "Done"
       },
-      "matches": true,
-      "fallbackOnly": true
+      "matches": false
     },
     {
-      "why": "exact stays case-sensitive in the fallback",
+      "why": "contains that query as a substring",
       "type": "XCUIElementTypeButton",
-      "label": "Log Out",
+      "label": "Done!",
       "query": {
-        "exact": "Log out?"
+        "substring": "done"
       },
-      "matches": false
+      "matches": true
     },
     {
-      "why": "a substring without the trailing \"?\"",
-      "type": "XCUIElementTypeLink",
-      "label": "Forgot password",
-      "query": {
-        "substring": "Forgot password?"
-      },
-      "matches": true,
-      "fallbackOnly": true
-    },
-    {
-      "why": "a substring without the trailing \"?\", ignoring case",
-      "type": "XCUIElementTypeLink",
-      "label": "Forgot password",
-      "query": {
-        "substring": "FORGOT PASSWORD?"
-      },
-      "matches": true,
-      "fallbackOnly": true
-    },
-    {
-      "why": "other trailing punctuation on the label",
+      "why": "a symbol is no stand-in for another",
       "type": "XCUIElementTypeButton",
-      "label": "Forgot password.",
+      "label": "👍",
       "query": {
-        "substring": "Forgot password?"
-      },
-      "matches": true,
-      "fallbackOnly": true
-    },
-    {
-      "why": "only the whole label stands in for the text",
-      "type": "XCUIElementTypeLink",
-      "label": "Forgot password",
-      "query": {
-        "substring": "password?"
+        "substring": "👎"
       },
       "matches": false
     },
     {
-      "why": "nor a label that only starts with it",
-      "type": "XCUIElementTypeLink",
-      "label": "Forgot password reset",
-      "query": {
-        "substring": "Forgot password?"
-      },
-      "matches": false
-    },
-    {
-      "why": "a prefix without the trailing \"?\" is no match",
-      "type": "XCUIElementTypeLink",
-      "label": "Forgot password",
-      "query": {
-        "substring": "Forgot pass?"
-      },
-      "matches": false
-    },
-    {
-      "why": "punctuation alone is no match",
-      "type": "XCUIElementTypeLink",
-      "label": "Forgot password",
-      "query": {
-        "substring": "?"
-      },
-      "matches": false
-    },
-    {
-      "why": "nor a title without the trailing \"?\"",
-      "type": "XCUIElementTypeButton",
-      "label": "",
-      "title": "Forgot password",
-      "query": {
-        "substring": "Forgot password?"
-      },
-      "matches": false
-    },
-    {
-      "why": "a query ending in symbols is no suffix of a word",
+      "why": "a query ending in symbols is literal",
       "type": "XCUIElementTypeStaticText",
       "label": "Music",
       "query": {
@@ -521,16 +461,7 @@
       "matches": false
     },
     {
-      "why": "nor is one ending in \"+\"",
-      "type": "XCUIElementTypeStaticText",
-      "label": "Camera",
-      "query": {
-        "substring": "A+"
-      },
-      "matches": false
-    },
-    {
-      "why": "nor is one ending in \"%\"",
+      "why": "a query ending in \"%\" is literal",
       "type": "XCUIElementTypeStaticText",
       "label": "Volume 50",
       "query": {
@@ -539,13 +470,13 @@
       "matches": false
     },
     {
-      "why": "nor a word ending in the query",
+      "why": "a query ending in \"%\" in the label",
       "type": "XCUIElementTypeStaticText",
-      "label": "Already",
+      "label": "Volume 50%",
       "query": {
-        "substring": "ready?"
+        "substring": "50%"
       },
-      "matches": false
+      "matches": true
     },
     {
       "why": "a \"?\" in the label",
