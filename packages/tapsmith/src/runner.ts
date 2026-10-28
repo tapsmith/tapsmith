@@ -539,13 +539,16 @@ export interface TestResult {
 
 /** A describe block's results: its tests and nested blocks. */
 export interface SuiteResult {
-  /** The describe block's title. */
+  /**
+   * The describe block's full title: the titles of it and its enclosing
+   * blocks joined with " > " (empty for a file's root suite).
+   */
   name: string;
   /** Results of the tests declared directly in this block. */
   tests: TestResult[];
   /** Results of the nested describe blocks. */
   suites: SuiteResult[];
-  /** Total time of the block's tests, in milliseconds. */
+  /** Wall time of the block, in milliseconds, its hooks and nested blocks included. */
   durationMs: number;
 }
 

@@ -818,8 +818,9 @@ export const ELEMENT_HANDLE_BRAND = Symbol.for('tapsmith.ElementHandle');
 /**
  * A locator: a lazy query for an element, as in Playwright. Building one
  * looks nothing up; each action or assertion resolves it afresh, auto-waits
- * for the element (and, for actions, for it to be enabled and uncovered)
- * up to the timeout, and throws on more than one match (strict mode).
+ * for the element up to the timeout, and throws on more than one match
+ * (strict mode). Tap-like actions (`tap`, `doubleTap`, `longPress`,
+ * `setChecked`) also wait for it to be enabled and uncovered.
  */
 export class ElementHandle {
   /** @internal */

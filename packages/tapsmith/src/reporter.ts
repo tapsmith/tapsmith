@@ -24,7 +24,7 @@ export interface FullResult {
   setupDuration?: number
   /** Every test's result, flat. */
   tests: TestResult[]
-  /** The results grouped by describe block. */
+  /** One root suite per test file, its describe blocks nested under it. */
   suites: SuiteResult[]
 }
 

@@ -402,7 +402,7 @@ back to a cold relaunch with the URL.
 
 ### `device.currentPackage(): Promise<string>`
 
-Returns the package name of the foreground app.
+Returns the package name of the foreground app. On iOS it always returns the configured app's bundle ID, whichever app is in front.
 
 ```typescript
 const pkg = await device.currentPackage(); // "com.example.myapp"

@@ -830,7 +830,10 @@ export class Device {
     this._forceColdDeepLinks = force;
   }
 
-  /** The package name (iOS: bundle ID) of the app in the foreground. */
+  /**
+   * The package name of the app in the foreground. On iOS it is always the
+   * configured app's bundle ID, whichever app is in front.
+   */
   async currentPackage(): Promise<string> {
     const res = await this._client.getCurrentPackage();
     return res.packageName;
