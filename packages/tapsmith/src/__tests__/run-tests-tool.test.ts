@@ -5,7 +5,8 @@ import * as path from 'node:path';
 import { zipSync } from 'fflate';
 import { MCP_RESPONSE_MAX_BYTES } from '../mcp/response-limits.js';
 import { createMcpServer } from '../mcp/index.js';
-import { stdioTestArgs } from '../mcp/tools/run-tests.js';
+import { locatorMissStep, stdioTestArgs } from '../mcp/tools/run-tests.js';
+import { LOCATOR_PICKER_HINT } from '../locator-miss-hint.js';
 import { runCli, type CliHandlers, type TestCommandArgs } from '../cli-program.js';
 import type { TestDispatcher, TestFailureDetail, TestRunResult, TestTreeEntry } from '../mcp/test-dispatcher.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -123,6 +124,50 @@ describe('tapsmith_run_tests result handling', () => {
     const t = text(res);
     expect(t).toContain('Tests failed: 1 passed, 1 failed');
     expect(t).toContain('FAIL: Login screen > shows an error');
+  });
+
+  it('steers a locator miss to tapsmith_test_locator, naming the locators (PILOT-849)', async () => {
+    const miss = (loc: string) => `Element ${loc} was not found after waiting 5000ms. ${LOCATOR_PICKER_HINT}`;
+    const result: TestRunResult = {
+      status: 'failed', passed: 0, failed: 3, skipped: 0, duration: 100,
+      failures: [
+        { fullName: 'a', filePath: FILE, error: miss('getByRole("button", { name: "Sign in" })') },
+        { fullName: 'b', filePath: FILE, error: `Expected element getByText("Hi") to be visible, but it was not. ${LOCATOR_PICKER_HINT}` },
+        { fullName: 'c', filePath: FILE, error: miss('getByRole("button", { name: "Sign in" })') },
+      ],
+    };
+    const t = text(await callRunTests(makeDispatcher({ runFiles: async () => result }), { files: [FILE] }));
+    expect(t).toContain(
+      'NEXT STEP: 3 failures are locators that matched nothing: getByRole("button", { name: "Sign in" }), getByText("Hi"). ' +
+        'Read the failure\'s trace (tapsmith_read_trace) to see the screen it was on, find a locator that matches with ' +
+        'tapsmith_snapshot and tapsmith_test_locator, and change the test only once tapsmith_test_locator counts 1.',
+    );
+    // The pointer at UI mode's picker is for a person; the agent gets the step instead.
+    expect(t).not.toContain(LOCATOR_PICKER_HINT);
+    expect(t).toContain('Error: Element getByRole("button", { name: "Sign in" }) was not found after waiting 5000ms.');
+  });
+
+  it('reads a locator whose text has a full stop in it whole, and counts past three', () => {
+    const step = locatorMissStep([
+      { fullName: 'a', filePath: FILE, error: `Element not found: getByText("Mr. Smith"). ${LOCATOR_PICKER_HINT}` },
+      ...['A', 'B', 'C'].map((n) => ({ fullName: n, filePath: FILE, error: `Element getByText("${n}") did not reach state "visible" after 50ms. ${LOCATOR_PICKER_HINT}` })),
+    ]);
+    expect(step).toContain('4 failures are locators that matched nothing: getByText("Mr. Smith"), getByText("A"), getByText("B") and 1 more.');
+  });
+
+  it('reads a locator whose quoted text has a closing parenthesis and full stop in it whole', () => {
+    const step = locatorMissStep([
+      { fullName: 'a', filePath: FILE, error: `Element not found: getByText("Sign in (beta). Next"). ${LOCATOR_PICKER_HINT}` },
+    ]);
+    expect(step).toContain('1 failure is a locator that matched nothing: getByText("Sign in (beta). Next").');
+  });
+
+  it('adds no locator step to failures that are not locator misses', async () => {
+    const result: TestRunResult = {
+      status: 'failed', passed: 0, failed: 1, skipped: 0, duration: 100,
+      failures: [{ fullName: 'a', filePath: FILE, error: 'expected 1 to be 2' }],
+    };
+    expect(text(await callRunTests(makeDispatcher({ runFiles: async () => result }), { files: [FILE] }))).not.toContain('NEXT STEP');
   });
 
   it('a user stop reports partial results without isError', async () => {

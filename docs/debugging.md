@@ -255,7 +255,7 @@ See [Environment Variables for Debugging](#environment-variables-for-debugging) 
 Element {"text":"Submit"} was not found after waiting 30000ms
 ```
 
-For a tap (`tap()`, `doubleTap()`, `longPress()`, `setChecked()`), the message usually goes on: `It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() …`. When an unnamed `getByRole()` misses a role that iOS shows only with a name, the message gives that more specific hint instead.
+The message goes on to list the locators that do match the same words on screen, if any, such as `Nothing matches it, but on screen now this locator matches: getByText("Submit") (1 element).` (see [Locators that match nothing](locators.md#locators-that-match-nothing)). For a tap (`tap()`, `doubleTap()`, `longPress()`, `setChecked()`), it then says `It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with await locator.scrollIntoView() …`. When an unnamed `getByRole()` misses a role that iOS shows only with a name, the message gives that more specific hint instead. It ends by pointing at UI mode's picker and the MCP tool `tapsmith_test_locator`, which find a locator that matches.
 
 **What happened:** Tapsmith polled the UI hierarchy for 30 seconds and never found an element matching your locator.
 
@@ -266,7 +266,7 @@ For a tap (`tap()`, `doubleTap()`, `longPress()`, `setChecked()`), the message u
   await device.getByText("Products").waitFor()
   await device.getByText("Submit", { exact: true }).tap()
   ```
-- **The locator is wrong** -- the text does not match exactly, or the element uses a different role. Use the trace viewer's Hierarchy tab or the `tapsmith_snapshot` MCP tool to inspect what is actually on screen.
+- **The locator is wrong** -- the text does not match exactly, or the element uses a different role. Start with the near misses the message lists. Then pick the element in UI mode, or check a locator with the `tapsmith_test_locator` MCP tool ([Finding locators](locators.md#finding-locators)). The trace viewer's Hierarchy tab shows what was on screen when the test failed.
 - **The element is off-screen** -- taps do not scroll, unlike a Playwright click, by design so both platforms behave the same. On Android an off-screen row is not in the accessibility tree at all, so a tap reports it not found and says it may be off-screen. Scroll to it first with `scrollIntoView()` (pass `{ direction: "down" }` for a row above the screen), then tap:
   ```typescript
   await device.getByText("Submit", { exact: true }).scrollIntoView()

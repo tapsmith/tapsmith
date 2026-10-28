@@ -385,7 +385,7 @@ test("can navigate to settings", async ({ device }) => {
 A few things to note:
 
 - Tests receive a `device` fixture automatically. This is your primary interface for interacting with the app.
-- `getByText()`, `getByRole()`, and the other `getBy*` methods are Playwright-style locators that identify UI elements. See the [Locators Guide](locators.md) for the full list.
+- `getByText()`, `getByRole()`, and the other `getBy*` methods are Playwright-style locators that identify UI elements. See the [Locators Guide](locators.md) for the full list. Rather than guess one, pick the element in UI mode (`npx tapsmith test --ui`) and copy a locator the device has checked, or let your coding agent find one over MCP: see [Finding locators](locators.md#finding-locators).
 - `expect()` creates assertions that auto-wait. `toBeVisible()` polls until the element appears or the timeout expires.
 - **Tests in the same file share the app.** Tapsmith resets the app to a clean state once at the start of each test file, not before every test. So the second test above starts on whatever screen the first one left, with any state it created, such as a signed-in user (unless the first one failed: the test after a failure starts from a fresh app). This differs from Playwright, where every test gets a fresh browser context. If a file's tests each need a fresh app, add `test.use({ appResetScope: "test" })` to that file. Without in-app hooks, each of those resets is a full clear and relaunch, which takes a few seconds per test. React Native and Expo apps that mount the [warm reset hooks](warm-reset.md) reset in well under a second instead. [Test isolation](writing-tests.md#test-isolation) covers the other reset options.
 

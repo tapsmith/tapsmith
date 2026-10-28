@@ -11,6 +11,9 @@ import type { ElementInfo, TapsmithGrpcClient } from "../grpc-client.js";
 
 // Its own sentence: "…after waiting 50ms. On iOS, …".
 const HINT = /[^.]\. On iOS, React Native publishes no "alert" role that getByRole\("alert"\) can see without a name: pass the element's name — getByRole\("alert", \{ name: "…" \}\) — or use getByText\(\) or getByTestId\(\)\.$/;
+// In a failure message, the pointer to the locator tools follows it (PILOT-849).
+const PICKER = /To find a locator that matches, pick the element in UI mode \(npx tapsmith test --ui\) or check one with the MCP tool tapsmith_test_locator\.$/;
+const HINT_IN_MESSAGE = new RegExp(HINT.source.replace(/\$$/, "") + " " + PICKER.source);
 
 function emptyClient(): TapsmithGrpcClient {
   return {
@@ -48,24 +51,24 @@ describe("iosUnnamedRoleMissHint()", () => {
 describe("a role-only miss on iOS carries the hint", () => {
   it("in toBeVisible and toHaveCount failures", async () => {
     await vitestExpect(tapsmithExpect(device("ios").getByRole("alert")).toBeVisible({ timeout: 50 }))
-      .rejects.toThrow(HINT);
+      .rejects.toThrow(HINT_IN_MESSAGE);
     await vitestExpect(tapsmithExpect(device("ios").getByRole("alert")).toHaveCount(1, { timeout: 50 }))
-      .rejects.toThrow(HINT);
+      .rejects.toThrow(HINT_IN_MESSAGE);
   });
 
   it("in an action's not-found error, through first() and scoping", async () => {
     const d = device("ios");
-    await vitestExpect(d.getByRole("alert").tap()).rejects.toThrow(HINT);
-    await vitestExpect(d.getByRole("alert").first().find()).rejects.toThrow(HINT);
-    await vitestExpect(d.getByTestId("screen").getByRole("alert").find()).rejects.toThrow(HINT);
-    await vitestExpect(d.getByTestId("screen").first().getByRole("alert").find()).rejects.toThrow(HINT);
+    await vitestExpect(d.getByRole("alert").tap()).rejects.toThrow(HINT_IN_MESSAGE);
+    await vitestExpect(d.getByRole("alert").first().find()).rejects.toThrow(HINT_IN_MESSAGE);
+    await vitestExpect(d.getByTestId("screen").getByRole("alert").find()).rejects.toThrow(HINT_IN_MESSAGE);
+    await vitestExpect(d.getByTestId("screen").first().getByRole("alert").find()).rejects.toThrow(HINT_IN_MESSAGE);
   });
 
   it("in toExist and waitFor failures", async () => {
     await vitestExpect(tapsmithExpect(device("ios").getByRole("alert")).toExist({ timeout: 50 }))
-      .rejects.toThrow(HINT);
-    await vitestExpect(device("ios").getByRole("alert").waitFor({ timeout: 50 })).rejects.toThrow(HINT);
-    await vitestExpect(device("ios").getByRole("alert").waitFor({ state: "attached", timeout: 50 })).rejects.toThrow(HINT);
+      .rejects.toThrow(HINT_IN_MESSAGE);
+    await vitestExpect(device("ios").getByRole("alert").waitFor({ timeout: 50 })).rejects.toThrow(HINT_IN_MESSAGE);
+    await vitestExpect(device("ios").getByRole("alert").waitFor({ state: "attached", timeout: 50 })).rejects.toThrow(HINT_IN_MESSAGE);
   });
 
   it("not when the query found an element that isn't visible", async () => {
@@ -100,7 +103,7 @@ describe("a role-only miss on iOS carries the hint", () => {
 // PILOT-828: a Jetpack Compose testTag reaches accessibility as a resource-id
 // only with testTagsAsResourceId, which a Compose developer has no reason to
 // know.
-const TEST_TAG_HINT = /[^.]\. On Android, a Jetpack Compose Modifier\.testTag\(\) is a test id only where the app sets Modifier\.semantics \{ testTagsAsResourceId = true \} on it or an ancestor — on the root of setContent, for the whole screen\.$/;
+const TEST_TAG_HINT = /[^.]\. On Android, a Jetpack Compose Modifier\.testTag\(\) is a test id only where the app sets Modifier\.semantics \{ testTagsAsResourceId = true \} on it or an ancestor — on the root of setContent, for the whole screen\. To find a locator that matches, pick the element in UI mode \(npx tapsmith test --ui\) or check one with the MCP tool tapsmith_test_locator\.$/;
 
 describe("a getByTestId miss on Android carries the testTagsAsResourceId hint", () => {
   const err = (p: Promise<unknown>) => p.then(() => "", (e: Error) => e.message);

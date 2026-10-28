@@ -4,6 +4,23 @@ Locators are how you tell Tapsmith which UI element to interact with. Tapsmith e
 
 Locators that reflect what users see and what assistive technologies read are preferred over locators that depend on implementation details. This makes your tests more resilient to refactors and ensures your app remains accessible.
 
+## Finding locators
+
+Don't guess a locator and wait out a timeout to learn it was wrong. Ask the app what is on screen:
+
+- **Pick it in UI mode.** Run `npx tapsmith test --ui`, drive the app to the screen you are testing, click the pick button (crosshair) in the device mirror, then click the element. The **Locator** tab lists suggested locators, each checked by the device to find exactly that element. Copy one into your test. Edit it in the tab to see its match count change live. See [Picking locators from the mirror](ui-mode.md#picking-locators-from-the-mirror).
+- **Ask your coding agent.** With the [MCP server](mcp-server.md) registered, `tapsmith_snapshot` lists the screen's elements with locators the device has checked, and `tapsmith_test_locator` counts how many elements a locator matches on the live screen. A locator is ready for a test when it counts exactly 1. [Using Tapsmith with AI coding agents](agents.md#the-locator-loop) gives your agent the whole loop.
+
+### Locators that match nothing
+
+When a locator still matches nothing, the error says what does. At the timeout, Tapsmith asks the device how the same words match under the other getters, and lists the locators that find something:
+
+```
+Element getByRole("button", { name: "Sign in" }) was not found after waiting 30000ms. Nothing matches it, but on screen now this locator matches: getByText("Sign in") (1 element). … To find a locator that matches, pick the element in UI mode (npx tapsmith test --ui) or check one with the MCP tool tapsmith_test_locator.
+```
+
+It checks `getByText()`, `getByLabel()`, `getByPlaceholder()` and `getByDescription()` with the same words, and a `getByRole()` again without `exact` or its state filters. If only the role matches, it says so: `getByRole("button") matches 3 elements on screen now, none named "Sign in".` It lists at most three near misses. The check takes at most 2 seconds, and never longer than the locator itself waited. A read with a timeout of 0 skips it. The checks only run for a locator built straight from `device`, with a string (not a RegExp) and without `.first()`, `.filter()`, `.and()`, `.or()` or a parent locator. Other locators get only the pointer to the picker. A miss of `.nth(i)` past the first or last element reports the index instead, since the locator itself may well match. The screen may have changed since the test needed the element, so treat a near miss as a lead and check it before using it.
+
 ## Priority Hierarchy
 
 | Priority | Methods | When to use |

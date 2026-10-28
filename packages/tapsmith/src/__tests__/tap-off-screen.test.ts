@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ElementHandle } from '../element-handle.js';
 import { _text, _role } from '../selectors.js';
+import { LOCATOR_PICKER_HINT } from '../locator-miss-hint.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from '../grpc-client.js';
 
 // PILOT-716: tap-family actions do not scroll (unlike a Playwright click, by
@@ -375,7 +376,8 @@ describe('tap() on an element never found (Android lists on-screen rows only) (P
     expect(err.message).toBe(
       'Element getByText("Item 1", { exact: true }) was not found after waiting 2000ms. ' +
         'It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with ' +
-        'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen), then tap() it.',
+        'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen), then tap() it. ' +
+        LOCATOR_PICKER_HINT,
     );
   });
 

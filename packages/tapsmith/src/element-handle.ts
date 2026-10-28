@@ -34,6 +34,8 @@ import { defineRenamedMethods } from './not-supported.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
+import { LOCATOR_PICKER_HINT, NEAR_MISS_BUDGET_MS, nearMissHint } from './locator-miss-hint.js';
+import { elementAccessibleName } from './accessible-name.js';
 
 // ─── Public types ───
 
@@ -514,7 +516,9 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
   if (el.resourceId && !nativeId) {
     return `device.getByTestId("${escapeJsString(el.resourceId)}")`;
   }
-  const name = el.contentDescription || el.text;
+  // A text field's text is its typed value, not its name: an unlabelled
+  // field is named by its placeholder (PILOT-834).
+  const name = elementAccessibleName(el);
   // Static text elements read better as getByText; real widgets as getByRole.
   // Only a role getByRole accepts: Android reports any role description an
   // app publishes (a custom "carousel", a localized one) as the role (PILOT-556).
@@ -1402,6 +1406,31 @@ export class ElementHandle {
     return hint && `.${hint}`;
   }
 
+  /**
+   * @internal — Everything a not-found message says after its first
+   * sentence, as ". …" to append to it (PILOT-849): the locators that do
+   * match the same words on screen now (asked of the device agent, for an
+   * unmodified native locator), then `hints` (by default the platform hint,
+   * {@link _missHint}), then where to find a locator that matches.
+   *
+   * '' after a `positionalDetail`, or for an `nth(i)` past the first or last
+   * (which every reader reports as a positional miss, matched or not): the
+   * locator may well match, only not at that index. The device is asked for
+   * near misses for no longer than the caller waited (`waitedMs`), and not at
+   * all after a no-wait (`timeout: 0`) read, which stays a single read.
+   */
+  async _locatorMissHelp(options: { waitedMs: number; positionalDetail?: string; hints?: string }): Promise<string> {
+    const positionalDetail = options.positionalDetail ?? '';
+    const nth = this._options.nthIndex;
+    if (positionalDetail || (nth !== undefined && nth !== 0 && nth !== -1)) return '';
+    const hints = options.hints ?? this._missHintSentence(positionalDetail);
+    const budgetMs = Math.min(NEAR_MISS_BUDGET_MS, options.waitedMs);
+    const near = this._hasModifiers() || budgetMs <= 0
+      ? ''
+      : await nearMissHint(this._client, this._selector, this._client._getAbortSignal?.(), budgetMs);
+    return `. ${[near, hints.trim(), LOCATOR_PICKER_HINT].filter(Boolean).join(' ')}`;
+  }
+
   /** {@link _missHint} as a bare sentence (with its leading space), to follow one that ends in a full stop. */
   private _missHintSentence(positionalDetail = ''): string {
     if (positionalDetail || this._options.andHandle || this._options.orHandle) return '';
@@ -1547,7 +1576,7 @@ export class ElementHandle {
         if (lastTransientErr) throw lastTransientErr;
         const detail = positionalMissDetail(lastPositionalMiss);
         throw new Error(
-          `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${detail}${this._missHint(detail)}`,
+          `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${detail}${await this._locatorMissHelp({ waitedMs: timeoutMs, positionalDetail: detail })}`,
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -1839,11 +1868,17 @@ export class ElementHandle {
             ? `Element ${desc} is disabled after waiting ${timeoutMs}ms`
             // A known cause (an unnamed role iOS cannot see, PILOT-718) is told
             // instead of the generic off-screen hint; a possible one (a
-            // Compose testTag, PILOT-828) after it.
+            // Compose testTag, PILOT-828) after it. A positional miss keeps
+            // the off-screen hint alone, as before.
             : `Element ${desc} was not found after waiting ${timeoutMs}ms${detail}` +
-              (this._selector.kind.type === 'role' && this._missHint(detail)
-                ? this._missHint(detail)
-                : `. ${offScreenHint(action)}${this._missHintSentence(detail)}`),
+              (detail
+                ? `. ${offScreenHint(action)}`
+                : await this._locatorMissHelp({
+                  waitedMs: timeoutMs,
+                  hints: this._selector.kind.type === 'role' && this._missHint(detail)
+                    ? this._missHintSentence(detail)
+                    : `${offScreenHint(action)}${this._missHintSentence(detail)}`,
+                })),
         );
       }
       const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
@@ -1960,7 +1995,7 @@ export class ElementHandle {
           detail = positionalMissDetail(err instanceof Error ? err : undefined);
           el = undefined;
         }
-        if (!el) throw new Error(`Element not found: ${this._describe()}${detail}${this._missHint(detail)}`);
+        if (!el) throw new Error(`Element not found: ${this._describe()}${detail}${await this._locatorMissHelp({ waitedMs: 0, positionalDetail: detail })}`);
         result = el;
       } else {
         // Strict resolution (PILOT-226): poll so multiple matches throw
@@ -2326,7 +2361,7 @@ export class ElementHandle {
           if (lastTransientErr) throw lastTransientErr;
           // A miss of an unnamed iOS role query explains itself (PILOT-718).
           const missed = (state === 'visible' || state === 'attached') && !lastAttached;
-          const hint = missed ? this._missHint() : '';
+          const hint = missed ? await this._locatorMissHelp({ waitedMs: timeoutMs }) : '';
           throw new Error(
             `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms${hint}`,
           );

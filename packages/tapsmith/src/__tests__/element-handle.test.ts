@@ -1035,6 +1035,19 @@ describe('tap()', () => {
     expect(err.message).not.toContain('getByText("65%"');
   });
 
+  it("names a typed-in text field by its placeholder, not its value (PILOT-834 follow-up)", () => {
+    // A field's text is what was typed into it; getByRole's name for an
+    // unlabelled field is its placeholder, so the typed value matches nothing.
+    const err = buildStrictModeViolationError('getByRole("textbox")', [
+      makeElementInfo({ role: 'textfield', className: 'XCUIElementTypeTextField', text: 'nick', hint: 'Nickname', contentDescription: '' }),
+      makeElementInfo({ role: 'textfield', className: 'android.widget.EditText', text: 'a@b.c', hint: 'Email', contentDescription: '' }),
+    ]);
+    expect(err.message).toContain('aka device.getByRole("textfield", { name: "Nickname", exact: true })');
+    expect(err.message).toContain('aka device.getByRole("textfield", { name: "Email", exact: true })');
+    expect(err.message).not.toContain('name: "nick"');
+    expect(err.message).not.toContain('name: "a@b.c"');
+  });
+
   it('suggests getByTestId only for an RN testID, never the name part of a native id (PILOT-659)', () => {
     const err = buildStrictModeViolationError('getByRole("image")', [
       makeElementInfo({ role: 'image', resourceId: 'avatar' }),
@@ -2244,7 +2257,7 @@ describe('last()', () => {
     // index the user never wrote and "found 0" adds nothing to "not found".
     const handle = new ElementHandle(client, _role('listitem'), 300);
     const err = await withFakeClock(5000, () => handle.last().find()).catch((e) => e);
-    expect(err.message).toMatch(/was not found after waiting 300ms$/);
+    expect(err.message).toMatch(/was not found after waiting 300ms\. To find a locator that matches, pick the element in UI mode/);
   });
 });
 
@@ -4316,7 +4329,7 @@ describe('boundingBox()', () => {
   it('reports a timed-out wait on a modified handle, not a single-read positional miss (review follow-up)', async () => {
     const client = makeMockClient({ findElements: vi.fn(async () => makeFindElementsResponse([])) });
     await expect(withFakeClock(5000, () => new ElementHandle(client, _role('button'), 1000).first().boundingBox()))
-      .rejects.toThrow(/was not found after waiting 1000ms$/);
+      .rejects.toThrow(/was not found after waiting 1000ms\. To find a locator that matches, pick the element in UI mode/);
   });
 });
 
