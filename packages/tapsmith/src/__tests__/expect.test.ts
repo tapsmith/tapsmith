@@ -1,6 +1,7 @@
 import { describe, it, expect as vitestExpect, vi } from "vitest";
 import { expect as tapsmithExpect } from "../expect.js";
 import { ElementHandle } from "../element-handle.js";
+import { errorStackFrames } from "../reporters/base.js";
 import { _role, _text, selectorToProto, type Selector } from "../selectors.js";
 import type {
   TapsmithGrpcClient,
@@ -242,6 +243,27 @@ describe("toHaveText()", () => {
     await vitestExpect(
       tapsmithExpect(handle).not.toHaveText("same", { timeout: 50 }),
     ).rejects.toThrow("NOT to have text");
+  });
+});
+
+// ─── Failure stacks (PILOT-841) ───
+
+describe("assertion failure stack (PILOT-841)", () => {
+  it("does not copy a multi-line message into the stack's frames", async () => {
+    const client = makeMockClient(async () => ({
+      requestId: "1",
+      found: true,
+      element: makeElementInfo({ text: "first\nsecond\nthird\nfourth" }),
+      errorMessage: "",
+    }));
+    const err = await tapsmithExpect(makeHandle(client)).toContainText("nope", { timeout: 50 })
+      .then(() => undefined, (e: unknown) => e as Error);
+    vitestExpect(err).toBeInstanceOf(Error);
+    const lines = err!.stack!.split("\n");
+    vitestExpect(lines.filter((l) => l === "third")).toHaveLength(1);
+    const frames = errorStackFrames(err!, 3);
+    vitestExpect(frames.length).toBeGreaterThan(0);
+    for (const frame of frames) vitestExpect(frame.trim()).toMatch(/^at /);
   });
 });
 

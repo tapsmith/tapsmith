@@ -550,7 +550,11 @@ function createAssertions(
     // assertion was called) rather than to Tapsmith internals.
     const source = callsite ?? err;
     if (source.stack) {
-      const frames = source.stack.split('\n').slice(1);
+      // A stack opens with every line of its message (one for a callsite's
+      // message-less Error): skip them all, or a multi-line message's later
+      // lines (a toHaveText's element text) land among the frames.
+      const header = source === err ? message.split('\n').length : 1;
+      const frames = source.stack.split('\n').slice(header);
       // Move user frames (non-Tapsmith-internal) to the top so the test file
       // location is the first thing developers see — in every install
       // layout, not only the monorepo's packages/tapsmith (PILOT-841).
