@@ -1281,11 +1281,12 @@ describe("toHaveAccessibleName()", () => {
     ["an iOS SwiftUI field", "XCUIElementTypeTextField", ""],
     ["a typed iOS field", "XCUIElementTypeSecureTextField", "hunter2"],
     ["a typed Android EditText", "android.widget.EditText", "sam@example.com"],
-  ])("names %s with no label by its placeholder", async (_why, className, text) => {
+    ["an EditText with a whitespace-only description", "android.widget.EditText", "x", " "],
+  ])("names %s with no label by its placeholder", async (_why, className, text, contentDescription = "") => {
     const client = makeMockClient(async () => ({
       requestId: "1",
       found: true,
-      element: makeElementInfo({ className, text, contentDescription: "", hint: "Title" }),
+      element: makeElementInfo({ className, text, contentDescription, hint: "Title" }),
       errorMessage: "",
     }));
     const handle = makeHandle(client);

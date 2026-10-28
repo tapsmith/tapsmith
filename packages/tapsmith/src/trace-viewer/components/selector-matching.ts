@@ -519,13 +519,15 @@ function textIsHint(node: HierarchyNode): boolean {
  * Playwright names an input with no label (PILOT-834), or '' — the agents'
  * fallback: an iOS text input (RoleName.placeholderNamedTypes) whose label and
  * title are empty is named by its placeholderValue; an Android EditText with
- * no content-desc by its hint (an empty one reports its hint as its text).
+ * no content-desc or descendant text by its hint (an empty one reports its
+ * hint as its text).
  */
 export function placeholderName(node: HierarchyNode): string {
   const blank = (value: string | undefined): boolean => normalizeWhitespace(value ?? '') === '';
   const className = node.attributes.get('class');
   if (className !== undefined) {
     if (!ANDROID_EDIT_TEXT_CLASSES.has(className) || !blank(node.attributes.get('content-desc'))) return '';
+    if (!blank(descendantText(node).join(' '))) return '';
     return node.attributes.get('hint') ?? '';
   }
   if (!IOS_PLACEHOLDER_NAMED_TYPES.has(node.attributes.get('type') ?? node.tagName)) return '';

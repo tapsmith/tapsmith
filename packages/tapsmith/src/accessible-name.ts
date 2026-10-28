@@ -37,7 +37,7 @@ function isPlaceholderNamedClass(className: string): boolean {
 export function elementAccessibleName(el: {
   className: string; contentDescription: string; text: string; hint: string;
 }): string {
-  if (el.contentDescription) return el.contentDescription;
+  if (el.contentDescription.trim()) return el.contentDescription;
   if (isPlaceholderNamedClass(el.className) && el.hint) return el.hint;
   return el.text;
 }

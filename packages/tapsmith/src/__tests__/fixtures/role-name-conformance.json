@@ -70,6 +70,21 @@
       "matches": true
     },
     {
+      "why": "a RegExp tests only the placeholder, not the empty label",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextField",
+      "role": "textfield",
+      "label": "",
+      "placeholder": "Email address",
+      "name": {
+        "source": "^(?!.*email)",
+        "flags": "i",
+        "pattern": "\\A(?![^\\u000A\\u000D\\u2028\\u2029]*email)",
+        "ignoreCase": true
+      },
+      "matches": false
+    },
+    {
       "why": "a secure field is named by its placeholder",
       "platform": "ios",
       "type": "XCUIElementTypeSecureTextField",
@@ -220,6 +235,22 @@
         "ignoreCase": true
       },
       "matches": true
+    },
+    {
+      "why": "a RegExp tests only a typed EditText's hint, not its empty description",
+      "platform": "android",
+      "type": "android.widget.EditText",
+      "role": "textfield",
+      "contentDesc": "",
+      "text": "x",
+      "placeholder": "Email address",
+      "name": {
+        "source": "^(?!.*email)",
+        "flags": "i",
+        "pattern": "\\A(?![^\\u000A\\u000D\\u2028\\u2029]*email)",
+        "ignoreCase": true
+      },
+      "matches": false
     },
     {
       "why": "a described EditText is not named by its hint",

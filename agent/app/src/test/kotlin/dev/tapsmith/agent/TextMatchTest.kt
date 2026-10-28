@@ -180,5 +180,19 @@ class TextMatchTest {
         assertFalse(TextMatch.accessibleNameMatches("Login", "Email address", false, { null }, re, hint = "Email address"))
         assertTrue(TextMatch.accessibleNameMatches(null, "Email address", false, { null }, re, hint = "Email address"))
         assertFalse(TextMatch.accessibleNameMatches(null, "x", true, { null }, re))
+        // A hint-named field is named by its hint alone: a RegExp that
+        // matches an empty string is not tested against the blank
+        // description or descendant text.
+        val notEmail = TextRegex(pattern = "^(?!.*email)", ignoreCase = true, display = "/^(?!.*email)/i")
+        assertFalse(TextMatch.accessibleNameMatches("", "x", true, { "" }, notEmail, hint = "Email address"))
+        assertTrue(TextMatch.accessibleNameMatches("", "x", true, { "" }, notEmail, hint = "Phone"))
+    }
+
+    @Test
+    fun `a field with descendant text is not named by its hint`() {
+        assertFalse(TextMatch.accessibleNameMatches(null, "x", true, { "Send" }, "Email", exact = false, hint = "Email address"))
+        assertTrue(TextMatch.accessibleNameMatches(null, "x", true, { "Send" }, "Send", exact = false, hint = "Email address"))
+        val re = TextRegex(pattern = "^email", ignoreCase = true, display = "/^email/i")
+        assertFalse(TextMatch.accessibleNameMatches(null, "x", true, { "Send" }, re, hint = "Email address"))
     }
 }

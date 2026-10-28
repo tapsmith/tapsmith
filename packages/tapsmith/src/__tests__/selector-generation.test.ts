@@ -94,6 +94,19 @@ describe('a label-less text field is named by its placeholder', () => {
     expect(findMatchingNodes([node], parsed!)).toHaveLength(1);
   });
 
+  it('iOS: a whitespace-only label is no label', () => {
+    const node = makeNode('XCUIElementTypeTextField', {
+      type: 'XCUIElementTypeTextField', label: ' ', identifier: '', value: '', placeholderValue: 'Title',
+    });
+    expect(generateSelectors(node)[0].code).toBe('device.getByRole("textfield", { name: "Title" })');
+  });
+
+  it('Android: an EditText with descendant text is not named by its hint', () => {
+    const node = makeNode('node', { class: 'android.widget.EditText', text: 'x', hint: 'Email' });
+    node.children.push(makeNode('node', { class: 'android.widget.TextView', text: 'Send' }));
+    expect(generateSelectors(node).map((s) => s.code)).not.toContain('device.getByRole("textfield", { name: "Email" })');
+  });
+
   it('iOS: a labelled field keeps its label as the name', () => {
     const node = makeNode('XCUIElementTypeTextField', {
       type: 'XCUIElementTypeTextField', label: 'Email', identifier: '', value: '', placeholderValue: 'name@example.com',

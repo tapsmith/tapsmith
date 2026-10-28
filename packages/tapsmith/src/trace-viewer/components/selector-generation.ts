@@ -265,7 +265,10 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   // it is the element's only name.
   // A text field with no other name is named by its placeholder, as the
   // agents name it (PILOT-834).
-  const fullName = ios ? (label || placeholderName(node)) : (contentDesc || placeholderName(node) || text);
+  const named = (value: string): string => (value.trim() ? value : '');
+  const fullName = ios
+    ? (named(label) || placeholderName(node))
+    : (named(contentDesc) || placeholderName(node) || text);
   const accessibleName = roleNameFor(fullName) || fullName;
   // getByLabel matches Android's content-desc (or a labelling view, which
   // the dump does not carry) — never the field's own text, which is its

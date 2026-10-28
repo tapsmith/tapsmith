@@ -78,8 +78,10 @@ object TextMatch {
     ): Boolean =
         nameMatches(contentDescription, name, exact) ||
             (!textIsHint(text, hint) && nameMatches(text, name, exact || textIsValue)) ||
-            nameMatches(descendantText(), name, exact) ||
-            nameMatches(hintName(contentDescription, hint), name, exact)
+            descendantText().let { descendants ->
+                nameMatches(descendants, name, exact) ||
+                    (isBlank(descendants) && nameMatches(hintName(contentDescription, hint), name, exact))
+            }
 
     /**
      * The [hint] that names an editable field with no content description, or
@@ -117,10 +119,15 @@ object TextMatch {
         hint: CharSequence? = null,
     ): Boolean {
         val test = { value: CharSequence? -> value != null && regex.matches(normalize(value.toString())) }
+        val descendants = descendantText()
+        // A hint-named field is tested against its hint alone: its blank
+        // description and descendant text are not its name, so a RegExp
+        // that matches "" does not match it.
+        val hintName = if (isBlank(descendants)) hintName(contentDescription, hint) else null
+        if (hintName != null) return test(hintName)
         return test(contentDescription) ||
             (!textIsValue && !textIsHint(text, hint) && test(text)) ||
-            test(descendantText()) ||
-            test(hintName(contentDescription, hint))
+            test(descendants)
     }
 
     /** Full-match pattern: the text equals [query] after normalizing both. */

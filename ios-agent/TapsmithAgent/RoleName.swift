@@ -46,15 +46,18 @@ enum RoleName {
     }
 
     /// `matches` for a RegExp name (PILOT-520), tested against each
-    /// whitespace-normalized name source.
+    /// whitespace-normalized name source. A placeholder-named field is
+    /// tested against its placeholder alone: its empty label and title are
+    /// not its name, so a RegExp that matches "" does not match it.
     static func matches(
         elementType: XCUIElement.ElementType, label: String, title: String, placeholder: String,
         regex: TextRegex
     ) -> Bool {
-        if regex.nameMatches(label) || regex.nameMatches(title) { return true }
-        guard let placeholderName = placeholderName(
+        if let placeholderName = placeholderName(
             elementType: elementType, label: label, title: title, placeholder: placeholder
-        ) else { return false }
-        return regex.nameMatches(placeholderName)
+        ) {
+            return regex.nameMatches(placeholderName)
+        }
+        return regex.nameMatches(label) || regex.nameMatches(title)
     }
 }
