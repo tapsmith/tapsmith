@@ -58,7 +58,7 @@ vi.mock('../setup-ios-device.js', () => {
   };
 });
 
-const { configureIos } = await import('../init.js');
+const { configureIos, generateConfig, placeholderKeys } = await import('../init.js');
 
 const env: EnvScan = {
   nodeVersion: '22.0.0',
@@ -553,5 +553,48 @@ describe('configureIos() with no build yet (PILOT-778)', () => {
     expect(ios.usePhysicalDevice).toBe(true);
     expect(ios.deviceAppPath).toBeUndefined();
     expect(ios.bundleId).toBeUndefined();
+  });
+
+  it('both: a skipped device id never takes the simulator build\'s id', async () => {
+    simCandidates = [SIM_APP];
+    bundleIds.set(SIM_APP, 'com.acme.app.dev');
+    script('both', [[/simulator build\)/, SIM_APP], [/device build \.app/, ''], [/device build's bundle identifier/, 'Skip for now']]);
+
+    const ios = await configureIos(env);
+
+    expect(ios.bundleId).toBe('com.acme.app.dev');
+    const text = generateConfig(['ios'], undefined, ios, false);
+    const device = text.slice(text.indexOf("name: 'ios-device'"));
+    expect(device).not.toContain("package: 'com.acme.app.dev'");
+    expect(device).toContain("// package: '<bundle identifier>',");
+    expect(placeholderKeys(['ios'], undefined, ios)).toEqual(['app', 'package']);
+  });
+
+  it('both: a skipped simulator id never takes the device build\'s id', async () => {
+    deviceCandidates = [DEVICE_APP];
+    bundleIds.set(DEVICE_APP, 'com.acme.app');
+    script('both', [[/simulator build\)/, ''], [/device build \.app/, DEVICE_APP], [/simulator build's bundle identifier/, 'Skip for now']]);
+
+    const ios = await configureIos(env);
+
+    const text = generateConfig(['ios'], undefined, ios, false);
+    const sim = text.slice(text.indexOf("name: 'ios'"), text.indexOf("name: 'ios-device'"));
+    const device = text.slice(text.indexOf("name: 'ios-device'"));
+    expect(sim).not.toContain("package: 'com.acme.app'");
+    expect(sim).toContain("// package: '<bundle identifier>',");
+    expect(device).toContain("package: 'com.acme.app',");
+    expect(placeholderKeys(['ios'], undefined, ios)).toEqual(['app', 'package']);
+  });
+
+  it('physical only, build skipped and id typed: one config with the id and an app placeholder', async () => {
+    script('physical', [[/device build \.app/, ''], [/bundle identifier/, 'com.acme.typed']]);
+
+    const ios = await configureIos(env);
+
+    const text = generateConfig(['ios'], undefined, ios, false);
+    expect(text).toContain("  package: 'com.acme.typed',");
+    expect(text).toContain("  // app: '<path to your iphoneos build>.app',");
+    expect(text).not.toContain('projects');
+    expect(placeholderKeys(['ios'], undefined, ios)).toEqual(['app']);
   });
 });

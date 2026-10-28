@@ -280,8 +280,12 @@ export interface IosConfig {
   /** Simulator build. Unset only when the user runs on physical devices alone. */
   appPath?: string;
   bundleId?: string;
-  /** The device build's bundle id, when it differs from `bundleId` (per-configuration ids). */
-  deviceBundleId?: string;
+  /**
+   * The device build's bundle id, when it differs from `bundleId` (per-configuration
+   * ids); `null` when the user skipped it beside a simulator id (PILOT-778), so
+   * the simulator's never stands in for it.
+   */
+  deviceBundleId?: string | null;
   simulator?: string;
   /**
    * Set when `simulator` is a custom name, only on this Mac (PILOT-721): the
@@ -627,8 +631,11 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
       suggest(simBundleId, "the simulator build's id"),
     );
   }
-  const bundleId = simBundleId ?? deviceBundleIdRead;
-  const deviceBundleId = both && deviceBundleIdRead !== simBundleId ? deviceBundleIdRead : undefined;
+  // With both, each target keeps its own id, a skipped one too (PILOT-778).
+  const bundleId = useSimulators ? simBundleId : deviceBundleIdRead;
+  const deviceBundleId = !both ? undefined
+    : deviceBundleIdRead === undefined ? (simBundleId === undefined ? undefined : null)
+    : deviceBundleIdRead !== simBundleId ? deviceBundleIdRead : undefined;
 
   return { appPath, bundleId, deviceBundleId, simulator, ...(simulatorDeviceType ? { simulatorDeviceType } : {}), usePhysicalDevice, deviceAppPath };
 }
@@ -855,10 +862,15 @@ const PNPM_IGNORED_BUILDS_HINT = [
  * build may be missing: the user skipped it (PILOT-778), and the config gets
  * a placeholder for it.
  */
-function iosTargets(ios: IosConfig | undefined): { sim?: { app?: string; simulator: string }; device?: { app?: string } } {
+function iosTargets(ios: IosConfig | undefined): {
+  sim?: { app?: string; pkg?: string; simulator: string };
+  device?: { app?: string; pkg?: string };
+} {
   return {
-    sim: ios?.simulator ? { app: ios.appPath, simulator: ios.simulator } : undefined,
-    device: ios?.usePhysicalDevice ? { app: ios.deviceAppPath } : undefined,
+    sim: ios?.simulator ? { app: ios.appPath, pkg: ios.bundleId, simulator: ios.simulator } : undefined,
+    device: ios?.usePhysicalDevice
+      ? { app: ios.deviceAppPath, pkg: ios.deviceBundleId === null ? undefined : ios.deviceBundleId ?? ios.bundleId }
+      : undefined,
   };
 }
 
@@ -868,7 +880,7 @@ function iosTargets(ios: IosConfig | undefined): { sim?: { app?: string; simulat
  */
 export function isUnconfigured(platform: Platform, android: AndroidConfig | undefined, ios: IosConfig | undefined): boolean {
   if (platform === 'android') return !android?.apkPath && !android?.packageName;
-  return !ios?.appPath && !ios?.deviceAppPath && !ios?.bundleId;
+  return !ios?.appPath && !ios?.deviceAppPath && !ios?.bundleId && !ios?.deviceBundleId;
 }
 
 /**
@@ -901,7 +913,7 @@ export function placeholderKeys(platforms: Platform[], android: AndroidConfig | 
   if (platforms.includes('ios') && ios) {
     const { sim, device } = iosTargets(ios);
     if ((sim && !sim.app) || (device && !device.app)) keys.add('app');
-    if (!ios.bundleId) keys.add('package');
+    if ((sim && !sim.pkg) || (device && !device.pkg)) keys.add('package');
   }
   return [...keys];
 }
@@ -986,7 +998,6 @@ export function generateConfig(
   if (enableNetwork) lines.push("  trace: { mode: 'retain-on-failure' },");
 
   const { sim: iosSim, device: iosDevice } = iosTargets(ios);
-  const iosDevicePkg = ios?.deviceBundleId ?? ios?.bundleId;
 
   /** An Android scope's keys; a package-only scope is complete (PILOT-721). */
   const androidLines = (indent: string, a: AndroidConfig): string[] => [
@@ -1013,7 +1024,7 @@ export function generateConfig(
       out.push("      name: 'ios',");
       out.push('      use: {');
       out.push("        platform: 'ios',");
-      out.push(...iosAppLines('        ', iosCfg.bundleId, iosSim.app, SIM_APP_PLACEHOLDER));
+      out.push(...iosAppLines('        ', iosSim.pkg, iosSim.app, SIM_APP_PLACEHOLDER));
       out.push(...simulatorLines('        ', iosCfg, iosSim.simulator));
       out.push('      },');
       out.push('    },');
@@ -1024,7 +1035,7 @@ export function generateConfig(
       out.push('      workers: 1,');
       out.push('      use: {');
       out.push("        platform: 'ios',");
-      out.push(...iosAppLines('        ', iosDevicePkg, iosDevice.app, DEVICE_APP_PLACEHOLDER));
+      out.push(...iosAppLines('        ', iosDevice.pkg, iosDevice.app, DEVICE_APP_PLACEHOLDER));
       out.push('      },');
       out.push('    },');
     }
@@ -1044,9 +1055,9 @@ export function generateConfig(
     } else {
       lines.push("  platform: 'ios',");
       if (iosDevice) {
-        lines.push(...iosAppLines('  ', iosDevicePkg, iosDevice.app, DEVICE_APP_PLACEHOLDER));
+        lines.push(...iosAppLines('  ', iosDevice.pkg, iosDevice.app, DEVICE_APP_PLACEHOLDER));
       } else if (iosSim) {
-        lines.push(...iosAppLines('  ', ios.bundleId, iosSim.app, SIM_APP_PLACEHOLDER));
+        lines.push(...iosAppLines('  ', iosSim.pkg, iosSim.app, SIM_APP_PLACEHOLDER));
         lines.push(...simulatorLines('  ', ios, iosSim.simulator));
       }
     }
