@@ -1394,7 +1394,10 @@ class CommandHandler {
             putKeyboardAwayIfItWouldEatTheTouch(element)
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
             switch try planTouch(element, timeoutMs: remaining, preferElementTap: false) {
-            case .point(let point, _):
+            case .point(let point, let visible):
+                // The daemon touches this point as soon as it has it, so the
+                // target must have stopped changing first (PILOT-791).
+                settleBeforeTouch(.point(point, visible: visible))
                 return ["x": Double(point.x), "y": Double(point.y)]
             case .hittableElement, .offScreen:
                 // No point to hand out (off screen, or hittable with no tree
