@@ -53,6 +53,13 @@ xcrun swiftc -sdk "$SDK" \
   Tests/TouchPlanClockTests/main.swift \
   TapsmithAgent/TouchPlanClock.swift \
   -o "$OUT/touch-plan-clock-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/TouchSettleTests/main.swift \
+  TapsmithAgent/TouchSettle.swift \
+  TapsmithAgent/TouchPlanClock.swift \
+  -o "$OUT/touch-settle-tests"
+"$OUT/touch-settle-tests"
 "$OUT/touch-plan-clock-tests"
 
 xcrun swiftc -sdk "$SDK" \
