@@ -327,11 +327,13 @@ export function androidEmulatorCaptureLine(avd: string | undefined, avdImages: A
  * infers from `android/`, `ios/`, a root `settings.gradle` or an Xcode
  * project, PILOT-832), then the toolchains: Android needs adb, iOS needs
  * Xcode and a simulator. A project with neither gets Android when adb is
- * there, else iOS when it can run.
+ * there, else iOS when it can run. Both narrows to the one platform with a
+ * build (`builds`, PILOT-778): the other has nothing to test yet.
  */
 export function platformPrompt(
   env: EnvScan,
   layout: { hasAndroidProject: boolean; hasIosProject: boolean },
+  builds: { android: boolean; ios: boolean } = { android: false, ios: false },
 ): { choices: Array<{ name: string; message: string; hint?: string }>; initial: number } {
   const androidHint = env.adbVersion ? undefined : env.adbOffPath ? 'adb not on PATH' : 'ADB not found';
   if (!env.isMacOS) return { choices: [{ name: 'android', message: 'Android', ...(androidHint ? { hint: androidHint } : {}) }], initial: 0 };
@@ -358,6 +360,7 @@ export function platformPrompt(
   } else {
     pick = !androidOk && iosOk ? 'ios' : 'android';
   }
+  if (pick === 'both' && builds.android !== builds.ios) pick = builds.android ? 'android' : 'ios';
   return { choices, initial: choices.findIndex((c) => c.name === pick) };
 }
 
@@ -1358,7 +1361,15 @@ async function runInitInner(): Promise<void> {
 
   // Step 2: Platform selection, defaulting to one that can run (PILOT-721)
   const layout = detectProjectLayout(cwd);
-  const platforms = platformPrompt(env, { hasAndroidProject: hasAndroidProject(layout), hasIosProject: hasIosProject(layout) });
+  const platforms = platformPrompt(
+    env,
+    { hasAndroidProject: hasAndroidProject(layout), hasIosProject: hasIosProject(layout) },
+    // Any build the questions would offer (PILOT-778).
+    {
+      android: findApkCandidates(cwd).length > 0,
+      ios: env.isMacOS && (iosBuildCandidates('iphonesimulator').candidates.length > 0 || iosBuildCandidates('iphoneos').candidates.length > 0),
+    },
+  );
   const platformChoice = await ask<string>({
     type: 'select',
     message: 'Which platform(s) will you test?',

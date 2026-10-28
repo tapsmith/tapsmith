@@ -394,6 +394,19 @@ describe('platformPrompt() (PILOT-721)', () => {
     expect(selected(platformPrompt(env(), { hasAndroidProject: true, hasIosProject: true }))).toBe('both');
   });
 
+  it('narrows Both to the platform that has a build (PILOT-778)', () => {
+    const both = { hasAndroidProject: true, hasIosProject: true };
+    expect(selected(platformPrompt(env(), both, { android: true, ios: false }))).toBe('android');
+    expect(selected(platformPrompt(env(), both, { android: false, ios: true }))).toBe('ios');
+    expect(selected(platformPrompt(env(), both, { android: true, ios: true }))).toBe('both');
+    // Neither built yet: the layout still says what the project is.
+    expect(selected(platformPrompt(env(), both, { android: false, ios: false }))).toBe('both');
+  });
+
+  it('a build never overrides a missing toolchain', () => {
+    expect(selected(platformPrompt(env({ adbVersion: undefined }), { hasAndroidProject: true, hasIosProject: true }, { android: true, ios: false }))).toBe('ios');
+  });
+
   it('defaults to the usable one of a two-platform project', () => {
     expect(selected(platformPrompt(env({ adbVersion: undefined }), { hasAndroidProject: true, hasIosProject: true }))).toBe('ios');
     expect(selected(platformPrompt(env({ xcodeVersion: undefined }), { hasAndroidProject: true, hasIosProject: true }))).toBe('android');
