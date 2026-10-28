@@ -35,6 +35,7 @@ import { escapeJsString } from './js-string-escape.js';
 import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type TimeoutOptions } from './action-options.js';
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
 import { LOCATOR_PICKER_HINT, nearMissHint } from './locator-miss-hint.js';
+import { elementAccessibleName } from './accessible-name.js';
 
 // ─── Public types ───
 
@@ -515,7 +516,9 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
   if (el.resourceId && !nativeId) {
     return `device.getByTestId("${escapeJsString(el.resourceId)}")`;
   }
-  const name = el.contentDescription || el.text;
+  // A text field's text is its typed value, not its name: an unlabelled
+  // field is named by its placeholder (PILOT-834).
+  const name = elementAccessibleName(el);
   // Static text elements read better as getByText; real widgets as getByRole.
   // Only a role getByRole accepts: Android reports any role description an
   // app publishes (a custom "carousel", a localized one) as the role (PILOT-556).
