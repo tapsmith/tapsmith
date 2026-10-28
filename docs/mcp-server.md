@@ -164,7 +164,7 @@ Returns a base64-encoded PNG image.
 
 #### `tapsmith_test_locator`
 
-Test a Tapsmith locator against the current screen, resolved exactly as a test resolves it: the same SDK locator code and the device agent's own matching (it does not wait for a match to appear). Returns whether it matches, how many elements match, and details about each match. Use to validate locators before putting them in test code.
+Test a Tapsmith locator against the current screen, resolved exactly as a test resolves it: the same SDK locator code and the device agent's own matching (it does not wait for a match to appear). Returns whether it matches, how many elements match, and details about each match. Check every locator with it before putting it in test code: a locator belongs in a test only once this tool counts exactly 1 match (or the `.first()`/`.nth()` you meant).
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
@@ -182,6 +182,8 @@ Tap a UI element matching the given Tapsmith locator, as `await locator.tap()` i
 | `locator` | string | Yes | Tapsmith locator, e.g. `device.getByRole("button", { name: "Login" })` |
 | `timeout` | number | No | How long the tap may take, waiting for the element included, in milliseconds (default 5000, at most 120000), as `tap({ timeout })` in a test (a tap on an element found just before it still gets up to a second). |
 | `device` | string | No | Device serial. Defaults to the session's primary device — see [Choosing a device](#choosing-a-device). |
+
+When nothing matches the locator, the error is the one a test gets, listing the locators that match the same words on screen (see [Locators that match nothing](locators.md#locators-that-match-nothing)), and it ends by asking you to check a locator with `tapsmith_test_locator` before acting on it. `tapsmith_type` answers a miss the same way.
 
 #### `tapsmith_type`
 
@@ -268,7 +270,7 @@ shown in detail, with each error cut to 2,000 characters; when their traces are
 long, fewer failures are shown in detail. The failures after those, up to the
 50th, get one line each, and any after that are counted. Screenshots are attached for up to the first 3 failures
 that have one, as many as fit the response limit. The report ends by pointing to `tapsmith_list_results`, which lists
-every failure, and `tapsmith_read_trace` for a failure's steps.
+every failure, and `tapsmith_read_trace` for a failure's steps. When failures are locators that matched nothing, it also names those locators and says what to do next: see the screen in the failure's trace, find a locator that matches with `tapsmith_snapshot` and `tapsmith_test_locator`, and change the test only once `tapsmith_test_locator` counts 1.
 
 A file that dies before any test reports — a failed import, a crashed or
 timed-out worker — is reported as a single failure named
@@ -390,7 +392,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 2. **Connect your agent** to the MCP endpoint shown in the MCP panel
 3. **Understand the environment:** call `tapsmith_session_info` to see platform, device, package, and project configuration
 4. **Discover tests:** call `tapsmith_list_tests` to see the full test tree with file paths and test names
-5. **Explore the screen:** use `tapsmith_snapshot` to see the accessibility tree with suggested locators, then `tapsmith_test_locator` to validate a locator before using it
+5. **Explore the screen:** use `tapsmith_snapshot` to see the accessibility tree with suggested locators, then `tapsmith_test_locator` on each locator you will use, until it counts exactly 1. Only then put it in test code
 6. **Run tests:** call `tapsmith_run_tests` with file paths and optional test name / project filters. On failure, the response includes error details, trace steps, and a screenshot
 7. **Review results:** use `tapsmith_list_results` to browse the latest run (pass `details: true` to see trace steps for failures), and `tapsmith_suite_status` to see the whole suite's accumulated status including tests that have not run yet
 8. **Debug failures:** use `tapsmith_read_trace` with the trace file path from the failure report for step-by-step debugging
@@ -401,7 +403,7 @@ Returns a message indicating whether watch mode was enabled or disabled.
 1. **Add the MCP server config:** `codex mcp add tapsmith-headless -- npx tapsmith mcp-server`
 2. **Understand the environment:** call `tapsmith_session_info` to lazy-load config, connect a device, and show project settings
 3. **Discover tests:** call `tapsmith_list_tests` to get file paths, test names, and project names from the headless session
-4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device
+4. **Explore the screen:** use `tapsmith_snapshot` and `tapsmith_test_locator` against the headless session's selected device, and put a locator in test code only once `tapsmith_test_locator` counts exactly 1
 5. **Run tests:** call `tapsmith_run_tests`; results are stored in the headless session for `tapsmith_list_results`
 6. **Iterate:** use `tapsmith_watch` to re-run watched files on save, or `tapsmith_stop_tests` to terminate a running headless test run
 

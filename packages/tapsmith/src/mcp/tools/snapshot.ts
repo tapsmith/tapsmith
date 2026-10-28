@@ -12,7 +12,7 @@ const IOS_CHUNK_SIZE = 500;
 export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_snapshot',
-    'Get the current screen\'s accessibility tree with copy-paste-ready Tapsmith locators for each interactive element. Suggested locators are checked by the device agent, with the same matching tests run with, and each resolved to exactly the element it is listed against when the snapshot was taken (getByText is substring by default; ambiguous locators throw a strict mode violation when acted on). Use this first when writing tests to see what\'s on screen. Then validate locators with tapsmith_test_locator before putting them in test code.',
+    'Get the current screen\'s accessibility tree with copy-paste-ready Tapsmith locators for each interactive element. Suggested locators are checked by the device agent, with the same matching tests run with, and each resolved to exactly the element it is listed against when the snapshot was taken (getByText is substring by default; ambiguous locators throw a strict mode violation when acted on). Use this first when writing tests to see what\'s on screen. Then check each locator you will use with tapsmith_test_locator (it must count exactly 1) before putting it in test code.',
     {
       device: z.string().optional().describe(DEVICE_ARG_DESCRIPTION),
       project: z.string().optional().describe(PROJECT_ARG_DESCRIPTION),

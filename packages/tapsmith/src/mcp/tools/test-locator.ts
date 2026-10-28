@@ -18,7 +18,7 @@ function errorResult(text: string) {
 export function registerTestLocatorTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_test_locator',
-    'Test a Tapsmith locator against the current screen, resolved exactly as a test resolves it (the same SDK locator code and the device agent\'s matching, no waiting). Chains work as in a test: scoped getters, .filter(), .and(), .or(), .first()/.nth()/.last(), and webview.* locators. Returns whether it matches, how many elements match, and details about each match. Warns when a locator is ambiguous (multiple matches), which makes runtime actions throw a strict mode violation. Use to validate locators before putting them in test code.',
+    'Test a Tapsmith locator against the current screen, resolved exactly as a test resolves it (the same SDK locator code and the device agent\'s matching, no waiting). Chains work as in a test: scoped getters, .filter(), .and(), .or(), .first()/.nth()/.last(), and webview.* locators. Returns whether it matches, how many elements match, and details about each match. Warns when a locator is ambiguous (multiple matches), which makes runtime actions throw a strict mode violation. Check every locator with it before putting it in test code: a locator belongs in a test only once this tool counts exactly 1 match (or the .first()/.nth() you meant).',
     {
       locator: z.string().describe('Tapsmith locator, e.g. device.getByRole("button", { name: "Login" }) or device.getByRole("listitem").filter({ hasText: "Milk" })'),
       device: z.string().optional().describe(DEVICE_ARG_DESCRIPTION),

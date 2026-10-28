@@ -5,6 +5,7 @@ import type { TestDispatcher } from '../test-dispatcher.js';
 import { isLocatorError, type EvaluatedLocator } from '../locator-eval.js';
 import { MCP_ACTION_RUN_TIMEOUT_MS, MCP_ACTION_TIMEOUT_MS, sdkDeviceFor, withEvaluatedLocator } from '../sdk-device.js';
 import type { ElementHandle } from '../../element-handle.js';
+import { LOCATOR_PICKER_HINT } from '../../locator-miss-hint.js';
 
 /** The tool result for a daemon action: its error, or "OK". */
 export function actionResult(success: boolean, errorMessage?: string) {
@@ -20,6 +21,12 @@ export function actionResult(success: boolean, errorMessage?: string) {
 /** The tool result for an SDK action that threw: its message, as a test would see it. */
 function thrownResult(err: unknown) {
   return actionResult(false, err instanceof Error ? err.message : String(err));
+}
+
+/** What an action tool's locator miss tells the agent to do next (PILOT-849). */
+function mcpLocatorHint(locator: string): string {
+  return `Check a locator with tapsmith_test_locator before acting on it (this one: ${locator.trim()}), ` +
+    'or take a tapsmith_snapshot for the checked locators of everything on screen.';
 }
 
 /**
@@ -41,7 +48,12 @@ async function actOn(
     if (isLocatorError(err)) return { content: [{ type: 'text' as const, text: err.message }], isError: true };
     const message = err instanceof Error ? err.message : String(err);
     // An agent that missed its target should look at the screen, as before
-    // (not one whose WebView or agent connection timed out).
+    // (not one whose WebView or agent connection timed out). A native miss
+    // ends with the pointer at UI mode's picker, which is for a human: the
+    // agent gets its own tools instead, with the locator to check (PILOT-849).
+    if (message.includes(LOCATOR_PICKER_HINT)) {
+      return actionResult(false, message.replace(LOCATOR_PICKER_HINT, mcpLocatorHint(locator)));
+    }
     return /not found|did not reach state|in WebView \(\d+ms\)/i.test(message)
       ? actionResult(false, `${message} Use tapsmith_snapshot or tapsmith_test_locator to inspect the current screen.`)
       : thrownResult(err);
@@ -73,7 +85,7 @@ const timeoutArg = z.number().min(1).max(MAX_TOOL_TIMEOUT_MS).optional().describ
 export function registerDeviceActionTools(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_tap',
-    'Tap a UI element matching the given Tapsmith locator, exactly as `await locator.tap()` in a test would (waits up to 5s for it, or `timeout` ms; strict mode; chains, .filter(), .first()/.nth() and webview.* locators work). Use tapsmith_snapshot first to find the right locator.',
+    'Tap a UI element matching the given Tapsmith locator, exactly as `await locator.tap()` in a test would (waits up to 5s for it, or `timeout` ms; strict mode; chains, .filter(), .first()/.nth() and webview.* locators work). Find the locator with tapsmith_snapshot and check it with tapsmith_test_locator first.',
     {
       locator: z.string().describe('Tapsmith locator, e.g. device.getByRole("button", { name: "Login" })'),
       timeout: timeoutArg,

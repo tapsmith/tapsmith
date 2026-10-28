@@ -533,6 +533,16 @@ describe('tapsmith_tap', () => {
     expect(text(res)).toContain('tapsmith_snapshot');
   }, 15_000);
 
+  it('names the failing locator for tapsmith_test_locator instead of the UI-mode picker (PILOT-849)', async () => {
+    hoisted.client = makeDaemon({ elements: [] }).client;
+    for (const tool of ['tapsmith_tap', 'tapsmith_type'] as const) {
+      const args = tool === 'tapsmith_tap' ? { locator: 'device.getByText("Nope")' } : { locator: 'device.getByText("Nope")', text: 'x' };
+      const out = text(await callTool(tool, args));
+      expect(out).toContain('Check a locator with tapsmith_test_locator before acting on it (this one: device.getByText("Nope")), or take a tapsmith_snapshot');
+      expect(out).not.toContain('npx tapsmith test --ui');
+    }
+  }, 30_000);
+
   it('surfaces a daemon failure rather than reporting OK', async () => {
     hoisted.client = makeDaemon({
       elements: [makeElement({ text: 'Sign in' })],

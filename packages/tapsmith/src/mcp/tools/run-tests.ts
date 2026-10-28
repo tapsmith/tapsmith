@@ -10,6 +10,7 @@ import { matchesTestFilter } from '../../test-filter.js';
 import { getSessionResultsStore } from '../session-results.js';
 import { beginTestRun, endTestRun } from '../sdk-device.js';
 import { clipText, MCP_IMAGE_BUDGET_BYTES, serializedTextBytes } from '../response-limits.js';
+import { LOCATOR_PICKER_HINT } from '../../locator-miss-hint.js';
 
 /**
  * How often a running test suite reports progress to the MCP client. Clients
@@ -64,10 +65,34 @@ export function stdioTestArgs(opts: { files: string[]; testFilter?: string; proj
   return args;
 }
 
+/** Distinct locators named at most in the locator-miss step. */
+const LISTED_MISSED_LOCATORS = 3;
+
+/**
+ * The step an agent should take when failures are locator misses (PILOT-849),
+ * or undefined. A native miss is told by the sentence every one ends with
+ * (locator-miss-hint.ts); the locator is the one its first sentence names.
+ */
+export function locatorMissStep(failures: TestFailureDetail[]): string | undefined {
+  const misses = failures.filter((f) => f.error.includes(LOCATOR_PICKER_HINT));
+  if (misses.length === 0) return undefined;
+  const locators = [...new Set(misses.flatMap((f) => {
+    const m = /^(?:Expected element|Element(?: not found:)?) (.+?\))(?: was not found| did not reach state| to (?:be visible|exist|have count)|\. |$)/m
+      .exec(f.error);
+    return m ? [m[1]] : [];
+  }))];
+  const shown = locators.slice(0, LISTED_MISSED_LOCATORS).join(', ');
+  const more = locators.length > LISTED_MISSED_LOCATORS ? ` and ${locators.length - LISTED_MISSED_LOCATORS} more` : '';
+  const which = misses.length === 1 ? '1 failure is a locator that matched nothing' : `${misses.length} failures are locators that matched nothing`;
+  return `NEXT STEP: ${which}${shown ? `: ${shown}${more}` : ''}. ` +
+    'Read the failure\'s trace (tapsmith_read_trace) to see the screen it was on, find a locator that matches with ' +
+    'tapsmith_snapshot and tapsmith_test_locator, and change the test only once tapsmith_test_locator counts 1.';
+}
+
 export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_run_tests',
-    'Run Tapsmith test files and return structured results. Reports pass/fail counts and detailed failure information including error messages and trace file paths for debugging. Only one test run can execute at a time. Use tapsmith_list_tests first to discover available files, test names, and project names.',
+    'Run Tapsmith test files and return structured results. Reports pass/fail counts and detailed failure information including error messages and trace file paths for debugging. Only one test run can execute at a time. Use tapsmith_list_tests first to discover available files, test names, and project names. On a failure, read its trace with tapsmith_read_trace; for a locator that matched nothing, find one that matches with tapsmith_snapshot and tapsmith_test_locator before changing the test.',
     {
       files: z.array(z.string()).describe('Test file paths: absolute, relative to the config\'s directory (rootDir) or to the MCP server\'s working directory, or glob patterns matched the same way (e.g. ["/Users/me/project/e2e/tests/login.tapsmith.ts"], ["tests/login.tapsmith.ts"], ["**/login.tapsmith.ts"]). An argument that matches no discovered file is named in the error. Use tapsmith_list_tests to find available files.'),
       test: z.string().optional().describe('Run only tests whose full name contains this text (case-insensitive substring of "Describe > test name", e.g. "submits form"). May match more than one test, and applies across all the given files. If it matches nothing, the run returns an error listing the available tests — it never silently passes. Use tapsmith_list_tests to see exact names.'),
@@ -209,6 +234,8 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             );
             lines.push(parts.join(' '));
           }
+          const step = locatorMissStep(failures);
+          if (step) lines.push('', step);
         };
         // Warnings on any result of this run (e.g. the app under test showed
         // an ANR dialog that the preflight closed before retrying) — a pass
