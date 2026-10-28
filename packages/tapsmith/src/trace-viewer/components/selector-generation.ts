@@ -4,6 +4,7 @@ import { iosDescribedRole, unknownRoleMessage } from '../../roles.js';
 import { escapeJsString, hasPrivateUseChar } from '../../js-string-escape.js';
 import { cssIdSelector, isCssIdentifier } from '../../css-selector.js';
 import { isNonAppNode, isNonAppSubtree } from './non-app-nodes.js';
+import { placeholderName } from './selector-matching.js';
 import { IOS_NAME_ONLY_TYPES } from '../../ios-text-content.js';
 
 // ─── Attribute Helpers ───
@@ -262,7 +263,9 @@ function generateNativeSelectors(node: HierarchyNode): GeneratedSelector[] {
   // Android prefer content-desc, then text — less any icon glyph at its ends.
   // A name that is nothing but glyphs (an icon-only element) stays whole:
   // it is the element's only name.
-  const fullName = ios ? label : (contentDesc || text);
+  // A text field with no other name is named by its placeholder, as the
+  // agents name it (PILOT-834).
+  const fullName = ios ? (label || placeholderName(node)) : (contentDesc || placeholderName(node) || text);
   const accessibleName = roleNameFor(fullName) || fullName;
   // getByLabel matches Android's content-desc (or a labelling view, which
   // the dump does not carry) — never the field's own text, which is its

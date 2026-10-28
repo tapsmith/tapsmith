@@ -80,6 +80,35 @@ describe('generateSelectors for a generic iOS view whose value describes its rol
   });
 });
 
+// ─── A text field named by its placeholder (PILOT-834) ───
+
+describe('a label-less text field is named by its placeholder', () => {
+  it('iOS: a SwiftUI TextField gets getByRole with its placeholder as the name', () => {
+    const node = makeNode('XCUIElementTypeTextField', {
+      type: 'XCUIElementTypeTextField', label: '', identifier: '', value: 'Title', placeholderValue: 'Title',
+    });
+    const codes = generateSelectors(node).map((s) => s.code);
+    expect(codes[0]).toBe('device.getByRole("textfield", { name: "Title" })');
+    expect(codes).toContain('device.getByPlaceholder("Title")');
+    const parsed = parseSelectorString(codes[0]);
+    expect(findMatchingNodes([node], parsed!)).toHaveLength(1);
+  });
+
+  it('iOS: a labelled field keeps its label as the name', () => {
+    const node = makeNode('XCUIElementTypeTextField', {
+      type: 'XCUIElementTypeTextField', label: 'Email', identifier: '', value: '', placeholderValue: 'name@example.com',
+    });
+    expect(generateSelectors(node)[0].code).toBe('device.getByRole("textfield", { name: "Email" })');
+  });
+
+  it('Android: a typed EditText is named by its hint, not its value', () => {
+    const node = makeNode('node', { class: 'android.widget.EditText', text: 'sam@example.com', hint: 'Email' });
+    const code = generateSelectors(node)[0].code;
+    expect(code).toBe('device.getByRole("textfield", { name: "Email" })');
+    expect(findMatchingNodes([node], parseSelectorString(code)!)).toHaveLength(1);
+  });
+});
+
 // ─── Native selector priority order ───
 
 describe('generateNativeSelectors priority order', () => {

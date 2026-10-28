@@ -1275,6 +1275,36 @@ describe("toHaveAccessibleName()", () => {
     await tapsmithExpect(handle).toHaveAccessibleName("Submit", { timeout: 50 });
   });
 
+  // PILOT-834: an input with no label is named by its placeholder, as
+  // getByRole's name is — never by its typed value.
+  it.each([
+    ["an iOS SwiftUI field", "XCUIElementTypeTextField", ""],
+    ["a typed iOS field", "XCUIElementTypeSecureTextField", "hunter2"],
+    ["a typed Android EditText", "android.widget.EditText", "sam@example.com"],
+  ])("names %s with no label by its placeholder", async (_why, className, text) => {
+    const client = makeMockClient(async () => ({
+      requestId: "1",
+      found: true,
+      element: makeElementInfo({ className, text, contentDescription: "", hint: "Title" }),
+      errorMessage: "",
+    }));
+    const handle = makeHandle(client);
+    await tapsmithExpect(handle).toHaveAccessibleName("Title", { timeout: 50 });
+  });
+
+  it("names a labelled field by its label, not its placeholder", async () => {
+    const client = makeMockClient(async () => ({
+      requestId: "1",
+      found: true,
+      element: makeElementInfo({
+        className: "XCUIElementTypeTextField", contentDescription: "Email", hint: "name@example.com",
+      }),
+      errorMessage: "",
+    }));
+    const handle = makeHandle(client);
+    await tapsmithExpect(handle).toHaveAccessibleName("Email", { timeout: 50 });
+  });
+
   it("supports regex matching", async () => {
     const client = makeMockClient(async () => ({
       requestId: "1",
