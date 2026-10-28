@@ -1108,8 +1108,9 @@ function classNameToRole(className: string): string {
 // ─── PILOT-42: Generic value assertions ───
 
 /**
- * Assertions on a plain value, from `expect(value)`. They check once and do
- * not wait; use `expect.poll()` to retry a value that changes.
+ * Assertions on a plain value. From `expect(value)` they check once and do
+ * not wait. From `expect.poll(fn)` each one re-runs `fn` until it passes or
+ * the poll's timeout runs out, and returns a promise to `await`.
  */
 export interface GenericAssertions {
   /** Negate the following assertion. */

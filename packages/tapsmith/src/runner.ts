@@ -481,7 +481,10 @@ export interface TestResult {
   fullName: string;
   /** Whether the test passed, failed or was skipped. */
   status: TestStatus;
-  /** How long the test took, in milliseconds, setup and hooks included. */
+  /**
+   * How long this attempt took, in milliseconds, setup and hooks included. A
+   * retried test reports each attempt as its own result.
+   */
   durationMs: number;
   /** The error that failed the test, when it failed. */
   error?: Error;
