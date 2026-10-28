@@ -294,7 +294,9 @@ class ElementFinder(
         // entry in roleClassMap — React Native renders these as a generic
         // android.view.View and names the role only through
         // AccessibilityNodeInfoCompat.setRoleDescription() (PILOT-664 added
-        // all but alert, combobox and tab). A tab item has no class of its
+        // all but alert, combobox and tab; its radiogroup, spinbutton and
+        // timer also have a framework widget, so they are DUAL_PATH_ROLES,
+        // PILOT-702). A tab item has no class of its
         // own either: RN, Material's TabLayout.TabView and
         // NavigationBarItemView, and Compose's Role.Tab all publish the
         // "Tab" description on a generic layout (PILOT-514). The SDK's
@@ -306,12 +308,9 @@ class ElementFinder(
                 "menu",
                 "menubar",
                 "menuitem",
-                "radiogroup",
                 "scrollbar",
-                "spinbutton",
                 "summary",
                 "tab",
-                "timer",
             )
 
         // Roles that CAN be resolved by class (they have roleClassMap
@@ -323,10 +322,24 @@ class ElementFinder(
         // and RN's tab list ("Tab List") is a tablist beside the native tab
         // containers (PILOT-514). Compose's Switch is a View with the
         // "Switch" description beside the framework and AppCompat classes
-        // (PILOT-828).
+        // (PILOT-828). React Native's radiogroup, spinbutton and timer
+        // descriptions (PILOT-664) sit beside the framework's RadioGroup,
+        // NumberPicker and Chronometer (PILOT-702).
         // The SDK's ANDROID_DUAL_PATH_ROLES (roles.ts) is pinned to this list.
         val DUAL_PATH_ROLES: Set<String> =
-            setOf("heading", "link", "image", "searchfield", "progressbar", "toolbar", "tablist", "switch")
+            setOf(
+                "heading",
+                "link",
+                "image",
+                "searchfield",
+                "progressbar",
+                "toolbar",
+                "tablist",
+                "switch",
+                "radiogroup",
+                "spinbutton",
+                "timer",
+            )
     }
 
     /**
@@ -449,6 +462,22 @@ class ElementFinder(
                 listOf(
                     "android.widget.SearchView",
                     "androidx.appcompat.widget.SearchView",
+                ),
+            // Framework widgets for React Native's generic-view roles
+            // (PILOT-702). Each reports its own accessibility class name
+            // (AppCompat has no subclasses of them). A NumberPicker is the
+            // spin button; its text field stays a textfield.
+            "radiogroup" to
+                listOf(
+                    "android.widget.RadioGroup",
+                ),
+            "spinbutton" to
+                listOf(
+                    "android.widget.NumberPicker",
+                ),
+            "timer" to
+                listOf(
+                    "android.widget.Chronometer",
                 ),
         )
 

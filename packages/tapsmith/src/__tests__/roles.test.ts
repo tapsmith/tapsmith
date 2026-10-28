@@ -145,8 +145,18 @@ describe('role set parity with the agents', () => {
     for (const role of ['progressbar', 'toolbar', 'tablist']) expect(ANDROID_DUAL_PATH_ROLES).toContain(role);
     // …and these only as a description, on a generic View (PILOT-664). A tab
     // item has no class of its own on any toolkit (PILOT-514).
-    for (const role of ['menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tab', 'timer']) {
+    for (const role of ['menu', 'menubar', 'menuitem', 'scrollbar', 'summary', 'tab']) {
       expect(ANDROID_TRAIT_ONLY_ROLES).toContain(role);
+    }
+    // PILOT-664's roles that also have a framework widget match by either
+    // (PILOT-702).
+    for (const [role, className] of [
+      ['radiogroup', 'android.widget.RadioGroup'],
+      ['spinbutton', 'android.widget.NumberPicker'],
+      ['timer', 'android.widget.Chronometer'],
+    ] as const) {
+      expect(ANDROID_DUAL_PATH_ROLES).toContain(role);
+      expect(ANDROID_ROLE_CLASSES[role]).toContain(className);
     }
   });
 

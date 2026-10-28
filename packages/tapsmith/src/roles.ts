@@ -184,6 +184,11 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
     'android.widget.SearchView',
     'androidx.appcompat.widget.SearchView',
   ],
+  // React Native's generic-view roles that also have a framework widget
+  // (PILOT-702).
+  radiogroup: ['android.widget.RadioGroup'],
+  spinbutton: ['android.widget.NumberPicker'],
+  timer: ['android.widget.Chronometer'],
 };
 
 /**
@@ -193,21 +198,25 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
  * matches only through it; one without falls back to the role's classes.
  * RN renders progressbar, toolbar and tablist as a generic View with only a
  * description (PILOT-656, PILOT-514), and Compose its Switch (PILOT-828).
+ * PILOT-664's radiogroup, spinbutton and timer are RN descriptions beside a
+ * framework widget (RadioGroup, NumberPicker, Chronometer; PILOT-702).
  */
 export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
   'heading', 'link', 'image', 'searchfield', 'progressbar', 'toolbar', 'tablist', 'switch',
+  'radiogroup', 'spinbutton', 'timer',
 ]);
 
 /**
  * Android roles the agent resolves only from a role description (no class) —
  * the agent's `TRAIT_ONLY_ROLES`, which `roles.test.ts` pins. React Native
  * renders each as a generic android.view.View whose role description names
- * it ("Menu Item", "Timer"); PILOT-664 added the menu, radiogroup, scrollbar,
- * spinbutton, summary and timer families. A tab item is one too: RN, Material
- * and Compose all publish "Tab" on a generic layout (PILOT-514).
+ * it ("Menu Item", "Scroll Bar"); PILOT-664 added the menu, scrollbar and
+ * summary families (its radiogroup, spinbutton and timer also have a widget,
+ * so they are dual-path). A tab item is one too: RN, Material and Compose all
+ * publish "Tab" on a generic layout (PILOT-514).
  */
 export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
-  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tab', 'timer',
+  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'scrollbar', 'summary', 'tab',
 ]);
 
 /**
@@ -229,7 +238,9 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   list: ['XCUIElementTypeTable', 'XCUIElementTypeCollectionView'],
   listitem: ['XCUIElementTypeCell'],
   scrollview: ['XCUIElementTypeScrollView'],
-  progressbar: ['XCUIElementTypeProgressIndicator'],
+  // An indeterminate ProgressView is an activity indicator: a progressbar,
+  // as on Android, that still matches spinner (PILOT-797).
+  progressbar: ['XCUIElementTypeProgressIndicator', 'XCUIElementTypeActivityIndicator'],
   seekbar: ['XCUIElementTypeSlider'],
   radiobutton: ['XCUIElementTypeRadioButton'],
   spinner: ['XCUIElementTypePicker', 'XCUIElementTypeActivityIndicator'],
@@ -237,6 +248,13 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   tab: ['XCUIElementTypeTab'],
   searchfield: ['XCUIElementTypeSearchField'],
   tablist: ['XCUIElementTypeTabBar'],
+  // React Native's generic-view roles that also have a native type
+  // (PILOT-702): a UIMenu and its items, a Stepper.
+  menu: ['XCUIElementTypeMenu'],
+  menubar: ['XCUIElementTypeMenuBar'],
+  menuitem: ['XCUIElementTypeMenuItem'],
+  radiogroup: ['XCUIElementTypeRadioGroup'],
+  spinbutton: ['XCUIElementTypeStepper'],
 };
 
 /**

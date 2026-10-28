@@ -32,7 +32,10 @@ enum RoleMapping {
         "list": [.table, .collectionView],
         "listitem": [.cell],
         "scrollview": [.scrollView],
-        "progressbar": [.progressIndicator],
+        // An indeterminate ProgressView / UIActivityIndicatorView is a
+        // progressbar, as ARIA and Android have it (PILOT-797); it still
+        // matches "spinner" too, which it was before.
+        "progressbar": [.progressIndicator, .activityIndicator],
         "seekbar": [.slider],
         "radiobutton": [.radioButton, .other],
         "spinner": [.picker, .activityIndicator],
@@ -54,13 +57,15 @@ enum RoleMapping {
         "combobox": [.other],
         // React Native's other description-only roles (PILOT-664): the
         // Android agent reads them from the role description; here they are
-        // generic views a named query finds (`undescribedOtherRoles`).
-        "menu": [.other],
-        "menubar": [.other],
-        "menuitem": [.other],
-        "radiogroup": [.other],
+        // generic views a named query finds (`undescribedOtherRoles`). Those
+        // with a native type match it too (PILOT-702): a UIMenu's items, a
+        // Stepper, and the menu bar / radio group types XCUITest defines.
+        "menu": [.menu, .other],
+        "menubar": [.menuBar, .other],
+        "menuitem": [.menuItem, .other],
+        "radiogroup": [.radioGroup, .other],
         "scrollbar": [.other],
-        "spinbutton": [.other],
+        "spinbutton": [.stepper, .other],
         "summary": [.other],
         "tablist": [.tabBar, .other],
         "timer": [.other],
@@ -69,9 +74,11 @@ enum RoleMapping {
     /// The role reported for an element type that more than one role lists in
     /// `roleToElementTypes`. "heading" also queries `.staticText`, but a
     /// heading is only reported off the header trait, which `resolveRole`
-    /// checks before this map.
+    /// checks before this map. An activity indicator is a progressbar that
+    /// still matches "spinner" (PILOT-797).
     static let reverseRolePins: [XCUIElement.ElementType: String] = [
         .staticText: "text",
+        .activityIndicator: "progressbar",
     ]
 
     /// Reverse mapping: XCUIElement.ElementType → role name.
@@ -342,6 +349,10 @@ enum RoleMapping {
         case .picker: return "XCUIElementTypePicker"
         case .pickerWheel: return "XCUIElementTypePickerWheel"
         case .stepper: return "XCUIElementTypeStepper"
+        case .menu: return "XCUIElementTypeMenu"
+        case .menuItem: return "XCUIElementTypeMenuItem"
+        case .menuBar: return "XCUIElementTypeMenuBar"
+        case .radioGroup: return "XCUIElementTypeRadioGroup"
         case .toolbar: return "XCUIElementTypeToolbar"
         case .tabBar: return "XCUIElementTypeTabBar"
         case .tab: return "XCUIElementTypeTab"

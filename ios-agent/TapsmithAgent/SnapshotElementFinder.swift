@@ -1720,8 +1720,24 @@ class SnapshotElementFinder {
                     element = nil
                 }
             } else if let types = try? RoleMapping.elementTypes(for: role), let firstType = types.first {
-                // Role-only: match by type.
-                element = resolve(app.descendants(matching: firstType))
+                // Role-only: match by type — every type the role lists, so
+                // a progressbar that is an activity indicator (PILOT-797) or
+                // a list that is a collection view is indexed among the
+                // role's matches, not looked for among the first type's.
+                if types.count == 1 {
+                    element = resolve(app.descendants(matching: firstType))
+                } else {
+                    let rawValues = types.map { NSNumber(value: $0.rawValue) }
+                    let query = app.descendants(matching: .any)
+                        .matching(NSPredicate(format: "elementType IN %@", rawValues))
+                    if nodeIdentifier.isEmpty {
+                        let rawTypes = Set(types.map(\.rawValue))
+                        let offset = keyboardTypes.filter { rawTypes.contains($0) }.count
+                        element = query.excludingHooksMarker().element(boundBy: matchIndex + offset)
+                    } else {
+                        element = resolve(query)
+                    }
+                }
             } else {
                 element = nil
             }

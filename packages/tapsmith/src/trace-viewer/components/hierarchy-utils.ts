@@ -121,6 +121,9 @@ export const ANDROID_CLASS_TO_ROLE: Record<string, string> = {
   'android.widget.ProgressBar': 'progressbar',
   'android.widget.SeekBar': 'seekbar',
   'com.google.android.material.slider.Slider': 'seekbar',
+  'android.widget.RadioGroup': 'radiogroup',
+  'android.widget.NumberPicker': 'spinbutton',
+  'android.widget.Chronometer': 'timer',
 };
 
 // No XCUIElementTypeTextView: the iOS agent's getByRole("textfield") does not
@@ -136,8 +139,14 @@ export const IOS_TYPE_TO_ROLE: Record<string, string> = {
   'XCUIElementTypeSearchField': 'searchfield',
   'XCUIElementTypeSlider': 'seekbar',
   'XCUIElementTypeProgressIndicator': 'progressbar',
+  'XCUIElementTypeActivityIndicator': 'progressbar',
   'XCUIElementTypePicker': 'spinner',
   'XCUIElementTypeRadioButton': 'radiobutton',
+  'XCUIElementTypeStepper': 'spinbutton',
+  'XCUIElementTypeMenu': 'menu',
+  'XCUIElementTypeMenuBar': 'menubar',
+  'XCUIElementTypeMenuItem': 'menuitem',
+  'XCUIElementTypeRadioGroup': 'radiogroup',
 };
 
 export const WEBVIEW_TAG_TO_ROLE: Record<string, string> = {
