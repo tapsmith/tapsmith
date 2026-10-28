@@ -77,7 +77,9 @@ export function locatorMissStep(failures: TestFailureDetail[]): string | undefin
   const misses = failures.filter((f) => f.error.includes(LOCATOR_PICKER_HINT));
   if (misses.length === 0) return undefined;
   const locators = [...new Set(misses.flatMap((f) => {
-    const m = /^(?:Expected element|Element(?: not found:)?) (.+?\))(?: was not found| did not reach state| to (?:be visible|exist|have count)|\. |$)/m
+    // Quoted values are read as whole tokens, so a ")" or ". " inside one
+    // does not end the locator early.
+    const m = /^(?:Expected element|Element(?: not found:)?) ((?:"(?:[^"\\\n]|\\.)*"|[^"\n])+?\))(?: was not found| did not reach state| to (?:be visible|exist|have count)|\. |$)/m
       .exec(f.error);
     return m ? [m[1]] : [];
   }))];

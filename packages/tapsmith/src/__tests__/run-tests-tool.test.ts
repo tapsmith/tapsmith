@@ -155,6 +155,13 @@ describe('tapsmith_run_tests result handling', () => {
     expect(step).toContain('4 failures are locators that matched nothing: getByText("Mr. Smith"), getByText("A"), getByText("B") and 1 more.');
   });
 
+  it('reads a locator whose quoted text has a closing parenthesis and full stop in it whole', () => {
+    const step = locatorMissStep([
+      { fullName: 'a', filePath: FILE, error: `Element not found: getByText("Sign in (beta). Next"). ${LOCATOR_PICKER_HINT}` },
+    ]);
+    expect(step).toContain('1 failure is a locator that matched nothing: getByText("Sign in (beta). Next").');
+  });
+
   it('adds no locator step to failures that are not locator misses', async () => {
     const result: TestRunResult = {
       status: 'failed', passed: 0, failed: 1, skipped: 0, duration: 100,
