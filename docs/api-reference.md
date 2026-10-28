@@ -54,7 +54,7 @@ Any other value (a number, `null`, …) throws a `TypeError`.
 
 Locate an element by its accessibility role, optionally filtered by accessible name or state.
 
-`role` is typed as [`Role`](#role-swipedirection-and-devicekey), so your editor autocompletes the native role names and their aliases. Any other string still compiles; at run time an unknown role throws at once with the supported list, and matching is case-insensitive.
+`role` is typed as [`Role`](api-reference.md#role-swipedirection-and-devicekey), so your editor autocompletes the native role names and their aliases. Any other string still compiles; at run time an unknown role throws at once with the supported list, and matching is case-insensitive.
 
 ```typescript
 device.getByRole("button", { name: "Submit" })
@@ -221,7 +221,7 @@ if (device.platform === "android") {
 
 ### `device.swipe(direction: SwipeDirection, options?: SwipeOptions): Promise<void>`
 
-Perform a swipe gesture across the screen in the given direction: `"up"`, `"down"`, `"left"` or `"right"` (the way the finger moves, so `"up"` reveals what is below; case-insensitive). See [`SwipeDirection`](#role-swipedirection-and-devicekey).
+Perform a swipe gesture across the screen in the given direction: `"up"`, `"down"`, `"left"` or `"right"` (the way the finger moves, so `"up"` reveals what is below; case-insensitive). See [`SwipeDirection`](api-reference.md#role-swipedirection-and-devicekey).
 
 On Android, `swipe()` (like `dragXY()`) returns once any scrolling it started has come to rest: it waits until no scroll along the swipe's axis has been reported for 300 ms, at most 3 s. A scroll view that is still flinging takes the next touch as "stop scrolling", so a `tap()` made straight after the swipe would otherwise be lost.
 
@@ -240,7 +240,7 @@ await device.swipe("left", { speed: 500, distance: 0.5 });
 
 ### `device.pressKey(key: DeviceKey): Promise<void>`
 
-Press a device key by name, case-insensitive. The names are typed as [`DeviceKey`](#role-swipedirection-and-devicekey) for autocompletion; any other string still compiles, since Android also takes a numeric key code (`"66"`) and iOS a single character to type. A name the platform does not support throws.
+Press a device key by name, case-insensitive. The names are typed as [`DeviceKey`](api-reference.md#role-swipedirection-and-devicekey) for autocompletion; any other string still compiles, since Android also takes a numeric key code (`"66"`) and iOS a single character to type. A name the platform does not support throws.
 
 ```typescript
 await device.pressKey("ENTER");
