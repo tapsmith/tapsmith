@@ -215,6 +215,35 @@ async function askBuildPath(opts: {
   return typed(opts.typeMessage);
 }
 
+const OTHER_ID = 'Enter another…';
+
+/**
+ * Ask for an app id (a package name or bundle identifier), which the user may
+ * leave for later (PILOT-778). A known id (`suggested`, with where it came
+ * from) is offered as a select, first and pre-selected, beside a way to type
+ * another and "Skip for now": an input's `initial` would make Enter take the
+ * id, so it could never be skipped the way its prompt says. With nothing to
+ * suggest it is an input, where Enter with nothing typed skips it.
+ */
+async function askAppId(message: string, suggested?: { id: string; source: string }): Promise<string | undefined> {
+  const typed = async (): Promise<string | undefined> => (await ask<string>({
+    type: 'input',
+    message: `${message} ${dim('(Enter to skip)')}`,
+  })).trim() || undefined;
+  if (!suggested) return typed();
+  const picked = await ask<string>({
+    type: 'select',
+    message,
+    choices: [
+      { name: suggested.id, message: suggested.id, hint: suggested.source },
+      { name: OTHER_ID, message: OTHER_ID },
+      { name: SKIP_BUILD, message: SKIP_BUILD, hint: 'set it in tapsmith.config.ts later' },
+    ],
+  });
+  if (picked === SKIP_BUILD) return undefined;
+  return picked === OTHER_ID ? typed() : picked;
+}
+
 /**
  * The simulator or device builds to offer: the project's own, else this
  * project's in Xcode's DerivedData (a build from the Xcode UI), hinted as
@@ -395,19 +424,16 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
       ? `  Could not read the package name from ${apkPath} (needs aapt2 from the Android SDK build-tools).`
       : '  No APK yet. If the app is installed on the device already, give its package name: Tapsmith launches it by that.'));
     // The app config's id, else the Gradle module's (PILOT-778): either is
-    // what a build of this project carries, so Enter takes it.
-    const initial = expo?.androidPackage ?? detectGradleApplicationId(cwd);
-    packageName = (await ask<string>({
-      type: 'input',
-      message: `What is your app's package name? ${dim('(Enter to skip)')}`,
-      ...(initial ? { initial } : {}),
-    })).trim() || undefined;
+    // what a build of this project carries.
+    const gradleId = expo?.androidPackage ? undefined : detectGradleApplicationId(cwd);
+    const suggested = expo?.androidPackage
+      ? { id: expo.androidPackage, source: 'from the Expo app config' }
+      : gradleId ? { id: gradleId, source: 'applicationId in app/build.gradle' } : undefined;
+    packageName = await askAppId('What is your app\'s package name?', suggested);
   }
   if (!apkPath && packageName) {
     // As `init --yes --package` says it (PILOT-721).
     console.log(`  ${YELLOW}⚠${RESET} No APK, so the config has no apk: Tapsmith will launch and reset ${packageName} but cannot install it — install the app on the device yourself, or add apk: '<path>' to tapsmith.config.ts`);
-  } else if (!packageName) {
-    console.log(dim(`  tapsmith.config.ts gets a placeholder for the ${apkPath ? 'package name' : 'APK and package name'}: set ${apkPath ? 'it' : 'them'} once you have built the app.`));
   }
 
   const deviceType = await ask<string>({
@@ -583,36 +609,26 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
 
   // Each build's id is read from its Info.plist, else asked for. Simulator
   // and device builds can carry different ids (Debug vs Release), so one
-  // never silently stands in for the other; the unread one's prompt is only
-  // pre-filled with it. Enter with nothing typed leaves it for later (PILOT-778).
+  // never silently stands in for the other: the unread one's prompt only
+  // suggests the other's. Either can be left for later (PILOT-778).
   const both = useSimulators && usePhysicalDevice;
-  const askBundleId = async (message: string, initial: string | undefined): Promise<string | undefined> => (await ask<string>({
-    type: 'input',
-    message: `${message} ${dim('(Enter to skip)')}`,
-    ...(initial ? { initial } : {}),
-  })).trim() || undefined;
+  const suggest = (other: string | undefined, otherSource: string): { id: string; source: string } | undefined => (other
+    ? { id: other, source: otherSource }
+    : expo?.iosBundleId ? { id: expo.iosBundleId, source: 'from the Expo app config' } : undefined);
   if (useSimulators && !simBundleId) {
-    simBundleId = await askBundleId(
+    simBundleId = await askAppId(
       both ? 'What is your simulator build\'s bundle identifier?' : 'What is your app\'s bundle identifier?',
-      deviceBundleIdRead ?? expo?.iosBundleId,
+      suggest(deviceBundleIdRead, "the device build's id"),
     );
   }
   if (usePhysicalDevice && !deviceBundleIdRead) {
-    deviceBundleIdRead = await askBundleId(
+    deviceBundleIdRead = await askAppId(
       both ? 'What is your device build\'s bundle identifier?' : 'What is your app\'s bundle identifier?',
-      simBundleId ?? expo?.iosBundleId,
+      suggest(simBundleId, "the simulator build's id"),
     );
   }
   const bundleId = simBundleId ?? deviceBundleIdRead;
   const deviceBundleId = both && deviceBundleIdRead !== simBundleId ? deviceBundleIdRead : undefined;
-  const missing = [
-    ...(useSimulators && !appPath ? ['simulator build'] : []),
-    ...(usePhysicalDevice && !deviceAppPath ? ['device build'] : []),
-    ...(!bundleId ? ['bundle identifier'] : []),
-  ];
-  if (missing.length > 0) {
-    console.log(dim(`  tapsmith.config.ts gets a placeholder for the ${missing.join(' and ')}: set ${missing.length === 1 ? 'it' : 'them'} once you have built the app.`));
-  }
 
   return { appPath, bundleId, deviceBundleId, simulator, ...(simulatorDeviceType ? { simulatorDeviceType } : {}), usePhysicalDevice, deviceAppPath };
 }
@@ -1417,6 +1433,11 @@ async function runInitInner(): Promise<void> {
     if (p === 'android') androidConfig = undefined;
     else iosConfig = undefined;
   }
+  // Said only for what the config keeps (PILOT-778); the next steps repeat it.
+  const placeholders = placeholderKeys(selectedPlatforms, androidConfig, iosConfig);
+  if (placeholders.length > 0) {
+    console.log(dim(`  tapsmith.config.ts gets placeholders for ${placeholders.join(', ')}: set ${placeholders.length === 1 ? 'it' : 'them'} once you have built the app.`));
+  }
 
   // Step 5: Network capture
   const enableNetwork = await setupNetworkCapture(selectedPlatforms, env, androidConfig, iosConfig, cli);
@@ -1492,7 +1513,7 @@ async function runInitInner(): Promise<void> {
   const steps = wizardNextSteps(cli, {
     install: installStep,
     capture: captureStep,
-    app: placeholderNextStep(placeholderKeys(selectedPlatforms, androidConfig, iosConfig)),
+    app: placeholderNextStep(placeholders),
     yarnPnp,
   });
   const width = Math.max(...[...steps.map(([l]) => l), ...projects.map((p) => p.label)].map((l) => l.length)) + 3;

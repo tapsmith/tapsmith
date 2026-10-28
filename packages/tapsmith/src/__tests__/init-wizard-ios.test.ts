@@ -171,7 +171,11 @@ describe('configureIos() (PILOT-251)', () => {
 
   it('both: asks for the simulator build\'s id when only the device build\'s can be read', async () => {
     bundleIds.set(DEVICE_APP, 'com.example.app');
-    script('both', [[/simulator build's bundle identifier/, 'com.example.app.dev']]);
+    script('both', [
+      // The device build's id is suggested; another is typed (PILOT-778).
+      [/simulator build's bundle identifier\? \S*\(Enter to skip/, 'com.example.app.dev'],
+      [/simulator build's bundle identifier/, 'Enter another…'],
+    ]);
 
     const ios = await configureIos(env);
 
@@ -191,7 +195,10 @@ describe('configureIos() (PILOT-251)', () => {
 
   it('both: confirms the device build\'s id when it cannot be read', async () => {
     bundleIds.set(SIM_APP, 'com.example.app.dev');
-    script('both', [[/device build's bundle identifier/, 'com.example.app']]);
+    script('both', [
+      [/device build's bundle identifier\? \S*\(Enter to skip/, 'com.example.app'],
+      [/device build's bundle identifier/, 'Enter another…'],
+    ]);
 
     const ios = await configureIos(env);
 
@@ -212,7 +219,9 @@ describe('configureIos() (PILOT-251)', () => {
   it('both: asks for each build\'s id when neither can be read', async () => {
     script('both', [
       [/simulator build's bundle identifier/, 'com.example.app.dev'],
-      [/device build's bundle identifier/, ' com.example.app '],
+      // The simulator build's id is suggested; another is typed.
+      [/device build's bundle identifier\? \S*\(Enter to skip/, ' com.example.app '],
+      [/device build's bundle identifier/, 'Enter another…'],
     ]);
 
     const ios = await configureIos(env);
@@ -354,21 +363,21 @@ describe('configureIos() on an Expo project (PILOT-557)', () => {
   });
 
   it('prefills the bundle id prompt from the app config when the build cannot be read', async () => {
-    script('simulators', [[/bundle identifier/, (q: { initial?: unknown }) => q.initial]]);
+    script('simulators', [[/bundle identifier/, (q: Question) => q.choices?.[0].name]]);
 
     const ios = await configureIos(env, expo);
 
-    expect(questions.find((q) => /bundle identifier/.test(q.message))?.initial).toBe('com.acme.expo');
+    expect(questions.find((q) => /bundle identifier/.test(q.message))?.choices?.[0]).toMatchObject({ name: 'com.acme.expo', hint: 'from the Expo app config' });
     expect(ios.bundleId).toBe('com.acme.expo');
   });
 
   it('a bundle id read from the other build is still the prefill over the app config', async () => {
     bundleIds.set(DEVICE_APP, 'com.acme.device');
-    script('both', [[/bundle identifier/, (q: { initial?: unknown }) => q.initial]]);
+    script('both', [[/bundle identifier/, (q: Question) => q.choices?.[0].name]]);
 
     await configureIos(env, expo);
 
-    expect(questions.find((q) => /simulator build's bundle identifier/.test(q.message))?.initial).toBe('com.acme.device');
+    expect(questions.find((q) => /simulator build's bundle identifier/.test(q.message))?.choices?.[0].name).toBe('com.acme.device');
   });
 });
 

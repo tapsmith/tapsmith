@@ -484,6 +484,12 @@ describe('detectGradleApplicationId() (PILOT-778)', () => {
     expect(detectGradleApplicationId(root)).toBe('com.acme.compose');
   });
 
+  it('reads an id on the same line as its block', () => {
+    write('settings.gradle', '');
+    write('app/build.gradle', 'android { defaultConfig { applicationId "com.acme.oneline" } }\n');
+    expect(detectGradleApplicationId(root)).toBe('com.acme.oneline');
+  });
+
   it('ignores an id computed from a variable, a commented-out line, and a project with no Gradle root', () => {
     write('settings.gradle', '');
     write('app/build.gradle', '// applicationId "com.acme.old"\nandroid { defaultConfig { applicationId rootProject.ext.appId } }\n');

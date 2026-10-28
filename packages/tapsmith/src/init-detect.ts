@@ -175,7 +175,7 @@ export function findApkCandidates(cwd: string): string[] {
 }
 
 /** A literal `applicationId "com.x"` (Groovy) or `applicationId = "com.x"` (Kotlin DSL). */
-const APPLICATION_ID = /^\s*applicationId\s*(?:=\s*)?\(?\s*["']([A-Za-z][\w]*(?:\.[A-Za-z][\w]*)+)["']/m;
+const APPLICATION_ID = /\bapplicationId\s*(?:=\s*)?\(?\s*["']([A-Za-z][\w]*(?:\.[A-Za-z][\w]*)+)["']/;
 
 /**
  * The app module's `applicationId` from `app/build.gradle(.kts)` in the
@@ -193,7 +193,8 @@ export function detectGradleApplicationId(cwd: string, layout: ProjectLayout = d
     } catch {
       continue;
     }
-    const id = APPLICATION_ID.exec(source)?.[1];
+    // Line comments dropped first, so a commented-out id is not read.
+    const id = APPLICATION_ID.exec(source.replace(/\/\/.*$/gm, ''))?.[1];
     if (id) return id;
   }
   return undefined;

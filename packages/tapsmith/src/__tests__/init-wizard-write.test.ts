@@ -187,6 +187,7 @@ describe('init wizard with a build skipped (PILOT-778)', () => {
     const config = fs.readFileSync(path.join(dir, 'tapsmith.config.ts'), 'utf8');
     expect(config).toContain("// apk: '<path to your .apk>',");
     expect(config).toContain("// package: '<applicationId>',");
+    expect(output).toContain('tapsmith.config.ts gets placeholders for apk, package: set them once you have built the app.');
     expect(output).toMatch(/Point it at your app:\s+build your app, then set apk and package in tapsmith\.config\.ts/);
     expect(output.indexOf('Point it at your app')).toBeLessThan(output.indexOf('Verify your setup'));
   });
@@ -205,10 +206,35 @@ describe('init wizard with a build skipped (PILOT-778)', () => {
     expect(config).not.toContain("platform: 'ios'");
     expect(config).toContain("package: 'com.acme.app',");
     expect(output).toContain('iOS left out of the config: it has no build or bundle identifier yet');
+    // Never first told it gets placeholders.
+    expect(output).not.toContain('placeholder');
     expect(output).not.toContain('Point it at your app');
     expect(output).not.toContain('--project');
   });
+
+  it('a package suggested from build.gradle can be skipped, and Android is then left out beside iOS', async () => {
+    fs.writeFileSync(path.join(dir, 'settings.gradle'), '');
+    fs.mkdirSync(path.join(dir, 'app'));
+    fs.writeFileSync(path.join(dir, 'app', 'build.gradle'), 'android { defaultConfig { applicationId "com.acme.gradle" } }\n');
+    Object.assign(env, { isMacOS: true, xcodeVersion: '26.0', simulators: [{ name: 'iPhone 17', udid: 'SIM-1', state: 'Shutdown', runtime: 'iOS 26.0' }] });
+    answer(/Which platform/, 'both');
+    answer(/Where is your Android APK/, 'Skip for now');
+    answer(/package name/, 'Skip for now');
+    answer(/How will you run iOS tests/, 'simulators');
+    answer(/simulator build\)/, '');
+    answer(/Which simulator/, 'iPhone 17');
+    answer(/bundle identifier/, 'com.acme.ios');
+    answer(/No iOS simulator agent found/, false);
+    const { exit, output } = await wizard();
+    expect(exit).toBeUndefined();
+    const config = fs.readFileSync(path.join(dir, 'tapsmith.config.ts'), 'utf8');
+    expect(config).not.toContain('com.acme.gradle');
+    expect(config).toContain("platform: 'ios',");
+    expect(config).toContain("package: 'com.acme.ios',");
+    expect(output).toContain('Android left out of the config');
+  });
 });
+
 
 describe('init wizard in a Yarn Plug\'n\'Play project (PILOT-778)', () => {
   it('warns right after the environment scan and leads the next steps with the nodeLinker fix', async () => {
