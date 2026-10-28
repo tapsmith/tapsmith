@@ -89,6 +89,15 @@ export function locatorMissStep(failures: TestFailureDetail[]): string | undefin
     'tapsmith_snapshot and tapsmith_test_locator, and change the test only once tapsmith_test_locator counts 1.';
 }
 
+/**
+ * A failure's error as the agent reads it: a locator miss's pointer at UI
+ * mode's picker is for a person, and the NEXT STEP line says what the agent
+ * should do instead (PILOT-849).
+ */
+function forAgent(error: string): string {
+  return error.replace(` ${LOCATOR_PICKER_HINT}`, '').replace(LOCATOR_PICKER_HINT, '');
+}
+
 export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
     'tapsmith_run_tests',
@@ -168,7 +177,7 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
           let detailBytes = 0;
           let imageBytes = 0;
           const oneLine = (f: TestFailureDetail, proj: string): string[] => {
-            const firstLine = f.error.split('\n')[0];
+            const firstLine = forAgent(f.error).split('\n')[0];
             const out = [`FAIL: ${f.fullName}${proj} — ${clipText(firstLine, ONE_LINE_ERROR_CHARS)}`];
             if (f.tracePath) out.push(`  Trace: ${f.tracePath}`);
             return out;
@@ -185,7 +194,7 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             const block: string[] = [];
             let screenshot: Buffer | undefined;
             block.push(`FAIL: ${f.fullName}${proj}`);
-            block.push(`  Error: ${clipText(f.error, ERROR_CHARS, FULL_ERROR_HINT)}`);
+            block.push(`  Error: ${clipText(forAgent(f.error), ERROR_CHARS, FULL_ERROR_HINT)}`);
             if (f.tracePath) {
               const summary = readTraceSummary(f.tracePath);
               if (summary) {

@@ -142,6 +142,9 @@ describe('tapsmith_run_tests result handling', () => {
         'Read the failure\'s trace (tapsmith_read_trace) to see the screen it was on, find a locator that matches with ' +
         'tapsmith_snapshot and tapsmith_test_locator, and change the test only once tapsmith_test_locator counts 1.',
     );
+    // The pointer at UI mode's picker is for a person; the agent gets the step instead.
+    expect(t).not.toContain(LOCATOR_PICKER_HINT);
+    expect(t).toContain('Error: Element getByRole("button", { name: "Sign in" }) was not found after waiting 5000ms.');
   });
 
   it('reads a locator whose text has a full stop in it whole, and counts past three', () => {
