@@ -28,6 +28,15 @@ describe("Login screen", () => {
     await expect(loginScreen.forgotPasswordLink).toBeVisible()
   })
 
+  test("PILOT-880: substring getByText finds the forgot password link exact getByText finds", async ({ loginScreen }) => {
+    await expect(loginScreen.forgotPasswordLinkBySubstring).toBeVisible()
+    await expect(loginScreen.forgotPasswordLinkBySubstring).toHaveCount(1)
+    await loginScreen.forgotPasswordLinkBySubstring.tap()
+    await expect(loginScreen.resetAlertMessage).toBeVisible()
+    await loginScreen.resetAlertOk.tap()
+    await expect(loginScreen.resetAlertMessage).toBeHidden()
+  })
+
   // ─── Text Input ───
 
   test("can type into email field", async ({ loginScreen }) => {
