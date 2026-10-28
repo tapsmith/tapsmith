@@ -776,8 +776,8 @@ export interface TestFn<Fixtures extends object = TestFixtures> {
   /** Declare a test. `fn` receives the fixtures (`device`, …). */
   (name: string, fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)): void;
   /**
-   * Declare a focused test: its siblings in the same describe block (or file)
-   * that are not focused are skipped.
+   * Declare a focused test: the unfocused tests beside it in the same
+   * describe block (or file) are skipped. Describe blocks beside it still run.
    */
   only: (name: string, fn: ((fixtures: Fixtures) => void | Promise<void>) | (() => void | Promise<void>)) => void;
   /** Skip a test, a scope or the running test; see `SkipFn`. */
@@ -891,8 +891,9 @@ export interface DescribeFn {
   /** Declare a group of tests; `fn` declares them synchronously. */
   (name: string, fn: () => void): void;
   /**
-   * Declare a focused group: its siblings in the same describe block (or file)
-   * that are not focused are skipped.
+   * Declare a focused group: the unfocused tests and groups beside it in the
+   * same describe block (or file) are skipped, except that the groups still
+   * run when a test beside them is focused too.
    */
   only: (name: string, fn: () => void) => void;
   /** Declare a group whose tests are all reported as skipped. */

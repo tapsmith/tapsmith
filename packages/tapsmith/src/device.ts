@@ -162,7 +162,8 @@ export interface SwipeOptions {
  * The device under test: the `device` fixture every test receives.
  * Locators come from its `getBy*()` methods and auto-wait when acted on;
  * the device-level actions here (keys, swipes, app control) act at once,
- * each bounded by the device timeout (the config's `timeout`).
+ * without waiting for an element. Each has its own deadline, which is not
+ * the config's `timeout` unless its doc says so.
  */
 export class Device {
   /** @internal */
@@ -865,7 +866,11 @@ export class Device {
     return this.pressKey('HOME');
   }
 
-  /** Bring a backgrounded app back to the foreground (launches it if stopped). */
+  /**
+   * Bring the app to the foreground. On Android this resumes a backgrounded
+   * app (or launches it if stopped); on iOS it relaunches the app, so its
+   * in-memory state is lost.
+   */
   async bringToForeground(packageName: string): Promise<void> {
     return this.launchApp(packageName);
   }

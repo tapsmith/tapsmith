@@ -250,7 +250,7 @@ await device.pressKey("VOLUME_UP");
 
 ### Role, SwipeDirection and DeviceKey
 
-The role, direction and key parameters are typed as unions of their known names, so your editor autocompletes them. Each parameter also takes any other string (it is typed `Role | (string & {})` and so on), and Tapsmith checks the value at run time.
+The role, direction and key parameters are typed as unions of their known names, so your editor autocompletes them. Each parameter also takes any other string (it is typed `Role | (string & {})` and so on). `getByRole()` throws at once on an unknown role; `toHaveRole()` does not check the name, it compares it with the element's role; the agents reject an unknown direction or key when the action runs.
 
 ```typescript
 import type { DeviceKey, Role, SwipeDirection } from "tapsmith";
@@ -442,7 +442,7 @@ await device.sendToBackground();
 
 ### `device.bringToForeground(packageName: string): Promise<void>`
 
-Bring a backgrounded app back to the foreground.
+Bring the app back to the foreground. On Android this resumes a backgrounded app (or launches it if it is stopped). On iOS it relaunches the app, so in-memory state such as form input and the navigation stack is lost.
 
 ```typescript
 await device.bringToForeground("com.example.myapp");
