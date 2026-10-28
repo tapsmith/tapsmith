@@ -60,6 +60,12 @@ object TextMatch {
      * of the accessible name (Playwright; the iOS agent checks label/title
      * only), so it is still compared whole: typing "email me later" into
      * Notes must not make that field match name "Email".
+     *
+     * [hint] is an editable field's hint (null for any other node): it names
+     * the field when nothing else does — no content description, and no text
+     * but its typed value — as Playwright names an input with no label by its
+     * placeholder (PILOT-834). An empty field already reports its hint as its
+     * text.
      */
     fun accessibleNameMatches(
         contentDescription: CharSequence?,
@@ -68,10 +74,30 @@ object TextMatch {
         descendantText: () -> CharSequence?,
         name: String,
         exact: Boolean,
+        hint: CharSequence? = null,
     ): Boolean =
         nameMatches(contentDescription, name, exact) ||
             nameMatches(text, name, exact || textIsValue) ||
-            nameMatches(descendantText(), name, exact)
+            nameMatches(descendantText(), name, exact) ||
+            nameMatches(hintName(contentDescription, text, textIsValue, hint), name, exact)
+
+    /**
+     * The [hint] that names an editable field with no other name, or null
+     * (see [accessibleNameMatches]).
+     */
+    fun hintName(
+        contentDescription: CharSequence?,
+        text: CharSequence?,
+        textIsValue: Boolean,
+        hint: CharSequence?,
+    ): CharSequence? {
+        if (hint.isNullOrEmpty()) return null
+        if (!isBlank(contentDescription)) return null
+        if (!textIsValue && !isBlank(text)) return null
+        return hint
+    }
+
+    private fun isBlank(value: CharSequence?): Boolean = value == null || normalize(value.toString()).isEmpty()
 
     /**
      * [accessibleNameMatches] for a getByRole `{ name: RegExp }` (PILOT-520):
@@ -85,9 +111,13 @@ object TextMatch {
         textIsValue: Boolean,
         descendantText: () -> CharSequence?,
         regex: TextRegex,
+        hint: CharSequence? = null,
     ): Boolean {
         val test = { value: CharSequence? -> value != null && regex.matches(normalize(value.toString())) }
-        return test(contentDescription) || (!textIsValue && test(text)) || test(descendantText())
+        return test(contentDescription) ||
+            (!textIsValue && test(text)) ||
+            test(descendantText()) ||
+            test(hintName(contentDescription, text, textIsValue, hint))
     }
 
     /** Full-match pattern: the text equals [query] after normalizing both. */

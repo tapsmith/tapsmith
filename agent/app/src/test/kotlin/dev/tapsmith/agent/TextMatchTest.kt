@@ -146,4 +146,35 @@ class TextMatchTest {
             TextMatch.accessibleNameMatches("Email address", "x", true, { null }, "email", exact = false),
         )
     }
+
+    @Test
+    fun `a typed field with no other name is named by its hint`() {
+        // PILOT-834: Playwright names an input with no label by its placeholder.
+        fun matches(
+            desc: String?,
+            text: String?,
+            textIsValue: Boolean,
+            name: String,
+            exact: Boolean = false,
+        ) = TextMatch.accessibleNameMatches(desc, text, textIsValue, { null }, name, exact, hint = "Email address")
+        assertTrue(matches(null, "sam@example.com", true, "Email address"))
+        assertTrue(matches(null, "sam@example.com", true, "email"))
+        assertTrue(matches(null, null, false, "Email address", exact = true))
+        assertTrue(matches("", "", false, "email"))
+        assertFalse(matches(null, "sam@example.com", true, "email", exact = true))
+        // The hint is a fallback: a described field is named by its description.
+        assertFalse(matches("Login", "sam@example.com", true, "email"))
+        // Non-value text names the field (an empty field reports its hint as text).
+        assertFalse(matches(null, "Your login", false, "email"))
+        // No hint, no fallback.
+        assertFalse(TextMatch.accessibleNameMatches(null, "x", true, { null }, "Email", exact = false))
+    }
+
+    @Test
+    fun `a typed field's hint is tested by a RegExp name`() {
+        val re = TextRegex(pattern = "^email", ignoreCase = true, display = "/^email/i")
+        assertTrue(TextMatch.accessibleNameMatches(null, "x", true, { null }, re, hint = "Email address"))
+        assertFalse(TextMatch.accessibleNameMatches("Login", "x", true, { null }, re, hint = "Email address"))
+        assertFalse(TextMatch.accessibleNameMatches(null, "x", true, { null }, re))
+    }
 }
