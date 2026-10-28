@@ -164,8 +164,10 @@ class TextMatchTest {
         assertFalse(matches(null, "sam@example.com", true, "email", exact = true))
         // The hint is a fallback: a described field is named by its description.
         assertFalse(matches("Login", "sam@example.com", true, "email"))
-        // Non-value text names the field (an empty field reports its hint as text).
-        assertFalse(matches(null, "Your login", false, "email"))
+        // An empty described field reports its hint as its text: still named
+        // by its description alone.
+        assertFalse(matches("Full name", "Email address", false, "email"))
+        assertTrue(matches("Full name", "Email address", false, "Full name"))
         // No hint, no fallback.
         assertFalse(TextMatch.accessibleNameMatches(null, "x", true, { null }, "Email", exact = false))
     }
@@ -175,6 +177,8 @@ class TextMatchTest {
         val re = TextRegex(pattern = "^email", ignoreCase = true, display = "/^email/i")
         assertTrue(TextMatch.accessibleNameMatches(null, "x", true, { null }, re, hint = "Email address"))
         assertFalse(TextMatch.accessibleNameMatches("Login", "x", true, { null }, re, hint = "Email address"))
+        assertFalse(TextMatch.accessibleNameMatches("Login", "Email address", false, { null }, re, hint = "Email address"))
+        assertTrue(TextMatch.accessibleNameMatches(null, "Email address", false, { null }, re, hint = "Email address"))
         assertFalse(TextMatch.accessibleNameMatches(null, "x", true, { null }, re))
     }
 }

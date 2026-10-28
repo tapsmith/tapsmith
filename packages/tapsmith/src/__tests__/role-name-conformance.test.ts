@@ -67,6 +67,9 @@ const CASES: Case[] = [
   { why: 'a typed EditText\'s hint is a case-insensitive substring', platform: 'android', type: 'android.widget.EditText', role: 'textfield', text: 'x', placeholder: 'Email address', name: 'email', matches: true },
   { why: 'a RegExp tests a typed EditText\'s hint', platform: 'android', type: 'com.google.android.material.textfield.TextInputEditText', role: 'textfield', text: 'x', placeholder: 'Email', name: { source: '^e', flags: 'i' }, matches: true },
   { why: 'a described EditText is not named by its hint', platform: 'android', type: 'android.widget.EditText', role: 'textfield', contentDesc: 'Email', text: 'x', placeholder: 'Phone', name: 'Phone', matches: false },
+  { why: 'an empty described EditText is not named by its hint', platform: 'android', type: 'android.widget.EditText', role: 'textfield', contentDesc: 'Full name', text: 'Your name', placeholder: 'Your name', name: 'Your name', matches: false },
+  { why: 'a RegExp does not test an empty described EditText\'s hint', platform: 'android', type: 'android.widget.EditText', role: 'textfield', contentDesc: 'Full name', text: 'Your name', placeholder: 'Your name', name: { source: 'your', flags: 'i' }, matches: false },
+  { why: 'an empty described EditText is named by its description', platform: 'android', type: 'android.widget.EditText', role: 'textfield', contentDesc: 'Full name', text: 'Your name', placeholder: 'Your name', name: 'Full name', matches: true },
   { why: 'a typed value is still not a substring name', platform: 'android', type: 'android.widget.EditText', role: 'textfield', text: 'email me later', placeholder: 'Notes', name: 'email', matches: false },
 ];
 

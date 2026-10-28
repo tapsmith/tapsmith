@@ -40,6 +40,8 @@ describe("getByRole name falls back to the placeholder (PILOT-834)", () => {
   test("a labelled field is named by its label, not its placeholder", async ({ device }) => {
     await expect(device.getByRole("textfield", { name: "Your name" })).toHaveCount(0)
     await expect(device.getByRole("textfield", { name: "Full name" })).toHaveCount(1)
-    await expect(screen.fullNameField).toHaveAccessibleName("Full name")
+    // The label is "Full\u00A0name" (a no-break space, for the whitespace
+    // tests); toHaveAccessibleName compares a string as it is.
+    await expect(screen.fullNameField).toHaveAccessibleName(/^Full\sname$/)
   })
 })

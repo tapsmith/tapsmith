@@ -497,10 +497,21 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
   return matches(node.attributes.get('content-desc'), exact)
     || matches(node.attributes.get('label'), exact)
     || matches(node.attributes.get('title'), exact)
-    || matches(text, exact || textIsValue)
+    || (!textIsHint(node) && matches(text, exact || textIsValue))
     || (!isAndroid && (iosChildLabel(node.attributes.get('label')) || iosChildLabel(node.attributes.get('title'))))
     || (isAndroid && matches(descendantText(node).join(' '), exact))
     || matches(placeholderName(node), exact);
+}
+
+/**
+ * Whether an Android EditText's text is its hint — what an empty field
+ * reports as its text — which names it only through {@link placeholderName},
+ * so a described field is named by its description alone (PILOT-834).
+ */
+function textIsHint(node: HierarchyNode): boolean {
+  const hint = node.attributes.get('hint');
+  return !!hint && ANDROID_EDIT_TEXT_CLASSES.has(node.attributes.get('class') ?? '')
+    && node.attributes.get('text') === hint;
 }
 
 /**
@@ -508,19 +519,14 @@ function roleNameMatches(node: HierarchyNode, name: string, exact: boolean): boo
  * Playwright names an input with no label (PILOT-834), or '' — the agents'
  * fallback: an iOS text input (RoleName.placeholderNamedTypes) whose label and
  * title are empty is named by its placeholderValue; an Android EditText with
- * no content-desc, whose text is empty or its typed value, by its hint (an
- * empty one already reports its hint as its text).
+ * no content-desc by its hint (an empty one reports its hint as its text).
  */
 export function placeholderName(node: HierarchyNode): string {
   const blank = (value: string | undefined): boolean => normalizeWhitespace(value ?? '') === '';
   const className = node.attributes.get('class');
   if (className !== undefined) {
     if (!ANDROID_EDIT_TEXT_CLASSES.has(className) || !blank(node.attributes.get('content-desc'))) return '';
-    const text = node.attributes.get('text');
-    const hint = node.attributes.get('hint') ?? '';
-    // Text other than a typed value (an empty field's hint) is the name.
-    if (!blank(text) && text === hint) return '';
-    return hint;
+    return node.attributes.get('hint') ?? '';
   }
   if (!IOS_PLACEHOLDER_NAMED_TYPES.has(node.attributes.get('type') ?? node.tagName)) return '';
   if (!blank(node.attributes.get('label')) || !blank(node.attributes.get('title'))) return '';
@@ -542,7 +548,7 @@ function roleNameMatchesRegex(node: HierarchyNode, re: RegExp): boolean {
   return test(node.attributes.get('content-desc'))
     || test(node.attributes.get('label'))
     || test(node.attributes.get('title'))
-    || (!textIsValue && test(text))
+    || (!textIsValue && !textIsHint(node) && test(text))
     || (isAndroid && test(descendantText(node).join(' ')))
     || test(placeholderName(node));
 }
