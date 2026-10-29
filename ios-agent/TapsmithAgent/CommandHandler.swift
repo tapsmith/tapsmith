@@ -886,31 +886,44 @@ class CommandHandler {
     /// which holds no switch, and for any other element.
     ///
     /// The knob is the switch inside the live Toggle. A Toggle found by a
-    /// locator that keeps no live element (`getByLabel`) is matched to the
-    /// unlabelled switch whose centre lies inside its frame as found.
+    /// locator that keeps no live element (`getByLabel`) is found again as
+    /// the switch with its label and identifier still at the frame it was
+    /// found at. One that moved or went away gets no knob, so the touch is
+    /// planned on it as found and reported stale (`planTouch`) rather than
+    /// sent to another Toggle that took its place.
     ///
     /// **Cost**, for such a Toggle only: a query for the knob and one
-    /// snapshot of it; without a live Toggle, a frame read per unlabelled
-    /// switch on screen until the knob.
+    /// snapshot of it; without a live Toggle, first a snapshot of each switch
+    /// carrying its label until the one at its frame.
     private func switchKnob(of element: ElementInfo) -> ElementInfo? {
-        guard snapshotFinder.getIdentity(element.elementId)?.holdsSwitchPart == true else { return nil }
+        guard let identity = snapshotFinder.getIdentity(element.elementId), identity.holdsSwitchPart,
+              let toggle = liveToggle(of: element, identity: identity) else { return nil }
         let switchTypes = [XCUIElement.ElementType.switch, .toggle].map { NSNumber(value: $0.rawValue) }
-        if let outer = try? getXCUIElement(element.elementId), outer.exists {
-            let knob = outer.descendants(matching: .any)
-                .matching(NSPredicate(format: "elementType IN %@", switchTypes))
-                .firstMatch
-            guard let snap = try? knob.snapshot(), Self.isUsable(snap.frame) else { return nil }
-            return snapshotFinder.cachePart(knob, of: element, frame: snap.frame, elementType: snap.elementType)
+        let knob = toggle.descendants(matching: .any)
+            .matching(NSPredicate(format: "elementType IN %@", switchTypes))
+            .firstMatch
+        guard let snap = try? knob.snapshot(), Self.isUsable(snap.frame) else { return nil }
+        return snapshotFinder.cachePart(knob, of: element, frame: snap.frame, elementType: snap.elementType)
+    }
+
+    /// The live Toggle `element` was found as: its own live element, or else
+    /// the switch with the label and identifier it was found with, at the
+    /// frame it was found at.
+    private func liveToggle(of element: ElementInfo, identity: SnapshotElementFinder.CachedIdentity) -> XCUIElement? {
+        if let live = try? getXCUIElement(element.elementId), live.exists { return live }
+        guard let found = snapshotFinder.getBounds(element.elementId) else { return nil }
+        var predicates = [
+            NSPredicate(format: "elementType == %@", NSNumber(value: identity.elementType.rawValue)),
+            NSPredicate(format: "label == %@", identity.label),
+        ]
+        if !identity.identifier.isEmpty {
+            predicates.append(NSPredicate(format: "identifier == %@", identity.identifier))
         }
-        let b = element.bounds
-        let frame = CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
-        let knobs = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "elementType IN %@ AND label == ''", switchTypes))
-        for knob in knobs.allElementsBoundByIndex {
-            guard let snap = try? knob.snapshot(), Self.isUsable(snap.frame) else { continue }
-            // Not the Toggle itself (one with an empty label).
-            if snap.frame.width < frame.width, frame.contains(CGPoint(x: snap.frame.midX, y: snap.frame.midY)) {
-                return snapshotFinder.cachePart(knob, of: element, frame: snap.frame, elementType: snap.elementType)
+        let candidates = app.descendants(matching: .any)
+            .matching(NSCompoundPredicate(andPredicateWithSubpredicates: predicates))
+        for candidate in candidates.allElementsBoundByIndex {
+            if let snap = try? candidate.snapshot(), OcclusionAnalyzer.framesMatch(snap.frame, found) {
+                return candidate
             }
         }
         return nil
