@@ -63,6 +63,14 @@ struct ElementSelector {
         guard let role, !hasNameFilter else { return false }
         return RoleMapping.needsLabelReResolution(role: role)
     }
+
+    /// Whether this is `getByRole("switch")` with no name: a named match is
+    /// found again by its own label, since a live switch query also returns
+    /// SwiftUI Toggle knobs, out of tree order (PILOT-790).
+    var roleOnlySwitch: Bool {
+        guard let role, !hasNameFilter else { return false }
+        return RoleMapping.normalize(role) == "switch"
+    }
 }
 
 /// Bounding rectangle for an element.
