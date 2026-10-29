@@ -1,5 +1,5 @@
 /**
- * How the CLI reports a config file that could not be imported (PILOT-569).
+ * How the CLI reports a config file that could not be imported.
  *
  * The error's message names the file — with `:<line>:<col>` for a syntax
  * error — and is printed once, followed by a code frame of the offending

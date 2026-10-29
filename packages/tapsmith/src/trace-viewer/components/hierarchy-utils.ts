@@ -22,7 +22,7 @@ export interface Bounds {
 
 /**
  * Parse a hierarchy dump into a node tree. Attribute values are returned
- * XML-entity-decoded (PILOT-658) — `Support &amp; legal` reads back as
+ * XML-entity-decoded — `Support &amp; legal` reads back as
  * `Support & legal` — so every consumer (MCP snapshot and test-locator, the
  * trace-viewer and UI-mode hierarchy tree and locator playground) sees the
  * text the app shows and the runtime matches against.
@@ -167,7 +167,7 @@ export const WEBVIEW_TAG_TO_ROLE: Record<string, string> = {
  * The attribute the Android agent marks a Jetpack Compose role carrier with:
  * the fake leaf Compose appends to a control to carry its role, which the
  * control itself reports (`tapsmith-role`) and no getByRole matches
- * (agent ComposeRoles.kt, PILOT-828).
+ * (agent ComposeRoles.kt).
  */
 export const COMPOSE_ROLE_CARRIER_ATTRIBUTE = 'tapsmith-role-carrier';
 
@@ -203,7 +203,7 @@ export function getNodeRole(node: HierarchyNode): string {
  * The element types the iOS agent's getByLabel finds (its
  * `LabelMatch.inputTypes`, ios-agent LabelMatchTests): by element type, not by
  * reported role — a text field keeps its type whatever trait role it reports,
- * and a search field is not one of them (PILOT-666).
+ * and a search field is not one of them.
  */
 export const IOS_LABEL_FIELD_TYPES: ReadonlySet<string> = new Set([
   'XCUIElementTypeTextField',
@@ -240,8 +240,8 @@ export function isLabelField(node: HierarchyNode): boolean {
 /**
  * The `aria-label` attribute of a WebView node — what `webview.getByLabel`
  * matches. The node's content-desc is its computed accessible name (also
- * from aria-labelledby or a `<label>`), which getByLabel does not read
- * (PILOT-666). A dump that predates the attribute falls back to content-desc.
+ * from aria-labelledby or a `<label>`), which getByLabel does not read.
+ * A dump that predates the attribute falls back to content-desc.
  */
 export function webViewAriaLabel(node: HierarchyNode): string {
   return node.attributes.get('webview-aria-label') ?? node.attributes.get('content-desc') ?? '';

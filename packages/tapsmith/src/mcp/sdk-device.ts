@@ -1,5 +1,5 @@
 /**
- * The SDK Device behind a device tool's client (PILOT-848).
+ * The SDK Device behind a device tool's client.
  *
  * MCP tools resolve and act on locators through the same Device /
  * ElementHandle / WebViewHandle code a test uses, so strict mode, positions,
@@ -36,7 +36,7 @@ const WEBVIEW_CONNECT_TIMEOUT_MS = 15_000;
  * Reconnecting costs ~10 s on iOS (the inspector lists no pages for a while
  * after a disconnect), so a burst of calls shares one connection; an idle
  * one is closed, as a test connecting to the same page alongside it would
- * wedge (PILOT-288).
+ * wedge.
  */
 export const WEBVIEW_IDLE_CLOSE_MS = 15_000;
 let idleCloseMs = WEBVIEW_IDLE_CLOSE_MS;
@@ -160,7 +160,7 @@ function closeWhenIdle(client: TapsmithGrpcClient, key: string, open: OpenWebVie
 
 /**
  * Close every WebView connection the MCP tools hold, before a test run
- * connects to the same page (PILOT-288).
+ * connects to the same page.
  */
 export async function closeMcpWebViews(): Promise<void> {
   await Promise.all([...openWebViews].flatMap(([client, perClient]) => [...perClient.keys()].map((key) => closeWebView(client, key))));
@@ -182,7 +182,7 @@ export async function withEvaluatedLocator<T>(
     /**
      * A WebView connection the caller already holds to use instead of one
      * of these tools' own (UI mode's picker connection, which a second one
-     * on the same page would wedge, PILOT-288).
+     * on the same page would wedge).
      */
     webview?: () => Promise<WebViewHandle>
     /**

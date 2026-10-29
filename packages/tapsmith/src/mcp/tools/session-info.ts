@@ -7,7 +7,7 @@ export function registerSessionInfoTool(server: McpServer, dispatcher: TestDispa
     'Get configuration and environment info for the current test session: platform, app package, device, timeout, retries, and per-project settings. Useful for understanding the test environment before writing or running tests.',
     {},
     async () => {
-      await dispatcher.ensureInitialized?.();
+      await dispatcher.refreshTestFiles();
       const info = dispatcher.getSessionInfo();
       const lines: string[] = [];
 

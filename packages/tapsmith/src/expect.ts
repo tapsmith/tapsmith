@@ -6,14 +6,14 @@
  *   expect(device.element(text('Hello'))).toBeVisible();
  *   expect(device.element(role('button', 'Submit'))).not.toBeEnabled();
  *
- *   // Generic value assertions (PILOT-42)
+ *   // Generic value assertions
  *   expect(5).toBe(5);
  *   expect("hello").toContain("ell");
  *
- *   // Soft assertions (PILOT-43)
+ *   // Soft assertions
  *   expect.soft(device.element(text('Header'))).toBeVisible();
  *
- *   // Poll assertions (PILOT-44)
+ *   // Poll assertions
  *   await expect.poll(async () => fetchCount()).toBe(5);
  */
 
@@ -180,7 +180,7 @@ export interface TapsmithAssertions {
   /**
    * Assert the element's text matches: equals a string, or matches a RegExp.
    * With an array, the locator's elements (all of them, in order) must have
-   * one text per item (PILOT-548).
+   * one text per item.
    */
   toHaveText(expected: TextExpected, options?: { timeout?: number }): Promise<void>;
 
@@ -205,7 +205,7 @@ export interface TapsmithAssertions {
   /**
    * Assert the element's text contains the given substring or matches a
    * RegExp. With an array, the locator's elements must contain the items in
-   * order — other elements may come between them (PILOT-548).
+   * order — other elements may come between them.
    */
   toContainText(
     expected: TextExpected,
@@ -249,7 +249,7 @@ export interface TapsmithAssertions {
 
 /** One expected text: a string, or a RegExp tested against the text. */
 type TextExpectation = string | RegExp;
-/** What toHaveText / toContainText accept, as in Playwright (PILOT-548). */
+/** What toHaveText / toContainText accept, as in Playwright. */
 export type TextExpected = TextExpectation | readonly TextExpectation[];
 
 /**

@@ -4,8 +4,6 @@
  * Provides an `APIRequestContext` (modeled after Playwright's) that wraps
  * Node's built-in `fetch`. Each HTTP call emits a trace event and accumulates
  * a `NetworkEntry` so requests appear in the trace viewer / UI mode.
- *
- * @see PILOT-121
  */
 
 import type { NetworkEntry } from './trace/types.js';

@@ -25,7 +25,7 @@ export interface TestTraceData {
   sources: Map<string, string>;
   network: NetworkEntry[];
   networkCaptureEnabled?: boolean;
-  /** How this test's capture reached the proxy (PILOT-319); `ios-system-proxy` is host-wide. */
+  /** How this test's capture reached the proxy; `ios-system-proxy` is host-wide. */
   networkCaptureRoute?: import('../../trace/types.js').NetworkCaptureRoute;
   /** Raw network request/response body bytes keyed by path (e.g.
    * `network/res-0.bin`). Kept as bytes rather than a decoded string because
@@ -131,7 +131,7 @@ export interface ResolvedHierarchy {
 /**
  * The hierarchy the locator playground must hit-test for an action, which
  * has to depict the same moment as the screenshot the panel displays — or a
- * pick would resolve one screen over a picture of another (PILOT-302):
+ * pick would resolve one screen over a picture of another:
  *
  * - The "after" display is the next action's before-screenshot (see
  *   ScreenshotPanel), so its tree is the next action's before-hierarchy —

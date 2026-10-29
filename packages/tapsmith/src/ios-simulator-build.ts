@@ -6,7 +6,7 @@
  * result in `~/.tapsmith/ios-simulator-agent/<tapsmith version>/`. Subsequent
  * runs skip the build as long as the cached SDK version still matches. Each
  * Tapsmith version has its own directory, so an upgrade, which brings new
- * agent source, builds afresh instead of running the old agent (PILOT-485).
+ * agent source, builds afresh instead of running the old agent.
  */
 
 import { spawn, type ChildProcess } from 'node:child_process';

@@ -45,6 +45,8 @@ function makeDispatcher(projects: ProjectInfo[]): {
     getSessionInfo: () => ({ timeout: 0, retries: 0, projects }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    classifyUnmatchedFile: () => undefined,
+    refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: false }),
   };
   return { dispatcher, runs };

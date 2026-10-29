@@ -29,6 +29,8 @@ function makeDispatcher(overrides: Partial<TestDispatcher> = {}): TestDispatcher
     }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    classifyUnmatchedFile: () => undefined,
+    refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: true }),
     ...overrides,
   };
@@ -324,5 +326,83 @@ describe('stdioTestArgs()', () => {
     // Same semantics as the dispatcher's `test` filter: a case-insensitive substring.
     expect(seen?.grep?.test('cart > -checkout (V2)? works')).toBe(true);
     expect(seen?.grep?.test('cart > checkout v2 works')).toBe(false);
+  });
+});
+
+// PILOT-836: a file written mid-session must be matchable by the run, and a
+// file that still matches nothing must be explained by what actually excludes
+// it rather than by path forms and load failures.
+describe('tapsmith_run_tests and files written mid-session', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-run-unmatched-')));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('syncs the test files before anything reads them', async () => {
+    const calls: string[] = [];
+    const dispatcher = makeDispatcher({
+      refreshTestFiles: async () => { calls.push('refresh'); },
+      resolveRequestedFiles: (files) => { calls.push('resolve'); return files; },
+      runFiles: async () => { calls.push('run'); return { status: 'passed', passed: 1, failed: 0, skipped: 0, duration: 1 }; },
+    });
+    await callRunTests(dispatcher, { files: [FILE] });
+    expect(calls[0]).toBe('refresh');
+    expect(calls).toContain('run');
+  });
+
+  it('says a file the config\'s testMatch leaves out is left out', async () => {
+    const configPath = path.join(root, 'tapsmith.config.mjs');
+    const asked: string[] = [];
+    const dispatcher = makeDispatcher({
+      resolveRequestedFiles: () => [],
+      classifyUnmatchedFile: (arg) => { asked.push(arg); return 'excluded'; },
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
+      getSessionInfo: () => ({ timeout: 5000, retries: 0, projects: [], configPath }),
+    });
+    const out = text(await callRunTests(dispatcher, { files: ['tests/new.tapsmith.ts'] }));
+    expect(asked).toEqual(['tests/new.tapsmith.ts']);
+    expect(out).toContain("tests/new.tapsmith.ts exists, but the config's testMatch (or testIgnore) leaves it out");
+    expect(out).toContain(configPath);
+    expect(out).not.toMatch(/Paths may be absolute/);
+  });
+
+  it('says a test file the session does not hold is not held, without blaming testMatch', async () => {
+    const dispatcher = makeDispatcher({
+      resolveRequestedFiles: () => [],
+      classifyUnmatchedFile: () => 'not-held',
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
+    });
+    const out = text(await callRunTests(dispatcher, { files: ['tests/signup.test.ts'] }));
+    expect(out).toContain('tests/signup.test.ts is a test file by the config\'s testMatch, but this session does not hold it');
+    expect(out).not.toContain('leaves it out');
+  });
+
+  it('does not blame testMatch when the config failed to load', async () => {
+    const dispatcher = makeDispatcher({
+      resolveRequestedFiles: () => [],
+      classifyUnmatchedFile: () => 'excluded',
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
+      getSessionInfo: () => ({ timeout: 5000, retries: 0, projects: [], configError: 'SyntaxError: Unexpected token' }),
+    });
+    const out = text(await callRunTests(dispatcher, { files: [path.join(root, 'login.test.ts')] }));
+    expect(out).not.toContain('testMatch');
+    expect(out).toContain('matched no discovered test file');
+  });
+
+  it('keeps the path advice for an argument that names no file at all', async () => {
+    const dispatcher = makeDispatcher({
+      resolveRequestedFiles: () => [],
+      classifyUnmatchedFile: () => undefined,
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
+    });
+    const out = text(await callRunTests(dispatcher, { files: ['tests/typo.test.ts'] }));
+    expect(out).toContain('matched no discovered test file');
+    expect(out).toMatch(/Paths may be absolute/);
+    expect(out).not.toContain('leaves it out');
   });
 });

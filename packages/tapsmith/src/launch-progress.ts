@@ -74,7 +74,7 @@ export interface LaunchProgressSink {
   /**
    * The details of the failed steps that their rows showed in full — not
    * cut short to fit the table — so an error printed after the rows can
-   * leave out what they already said (PILOT-569).
+   * leave out what they already said.
    */
   shownFailures(): string[];
   skip(id: LaunchStepId, detail?: string): void;
@@ -512,7 +512,7 @@ function tableWidths(
  * `message` without the lines that only repeat a detail the launch rows
  * already showed (`shownFailures`): a line ending in that detail — whatever
  * label precedes it, which the row's own label stands in for. Whatever the
- * error adds (a hint, the detail of a summary row) is kept (PILOT-569).
+ * error adds (a hint, the detail of a summary row) is kept.
  */
 export function unshownPart(message: string, shown: readonly string[]): string {
   let text = message;
@@ -542,7 +542,7 @@ export function unshownPart(message: string, shown: readonly string[]): string {
  * launch rows showed (`unshownPart` on the headline alone). For the summary
  * errors a run ends with — "No worker could start: <reason>" over one line
  * per worker, "No device target could start" over one per target — whose
- * later lines name the worker or target the rows do not (PILOT-569).
+ * later lines name the worker or target the rows do not.
  */
 export function withoutShownHeadline(message: string, shown: readonly string[]): string {
   const [headline, ...rest] = message.split("\n");
@@ -565,8 +565,7 @@ export function writesToSamePlace(
  * Whether the launch rows (stdout) and the errors printed after them
  * (stderr) end up in the same place, so an error may leave out what a row
  * already showed. Where they part — `verify --json` ignores the run's stdout
- * and reports its stderr, a CI step may keep `2>` — the error stays whole
- * (PILOT-569).
+ * and reports its stderr, a CI step may keep `2>` — the error stays whole.
  */
 export function launchRowsShareStderr(): boolean {
   try {

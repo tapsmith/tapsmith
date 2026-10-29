@@ -1,5 +1,5 @@
 /**
- * Locator answers for UI mode's live device (PILOT-848).
+ * Locator answers for UI mode's live device.
  *
  * The Locator tab's match count and highlights, and the picker's suggested
  * locators, come from the device agent — the same SDK locator builder and
@@ -220,7 +220,7 @@ function isPickedWebViewElement(match: WebViewMatch, node: HierarchyNode): boole
 
 /**
  * The last few live hierarchy captures per device, so a pick made on one
- * can still be resolved after newer captures arrived (PILOT-848).
+ * can still be resolved after newer captures arrived.
  */
 export class LiveHierarchyCache {
   private readonly _byDevice = new Map<string, Array<{ revision: number; xml: string }>>();

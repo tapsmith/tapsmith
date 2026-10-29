@@ -34,7 +34,7 @@ export interface InitArgs {
   avd?: string;
   simulator?: string;
   deviceType?: DeviceType;
-  /** `--network-capture` / `--no-network-capture`; unset takes the wizard's default (PILOT-775). */
+  /** `--network-capture` / `--no-network-capture`; unset takes the wizard's default. */
   networkCapture?: boolean;
   exampleTest: boolean;
   agentsMd: boolean;
@@ -61,7 +61,7 @@ export interface InitPlan {
   ios?: IosConfig;
   networkCapture: boolean;
   warnings: string[];
-  /** Next steps entry for a Play-image AVD (PILOT-711), from `captureAvdNextStep`. */
+  /** Next steps entry for a Play-image AVD, from `captureAvdNextStep`. */
   captureAvdStep?: { label: string; action: string; optional: boolean };
 }
 
@@ -78,9 +78,9 @@ export interface DetectFns {
   detectAndroidPackage: (apkPath: string) => string | undefined;
   findIosAppCandidates: (cwd: string) => string[];
   detectIosBundleId: (appPath: string) => string | undefined;
-  /** Optional so callers that stub the build detectors need not stub this too (PILOT-557). */
+  /** Optional so callers that stub the build detectors need not stub this too. */
   detectExpoProject?: (cwd: string, readConfig?: (cwd: string) => unknown) => detectDefaults.ExpoProject | undefined;
-  /** This project's builds in Xcode's DerivedData (PILOT-832); optional like detectExpoProject. */
+  /** This project's builds in Xcode's DerivedData; optional like detectExpoProject. */
   findDerivedDataApps?: (cwd: string, xcodeProjects: string[], sdk: 'iphonesimulator' | 'iphoneos') => string[];
 }
 
@@ -573,7 +573,7 @@ export function writeInitFiles(files: InitFiles, cwd: string = process.cwd()): W
 
 /**
  * Writes the files. `missingTapsmith` is the install command when the project
- * cannot resolve `tapsmith`, which the files written here import (PILOT-551):
+ * cannot resolve `tapsmith`, which the files written here import:
  * `--yes` never runs it — a scripted setup should not change package.json and
  * the lockfile unasked — so it becomes the first next step.
  */

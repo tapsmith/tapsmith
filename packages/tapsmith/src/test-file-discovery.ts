@@ -8,12 +8,12 @@ import { Minimatch, minimatch } from 'minimatch';
  * dependency, build and tooling trees of a JS / React Native / Expo project.
  * They are never tests, and an Expo app's `ios/Pods` and `ios/build` alone hold
  * tens of thousands of files — watching them kept UI mode unresponsive for
- * minutes after it said it was ready (PILOT-713). `ios/Pods` also symlinks
+ * minutes after it said it was ready. `ios/Pods` also symlinks
  * headers back into `node_modules`, which a watcher would otherwise follow.
  *
  * Build directories are anchored under `ios/` and `android/`, so a `build`
  * directory elsewhere (one holding tests, say) is still searched. A native
- * project builds at its root (PILOT-832), so the trees Gradle and
+ * project builds at its root, so the trees Gradle and
  * `xcodebuild -derivedDataPath build` write inside any `build/` are skipped
  * by name instead.
  */
@@ -181,7 +181,7 @@ export function noTestFilesFoundMessage(opts: {
 /**
  * The error for `tapsmith test` in a directory with no config file: a
  * project that has not been set up, so `init` is the next step, as `verify`
- * and `doctor` say (PILOT-569). `execCommand` is how the project runs its
+ * and `doctor` say. `execCommand` is how the project runs its
  * own Tapsmith (`tapsmithExecCommand`).
  */
 export function noConfigFoundMessage(rootDir: string, execCommand: string): string {
@@ -269,6 +269,50 @@ export function matchesTestFile(
 
   if (matchesTestIgnore(relative, extraIgnore)) return false;
   return patterns.some((pattern) => minimatch(relative, normalizeGlobPattern(pattern)));
+}
+
+/**
+ * Why a `files` argument matched none of a session's test files, as the
+ * config's own matcher sees it: `excluded` when it names a file
+ * that no `testMatch` selects (or a `testIgnore` drops), `not-held` when it
+ * names one the config does select but the session does not hold (a UI
+ * session started on a file argument or `--project`), `undefined` when it
+ * names no file at all (a typo, a directory, a glob).
+ *
+ * Relative arguments resolve against `roots` — the ones the matching uses —
+ * and paths are compared real, so a symlinked spelling of the root (macOS's
+ * `/tmp`) or a case-insensitive filesystem's spelling does not read as
+ * excluded. Telling the caller "on disk, so testMatch leaves it out" was
+ * wrong in each of those cases and sent it to edit a config that was fine.
+ */
+export function classifyUnmatchedTestFile(
+  arg: string,
+  opts: {
+    roots: string[]
+    rootDir: string
+    selectors: Array<{ testMatch: string[]; testIgnore?: string[] }>
+  },
+): 'excluded' | 'not-held' | undefined {
+  const real = (p: string): string | undefined => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return undefined;
+    }
+  };
+  const rootDir = real(opts.rootDir) ?? opts.rootDir;
+  const candidates = path.isAbsolute(arg) ? [arg] : opts.roots.map((r) => path.resolve(r, arg));
+  for (const candidate of candidates) {
+    const file = real(candidate);
+    if (!file) continue;
+    try {
+      if (!fs.statSync(file).isFile()) continue;
+    } catch {
+      continue;
+    }
+    return opts.selectors.some((s) => matchesTestFile(file, s.testMatch, rootDir, s.testIgnore)) ? 'not-held' : 'excluded';
+  }
+  return undefined;
 }
 
 export function matchesTestIgnore(relativePath: string, extraIgnore?: string[]): boolean {

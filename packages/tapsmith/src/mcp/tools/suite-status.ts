@@ -31,7 +31,7 @@ export function registerSuiteStatusTool(server: McpServer, dispatcher: TestDispa
       details: z.boolean().optional().describe('List every test with its status (default false: per-file counts plus failed test names)'),
     },
     async ({ file, details }) => {
-      await dispatcher.ensureInitialized?.();
+      await dispatcher.refreshTestFiles();
       const store = getSessionResultsStore(dispatcher);
       // Read-time merge: also captures runs this tool never saw start
       // (e.g. triggered from the UI or another attached MCP client).

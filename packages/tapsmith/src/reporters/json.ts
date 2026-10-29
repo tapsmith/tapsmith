@@ -3,8 +3,6 @@
  *
  * Writes a JSON file with all test run information including config,
  * suites, tests (with status, duration, errors), and summary statistics.
- *
- * @see PILOT-71
  */
 
 import * as fs from 'node:fs';

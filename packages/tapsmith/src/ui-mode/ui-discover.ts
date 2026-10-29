@@ -4,8 +4,6 @@
  * Imports a test file in dry-run mode, collects the test/suite tree
  * structure, and sends it back to the parent via IPC. Does NOT execute
  * any test bodies — only the describe() callbacks run to register the tree.
- *
- * @see PILOT-87
  */
 
 import * as path from 'node:path';

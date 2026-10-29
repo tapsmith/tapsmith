@@ -62,8 +62,8 @@ interface McpSession {
 }
 
 /**
- * Routes Streamable-HTTP MCP requests across multiple concurrent sessions
- * (PILOT-221). A single transport instance is one MCP session in the SDK, so a
+ * Routes Streamable-HTTP MCP requests across multiple concurrent sessions.
+ * A single transport instance is one MCP session in the SDK, so a
  * single shared transport can never accept a second `initialize` — breaking
  * reconnects and multi-client. This router follows the SDK's documented
  * multi-session pattern: a fresh transport + McpServer per `initialize`, keyed

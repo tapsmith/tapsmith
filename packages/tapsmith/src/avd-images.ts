@@ -1,5 +1,5 @@
 /**
- * AVD system images and HTTPS capture (PILOT-403, PILOT-404).
+ * AVD system images and HTTPS capture.
  *
  * The single source for "can this AVD capture HTTPS?" — `doctor`'s AVD check
  * and `init`'s AVD choice both judge AVDs here, and both build their
@@ -108,7 +108,7 @@ export type AvdCaptureSupport = 'capable' | 'play-image' | 'unknown';
 /**
  * What network capture does on a Google Play image, for every message that
  * names one (init, doctor). The daemon tunnels HTTPS there instead of
- * breaking it (PILOT-711), so the app keeps working and only capture is lost.
+ * breaking it, so the app keeps working and only capture is lost.
  */
 export const PLAY_IMAGE_CAPTURE_EFFECT =
   "no adb root, so Tapsmith can't install its CA certificate: the app's HTTPS requests still reach their servers, "
@@ -120,7 +120,7 @@ export function avdCaptureSupport(avd: AvdImageInfo | undefined): AvdCaptureSupp
 }
 
 /**
- * The AVD init chooses when the user names none (PILOT-721): the first
+ * The AVD init chooses when the user names none: the first
  * capture-capable one, else the first whose image could not be read (it may
  * well be capable), else the first listed. A Google Play image is the last
  * resort even when capture is off: `device.route()` cannot intercept HTTPS
@@ -201,7 +201,7 @@ function pickCaptureAvd(avds: AvdImageInfo[], apiLevel?: number, reserved?: stri
 }
 
 /**
- * init's Next steps entry for an AVD on a Google Play image (PILOT-711): the
+ * init's Next steps entry for an AVD on a Google Play image: the
  * capture-capable AVD to switch to, or the `create-avd` command for one, and
  * — when the config was written without capture — the trace setting that
  * turns it on. `undefined` unless `avd` is known to be a Play image.

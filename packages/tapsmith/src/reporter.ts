@@ -5,8 +5,6 @@
  * can be active concurrently. Built-in reporters (list, line, dot, json,
  * junit, html, github, blob) implement this interface, and custom reporters
  * can be provided as objects or npm packages.
- *
- * @see PILOT-66
  */
 
 import type { TapsmithConfig } from './config.js';
@@ -219,7 +217,7 @@ const SUMMARY_REPORTERS = new Set(['list', 'line', 'dot']);
 /**
  * Whether the configured reporters print a run summary in the terminal —
  * so watch mode, which prints its key list after each run, need not print a
- * second one (PILOT-569).
+ * second one.
  */
 export function printsRunSummary(config: ReporterConfig | undefined): boolean {
   return normalizeReporterConfig(config).some((desc) => SUMMARY_REPORTERS.has(typeof desc === 'string' ? desc : desc[0]));

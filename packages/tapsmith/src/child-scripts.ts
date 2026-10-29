@@ -74,7 +74,7 @@ export function resolveTsxBin(tapsmithPkgDir: string): string | undefined {
  * listens on a Unix socket at `<tmpdir>/tsx-<uid>/<pid>.pipe`, and a socket
  * path longer than `sun_path` (104 bytes on macOS and the BSDs, 108 on Linux,
  * NUL included) fails with a raw `listen EINVAL` stack trace before any
- * Tapsmith code runs (PILOT-569). Checked against the longest pid the
+ * Tapsmith code runs. Checked against the longest pid the
  * platform hands out, so a run never passes the check and then fails on a
  * longer pid.
  */

@@ -302,8 +302,8 @@ export interface TapsmithConfig {
   trace?: TraceMode | Partial<TraceConfig>;
 
   /**
-   * Continuous video recording of the device screen during test execution
-   * (PILOT-114). Mirrors Playwright's `video` config.
+   * Continuous video recording of the device screen during test execution.
+   * Mirrors Playwright's `video` config.
    *
    * Defaults to `'off'`. The supported modes are the same as `trace`.
    *
@@ -1421,7 +1421,7 @@ function withConfigPath(config: TapsmithConfig, configPath?: string): TapsmithCo
  *
  * Undefined means no config file exists: `loadConfig` rejects when one exists
  * but cannot be imported, so a config this returns undefined for was never
- * backed by a file (PILOT-262).
+ * backed by a file.
  */
 export function configPathOf(config: TapsmithConfig): string | undefined {
   return (config as unknown as Record<symbol, string | undefined>)[CONFIG_PATH];
@@ -1441,7 +1441,7 @@ export interface InstallCommand {
   args: string[];
   /**
    * What the user should type: `npm i -D tapsmith`, or, in a directory without
-   * a package.json, `npm init -y && npm i -D tapsmith` (PILOT-631).
+   * a package.json, `npm init -y && npm i -D tapsmith`.
    */
   display: string;
   /** Set when the directory has no package.json: says so, naming the project a bare add would change. */
@@ -1464,7 +1464,7 @@ export function isTapsmithResolvableFrom(dir: string): boolean {
  * names it (`npm`, `pnpm`, `yarn`, `yarn@berry`, `bun`, …): the one its
  * lockfile or `packageManager` field names, looking up from `dir` so a
  * workspace root's lockfile counts, else npm. Exported for hints that name
- * the project's own commands (PILOT-709).
+ * the project's own commands.
  */
 export async function projectPackageManager(dir: string): Promise<string> {
   // Loaded only when needed: config.ts is part of the SDK every test imports.
@@ -1475,7 +1475,7 @@ export async function projectPackageManager(dir: string): Promise<string> {
 
 /**
  * How the project at `dir` runs its own Tapsmith, for the commands init and
- * its hints print (PILOT-721): `pnpm exec tapsmith`, `yarn tapsmith` (Yarn
+ * its hints print: `pnpm exec tapsmith`, `yarn tapsmith` (Yarn
  * 2+), `bunx tapsmith`, else `npx tapsmith`. Yarn 1 keeps npx, which finds
  * the local bin in its node_modules: `yarn tapsmith` prints a banner on
  * stdout, which breaks `mcp-server`'s stdio and `--json` output.

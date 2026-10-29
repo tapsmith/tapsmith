@@ -1,6 +1,6 @@
 /**
  * Child process for `tapsmith test`'s checks before any device work: the
- * selection check (PILOT-553) and load failures (PILOT-784).
+ * selection check and load failures.
  *
  * Imports each test file to read its test names — no test body runs — and
  * sends them back over IPC, or the error the file failed to load with. Out of the CLI's process so a test file's

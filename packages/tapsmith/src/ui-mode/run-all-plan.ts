@@ -1,6 +1,6 @@
 /**
  * What UI mode's Run all dispatches: every file, or a filtered tree's
- * selection (PILOT-729), grouped into project dependency waves when projects
+ * selection, grouped into project dependency waves when projects
  * are configured.
  */
 

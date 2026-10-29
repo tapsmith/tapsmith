@@ -1,6 +1,6 @@
 /**
  * The pre-run health check for a pinned Android device, and what it does when
- * the device does not answer (PILOT-475).
+ * the device does not answer.
  *
  * The ADB server is shared by every adb client on the machine: other Tapsmith
  * sessions and their daemons' forwarded agent sockets, Android Studio,

@@ -1,5 +1,5 @@
 /**
- * JavaScript string-literal escaping for generated locator code (PILOT-659).
+ * JavaScript string-literal escaping for generated locator code.
  *
  * A suggested locator is meant to be copied — by a person from the locator
  * playground or a strict mode error, or by an agent from `tapsmith_snapshot`

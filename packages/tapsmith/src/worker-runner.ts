@@ -5,8 +5,6 @@
  * device for ordinary projects, several for `use.devices` projects — each on
  * its own daemon. It receives test files to run via IPC, executes them
  * sequentially, and sends results back to the main process.
- *
- * @see PILOT-106, PILOT-310
  */
 
 import * as path from 'node:path';

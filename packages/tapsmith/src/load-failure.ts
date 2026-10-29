@@ -1,5 +1,5 @@
 /**
- * Test files that fail to load (PILOT-545).
+ * Test files that fail to load.
  *
  * Such a file reports one failed result, titled by {@link fileLoadFailureTitle},
  * in place of its tests.
@@ -8,7 +8,7 @@
  *
  * A test file that imports a missing module fails inside the module resolver,
  * so the error's stack holds only resolver frames and reporters have no user
- * frame to show a code frame for (PILOT-545). The message does name the
+ * frame to show a code frame for. The message does name the
  * specifier and the importing file, in one of the shapes Node, tsx and Vite
  * produce; this finds the import line in that file and adds a stack frame for
  * it, so the reporter's usual code-frame rendering shows the offending line.

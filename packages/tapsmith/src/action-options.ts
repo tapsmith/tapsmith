@@ -1,5 +1,5 @@
 /**
- * Runtime checks for the options objects locator actions take (PILOT-840).
+ * Runtime checks for the options objects locator actions take.
  *
  * Tests usually run under tsx, which strips types without checking them, so
  * an option TypeScript would reject (`tap({ timout: 5000 })`, `tap(5000)`)

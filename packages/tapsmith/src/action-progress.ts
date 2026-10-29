@@ -8,8 +8,6 @@
  * channel is independent of tracing — Device emits start/end events around
  * the slow set, and each surface (CLI printer, worker IPC forwarder, UI mode)
  * subscribes with its own renderer.
- *
- * @see PILOT-232
  */
 
 import { isAbortError } from './abort.js';
@@ -39,7 +37,7 @@ export interface ActionProgressEvent {
   durationMs?: number
   /** End events only. */
   success?: boolean
-  /** True when the action was cancelled by a user stop (PILOT-222). End events only. */
+  /** True when the action was cancelled by a user stop. End events only. */
   aborted?: boolean
   /** Error message. End events with success=false only. */
   error?: string
@@ -47,7 +45,7 @@ export interface ActionProgressEvent {
    * Short annotation set by the action body via {@link ActionProgressHandle},
    * e.g. `'foreground probe 9.1s'`. Renderers append it to the end line so a
    * slow sub-step is attributable without reading the whole duration as one
-   * opaque number (PILOT-350). End events only.
+   * opaque number. End events only.
    */
   detail?: string
 }

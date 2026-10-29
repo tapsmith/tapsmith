@@ -17,7 +17,7 @@ export const WEBVIEW_LOCATOR_BRAND = Symbol.for('tapsmith.WebViewLocator');
  * document order (defaults to `querySelectorAll(selector)` when not
  * explicitly set); `_finderJs` derives the single target element from it.
  *
- * Strict mode (PILOT-227): like native locators, an action, single-element
+ * Strict mode: like native locators, an action, single-element
  * query, or positive assertion on a locator that resolves to more than one
  * element throws a StrictModeViolationError. Narrow with `.first()`,
  * `.last()`, or `.nth(n)` to target one match positionally.

@@ -82,6 +82,11 @@ function escapeHtmlPreservingCode(md) {
 //   - drop version-bump PRs ("Bump version to X.Y.Z")
 //   - drop "first contribution" credits (they duplicate PRs already listed)
 //   - strip the "by @user in <pr-url>" attribution from each item
+//   - strip internal tracker keys from PR titles ("Fix taps (PILOT-12)",
+//     "PILOT-12: Fix taps", "(PILOT-12 follow-up)"): they mean nothing to users
+const TICKET_PREFIX = /^(\s*[*-]\s+)PILOT-\d+:\s*/i
+const TICKET_PAREN = /\s*\(PILOT-\d+\b[^)]*\)/gi
+
 function cleanBody(md) {
   const kept = md
     .replace(/<!--[\s\S]*?-->/g, '')
@@ -90,6 +95,7 @@ function cleanBody(md) {
     .filter((line) => !/^\s*[*-]\s+bump version\b/i.test(line))
     .filter((line) => !/made their first contribution/i.test(line))
     .map((line) => line.replace(/\s+by @[\w-]+ in https?:\/\/\S+\s*$/i, ''))
+    .map((line) => line.replace(TICKET_PREFIX, '$1').replace(TICKET_PAREN, ''))
   return escapeHtmlPreservingCode(kept.join('\n'))
     .replace(/\n{3,}/g, '\n\n')
     .trim()

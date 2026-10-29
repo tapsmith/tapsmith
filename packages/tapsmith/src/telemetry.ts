@@ -1,5 +1,5 @@
 /**
- * Anonymous, opt-out usage telemetry (PILOT-330).
+ * Anonymous, opt-out usage telemetry.
  *
  * Without usage numbers there is no way to tell five users from five
  * thousand, so nothing to prioritise against. This module reports the
@@ -99,7 +99,7 @@ interface TelemetryState {
   /**
    * Random per-machine id. Optional: it is minted only when something is
    * actually sent, so `tapsmith telemetry disable` on a fresh machine can
-   * persist the switch below without creating an identifier (PILOT-330 review).
+   * persist the switch below without creating an identifier.
    */
   anonymousId?: string;
   createdAt: string;
@@ -344,7 +344,7 @@ export class Telemetry {
    */
   setMachineEnabled(enabled: boolean): boolean {
     // No `anonymousId` here: disabling before the first run must not mint an
-    // identifier (PILOT-330 review). One is created only when something sends.
+    // identifier. One is created only when something sends.
     const current = this._peekState()
       ?? { createdAt: new Date().toISOString(), noticeShown: false };
     // Someone who ran `enable` by hand has read the docs; the notice would
@@ -366,7 +366,7 @@ export class Telemetry {
       this._writeNotice(telemetryNoticeText());
       // Only burn the once-per-machine flag when the notice actually reached a
       // person. An MCP server whose stderr is the host's log leaves it unset,
-      // so a later interactive run still gets its turn (PILOT-330 review).
+      // so a later interactive run still gets its turn.
       if (this._noticeVisible) this._saveState({ ...state, noticeShown: true });
       return true;
     } catch {
@@ -491,7 +491,7 @@ export class Telemetry {
    * Send the one-off `install` event unless it has already been acknowledged.
    * The `installReported` flag is persisted only on a 2xx, so a first run that
    * exits before the install lands leaves it unset and the next process
-   * resends — installs are not lost to an early exit (PILOT-330 review).
+   * resends — installs are not lost to an early exit.
    */
   private _maybeSendInstall(): void {
     if (this._installAttempted) return;
@@ -530,7 +530,7 @@ export class Telemetry {
     if (isDebug(this._env)) {
       // A dry run must not touch the disk: keep the id in memory for this
       // process only, so `TAPSMITH_TELEMETRY_DEBUG=1` leaves no identifier
-      // behind (PILOT-330 review).
+      // behind.
       this._state = next;
       this._idPersisted = false;
       return next;
@@ -545,7 +545,7 @@ export class Telemetry {
   /**
    * Mint and persist the anonymous id in the top-level process before it
    * forks per-file workers, so every worker of a first-ever run reads one
-   * shared id from disk instead of each minting its own (PILOT-330 review).
+   * shared id from disk instead of each minting its own.
    * No-op when telemetry is off, so it never creates an id for an opted-out
    * machine. Never throws.
    */

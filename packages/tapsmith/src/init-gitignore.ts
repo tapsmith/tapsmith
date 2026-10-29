@@ -88,7 +88,7 @@ export function ignoreTestResults(
  * Makes sure git ignores `node_modules/`, which installing Tapsmith creates.
  * A JavaScript project's .gitignore has it already; a native iOS or Android
  * project's does not, and its first commit after the install would hold the
- * whole dependency tree (PILOT-832).
+ * whole dependency tree.
  */
 export function ignoreNodeModules(
   cwd: string,

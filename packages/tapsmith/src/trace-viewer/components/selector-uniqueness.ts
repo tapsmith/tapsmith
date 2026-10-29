@@ -1,5 +1,5 @@
 /**
- * Selector uniqueness validation (PILOT-226).
+ * Selector uniqueness validation.
  *
  * Suggested locators must resolve to exactly one element under RUNTIME
  * matching semantics — an ambiguous suggestion now throws a strict mode

@@ -9,6 +9,18 @@ export interface TestRunResult {
   interrupted?: number
   duration: number
   failures?: TestFailureDetail[]
+  /**
+   * Set when the run never started because another was under way. Without it
+   * the refusal reads exactly like a run of files that hold no tests: two
+   * parallel `run_tests` calls both pass the tool's own check while their
+   * file refreshes run, and the second was told its valid file was empty.
+   */
+  busy?: true
+}
+
+/** The result of a run refused because another is under way. */
+export function runInProgressResult(): TestRunResult {
+  return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0, busy: true };
 }
 
 export interface TestFailureDetail {
@@ -127,6 +139,15 @@ export interface SessionInfo {
 export interface TestDispatcher {
   ensureInitialized?(): Promise<void>
   /**
+   * Bring the discovered test files up to date with the disk — files written,
+   * edited or deleted since the session last looked — initializing first if
+   * need be. Every tool that reads or runs the test tree calls it, so a test
+   * an agent has just written is listed and runnable straight away
+   * (PILOT-836). Required: an optional method lets a dispatcher omit it, and
+   * its tools then answer from a stale tree with nothing to say so.
+   */
+  refreshTestFiles(): Promise<void>
+  /**
    * Settle only what a device tool needs — config, projects, and a device per
    * platform — skipping the test-tree discovery `ensureInitialized` also waits
    * for. Optional: a dispatcher that is ready by the time it is handed over
@@ -141,13 +162,20 @@ export interface TestDispatcher {
     retryFailedTargets?: boolean
     /** The project the tool names, if any: its target is the one worth retrying. */
     project?: string
+    /**
+     * The device the tool names, if any. On a session whose targets are not
+     * resolved yet it chooses the device of the one target it can serve, as a
+     * first `run_tests` `device` does — resolving first auto-picked a device
+     * and installed the agent there before the tool switched away.
+     */
+    device?: string
   }): Promise<void>
   runFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult>
   /**
    * Why `run_tests` cannot run `files` on `device` (a serial or a group
    * member's name), or `null` when it can. Asked before the run so a `device`
    * the dispatcher cannot honour is refused rather than ignored — ignoring it
-   * ran the tests on another session's device (PILOT-342). The headless
+   * ran the tests on another session's device. The headless
    * dispatcher may pin an unresolved target to `device` while answering.
    * Required, like `resolveDeviceName`.
    */
@@ -176,6 +204,14 @@ export interface TestDispatcher {
    * nothing matched, which is a different answer from "ran and found nothing".
    */
   resolveRequestedFiles?(files: string[]): string[]
+  /**
+   * For a `files` argument that matched none of the session's test files,
+   * what the config's own matcher makes of it — see
+   * `classifyUnmatchedTestFile`. `undefined` without a loaded config, or when
+   * the argument names no file. Required, so `run_tests` explains a refused
+   * file the same way over either transport.
+   */
+  classifyUnmatchedFile(arg: string): 'excluded' | 'not-held' | undefined
   getSessionInfo(): SessionInfo
   /**
    * The serial behind a `use.devices` group name (`alice`), so device tools

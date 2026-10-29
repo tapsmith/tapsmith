@@ -1,6 +1,5 @@
 /**
- * A config's `grep` / `grepInvert` applied to a discovered file's test tree
- * (PILOT-730).
+ * A config's `grep` / `grepInvert` applied to a discovered file's test tree.
  *
  * A test a grep leaves out is not part of the suite — not run, listed or
  * counted as skipped (docs/configuration.md) — so UI mode and the headless
@@ -37,8 +36,7 @@ export function pruneTreeByGrep(file: TestTreeNode, filters: GrepFilters): TestT
  * The tests a run of one file covers, as UI mode's tree shows them: the
  * file's rows under its project (the whole tree without one), narrowed by the
  * run's test filter and exact names. The tree is already pruned by the grep,
- * so a file no worker can run fails only the tests its run would have run
- * (PILOT-593).
+ * so a file no worker can run fails only the tests its run would have run.
  */
 export function fileTestsInTree(
   tree: readonly TestTreeNode[],

@@ -499,7 +499,7 @@ export async function buildIosAgent(options: BuildIosAgentOptions): Promise<stri
 /**
  * What to tell the user about configuring the runner just built. It used to
  * print a cwd-relative `iosXctestrun`, which broke in a config whose rootDir
- * is elsewhere (PILOT-264); `tapsmith test` now finds this build itself in the
+ * is elsewhere; `tapsmith test` now finds this build itself in the
  * usual layouts, so say that, and give an absolute path for pinning or for a
  * build it will not find (a custom `--derived-data-path`).
  */

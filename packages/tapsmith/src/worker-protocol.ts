@@ -2,8 +2,6 @@
  * IPC message protocol between the main process (dispatcher) and worker
  * child processes. Each worker is assigned a device and runs test files
  * sent to it by the dispatcher.
- *
- * @see PILOT-106
  */
 
 import type { TestResult, SuiteResult, RunOptions } from './runner.js';
@@ -31,7 +29,7 @@ export interface InitMessage {
   /**
    * `--force-install`: reinstall the app even when the device holds this
    * build. Required so no embedder can forget it — the parallel path dropped
-   * the flag entirely (PILOT-261).
+   * the flag entirely.
    */
   forceInstall: boolean
   /**
@@ -221,7 +219,7 @@ export function isRecoverableInfrastructureError(err: unknown): boolean {
 /**
  * "Network capture disabled" is recoverable in general — a session restart can
  * bring back a capture that failed transiently. These daemon refusals (the iOS
- * system-proxy fallback's policy, PILOT-319) are not: a restarted session gets
+ * system-proxy fallback's policy) are not: a restarted session gets
  * the same answer until the cause changes, so recovering only restarts the app,
  * fails the retry, and can retire a healthy worker. Substrings of the daemon's
  * messages in `grpc_server/ios_backend.rs` / `ios/system_proxy.rs`.
@@ -251,7 +249,7 @@ export const DEVICE_SELECT_RETRY_DELAY_MS = 3_000;
  * remembers (unplugged, out of range) before device selection stops retrying
  * and says so. Long enough for a phone re-enumerating after a replug, reboot
  * or tunnel reset; short of the full retry budget, which would otherwise be
- * spent on a phone that is not there (PILOT-386).
+ * spent on a phone that is not there.
  */
 export const DEVICE_SELECT_UNREACHABLE_GRACE_MS = 30_000;
 
@@ -325,7 +323,7 @@ export function isRetryableAgentStartError(err: unknown): boolean {
 
 /** Pause before retrying a failed agent start. A transient agent-connection
  *  drop takes a few seconds to clear; an immediate retry lands inside the
- *  same drop window and fails identically (PILOT-282). Shared by the CLI
+ *  same drop window and fails identically. Shared by the CLI
  *  startup path and worker init so both retry with the same tolerance. */
 export const AGENT_START_RETRY_DELAY_MS = 2_000;
 
@@ -469,7 +467,7 @@ export function deserializeRegExpArray(values: SerializedRegExp[] | undefined): 
  * (`grepFiltersFor`). Required on the run messages of every child that runs
  * a file for a parent which holds the projects (UI mode's workers, watch
  * mode's), so an embedder that forgets them fails to compile instead of
- * running tests the config filters out (PILOT-730).
+ * running tests the config filters out.
  */
 export interface SerializedGrepFilters {
   grep: SerializedRegExp[]
@@ -515,7 +513,7 @@ export interface SerializedTestResult {
   _willRetry?: boolean
   filePath?: string
   warnings?: string[]
-  /** The result stands for a whole file that failed to load (PILOT-545). */
+  /** The result stands for a whole file that failed to load. */
   fileLevelFailure?: boolean
 }
 

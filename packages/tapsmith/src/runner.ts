@@ -492,7 +492,7 @@ export interface TestResult {
   screenshotPath?: string;
   /** Path to the trace archive, if recorded. */
   tracePath?: string;
-  /** Path to the recorded MP4 video, if `video` was enabled and retained (PILOT-114). */
+  /** Path to the recorded MP4 video, if `video` was enabled and retained. */
   videoPath?: string;
   /** Index of the worker that ran this test (only set in parallel mode). */
   workerIndex?: number;
@@ -528,13 +528,13 @@ export interface TestResult {
   /**
    * Things that happened to this test's session that did not fail it but that
    * a reader should know — e.g. the app under test showed an ANR or crash
-   * dialog that the preflight closed before retrying (PILOT-398).
+   * dialog that the preflight closed before retrying.
    */
   warnings?: string[];
   /**
    * True when this result stands for a whole file rather than a test in it —
    * the file failed to load (a missing module, an error thrown at import), so
-   * none of its tests could be registered or run (PILOT-545). Its `name` and
+   * none of its tests could be registered or run. Its `name` and
    * `fullName` are `<file name> — failed to load`; `filePath` names the file.
    */
   fileLevelFailure?: boolean;
@@ -609,7 +609,7 @@ interface TestEntry {
 interface HookEntry {
   fn: HookFn
   registry?: FixtureRegistry
-  /** Where the hook was registered — named by its timeout error (PILOT-583). */
+  /** Where the hook was registered — named by its timeout error. */
   location?: SourceLocation
 }
 
@@ -640,10 +640,10 @@ interface SuiteContext {
   beforeEach: HookEntry[];
   afterEach: HookEntry[];
   useOptions?: UseOptions;
-  /** `'serial'`: a failed test skips the rest of this scope (PILOT-544). */
+  /** `'serial'`: a failed test skips the rest of this scope. */
   mode?: DescribeMode;
   /**
-   * Set by a describe-level `test.skip(condition)` (PILOT-546): every test of
+   * Set by a describe-level `test.skip(condition)`: every test of
    * this scope, nested describes included, is skipped and no hook runs.
    */
   skipped?: boolean;
@@ -843,7 +843,7 @@ export interface TestFn<Fixtures extends object = TestFixtures> {
 }
 
 /**
- * Playwright's `test.skip` overloads (PILOT-546).
+ * Playwright's `test.skip` overloads.
  *
  * ```ts
  * test.skip("broken", async ({ device }) => { ... })   // declare a skipped test
@@ -1333,7 +1333,7 @@ export interface RunOptions {
   /**
    * Which run path this file executes under — deliberately REQUIRED, like
    * `resetCapabilities`. The runner reports one anonymous telemetry event per
-   * file tagged with this mode (PILOT-330); were it optional, an embedder
+   * file tagged with this mode; were it optional, an embedder
    * that forgot it would silently under-report its whole path. Every embedder
    * (sequential CLI, worker-runner, ui-worker, watch-run — which also serves
    * the MCP dispatcher and so takes the mode from its parent's message) must
@@ -1364,7 +1364,7 @@ export interface RunOptions {
   testFilter?: string;
   /**
    * Run only tests whose fullName is exactly one of these — UI mode's Run all
-   * over a filtered tree sends the visible tests this way (PILOT-729). All
+   * over a filtered tree sends the visible tests this way. All
    * other tests are left out of the run, unreported, as with `testFilter`.
    */
   fullNames?: readonly string[];
@@ -1396,7 +1396,7 @@ export interface RunOptions {
    * Full snapshots during a test and after its final drain. Enables live
    * polling in UI mode. `networkCaptureRoute` is how this attempt's capture
    * reached the proxy — `ios-system-proxy` (host-wide, may include other apps'
-   * traffic) whenever any device used it (PILOT-319).
+   * traffic) whenever any device used it.
    */
   onNetworkEntries?: (entries: NetworkEntry[], networkCaptureEnabled?: boolean, networkCaptureRoute?: NetworkCaptureRoute) => void;
   /**
@@ -1804,7 +1804,7 @@ interface InheritedScopeSetup {
   serialGroup?: { failed: boolean };
   /**
    * The setup each enclosing scope ran, outermost first — what a retry has
-   * to run again to start where the first attempt started (PILOT-715).
+   * to run again to start where the first attempt started.
    */
   retrySetup?: ScopeRetryStep[];
   /** File-wide state of the fresh starts retries and failures need. */
@@ -1828,7 +1828,7 @@ interface RetryState {
    * the app is wherever the failure left it. Playwright discards a worker
    * after a failure, so the rest of the file starts in a fresh one; the next
    * scope to enter, or the next test, runs the setup again first instead of
-   * inheriting the failed test's screen (PILOT-739).
+   * inheriting the failed test's screen.
    */
   freshStartPending: boolean;
   /** Screenshot copies the refreshed setup views replay from; removed when the file ends. */
@@ -4093,7 +4093,7 @@ async function runTestFileOwned(
 
 /**
  * The failed result that stands in for a whole file whose tests never ran —
- * the file failed to load (PILOT-545). The error keeps its own stack; for a
+ * the file failed to load. The error keeps its own stack; for a
  * missing module, a frame at the import line is added so reporters can show
  * a code frame, which the resolver's own stack never reaches.
  */
@@ -4106,7 +4106,7 @@ export function fileLevelFailureResult(
 
 /**
  * {@link fileLevelFailureResult} for an error `loadErrorForReport` already
- * prepared — in the child that loaded the file before the run (PILOT-784).
+ * prepared — in the child that loaded the file before the run.
  */
 export function loadFailureResult(
   opts: Pick<RunOptions, 'testFilePath' | 'projectName'>,

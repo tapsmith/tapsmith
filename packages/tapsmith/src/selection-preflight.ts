@@ -1,8 +1,8 @@
 /**
  * Load every test file in a child process before `tapsmith test` touches a
- * device: for the check that a `--grep` selects something (PILOT-553), and to
- * report a file that fails to load before a device is acquired for it
- * (PILOT-784). See selection-preflight-child.ts for why it is a child.
+ * device: for the check that a `--grep` selects something, and to report a
+ * file that fails to load before a device is acquired for it.
+ * See selection-preflight-child.ts for why it is a child.
  */
 
 import { fork } from 'node:child_process';

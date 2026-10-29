@@ -1,6 +1,6 @@
 /**
  * Fail fast, with the real cause, when the SDK is loaded without
- * `import.meta.dirname` — in practice, compiled to CommonJS (PILOT-382).
+ * `import.meta.dirname` — in practice, compiled to CommonJS.
  *
  * Tapsmith ships ESM. A CommonJS test or config file — any `.ts` file in a
  * package without `"type": "module"` — makes its TypeScript loader compile

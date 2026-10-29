@@ -521,7 +521,7 @@ export function networkHostsForPac(
 /**
  * Return the configured `trace.networkPassthroughHosts` glob list for the
  * daemon's MITM proxy. TLS connections whose SNI matches are tunneled
- * end-to-end without interception (PILOT-231). Returns `[]` when tracing
+ * end-to-end without interception. Returns `[]` when tracing
  * is off or the option is unset — the daemon interprets `[]` as "no
  * host-based passthrough".
  */

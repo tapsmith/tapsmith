@@ -735,7 +735,7 @@ export function collectTransitiveDeps(
  *
  * The run iterates the projects' lists, so the split has to land there — a
  * config without `projects` runs under one synthesized project, which is cut
- * like any other (PILOT-596: cutting only a flat copy ran every file on
+ * like any other (cutting only a flat copy ran every file on
  * every shard).
  */
 export function shardProjects(
