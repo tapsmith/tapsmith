@@ -629,8 +629,13 @@ function checkConfiguredSimulators(report: Reporter, configured: Map<string, str
     }
     if (byName.length > 1) {
       const runtimes = [...new Set(byName.map((s) => s.runtime))].join(', ');
+      const booted = byName.find((s) => s.state === 'Booted');
+      const first = `the first simctl lists (${byName[0].runtime}, ${byName[0].udid})`;
+      const picks = booted
+        ? `tapsmith test uses the booted one (${booted.runtime}, ${booted.udid}); with none booted, ${first}`
+        : `tapsmith test uses a booted one, else ${first}`;
       warn(report, 'simulator', `${byName.length} simulators are named ${quoted}${owner} (${runtimes})`,
-        `tapsmith test uses a booted one, else the first simctl lists (${byName[0].runtime}, ${byName[0].udid}), so a run may not get the iOS version you expect. `
+        `${picks}, so a run may not get the iOS version you expect. `
         + `To pin one, set simulator to its UDID: ${byName.map((s) => `${s.udid} (${s.runtime})`).join(', ')}`);
       continue;
     }

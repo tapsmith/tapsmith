@@ -546,6 +546,19 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
       expect(code).toBe(0);
     });
 
+    it('names the booted one of several, which is the one a run takes', async () => {
+      withSimulators({
+        [IOS_18]: [{ name: 'iPhone 16 Pro', udid: 'OLD-1', state: 'Shutdown' }],
+        [IOS_26]: [{ name: 'iPhone 16 Pro', udid: 'NEW-2', state: 'Booted' }],
+      });
+      writeConfig(ios('iPhone 16 Pro'));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({
+        status: 'warn',
+        fix: expect.stringMatching(/^tapsmith test uses the booted one \(iOS 26\.0, NEW-2\); with none booted, the first simctl lists \(iOS 18\.5, OLD-1\), /),
+      })]);
+    });
+
     it('a UDID is never ambiguous', async () => {
       withSimulators({
         [IOS_18]: [{ name: 'iPhone 16 Pro', udid: 'OLD-1', state: 'Shutdown' }],
