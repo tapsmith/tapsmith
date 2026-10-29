@@ -199,9 +199,14 @@ check("getByRole(\"alert\") still lists generic views only", (try? RoleMapping.e
 
 let rnGenericRoles = ["menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "tablist", "timer"]
 for role in rnGenericRoles {
-    // tablist also lists the native tab bar (PILOT-514).
+    // tablist also lists the native tab bar (PILOT-514); the others with a
+    // native type list it first (PILOT-702).
+    let native: [String: ElementType] = [
+        "tablist": .tabBar, "menu": .menu, "menubar": .menuBar, "menuitem": .menuItem,
+        "radiogroup": .radioGroup, "spinbutton": .stepper,
+    ]
     check("getByRole(\"\(role)\") is a known role", (try? RoleMapping.elementTypes(for: role)) ?? [],
-          role == "tablist" ? [.tabBar, .other] : [.other])
+          native[role].map { [$0, .other] } ?? [.other])
     check("an unnamed \(role) query doesn't match a generic view", matches(role, .other), false)
     check("a named \(role) query finds an undescribed generic view", matches(role, .other, named: true), true)
     check("a named \(role) query skips a button-trait view", matches(role, .other, traits: buttonTrait, named: true), false)
@@ -281,6 +286,38 @@ for role in ["heading", "header", "checkbox", "radiobutton", "radio", "alert", "
 for role in ["button", "text", "switch", "textfield"] {
     check("role-only \(role) re-resolves by type", RoleMapping.needsLabelReResolution(role: role), false)
 }
+
+// ─── Native widgets for the PILOT-664 roles (PILOT-702) ───
+
+let nativeRoleTypes: [(role: String, type: ElementType)] = [
+    ("menu", .menu), ("menubar", .menuBar), ("menuitem", .menuItem),
+    ("spinbutton", .stepper), ("radiogroup", .radioGroup),
+]
+for (role, type) in nativeRoleTypes {
+    let name = RoleMapping.typeName(for: type)
+    check("\(name) is a \(role)", matches(role, type), true)
+    check("\(name) is a \(role) by name too", matches(role, type, named: true), true)
+    check("\(name) reports \"\(role)\"", RoleMapping.resolveRole(for: type, traits: 0, inTabBar: false), role)
+    check("\(name) has its own type name", name.hasPrefix("XCUIElementType("), false)
+    check("a \(role) query covers \(name)", ((try? RoleMapping.queryTypes(for: role)) ?? []).contains(type), true)
+}
+check("a stepper is not a menu item", matches("menuitem", .stepper, named: true), false)
+check("a menu item is not a menu", matches("menu", .menuItem, named: true), false)
+check("a menu is not a menu item", matches("menuitem", .menu, named: true), false)
+check("a named spinbutton query still finds an RN generic view", matches("spinbutton", .other, named: true), true)
+check("an unnamed spinbutton query still skips a generic view", matches("spinbutton", .other), false)
+
+// ─── Indeterminate progress (PILOT-797) ───
+
+check("an activity indicator is a progressbar", matches("progressbar", .activityIndicator), true)
+check("an activity indicator still matches spinner", matches("spinner", .activityIndicator), true)
+check("an activity indicator reports \"progressbar\"",
+      RoleMapping.resolveRole(for: .activityIndicator, traits: 0, inTabBar: false), "progressbar")
+check("a progress indicator is still a progressbar", matches("progressbar", .progressIndicator), true)
+check("a picker is still a spinner, not a progressbar", matches("progressbar", .picker), false)
+check("a picker still reports \"spinner\"", RoleMapping.resolveRole(for: .picker, traits: 0, inTabBar: false), "spinner")
+check("a progressbar query covers both indicators",
+      (try? RoleMapping.queryTypes(for: "progressbar")) ?? [], [.progressIndicator, .activityIndicator])
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

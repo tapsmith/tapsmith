@@ -23,6 +23,14 @@ describe("Animating screen (never-idle)", () => {
     await expect(animatingScreen.stopButton).toBeVisible()
   })
 
+  // ARIA and both platforms call an indeterminate indicator a progressbar
+  // (PILOT-797); a role-only match binds the indicator itself.
+  test("an ActivityIndicator is a progressbar", async ({ animatingScreen }) => {
+    await expect(animatingScreen.progress).toHaveRole("progressbar")
+    const png = await animatingScreen.progress.screenshot()
+    expect(png.length).toBeGreaterThan(0)
+  })
+
   test("taps a stable button on a perpetually-animated screen", async ({ animatingScreen }) => {
     await animatingScreen.stopButton.tap()
     await expect(animatingScreen.stoppedStatus).toBeVisible()

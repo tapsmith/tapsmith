@@ -151,7 +151,7 @@ describe('prefer-role rule', () => {
     const reports: ReportDescriptor[] = [];
     const visitor = rule.create(makeContext(reports));
     visitor.CallExpression(
-      makeMethodCall('locator', objectExpr([{ key: 'className', value: 'android.widget.Chronometer' }])),
+      makeMethodCall('locator', objectExpr([{ key: 'className', value: 'android.widget.VideoView' }])),
     );
     expect(reports).toHaveLength(0);
   });

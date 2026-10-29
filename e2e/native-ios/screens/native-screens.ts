@@ -22,6 +22,8 @@ export class NativeLoginScreen {
   get signIn() { return this.device.getByRole("button", { name: "Sign In" }) }
   get welcome() { return this.device.getByText("Welcome, sam@example.com", { exact: true }) }
   get invalid() { return this.device.getByText("Invalid credentials", { exact: true }) }
+  /** The fields by role alone: a TextField, then a SecureField (both "textfield"). */
+  textField(index: number) { return this.device.getByRole("textfield").nth(index) }
 }
 
 export class NativeTogglesScreen {
@@ -36,6 +38,8 @@ export class NativeTogglesScreen {
   /** The Stepper's label text, not the Stepper or its buttons (PILOT-794). */
   quantity(n: number) { return this.device.getByText(`Quantity: ${n}`, { exact: true }) }
   get increment() { return this.device.getByRole("button", { name: "Increment" }) }
+  /** A Stepper is a spin button, as ARIA has it (PILOT-702). */
+  get stepper() { return this.device.getByRole("spinbutton", { name: "Quantity" }) }
   get slider() { return this.device.getByRole("slider", { name: "Volume" }) }
 }
 
@@ -65,6 +69,10 @@ export class NativeDialogsScreen {
   get copyLink() { return this.device.getByRole("button", { name: "Copy Link" }) }
   get sheetContent() { return this.device.getByText("Sheet content", { exact: true }) }
   get sheetDone() { return this.device.getByRole("button", { name: "Done" }) }
+
+  get actionsMenu() { return this.device.getByRole("button", { name: "Actions" }) }
+  /** An open SwiftUI Menu's items are buttons, not menu items (docs/locators.md, PILOT-702). */
+  menuItem(name: string) { return this.device.getByRole("button", { name, exact: true }) }
 }
 
 export class NativeScrollScreen {
@@ -105,8 +113,16 @@ export class NativeGesturesScreen {
 export class NativeSlowLoadScreen {
   constructor(private device: Device) {}
 
-  /** An indeterminate ProgressView is an ActivityIndicator: role `spinner`, not `progressbar` (PILOT-797). */
-  get spinner() { return this.device.getByRole("spinner").first() }
+  /**
+   * An indeterminate ProgressView is an ActivityIndicator: a progressbar, as
+   * ARIA and Android have it (PILOT-797). SwiftUI nests an unlabelled
+   * indicator inside the labelled one, so name it.
+   */
+  get progress() { return this.device.getByRole("progressbar", { name: "Loading" }) }
+  /** The same indicator by role alone (both of SwiftUI's nodes). */
+  get anyProgress() { return this.device.getByRole("progressbar") }
+  /** …which still matches "spinner", as it did before PILOT-797. */
+  get spinner() { return this.device.getByRole("spinner", { name: "Loading" }) }
   get loaded() { return this.device.getByText("Loaded content", { exact: true }) }
 }
 
@@ -138,6 +154,8 @@ export class UIKitControlsScreen {
     return this.device.getByRole("button", { name, exact: true, ...options })
   }
   get increment() { return this.device.getByRole("button", { name: "Increment" }) }
+  /** A UIStepper is a spin button (PILOT-702): the only one on the screen. */
+  get stepper() { return this.device.getByRole("spinbutton") }
   count(n: number) { return this.device.getByRole("text", { name: `Count: ${n}`, exact: true }) }
   get submit() { return this.device.getByRole("button", { name: "Submit" }) }
 }

@@ -95,6 +95,10 @@ struct DialogsView: View {
             Button("Show Alert") { showAlert = true }
             Button("Show Confirmation") { showConfirm = true }
             Button("Show Sheet") { showSheet = true }
+            Menu("Actions") {
+                Button("Rename") { result = "Renamed" }
+                Button("Duplicate") { result = "Duplicated" }
+            }
             Text("Result: \(result)")
         }
         .navigationTitle("Dialogs")

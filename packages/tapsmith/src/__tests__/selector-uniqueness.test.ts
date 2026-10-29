@@ -424,6 +424,46 @@ describe('iOS generic-view roles in the playground, like the agent (PILOT-664)',
   });
 });
 
+describe('native widgets for the PILOT-664 roles in the playground, like the agents (PILOT-702, PILOT-797)', () => {
+  it('matches Android RadioGroup, NumberPicker and Chronometer by class, in dumps with or without a reported role', () => {
+    const group = makeNode('android.widget.RadioGroup', { class: 'android.widget.RadioGroup', 'content-desc': 'Size', bounds: '[0,0][200,100]' });
+    const picker = makeNode('android.widget.NumberPicker', { class: 'android.widget.NumberPicker', 'tapsmith-role': 'spinbutton', 'content-desc': 'Quantity', bounds: '[0,100][200,300]' }, [
+      makeNode('android.widget.EditText', { class: 'android.widget.EditText', text: '3', bounds: '[0,150][200,250]' }),
+    ]);
+    const timer = makeNode('android.widget.Chronometer', { class: 'android.widget.Chronometer', text: '00:05', bounds: '[0,300][200,350]' });
+    const rnTimer = makeNode('android.view.View', { class: 'android.view.View', 'tapsmith-role': 'timer', 'content-desc': 'Elapsed time', bounds: '[0,400][200,450]' });
+    const roots = [makeNode('android.widget.FrameLayout', { class: 'android.widget.FrameLayout' }, [group, picker, timer, rnTimer])];
+    const on = (selector: string) => findMatchingNodes(roots, parseSelectorString(selector)!);
+    expect(on('device.getByRole("radiogroup")')).toEqual([group]);
+    expect(on('device.getByRole("spinbutton", { name: "Quantity" })')).toEqual([picker]);
+    expect(on('device.getByRole("timer")')).toEqual([timer, rnTimer]);
+    expect(on('device.getByRole("textfield")')).toHaveLength(1);
+    expect(generateSelectors(group).map((x) => x.code)).toContain('device.getByRole("radiogroup", { name: "Size" })');
+  });
+
+  it('matches an iOS Stepper, Menu and menu item by type, and an activity indicator as a progressbar', () => {
+    const el = (type: string, label: string, y: number) => makeNode(type, {
+      type, label, x: '0', y: String(y), width: '200', height: '40',
+    });
+    const stepper = el('XCUIElementTypeStepper', 'Quantity: 1', 0);
+    const menuNode = el('XCUIElementTypeMenu', '', 50);
+    const item = el('XCUIElementTypeMenuItem', 'Rename', 100);
+    const spinner = el('XCUIElementTypeActivityIndicator', 'Loading…', 200);
+    const picker = el('XCUIElementTypePicker', 'Size', 250);
+    const roots = [makeNode('XCUIElementTypeApplication', { type: 'XCUIElementTypeApplication' }, [stepper, menuNode, item, spinner, picker])];
+    const on = (selector: string) => findMatchingNodes(roots, parseSelectorString(selector)!);
+    expect(on('device.getByRole("spinbutton")')).toEqual([stepper]);
+    expect(on('device.getByRole("menu")')).toEqual([menuNode]);
+    expect(on('device.getByRole("menuitem")')).toEqual([item]);
+    expect(on('device.getByRole("menuitem", { name: "Rename" })')).toEqual([item]);
+    expect(on('device.getByRole("progressbar")')).toEqual([spinner]);
+    // Still a spinner too, as before PILOT-797.
+    expect(on('device.getByRole("spinner")')).toEqual([spinner, picker]);
+    expect(generateSelectors(spinner).map((x) => x.code)).toContain('device.getByRole("progressbar", { name: "Loading…" })');
+    expect(generateSelectors(stepper).map((x) => x.code)).toContain('device.getByRole("spinbutton", { name: "Quantity: 1" })');
+  });
+});
+
 describe('an RN alert Text in the iOS playground, like the agent (PILOT-718)', () => {
   // <Text accessibilityRole="alert"> is plain static text on iOS (Fabric
   // publishes no trait or description for it): a named query finds it.

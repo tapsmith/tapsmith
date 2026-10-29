@@ -34,6 +34,11 @@ describe("UIKit: controls", () => {
     await expect(uikitControls.count(1)).toBeVisible()
   })
 
+  test("a UIStepper is a spinbutton (PILOT-702)", async ({ uikitControls }) => {
+    await expect(uikitControls.stepper).toHaveCount(1)
+    await expect(uikitControls.stepper).toHaveRole("spinbutton")
+  })
+
   test("UIButton tap", async ({ uikitControls }) => {
     await uikitControls.submit.tap()
     await expect(uikitControls.status("Submitted")).toBeVisible()

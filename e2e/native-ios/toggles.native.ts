@@ -38,6 +38,12 @@ describe("Native: toggles and controls", () => {
     await expect(toggles.quantity(2)).toBeVisible()
   })
 
+  test("a Stepper is a spinbutton (PILOT-702)", async ({ toggles }) => {
+    await expect(toggles.stepper).toBeVisible()
+    await expect(toggles.stepper).toHaveRole("spinbutton")
+    await expect(toggles.stepper).toHaveValue("1")
+  })
+
   test("Slider is found by role", async ({ toggles }) => {
     await toggles.slider.scrollIntoView()
     await expect(toggles.slider).toBeVisible()

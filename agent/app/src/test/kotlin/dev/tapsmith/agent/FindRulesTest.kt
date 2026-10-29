@@ -113,8 +113,8 @@ class FindRulesTest {
     @Test
     fun `RN's description-only roles resolve through the description alone`() {
         // PILOT-664: RN publishes these only as a role description on a
-        // generic View ("Menu Item", "Timer"), so they have no class at all.
-        val roles = listOf("menu", "menubar", "menuitem", "radiogroup", "scrollbar", "spinbutton", "summary", "timer")
+        // generic View ("Menu Item", "Summary"), and no widget has the role.
+        val roles = listOf("menu", "menubar", "menuitem", "scrollbar", "summary")
         for (role in roles) {
             assertTrue("$role is description-only", role in ElementFinder.TRAIT_ONLY_ROLES)
         }
@@ -128,6 +128,33 @@ class FindRulesTest {
         assertFalse(FindRules.matchesTraitRole(null, "android.view.View", setOf("menuitem"), emptySet(), false))
         // RN's spin button names a class no widget has; the description decides.
         assertTrue(FindRules.matchesTraitRole("spinbutton", "android.widget.SpinButton", setOf("spinbutton"), emptySet(), false))
+    }
+
+    @Test
+    fun `RN's radiogroup, spinbutton and timer also match their framework widget`() {
+        // PILOT-702: RadioGroup, NumberPicker and Chronometer carry these
+        // roles natively, beside RN's descriptions on a generic View.
+        val widgets =
+            listOf(
+                Triple("radiogroup", "android.widget.RadioGroup", "Radio Group"),
+                Triple("spinbutton", "android.widget.NumberPicker", "Spin Button"),
+                Triple("timer", "android.widget.Chronometer", "Timer"),
+            )
+        for ((role, className, description) in widgets) {
+            assertTrue("$role is dual-path", role in ElementFinder.DUAL_PATH_ROLES)
+            assertFalse("$role is not description-only", role in ElementFinder.TRAIT_ONLY_ROLES)
+            val roles = setOf(role)
+            val classes = setOf(className)
+            // The undescribed widget matches by its class…
+            assertTrue(FindRules.matchesTraitRole(null, className, roles, classes, false))
+            // …RN's described View by its description…
+            val described = FindRules.canonicalRoleDescription(description)
+            assertTrue(FindRules.matchesTraitRole(described, "android.view.View", roles, classes, false))
+            // …and an undescribed View is not one.
+            assertFalse(FindRules.matchesTraitRole(null, "android.view.View", roles, classes, false))
+            // A widget described as another role is that role, not its class's.
+            assertFalse(FindRules.matchesTraitRole("menu", className, roles, classes, false))
+        }
     }
 
     @Test
