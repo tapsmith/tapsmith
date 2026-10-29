@@ -39,6 +39,10 @@ class SnapshotElementFinder {
         /// Whether the element had a `.tabBar` ancestor, so a live re-read
         /// still reports a tab bar's button as a tab (PILOT-514).
         let inTabBar: Bool
+        /// Whether the element is a switch holding a switch — a SwiftUI
+        /// Toggle and its knob (NonAppElements.isSwitchPart, PILOT-790) — so
+        /// a tap on it is delivered to the knob.
+        var holdsSwitchPart = false
     }
 
     /// Maximum number of cached elements before eviction. Prevents unbounded
@@ -180,8 +184,13 @@ class SnapshotElementFinder {
         // so a role+name, RegExp or substring-text match can be re-resolved
         // by its index within the live query that finds it again
         // (cacheQueryElement, PILOT-549, PILOT-520, PILOT-522).
+        // Whether the tree holds a SwiftUI Toggle's knob, which a live switch
+        // query returns out of tree order (cacheQueryElement).
+        let treeHasSwitchPart = register && selector.roleOnlySwitch
+            && SnapshotElementFinder.containsSwitchPart(snapshotDict, insideSwitch: false)
         var queryNodes: [QueryNode] = []
-        if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel) {
+        if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel
+            || selector.roleOnlySwitch) {
             SnapshotElementFinder.numberDescendants(of: &snapshotDict, into: &queryNodes)
         }
         var liveFocusedTextInputFetched = false
@@ -312,7 +321,8 @@ class SnapshotElementFinder {
                 lock.lock()
                 boundsCache[elementId] = frame
                 identityCache[elementId] = CachedIdentity(
-                    elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar
+                    elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar,
+                    holdsSwitchPart: NonAppElements.isSwitch(elType) && Self.holdsSwitch(nodeDict)
                 )
                 // Every minted id takes part in eviction, with or without a live
                 // query — ids that get none (placeholder, className, …) would
@@ -326,7 +336,8 @@ class SnapshotElementFinder {
                 // a property (like .isHittable) is accessed. Pass the snapshot node so the
                 // query can use element type + identifier for more precise matching.
                 cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, idIndex: idIndices[matchIndex],
-                    labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict
+                    labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict,
+                    treeHasSwitchPart: treeHasSwitchPart
                 )
             }
             // The snapshot's hasFocus is unreliable on Xcode 26 — it can
@@ -570,6 +581,47 @@ class SnapshotElementFinder {
     func getElementInfo(_ elementId: String) throws -> ElementInfo {
         let elem = try getElement(elementId)
         return toElementInfo(elem, elementId: elementId)
+    }
+
+    /// Cache `element`, the part of the element `info` describes that an
+    /// action is delivered to in its place — a SwiftUI Toggle's knob
+    /// (NonAppElements.isSwitchPart, PILOT-790) — at `frame`. It reports the
+    /// whole element's state, so nothing more is read from the device.
+    func cachePart(
+        _ element: XCUIElement, of info: ElementInfo, frame: CGRect, elementType: XCUIElement.ElementType
+    ) -> ElementInfo {
+        let elementId = UUID().uuidString
+        let bounds = ElementBounds(
+            left: Int(frame.origin.x), top: Int(frame.origin.y),
+            right: Int(frame.origin.x + frame.width), bottom: Int(frame.origin.y + frame.height)
+        )
+        lock.lock()
+        elementCache[elementId] = element
+        boundsCache[elementId] = frame
+        identityCache[elementId] = CachedIdentity(elementType: elementType, label: "", identifier: "", inTabBar: false)
+        cacheOrder.append(elementId)
+        pruneCacheLocked()
+        lock.unlock()
+        return ElementInfo(
+            elementId: elementId,
+            className: info.className,
+            text: info.text,
+            contentDescription: info.contentDescription,
+            resourceId: info.resourceId,
+            hint: info.hint,
+            bounds: bounds,
+            isEnabled: info.isEnabled,
+            isChecked: info.isChecked,
+            isFocused: info.isFocused,
+            isClickable: info.isClickable,
+            isFocusable: info.isFocusable,
+            isScrollable: info.isScrollable,
+            isVisible: info.isVisible,
+            isSelected: info.isSelected,
+            childCount: 0,
+            role: info.role,
+            viewportRatio: computeViewportRatio(bounds, screenSize: screenSize)
+        )
     }
 
     /// Cache an XCUIElement and return its ElementInfo.
@@ -840,6 +892,28 @@ class SnapshotElementFinder {
         RoleName.placeholderName(
             elementType: type, label: node.label, title: node.title, placeholder: node.placeholder
         ) != nil
+    }
+
+    /// Whether `node` or a descendant is part of a switch
+    /// (NonAppElements.isSwitchPart); `insideSwitch`: whether `node` has a
+    /// switch ancestor.
+    static func containsSwitchPart(_ node: [String: Any], insideSwitch: Bool) -> Bool {
+        let type = XCUIElement.ElementType(rawValue: parseUInt(node["elementType"]) ?? 0) ?? .other
+        if NonAppElements.isSwitchPart(elementType: type, insideSwitch: insideSwitch) { return true }
+        let childInsideSwitch = insideSwitch || NonAppElements.isSwitch(type)
+        return (node["children"] as? [[String: Any]] ?? []).contains {
+            containsSwitchPart($0, insideSwitch: childInsideSwitch)
+        }
+    }
+
+    /// Whether a descendant of `node` is a switch: the knob of a SwiftUI
+    /// Toggle when `node` is itself one (NonAppElements.isSwitchPart).
+    static func holdsSwitch(_ node: [String: Any]) -> Bool {
+        for child in node["children"] as? [[String: Any]] ?? [] {
+            let type = XCUIElement.ElementType(rawValue: parseUInt(child["elementType"]) ?? 0) ?? .other
+            if NonAppElements.isSwitch(type) || holdsSwitch(child) { return true }
+        }
+        return false
     }
 
     /// Number every descendant of `dict` (not `dict` itself — XCUIElement
@@ -1116,6 +1190,7 @@ class SnapshotElementFinder {
     private func findMatches(
         in nodeDict: [String: Any],
         inTabBar: Bool,
+        insideSwitch: Bool = false,
         containerLabel: String,
         selector: ElementSelector,
         results: inout [([String: Any], CGRect)],
@@ -1163,8 +1238,14 @@ class SnapshotElementFinder {
             title: nodeDict["title"] as? String ?? "",
             value: nodeDict["value"] as? String ?? ""
         )
+        // A SwiftUI Toggle's knob is part of the switch it sits in, not a
+        // match of its own (NonAppElements.isSwitchPart, PILOT-790). A live
+        // switch query still returns it, and not in tree order (after every
+        // outer switch, measured on iOS 26), so a role-only switch match is
+        // found again by its own label (cacheQueryElement).
+        let isSwitchPart = NonAppElements.isSwitchPart(elementType: nodeType, insideSwitch: insideSwitch)
         var pushedAncestor = false
-        if isAppNode, matchesSelector(
+        if isAppNode, !isSwitchPart, matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
             containerLabel: containerLabel,
@@ -1255,6 +1336,7 @@ class SnapshotElementFinder {
                 findMatches(
                     in: child,
                     inTabBar: childrenInTabBar,
+                    insideSwitch: insideSwitch || NonAppElements.isSwitch(nodeType),
                     containerLabel: childContainerLabel,
                     selector: selector,
                     results: &results,
@@ -1533,7 +1615,8 @@ class SnapshotElementFinder {
         matchIndex: Int,
         idIndex: Int,
         labelIndex: Int?,
-        snapshotNode: [String: Any]? = nil
+        snapshotNode: [String: Any]? = nil,
+        treeHasSwitchPart: Bool = false
     ) {
         // Build a query that matches this element
         let element: XCUIElement?
@@ -1719,6 +1802,19 @@ class SnapshotElementFinder {
                 } else {
                     element = nil
                 }
+            } else if selector.roleOnlySwitch, !nodeLabel.isEmpty, let labelIndex {
+                // A live switch query also returns SwiftUI Toggle knobs, which
+                // the match set leaves out (NonAppElements.isSwitchPart), and
+                // after the switches that hold them rather than in tree order,
+                // so no index into it can be trusted: find a named switch by
+                // its own label, which a knob doesn't have (PILOT-790).
+                element = byOwnLabel(nodeLabel, at: labelIndex)
+            } else if selector.roleOnlySwitch, treeHasSwitchPart {
+                // An unnamed switch beside SwiftUI Toggles: nothing but a
+                // position in that query could find it again, so cache
+                // nothing, as for the roles above — a tap goes to its bounds
+                // (or, for a Toggle, its knob by frame).
+                element = nil
             } else if let types = try? RoleMapping.elementTypes(for: role), let firstType = types.first {
                 // Role-only: match by type — every type the role lists, so
                 // a progressbar that is an activity indicator (PILOT-797) or

@@ -158,18 +158,11 @@ export function noTestFilesFoundMessage(opts: {
   rootDir: string;
   /** `--project` narrowed the run, so an unselected project may cover a file. */
   projectsSelected?: boolean;
-  /** Whether a config file was loaded; without one, `init` is the next step. */
-  configFound: boolean;
 }): string {
   const lines = ['No tests found.'];
   const testMatch = opts.testMatch.join(', ');
-  // A project with no config has most likely not been set up: say so, as
-  // `verify` and `doctor` do (PILOT-569).
-  const initHint = opts.configFound
-    ? []
-    : [`No tapsmith.config.ts (or .js, .mjs) found in ${opts.rootDir}. To set Tapsmith up here, run: npx tapsmith init`];
   if (opts.args.length === 0) {
-    lines.push(`No file under ${opts.rootDir} matches testMatch ${testMatch}.`, ...initHint);
+    lines.push(`No file under ${opts.rootDir} matches testMatch ${testMatch}.`);
     return lines.join('\n');
   }
   for (const arg of opts.unmatched) {
@@ -181,9 +174,18 @@ export function noTestFilesFoundMessage(opts: {
   lines.push(
     'Each argument is a file, a directory, a glob, or a regular expression matched against the test file paths '
     + `(relative to ${opts.rootDir}); directories, globs and expressions select among the files testMatch discovers (${testMatch}).`,
-    ...initHint,
   );
   return lines.join('\n');
+}
+
+/**
+ * The error for `tapsmith test` in a directory with no config file: a
+ * project that has not been set up, so `init` is the next step, as `verify`
+ * and `doctor` say. `execCommand` is how the project runs its
+ * own Tapsmith (`tapsmithExecCommand`).
+ */
+export function noConfigFoundMessage(rootDir: string, execCommand: string): string {
+  return `No tapsmith.config.ts (or .js, .mjs) found in ${rootDir}. To set Tapsmith up here, run: ${execCommand} init`;
 }
 
 function matchTestFileArg(
@@ -271,7 +273,7 @@ export function matchesTestFile(
 
 /**
  * Why a `files` argument matched none of a session's test files, as the
- * config's own matcher sees it (PILOT-836): `excluded` when it names a file
+ * config's own matcher sees it: `excluded` when it names a file
  * that no `testMatch` selects (or a `testIgnore` drops), `not-held` when it
  * names one the config does select but the session does not hold (a UI
  * session started on a file argument or `--project`), `undefined` when it

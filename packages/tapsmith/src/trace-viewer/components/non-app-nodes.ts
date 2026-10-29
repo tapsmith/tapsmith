@@ -17,6 +17,12 @@ import { HOOKS_MARKER_PREFIX } from '../../hooks-marker.js';
 // - Both: the @tapsmith/react-native hooks marker, which exists only for
 //   Tapsmith to read from the dump.
 //
+// Nor does a part of a control, which is app content but not an element of
+// its own: the knob of a SwiftUI Toggle, an unlabelled switch inside the
+// row-sized switch the Toggle is (iOS, marked `tapsmith-switch-part="true"`,
+// PILOT-790). The outer switch is the control, named and checked; a pick on
+// the knob means it.
+//
 // The agents apply the same rule: ios-agent NonAppElements.swift and the
 // Android agent's NonAppNodes.kt. This is the trace viewer's copy.
 
@@ -54,10 +60,15 @@ export function isHooksMarkerCarrier(node: HierarchyNode): boolean {
   return node.children.every(isHooksMarkerCarrier);
 }
 
+/** Whether the node is part of the switch it sits in (a SwiftUI Toggle's knob), not an element of its own. */
+export function isSwitchPartNode(node: HierarchyNode): boolean {
+  return node.attributes.get('tapsmith-switch-part') === 'true';
+}
+
 /** Whether no locator matches this node itself (its descendants still can). */
 export function isNonAppNode(node: HierarchyNode): boolean {
   const type = iosType(node);
-  return (type !== undefined && IOS_APPLICATION_TYPES.has(type)) || isHooksMarkerNode(node);
+  return (type !== undefined && IOS_APPLICATION_TYPES.has(type)) || isHooksMarkerNode(node) || isSwitchPartNode(node);
 }
 
 /** Whether no locator matches this node or anything inside it. */
