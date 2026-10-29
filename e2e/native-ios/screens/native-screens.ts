@@ -154,7 +154,7 @@ export class UIKitControlsScreen {
     return this.device.getByRole("button", { name, exact: true, ...options })
   }
   get increment() { return this.device.getByRole("button", { name: "Increment" }) }
-  /** A UIStepper is a spin button (PILOT-702); it has no name of its own. */
+  /** A UIStepper is a spin button (PILOT-702): the only one on the screen. */
   get stepper() { return this.device.getByRole("spinbutton") }
   count(n: number) { return this.device.getByRole("text", { name: `Count: ${n}`, exact: true }) }
   get submit() { return this.device.getByRole("button", { name: "Submit" }) }

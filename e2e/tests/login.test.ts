@@ -43,6 +43,15 @@ describe("Login screen", () => {
     await expect(loginScreen.resetAlertMessage).toBeHidden()
   })
 
+  // A role-only match binds the field it matched, whichever of the role's
+  // element types it is: on iOS the password field is a secure text field,
+  // the role's second type (PILOT-702).
+  test("a role-only textfield match binds the secure field it matched", async ({ loginScreen }) => {
+    await expect(loginScreen.textField(1)).toBeVisible()
+    const png = await loginScreen.textField(1).screenshot()
+    expect(png.length).toBeGreaterThan(0)
+  })
+
   // ─── Text Input ───
 
   test("can type into email field", async ({ loginScreen }) => {
