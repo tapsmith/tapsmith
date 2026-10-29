@@ -340,157 +340,380 @@ class ElementFinder(
                 "spinbutton",
                 "timer",
             )
-    }
 
-    /**
-     * Role-to-class-name mappings. Each role maps to a list of Android class names
-     * that could represent that role (including Material/AppCompat variants).
-     * These keys plus TRAIT_ONLY_ROLES are the SDK's `NATIVE_ROLES`
-     * (packages/tapsmith/src/roles.ts), which rejects any other role before
-     * it reaches the agent; `roles.test.ts` pins them together (PILOT-556).
-     */
-    private val roleClassMap =
-        mapOf(
-            // ToggleButton is also React Native's togglebutton role, which
-            // iOS reports as a button too, as ARIA does (PILOT-664).
-            "button" to
-                listOf(
-                    "android.widget.Button",
-                    "android.widget.ImageButton",
-                    "android.widget.ToggleButton",
-                    "com.google.android.material.button.MaterialButton",
-                    "androidx.appcompat.widget.AppCompatButton",
-                ),
-            "textfield" to
-                listOf(
-                    "android.widget.EditText",
-                    "android.widget.AutoCompleteTextView",
-                    "com.google.android.material.textfield.TextInputEditText",
-                    "androidx.appcompat.widget.AppCompatEditText",
-                ),
-            "checkbox" to
-                listOf(
-                    "android.widget.CheckBox",
-                    "androidx.appcompat.widget.AppCompatCheckBox",
-                    "com.google.android.material.checkbox.MaterialCheckBox",
-                ),
-            "switch" to
-                listOf(
-                    "android.widget.Switch",
-                    "androidx.appcompat.widget.SwitchCompat",
-                    "com.google.android.material.switchmaterial.SwitchMaterial",
-                ),
-            "image" to
-                listOf(
-                    "android.widget.ImageView",
-                    "androidx.appcompat.widget.AppCompatImageView",
-                ),
-            "text" to
-                listOf(
-                    "android.widget.TextView",
-                    "androidx.appcompat.widget.AppCompatTextView",
-                    "com.google.android.material.textview.MaterialTextView",
-                ),
-            "heading" to
-                listOf(
-                    "android.widget.TextView",
-                ),
-            "link" to
-                listOf(
-                    "android.widget.TextView",
-                ),
-            "list" to
-                listOf(
-                    "android.widget.ListView",
-                    "android.widget.GridView",
-                    "androidx.recyclerview.widget.RecyclerView",
-                ),
-            "listitem" to
-                listOf(
-                    "android.widget.LinearLayout",
-                    "android.widget.RelativeLayout",
-                    "android.widget.FrameLayout",
-                ),
-            "scrollview" to
-                listOf(
-                    "android.widget.ScrollView",
-                    "android.widget.HorizontalScrollView",
-                    "androidx.core.widget.NestedScrollView",
-                ),
-            "progressbar" to
-                listOf(
-                    "android.widget.ProgressBar",
-                    "com.google.android.material.progressindicator.LinearProgressIndicator",
-                    "com.google.android.material.progressindicator.CircularProgressIndicator",
-                ),
-            "seekbar" to
-                listOf(
-                    "android.widget.SeekBar",
-                    "com.google.android.material.slider.Slider",
-                ),
-            "radiobutton" to
-                listOf(
-                    "android.widget.RadioButton",
-                    "androidx.appcompat.widget.AppCompatRadioButton",
-                    "com.google.android.material.radiobutton.MaterialRadioButton",
-                ),
-            "spinner" to
-                listOf(
-                    "android.widget.Spinner",
-                    "androidx.appcompat.widget.AppCompatSpinner",
-                ),
-            "toolbar" to
-                listOf(
-                    "android.widget.Toolbar",
-                    "androidx.appcompat.widget.Toolbar",
-                    "com.google.android.material.appbar.MaterialToolbar",
-                ),
-            // The tab containers. Their items are "tab"s, known only by
-            // their role description (TRAIT_ONLY_ROLES, PILOT-514).
-            "tablist" to
-                listOf(
-                    "android.widget.TabWidget",
-                    "com.google.android.material.tabs.TabLayout",
-                ),
-            // Mirrors iOS RoleMapping ("searchfield" -> .searchField).
-            // Native SearchView only. RN renders accessibilityRole="search"
-            // as a plain EditText with no role description (RN 0.83), so
-            // it is a "textfield" here; an app that publishes its own
-            // "search" description still matches through the dual-path
-            // filter and the "search" → "searchfield" alias.
-            "searchfield" to
-                listOf(
-                    "android.widget.SearchView",
-                    "androidx.appcompat.widget.SearchView",
-                ),
-            // Framework widgets for React Native's generic-view roles
-            // (PILOT-702). Each reports its own accessibility class name
-            // (AppCompat has no subclasses of them). A NumberPicker is the
-            // spin button; its text field stays a textfield.
-            "radiogroup" to
-                listOf(
-                    "android.widget.RadioGroup",
-                ),
-            "spinbutton" to
-                listOf(
-                    "android.widget.NumberPicker",
-                ),
-            "timer" to
-                listOf(
-                    "android.widget.Chronometer",
-                ),
-        )
+        /**
+         * Role-to-class-name mappings. Each role maps to a list of Android class names
+         * that could represent that role (including Material/AppCompat variants).
+         * These keys plus TRAIT_ONLY_ROLES are the SDK's `NATIVE_ROLES`
+         * (packages/tapsmith/src/roles.ts), which rejects any other role before
+         * it reaches the agent; `roles.test.ts` pins them together (PILOT-556).
+         */
+        private val roleClassMap =
+            mapOf(
+                // ToggleButton is also React Native's togglebutton role, which
+                // iOS reports as a button too, as ARIA does (PILOT-664).
+                "button" to
+                    listOf(
+                        "android.widget.Button",
+                        "android.widget.ImageButton",
+                        "android.widget.ToggleButton",
+                        "com.google.android.material.button.MaterialButton",
+                        "androidx.appcompat.widget.AppCompatButton",
+                    ),
+                "textfield" to
+                    listOf(
+                        "android.widget.EditText",
+                        "android.widget.AutoCompleteTextView",
+                        "com.google.android.material.textfield.TextInputEditText",
+                        "androidx.appcompat.widget.AppCompatEditText",
+                    ),
+                "checkbox" to
+                    listOf(
+                        "android.widget.CheckBox",
+                        "androidx.appcompat.widget.AppCompatCheckBox",
+                        "com.google.android.material.checkbox.MaterialCheckBox",
+                    ),
+                "switch" to
+                    listOf(
+                        "android.widget.Switch",
+                        "androidx.appcompat.widget.SwitchCompat",
+                        "com.google.android.material.switchmaterial.SwitchMaterial",
+                    ),
+                "image" to
+                    listOf(
+                        "android.widget.ImageView",
+                        "androidx.appcompat.widget.AppCompatImageView",
+                    ),
+                "text" to
+                    listOf(
+                        "android.widget.TextView",
+                        "androidx.appcompat.widget.AppCompatTextView",
+                        "com.google.android.material.textview.MaterialTextView",
+                    ),
+                "heading" to
+                    listOf(
+                        "android.widget.TextView",
+                    ),
+                "link" to
+                    listOf(
+                        "android.widget.TextView",
+                    ),
+                "list" to
+                    listOf(
+                        "android.widget.ListView",
+                        "android.widget.GridView",
+                        "androidx.recyclerview.widget.RecyclerView",
+                    ),
+                "listitem" to
+                    listOf(
+                        "android.widget.LinearLayout",
+                        "android.widget.RelativeLayout",
+                        "android.widget.FrameLayout",
+                    ),
+                "scrollview" to
+                    listOf(
+                        "android.widget.ScrollView",
+                        "android.widget.HorizontalScrollView",
+                        "androidx.core.widget.NestedScrollView",
+                    ),
+                "progressbar" to
+                    listOf(
+                        "android.widget.ProgressBar",
+                        "com.google.android.material.progressindicator.LinearProgressIndicator",
+                        "com.google.android.material.progressindicator.CircularProgressIndicator",
+                    ),
+                "seekbar" to
+                    listOf(
+                        "android.widget.SeekBar",
+                        "com.google.android.material.slider.Slider",
+                    ),
+                "radiobutton" to
+                    listOf(
+                        "android.widget.RadioButton",
+                        "androidx.appcompat.widget.AppCompatRadioButton",
+                        "com.google.android.material.radiobutton.MaterialRadioButton",
+                    ),
+                "spinner" to
+                    listOf(
+                        "android.widget.Spinner",
+                        "androidx.appcompat.widget.AppCompatSpinner",
+                    ),
+                "toolbar" to
+                    listOf(
+                        "android.widget.Toolbar",
+                        "androidx.appcompat.widget.Toolbar",
+                        "com.google.android.material.appbar.MaterialToolbar",
+                    ),
+                // The tab containers. Their items are "tab"s, known only by
+                // their role description (TRAIT_ONLY_ROLES, PILOT-514).
+                "tablist" to
+                    listOf(
+                        "android.widget.TabWidget",
+                        "com.google.android.material.tabs.TabLayout",
+                    ),
+                // Mirrors iOS RoleMapping ("searchfield" -> .searchField).
+                // Native SearchView only. RN renders accessibilityRole="search"
+                // as a plain EditText with no role description (RN 0.83), so
+                // it is a "textfield" here; an app that publishes its own
+                // "search" description still matches through the dual-path
+                // filter and the "search" → "searchfield" alias.
+                "searchfield" to
+                    listOf(
+                        "android.widget.SearchView",
+                        "androidx.appcompat.widget.SearchView",
+                    ),
+                // Framework widgets for React Native's generic-view roles
+                // (PILOT-702). Each reports its own accessibility class name
+                // (AppCompat has no subclasses of them). A NumberPicker is the
+                // spin button; its text field stays a textfield.
+                "radiogroup" to
+                    listOf(
+                        "android.widget.RadioGroup",
+                    ),
+                "spinbutton" to
+                    listOf(
+                        "android.widget.NumberPicker",
+                    ),
+                "timer" to
+                    listOf(
+                        "android.widget.Chronometer",
+                    ),
+            )
 
-    /**
-     * Reverse mapping from class name to role.
-     */
-    private val classToRoleMap: Map<String, String> by lazy {
-        buildMap {
-            for ((role, classNames) in roleClassMap) {
-                for (className in classNames) {
-                    putIfAbsent(className, role)
+        /**
+         * Reverse mapping from class name to role.
+         */
+        private val classToRoleMap: Map<String, String> by lazy {
+            buildMap {
+                for ((role, classNames) in roleClassMap) {
+                    for (className in classNames) {
+                        putIfAbsent(className, role)
+                    }
                 }
             }
+        }
+
+        /**
+         * For a normalized role, return the set of raw roleDescription values
+         * that should match. Bridges the ROLE_ALIASES gap: e.g., for
+         * "searchfield", returns {"searchfield", "search"} so an app's own
+         * roleDescription="search" is accepted.
+         */
+        private fun acceptableRoleDescriptions(normalizedRole: String): Set<String> =
+            buildSet {
+                add(normalizedRole)
+                for ((alias, target) in ROLE_ALIASES) {
+                    if (target == normalizedRole) add(alias)
+                }
+            }
+
+        /** Input classes a label can name (getByLabel). */
+        private val labelInputClassPattern: java.util.regex.Pattern by lazy {
+            val inputClasses =
+                roleClassMap["textfield"].orEmpty() +
+                    roleClassMap["checkbox"].orEmpty() +
+                    roleClassMap["switch"].orEmpty() +
+                    roleClassMap["radiobutton"].orEmpty() +
+                    roleClassMap["seekbar"].orEmpty() +
+                    roleClassMap["spinner"].orEmpty()
+            java.util.regex.Pattern
+                .compile(inputClasses.joinToString("|") { Regex.escape(it) })
+        }
+
+        /** Any class: the walk of a role a description can decide. */
+        private val ANY_CLASS: Pattern = Pattern.compile(".*")
+
+        /**
+         * The class pattern a getByRole walk selects by: the role's classes,
+         * or — for a trait or dual-path role, which a description on any
+         * view can decide — any class, the post-filter deciding.
+         * @throws InvalidSelectorException for a role no table knows
+         */
+        private fun roleWalkPattern(role: String): Pattern {
+            val lowered = role.lowercase()
+            val normalizedRole = ROLE_ALIASES[lowered] ?: lowered
+            val classNames = roleClassMap[normalizedRole]
+            return when {
+                // A switch is a switch class, or Compose's Switch: a plain
+                // View with the "Switch" description (PILOT-828). Walking
+                // just those keeps the query as cheap as the class walk it
+                // was; the dual-path post-filter decides between them.
+                normalizedRole == "switch" && classNames != null ->
+                    Pattern.compile((classNames + ComposeRoles.COMPOSE_VIEW_CLASS).joinToString("|") { Regex.escape(it) })
+                // Trait/dual-path roles: no class constraint. RN surfaces
+                // these via roleDescription on generic views
+                // (ReactViewGroup), not via class name. The post-filter
+                // in matchesCandidate matches by the role description and
+                // falls back to class membership for dual-path roles.
+                normalizedRole in DUAL_PATH_ROLES || normalizedRole in TRAIT_ONLY_ROLES -> ANY_CLASS
+                classNames != null -> Pattern.compile(classNames.joinToString("|") { Regex.escape(it) })
+                else -> {
+                    val known = (roleClassMap.keys + TRAIT_ONLY_ROLES + DUAL_PATH_ROLES).sorted()
+                    throw InvalidSelectorException(
+                        "Unknown role: '$role'. Known roles: ${known.joinToString()}",
+                    )
+                }
+            }
+        }
+
+        /**
+         * The class and text criteria of [selector]'s tree walk (PILOT-707):
+         * a label selector walks the input classes; otherwise a role walks
+         * its classes ([roleWalkPattern]) and a hint the EditText classes
+         * (replacing the role's — the two are rejected together), and getByText
+         * walks the text that matches. Text is whitespace-normalized like
+         * Playwright (PILOT-510): a non-breaking space or line break in the
+         * element's text matches a plain space in the query; a RegExp is
+         * tested against the raw text, as Playwright tests it against the
+         * element's full text (PILOT-520).
+         */
+        internal fun walkPatterns(selector: ElementSelector): WalkPatterns {
+            if (selector.label != null || selector.labelRegex != null) {
+                return WalkPatterns(labelInputClassPattern, emptyList())
+            }
+            val clazz =
+                when {
+                    selector.hint != null -> EDIT_TEXT_HINT_CLASS_PATTERN
+                    selector.role != null -> roleWalkPattern(selector.role)
+                    else -> null
+                }
+            val text =
+                listOfNotNull(
+                    selector.text?.let { TextMatch.exactPattern(it) },
+                    selector.textContains?.let { TextMatch.containsPattern(it) },
+                    selector.textRegex?.fullMatchPattern(),
+                )
+            return WalkPatterns(clazz, text)
+        }
+
+        /**
+         * The parts of [selector] UIAutomator can't express natively,
+         * checked against a [candidate] the walk selected: label,
+         * trait-based role, role name and hint. The role is read from
+         * [roleCandidate]: the candidate itself, or the Compose role carrier
+         * that stands for it ([ComposeRoles]).
+         */
+        internal fun matchesCandidate(
+            candidate: FindCandidate,
+            selector: ElementSelector,
+            roleCandidate: FindCandidate = candidate,
+        ): Boolean {
+            // Label selector: an input whose contentDescription matches the
+            // label text, OR one labeled by a TextView with matching text (via
+            // AccessibilityNodeInfo.getLabeledBy).
+            if (selector.label != null) {
+                return matchesLabel(candidate) { TextMatch.equalsNormalized(it, selector.label) }
+            }
+            if (selector.labelRegex != null) {
+                return matchesLabel(candidate) { selector.labelRegex.matches(it) }
+            }
+
+            // Trait-based and dual-path roles use the broad any-class walk,
+            // so the trait decides first, then the name. Matching the
+            // name alone on the broad set is unreliable — a View whose
+            // AccessibilityNodeInfo text is aggregated from children reports
+            // null text.
+            if (selector.role != null) {
+                val normalized = ROLE_ALIASES[selector.role.lowercase()] ?: selector.role.lowercase()
+                if (normalized in TRAIT_ONLY_ROLES || normalized in DUAL_PATH_ROLES) {
+                    val isRole =
+                        FindRules.matchesTraitRole(
+                            roleDescription = roleCandidate.roleDescription(),
+                            className = roleCandidate.className,
+                            acceptable = acceptableRoleDescriptions(normalized),
+                            classSet = roleClassMap[normalized]?.toSet() ?: emptySet(),
+                            ambiguous = normalized == "heading" || normalized == "link",
+                        )
+                    return isRole && matchesAccessibleName(candidate, selector)
+                }
+            }
+
+            // Role name: match contentDescription, text, or the joined
+            // descendant text. Like Playwright, a case-insensitive substring by
+            // default and a case-sensitive whole-string match with `exact`
+            // (PILOT-549); a RegExp tested against the normalized name
+            // (PILOT-520).
+            if (selector.role != null && !matchesAccessibleName(candidate, selector)) return false
+
+            // Hint — UIAutomator can't query hint directly. `walkPatterns`
+            // narrows the walk to EditText variants only when `hint` is the
+            // *only* selector; combined with another selector (e.g.
+            // `locator({ className: "TextView", hint: "Email" })`) the walk can
+            // return arbitrary classes, so require the EditText class here too
+            // before accepting the `text == hint` fallback. Without that guard a
+            // TextView with the literal visible label "Email" would match a
+            // getByPlaceholder("Email") query.
+            if (selector.hint != null) {
+                if (!EDIT_TEXT_HINT_CLASS_PATTERN.matcher(candidate.className ?: "").matches()) return false
+                return candidate.hint() == selector.hint || candidate.text == selector.hint
+            }
+            return true
+        }
+
+        /**
+         * Whether an input's label passes [labelMatches] — getByLabel's one
+         * rule for a string and a RegExp alike (PILOT-666). The label is:
+         * 1. its contentDescription (most common in React Native, where
+         *    accessibilityLabel is set directly on the input),
+         * 2. the text of the node it is labeled by (AccessibilityNodeInfo's
+         *    labeledBy/labelFor relationship — the native Android pattern; one
+         *    round-trip, only for inputs strategy 1 rejects), or
+         * 3. for a text field, the text of one of its descendants: a Compose
+         *    TextField's `label = { Text("Email") }` is a child of the field
+         *    (PILOT-828). Not for other inputs: a Spinner's child shows its
+         *    selected value, which is no label.
+         */
+        private fun matchesLabel(
+            candidate: FindCandidate,
+            labelMatches: (CharSequence?) -> Boolean,
+        ): Boolean {
+            if (labelMatches(candidate.contentDescription)) return true
+            if (labelMatches(candidate.labeledByText())) return true
+            if (!EDIT_TEXT_HINT_CLASS_PATTERN.matcher(candidate.className ?: "").matches()) return false
+            return candidate.descendantTextParts().any(labelMatches)
+        }
+
+        /**
+         * Whether [candidate]'s accessible name matches the selector's role
+         * name: its contentDescription, its text, or its joined descendant
+         * text (read only when the first two don't match) — or, for an
+         * EditText with no other name, its hint (PILOT-834).
+         */
+        private fun matchesAccessibleName(
+            candidate: FindCandidate,
+            selector: ElementSelector,
+        ): Boolean {
+            val regex = selector.nameRegex
+            val name = selector.name
+            if (regex == null && name == null) return true
+            val text = candidate.text
+            val contentDescription = candidate.contentDescription
+            // An empty EditText reports its hint as its text; that hint is a
+            // name, not a typed value. A typed one with no other name is still
+            // named by its hint (PILOT-834).
+            val isEditText = EDIT_TEXT_HINT_CLASS_PATTERN.matcher(candidate.className ?: "").matches()
+            val hint = if (isEditText) candidate.hint() else null
+            val textIsValue = text != null && isEditText && text != hint
+            val descendantText = { candidate.descendantTextParts().joinToString(" ") }
+            if (regex != null) {
+                return TextMatch.accessibleNameMatches(
+                    contentDescription = contentDescription,
+                    text = text,
+                    textIsValue = textIsValue,
+                    descendantText = descendantText,
+                    regex = regex,
+                    hint = hint,
+                )
+            }
+            return TextMatch.accessibleNameMatches(
+                contentDescription = contentDescription,
+                text = text,
+                textIsValue = textIsValue,
+                descendantText = descendantText,
+                name = name!!,
+                exact = selector.nameExact,
+                hint = hint,
+            )
         }
     }
 
@@ -517,20 +740,6 @@ class ElementFinder(
      * Resolve the role for a given class name.
      */
     private fun resolveRole(className: String): String = classToRoleMap[className] ?: ""
-
-    /**
-     * For a normalized role, return the set of raw roleDescription values
-     * that should match. Bridges the ROLE_ALIASES gap: e.g., for
-     * "searchfield", returns {"searchfield", "search"} so an app's own
-     * roleDescription="search" is accepted.
-     */
-    private fun acceptableRoleDescriptions(normalizedRole: String): Set<String> =
-        buildSet {
-            add(normalizedRole)
-            for ((alias, target) in ROLE_ALIASES) {
-                if (target == normalizedRole) add(alias)
-            }
-        }
 
     /**
      * Find a single element matching the selector: the first match, in tree
@@ -835,19 +1044,6 @@ class ElementFinder(
         return obj.visibleBounds
     }
 
-    /** Input classes a label can name (getByLabel). */
-    private val labelInputClassPattern: java.util.regex.Pattern by lazy {
-        val inputClasses =
-            roleClassMap["textfield"].orEmpty() +
-                roleClassMap["checkbox"].orEmpty() +
-                roleClassMap["switch"].orEmpty() +
-                roleClassMap["radiobutton"].orEmpty() +
-                roleClassMap["seekbar"].orEmpty() +
-                roleClassMap["spinner"].orEmpty()
-        java.util.regex.Pattern
-            .compile(inputClasses.joinToString("|") { Regex.escape(it) })
-    }
-
     /**
      * The one tree walk of a find: every element the selector's native
      * UIAutomator part ([buildBySelector]) selects, in tree order.
@@ -857,34 +1053,16 @@ class ElementFinder(
         parent: UiObject2?,
     ): List<UiObject2> {
         val bySelector =
-            if (selector.label != null || selector.labelRegex != null) {
-                // Label selector: input elements, filtered by label in
-                // matchesSelector — a single walk with a class pattern.
-                By.clazz(labelInputClassPattern)
-            } else {
-                buildBySelector(selector)
-                    ?: if (selector.role != null) {
-                        // Trait/dual-path role: no class constraint. Broad
-                        // match required because BySelector can't express
-                        // desc-OR-text. The byName and role post-filters
-                        // in matchesSelector handle precise matching.
-                        By.clazz(
-                            java.util.regex.Pattern
-                                .compile(".*"),
-                        )
-                    } else {
-                        throw InvalidSelectorException("No valid selector criteria provided")
-                    }
-            }
+            buildBySelector(selector)
+                ?: throw InvalidSelectorException("No valid selector criteria provided")
         return (if (parent != null) parent.findObjects(bySelector) else device.findObjects(bySelector))
             ?: emptyList()
     }
 
     /**
-     * The parts of the selector UIAutomator can't express natively, checked
-     * against a candidate's snapshot [node]: label, trait-based role, role
-     * name and hint. The role is read from [roleNode]: the node itself, or
-     * the Compose role carrier that stands for it ([ComposeRoles]).
+     * [matchesCandidate] for a candidate's snapshot [node], its role read
+     * from [roleNode]: the node itself, or the Compose role carrier that
+     * stands for it ([ComposeRoles]).
      */
     private fun matchesSelector(
         node: AccessibilityNodeInfo,
@@ -892,57 +1070,38 @@ class ElementFinder(
         fresh: Boolean,
         roleNode: AccessibilityNodeInfo = node,
     ): Boolean {
-        // Label selector: an input whose contentDescription matches the
-        // label text, OR one labeled by a TextView with matching text (via
-        // AccessibilityNodeInfo.getLabeledBy).
-        if (selector.label != null) {
-            return matchesLabel(node, fresh) { TextMatch.equalsNormalized(it, selector.label) }
-        }
-        if (selector.labelRegex != null) {
-            return matchesLabel(node, fresh) { selector.labelRegex.matches(it) }
-        }
+        val candidate = NodeCandidate(node, fresh)
+        return matchesCandidate(candidate, selector, if (roleNode === node) candidate else NodeCandidate(roleNode, fresh))
+    }
 
-        // Trait-based and dual-path roles use the broad By.clazz(".*")
-        // walk, so the trait decides first, then the name. Matching the
-        // name alone on the broad set is unreliable — a View whose
-        // AccessibilityNodeInfo text is aggregated from children reports
-        // null text.
-        if (selector.role != null) {
-            val normalized = ROLE_ALIASES[selector.role.lowercase()] ?: selector.role.lowercase()
-            if (normalized in TRAIT_ONLY_ROLES || normalized in DUAL_PATH_ROLES) {
-                val isRole =
-                    FindRules.matchesTraitRole(
-                        roleDescription = extractRoleDescription(roleNode),
-                        className = roleNode.className?.toString(),
-                        acceptable = acceptableRoleDescriptions(normalized),
-                        classSet = roleClassMap[normalized]?.toSet() ?: emptySet(),
-                        ambiguous = normalized == "heading" || normalized == "link",
-                    )
-                return isRole && matchesAccessibleName(node, selector, fresh)
+    /**
+     * What [matchesCandidate] reads of a snapshot [node]: its attributes,
+     * and — only when asked — its hint, role description, labelling view
+     * and descendant text, each an accessibility read.
+     */
+    private inner class NodeCandidate(
+        private val node: AccessibilityNodeInfo,
+        private val fresh: Boolean,
+    ) : FindCandidate {
+        override val className: String? get() = node.className?.toString()
+        override val text: String? get() = node.text?.toString()
+        override val contentDescription: String? get() = node.contentDescription?.toString()
+
+        override fun hint(): String? = extractHint(node)
+
+        override fun roleDescription(): String? = extractRoleDescription(node)
+
+        override fun labeledByText(): CharSequence? {
+            val labelNode = node.labeledBy ?: return null
+            try {
+                return labelNode.text?.toString()
+            } finally {
+                @Suppress("DEPRECATION")
+                labelNode.recycle()
             }
         }
 
-        // Role name: match contentDescription, text, or the joined
-        // descendant text. Like Playwright, a case-insensitive substring by
-        // default and a case-sensitive whole-string match with `exact`
-        // (PILOT-549); a RegExp tested against the normalized name
-        // (PILOT-520).
-        if (selector.role != null && !matchesAccessibleName(node, selector, fresh)) return false
-
-        // Hint — UIAutomator can't query hint directly. `buildBySelector`
-        // narrows the walk to EditText variants only when `hint` is the
-        // *only* selector; combined with another selector (e.g.
-        // `locator({ className: "TextView", hint: "Email" })`) the walk can
-        // return arbitrary classes, so require the EditText class here too
-        // before accepting the `text == hint` fallback. Without that guard a
-        // TextView with the literal visible label "Email" would match a
-        // getByPlaceholder("Email") query.
-        if (selector.hint != null) {
-            val className = node.className?.toString() ?: ""
-            if (!EDIT_TEXT_HINT_CLASS_PATTERN.matcher(className).matches()) return false
-            return extractHint(node) == selector.hint || node.text?.toString() == selector.hint
-        }
-        return true
+        override fun descendantTextParts(): List<String> = if (node.childCount == 0) emptyList() else descendantTextParts(node, fresh)
     }
 
     /** The enabled/checked/focused/selected/expanded state filters. */
@@ -957,6 +1116,10 @@ class ElementFinder(
             (selector.expanded == null || isExpanded(node) == selector.expanded)
 
     private fun buildBySelector(selector: ElementSelector): BySelector? {
+        // A label selector walks its input classes alone: the label is
+        // checked by matchesCandidate.
+        if (selector.label != null || selector.labelRegex != null) return walkPatterns(selector).clazz?.let { By.clazz(it) }
+
         // Reject incompatible combinations up front so the failure mode
         // is "loud and obvious" rather than "silent contract drift".
         // `hint` always narrows to the EditText class pattern below via
@@ -979,66 +1142,13 @@ class ElementFinder(
             }
         }
 
-        var by: BySelector? = null
-
-        // Role-based selection
-        if (selector.role != null) {
-            val lowered = selector.role.lowercase()
-            val normalizedRole = ROLE_ALIASES[lowered] ?: lowered
-            val classNames = roleClassMap[normalizedRole]
-
-            if (normalizedRole == "switch" && classNames != null) {
-                // A switch is a switch class, or Compose's Switch: a plain
-                // View with the "Switch" description (PILOT-828). Walking
-                // just those keeps the query as cheap as the class walk it
-                // was; the dual-path post-filter decides between them.
-                val classes = classNames + ComposeRoles.COMPOSE_VIEW_CLASS
-                val pattern = classes.joinToString("|") { Regex.escape(it) }
-                by = By.clazz(Pattern.compile(pattern))
-            } else if (normalizedRole in DUAL_PATH_ROLES || normalizedRole in TRAIT_ONLY_ROLES) {
-                // Trait/dual-path roles: skip class constraint. RN
-                // surfaces these via roleDescription on generic views
-                // (ReactViewGroup), not via class name. The post-filter
-                // in matchesSelector matches by extractRoleDescription()
-                // and falls back to class membership for dual-path roles.
-            } else if (classNames != null) {
-                val pattern = classNames.joinToString("|") { Regex.escape(it) }
-                by =
-                    By.clazz(
-                        java.util.regex.Pattern
-                            .compile(pattern),
-                    )
-            } else {
-                val known = (roleClassMap.keys + TRAIT_ONLY_ROLES + DUAL_PATH_ROLES).sorted()
-                throw InvalidSelectorException(
-                    "Unknown role: '${selector.role}'. Known roles: ${known.joinToString()}",
-                )
-            }
-
-            // If a name is also given, filter by accessible name (contentDescription
-            // or text on the element itself, or text on a descendant). We can't express
-            // OR conditions in a single BySelector, so matchesSelector filters by it.
-            // Store the name requirement but don't add it to `by` here.
+        // The class and text criteria, shared with the host tests' replay
+        // of the conformance fixtures (PILOT-707).
+        val walk = walkPatterns(selector)
+        var by: BySelector? = walk.clazz?.let { By.clazz(it) }
+        for (pattern in walk.text) {
+            by = by?.text(pattern) ?: By.text(pattern)
         }
-
-        // Text selectors — whitespace-normalized like Playwright (PILOT-510):
-        // a non-breaking space or line break in the element's text matches a
-        // plain space in the query.
-        if (selector.text != null) {
-            val pattern = TextMatch.exactPattern(selector.text)
-            by = if (by != null) by.text(pattern) else By.text(pattern)
-        }
-        if (selector.textContains != null) {
-            val pattern = TextMatch.containsPattern(selector.textContains)
-            by = if (by != null) by.text(pattern) else By.text(pattern)
-        }
-        // A RegExp is tested against the raw text, as Playwright tests it
-        // against the element's full text (PILOT-520).
-        if (selector.textRegex != null) {
-            val pattern = selector.textRegex.fullMatchPattern()
-            by = if (by != null) by.text(pattern) else By.text(pattern)
-        }
-
         // Content description
         if (selector.contentDesc != null) {
             by = if (by != null) by.desc(selector.contentDesc) else By.desc(selector.contentDesc)
@@ -1059,22 +1169,6 @@ class ElementFinder(
         // resource-id lookup.
         if (selector.testId != null) {
             by = if (by != null) by.res(selector.testId) else By.res(selector.testId)
-        }
-
-        // Hint text — UIAutomator has no By.hint(), so narrow to EditText
-        // candidates here and post-filter on the actual hint value in
-        // matchesSelector(). Conflicting combinations (hint + className /
-        // role / id / testId) were rejected up front, so by the time
-        // we get here `hint` is either the only selector or paired
-        // with text/textContains/contentDesc/enabled-style filters
-        // that compose cleanly with the EditText class constraint.
-        if (selector.hint != null) {
-            by =
-                if (by != null) {
-                    by.clazz(EDIT_TEXT_HINT_CLASS_PATTERN)
-                } else {
-                    By.clazz(EDIT_TEXT_HINT_CLASS_PATTERN)
-                }
         }
 
         return by
@@ -1133,37 +1227,6 @@ class ElementFinder(
         }
 
         return results
-    }
-
-    /**
-     * Whether input [node] is named by a label that [labelMatches]:
-     * 1. its contentDescription (most common in React Native, where
-     *    accessibilityLabel is set directly on the input),
-     * 2. the text of the node it is labeled by (AccessibilityNodeInfo's
-     *    labeledBy/labelFor relationship — the native Android pattern; one
-     *    round-trip, only for inputs strategy 1 rejects), or
-     * 3. for a text field, the text of one of its descendants: a Compose
-     *    TextField's `label = { Text("Email") }` is a child of the field
-     *    (PILOT-828). Not for other inputs: a Spinner's child shows its
-     *    selected value, which is no label.
-     */
-    private fun matchesLabel(
-        node: AccessibilityNodeInfo,
-        fresh: Boolean,
-        labelMatches: (CharSequence?) -> Boolean,
-    ): Boolean {
-        if (labelMatches(node.contentDescription?.toString())) return true
-        val labelNode = node.labeledBy
-        if (labelNode != null) {
-            try {
-                if (labelMatches(labelNode.text)) return true
-            } finally {
-                @Suppress("DEPRECATION")
-                labelNode.recycle()
-            }
-        }
-        if (node.childCount == 0 || !EDIT_TEXT_HINT_CLASS_PATTERN.matcher(node.className?.toString() ?: "").matches()) return false
-        return descendantTextParts(node, fresh).any(labelMatches)
     }
 
     private fun parseBounds(boundsStr: String): Rect {
@@ -1291,18 +1354,14 @@ class ElementFinder(
             // 1. Heading flag (API 28+) — React Native writes here for
             //    `accessibilityRole="header"`.
             if (android.os.Build.VERSION.SDK_INT >= 28 && node.isHeading) {
-                return "heading"
+                return FindRules.publishedRole(isHeading = true, rawDescription = null)
             }
 
             // 2. Compat-shimmed heading flag for older API levels: read the
             // packed boolean-properties int and test the IS_HEADING bit.
             val extras = node.extras
-            if (extras != null) {
-                val packed = extras.getInt(COMPAT_BOOLEAN_PROPERTY_KEY, 0)
-                if ((packed and COMPAT_BOOLEAN_PROPERTY_IS_HEADING) != 0) {
-                    return "heading"
-                }
-            }
+            val compatHeading =
+                extras != null && (extras.getInt(COMPAT_BOOLEAN_PROPERTY_KEY, 0) and COMPAT_BOOLEAN_PROPERTY_IS_HEADING) != 0
 
             // 3. Role description set via AccessibilityNodeInfoCompat.
             // Try both the canonical and the older long-form key — older
@@ -1315,7 +1374,7 @@ class ElementFinder(
             // accessibilityRole="Header" would otherwise surface as
             // "Header"), and read RN's multi-word descriptions ("Progress
             // Bar") as the role name.
-            return FindRules.canonicalRoleDescription(raw)
+            return FindRules.publishedRole(compatHeading, raw)
         } catch (e: Exception) {
             // A malformed extras bundle must not fail the whole find; log so
             // a regression in every role-from-RN mapping is visible.
@@ -1369,49 +1428,6 @@ class ElementFinder(
             // real exception type.
             throw e.targetException ?: e
         }
-    }
-
-    /**
-     * Whether [node]'s accessible name matches the selector's role name:
-     * its contentDescription, its text, or its joined descendant text (read
-     * only when the first two don't match) — or, for an EditText with no
-     * other name, its hint (PILOT-834).
-     */
-    private fun matchesAccessibleName(
-        node: AccessibilityNodeInfo,
-        selector: ElementSelector,
-        fresh: Boolean,
-    ): Boolean {
-        val regex = selector.nameRegex
-        val name = selector.name
-        if (regex == null && name == null) return true
-        val text = node.text?.toString()
-        val contentDescription = node.contentDescription?.toString()
-        // An empty EditText reports its hint as its text; that hint is a
-        // name, not a typed value. A typed one with no other name is still
-        // named by its hint (PILOT-834).
-        val isEditText = EDIT_TEXT_HINT_CLASS_PATTERN.matcher(node.className?.toString() ?: "").matches()
-        val hint = if (isEditText) extractHint(node) else null
-        val textIsValue = text != null && isEditText && text != hint
-        if (regex != null) {
-            return TextMatch.accessibleNameMatches(
-                contentDescription = contentDescription,
-                text = text,
-                textIsValue = textIsValue,
-                descendantText = { collectDescendantText(node, fresh) },
-                regex = regex,
-                hint = hint,
-            )
-        }
-        return TextMatch.accessibleNameMatches(
-            contentDescription = contentDescription,
-            text = text,
-            textIsValue = textIsValue,
-            descendantText = { collectDescendantText(node, fresh) },
-            name = name!!,
-            exact = selector.nameExact,
-            hint = hint,
-        )
     }
 
     /**

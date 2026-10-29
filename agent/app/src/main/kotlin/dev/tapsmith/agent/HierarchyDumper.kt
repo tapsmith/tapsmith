@@ -251,17 +251,14 @@ class HierarchyDumper internal constructor(
     private fun extractRoleFromNodeInfo(node: AccessibilityNodeInfo): String? {
         try {
             if (Build.VERSION.SDK_INT >= 28 && node.isHeading) {
-                return "heading"
+                return FindRules.publishedRole(isHeading = true, rawDescription = null)
             }
             val extras = node.extras ?: return null
             val packed = extras.getInt(COMPAT_BOOLEAN_PROPERTY_KEY, 0)
-            if ((packed and COMPAT_BOOLEAN_PROPERTY_IS_HEADING) != 0) {
-                return "heading"
-            }
             val raw =
                 extras.getCharSequence(ROLE_DESCRIPTION_EXTRA_KEY)?.toString()
                     ?: extras.getCharSequence(ROLE_DESCRIPTION_LONG_FORM_KEY)?.toString()
-            return FindRules.canonicalRoleDescription(raw)
+            return FindRules.publishedRole((packed and COMPAT_BOOLEAN_PROPERTY_IS_HEADING) != 0, raw)
         } catch (e: Exception) {
             return null
         }
