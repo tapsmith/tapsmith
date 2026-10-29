@@ -377,7 +377,7 @@ html, body, #app {
 .action-origin-tag { font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; padding: 1px 5px; border-radius: 999px; border: 1px solid var(--border, #444); color: var(--fg-muted, var(--fg-dim, #888)); }
 .action-device-tag { font-size: 9.5px; font-weight: 600; letter-spacing: 0.02em; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: oklch(var(--device-tag-bg-l) var(--device-tag-bg-c) var(--device-h, var(--accent-h))); color: oklch(var(--device-tag-fg-l) var(--device-tag-fg-c) var(--device-h, var(--accent-h))); vertical-align: middle; }
 
-/* ─── Multi-device traces (PILOT-310) ─── */
+/* ─── Multi-device traces ─── */
 /* One lane per device, stacked in the single filmstrip row over one shared
    time axis. Only .film-lanes scrolls: the lane rows reuse .timeline-inner's
    markup but must not inherit its scrolling or its min-width: 100% -- with

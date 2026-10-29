@@ -3,7 +3,7 @@
  * Tapsmith version put it there. Shared by the writer (`resolveIosAgentDir`
  * in build-ios-agent.ts, which extracts the source and builds into it) and
  * the readers (device xctestrun lookup, `ios setup-device`), so the two can't
- * drift apart (PILOT-264).
+ * drift apart.
  */
 
 import * as fs from 'node:fs';

@@ -7,7 +7,7 @@
  * Android passes colours as ints and uses `0` to mean "no colour set", and
  * `'transparent'` is `0x00000000`. The text colour is then never applied and
  * the TextView draws the whole marker string in the default colour, black,
- * across the top of the app (PILOT-732). The same goes for any colour whose
+ * across the top of the app. The same goes for any colour whose
  * alpha rounds to 0, such as `rgba(0,0,0,0.001)`.
  *
  * Nor can the carrier use `opacity: 0`: iOS can drop a view that is close to

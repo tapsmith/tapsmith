@@ -1,6 +1,6 @@
 /**
  * RegExp locators — `getByText(/…/)`, `getByLabel(/…/)` and getByRole's
- * `{ name: /…/ }` (PILOT-520), the way Playwright accepts them.
+ * `{ name: /…/ }`, the way Playwright accepts them.
  *
  * The regex is matched on the device, by ICU on both platforms (Android's
  * `java.util.regex` is ICU-backed; iOS's NSRegularExpression and NSPredicate

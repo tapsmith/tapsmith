@@ -156,7 +156,7 @@ export function hasIosProject(layout: ProjectLayout): boolean {
  * Returns project-relative APK paths (posix-style globs, deterministic order):
  * any Gradle module's `build/outputs/apk/` in the Android project, so
  * `android/app/…` in a React Native project and `app/…` in an Android Studio
- * one (PILOT-832). Outside an Android project there is nothing to search, and
+ * one. Outside an Android project there is nothing to search, and
  * a walk of a home directory would stall init.
  */
 export function findApkCandidates(cwd: string): string[] {
@@ -181,7 +181,7 @@ const APPLICATION_ID = /\bapplicationId\s*(?:=\s*)?\(?\s*["']([A-Za-z][\w]*(?:\.
  * The app module's `applicationId` from `app/build.gradle(.kts)` in the
  * project's Gradle root, the package an APK built from it will carry
  * (before any build variant's suffix): the wizard's package prefill when there is
- * no APK to read (PILOT-778). Only a literal: an id computed from a variable
+ * no APK to read. Only a literal: an id computed from a variable
  * is left for the user to type.
  */
 export function detectGradleApplicationId(cwd: string, layout: ProjectLayout = detectProjectLayout(cwd)): string | undefined {
@@ -222,7 +222,7 @@ export interface Aapt2Deps {
 /**
  * Locate aapt2: PATH, then the newest build-tools in each SDK Tapsmith looks
  * in — `$ANDROID_HOME`, `$ANDROID_SDK_ROOT`, then the OS default where
- * Android Studio installs it without setting either (PILOT-516, PILOT-832).
+ * Android Studio installs it without setting either.
  */
 export function resolveAapt2(overrides: Partial<Aapt2Deps> = {}): string {
   const deps: Aapt2Deps = {
@@ -328,8 +328,8 @@ function derivedDataWorkspace(dir: string): string | undefined {
 /**
  * This project's builds in Xcode's DerivedData (absolute paths): the
  * `<Name>-<hash>` folders whose `info.plist` says they belong to one of its
- * Xcode projects, not another checkout of a project with the same name
- * (PILOT-832). These paths are specific to this Mac, so
+ * Xcode projects, not another checkout of a project with the same name.
+ * These paths are specific to this Mac, so
  * init offers them only when the project holds no build of its own.
  */
 export function findDerivedDataApps(

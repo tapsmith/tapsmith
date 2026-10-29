@@ -1,5 +1,5 @@
 /**
- * Machine-wide device claims (PILOT-381).
+ * Machine-wide device claims.
  *
  * Every Tapsmith session records the devices it drives in a registry under
  * `~/.tapsmith/claims/`, one file per device. A session never selects a device

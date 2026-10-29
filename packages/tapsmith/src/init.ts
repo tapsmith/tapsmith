@@ -268,7 +268,7 @@ function orderApkCandidates(candidates: string[]): string[] {
 export type Platform = 'android' | 'ios';
 
 export interface AndroidConfig {
-  /** Unset for a package-only config: the app is installed already (PILOT-721). */
+  /** Unset for a package-only config: the app is installed already. */
   apkPath?: string;
   packageName?: string;
   useEmulators: boolean;
@@ -282,13 +282,13 @@ export interface IosConfig {
   bundleId?: string;
   /**
    * The device build's bundle id, when it differs from `bundleId` (per-configuration
-   * ids); `null` when the user skipped it beside a simulator id (PILOT-778), so
+   * ids); `null` when the user skipped it beside a simulator id, so
    * the simulator's never stands in for it.
    */
   deviceBundleId?: string | null;
   simulator?: string;
   /**
-   * Set when `simulator` is a custom name, only on this Mac (PILOT-721): the
+   * Set when `simulator` is a custom name, only on this Mac: the
    * simulator's device type, which the config's comment offers instead.
    */
   simulatorDeviceType?: string;
@@ -318,7 +318,7 @@ export function avdPickerChoices(
 }
 
 /**
- * The capture question's default (PILOT-711): no when the only thing set up
+ * The capture question's default: no when the only thing set up
  * is an Android emulator on a Google Play image, where HTTPS cannot be
  * captured, with the reason for the prompt. iOS capture works, so a mixed
  * setup keeps yes (and the Android warning still prints).
@@ -359,10 +359,10 @@ export function androidEmulatorCaptureLine(avd: string | undefined, avdImages: A
  * run here hinted with why, and a default that can. The project's layout
  * narrows it (an iOS-only project means iOS, both mean Both, as `init --yes`
  * infers from `android/`, `ios/`, a root `settings.gradle` or an Xcode
- * project, PILOT-832), then the toolchains: Android needs adb, iOS needs
+ * project), then the toolchains: Android needs adb, iOS needs
  * Xcode and a simulator. A project with neither gets Android when adb is
  * there, else iOS when it can run. Both narrows to the one platform with a
- * build (`builds`, PILOT-778): the other has nothing to test yet.
+ * build (`builds`): the other has nothing to test yet.
  */
 export function platformPrompt(
   env: EnvScan,
@@ -399,7 +399,7 @@ export function platformPrompt(
 }
 
 /**
- * The Android questions. `expo` (PILOT-557) swaps the build hint for the Expo
+ * The Android questions. `expo` swaps the build hint for the Expo
  * one and prefills the package prompt from the app config.
  */
 export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = 'npx tapsmith'): Promise<AndroidConfig> {
@@ -477,7 +477,7 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
 const SIMULATOR_PICKER_ROWS = 12;
 
 /**
- * The iOS questions. `expo` (PILOT-557) swaps the simulator build hint for
+ * The iOS questions. `expo` swaps the simulator build hint for
  * the Expo one and is the last fallback for the bundle id prompt's prefill.
  */
 export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx tapsmith'): Promise<IosConfig> {
@@ -664,7 +664,7 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
 
 /**
  * The device type of the simulator named `name`, when that name is a custom
- * one only this Mac has (PILOT-721); undefined for a stock name, a UDID or a
+ * one only this Mac has; undefined for a stock name, a UDID or a
  * name init does not know.
  */
 export function customSimulatorDeviceType(name: string, env: EnvScan): string | undefined {
@@ -681,7 +681,7 @@ function detectBundleId(appPath: string): string | undefined {
 // ─── Network capture setup ───
 
 /**
- * The network capture summary line for iOS simulators (PILOT-721): what
+ * The network capture summary line for iOS simulators: what
  * still needs doing, judged as `doctor` judges it — mitmproxy's redirector
  * (`source`, from `mitmproxyRedirectorSource`) and then its Network
  * Extension. `cli` is how the project runs Tapsmith (`npx tapsmith`).
@@ -802,8 +802,8 @@ class SetupCancelled extends Error {}
  * resolve it, offer the project's package manager's install and run it.
  * Returns the command still to run (declined, failed, or not offered because
  * there is no package.json here — npm would install into whichever ancestor
- * has one, so the command creates one first and a warning says why,
- * PILOT-631), or undefined when Tapsmith is in place. Cancelling the prompt
+ * has one, so the command creates one first and a warning says why),
+ * or undefined when Tapsmith is in place. Cancelling the prompt
  * throws SetupCancelled.
  */
 export async function offerTapsmithInstall(
@@ -848,7 +848,7 @@ export async function offerTapsmithInstall(
 
 /**
  * Warn when the project's own tapsmith cannot find the Android agent package
- * (PILOT-709: pnpm 11+ skipped it as an optional dependency). The check reads
+ * (pnpm 11+ skipped it as an optional dependency). The check reads
  * the project's install, not the copy of Tapsmith running init, which may be
  * npx's. Silent when the project has no tapsmith: the install step said so.
  */
@@ -898,7 +898,7 @@ function iosTargets(ios: IosConfig | undefined): {
 
 /**
  * A platform the user set up with neither a build nor an app id: they skipped
- * both (PILOT-778), so its config scope can only hold placeholders.
+ * both, so its config scope can only hold placeholders.
  */
 export function isUnconfigured(platform: Platform, android: AndroidConfig | undefined, ios: IosConfig | undefined): boolean {
   if (platform === 'android') return !android?.apkPath && !android?.packageName;
@@ -906,7 +906,7 @@ export function isUnconfigured(platform: Platform, android: AndroidConfig | unde
 }
 
 /**
- * The platforms the config keeps (PILOT-778): of two, one with nothing set up
+ * The platforms the config keeps: of two, one with nothing set up
  * is left out — a placeholder scope there would fail the first `verify` or
  * `test` that runs every project. A lone platform, or both when neither is set
  * up, stays, with placeholders the next steps point at.
@@ -923,8 +923,8 @@ export function platformsToWrite(
 
 /**
  * The config keys the generated config leaves as placeholders, for the next
- * step that says to fill them in (PILOT-778); empty when nothing is missing.
- * A package-only Android setup is complete (PILOT-721).
+ * step that says to fill them in; empty when nothing is missing.
+ * A package-only Android setup is complete.
  */
 export function placeholderKeys(platforms: Platform[], android: AndroidConfig | undefined, ios: IosConfig | undefined): string[] {
   const keys = new Set<string>();
@@ -970,7 +970,7 @@ export function generatedProjects(
 
 /**
  * Where init scaffolds its example test, and the `testMatch` the generated
- * config uses (PILOT-554). Jest and Vitest run every `*.test.ts` / `*.spec.ts`
+ * config uses. Jest and Vitest run every `*.test.ts` / `*.spec.ts`
  * file by default, so a scaffold with that suffix breaks the project's own
  * unit-test run, and Tapsmith's default `testMatch` would in turn pick up the
  * project's unit tests. The distinct suffix keeps the two suites apart without
@@ -1188,7 +1188,7 @@ function importsTapsmith(file: string): boolean {
 /**
  * Tapsmith tests already in the project under the old `*.test.ts` /
  * `*.spec.ts` names (an earlier init's scaffold, say), which the generated
- * config's GENERATED_TEST_MATCH no longer runs (PILOT-554). A file counts when
+ * config's GENERATED_TEST_MATCH no longer runs. A file counts when
  * it looks like a Tapsmith test (see importsTapsmith()), so the project's own Jest or
  * Vitest tests don't. Paths are relative to `cwd`, with `/` separators, sorted.
  */
@@ -1223,7 +1223,7 @@ export function testsOutsideGeneratedMatchWarning(files: string[]): string | und
 
 // ─── Main wizard ───
 
-/** The next step for a config with placeholders (PILOT-778), or undefined when it has none. */
+/** The next step for a config with placeholders, or undefined when it has none. */
 export function placeholderNextStep(keys: string[]): string | undefined {
   if (keys.length === 0) return undefined;
   const named = keys.length === 1 ? keys[0] : `${keys.slice(0, -1).join(', ')} and ${keys[keys.length - 1]}`;
@@ -1231,21 +1231,21 @@ export function placeholderNextStep(keys: string[]): string | undefined {
 }
 
 /**
- * The wizard's Next steps as `[label, command]`: a declined install first
- * (PILOT-551), then what the config still needs (a build the user skipped,
- * PILOT-778), then `tapsmith verify`, which getting-started has a new user
- * run before writing tests (PILOT-562). Plain commands: `--json` is for agents.
+ * The wizard's Next steps as `[label, command]`: a declined install first,
+ * then what the config still needs (a build the user skipped),
+ * then `tapsmith verify`, which getting-started has a new user
+ * run before writing tests. Plain commands: `--json` is for agents.
  */
 export function wizardNextSteps(
   cli: string,
   steps: {
-    /** The install command, when Tapsmith is not installed (PILOT-551). */
+    /** The install command, when Tapsmith is not installed. */
     install?: string;
-    /** A Play-image AVD's step (PILOT-711). */
+    /** A Play-image AVD's step. */
     capture?: { label: string; action: string; optional: boolean };
-    /** What the config still needs: {@link placeholderNextStep} (PILOT-778). */
+    /** What the config still needs: {@link placeholderNextStep}. */
     app?: string;
-    /** A Yarn Plug'n'Play project, which must switch linker before running tests (PILOT-778). */
+    /** A Yarn Plug'n'Play project, which must switch linker before running tests. */
     yarnPnp?: boolean;
   } = {},
 ): Array<[string, string]> {
@@ -1269,7 +1269,7 @@ export function wizardNextSteps(
 
 /**
  * `text` with each `npx tapsmith` made `cli`, the project's own way to run
- * Tapsmith (`tapsmithExecCommand`, PILOT-721), for messages built elsewhere.
+ * Tapsmith (`tapsmithExecCommand`), for messages built elsewhere.
  */
 export function withTapsmithCommand(text: string, cli: string): string {
   return cli === 'npx tapsmith' ? text : text.replace(/\bnpx tapsmith\b/g, cli);

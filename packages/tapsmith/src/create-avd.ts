@@ -377,7 +377,7 @@ function toolEnv(): NodeJS.ProcessEnv {
  * the user set it. Without the pin, avdmanager can write the AVD somewhere
  * the emulator never looks — on GitHub's Ubuntu runners (`XDG_CONFIG_HOME`
  * set) it lands under `~/.config/.android/avd`, and `emulator -list-avds`,
- * so Tapsmith's launch, cannot find the AVD just created (PILOT-483).
+ * so Tapsmith's launch, cannot find the AVD just created.
  */
 export function avdmanagerEnv(env: NodeJS.ProcessEnv, homedir: string = os.homedir()): NodeJS.ProcessEnv {
   if (env.ANDROID_AVD_HOME) return env;

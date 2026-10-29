@@ -1,5 +1,5 @@
 /**
- * Yarn Plug'n'Play (PILOT-560).
+ * Yarn Plug'n'Play.
  *
  * Under PnP, packages stay inside zip archives in Yarn's cache and Node reaches
  * them only through the `.pnp.cjs` runtime Yarn loads into the process. Running
@@ -53,7 +53,7 @@ export function isYarnPnp(env: PnpEnv = processEnv()): boolean {
 }
 
 /**
- * Whether `tapsmith init` is setting up a Plug'n'Play project (PILOT-778):
+ * Whether `tapsmith init` is setting up a Plug'n'Play project:
  * {@link isYarnPnp}, or the project's own `.pnp.cjs` — before Tapsmith is
  * added, which is when init usually runs, isYarnPnp cannot tell a project
  * from one under a stray parent `.pnp.cjs`, but a `.pnp.cjs` beside it is the
@@ -63,7 +63,7 @@ export function projectUsesYarnPnp(env: PnpEnv = processEnv()): boolean {
   return isYarnPnp(env) || fs.existsSync(path.join(env.cwd, '.pnp.cjs'));
 }
 
-/** What init says in a Plug'n'Play project, before anything else goes wrong (PILOT-778). */
+/** What init says in a Plug'n'Play project, before anything else goes wrong. */
 export const YARN_PNP_INIT_WARNING = "This is a Yarn Plug'n'Play install, where Tapsmith can't run tests: it starts tsx, its "
   + 'daemon and its device agents from files on disk. Add `nodeLinker: node-modules` to .yarnrc.yml and run `yarn install` before running tests.';
 

@@ -1,6 +1,5 @@
 /**
- * Picking an element on a screenshot or the live mirror (PILOT-226,
- * PILOT-848): which node a point lands on, and hover bounds. Geometry and
+ * Picking an element on a screenshot or the live mirror: which node a point lands on, and hover bounds. Geometry and
  * selector generation only — this module must not match locators, so the
  * live picker can use it; the offline trace playground adds its own
  * suggestion ranking in selector-pick.ts.

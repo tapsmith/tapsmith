@@ -543,7 +543,7 @@ export class NetworkRouteManager {
   /**
    * The route scope each request/response listener was added in (undefined
    * for a test's own), so listeners end with their test or scope like routes
-   * do (PILOT-775): the route manager now outlives the test whenever a proxy
+   * do: the route manager now outlives the test whenever a proxy
    * is running, traced or not.
    */
   private _listenerScopes: Map<unknown, RouteScope | undefined> = new Map();
@@ -551,7 +551,7 @@ export class NetworkRouteManager {
    * Whether daemon network events are wanted (a listener, or network
    * capture's eager subscription). This is intent, kept across streams; the
    * subscription itself lives on the daemon's per-stream handler, so every
-   * new stream re-sends it (PILOT-581).
+   * new stream re-sends it.
    */
   private _eventsWanted = false;
   /** The stream `subscribeEvents` was last sent on. */
@@ -560,7 +560,7 @@ export class NetworkRouteManager {
   private _reopenTimer: ReturnType<typeof setTimeout> | null = null;
   private _reopenDelayMs = REOPEN_INITIAL_DELAY_MS;
   private _disposed = false;
-  /** Requests handed to a route handler since the runner last took the count (PILOT-775). */
+  /** Requests handed to a route handler since the runner last took the count. */
   private _handlerCalls = 0;
 
   constructor(client: TapsmithGrpcClient) {
@@ -623,7 +623,7 @@ export class NetworkRouteManager {
   /**
    * Restore what lived on the daemon's handler for the previous stream: the
    * event subscription and every confirmed route, under the same ids so
-   * their handlers, scopes and `times` counters carry on (PILOT-581). Written
+   * their handlers, scopes and `times` counters carry on. Written
    * before any caller's own message, so a lazy reopen keeps their order.
    */
   private _replayState(stream: grpc.ClientDuplexStream<unknown, unknown>): void {
@@ -665,7 +665,7 @@ export class NetworkRouteManager {
    * replaced stream's late `end` must not discard its replacement. When
    * there is state the daemon has lost (routes, an event subscription),
    * reopen without waiting for user code: a `beforeAll` route must keep
-   * mocking a test that never touches the network API (PILOT-581).
+   * mocking a test that never touches the network API.
    */
   private _onStreamDropped(stream: grpc.ClientDuplexStream<unknown, unknown>, reason: string): void {
     if (this._stream !== stream) return;
@@ -819,7 +819,7 @@ export class NetworkRouteManager {
 
   /**
    * Remove the routes the current test registered, keeping those a suite
-   * scope's `beforeAll`/`afterAll` registered (PILOT-534).
+   * scope's `beforeAll`/`afterAll` registered.
    */
   async removeTestRoutes(): Promise<void> {
     await this._removeWhere((info) => info.scope === undefined);
@@ -929,12 +929,12 @@ export class NetworkRouteManager {
     this._unsubscribeIfUnused();
   }
 
-  /** Remove the request/response listeners the current test added (PILOT-775). */
+  /** Remove the request/response listeners the current test added. */
   removeTestListeners(): void {
     this._removeListenersWhere((scope) => scope === undefined);
   }
 
-  /** Remove the listeners `scope`'s hooks or fixtures added, once it has ended (PILOT-775). */
+  /** Remove the listeners `scope`'s hooks or fixtures added, once it has ended. */
   removeScopeListeners(scope: RouteScope): void {
     this._removeListenersWhere((s) => s === scope);
   }
@@ -963,7 +963,7 @@ export class NetworkRouteManager {
   /**
    * How many intercepted requests reached a route handler since the last
    * call, then reset. The runner reads it after each test to tell a route
-   * that never fired from one that did (PILOT-775).
+   * that never fired from one that did.
    */
   takeHandlerCalls(): number {
     const n = this._handlerCalls;

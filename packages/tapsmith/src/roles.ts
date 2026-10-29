@@ -1,5 +1,5 @@
 /**
- * Native role names for `getByRole()` and `toHaveRole()` (PILOT-556).
+ * Native role names for `getByRole()` and `toHaveRole()`.
  *
  * Browser-safe (no Node imports): the trace viewer / UI-mode locator
  * playground imports it too, so a role the playground accepts is exactly one
@@ -192,7 +192,7 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
  * `DUAL_PATH_ROLES`, which `roles.test.ts` pins. A node with a description
  * matches only through it; one without falls back to the role's classes.
  * RN renders progressbar, toolbar and tablist as a generic View with only a
- * description (PILOT-656, PILOT-514), and Compose its Switch (PILOT-828).
+ * description, and Compose its Switch.
  */
 export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
   'heading', 'link', 'image', 'searchfield', 'progressbar', 'toolbar', 'tablist', 'switch',
@@ -202,9 +202,9 @@ export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
  * Android roles the agent resolves only from a role description (no class) —
  * the agent's `TRAIT_ONLY_ROLES`, which `roles.test.ts` pins. React Native
  * renders each as a generic android.view.View whose role description names
- * it ("Menu Item", "Timer"); PILOT-664 added the menu, radiogroup, scrollbar,
+ * it ("Menu Item", "Timer"): the menu, radiogroup, scrollbar,
  * spinbutton, summary and timer families. A tab item is one too: RN, Material
- * and Compose all publish "Tab" on a generic layout (PILOT-514).
+ * and Compose all publish "Tab" on a generic layout.
  */
 export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
   'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tab', 'timer',
@@ -215,7 +215,7 @@ export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
  * without `.other` (a generic view, which the agent narrows by trait or name),
  * as the `XCUIElementType…` names hierarchy dumps use. `roles.test.ts` pins it.
  * A tab bar's items are buttons the agent reports as "tab" (`tapsmith-role`)
- * from their tab-bar ancestor, which no type can say (PILOT-514).
+ * from their tab-bar ancestor, which no type can say.
  */
 export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   button: ['XCUIElementTypeButton'],
@@ -254,7 +254,7 @@ export const IOS_OTHER_ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
 
 /**
  * React Native's other iOS generic-view roles, which only a named query finds
- * — the agent's `RoleMapping.undescribedOtherRoles` (PILOT-664). RN's new
+ * — the agent's `RoleMapping.undescribedOtherRoles`. RN's new
  * architecture publishes no description for them.
  */
 export const IOS_UNDESCRIBED_OTHER_ROLES: ReadonlySet<string> = new Set([
@@ -263,7 +263,7 @@ export const IOS_UNDESCRIBED_OTHER_ROLES: ReadonlySet<string> = new Set([
 
 /**
  * The generic-view roles an iOS static text also takes — the agent's
- * `RoleMapping.staticTextRoles` (PILOT-718), which `roles.test.ts` pins. React
+ * `RoleMapping.staticTextRoles`, which `roles.test.ts` pins. React
  * Native's `<Text accessibilityRole="alert">` is plain static text on iOS, so
  * it is matched as a generic view is: by a description or a named query.
  */
@@ -311,7 +311,7 @@ export function assertKnownRole(role: unknown, what: string): asserts role is st
  * role it doesn't match this way. `value` is the view's accessibility value,
  * `traitRole` the role its traits give it (the dump's `tapsmith-role`), and
  * `named` whether the query has a name: a generic view no description marks
- * is then identified by that name (PILOT-608, PILOT-664).
+ * is then identified by that name.
  */
 export function iosGenericViewHasRole(
   role: string,
@@ -340,7 +340,7 @@ export function iosDescribedRole(value: string | undefined): string {
  * What to add to a "not found" failure of `getByRole(role)` with no name on
  * iOS, for a role React Native publishes nothing for there — alert, combobox
  * and the undescribed generic-view roles but tablist — so the miss is explained instead of
- * looking like a flaky screen (PILOT-718). Empty in every other case. Leads
+ * looking like a flaky screen. Empty in every other case. Leads
  * with a space, ready to append to a sentence.
  */
 export function iosUnnamedRoleMissHint(

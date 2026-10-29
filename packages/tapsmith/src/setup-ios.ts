@@ -1,7 +1,7 @@
 /**
  * `tapsmith ios network setup-simulator` — interactive first-run setup for
- * iOS *simulator* network capture (PILOT-182; renamed from `setup-ios` in
- * PILOT-271 so the name says which track it is for). Physical devices use
+ * iOS *simulator* network capture (renamed from `setup-ios` so
+ * the name says which track it is for). Physical devices use
  * `tapsmith ios setup-device` and `tapsmith ios network configure` instead.
  *
  * Runs the user through the (currently three-step) install flow:
@@ -99,8 +99,8 @@ export function findMitmRedirector(
 
 /**
  * Where this machine has mitmproxy's redirector ({@link findMitmRedirector}),
- * or undefined. The one check `doctor`, `init` and this command share
- * (PILOT-721): `brew list mitmproxy` misses a pip or /Applications install
+ * or undefined. The one check `doctor`, `init` and this command share:
+ * `brew list mitmproxy` misses a pip or /Applications install
  * that the daemon uses happily.
  */
 export function mitmproxyRedirectorSource(): string | undefined {

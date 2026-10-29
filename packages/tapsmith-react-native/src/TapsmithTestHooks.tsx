@@ -41,7 +41,7 @@ export interface TapsmithTestHooksProps {
  * marker in the accessibility tree that tells Tapsmith the app can be reset
  * in-process (and acknowledges each reset by bumping an epoch), and listens
  * for the reset deep links Tapsmith opens. Tapsmith reads the marker from the
- * hierarchy; no locator matches it (PILOT-830).
+ * hierarchy; no locator matches it.
  *
  * Renders nothing and registers nothing when disabled (production).
  */

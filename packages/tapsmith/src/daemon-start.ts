@@ -5,8 +5,8 @@
  * installed?" whatever had happened: the daemon's output went nowhere, so a
  * port already in use, a binary macOS refused or a bad argument all looked
  * like a missing install. This module keeps the daemon's own words and the
- * way it ended (PILOT-463), and shapes them with error-detail.ts so they
- * survive every layer that reports a start failure (PILOT-464).
+ * way it ended, and shapes them with error-detail.ts so they
+ * survive every layer that reports a start failure.
  */
 
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from 'node:child_process';
@@ -124,7 +124,7 @@ const DARWIN_EBADARCH = -86;
  * throw instead: a binary for another architecture or platform (ENOEXEC,
  * macOS's EBADARCH), with a message that does not even name the file
  * ("spawn ENOEXEC"). Those come back here as a failed start, so every caller
- * reports them through its usual {@link daemonStartFailure} path (PILOT-490).
+ * reports them through its usual {@link daemonStartFailure} path.
  *
  * Only the spawn syscall's own errors are caught: a bad argument is a bug in
  * the caller, and still throws.

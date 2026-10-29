@@ -28,13 +28,13 @@ export function tryExec(cmd: string, args: string[]): string | undefined {
 
 export interface EnvScan {
   nodeVersion: string;
-  /** Why an x64 Node under Rosetta is a problem, with the fix; undefined for a native Node (PILOT-559). */
+  /** Why an x64 Node under Rosetta is a problem, with the fix; undefined for a native Node. */
   rosettaWarning: string | undefined;
   daemonBin: string | undefined;
   agentApk: boolean;
   agentTestApk: boolean;
   adbVersion: string | undefined;
-  /** With no adb on PATH, the SDK platform-tools directory that has one (PILOT-832). */
+  /** With no adb on PATH, the SDK platform-tools directory that has one. */
   adbOffPath?: string;
   androidHome: string | undefined;
   xcodeVersion: string | undefined;
@@ -53,7 +53,7 @@ export interface SimulatorInfo {
   runtime: string;
   /**
    * The simulator's device type (`iPhone 16`), when simctl's device type list
-   * names it. A simulator whose name differs is a custom one (PILOT-721).
+   * names it. A simulator whose name differs is a custom one.
    */
   deviceTypeName?: string;
 }
@@ -96,7 +96,7 @@ export function parseSimctlDeviceTypesJson(output: string): Map<string, string> 
 /**
  * Whether a simulator has a name of its own rather than its device type's
  * (`PersonaA iPhone`, an `iPhone 16`). The config names a simulator by name,
- * so a custom name resolves only on the Mac that has it (PILOT-721). False
+ * so a custom name resolves only on the Mac that has it. False
  * when the device type is unknown: nothing can be said.
  */
 export function isCustomSimulatorName(sim: SimulatorInfo): boolean {
@@ -137,12 +137,12 @@ export function parseSimctlDevicesJson(output: string, deviceTypes: Map<string, 
 // ─── Simulator choice (PILOT-562) ───
 
 /**
- * The simulators init offers, best first (PILOT-562): no Tapsmith worker
+ * The simulators init offers, best first: no Tapsmith worker
  * clones, iOS runtimes only (watchOS, tvOS and visionOS simulators cannot
  * run an iOS app, so with no iOS runtime there is nothing), one per name — a booted one, else the newest
  * runtime's, as the config names a simulator by name and the runner adopts a
  * booted one of that name. Stock-named simulators come before custom-named
- * ones, which only this Mac has (PILOT-721); then a booted simulator, as
+ * ones, which only this Mac has; then a booted simulator, as
  * choosing it avoids a boot, then iPhones, then the rest, each newest runtime
  * first and in simctl's order within a runtime. The wizard lists them all
  * with the first selected, and `init --yes` picks the first.

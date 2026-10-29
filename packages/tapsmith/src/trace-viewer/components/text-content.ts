@@ -56,7 +56,7 @@ function containsChildText(label: string, query: string): boolean {
   return l === q || l.startsWith(`${q}, `) || l.endsWith(`, ${q}`) || l.includes(`, ${q}, `);
 }
 
-/** getByText(string, { exact: true }) on iOS: literal, like the substring form (PILOT-880). */
+/** getByText(string, { exact: true }) on iOS: literal, like the substring form. */
 export function iosTextMatchesExact(texts: IosTexts, query: string): boolean {
   const q = normalize(query);
   if ([texts.label, texts.title, texts.value].some((t) => normalize(t) === q)) return true;

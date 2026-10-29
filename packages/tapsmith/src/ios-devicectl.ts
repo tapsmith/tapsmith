@@ -196,8 +196,7 @@ const SIMULATOR_UDID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F
  * A simulator-shaped UDID is answered without devicectl: no physical
  * device's hardware UDID has that shape, and a simulator session asks this
  * several times during setup. On a hosted macOS runner whose simulator was
- * just booted, each of those devicectl calls ran into its 15 s timeout
- * (PILOT-496).
+ * just booted, each of those devicectl calls ran into its 15 s timeout.
  */
 export function isPhysicalDevice(udid: string): boolean {
   if (!udid || SIMULATOR_UDID.test(udid)) return false;

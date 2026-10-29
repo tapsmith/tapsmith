@@ -1,5 +1,5 @@
 /**
- * Screenshot pick handler for the offline trace playground (PILOT-226): the
+ * Screenshot pick handler for the offline trace playground: the
  * picked node and the top suggestion ranked against the recorded hierarchy.
  *
  * Plain TS (no JSX) so the logic is unit-testable under the non-JSX

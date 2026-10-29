@@ -4,8 +4,6 @@
  * Overwrites the current line with the most recently completed test.
  * Prints full failure details when they occur. More compact than list
  * reporter — good for large test suites.
- *
- * @see PILOT-68
  */
 
 import type { TapsmithReporter, FullResult, RunStartInfo } from '../reporter.js';

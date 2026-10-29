@@ -1,6 +1,6 @@
 /**
  * The Node.js floor, and what the CLI's entry does about the runtime before
- * loading anything else (PILOT-542).
+ * loading anything else.
  *
  * This module is imported by `bin.ts` ahead of the CLI, on whatever Node the
  * user happens to run, so it must stay import-free and use nothing newer than

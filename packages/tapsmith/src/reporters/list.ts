@@ -6,8 +6,6 @@
  *
  * In-progress tests are shown as dimmed lines on TTY terminals and
  * cleared when the test completes, matching Playwright's list reporter.
- *
- * @see PILOT-67
  */
 
 import type { TapsmithReporter, FullResult, RunStartInfo, TestStartInfo } from '../reporter.js';

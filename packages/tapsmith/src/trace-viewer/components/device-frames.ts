@@ -1,5 +1,5 @@
 /**
- * Multi-device trace helpers (PILOT-310).
+ * Multi-device trace helpers.
  *
  * A trace recorded by a `use.devices` test holds one interleaved action list
  * for several devices. Screenshots and hierarchies are still keyed by the

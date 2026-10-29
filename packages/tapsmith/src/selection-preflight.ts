@@ -1,7 +1,7 @@
 /**
  * Read every test file's test names in a child process, for the check that a
- * `--grep` selects something before `tapsmith test` touches a device
- * (PILOT-553). See selection-preflight-child.ts for why it is a child.
+ * `--grep` selects something before `tapsmith test` touches a device.
+ * See selection-preflight-child.ts for why it is a child.
  */
 
 import { fork } from 'node:child_process';

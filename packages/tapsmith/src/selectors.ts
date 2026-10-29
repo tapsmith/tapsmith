@@ -20,7 +20,7 @@ export interface RoleLocatorOptions {
   /**
    * Filter by accessible name. A case-insensitive substring match by default,
    * like Playwright; whitespace is normalized on both sides. A RegExp is
-   * tested against the whitespace-normalized name (PILOT-520).
+   * tested against the whitespace-normalized name.
    */
   name?: string | RegExp;
   /** Match a string `name` case-sensitively and as the whole string. Ignored for a RegExp. */
@@ -36,11 +36,11 @@ export interface RoleSelectorValue {
   name: string;
   /**
    * Match `name` case-sensitively and as the whole string. Absent is
-   * Playwright's default: a case-insensitive substring match (PILOT-549).
+   * Playwright's default: a case-insensitive substring match.
    */
   exact?: boolean;
   /**
-   * getByRole `{ name: RegExp }` (PILOT-520); `name` is then empty here (the
+   * getByRole `{ name: RegExp }`; `name` is then empty here (the
    * proto carries the literal in `name` for agents without RegExp support).
    */
   nameRegex?: TextRegexValue;

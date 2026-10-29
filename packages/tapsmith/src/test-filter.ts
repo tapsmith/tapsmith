@@ -19,7 +19,7 @@ export interface SelectionFilters {
   /**
    * Run only tests whose full name is exactly one of these — an explicit
    * selection, as UI mode's Run all sends for the tests visible in a filtered
-   * tree (PILOT-729). Intersected with every other filter.
+   * tree. Intersected with every other filter.
    */
   fullNames?: readonly string[];
   grep?: RegExp[];
@@ -100,7 +100,7 @@ export interface SelectionMiss {
  * Whether the selection filters select no test at all in these files, given
  * each file's test names (read without running any test body) — so a `--grep`
  * that matches nothing fails before any device work, as Playwright lists its
- * tests before starting workers (PILOT-553).
+ * tests before starting workers.
  *
  * `namesOf` returns `undefined` for a file that failed to load: its tests are
  * unknown, so no conclusion is drawn, and the run itself reports the load
@@ -164,7 +164,7 @@ export function noTestsMatchFilterMessage(
 
 /**
  * Whether a run under an active selection filter ran no test: it selected
- * none (the tests a filter excludes report no result, PILOT-569) or only
+ * none (the tests a filter excludes report no result) or only
  * skipped ones. The CLI fails such a run rather than reporting it green —
  * the safety net for a `--grep` the pre-run check could not judge.
  */

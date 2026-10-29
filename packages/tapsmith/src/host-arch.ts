@@ -1,5 +1,5 @@
 /**
- * The machine's real CPU architecture, which is not always Node's (PILOT-559).
+ * The machine's real CPU architecture, which is not always Node's.
  *
  * An x64 Node on an Apple Silicon Mac runs under Rosetta — common after
  * Migration Assistant from an Intel Mac, or with an x64 nvm install. Its

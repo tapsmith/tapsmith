@@ -1,5 +1,5 @@
 /**
- * What a locator miss says about the screen (PILOT-849).
+ * What a locator miss says about the screen.
  *
  * A wrong guess at a locator used to cost a whole timeout and say only "not
  * found". At the deadline, the not-found error now asks the device agent —

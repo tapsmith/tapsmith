@@ -7,8 +7,6 @@
  * is one worker that adopts the primary daemon/agent the CLI provisioned. A
  * `use.devices` project's worker holds every device of the group, each on its
  * own daemon.
- *
- * @see PILOT-87, PILOT-310
  */
 
 import * as path from 'node:path';

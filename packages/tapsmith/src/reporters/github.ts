@@ -9,9 +9,7 @@
  * any file-level infrastructure retries). GitHub collects `::error::`
  * commands from anywhere in the log, and emitting them mid-run made them
  * interleave confusingly with the console reporter's stream at file
- * boundaries — long after the ✗ line they belonged to (PILOT-73 follow-up).
- *
- * @see PILOT-73
+ * boundaries — long after the ✗ line they belonged to
  */
 
 import type { TapsmithReporter, FullResult } from '../reporter.js';

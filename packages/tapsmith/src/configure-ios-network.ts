@@ -1,7 +1,7 @@
 /**
  * `tapsmith ios network configure <udid> [--refresh]` — generate /
  * regenerate a per-device mobileconfig for physical iOS network capture
- * (PILOT-185; `--refresh` replaced `refresh-ios-network` in PILOT-271).
+ * (`--refresh` replaced the old `refresh-ios-network` command).
  *
  * Both modes delegate the heavy lifting to the daemon's
  * `GenerateIosNetworkProfile` RPC so the mobileconfig generation logic
@@ -164,7 +164,7 @@ interface GeneratedProfile {
  * The install walkthrough, as lines. A refresh is the same walkthrough with
  * the old profile removed first: the proxy URL is typed into the device's
  * Wi-Fi settings by hand and carries the host IP, so a refresh that skipped
- * it would leave a host-IP change unfixed (PILOT-255).
+ * it would leave a host-IP change unfixed.
  */
 export function walkthroughLines(opts: { udid: string; refresh: boolean }, result: GeneratedProfile): string[] {
   const lines: string[] = [];

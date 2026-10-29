@@ -103,7 +103,7 @@ const EDGE_GLYPHS_RE = /^[\p{Co}\s,;:|·•\-–—]+|[\p{Co}\s,;:|·•\-–—
  * The name to give getByRole: the accessible name without the icon glyphs at
  * its ends, so the locator reads "Library" rather than pinning an invisible
  * glyph's code point. The result is a substring of the full name, which the
- * runtime's default role-name match (case-insensitive substring, PILOT-549)
+ * runtime's default role-name match (case-insensitive substring)
  * accepts; a name with no glyph is returned unchanged.
  */
 export function roleNameFor(accessibleName: string): string {
