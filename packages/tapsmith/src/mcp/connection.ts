@@ -8,6 +8,7 @@ import { findDaemonBin } from '../daemon-bin.js';
 import { pickFreePort } from '../port-utils.js';
 import { resolveDeviceGroup, primaryDevicePin, type TapsmithConfig } from '../config.js';
 import { loadMcpConfig } from './config-loader.js';
+import { configDeviceTarget, configTargetMissMessage, type ConfigDeviceTarget } from './config-device-target.js';
 import { describeUnusableAndroidDevices, pinnedDeviceUnusableMessage, type AdbStateEntry } from '../device-advice.js';
 import { uiPortFilePath, allUiPortFiles, mcpDaemonRegistryPath } from './port-file.js';
 import { openDaemonLog, readDaemonLogSince } from './daemon-log.js';
@@ -1294,12 +1295,17 @@ async function ensureMemberTarget(
   assertPinNotClaimed(wantedSerial);
   const conn = await startDaemon(platform, name);
   if (!conn) throw new Error(`The session closed while a daemon for group member "${name}" was starting.`);
-  const serial = (await pickDevice(conn, platform, wantedSerial, exclude))?.serial;
+  // An unpinned member takes a device the config targets, as the primary does.
+  const target = wantedSerial ? undefined : await configDeviceTarget(config);
+  const serial = (await pickDevice(conn, platform, wantedSerial, exclude, target))?.serial;
   if (!serial) {
     const { serials, all, unusable } = await visibleDevices(conn, platform);
     const visible = serials.filter((s) => !exclude.includes(s));
     discardDaemon(conn);
     await refreshDeviceIndex();
+    if (target && visible.length > 0) {
+      throw new Error(`${configTargetMissMessageWithClaims(target, platform, visible, all)} (needed for group member "${name}")`);
+    }
     throw new Error(
       `${noDeviceMessageWithClaims(all, platform, wantedSerial, visible, uiHeldDevices(), 'config', unusable)} (needed for group member "${name}"; `
       + `${exclude.join(', ')} already serve the group's other members)`,
@@ -1334,8 +1340,12 @@ async function ensurePrimaryTarget(
   // outright, not silently taken over.
   assertNotHeldByUi(wanted, uiHeldDevices(), undefined, pinSource);
   assertPinNotClaimed(wanted);
+  // Unpinned, the config may still name the device: `simulator`, or an
+  // avd-only `avd`. Only those are picked, as `tapsmith test` picks them
+  // (PILOT-915). A pin wins over both, as it does for the runner.
+  const target = wanted ? undefined : await configDeviceTarget(config);
 
-  const existing = await findConnectionForPlatform(platform, key, wanted, exclude);
+  const existing = await findConnectionForPlatform(platform, key, wanted, exclude, target);
   if (existing) {
     // Claim it only for as long as the claim holds: a failed prepare would
     // otherwise leave the daemon marked as this platform's forever, so no
@@ -1364,7 +1374,7 @@ async function ensurePrimaryTarget(
   const conn = await startDaemon(platform);
   if (!conn) throw new Error(`The session closed while a ${platform ?? 'Tapsmith'} daemon was starting.`);
 
-  const serial = (await pickDevice(conn, platform, wanted, exclude))?.serial;
+  const serial = (await pickDevice(conn, platform, wanted, exclude, target))?.serial;
   if (!serial) {
     // Ask what it *could* see before discarding it, so a config pinning a
     // serial that does not exist is not reported as "no device available"
@@ -1375,7 +1385,10 @@ async function ensurePrimaryTarget(
     // yet another one.
     discardDaemon(conn);
     await refreshDeviceIndex();
-    throw new Error(noDeviceMessageWithClaims(all, platform, wanted, visible, uiHeldDevices(), pinSource, unusable));
+    const pickable = visible.filter((s) => !exclude.includes(s));
+    throw new Error(target && pickable.length > 0
+      ? configTargetMissMessageWithClaims(target, platform, pickable, all)
+      : noDeviceMessageWithClaims(all, platform, wanted, visible, uiHeldDevices(), pinSource, unusable));
   }
 
   conn.claimedBy = key;
@@ -1442,6 +1455,16 @@ function assertPinNotClaimed(wanted: string | undefined): void {
   if (!wanted) return;
   const [holder] = withoutHeldDevices([wanted], currentSession()).held;
   if (holder) throw new DeviceClaimedError(wanted, holder);
+}
+
+/** {@link configTargetMissMessage}, plus which devices other sessions hold (the target's may be among them). */
+function configTargetMissMessageWithClaims(
+  target: ConfigDeviceTarget,
+  platform: string | undefined,
+  visible: readonly string[],
+  candidates: readonly string[],
+): string {
+  return configTargetMissMessage(target, platform, visible) + heldDevicesNote(withoutHeldDevices(candidates, currentSession()).held);
 }
 
 /** The no-device message, plus which devices other sessions hold (there may be the missing ones). */
@@ -1580,13 +1603,14 @@ async function findConnectionForPlatform(
   key: string,
   wantedSerial: string | undefined,
   exclude: string[] = [],
+  target?: ConfigDeviceTarget,
 ): Promise<{ conn: DaemonConnection; serial: string } | null> {
   for (const conn of _connections) {
     if (conn.source === 'ui') continue;
     if (conn.claimedBy && conn.claimedBy !== key) continue;
     // A daemon started for another platform cannot serve this one.
     if (conn.platform && platform && conn.platform !== platform) continue;
-    const choice = await pickDevice(conn, platform, wantedSerial, exclude);
+    const choice = await pickDevice(conn, platform, wantedSerial, exclude, target);
     if (!choice) continue;
     if (conn.source === 'peer' && isRepointing(choice.activeSerial, choice.serial)) continue;
     // A daemon this session did not start, pointed at another platform's
@@ -1666,6 +1690,7 @@ async function pickDevice(
   platform: string | undefined,
   wantedSerial: string | undefined,
   exclude: string[] = [],
+  target?: ConfigDeviceTarget,
 ): Promise<DeviceChoice | undefined> {
   let devices: DeviceInfoProto[];
   try {
@@ -1673,7 +1698,9 @@ async function pickDevice(
   } catch {
     return undefined;
   }
-  return chooseDevice(devices, { platform, wantedSerial, exclude, heldByUi: heldDevices(devices.map((d) => d.serial)) });
+  return chooseDevice(devices, {
+    platform, wantedSerial, exclude, heldByUi: heldDevices(devices.map((d) => d.serial)), accepts: target?.accepts,
+  });
 }
 
 /**
@@ -1685,24 +1712,30 @@ async function pickDevice(
  * `heldByUi` the devices a running UI-mode session drives — neither is picked,
  * and a wanted serial in either is not honoured (the caller reports the held
  * case with a message naming the UI session; see {@link assertNotHeldByUi}).
+ * Without a wanted serial, only a device `accepts` takes is picked: the one
+ * the config targets (`simulator`, an avd-only `avd`).
  *
  * @internal — exported for unit testing.
  */
 export function chooseDevice(
   devices: DeviceInfoProto[],
-  opts: { platform?: string; wantedSerial?: string; exclude?: string[]; heldByUi?: Set<string> },
+  opts: {
+    platform?: string; wantedSerial?: string; exclude?: string[]; heldByUi?: Set<string>
+    accepts?: (serial: string) => boolean
+  },
 ): DeviceChoice | undefined {
-  const { platform, wantedSerial, exclude = [], heldByUi = new Set<string>() } = opts;
+  const { platform, wantedSerial, exclude = [], heldByUi = new Set<string>(), accepts } = opts;
   const activeSerial = activeDeviceOf(devices);
   const activePlatform = devices.find((d) => d.serial === activeSerial)?.platform || undefined;
   const candidates = (platform ? devices.filter((d) => d.platform === platform) : devices)
     .filter((d) => !exclude.includes(d.serial) && !heldByUi.has(d.serial));
+  const targeted = accepts ? candidates.filter((d) => accepts(d.serial)) : candidates;
   const serial = wantedSerial
     ? candidates.find((d) => d.serial === wantedSerial)?.serial
     : (
-        candidates.find((d) => d.state === 'Active' || d.state === 'online')
-        ?? candidates.find((d) => d.state === 'Discovered')
-        ?? candidates[0]
+        targeted.find((d) => d.state === 'Active' || d.state === 'online')
+        ?? targeted.find((d) => d.state === 'Discovered')
+        ?? targeted[0]
       )?.serial;
   const chosenPlatform = devices.find((d) => d.serial === serial)?.platform || undefined;
   return serial ? { serial, activeSerial, activePlatform, platform: chosenPlatform } : undefined;
@@ -2341,7 +2374,10 @@ async function setDeviceAndAgent(
   } else {
     const { devices } = await client.listDevices();
     const held = heldDevices(devices.map((d) => d.serial));
-    const free = devices.filter((d) => !held.has(d.serial));
+    // Only a device the config targets (`simulator`, an avd-only `avd`), as
+    // `tapsmith test` picks: the first one listed may be another session's.
+    const target = config ? await configDeviceTarget(config) : undefined;
+    const free = devices.filter((d) => !held.has(d.serial) && (!target || target.accepts(d.serial)));
     const best = free.find(d => d.state === 'Active' || d.state === 'online')
       ?? free.find(d => d.state === 'Discovered');
     serial = best?.serial;

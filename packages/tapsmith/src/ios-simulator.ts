@@ -94,7 +94,7 @@ export function listBootedSimulators(): SimulatorInfo[] {
 }
 
 /** Whether `name` is one Tapsmith gives its clones of `source` (`<source> (Tapsmith Worker N)`). */
-function isTapsmithCloneOf(name: string, source: string): boolean {
+export function isTapsmithCloneOf(name: string, source: string): boolean {
   const suffix = name.startsWith(`${source} (Tapsmith Worker `) ? name.slice(source.length) : '';
   return /^ \(Tapsmith Worker \d+\)$/.test(suffix);
 }

@@ -110,6 +110,15 @@ either:
 session merely *sees* — another simulator, a peer session's device — cannot be
 acted on: its daemon is pointed elsewhere.
 
+Unless `device` names one, a headless session prepares the device your config
+targets, as `tapsmith test` does: the `device` pin, else a booted simulator
+whose name or UDID is `simulator`, else, on Android under
+`deviceStrategy: 'avd-only'` (the default when `avd` is set), an emulator
+running that AVD. Another booted simulator or a different emulator is never
+taken instead. The server does not boot a simulator or launch an emulator
+itself: when the configured one is not running, the first device tool or run
+says so, names the devices that are, and suggests how to start it.
+
 A headless server never takes a device, or a daemon, that another running
 Tapsmith session holds — a `tapsmith test` run, a UI session, or another MCP
 server (see [Several sessions on one machine](./parallel-and-sharding.md#several-sessions-on-one-machine)).
