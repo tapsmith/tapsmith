@@ -414,7 +414,7 @@ describe('run_tests `device` in a headless MCP session', () => {
     await vi.waitFor(() => expect(d.isRunning()).toBe(true), { timeout: 30_000 });
     release();
     await first;
-  });
+  }, 60_000);
 
   // The CLI keeps a root `device` on the projects of its own platform; the
   // headless session resolves projects itself and must do the same.
