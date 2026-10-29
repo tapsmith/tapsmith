@@ -108,6 +108,17 @@ do {
     expect("no time left: nothing sampled", h.taken == 0)
 }
 
+// Whether the target changed while it was watched: a touch point planned
+// before the wait is stale then, and the caller plans it again.
+do {
+    expect("settled on the first comparison: nothing changed", !TouchSettle.Outcome.settled(samples: 2).sawChange)
+    expect("settled after more samples: it changed", TouchSettle.Outcome.settled(samples: 3).sawChange)
+    expect("still changing at the deadline: it changed", TouchSettle.Outcome.stillChanging(samples: 4).sawChange)
+    expect("one sample before the deadline: nothing seen to change", !TouchSettle.Outcome.stillChanging(samples: 1).sawChange)
+    expect("unreadable: nothing seen to change", !TouchSettle.Outcome.unreadable.sawChange)
+    expect("no time: nothing seen to change", !TouchSettle.Outcome.noTime.sawChange)
+}
+
 // The deadline: at most maxWaitSeconds, and never into the margin the touch
 // needs before the daemon's read deadline (plus any reserved hold time).
 do {

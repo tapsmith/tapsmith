@@ -41,6 +41,17 @@ enum TouchSettle {
         case unreadable
         /// No time left before the deadline to take even one sample.
         case noTime
+
+        /// Whether the target was seen to change while it was watched. A
+        /// touch point planned before the wait is stale then: the target
+        /// may have moved, or something may have come over it.
+        var sawChange: Bool {
+            switch self {
+            case .settled(let samples): return samples > 2
+            case .stillChanging(let samples): return samples > 1
+            case .unreadable, .noTime: return false
+            }
+        }
     }
 
     /// When the settle wait must end: `maxWaitSeconds` from now, or earlier
