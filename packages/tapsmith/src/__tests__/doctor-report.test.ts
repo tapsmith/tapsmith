@@ -540,7 +540,7 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
         id: 'simulator',
         status: 'warn',
         label: '2 simulators are named "iPhone 16 Pro" (iOS 18.5, iOS 26.0)',
-        fix: 'tapsmith test uses a booted one, else the first simctl lists (iOS 18.5, OLD-1), so a run may not get the iOS version you expect. '
+        fix: 'tapsmith test uses a booted one, else the first in xcrun simctl list devices -j (iOS 18.5, OLD-1), so a run may not get the iOS version you expect. '
           + 'To pin one, set simulator to its UDID: OLD-1 (iOS 18.5), NEW-2 (iOS 26.0)',
       }]);
       expect(code).toBe(0);
@@ -555,7 +555,21 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
       const { json } = await doctorJson();
       expect(rows(json)).toEqual([expect.objectContaining({
         status: 'warn',
-        fix: expect.stringMatching(/^tapsmith test uses the booted one \(iOS 26\.0, NEW-2\); with none booted, the first simctl lists \(iOS 18\.5, OLD-1\), /),
+        fix: expect.stringMatching(/^tapsmith test uses the booted one \(iOS 26\.0, NEW-2\); with none booted, the first in xcrun simctl list devices -j \(iOS 18\.5, OLD-1\), /),
+      })]);
+    });
+
+    it('says it once when the booted one is also the first listed, and sorts the iOS versions', async () => {
+      withSimulators({
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-4': [{ name: 'iPhone 17 Pro', udid: 'MID', state: 'Booted' }],
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-10': [{ name: 'iPhone 17 Pro', udid: 'NEW', state: 'Shutdown' }],
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [{ name: 'iPhone 17 Pro', udid: 'OLD', state: 'Shutdown' }],
+      });
+      writeConfig(ios('iPhone 17 Pro'));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({
+        label: '3 simulators are named "iPhone 17 Pro" (iOS 26.1, iOS 26.4, iOS 26.10)',
+        fix: expect.stringMatching(/^tapsmith test uses the booted one \(iOS 26\.4, MID\), which is also the first in xcrun simctl list devices -j, so /),
       })]);
     });
 

@@ -628,12 +628,16 @@ function checkConfiguredSimulators(report: Reporter, configured: Map<string, str
       continue;
     }
     if (byName.length > 1) {
-      const runtimes = [...new Set(byName.map((s) => s.runtime))].join(', ');
+      const runtimes = [...new Set(byName.map((s) => s.runtime))]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).join(', ');
       const booted = byName.find((s) => s.state === 'Booted');
-      const first = `the first simctl lists (${byName[0].runtime}, ${byName[0].udid})`;
-      const picks = booted
-        ? `tapsmith test uses the booted one (${booted.runtime}, ${booted.udid}); with none booted, ${first}`
-        : `tapsmith test uses a booted one, else ${first}`;
+      // simctl's JSON order, which the runner reads — its text listing can differ.
+      const first = `the first in xcrun simctl list devices -j (${byName[0].runtime}, ${byName[0].udid})`;
+      const picks = !booted
+        ? `tapsmith test uses a booted one, else ${first}`
+        : booted === byName[0]
+          ? `tapsmith test uses the booted one (${booted.runtime}, ${booted.udid}), which is also the first in xcrun simctl list devices -j`
+          : `tapsmith test uses the booted one (${booted.runtime}, ${booted.udid}); with none booted, ${first}`;
       warn(report, 'simulator', `${byName.length} simulators are named ${quoted}${owner} (${runtimes})`,
         `${picks}, so a run may not get the iOS version you expect. `
         + `To pin one, set simulator to its UDID: ${byName.map((s) => `${s.udid} (${s.runtime})`).join(', ')}`);
