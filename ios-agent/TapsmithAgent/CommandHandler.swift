@@ -2349,7 +2349,9 @@ class CommandHandler {
             // cut short once it is plainly parked.
             // Snapshots rather than app.keyboards.count, which waits for
             // quiescence on Xcode 26. An unreadable tree reads as not shown.
-            let presence = waitWhileKeyboardSlidesIn(until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace))
+            let presence = waitWhileKeyboardSlidesIn(
+                until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace), stopWhenParked: true
+            )
             return ["shown": presence == .onScreen]
 
         case "hideKeyboard":
@@ -2378,8 +2380,11 @@ class CommandHandler {
             // Let the keyboard finish appearing before planning around it. A
             // keyboard element with no on-screen area yet may still be sliding
             // in (hideKeyboard right after a focusing tap on a slow runner):
-            // wait for it rather than call it "nothing to dismiss".
-            _ = waitWhileKeyboardSlidesIn(until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace))
+            // wait for it rather than call it "nothing to dismiss". The full
+            // grace, with no early stop for a keyboard that looks parked: a
+            // keyboard that has not started moving looks the same, and calling
+            // it gone would report success with a keyboard about to come up.
+            _ = waitWhileKeyboardSlidesIn(until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace), stopWhenParked: false)
             Thread.sleep(forTimeInterval: 0.3)
             do {
                 try dismissKeyboard()
@@ -2567,7 +2572,7 @@ class CommandHandler {
                 throw AgentError.actionFailed("hideKeyboard could not read the screen to dismiss the keyboard")
             }
             guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
-            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
             // A keyboard element with nothing on screen (zero-sized, off
             // screen, after the appearance wait above) covers nothing: there is
             // nothing to put away, and no reason to touch the app or submit the
@@ -2639,7 +2644,7 @@ class CommandHandler {
             // first drag may have scrolled a control under the old point.
             guard let snapshot = try? snapshotFinder.takeSnapshot(),
                   hasKeyboardInSnapshot(snapshot.dictionaryRepresentation),
-                  let again = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screen)
+                  let again = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
                       .scrollSwipeStart(focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame)
             else { return .keyboardStayed }
             _ = EventSynthesizer.swipe(
@@ -2710,20 +2715,32 @@ class CommandHandler {
         guard let snapshot = try? app.snapshot(),
               !snapshot.dictionaryRepresentation.isEmpty else { return nil }
         guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return (.absent, []) }
-        let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+        let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
         return (planner.keyboardRegion == nil ? .offScreen : .onScreen, planner.keyboardFrames)
     }
 
+    /// The screen as `snapshot` saw it: the application element's frame,
+    /// which follows any rotation — the cached `screenSize` is refreshed only
+    /// by setOrientation and a rebind, so after a rotation Tapsmith did not
+    /// make it can put an on-screen keyboard off its screen. The cached size
+    /// when the frame is empty.
+    private func screenSize(of snapshot: XCUIElementSnapshot) -> CGSize {
+        let size = snapshot.frame.size
+        return size.width > 0 && size.height > 0 ? size : snapshotFinder.screenSize
+    }
+
     /// While the keyboard element is in the tree with no on-screen area, give
-    /// it until `deadline` to slide in — unless it is parked there (a
-    /// hardware keyboard attached), which `ParkedKeyboardWatch` tells from a
-    /// frame that stops changing. Returns the last presence read (nil: the
-    /// tree could not be read).
-    private func waitWhileKeyboardSlidesIn(until deadline: Date) -> KeyboardPresence? {
+    /// it until `deadline` to slide in. With `stopWhenParked`, stop early once
+    /// it looks parked there (a hardware keyboard attached), which
+    /// `ParkedKeyboardWatch` tells from a frame that stops changing — only for
+    /// a read-only answer, since a keyboard that has not started moving looks
+    /// the same. Returns the last presence read (nil: the tree could not be
+    /// read).
+    private func waitWhileKeyboardSlidesIn(until deadline: Date, stopWhenParked: Bool) -> KeyboardPresence? {
         var watch = ParkedKeyboardWatch()
         var reading = keyboardReading()
         while let current = reading, current.presence == .offScreen, Date() < deadline,
-              !watch.isParked(after: current.frames) {
+              !(stopWhenParked && watch.isParked(after: current.frames)) {
             Thread.sleep(forTimeInterval: 0.15)
             reading = keyboardReading()
         }
