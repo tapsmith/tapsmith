@@ -1,4 +1,5 @@
 import { describe, expect, openScreen, test } from "./fixtures.js"
+import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 // UIKit mirrors of the SwiftUI tests: the same interactions against hosted
 // UIKit view controllers, to tell SwiftUI-only bugs from all-native ones.
@@ -114,7 +115,7 @@ describe("UIKit: keyboard", () => {
 
   test("hideKeyboard dismisses it", async ({ device, uikitKeyboard }) => {
     await uikitKeyboard.city.tap()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
     await device.hideKeyboard()
     expect(await device.isKeyboardShown()).toBe(false)
   })

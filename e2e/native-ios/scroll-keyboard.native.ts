@@ -1,4 +1,5 @@
 import { describe, expect, openScreen, test } from "./fixtures.js"
+import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 describe("Native: ScrollView + LazyVStack", () => {
   test.beforeEach(async ({ device, scroll }) => {
@@ -31,12 +32,10 @@ describe("Native: keyboard", () => {
     await expect(keyboard.submitted("Ada")).toBeVisible()
   })
 
-  // Needs the software keyboard: with a hardware keyboard attached to the
-  // simulator, iOS parks it off screen and isKeyboardShown() is false (PILOT-792).
   test("focus shows the keyboard and hideKeyboard dismisses it", async ({ device, keyboard }) => {
     await keyboard.name.tap()
     await expect(keyboard.name).toBeFocused()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
     await device.hideKeyboard()
     expect(await device.isKeyboardShown()).toBe(false)
   })

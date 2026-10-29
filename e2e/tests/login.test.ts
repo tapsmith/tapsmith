@@ -1,4 +1,5 @@
 import { describe, expect, test } from "../fixtures.js"
+import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 describe("Login screen", () => {
   test.beforeAll(async ({ device }) => {
@@ -107,7 +108,7 @@ describe("Login screen", () => {
     await loginScreen.emailField.clearAndType("test@example.com")
     await loginScreen.passwordField.tap()
     await expect(loginScreen.passwordField).toBeFocused()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
   })
 
   // PILOT-622: the form is in a ScrollView with the default
@@ -118,7 +119,7 @@ describe("Login screen", () => {
     await loginScreen.emailField.clearAndType("test@example.com")
     await loginScreen.passwordField.clearAndType("password123")
     await expect(loginScreen.signInButton).toBeEnabled()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
     await loginScreen.signInButton.tap()
     await expect(device.getByText("Login successful!", { exact: true })).toBeVisible()
   })
