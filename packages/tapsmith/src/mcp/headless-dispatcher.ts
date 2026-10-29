@@ -135,7 +135,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   /**
    * Each discovered file's mtime and size when its tree was last taken. A file
    * whose stamp moves is discovered again; the rest keep their tree, so a
-   * refresh forks a child only for what changed (PILOT-836).
+   * refresh forks a child only for what changed.
    */
   private _fileStamps = new Map<string, string>();
   /** The refresh running now, and the one queued behind it (see `refreshTestFiles`). */
@@ -195,7 +195,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
 
   /**
    * Bring the test files up to date with the disk: files written, edited or
-   * deleted since the last look (PILOT-836).
+   * deleted since the last look.
    *
    * The session globbed once, on the first call that needed it — usually a
    * device tool, since an agent snapshots the screen before it writes a test.
