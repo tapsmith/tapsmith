@@ -42,6 +42,16 @@ kotlin {
     }
 }
 
+// The host tests replay the SDK's conformance fixtures (TextRegexTest,
+// LocatorConformanceTest): declare them, so changing a fixture re-runs the
+// tests instead of leaving the task up to date.
+tasks.withType<Test>().configureEach {
+    inputs
+        .dir(rootProject.file("../packages/tapsmith/src/__tests__/fixtures"))
+        .withPropertyName("sdkConformanceFixtures")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 dependencies {
     implementation("androidx.core:core-ktx:$coreKtxVersion")
     implementation("androidx.test:runner:$testRunnerVersion")
