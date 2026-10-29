@@ -1,7 +1,9 @@
-// Unit tests for RoleName (PILOT-834): getByRole's name rule, with the
-// placeholder fallback for a text input that has no label or title, replayed
-// from the SDK's conformance fixture so the locator playground and the agent
-// agree. Also QueryIndex.placeholderLiveIndex, which re-finds such a match
+// Unit tests for getByRole (PILOT-834, PILOT-707): RoleMapping's role rule
+// and RoleName's name rule, with the placeholder fallback for a text input
+// that has no label or title, replayed from the SDK's conformance fixture so
+// the locator playground and the agents agree. Each case also says which role
+// the hierarchy dump reports for the element (RoleMapping.resolveRole), which
+// is all the playground knows of its traits. Also QueryIndex.placeholderLiveIndex, which re-finds such a match
 // through a live placeholderValue query.
 
 import Foundation
@@ -21,21 +23,34 @@ func expect(_ name: String, _ ok: Bool) {
 /// The element types the fixture names, by the type name the hierarchy dump writes.
 let typesByName: [String: XCUIElement.ElementType] = {
     let types: [XCUIElement.ElementType] = [
-        .textField, .secureTextField, .textView, .searchField, .button, .staticText, .other,
+        .textField, .secureTextField, .textView, .searchField, .button, .staticText, .other, .link, .image,
+        .slider, .switch, .toggle, .tab, .tabBar, .checkBox, .stepper, .progressIndicator, .activityIndicator,
+        .cell, .table,
     ]
     var map: [String: XCUIElement.ElementType] = [:]
     for type in types { map[RoleMapping.typeName(for: type)] = type }
     return map
 }()
 
+/// The fixture's trait names, as the bits RoleMapping reads.
+let traitsByName: [String: UInt64] = [
+    "button": AccessibilityTrait.button,
+    "link": AccessibilityTrait.link,
+    "image": AccessibilityTrait.image,
+    "staticText": AccessibilityTrait.staticText,
+    "header": AccessibilityTrait.header,
+    "adjustable": AccessibilityTrait.adjustable,
+    "searchField": AccessibilityTrait.searchField,
+]
+
 let fixturePath = CommandLine.arguments.count > 1
     ? CommandLine.arguments[1]
-    : "../packages/tapsmith/src/__tests__/fixtures/role-name-conformance.json"
+    : "../packages/tapsmith/src/__tests__/fixtures/role-conformance.json"
 if let data = FileManager.default.contents(atPath: fixturePath),
    let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
    let cases = root["cases"] as? [[String: Any]] {
     let iosCases = cases.filter { $0["platform"] as? String == "ios" }
-    expect("the conformance fixture has iOS cases", iosCases.count > 10)
+    expect("the conformance fixture has iOS cases", iosCases.count > 50)
     for c in iosCases {
         let why = c["why"] as? String ?? ""
         let typeName = c["type"] as? String ?? ""
@@ -46,9 +61,29 @@ if let data = FileManager.default.contents(atPath: fixturePath),
         let label = c["label"] as? String ?? ""
         let title = c["title"] as? String ?? ""
         let placeholder = c["placeholder"] as? String ?? ""
+        let value = c["value"] as? String ?? ""
+        let role = c["role"] as? String ?? ""
+        let inTabBar = c["inTabBar"] as? Bool ?? false
+        var traits: UInt64 = 0
+        for name in c["traits"] as? [String] ?? [] {
+            guard let bit = traitsByName[name] else {
+                expect("\(why): known trait \(name)", false)
+                continue
+            }
+            traits |= bit
+        }
         let want = c["matches"] as? Bool ?? false
-        if let name = c["name"] as? String {
-            let got = RoleName.matches(
+        let reported = RoleMapping.resolveRole(for: type, traits: traits, inTabBar: inTabBar)
+        expect("reports \(c["reportedRole"] as? String ?? "no role") \(why)",
+               reported == (c["reportedRole"] as? String ?? ""))
+        let isRole = RoleMapping.matches(
+            role: role, elementType: type, traits: traits, value: value,
+            hasNameFilter: c["name"] != nil, inTabBar: inTabBar
+        )
+        if c["name"] == nil {
+            expect("role \(role) \(why)", isRole == want)
+        } else if let name = c["name"] as? String {
+            let got = isRole && RoleName.matches(
                 elementType: type, label: label, title: title, placeholder: placeholder,
                 name: name, exact: c["exact"] as? Bool ?? false
             )
@@ -61,7 +96,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
                 ignoreCase: name["ignoreCase"] as? Bool ?? false,
                 display: "/\(source)/\(flags)"
             )
-            let got = RoleName.matches(
+            let got = isRole && RoleName.matches(
                 elementType: type, label: label, title: title, placeholder: placeholder, regex: re
             )
             expect("regex /\(source)/\(flags) \(why)", re.error == nil && got == want)

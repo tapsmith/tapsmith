@@ -9,13 +9,16 @@ import { escapeJsString } from '../js-string-escape.js';
 import { translateRegex } from '../text-regex.js';
 
 /**
- * iOS getByText conformance (PILOT-794): which of a node's label, title and
- * value are its text content, and how a getByText query matches them. The
- * offline trace playground matches with a TypeScript copy of the iOS agent's
- * TextContent rule; each case below is one node (with its container's label)
- * and one query, with the agent's answer. The TypeScript matcher is checked
- * against them here, and the agent's TextContent replays the same cases from
- * `fixtures/text-content-conformance.json` (ios-agent/Tests/TextContentTests).
+ * getByText conformance (PILOT-794, PILOT-707). On iOS: which of a node's
+ * label, title and value are its text content, and how a getByText query
+ * matches them. On Android: the node's text alone, as UIAutomator's walk
+ * compares it. The offline trace playground matches with a TypeScript copy of
+ * the agents' rules; each case below is one node (with, on iOS, its
+ * container's label) and one query, with the agent's answer. The TypeScript
+ * matcher is checked against them here, and the agents replay the same cases
+ * from `fixtures/text-content-conformance.json`: the iOS agent's TextContent
+ * (ios-agent/Tests/TextContentTests) and the Android agent's ElementFinder
+ * (agent LocatorConformanceTest).
  * Regenerate the fixture after changing a case with
  * `UPDATE_TEXT_CONTENT_FIXTURE=1 npx vitest run src/__tests__/text-content-conformance.test.ts`.
  *
@@ -26,13 +29,19 @@ import { translateRegex } from '../text-regex.js';
 
 interface Case {
   why: string
-  /** iOS element type name. */
+  platform: 'ios' | 'android'
+  /** iOS element type name, or Android class name. */
   type: string
   label?: string
   title?: string
   value?: string
   /** The nearest labelled ancestor's label. */
   container?: string
+  /** Android: the node's text (an empty EditText reports its hint here). */
+  text?: string
+  contentDesc?: string
+  /** Android: an editable field's hint. */
+  placeholder?: string
   /** exact: getByText(q, { exact: true }); substring: getByText(q); or a RegExp as source + flags. */
   query: { exact: string } | { substring: string } | { source: string; flags: string }
   matches: boolean
@@ -57,85 +66,139 @@ const T = {
   wheel: 'XCUIElementTypePickerWheel',
 } as const;
 
+const A = {
+  textView: 'android.widget.TextView',
+  button: 'android.widget.Button',
+  imageButton: 'android.widget.ImageButton',
+  editText: 'android.widget.EditText',
+  viewGroup: 'android.view.ViewGroup',
+} as const;
+
 const CASES: Case[] = [
   // Labels are text content…
-  { why: 'static text by its label', type: T.text, label: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: true },
-  { why: 'a button by its label', type: T.button, label: 'Sign In', query: { exact: 'Sign In' }, matches: true },
-  { why: 'an alert by its title label', type: T.alert, label: 'Delete file?', query: { exact: 'Delete file?' }, matches: true },
-  { why: 'a generic view by its label', type: T.other, label: 'Card', query: { exact: 'Card' }, matches: true },
-  { why: 'a text field by its label', type: T.field, label: 'Full name', query: { substring: 'full name' }, matches: true },
-  { why: 'a title is text content', type: T.button, label: '', title: 'Save', query: { exact: 'Save' }, matches: true },
+  { why: 'static text by its label', platform: 'ios', type: T.text, label: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: true },
+  { why: 'a button by its label', platform: 'ios', type: T.button, label: 'Sign In', query: { exact: 'Sign In' }, matches: true },
+  { why: 'an alert by its title label', platform: 'ios', type: T.alert, label: 'Delete file?', query: { exact: 'Delete file?' }, matches: true },
+  { why: 'a generic view by its label', platform: 'ios', type: T.other, label: 'Card', query: { exact: 'Card' }, matches: true },
+  { why: 'a text field by its label', platform: 'ios', type: T.field, label: 'Full name', query: { substring: 'full name' }, matches: true },
+  { why: 'a title is text content', platform: 'ios', type: T.button, label: '', title: 'Save', query: { exact: 'Save' }, matches: true },
   // …except a control's, which is only its accessible name.
-  { why: 'a switch is not text by its name', type: T.switch, label: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
-  { why: 'a toggle is not text by its name', type: T.toggle, label: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
-  { why: 'a slider is not text by its name', type: T.slider, label: 'Volume', query: { exact: 'Volume' }, matches: false },
-  { why: 'a stepper is not text by its name', type: T.stepper, label: 'Quantity: 1', query: { exact: 'Quantity: 1' }, matches: false },
-  { why: 'nor by substring', type: T.stepper, label: 'Quantity: 1', query: { substring: 'quantity' }, matches: false },
-  { why: 'nor by RegExp', type: T.stepper, label: 'Quantity: 1', query: { source: '^Quantity: \\d+$', flags: '' }, matches: false },
-  { why: 'nor a control by its title', type: T.switch, label: '', title: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
+  { why: 'a switch is not text by its name', platform: 'ios', type: T.switch, label: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
+  { why: 'a toggle is not text by its name', platform: 'ios', type: T.toggle, label: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
+  { why: 'a slider is not text by its name', platform: 'ios', type: T.slider, label: 'Volume', query: { exact: 'Volume' }, matches: false },
+  { why: 'a stepper is not text by its name', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { exact: 'Quantity: 1' }, matches: false },
+  { why: 'nor by substring', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { substring: 'quantity' }, matches: false },
+  { why: 'nor by RegExp', platform: 'ios', type: T.stepper, label: 'Quantity: 1', query: { source: '^Quantity: \\d+$', flags: '' }, matches: false },
+  { why: 'nor a control by its title', platform: 'ios', type: T.switch, label: '', title: 'Dark Mode', query: { exact: 'Dark Mode' }, matches: false },
   // Values are text content only where they are the text on screen.
-  { why: "a switch's value is not text", type: T.switch, label: '', value: '1', query: { exact: '1' }, matches: false },
-  { why: "a stepper's value is not text", type: T.stepper, label: 'Quantity: 1', value: '1', query: { exact: '1' }, matches: false },
-  { why: "a slider's value is not text", type: T.slider, label: 'Volume', value: '50%', query: { substring: '50' }, matches: false },
-  { why: "a button's value is not text", type: T.button, label: 'Increment', value: '1', query: { exact: '1' }, matches: false },
-  { why: 'an accessibilityValue is not text', type: T.other, label: 'Upload progress', value: '65%', query: { exact: '65%' }, matches: false },
-  { why: "a progress indicator's value is not text", type: T.progress, label: 'Loading', value: '40%', query: { source: '%', flags: '' }, matches: false },
-  { why: "a link's value (its URL) is not text", type: T.link, label: 'Docs', value: 'https://example.com', query: { substring: 'example' }, matches: false },
-  { why: "a text field's typed value is text", type: T.field, label: '', value: 'nick', query: { substring: 'nick' }, matches: true },
-  { why: "a text field's value, exactly", type: T.field, label: 'Email', value: 'ada@example.com', query: { exact: 'ada@example.com' }, matches: true },
-  { why: "a secure field's value", type: T.secure, label: 'Password', value: '••••', query: { exact: '••••' }, matches: true },
-  { why: "a text view's value", type: T.textView, label: 'Notes', value: 'Buy milk', query: { source: 'milk', flags: '' }, matches: true },
-  { why: "a search field's value", type: T.search, label: 'Search', value: 'cats', query: { exact: 'cats' }, matches: true },
-  { why: "static text's value", type: T.text, label: '', value: 'Hello', query: { exact: 'Hello' }, matches: true },
-  { why: "a picker wheel's selected row is its value", type: T.wheel, label: '', value: 'Medium', query: { exact: 'Medium' }, matches: true },
-  { why: 'a picker wheel by substring', type: T.wheel, label: '', value: 'Medium', query: { substring: 'med' }, matches: true },
+  { why: "a switch's value is not text", platform: 'ios', type: T.switch, label: '', value: '1', query: { exact: '1' }, matches: false },
+  { why: "a stepper's value is not text", platform: 'ios', type: T.stepper, label: 'Quantity: 1', value: '1', query: { exact: '1' }, matches: false },
+  { why: "a slider's value is not text", platform: 'ios', type: T.slider, label: 'Volume', value: '50%', query: { substring: '50' }, matches: false },
+  { why: "a button's value is not text", platform: 'ios', type: T.button, label: 'Increment', value: '1', query: { exact: '1' }, matches: false },
+  { why: 'an accessibilityValue is not text', platform: 'ios', type: T.other, label: 'Upload progress', value: '65%', query: { exact: '65%' }, matches: false },
+  { why: "a progress indicator's value is not text", platform: 'ios', type: T.progress, label: 'Loading', value: '40%', query: { source: '%', flags: '' }, matches: false },
+  { why: "a link's value (its URL) is not text", platform: 'ios', type: T.link, label: 'Docs', value: 'https://example.com', query: { substring: 'example' }, matches: false },
+  { why: "a text field's typed value is text", platform: 'ios', type: T.field, label: '', value: 'nick', query: { substring: 'nick' }, matches: true },
+  { why: "a text field's value, exactly", platform: 'ios', type: T.field, label: 'Email', value: 'ada@example.com', query: { exact: 'ada@example.com' }, matches: true },
+  { why: "a secure field's value", platform: 'ios', type: T.secure, label: 'Password', value: '••••', query: { exact: '••••' }, matches: true },
+  { why: "a text view's value", platform: 'ios', type: T.textView, label: 'Notes', value: 'Buy milk', query: { source: 'milk', flags: '' }, matches: true },
+  { why: "a search field's value", platform: 'ios', type: T.search, label: 'Search', value: 'cats', query: { exact: 'cats' }, matches: true },
+  { why: "static text's value", platform: 'ios', type: T.text, label: '', value: 'Hello', query: { exact: 'Hello' }, matches: true },
+  { why: "a picker wheel's selected row is its value", platform: 'ios', type: T.wheel, label: '', value: 'Medium', query: { exact: 'Medium' }, matches: true },
+  { why: 'a picker wheel by substring', platform: 'ios', type: T.wheel, label: '', value: 'Medium', query: { substring: 'med' }, matches: true },
   // A label read without the prefix it repeats from its container.
-  { why: "a stepper button's label without the stepper's", type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { exact: 'Quantity: 1' }, matches: false },
-  { why: 'nor by substring', type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { substring: 'quantity' }, matches: false },
-  { why: 'nor by RegExp', type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { source: '^Quantity', flags: '' }, matches: false },
-  { why: 'its own part still matches', type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { exact: 'Increment' }, matches: true },
-  { why: 'without its container, a joined child matches', type: T.button, label: 'Quantity: 1, Increment', query: { exact: 'Quantity: 1' }, matches: true },
-  { why: 'a label equal to its container is kept', type: T.text, label: 'Item 3', container: 'Item 3', query: { exact: 'Item 3' }, matches: true },
-  { why: 'a label that only starts like its container is kept', type: T.text, label: 'Quantity: 10', container: 'Quantity: 1', query: { exact: 'Quantity: 10' }, matches: true },
-  { why: 'the container prefix compares whitespace-normalized', type: T.button, label: 'Quantity:\u00a01, Increment', container: 'Quantity: 1', query: { exact: 'Quantity: 1' }, matches: false },
+  { why: "a stepper button's label without the stepper's", platform: 'ios', type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { exact: 'Quantity: 1' }, matches: false },
+  { why: 'nor by substring', platform: 'ios', type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { substring: 'quantity' }, matches: false },
+  { why: 'nor by RegExp', platform: 'ios', type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { source: '^Quantity', flags: '' }, matches: false },
+  { why: 'its own part still matches', platform: 'ios', type: T.button, label: 'Quantity: 1, Increment', container: 'Quantity: 1', query: { exact: 'Increment' }, matches: true },
+  { why: 'without its container, a joined child matches', platform: 'ios', type: T.button, label: 'Quantity: 1, Increment', query: { exact: 'Quantity: 1' }, matches: true },
+  { why: 'a label equal to its container is kept', platform: 'ios', type: T.text, label: 'Item 3', container: 'Item 3', query: { exact: 'Item 3' }, matches: true },
+  { why: 'a label that only starts like its container is kept', platform: 'ios', type: T.text, label: 'Quantity: 10', container: 'Quantity: 1', query: { exact: 'Quantity: 10' }, matches: true },
+  { why: 'the container prefix compares whitespace-normalized', platform: 'ios', type: T.button, label: 'Quantity:\u00a01, Increment', container: 'Quantity: 1', query: { exact: 'Quantity: 1' }, matches: false },
   // React Native joins a touchable's child texts into its label with ", ".
-  { why: 'a joined first child', type: T.other, label: 'Login Form, Text inputs, buttons', query: { exact: 'Login Form' }, matches: true },
-  { why: 'a joined middle child', type: T.other, label: 'A, B, C', query: { exact: 'B' }, matches: true },
-  { why: 'a joined last child', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Text inputs' }, matches: true },
-  { why: 'part of a child is no exact match', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Login' }, matches: false },
+  { why: 'a joined first child', platform: 'ios', type: T.other, label: 'Login Form, Text inputs, buttons', query: { exact: 'Login Form' }, matches: true },
+  { why: 'a joined middle child', platform: 'ios', type: T.other, label: 'A, B, C', query: { exact: 'B' }, matches: true },
+  { why: 'a joined last child', platform: 'ios', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Text inputs' }, matches: true },
+  { why: 'part of a child is no exact match', platform: 'ios', type: T.other, label: 'Login Form, Text inputs', query: { exact: 'Login' }, matches: false },
   // A label that lacks the text's trailing punctuation is not that text
   // (PILOT-880): a React Native touchable's accessibilityLabel hides the text
   // it wraps, and an alert's "Log out" button is not its "Log out?" title.
   // Exact and substring agree.
-  { why: 'a label without the trailing "?"', type: T.link, label: 'Forgot password', query: { exact: 'Forgot password?' }, matches: false },
-  { why: 'nor by substring', type: T.link, label: 'Forgot password', query: { substring: 'Forgot password?' }, matches: false },
-  { why: 'the label is found by its own text', type: T.link, label: 'Forgot password', query: { substring: 'forgot password' }, matches: true },
-  { why: 'a label with trailing punctuation the query lacks', type: T.button, label: 'Done!', query: { exact: 'Done' }, matches: false },
-  { why: 'contains that query as a substring', type: T.button, label: 'Done!', query: { substring: 'done' }, matches: true },
-  { why: 'a symbol is no stand-in for another', type: T.button, label: '👍', query: { substring: '👎' }, matches: false },
-  { why: 'a query ending in symbols is literal', type: T.text, label: 'Music', query: { substring: 'C++' }, matches: false },
-  { why: 'a query ending in "%" is literal', type: T.text, label: 'Volume 50', query: { substring: '50%' }, matches: false },
-  { why: 'a query ending in "%" in the label', type: T.text, label: 'Volume 50%', query: { substring: '50%' }, matches: true },
+  { why: 'a label without the trailing "?"', platform: 'ios', type: T.link, label: 'Forgot password', query: { exact: 'Forgot password?' }, matches: false },
+  { why: 'nor by substring', platform: 'ios', type: T.link, label: 'Forgot password', query: { substring: 'Forgot password?' }, matches: false },
+  { why: 'the label is found by its own text', platform: 'ios', type: T.link, label: 'Forgot password', query: { substring: 'forgot password' }, matches: true },
+  { why: 'a label with trailing punctuation the query lacks', platform: 'ios', type: T.button, label: 'Done!', query: { exact: 'Done' }, matches: false },
+  { why: 'contains that query as a substring', platform: 'ios', type: T.button, label: 'Done!', query: { substring: 'done' }, matches: true },
+  { why: 'a symbol is no stand-in for another', platform: 'ios', type: T.button, label: '👍', query: { substring: '👎' }, matches: false },
+  { why: 'a query ending in symbols is literal', platform: 'ios', type: T.text, label: 'Music', query: { substring: 'C++' }, matches: false },
+  { why: 'a query ending in "%" is literal', platform: 'ios', type: T.text, label: 'Volume 50', query: { substring: '50%' }, matches: false },
+  { why: 'a query ending in "%" in the label', platform: 'ios', type: T.text, label: 'Volume 50%', query: { substring: '50%' }, matches: true },
   // A substring is literal: ICU pattern characters match only themselves.
-  { why: 'a "?" in the label', type: T.text, label: 'Forgot password? Reset it', query: { substring: 'password? reset' }, matches: true },
-  { why: '"?" is not optional', type: T.text, label: 'Ready', query: { substring: 'x?Ready' }, matches: false },
-  { why: 'a "*" in the label', type: T.text, label: 'Rating: 5*', query: { substring: '5*' }, matches: true },
-  { why: '"*" is not a repeat', type: T.text, label: 'aab', query: { substring: 'a*b' }, matches: false },
-  { why: 'a "\\" in the label', type: T.text, label: 'C:\\Users\\ada', query: { substring: ':\\users' }, matches: true },
-  { why: '"\\d" is not a digit class', type: T.text, label: 'a1', query: { substring: 'a\\d' }, matches: false },
-  { why: 'a "[" in the label', type: T.text, label: 'Items [3]', query: { substring: '[3]' }, matches: true },
-  { why: '"[...]" is not a character class', type: T.text, label: 'a', query: { substring: '[ab]' }, matches: false },
-  { why: '"." is not any character', type: T.text, label: 'abc', query: { substring: 'a.c' }, matches: false },
-  { why: 'exact is literal too', type: T.text, label: 'aab', query: { exact: 'a*b' }, matches: false },
+  { why: 'a "?" in the label', platform: 'ios', type: T.text, label: 'Forgot password? Reset it', query: { substring: 'password? reset' }, matches: true },
+  { why: '"?" is not optional', platform: 'ios', type: T.text, label: 'Ready', query: { substring: 'x?Ready' }, matches: false },
+  { why: 'a "*" in the label', platform: 'ios', type: T.text, label: 'Rating: 5*', query: { substring: '5*' }, matches: true },
+  { why: '"*" is not a repeat', platform: 'ios', type: T.text, label: 'aab', query: { substring: 'a*b' }, matches: false },
+  { why: 'a "\\" in the label', platform: 'ios', type: T.text, label: 'C:\\Users\\ada', query: { substring: ':\\users' }, matches: true },
+  { why: '"\\d" is not a digit class', platform: 'ios', type: T.text, label: 'a1', query: { substring: 'a\\d' }, matches: false },
+  { why: 'a "[" in the label', platform: 'ios', type: T.text, label: 'Items [3]', query: { substring: '[3]' }, matches: true },
+  { why: '"[...]" is not a character class', platform: 'ios', type: T.text, label: 'a', query: { substring: '[ab]' }, matches: false },
+  { why: '"." is not any character', platform: 'ios', type: T.text, label: 'abc', query: { substring: 'a.c' }, matches: false },
+  { why: 'exact is literal too', platform: 'ios', type: T.text, label: 'aab', query: { exact: 'a*b' }, matches: false },
   // Whitespace and case, as before (PILOT-510, PILOT-522).
-  { why: 'NBSP is a space', type: T.text, label: 'Welcome to\u00a0Expo', query: { exact: 'Welcome to Expo' }, matches: true },
-  { why: 'exact is case-sensitive', type: T.text, label: 'GET STARTED', query: { exact: 'get started' }, matches: false },
-  { why: 'substring ignores case', type: T.text, label: 'GET STARTED', query: { substring: 'get started' }, matches: true },
-  { why: 'a RegExp tests the raw label', type: T.text, label: 'Line one\nLine two', query: { source: '^Line two$', flags: 'm' }, matches: true },
+  { why: 'NBSP is a space', platform: 'ios', type: T.text, label: 'Welcome to\u00a0Expo', query: { exact: 'Welcome to Expo' }, matches: true },
+  { why: 'exact is case-sensitive', platform: 'ios', type: T.text, label: 'GET STARTED', query: { exact: 'get started' }, matches: false },
+  { why: 'substring ignores case', platform: 'ios', type: T.text, label: 'GET STARTED', query: { substring: 'get started' }, matches: true },
+  { why: 'a RegExp tests the raw label', platform: 'ios', type: T.text, label: 'Line one\nLine two', query: { source: '^Line two$', flags: 'm' }, matches: true },
+  // ─── Android: the node's text, as UIAutomator's walk reads it ───
+  { why: 'exact matches the whole text', platform: 'android', type: A.textView, text: 'Sign In', query: { exact: 'Sign In' }, matches: true },
+  { why: 'exact is case-sensitive', platform: 'android', type: A.textView, text: 'GET STARTED', query: { exact: 'get started' }, matches: false },
+  { why: 'exact is not a substring', platform: 'android', type: A.textView, text: 'Sign In', query: { exact: 'Sign' }, matches: false },
+  { why: 'substring ignores case', platform: 'android', type: A.textView, text: 'GET STARTED', query: { substring: 'get started' }, matches: true },
+  { why: 'substring ignores non-ASCII case', platform: 'android', type: A.textView, text: 'ÉTÉ', query: { substring: 'été' }, matches: true },
+  { why: 'NBSP is a space', platform: 'android', type: A.textView, text: 'Welcome to\u00a0Expo', query: { exact: 'Welcome to Expo' }, matches: true },
+  { why: 'a line break is a space', platform: 'android', type: A.textView, text: 'Line one\nLine two', query: { exact: 'Line one Line two' }, matches: true },
+  { why: 'padding in the text is ignored', platform: 'android', type: A.textView, text: '  Sign In ', query: { exact: 'Sign In' }, matches: true },
+  { why: 'padding in the query is ignored', platform: 'android', type: A.textView, text: 'Sign In', query: { exact: ' Sign  In ' }, matches: true },
+  { why: 'substring across a whitespace run', platform: 'android', type: A.textView, text: 'Welcome  to\u00a0Expo', query: { substring: 'to expo' }, matches: true },
+  { why: 'a button by its text', platform: 'android', type: A.button, text: 'Save', query: { exact: 'Save' }, matches: true },
+  { why: "a text field's typed value is text", platform: 'android', type: A.editText, text: 'ada@example.com', placeholder: 'Email', query: { exact: 'ada@example.com' }, matches: true },
+  // An empty EditText reports its hint as its text, and the walk compares that.
+  { why: "an empty text field's hint is its text", platform: 'android', type: A.editText, text: 'Email', placeholder: 'Email', query: { exact: 'Email' }, matches: true },
+  // Unlike an iOS label, a content description is no getByText text on Android.
+  { why: 'a content description is not text', platform: 'android', type: A.imageButton, contentDesc: 'Close', query: { exact: 'Close' }, matches: false },
+  { why: 'nor by substring', platform: 'android', type: A.viewGroup, contentDesc: 'Login Form', query: { substring: 'login' }, matches: false },
+  { why: 'nor by RegExp', platform: 'android', type: A.viewGroup, contentDesc: 'Login Form', query: { source: 'Login', flags: '' }, matches: false },
+  // Unlike an iOS ", "-joined label, a text is compared whole.
+  { why: 'a ", "-joined text is one text', platform: 'android', type: A.textView, text: 'Login Form, Text inputs', query: { exact: 'Text inputs' }, matches: false },
+  { why: 'a text without the trailing "?"', platform: 'android', type: A.textView, text: 'Forgot password', query: { exact: 'Forgot password?' }, matches: false },
+  { why: 'nor by substring', platform: 'android', type: A.textView, text: 'Forgot password', query: { substring: 'Forgot password?' }, matches: false },
+  // A substring is literal: regex characters match only themselves.
+  { why: 'a "?" in the text', platform: 'android', type: A.textView, text: 'Forgot password? Reset it', query: { substring: 'password? reset' }, matches: true },
+  { why: '"?" is not optional', platform: 'android', type: A.textView, text: 'Ready', query: { substring: 'x?Ready' }, matches: false },
+  { why: '"*" is not a repeat', platform: 'android', type: A.textView, text: 'aab', query: { substring: 'a*b' }, matches: false },
+  { why: 'a "\\" in the text', platform: 'android', type: A.textView, text: 'C:\\Users\\ada', query: { substring: ':\\users' }, matches: true },
+  { why: '"\\E" ends no quote', platform: 'android', type: A.textView, text: 'a\\Eb', query: { substring: 'a\\Eb' }, matches: true },
+  { why: '"[...]" is not a character class', platform: 'android', type: A.textView, text: 'a', query: { substring: '[ab]' }, matches: false },
+  { why: '"." is not any character', platform: 'android', type: A.textView, text: 'abc', query: { substring: 'a.c' }, matches: false },
+  { why: 'exact is literal too', platform: 'android', type: A.textView, text: 'aab', query: { exact: 'a*b' }, matches: false },
+  // A RegExp tests the raw text, anywhere in it.
+  { why: 'a RegExp finds a part', platform: 'android', type: A.textView, text: 'Order #1234 shipped', query: { source: '#\\d+', flags: '' }, matches: true },
+  { why: 'with the i flag', platform: 'android', type: A.textView, text: 'GET STARTED', query: { source: '^get', flags: 'i' }, matches: true },
+  { why: 'without it, case counts', platform: 'android', type: A.textView, text: 'GET STARTED', query: { source: '^get', flags: '' }, matches: false },
+  { why: 'anchors see the raw line break', platform: 'android', type: A.textView, text: 'Line one\nLine two', query: { source: '^Line two$', flags: '' }, matches: false },
+  { why: 'the m flag anchors each line', platform: 'android', type: A.textView, text: 'Line one\nLine two', query: { source: '^Line two$', flags: 'm' }, matches: true },
+  { why: 'the text is not normalized for a RegExp', platform: 'android', type: A.textView, text: 'Full\u00a0name', query: { source: '^Full name$', flags: '' }, matches: false },
+  { why: '\\s covers NBSP', platform: 'android', type: A.textView, text: 'Full\u00a0name', query: { source: '^Full\\sname$', flags: '' }, matches: true },
+  { why: 'a RegExp on no text', platform: 'android', type: A.viewGroup, query: { source: 'a', flags: '' }, matches: false },
 ];
 
-/** The case's node as the iOS agent's dump writes it. */
+/** The case's node as its agent's dump writes it. */
 function nodeFor(c: Case): HierarchyNode {
+  if (c.platform === 'android') {
+    const attrs: Record<string, string> = { class: c.type, text: c.text ?? '', 'resource-id': '', 'content-desc': c.contentDesc ?? '' };
+    if (c.placeholder !== undefined) attrs.hint = c.placeholder;
+    return { tagName: 'node', attributes: new Map(Object.entries(attrs)), children: [], depth: 0 };
+  }
   const attrs: Record<string, string> = { type: c.type, label: c.label ?? '', identifier: '', value: c.value ?? '' };
   if (c.title !== undefined) attrs.title = c.title;
   return { tagName: c.type, attributes: new Map(Object.entries(attrs)), children: [], depth: 0 };
@@ -164,9 +227,10 @@ const FIXTURE = fileURLToPath(new URL('./fixtures/text-content-conformance.json'
 function buildFixture() {
   return {
     comment:
-      'Generated by packages/tapsmith/src/__tests__/text-content-conformance.test.ts (PILOT-794). One iOS node, its ' +
-      'container\'s label and one getByText query per case, with the agent\'s answer; a RegExp query carries the SDK ' +
-      'translation the agent compiles. Replayed by the TypeScript playground matcher and the iOS agent\'s TextContentTests.',
+      'Generated by packages/tapsmith/src/__tests__/text-content-conformance.test.ts (PILOT-794, PILOT-707). One node ' +
+      '(on iOS with its container\'s label) and one getByText query per case, with the agent\'s answer; a RegExp query ' +
+      'carries the SDK translation the agents compile. Replayed by the TypeScript playground matcher, the iOS agent\'s ' +
+      'TextContentTests and the Android agent\'s LocatorConformanceTest.',
     cases: CASES.map((c) => ({
       ...c,
       query: 'source' in c.query ? { ...c.query, ...translateRegex(c.query.source, c.query.flags) } : c.query,
@@ -189,11 +253,12 @@ function matchTypes(root: HierarchyNode, code: string): string[] {
   return findMatchingNodes([root], parsed!).map((n) => `${n.attributes.get('type')}:${n.attributes.get('label')}`);
 }
 
-describe('iOS getByText conformance (PILOT-794)', () => {
-  it.each(CASES)('$why → $matches', (c) => {
+describe('getByText conformance (PILOT-794, PILOT-707)', () => {
+  it.each(CASES)('$platform $why → $matches', (c) => {
     const parsed = parseSelectorString(codeFor(c));
     expect(parsed).not.toBeNull();
-    const matched = findMatchingNodes([treeFor(c)], parsed!).filter((n) => n.attributes.get('type') === c.type);
+    const matched = findMatchingNodes([treeFor(c)], parsed!)
+      .filter((n) => (n.attributes.get('type') ?? n.attributes.get('class')) === c.type);
     expect(matched.length).toBe(c.matches ? 1 : 0);
   });
 

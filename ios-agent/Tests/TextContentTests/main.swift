@@ -38,8 +38,10 @@ let fixturePath = CommandLine.arguments.count > 1
 if let data = FileManager.default.contents(atPath: fixturePath),
    let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
    let cases = root["cases"] as? [[String: Any]] {
-    expect("the conformance fixture has cases", cases.count > 30)
-    for c in cases {
+    // The Android cases are the Android agent's (LocatorConformanceTest).
+    let iosCases = cases.filter { $0["platform"] as? String == "ios" }
+    expect("the conformance fixture has iOS cases", iosCases.count > 30)
+    for c in iosCases {
         let why = c["why"] as? String ?? ""
         let typeName = c["type"] as? String ?? ""
         guard let type = typesByName[typeName] else {
