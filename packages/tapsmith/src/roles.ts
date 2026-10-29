@@ -184,6 +184,11 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
     'android.widget.SearchView',
     'androidx.appcompat.widget.SearchView',
   ],
+  // React Native's generic-view roles that also have a framework widget
+  // (PILOT-702).
+  radiogroup: ['android.widget.RadioGroup'],
+  spinbutton: ['android.widget.NumberPicker'],
+  timer: ['android.widget.Chronometer'],
 };
 
 /**
@@ -193,21 +198,25 @@ export const ANDROID_ROLE_CLASSES: Readonly<Record<string, readonly string[]>> =
  * matches only through it; one without falls back to the role's classes.
  * RN renders progressbar, toolbar and tablist as a generic View with only a
  * description (PILOT-656, PILOT-514), and Compose its Switch (PILOT-828).
+ * PILOT-664's radiogroup, spinbutton and timer are RN descriptions beside a
+ * framework widget (RadioGroup, NumberPicker, Chronometer; PILOT-702).
  */
 export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
   'heading', 'link', 'image', 'searchfield', 'progressbar', 'toolbar', 'tablist', 'switch',
+  'radiogroup', 'spinbutton', 'timer',
 ]);
 
 /**
  * Android roles the agent resolves only from a role description (no class) —
  * the agent's `TRAIT_ONLY_ROLES`, which `roles.test.ts` pins. React Native
  * renders each as a generic android.view.View whose role description names
- * it ("Menu Item", "Timer"); PILOT-664 added the menu, radiogroup, scrollbar,
- * spinbutton, summary and timer families. A tab item is one too: RN, Material
- * and Compose all publish "Tab" on a generic layout (PILOT-514).
+ * it ("Menu Item", "Scroll Bar"); PILOT-664 added the menu, scrollbar and
+ * summary families (its radiogroup, spinbutton and timer also have a widget,
+ * so they are dual-path). A tab item is one too: RN, Material and Compose all
+ * publish "Tab" on a generic layout (PILOT-514).
  */
 export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
-  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'radiogroup', 'scrollbar', 'spinbutton', 'summary', 'tab', 'timer',
+  'alert', 'combobox', 'menu', 'menubar', 'menuitem', 'scrollbar', 'summary', 'tab',
 ]);
 
 /**
@@ -229,7 +238,9 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   list: ['XCUIElementTypeTable', 'XCUIElementTypeCollectionView'],
   listitem: ['XCUIElementTypeCell'],
   scrollview: ['XCUIElementTypeScrollView'],
-  progressbar: ['XCUIElementTypeProgressIndicator'],
+  // An indeterminate ProgressView is an activity indicator: a progressbar,
+  // as on Android, that still matches spinner (PILOT-797).
+  progressbar: ['XCUIElementTypeProgressIndicator', 'XCUIElementTypeActivityIndicator'],
   seekbar: ['XCUIElementTypeSlider'],
   radiobutton: ['XCUIElementTypeRadioButton'],
   spinner: ['XCUIElementTypePicker', 'XCUIElementTypeActivityIndicator'],
@@ -237,6 +248,14 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   tab: ['XCUIElementTypeTab'],
   searchfield: ['XCUIElementTypeSearchField'],
   tablist: ['XCUIElementTypeTabBar'],
+  // React Native's generic-view roles that also have a native type
+  // (PILOT-702): a Stepper; the menu and radio group types match where
+  // XCUITest reports them (an open SwiftUI or UIKit menu's items are buttons).
+  menu: ['XCUIElementTypeMenu'],
+  menubar: ['XCUIElementTypeMenuBar'],
+  menuitem: ['XCUIElementTypeMenuItem'],
+  radiogroup: ['XCUIElementTypeRadioGroup'],
+  spinbutton: ['XCUIElementTypeStepper'],
 };
 
 /**
@@ -337,11 +356,24 @@ export function iosDescribedRole(value: string | undefined): string {
 }
 
 /**
+ * What finds an iOS native widget with one of React Native's generic-view
+ * roles, for the unnamed-role miss hint (PILOT-702). XCUITest shows an open
+ * SwiftUI or UIKit menu's items as buttons, never as menu items.
+ */
+const IOS_NATIVE_WIDGET_NOTES: Readonly<Record<string, string>> = {
+  spinbutton: ' (a native Stepper matches without one)',
+  menu: ' (an open native menu\'s items are buttons: getByRole("button", { name: "…" }))',
+  menuitem: ' (an open native menu\'s items are buttons: getByRole("button", { name: "…" }))',
+};
+
+/**
  * What to add to a "not found" failure of `getByRole(role)` with no name on
  * iOS, for a role React Native publishes nothing for there — alert, combobox
  * and the undescribed generic-view roles but tablist — so the miss is explained instead of
- * looking like a flaky screen (PILOT-718). Empty in every other case. Leads
- * with a space, ready to append to a sentence.
+ * looking like a flaky screen (PILOT-718). For a role an iOS native widget
+ * also has, it says what finds that widget instead (PILOT-702): a Stepper
+ * matches without a name, and an open menu's items are buttons. Empty in
+ * every other case. Leads with a space, ready to append to a sentence.
  */
 export function iosUnnamedRoleMissHint(
   role: { role: string; name: string; nameRegex?: unknown },
@@ -354,6 +386,7 @@ export function iosUnnamedRoleMissHint(
     || (IOS_UNDESCRIBED_OTHER_ROLES.has(canonical) && canonical !== 'tablist');
   if (!nameOnly) return '';
   const quoted = JSON.stringify(role.role);
-  return ` On iOS, React Native publishes no ${quoted} role that getByRole(${quoted}) can see without a name: ` +
+  const unnamed = IOS_NATIVE_WIDGET_NOTES[canonical] ?? '';
+  return ` On iOS, React Native publishes no ${quoted} role that getByRole(${quoted}) can see without a name${unnamed}: ` +
     `pass the element's name — getByRole(${quoted}, { name: "…" }) — or use getByText() or getByTestId().`;
 }

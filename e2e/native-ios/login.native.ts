@@ -6,6 +6,15 @@ describe("Native: login form", () => {
     await expect(login.email).toBeVisible()
   })
 
+  // A role-only match binds the field it matched, whichever of the role's
+  // element types it is (the SecureField is the second "textfield").
+  test("role-only textfields: type into the SecureField by index", async ({ login }) => {
+    await login.textField(0).type("sam@example.com")
+    await login.textField(1).type("secret")
+    await login.signIn.tap()
+    await expect(login.welcome).toBeVisible()
+  })
+
   test("Sign In is disabled until both fields are filled", async ({ login }) => {
     await expect(login.signIn).toBeDisabled()
     await login.email.type("sam@example.com")

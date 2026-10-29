@@ -51,9 +51,26 @@ describe("Native: slow load", () => {
   test("auto-waits through a ProgressView", async ({ device, home, slowLoad }) => {
     await openScreen(device, "")
     await home.row("Slow Load").tap()
-    await expect(slowLoad.spinner).toBeVisible()
+    await expect(slowLoad.progress).toBeVisible()
     await expect(slowLoad.loaded).toBeVisible()
-    await expect(slowLoad.spinner).toBeHidden()
+    await expect(slowLoad.progress).toBeHidden()
+  })
+
+  // PILOT-797: ARIA and Android call an indeterminate indicator a progressbar.
+  test("an indeterminate ProgressView is a progressbar, and still a spinner", async ({ device, home, slowLoad }) => {
+    await openScreen(device, "")
+    await home.row("Slow Load").tap()
+    await expect(slowLoad.progress).toHaveRole("progressbar")
+    await expect(slowLoad.spinner).toBeVisible()
+    // A role-only match binds the indicator itself, not a query for the
+    // role's first element type: the element screenshot is the indicator's.
+    const box = await slowLoad.anyProgress.first().boundingBox()
+    const png = await slowLoad.anyProgress.first().screenshot()
+    if (!box) throw new Error("progress indicator has no bounds")
+    // PNG width over point width is the screen scale (2 or 3) only for the
+    // element whose bounds these are.
+    const scale = png.readUInt32BE(16) / box.width
+    expect([2, 3].some((s) => Math.abs(scale - s) < 0.05)).toBe(true)
   })
 })
 

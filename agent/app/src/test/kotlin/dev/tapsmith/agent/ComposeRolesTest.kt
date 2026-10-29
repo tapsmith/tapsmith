@@ -41,6 +41,11 @@ class ComposeRolesTest {
         // A toggleable Row's fake CheckBox, and a Switch description.
         assertTrue(ComposeRoles.isCarrier(shape("android.widget.CheckBox", role = "checkbox"), { buttonParent }, { true }))
         assertTrue(ComposeRoles.isCarrier(shape("android.view.View", role = "switch"), { buttonParent }, { true }))
+        // Role.ValuePicker's fake NumberPicker: the picker above it is the
+        // spinbutton, not the leaf (PILOT-702).
+        val pickerCarrier = shape("android.widget.NumberPicker", role = "spinbutton")
+        assertTrue(ComposeRoles.isCarrier(pickerCarrier, { buttonParent }, { true }))
+        assertEquals("spinbutton", ComposeRoles.carriedRole(pickerCarrier))
     }
 
     @Test
@@ -72,7 +77,7 @@ class ComposeRolesTest {
         // nor a progress indicator's ProgressBar class (progress semantics, not a Role).
         assertFalse(ComposeRoles.isCarrier(shape("android.widget.TextView", role = "text"), { buttonParent }, { true }))
         assertFalse(ComposeRoles.isCarrier(shape("android.widget.ProgressBar", role = "progressbar"), { buttonParent }, { true }))
-        for (role in listOf("button", "checkbox", "radiobutton", "image", "spinner", "tab", "switch")) {
+        for (role in listOf("button", "checkbox", "radiobutton", "image", "spinner", "spinbutton", "tab", "switch")) {
             assertEquals(role, ComposeRoles.carriedRole(shape("android.view.View", role = role)))
         }
         assertFalse(ComposeRoles.isCarrier(shape("android.view.View", role = "heading"), { buttonParent }, { true }))

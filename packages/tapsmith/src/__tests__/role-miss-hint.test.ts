@@ -36,6 +36,17 @@ describe("iosUnnamedRoleMissHint()", () => {
     }
   });
 
+  it("says a native control with the role needs no name (PILOT-702)", () => {
+    vitestExpect(iosUnnamedRoleMissHint(role("spinbutton"), "ios"))
+      .toContain('can see without a name (a native Stepper matches without one): pass the element\'s name');
+    // An open SwiftUI / UIKit menu's items are buttons, not menu items.
+    vitestExpect(iosUnnamedRoleMissHint(role("menuitem"), "ios"))
+      .toContain('(an open native menu\'s items are buttons: getByRole("button", { name: "…" }))');
+    for (const r of ["timer", "radiogroup", "menubar"]) {
+      vitestExpect(iosUnnamedRoleMissHint(role(r), "ios"), r).not.toContain("native");
+    }
+  });
+
   it("says nothing for a named query, another platform, or a role iOS can see", () => {
     vitestExpect(iosUnnamedRoleMissHint(role("alert", "Failed"), "ios")).toBe("");
     vitestExpect(iosUnnamedRoleMissHint({ role: "alert", name: "", nameRegex: { source: "x", flags: "" } }, "ios")).toBe("");

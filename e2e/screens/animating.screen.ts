@@ -8,4 +8,10 @@ export class AnimatingScreen {
   get stoppedStatus() { return this.device.getByText("Stopped", { exact: true }) }
   get stopButton() { return this.device.getByRole("button", { name: "Stop generation" }) }
   get backButton() { return this.device.getByRole("button", { name: "Go back" }) }
+  /**
+   * RN's ActivityIndicator, the screen's only progress indicator: a
+   * progressbar on both platforms (PILOT-797). Its testID sits on a wrapper
+   * view on iOS, so find it by role.
+   */
+  get progress() { return this.device.getByRole("progressbar").first() }
 }
