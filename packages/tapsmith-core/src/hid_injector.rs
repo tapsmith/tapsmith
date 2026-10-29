@@ -8,13 +8,13 @@
 //! gesture re-spawns it; the caller falls back to the agent path on `ensure`
 //! failure. macOS-only (CoreSimulator).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 struct Helper {
     child: Child,
@@ -24,6 +24,9 @@ struct Helper {
 pub struct HidInjector {
     helper_path: PathBuf,
     helpers: Mutex<HashMap<String, Helper>>,
+    /// Devices whose helper failed to start and has been reported since it
+    /// last started: the failure is logged once, not on every touch.
+    unavailable_reported: std::sync::Mutex<HashSet<String>>,
 }
 
 /// Resolve the helper binary as a sibling of the daemon executable (npm package
@@ -52,6 +55,7 @@ impl HidInjector {
         Self {
             helper_path: resolve_helper_path(),
             helpers: Mutex::new(HashMap::new()),
+            unavailable_reported: std::sync::Mutex::new(HashSet::new()),
         }
     }
 
@@ -60,13 +64,52 @@ impl HidInjector {
         Self {
             helper_path,
             helpers: Mutex::new(HashMap::new()),
+            unavailable_reported: std::sync::Mutex::new(HashSet::new()),
         }
     }
 
     /// Ensure a helper is running for `udid`. Idempotent: reuses a live child.
     /// Returns Err if the helper can't start or never reports `ready` — the
-    /// caller then falls back to the agent path.
+    /// caller then falls back to the agent path. The first such failure for a
+    /// device is logged as a warning: the agent path's synthesized touches
+    /// are not always taken for real ones (a native double-tap recognizer
+    /// ignores them on iOS 26 — PILOT-795), so this is worth seeing.
     pub async fn ensure(&self, udid: &str) -> anyhow::Result<()> {
+        let result = self.start_or_reuse(udid).await;
+        match &result {
+            Ok(()) => self.note_available(udid),
+            Err(e) => {
+                if self.note_unavailable(udid) {
+                    warn!(
+                        udid, helper = ?self.helper_path, error = %e,
+                        "iOS simulator HID helper could not start; double taps and long presses \
+                         use the agent's synthesized touches instead, which some native gesture \
+                         recognizers ignore"
+                    );
+                }
+            }
+        }
+        result
+    }
+
+    /// Record that `udid`'s helper is unavailable. True the first time since
+    /// it last started (the caller reports it then).
+    fn note_unavailable(&self, udid: &str) -> bool {
+        self.unavailable_reported
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(udid.to_string())
+    }
+
+    /// Record that `udid`'s helper is running, so a later failure is reported again.
+    fn note_available(&self, udid: &str) {
+        self.unavailable_reported
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(udid);
+    }
+
+    async fn start_or_reuse(&self, udid: &str) -> anyhow::Result<()> {
         // Fast path: reuse a live helper. Verify it's still running with
         // try_wait() — a dead helper (simulator reload/crash) would otherwise
         // linger in the map and make the next gesture's first event fail and
@@ -246,6 +289,22 @@ mod tests {
         injector.send("UDID-1", "m 100 150").await.unwrap();
 
         injector.shutdown("UDID-1").await;
+    }
+
+    #[tokio::test]
+    async fn an_unavailable_helper_is_reported_once_until_it_starts() {
+        let (_dir, path) = stub_helper("exit 1\n");
+        let injector = HidInjector::with_helper_path(path);
+        assert!(injector.ensure("UDID-W").await.is_err());
+        // ensure already reported it; later failures stay quiet...
+        assert!(!injector.note_unavailable("UDID-W"));
+        assert!(injector.ensure("UDID-W").await.is_err());
+        assert!(!injector.note_unavailable("UDID-W"));
+        // ...per device...
+        assert!(injector.note_unavailable("UDID-OTHER"));
+        // ...until the helper has started again.
+        injector.note_available("UDID-W");
+        assert!(injector.note_unavailable("UDID-W"));
     }
 
     #[tokio::test]
