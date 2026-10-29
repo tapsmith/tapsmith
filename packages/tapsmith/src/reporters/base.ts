@@ -130,8 +130,8 @@ export function projectTag(project: string | undefined): string {
   return dim(`[${project}]`) + ' ';
 }
 
-/** An error stack's opening `<Name>: ` or `<Name> [<code>]: ` (Node's `TypeError [ERR_X]: `). */
-const STACK_HEADER_NAME_RE = /^[A-Za-z_$][\w$.]*(?: \[[^\]\n]*\])?: /;
+/** A stack line that is a frame (`    at …`). */
+const FRAME_LINE_RE = /^\s*at\s/;
 
 /**
  * The first `max` frames of an error's stack worth showing under its message:
@@ -141,16 +141,17 @@ const STACK_HEADER_NAME_RE = /^[A-Za-z_$][\w$.]*(?: \[[^\]\n]*\])?: /;
  */
 export function errorStackFrames(error: Error, max: number): string[] {
   if (!error.stack) return [];
-  // The stack opens with "<name>: <message>" — every line of the message,
-  // which the reporter prints on its own. Only what follows is frames. Match
-  // any name, not only error.name: --workers, watch and merged reports
-  // rebuild errors as new Error(message), so a StrictModeViolationError's
-  // stack no longer opens with its error.name, and its message lines would
-  // otherwise fill the frame cap.
-  const prefix = STACK_HEADER_NAME_RE.exec(error.stack)?.[0];
-  const opensWithMessage = prefix !== undefined && error.stack.startsWith(error.message, prefix.length);
-  const header = opensWithMessage ? error.message.split('\n').length : 1;
-  return userStackFrames(error.stack.split('\n').slice(header)).slice(0, max);
+  // The stack opens with "<name>: <message>", which the reporter prints on its
+  // own: the frames start at its first "at" line. Matching the header against
+  // error.name and error.message instead misses whenever they changed after
+  // the stack was taken — --workers, watch and merged reports rebuild errors
+  // as new Error(message) under another name, and the runner appends
+  // "--- Additionally ---" blocks to the message — and a multi-line message's
+  // later lines then fill the frame cap.
+  const lines = error.stack.split('\n');
+  const first = lines.findIndex((line) => FRAME_LINE_RE.test(line));
+  if (first === -1) return [];
+  return userStackFrames(lines.slice(first)).slice(0, max);
 }
 
 export function formatError(error: Error, indent: string = '        '): string {

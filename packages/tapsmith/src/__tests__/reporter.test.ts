@@ -1252,6 +1252,26 @@ describe('base formatting utilities', () => {
     }
   });
 
+  it('formatError skips the stack header even when the message grew after the stack was set (soft / unhandled errors appended)', async () => {
+    // The runner appends "--- Additionally ---" blocks to a failed test's
+    // message; expect() set the stack before that, so the stack no longer
+    // opens with the whole message. Whatever the header holds, the frames
+    // are what starts at the first "at" line.
+    const { formatError, errorStackFrames } = await import('../reporters/base.js');
+    const first = 'Expected element getByTestId("x") to contain text zulu, but got "alpha\nbravo\ncharlie\ndelta"';
+    const err = new Error(`${first}\n\n--- Additionally ---\nExpected 2, received 1`);
+    err.stack = [`Error: ${first}`, '    at async Object.fn (/proj/tests/softlong.test.ts:8:3)'].join('\n');
+    expect(errorStackFrames(err, 3)).toEqual(['    at async Object.fn (/proj/tests/softlong.test.ts:8:3)']);
+    const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain.split('\n').filter((l) => l.trim() === 'bravo')).toHaveLength(1);
+  });
+
+  it('formatError keeps the first frame of a stack with no header line', async () => {
+    const { errorStackFrames } = await import('../reporters/base.js');
+    const err = Object.assign(new Error('boom'), { stack: '    at /proj/tests/a.test.ts:1:1\n    at /proj/tests/b.test.ts:2:2' });
+    expect(errorStackFrames(err, 3)).toEqual(['    at /proj/tests/a.test.ts:1:1', '    at /proj/tests/b.test.ts:2:2']);
+  });
+
   it('formatError caps the user frames at three', async () => {
     const { formatError } = await import('../reporters/base.js');
     const err = new Error('boom');
