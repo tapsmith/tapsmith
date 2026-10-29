@@ -90,6 +90,23 @@ static IndigoMessage *makeTouchMessage(double xRatio, double yRatio, int directi
   return message;
 }
 
+// `xcode-select -p`, or nil when it fails or prints nothing.
+static NSString *selectedDeveloperDir(void) {
+  NSTask *task = [[NSTask alloc] init];
+  task.executableURL = [NSURL fileURLWithPath:@"/usr/bin/xcode-select"];
+  task.arguments = @[ @"-p" ];
+  NSPipe *out = [NSPipe pipe];
+  task.standardOutput = out;
+  task.standardError = [NSFileHandle fileHandleWithNullDevice];
+  if (![task launchAndReturnError:nil]) return nil;
+  NSData *data = [out.fileHandleForReading readDataToEndOfFile];
+  [task waitUntilExit];
+  if (task.terminationStatus != 0) return nil;
+  NSString *path = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+  return path.length ? path : nil;
+}
+
 static id msgSend_id(id self, SEL op) {
   return ((id(*)(id, SEL))objc_msgSend)(self, op);
 }
@@ -103,17 +120,33 @@ int main(int argc, char **argv) {
     if (argc < 2) { fprintf(stderr, "fatal usage: %s <udid>\n", argv[0]); return 1; }
     NSString *udid = [NSString stringWithUTF8String:argv[1]];
 
-    const char *devDir = getenv("DEVELOPER_DIR");
-    if (!devDir) devDir = "/Applications/Xcode.app/Contents/Developer";
+    // The Xcode to drive: DEVELOPER_DIR, else the one `xcode-select` picked
+    // (not necessarily /Applications/Xcode.app), else the default install.
+    NSString *devDirStr = nil;
+    const char *envDev = getenv("DEVELOPER_DIR");
+    if (envDev && *envDev) devDirStr = [NSString stringWithUTF8String:envDev];
+    if (!devDirStr) devDirStr = selectedDeveloperDir();
+    if (!devDirStr) devDirStr = @"/Applications/Xcode.app/Contents/Developer";
+    const char *devDir = devDirStr.UTF8String;
 
     void *cs = dlopen("/Library/Developer/PrivateFrameworks/CoreSimulator.framework/CoreSimulator", RTLD_NOW);
     if (!cs) { fprintf(stderr, "fatal dlopen CoreSimulator: %s\n", dlerror()); return 1; }
     Class SimServiceContext = NSClassFromString(@"SimServiceContext");
     if (!SimServiceContext) { fprintf(stderr, "fatal no SimServiceContext\n"); return 1; }
 
-    NSString *skPath = [NSString stringWithFormat:@"%s/Library/PrivateFrameworks/SimulatorKit.framework/SimulatorKit", devDir];
-    void *sk = dlopen(skPath.UTF8String, RTLD_NOW);
-    if (!sk) { fprintf(stderr, "fatal dlopen SimulatorKit: %s\n", dlerror()); return 1; }
+    // SimulatorKit moved between Xcode releases (hid_simulatorkit_path):
+    // try each place in turn and report every miss if none loads.
+    void *sk = NULL;
+    NSMutableString *skErrors = [NSMutableString string];
+    char skPath[PATH_MAX];
+    for (int i = 0; !sk && hid_simulatorkit_path(devDir, i, skPath, sizeof skPath); i++) {
+      sk = dlopen(skPath, RTLD_NOW);
+      if (!sk) {
+        const char *why = dlerror();
+        [skErrors appendFormat:@"%@%s", skErrors.length ? @"; " : @"", why ? why : skPath];
+      }
+    }
+    if (!sk) { fprintf(stderr, "fatal dlopen SimulatorKit (developer dir %s): %s\n", devDir, skErrors.UTF8String); return 1; }
     gMouseFn = (MouseNSEventFn)dlsym(sk, "IndigoHIDMessageForMouseNSEvent");
     if (!gMouseFn) { fprintf(stderr, "fatal no IndigoHIDMessageForMouseNSEvent\n"); return 1; }
 

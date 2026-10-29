@@ -27,6 +27,12 @@ describe("Gestures screen", () => {
     await expect(gesturesScreen.lastGesture).toContainText("Double tap")
   })
 
+  // Positional handles address the element by id, a separate route (PILOT-795).
+  test("double tap through .first() registers double tap gesture", async ({ gesturesScreen }) => {
+    await gesturesScreen.firstTapArea.doubleTap()
+    await expect(gesturesScreen.lastGesture).toContainText("Double tap")
+  })
+
   // ─── Long Press ───
 
   test("long press changes state", async ({ gesturesScreen }) => {

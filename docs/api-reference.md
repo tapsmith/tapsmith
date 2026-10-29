@@ -1179,7 +1179,7 @@ On Android, an element that is *entirely* behind the keyboard is hidden from the
 
 Double-tap this element.
 
-- `options.intervalMs?`: `number` — interval in milliseconds between the two taps. Overrides the global `doubleTapInterval` config for this call. Defaults to `100`. On iOS, the interval is used for the coordinate-based EventSynthesizer path; the XCUIElement path handles timing internally.
+- `options.intervalMs?`: `number` — interval in milliseconds between the two taps. Overrides the global `doubleTapInterval` config for this call. Defaults to `100`. On an iOS simulator the two taps are sent as real touches about 120 ms apart and `intervalMs` is ignored, because a fixed gap stays inside the app's double-tap window however busy the machine is. Where that route is unavailable (a physical iOS device, or a simulator where Tapsmith's touch helper cannot start), the interval is used, raised to at least 250 ms on iOS 26 and later runtimes when the agent was built with an Xcode older than 27.
 - `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
