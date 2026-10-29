@@ -2339,12 +2339,13 @@ class CommandHandler {
         // ─── Keyboard ───
 
         case "isKeyboardShown":
-            // Use snapshot to check for keyboard instead of app.keyboards.count
-            // which triggers quiescence waiting on Xcode 26.
-            let snapshot = try? app.snapshot()
-            let dict = snapshot.map { $0.dictionaryRepresentation } ?? [:]
-            let shown = hasKeyboardInSnapshot(dict)
-            return ["shown": shown]
+            // Shown means on screen: the same test hideKeyboard uses to decide
+            // there is nothing to dismiss (PILOT-792). A keyboard element alone
+            // is not enough. With a hardware keyboard attached, iOS keeps the
+            // software keyboard in the tree but parks it below the screen.
+            // A snapshot rather than app.keyboards.count, which waits for
+            // quiescence on Xcode 26. An unreadable tree reads as not shown.
+            return ["shown": keyboardPresence() == .onScreen]
 
         case "hideKeyboard":
             // Check if keyboard is actually shown before attempting dismissal.
@@ -2469,9 +2470,10 @@ class CommandHandler {
     }
 
     /// After the keyboard left: off screen first, out of the tree a moment
-    /// later — give it that moment, so isKeyboardShown() (any keyboard
-    /// element) agrees straight after (best effort: it is already off the
-    /// screen). Then let the app's own animated relayout settle.
+    /// later — give it that moment, so a following command that waits for a
+    /// keyboard element to appear (type()) does not find the leaving one
+    /// (best effort: it is already off the screen). Then let the app's own
+    /// animated relayout settle.
     private func settleAfterKeyboardDismissed(by deadline: Date? = nil) {
         var treeDeadline = Date(timeIntervalSinceNow: 1.0)
         if let deadline { treeDeadline = min(treeDeadline, deadline) }
@@ -2569,7 +2571,7 @@ class CommandHandler {
             // nothing to put away, and no reason to touch the app or submit the
             // field. The dismissal checks below use the same notion.
             guard planner.keyboardRegion != nil else {
-                NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area; nothing to dismiss")
+                NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area (a hardware keyboard parks it off screen); nothing to dismiss")
                 return
             }
             let outcome = runDismissStrategy(strategy, planner: planner, deadline: deadline)

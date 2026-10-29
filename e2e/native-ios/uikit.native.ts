@@ -112,8 +112,7 @@ describe("UIKit: keyboard", () => {
     await expect(uikitKeyboard.entered("Leeds")).toBeVisible()
   })
 
-  // BUG PILOT-792: "keyboard element has no on-screen area", returns success.
-  test.skip("hideKeyboard dismisses it", async ({ device, uikitKeyboard }) => {
+  test("hideKeyboard dismisses it", async ({ device, uikitKeyboard }) => {
     await uikitKeyboard.city.tap()
     expect(await device.isKeyboardShown()).toBe(true)
     await device.hideKeyboard()
