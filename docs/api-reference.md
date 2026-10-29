@@ -2594,7 +2594,9 @@ A test file that fails to load — a missing module, an error thrown while it is
 imported or inside a `describe()` callback — reports a single failed result in
 place of its tests: `name` and `fullName` are `"<file name> — failed to load"` (e.g. `"login.test.ts — failed to load"`),
 `fileLevelFailure` is `true`, `filePath` names the file, and `error` is the load
-error, with a code frame at the offending line for a syntax error or a missing import. None of the
+error. Its stack starts at the offending line for a missing import, or for a syntax error in the test
+file or a TypeScript module it imports, so reporters show a code frame there. Node gives no location for
+a syntax error in an imported JavaScript module, so that error is reported without one. None of the
 file's tests run. `tapsmith test` (sequentially or with `--workers`) loads every file it is about to
 run before it starts the daemon or touches a device, as Playwright does before it launches a browser:
 when any file fails to load, it reports these results to every reporter, prints
