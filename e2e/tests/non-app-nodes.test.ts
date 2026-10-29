@@ -1,5 +1,6 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
+import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 import { androidWindows, hierarchyXml, readHooksMarker } from "../utils/hooks-marker.js"
 
 // PILOT-756 / PILOT-830: a locator matches only the app's own elements — not
@@ -15,7 +16,7 @@ describe("Locators match only the app's own elements", () => {
     await openScreen(device, "/keyboard?done=1")
     await expect(keyboardScreen.doneTaps).toBeVisible()
     await keyboardScreen.openKeyboard("done")
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
     // The keyboard has a Done key of its own: iOS's return key is a "Done"
     // button inside the keyboard, Gboard's a key described "Done" in the
     // input method's window (which the dump marks as not the app's).

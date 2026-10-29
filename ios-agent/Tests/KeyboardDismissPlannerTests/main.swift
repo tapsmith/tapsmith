@@ -498,14 +498,12 @@ do {
     check("zero-sized keyboard: no keyboard region", planner(appHead + zero).keyboardRegion, nil)
 }
 
-do {
-    // A hardware keyboard attached (PILOT-792), recorded on an iPhone 17 Pro /
-    // iOS 26.4 simulator with a SwiftUI Form field focused: the software
-    // keyboard stays in the tree, parked below the screen, while nothing of
-    // it is drawn. Its window and the window's full-screen host are on
-    // screen, and so is part of a 1244-point scroller. isKeyboardShown() and
-    // hideKeyboard both read this as no keyboard.
-    let parked: [Row] = appHead + [
+/// The tree recorded with a hardware keyboard attached (PILOT-792), on an
+/// iPhone 17 Pro / iOS 26.4 simulator with a SwiftUI Form field focused: the
+/// software keyboard stays in the tree, parked below the screen, while
+/// nothing of it is drawn.
+func parkedKeyboardTree() -> [Row] {
+    appHead + [
         (1, .window, "", "", screen),
         (2, .other, "", "", screen),
         (3, .other, "", "", R(0, 874, 402, 311)),
@@ -523,12 +521,36 @@ do {
         (6, .button, "shift", "shift", R(4.67, 1067, 51.33, 54)),
         (6, .button, "done", "Done", R(300.67, 1121, 99, 54)),
     ]
+}
+
+do {
+    // A hardware keyboard attached (PILOT-792), recorded on an iPhone 17 Pro /
+    // iOS 26.4 simulator with a SwiftUI Form field focused: the software
+    // keyboard stays in the tree, parked below the screen, while nothing of
+    // it is drawn. Its window and the window's full-screen host are on
+    // screen, and so is part of a 1244-point scroller. isKeyboardShown() and
+    // hideKeyboard both read this as no keyboard.
+    let parked = parkedKeyboardTree()
     let parkedPlanner = planner(parked)
     check("keyboard parked below the screen (hardware keyboard): no keyboard region",
           parkedPlanner.keyboardRegion, nil)
     check("keyboard parked below the screen: no return key to press",
           parkedPlanner.returnKey(focusedInput: .textField),
           .notPossible("the keyboard has no return key"))
+}
+
+do {
+    // A parked keyboard (the same off-screen frame read after read) stops
+    // the wait for it to slide in; a moving one does not.
+    let parkedFrame = [R(0, 952, 402, 233)]
+    var parked = ParkedKeyboardWatch()
+    let parkedReads = (1...ParkedKeyboardWatch.parkedReads).map { _ in parked.isParked(after: parkedFrame) }
+    check("same off-screen frame: parked only on the last of parkedReads reads",
+          parkedReads, Array(repeating: false, count: ParkedKeyboardWatch.parkedReads - 1) + [true])
+    var sliding = ParkedKeyboardWatch()
+    let slidingReads = [900.0, 900, 880, 880, 880, 880].map { sliding.isParked(after: [R(0, $0, 402, 233)]) }
+    check("a frame that moves restarts the count", slidingReads, [false, false, false, false, false, true])
+    check("the recorded parked tree lists its keyboard frame", planner(parkedKeyboardTree()).keyboardFrames, parkedFrame)
 }
 
 do {

@@ -2345,15 +2345,11 @@ class CommandHandler {
             // software keyboard in the tree but parks it below the screen.
             // An element with no on-screen area may also still be sliding in
             // (a call straight after a focusing tap on a slow runner), so it
-            // gets the moment hideKeyboard gives it before the answer is no.
+            // gets the moment hideKeyboard gives it before the answer is no,
+            // cut short once it is plainly parked.
             // Snapshots rather than app.keyboards.count, which waits for
             // quiescence on Xcode 26. An unreadable tree reads as not shown.
-            let appearDeadline = Date(timeIntervalSinceNow: Self.keyboardAppearGrace)
-            var presence = keyboardPresence()
-            while presence == .offScreen, Date() < appearDeadline {
-                Thread.sleep(forTimeInterval: 0.15)
-                presence = keyboardPresence()
-            }
+            let presence = waitWhileKeyboardSlidesIn(until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace))
             return ["shown": presence == .onScreen]
 
         case "hideKeyboard":
@@ -2383,10 +2379,7 @@ class CommandHandler {
             // keyboard element with no on-screen area yet may still be sliding
             // in (hideKeyboard right after a focusing tap on a slow runner):
             // wait for it rather than call it "nothing to dismiss".
-            let appearDeadline = Date(timeIntervalSinceNow: Self.keyboardAppearGrace)
-            while keyboardPresence() == .offScreen, Date() < appearDeadline {
-                Thread.sleep(forTimeInterval: 0.15)
-            }
+            _ = waitWhileKeyboardSlidesIn(until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace))
             Thread.sleep(forTimeInterval: 0.3)
             do {
                 try dismissKeyboard()
@@ -2709,11 +2702,32 @@ class CommandHandler {
     /// with no on-screen area, or a keyboard on screen. nil when the tree
     /// could not be read or came back empty.
     private func keyboardPresence() -> KeyboardPresence? {
+        keyboardReading()?.presence
+    }
+
+    /// `keyboardPresence()` plus the keyboard elements' frames.
+    private func keyboardReading() -> (presence: KeyboardPresence, frames: [CGRect])? {
         guard let snapshot = try? app.snapshot(),
               !snapshot.dictionaryRepresentation.isEmpty else { return nil }
-        guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return .absent }
+        guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return (.absent, []) }
         let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
-        return planner.keyboardRegion == nil ? .offScreen : .onScreen
+        return (planner.keyboardRegion == nil ? .offScreen : .onScreen, planner.keyboardFrames)
+    }
+
+    /// While the keyboard element is in the tree with no on-screen area, give
+    /// it until `deadline` to slide in — unless it is parked there (a
+    /// hardware keyboard attached), which `ParkedKeyboardWatch` tells from a
+    /// frame that stops changing. Returns the last presence read (nil: the
+    /// tree could not be read).
+    private func waitWhileKeyboardSlidesIn(until deadline: Date) -> KeyboardPresence? {
+        var watch = ParkedKeyboardWatch()
+        var reading = keyboardReading()
+        while let current = reading, current.presence == .offScreen, Date() < deadline,
+              !watch.isParked(after: current.frames) {
+            Thread.sleep(forTimeInterval: 0.15)
+            reading = keyboardReading()
+        }
+        return reading?.presence
     }
 
     /// Check if a keyboard is visible in the snapshot tree by looking for

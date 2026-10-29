@@ -1,5 +1,6 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
+import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 // PILOT-223 (iOS) / PILOT-362 (Android): a tap on an element that is on
 // screen but covered by something else — the software keyboard, an overlay —
@@ -53,13 +54,13 @@ describe("Occlusion", () => {
 
     test("tap() on a button behind the keyboard fails and names the keyboard", async ({ device, platform, occlusionScreen }) => {
       await occlusionScreen.openKeyboard()
-      expect(await device.isKeyboardShown()).toBe(true)
+      await expectSoftwareKeyboardShown(device)
 
       expect(await failureOf(occlusionScreen.bottomAction.tap())).toMatch(behindKeyboardFailure(platform))
 
       // The keyboard never saw the touch (no stray key typed) and it is still up.
       await expect(occlusionScreen.input).toHaveValue("x")
-      expect(await device.isKeyboardShown()).toBe(true)
+      await expectSoftwareKeyboardShown(device)
       await expect(occlusionScreen.counts).toHaveText(counts({}))
     })
 
@@ -134,7 +135,7 @@ describe("Occlusion", () => {
   test("tap() taps the visible part of a button the keyboard half covers", async ({ device, occlusionScreen }) => {
     await occlusionScreen.makeTallButton.tap()
     await occlusionScreen.openKeyboard()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
 
     await occlusionScreen.tallBottomAction.tap()
 
@@ -145,7 +146,7 @@ describe("Occlusion", () => {
   test("doubleTap() lands on the visible part of a button the keyboard half covers", async ({ device, occlusionScreen }) => {
     await occlusionScreen.makeTallButton.tap()
     await occlusionScreen.openKeyboard()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
 
     // Coordinate gestures take the analyzer's point, not XCUITest's own.
     await occlusionScreen.tallBottomAction.doubleTap()
@@ -157,7 +158,7 @@ describe("Occlusion", () => {
   test("type() and clear() on a field the keyboard half covers stay inside its visible part", async ({ device, occlusionScreen }) => {
     await occlusionScreen.makeInputTallButton.tap()
     await occlusionScreen.openKeyboard()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
 
     const field = occlusionScreen.bottomInput
     await field.type("abc")
@@ -189,7 +190,7 @@ describe("Occlusion", () => {
     // Tapping the bottom input raises a keyboard over it (no avoidance). The
     // field already has focus, so type() must not need a focusing tap.
     await occlusionScreen.bottomInput.tap()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
 
     await occlusionScreen.bottomInput.type("abc")
 
