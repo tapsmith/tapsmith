@@ -291,7 +291,10 @@ Read a Tapsmith trace archive (.zip) and return step-by-step test execution data
 | `include_screenshots` | boolean | No | Include base64 screenshots for each step (default: false) |
 | `device_logs` | string | No | Include device logs: `errors` (default, error/warn only), `all`, or `none` |
 
-Returns trace metadata (device, platform, test file, duration) followed by a step-by-step action list with status, locators, durations, and error details.
+Returns the test's result first (name, project, status, and the test's error), naming the
+failed step or saying that no traced step failed (the error came from the test code, a hook or a
+timeout); then trace metadata (device, platform, test file, duration) and a step-by-step action
+list with status, locators, durations, and error details.
 Each error, expected or actual value is cut to 2,000 characters. With
 `include_screenshots`, the response holds the latest screenshots that fit the
 response limit and says how many earlier ones it left out.

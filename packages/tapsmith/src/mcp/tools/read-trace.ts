@@ -27,7 +27,7 @@ const NOTES_RESERVE_BYTES = 4 * 1024;
 export function registerReadTraceTool(server: McpServer): void {
   server.tool(
     'tapsmith_read_trace',
-    'Read a Tapsmith trace archive (.zip) and get step-by-step test execution data. Returns actions with their locators, durations, and pass/fail status. Use to debug why a test failed. Long step values are shortened, and with include_screenshots the latest screenshots that fit the response limit are returned.',
+    'Read a Tapsmith trace archive (.zip) and get step-by-step test execution data. Starts with the test\'s status and error, and names the failed step (or says no traced step failed). Returns actions with their locators, durations, and pass/fail status. Use to debug why a test failed. Long step values are shortened, and with include_screenshots the latest screenshots that fit the response limit are returned.',
     {
       path: z.string().describe('Path to the trace .zip file'),
       include_screenshots: z.boolean().optional().describe('Include base64 screenshots for each step (default false)'),
@@ -53,6 +53,29 @@ export function registerReadTraceTool(server: McpServer): void {
   );
 }
 
+/** How many failed steps the result header names before eliding the middle. */
+const MAX_LISTED_FAILED_STEPS = 10;
+
+/** One NDJSON event as read: the archive is untrusted, so every field is optional. */
+interface TraceLine {
+  type?: string
+  action?: string
+  assertion?: string
+  selector?: string
+  expected?: unknown
+  actual?: unknown
+  error?: unknown
+  success?: boolean
+  passed?: boolean
+  duration?: number
+  deviceId?: string
+  name?: string
+  title?: string
+  source?: string
+  level?: string
+  message?: unknown
+}
+
 type ContentItem =
   | { type: 'text'; text: string }
   | { type: 'image'; data: string; mimeType: string };
@@ -72,13 +95,60 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
       device?: { name?: string; serial?: string; model?: string; platform?: string }
       version?: number
       testFile?: string
+      testName?: string
+      testStatus?: string
+      error?: string
+      project?: string
       testDuration?: number
       duration?: number
     }
     | undefined;
   const problem = traceFormatProblem(meta);
   if (problem) throw new Error(problem);
+
+  const events: TraceLine[] = files['trace.json']
+    ? decode(files['trace.json']).split('\n').filter(Boolean).map((line: string) => {
+      try { return JSON.parse(line) as TraceLine; } catch { return null; }
+    }).filter((e): e is TraceLine => e !== null && typeof e === 'object')
+    : [];
+  // A step failed when it says so: older writers set only `error`, and a
+  // step can record `success`/`passed: false` without any error text.
+  const stepFailed = (e: TraceLine) =>
+    (e.type === 'action' || e.type === 'assertion')
+    && (Boolean(e.error) || e.success === false || e.passed === false);
+  const stepLabel = (e: TraceLine, i: number) => {
+    const who = e.deviceId ? `${e.deviceId}: ` : '';
+    const what = e.type === 'assertion' ? `expect ${e.assertion ?? 'assertion'}` : (e.action ?? 'action');
+    return `${i + 1}. ${who}${what}`;
+  };
+
   if (meta) {
+    // The test's own result comes first (PILOT-917): a failure thrown outside
+    // a traced step — a TypeError in the test body, a hook, a timeout — leaves
+    // every step [OK], and the only record of it is metadata's `error`.
+    const result: string[] = [];
+    if (meta.testName) result.push(`Test: ${meta.testName}`);
+    if (meta.project) result.push(`Project: ${meta.project}`);
+    if (meta.testStatus) result.push(`Status: ${meta.testStatus}`);
+    if (meta.error) result.push(`Error: ${clipText(String(meta.error), STEP_VALUE_CHARS)}`);
+    if (meta.testStatus === 'failed' || meta.error) {
+      const failed = events.map((e, i) => (stepFailed(e) ? stepLabel(e, i) : undefined))
+        .filter((l): l is string => l !== undefined);
+      if (failed.length === 1) {
+        result.push(`Failed step: ${failed[0]} (marked [FAIL] below)`);
+      } else if (failed.length > 1) {
+        const shown = failed.length > MAX_LISTED_FAILED_STEPS
+          ? [...failed.slice(0, MAX_LISTED_FAILED_STEPS - 1), `… ${failed.length - MAX_LISTED_FAILED_STEPS} more …`, failed[failed.length - 1]]
+          : failed;
+        result.push(`Failed steps: ${shown.join(', ')} (marked [FAIL] below; the last one ended the test unless it was a soft assertion)`);
+      } else if (events.length > 0) {
+        result.push('No traced step failed: the error was thrown outside a traced action or assertion (in the test code, a hook, or a timeout).');
+      }
+    }
+    if (result.length > 0) {
+      lines.push('## Result', ...result, '');
+    }
+
     lines.push(`## Trace Metadata`);
     // Multi-device traces list every device by its group name — the same
     // name each step below carries — so the steps read as a conversation.
@@ -93,7 +163,7 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
       // archive does not record — say so, or an agent resolves it against its
       // own working directory and opens the wrong file.
       const relative = (meta.version ?? 1) >= 2 ? " (relative to the project's rootDir)" : '';
-      lines.push(`Test: ${meta.testFile}${relative}`);
+      lines.push(`File: ${meta.testFile}${relative}`);
     }
     // `testDuration` is the archive's field; `duration` was what this read
     // before (never present, so the line never printed).
@@ -104,17 +174,12 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
 
   // Read trace events
   if (files['trace.json']) {
-    const traceData = decode(files['trace.json']);
-    const events = traceData.split('\n').filter(Boolean).map((line: string) => {
-      try { return JSON.parse(line); } catch { return null; }
-    }).filter(Boolean);
-
     lines.push(`## Steps (${events.length} events)`);
     lines.push('');
 
     for (let i = 0; i < events.length; i++) {
       const event = events[i];
-      const status = event.error ? 'FAIL' : 'OK';
+      const status = stepFailed(event) ? 'FAIL' : 'OK';
       const duration = event.duration ? ` (${event.duration}ms)` : '';
       // Which device acted, for a two-user test's interleaved steps.
       const who = event.deviceId ? `${event.deviceId}: ` : '';
@@ -129,7 +194,9 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
         if (event.actual !== undefined) lines.push(`   Actual: ${clipText(String(event.actual), STEP_VALUE_CHARS)}`);
         if (event.error) lines.push(`   Error: ${clipText(String(event.error), STEP_VALUE_CHARS)}`);
       } else if (event.type === 'group-start') {
-        lines.push(`\n### ${event.title ?? 'Test'}`);
+        // The collector writes `name` (GroupTraceEvent); `title` was read
+        // before, so every group printed as "Test".
+        lines.push(`\n### ${event.name ?? event.title ?? 'Test'}`);
       }
     }
 
@@ -137,15 +204,15 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
     const logLines: string[] = [];
     if (deviceLogs !== 'none') {
       const isErrorOnly = deviceLogs === 'errors';
-      const logEvents = events.filter((e: Record<string, unknown>) =>
+      const logEvents = events.filter((e) =>
         e.type === 'console' && e.source === 'device'
         && (!isErrorOnly || e.level === 'error' || e.level === 'warn'),
       );
       // One section per device in a multi-device trace; the untagged bucket
       // is the single device of an ordinary run.
-      const byDevice = new Map<string | undefined, Record<string, unknown>[]>();
+      const byDevice = new Map<string | undefined, TraceLine[]>();
       for (const ev of logEvents) {
-        const key = ev.deviceId as string | undefined;
+        const key = ev.deviceId;
         const bucket = byDevice.get(key) ?? [];
         bucket.push(ev);
         byDevice.set(key, bucket);
@@ -157,7 +224,7 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
         logLines.push(`## Device Logs${deviceId ? ` — ${deviceId}` : ''} (${bucket.length} entries${bucket.length > cap ? `, showing last ${cap}` : ''})`);
         logLines.push('');
         for (const ev of shown) {
-          logLines.push(`[${(ev.level as string)?.toUpperCase()}] ${clipText(String(ev.message ?? ''), LOG_LINE_CHARS)}`);
+          logLines.push(`[${ev.level?.toUpperCase()}] ${clipText(String(ev.message ?? ''), LOG_LINE_CHARS)}`);
         }
       }
     }
