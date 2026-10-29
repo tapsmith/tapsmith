@@ -429,6 +429,7 @@ pub enum AgentCommand {
     ResolveActionPoint {
         selector: Value,
         timeout_ms: Option<u64>,
+        element_id: Option<String>,
     },
     LongPress {
         selector: Value,
@@ -712,11 +713,13 @@ impl AgentCommand {
             AgentCommand::ResolveActionPoint {
                 selector,
                 timeout_ms,
+                element_id,
             } => {
                 let mut p = selector.clone();
                 if let Some(t) = timeout_ms {
                     p["timeout"] = json!(t);
                 }
+                add_element_id(&mut p, element_id);
                 ("resolveActionPoint", p)
             }
             AgentCommand::LongPress {
@@ -1758,11 +1761,29 @@ mod tests {
         let cmd = AgentCommand::ResolveActionPoint {
             selector: json!({"text": "Item"}),
             timeout_ms: Some(4000),
+            element_id: None,
         };
         let j = cmd.to_json("rap");
         assert_eq!(j["method"], "resolveActionPoint");
         assert_eq!(cmd.method_name(), "resolveActionPoint");
         assert_eq!(j["params"]["text"], "Item");
+        assert_eq!(j["params"]["timeout"], 4000);
+        assert!(j["params"].get("elementId").is_none());
+    }
+
+    #[test]
+    fn to_json_resolve_action_point_by_element_id() {
+        // Positional/filtered handles (`.first()`, `.nth()`, `filter()`) carry
+        // the id of the element they resolved; the agent resolves the point
+        // of that exact element, so they can take the HID route too (PILOT-795).
+        let cmd = AgentCommand::ResolveActionPoint {
+            selector: json!({}),
+            timeout_ms: Some(4000),
+            element_id: Some("el-7".into()),
+        };
+        let j = cmd.to_json("rap2");
+        assert_eq!(j["method"], "resolveActionPoint");
+        assert_eq!(j["params"]["elementId"], "el-7");
         assert_eq!(j["params"]["timeout"], 4000);
     }
 
