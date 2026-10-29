@@ -10,7 +10,7 @@ import {
   getTestDiscoveryWatchRoots,
   matchesTestIgnore,
   matchesTestFile,
-  noTestFilesFoundMessage,
+  noConfigFoundMessage, noTestFilesFoundMessage,
   relativeTestPath,
   resolveTestFileArgs,
 } from '../test-file-discovery.js';
@@ -472,7 +472,7 @@ describe('test-file-discovery helpers', () => {
   describe('noTestFilesFoundMessage', () => {
     it('says no file matched testMatch when no argument was given', () => {
       const message = noTestFilesFoundMessage({
-        args: [], unmatched: [], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj', configFound: true,
+        args: [], unmatched: [], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj',
       });
       expect(message).toMatch(/^No tests found\./);
       expect(message).toContain('No file under /proj matches testMatch **/*.test.ts');
@@ -485,7 +485,6 @@ describe('test-file-discovery helpers', () => {
         outsideProjects: [],
         testMatch: ['tests/**/*.test.ts'],
         rootDir: '/proj',
-        configFound: true,
       });
       expect(message).toMatch(/^No tests found\./);
       expect(message).toContain('"login" matched no test file');
@@ -496,33 +495,32 @@ describe('test-file-discovery helpers', () => {
 
     it('names a file no project runs', () => {
       const message = noTestFilesFoundMessage({
-        args: ['scripts/x.test.ts'], unmatched: [], outsideProjects: ['scripts/x.test.ts'], testMatch: ['tests/**'], rootDir: '/proj', configFound: true,
+        args: ['scripts/x.test.ts'], unmatched: [], outsideProjects: ['scripts/x.test.ts'], testMatch: ['tests/**'], rootDir: '/proj',
       });
       expect(message).toContain('scripts/x.test.ts is not matched by any project\'s testMatch');
     });
 
     it('blames the --project choice for a file only an unselected project runs', () => {
       const message = noTestFilesFoundMessage({
-        args: ['a.test.ts'], unmatched: [], outsideProjects: ['a.test.ts'], testMatch: ['ios/**'], rootDir: '/proj', projectsSelected: true, configFound: true,
+        args: ['a.test.ts'], unmatched: [], outsideProjects: ['a.test.ts'], testMatch: ['ios/**'], rootDir: '/proj', projectsSelected: true,
       });
       expect(message).toContain('a.test.ts is not matched by any selected project\'s testMatch');
     });
 
-    // `verify` and `doctor` point a project with no config at `init`; so
-    // does `test` now (PILOT-569).
-    it('points a project with no config file at tapsmith init', () => {
+    it('does not mention init', () => {
       const message = noTestFilesFoundMessage({
-        args: [], unmatched: [], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj', configFound: false,
-      });
-      expect(message).toMatch(/^No tests found\./);
-      expect(message).toContain('No tapsmith.config.ts (or .js, .mjs) found in /proj. To set Tapsmith up here, run: npx tapsmith init');
-    });
-
-    it('does not mention init when there is a config', () => {
-      const message = noTestFilesFoundMessage({
-        args: ['nope'], unmatched: ['nope'], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj', configFound: true,
+        args: ['nope'], unmatched: ['nope'], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj',
       });
       expect(message).not.toContain('init');
+    });
+  });
+
+  // `verify` and `doctor` point a project with no config at `init`; so does
+  // `test`, before anything else (PILOT-569, PILOT-784).
+  describe('noConfigFoundMessage', () => {
+    it('names the directory and the init command in the project\'s own runner', () => {
+      expect(noConfigFoundMessage('/proj', 'pnpm exec tapsmith'))
+        .toBe('No tapsmith.config.ts (or .js, .mjs) found in /proj. To set Tapsmith up here, run: pnpm exec tapsmith init');
     });
   });
 });

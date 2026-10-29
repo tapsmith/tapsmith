@@ -10,11 +10,11 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { claimBanner, printsBanner, runCli, type CliHandlers, type TestCommandArgs } from './cli-program.js';
-import { loadConfig, configPathOf, normalizeGrep, resolveDeviceStrategy, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
+import { loadConfig, configPathOf, tapsmithExecCommand, normalizeGrep, resolveDeviceStrategy, resolveDeviceGroup, primaryDevicePin, deviceGroupSize, assignGroupMemberDevices, EXPLICIT_WORKERS, isExplicitWorkers, isTapsmithNotInstalledError, isConfigValidationError, configLoadFailureOf, type DeviceGroupEntry, type TapsmithConfig } from './config.js';
 import figlet from 'figlet';
 import { TapsmithGrpcClient } from './grpc-client.js';
 import { Device } from './device.js';
-import { runTestFile, collectResults, markFileRetryFlakes, type RunDevice, type TestResult, type SuiteResult } from './runner.js';
+import { runTestFile, loadFailureResult, collectResults, markFileRetryFlakes, type RunDevice, type TestResult, type SuiteResult } from './runner.js';
 import { runnerClaimsUnhandledRejection } from './unhandled-errors.js';
 import { telemetry, readSdkVersion, ensureSessionEnv } from './telemetry.js';
 import { createReporters, ReporterDispatcher, type FullResult } from './reporter.js';
@@ -33,7 +33,7 @@ import {
 import type { PreparedState, ResetCapabilities } from './app-reset.js';
 import { claimDeviceOrThrow, claimFirstFree, claimUpTo, currentSession, ensureClaimSession, devicesHeldByThisProcess, heldDevicesNote, listDeviceClaims, releaseDeviceClaim, skippedHeldDeviceMessage, withoutHeldDevices } from './device-claims.js';
 import { installActionProgressPrinter } from './action-progress-renderer.js';
-import { discoverTestFiles, noTestFilesFoundMessage, relativeTestPath, resolveTestFileArgs } from './test-file-discovery.js';
+import { discoverTestFiles, noConfigFoundMessage, noTestFilesFoundMessage, relativeTestPath, resolveTestFileArgs } from './test-file-discovery.js';
 import { resolveTsxBin, tsxIpcPathProblem } from './child-scripts.js';
 import { filterRanNothing } from './test-filter.js';
 import {
@@ -1892,10 +1892,42 @@ function claimSessionCommand(argv: readonly string[]): string {
   return ['tapsmith', ...(subcommand ? [subcommand] : []), ...modes.map((m) => (m.startsWith('--workers') ? '--workers' : m))].join(' ');
 }
 
+/**
+ * The failed-to-load result of each file of the run that the preflight child
+ * could not load, one per project that runs it, as the run itself would have
+ * reported them.
+ */
+async function preflightLoadFailures(
+  projects: import('./project.js').ResolvedProject[],
+  found: Map<string, import('./selection-preflight.js').FilePreflight | undefined>,
+): Promise<TestResult[]> {
+  const { preflightLoadError } = await import('./selection-preflight.js');
+  const { projectLabel } = await import('./project.js');
+  const results: TestResult[] = [];
+  for (const project of projects) {
+    for (const file of project.testFiles) {
+      const result = found.get(file);
+      if (!result || !('error' in result)) continue;
+      results.push(loadFailureResult(
+        { testFilePath: file, projectName: projectLabel(project) },
+        preflightLoadError(result.error),
+      ));
+    }
+  }
+  return results;
+}
+
 async function runTestCommand(args: TestCommandArgs): Promise<void> {
   // Load config
   const config = await loadConfig(undefined, args.config);
   const configPath = configPathOf(config);
+  // No config file: a project not set up yet, with no app to test. Say how
+  // to set it up, before finding files or a device the defaults would send
+  // the run looking for (PILOT-784). A missing --config file already threw.
+  if (configPath === undefined) {
+    console.error(red(noConfigFoundMessage(config.rootDir, await tapsmithExecCommand(config.rootDir))));
+    process.exit(1);
+  }
   if (args.device) {
     config.device = args.device;
   }
@@ -2115,7 +2147,6 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
       testMatch: selectionTestMatch,
       rootDir: config.rootDir,
       projectsSelected: selectedProjects !== undefined,
-      configFound: configPath !== undefined,
     })));
     process.exit(1);
   }
@@ -2175,21 +2206,39 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     config.grep !== undefined || config.grepInvert !== undefined ||
     (hasProjects && projects.some((p) => p.grep !== undefined || p.grepInvert !== undefined));
 
-  // A grep that selects no test fails here, before the daemon, the device and
-  // the reporters (PILOT-553). The names come from a child process, so no
-  // test file's top-level code runs in this one before the run imports it.
-  // Not in UI mode, which shows the tree to pick from, nor in watch mode,
-  // where an edit can add the test the pattern is waiting for.
-  if (selectionFilterActive && !args.ui && !args.watch) {
-    const { discoverTestNames } = await import('./selection-preflight.js');
+  // Every file the run imports is loaded first, in a child process, so a
+  // grep that selects no test (PILOT-553) and a file that fails to load
+  // (PILOT-784) fail before the daemon and the device: a syntax error must
+  // not cost an emulator boot to find out, as in Playwright, which loads
+  // every file before launching a browser. A child, so no test file's
+  // top-level code runs in this process before the run imports it. Not in UI
+  // mode, which shows the tree (load failures included) to pick from, nor in
+  // watch mode, which waits for the edit that fixes the file, or adds the
+  // test a pattern is waiting for.
+  let preflight: Map<string, import('./selection-preflight.js').FilePreflight | undefined> | undefined;
+  if (!args.ui && !args.watch) {
+    const { preflightTestFiles } = await import('./selection-preflight.js');
+    // A grep is answered from the whole suite, so every shard answers it the
+    // same way; load failures are reported for this shard's files.
+    preflight = await preflightTestFiles([...new Set([
+      ...(selectionFilterActive ? unshardedFiles.flatMap(({ files }) => files) : []),
+      ...testFiles,
+    ])]);
+  }
+
+  // A grep that selects no test fails here, before the reporters too.
+  if (selectionFilterActive && preflight) {
+    const found = preflight;
     const { findSelectionMiss, grepFiltersFor, noTestsMatchFilterMessage } = await import('./test-filter.js');
-    const names = await discoverTestNames([...new Set(unshardedFiles.flatMap(({ files }) => files))]);
     const miss = findSelectionMiss(
       unshardedFiles.flatMap(({ project, files }) => {
         const filters = grepFiltersFor(config, project);
         return files.map((file) => ({ file, filters }));
       }),
-      (file) => names.get(file),
+      (file) => {
+        const result = found.get(file);
+        return result && 'names' in result ? result.names : undefined;
+      },
     );
     if (miss) {
       console.error(red(noTestsMatchFilterMessage(
@@ -2243,6 +2292,27 @@ async function runTestCommand(args: TestCommandArgs): Promise<void> {
     }
   }
   const reporter = new ReporterDispatcher(reporters);
+
+  // A file that failed to load: report it, as the run would have, to every
+  // reporter, and run nothing (PILOT-784).
+  const loadFailures = preflight ? await preflightLoadFailures(projects, preflight) : [];
+  if (loadFailures.length > 0) {
+    const fileCount = new Set(loadFailures.map((r) => r.filePath)).size;
+    reporter.onRunStart(config, fileCount);
+    for (const result of loadFailures) {
+      reporter.onTestFileStart(result.filePath!);
+      reporter.onTestEnd(result);
+      reporter.onTestFileEnd(result.filePath!, [result]);
+    }
+    await reporter.onRunEnd({
+      status: 'failed',
+      duration: 0,
+      tests: loadFailures,
+      suites: loadFailures.map((result) => ({ name: '', tests: [result], suites: [], durationMs: 0 })),
+    });
+    console.error(red(`No tests ran: ${fileCount} test file${fileCount === 1 ? '' : 's'} failed to load.`));
+    process.exit(1);
+  }
 
   // Compute the effective parallelism BEFORE handing config to the reporter,
   // so reporters can correctly suppress file headings / show project tags

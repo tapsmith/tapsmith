@@ -2594,8 +2594,13 @@ A test file that fails to load — a missing module, an error thrown while it is
 imported or inside a `describe()` callback — reports a single failed result in
 place of its tests: `name` and `fullName` are `"<file name> — failed to load"` (e.g. `"login.test.ts — failed to load"`),
 `fileLevelFailure` is `true`, `filePath` names the file, and `error` is the load
-error. None of the file's tests run; every other file still does, and the run
-counts it as a failure.
+error, with a code frame at the offending line for a syntax error or a missing import. None of the
+file's tests run. `tapsmith test` (sequentially or with `--workers`) loads every file it is about to
+run before it starts the daemon or touches a device, as Playwright does before it launches a browser:
+when any file fails to load, it reports these results to every reporter, prints
+`No tests ran: <n> test file(s) failed to load.`, and exits with code 1 without running any test. UI
+mode, watch mode and the MCP server's `run_tests` keep running the other files, since they wait for
+the edit that fixes the broken one.
 
 For a **flaky** test (failed, then passed on retry) the final result links the
 **first failed attempt's** trace, screenshot, and video — the failure is what
@@ -2827,7 +2832,7 @@ npx tapsmith test --grep "@smoke|@critical"  # Run smoke + critical tests by tag
 
 The pattern is compiled as a JavaScript `RegExp`. Combine with `--grep-invert` to further narrow the selection.
 
-If a `--grep` / `--grep-invert` filter selects zero tests (e.g. a typo'd pattern), the run fails with `No tests found` and lists the tests there are, rather than reporting a green "0 tests" success. Like Playwright, Tapsmith reads the test names first, so this happens before it starts the daemon or touches a device (a file that fails to load leaves the question open, and the run goes ahead to report it). Watch and UI mode skip this check: an edit can add the test the pattern is waiting for. UI mode lists only the tests the filter selects, so a pattern that selects none leaves its test tree empty.
+If a `--grep` / `--grep-invert` filter selects zero tests (e.g. a typo'd pattern), the run fails with `No tests found` and lists the tests there are, rather than reporting a green "0 tests" success. Like Playwright, Tapsmith reads the test names first, so this happens before it starts the daemon or touches a device (a file that fails to load is reported instead, as above). Watch and UI mode skip this check: an edit can add the test the pattern is waiting for. UI mode lists only the tests the filter selects, so a pattern that selects none leaves its test tree empty.
 
 The same filter can be set in `tapsmith.config.ts`:
 

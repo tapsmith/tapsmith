@@ -1,7 +1,8 @@
 /**
- * Read every test file's test names in a child process, for the check that a
- * `--grep` selects something before `tapsmith test` touches a device
- * (PILOT-553). See selection-preflight-child.ts for why it is a child.
+ * Load every test file in a child process before `tapsmith test` touches a
+ * device: for the check that a `--grep` selects something (PILOT-553), and to
+ * report a file that fails to load before a device is acquired for it
+ * (PILOT-784). See selection-preflight-child.ts for why it is a child.
  */
 
 import { fork } from 'node:child_process';
@@ -14,23 +15,33 @@ export interface PreflightRequest {
   files: string[];
 }
 
+/** A load error as it crosses the IPC channel: already prepared for a report (`loadErrorForReport`). */
+export interface PreflightLoadError {
+  name: string;
+  message: string;
+  stack?: string;
+}
+
+/** What loading one file found: its test names, or why it could not be loaded. */
+export type FilePreflight = { names: string[] } | { error: PreflightLoadError };
+
 export type PreflightResponse =
   /** Sent first: the process that imports the files (under tsx, a grandchild). */
   | { type: 'pid'; pid: number }
-  | { type: 'names'; results: Array<{ file: string; names?: string[]; error?: string }> };
+  | { type: 'names'; results: Array<{ file: string } & FilePreflight> };
 
 /** Long enough for a slow machine to import a large suite under tsx. */
 const PREFLIGHT_TIMEOUT_MS = 60_000;
 
 /**
- * Each file's test names, or `undefined` for a file that failed to load (and
- * for every file when the child itself failed or timed out): the run then goes
- * ahead and reports whatever is wrong itself.
+ * What loading each file found, or `undefined` for every file when the child
+ * itself failed or timed out: the run then goes ahead and reports whatever is
+ * wrong itself.
  */
-export function discoverTestNames(
+export function preflightTestFiles(
   files: string[],
   timeoutMs = PREFLIGHT_TIMEOUT_MS,
-): Promise<Map<string, string[] | undefined>> {
+): Promise<Map<string, FilePreflight | undefined>> {
   // import.meta.dirname is src/ or dist/; the package root is one level up.
   const jsScript = path.resolve(import.meta.dirname, 'selection-preflight-child.js');
   const tsScript = path.resolve(import.meta.dirname, 'selection-preflight-child.ts');
@@ -39,7 +50,7 @@ export function discoverTestNames(
   // From every file being checked, not this shard's: a shard of .js files
   // still has to import the suite's .ts files to answer the same way.
   const loader = resolveChildLoader([script], files, pkgDir);
-  const unknown = new Map<string, string[] | undefined>(files.map((f) => [f, undefined]));
+  const unknown = new Map<string, FilePreflight | undefined>(files.map((f) => [f, undefined]));
 
   return new Promise((resolve) => {
     let child: ReturnType<typeof fork>;
@@ -67,7 +78,7 @@ export function discoverTestNames(
       }
     };
     let settled = false;
-    const settle = (result: Map<string, string[] | undefined>): void => {
+    const settle = (result: Map<string, FilePreflight | undefined>): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -83,7 +94,7 @@ export function discoverTestNames(
 
     child.on('message', (msg: PreflightResponse) => {
       if (msg?.type === 'pid') importerPid = msg.pid;
-      else if (msg?.type === 'names') settle(new Map(msg.results.map((r) => [r.file, r.names])));
+      else if (msg?.type === 'names') settle(new Map(msg.results.map(({ file, ...found }) => [file, found])));
     });
     child.on('error', () => settle(unknown));
     // 'disconnect', not 'exit': 'exit' can arrive before the names message has
@@ -92,4 +103,12 @@ export function discoverTestNames(
     const request: PreflightRequest = { type: 'discover-names', files };
     child.send(request, (err) => { if (err) settle(unknown); });
   });
+}
+
+/** A load error from {@link preflightTestFiles} as an `Error` again, for a test result. */
+export function preflightLoadError(error: PreflightLoadError): Error {
+  const rebuilt = new Error(error.message);
+  rebuilt.name = error.name;
+  if (error.stack !== undefined) rebuilt.stack = error.stack;
+  return rebuilt;
 }

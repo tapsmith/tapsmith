@@ -37,7 +37,7 @@ describe("Login screen", () => {
 
 Every import you need comes from the `tapsmith` package: `test`, `describe`, `expect`, `beforeAll`, `afterAll`, `beforeEach`, `afterEach`, `flushSoftErrors`, `Device`, and the config utilities.
 
-A file that fails to load — an import of a module that doesn't exist, or an error thrown at the top level or inside a `describe()` callback — runs none of its tests. It is reported as one failed result, `<file name> — failed to load`, with the error and a code frame pointing at the line, and the rest of the run carries on.
+A file that fails to load — an import of a module that doesn't exist, or an error thrown at the top level or inside a `describe()` callback — runs none of its tests. It is reported as one failed result, `<file name> — failed to load`, with the error and a code frame pointing at the line. `tapsmith test` loads every file before it touches a device, so it reports such a file at once and runs nothing until it is fixed; UI mode and watch mode run the rest and pick the file up again once you fix it.
 
 ---
 
