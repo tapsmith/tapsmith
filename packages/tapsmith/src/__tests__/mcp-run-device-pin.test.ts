@@ -78,6 +78,53 @@ describe('run_tests `device` in a headless MCP session', () => {
     expect(d.getSessionInfo().device).toBe('emulator-5560');
   });
 
+  // A device tool (snapshot, launch_app) as the first call: its `device`
+  // must choose the device, not be applied after an auto-pick has already
+  // installed the agent on another one.
+  it('resolves the target on the device a first device tool names', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    await d.ensureDevicesReady({ retryFailedTargets: true, device: 'emulator-5560' });
+    expect(hoisted.resolved).toEqual([{ platform: 'android', device: 'emulator-5560' }]);
+    expect(d.getSessionInfo().device).toBe('emulator-5560');
+  });
+
+  it('pins only the target of the named device\'s platform', async () => {
+    writeProject(`export default {
+      testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "android", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["b.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    const d = dispatcher();
+    const udid = '11111111-2222-3333-4444-555555555555';
+    await d.ensureDevicesReady({ device: udid });
+    expect(hoisted.resolved).toContainEqual({ platform: 'ios', device: udid });
+    expect(hoisted.resolved).toContainEqual({ platform: 'android', device: undefined });
+  });
+
+  it('pins the named project\'s target', async () => {
+    writeProject(`export default {
+      testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "phone", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["b.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    const d = dispatcher();
+    await d.ensureDevicesReady({ device: 'emulator-5560', project: 'phone' });
+    expect(hoisted.resolved).toContainEqual({ platform: 'android', device: 'emulator-5560' });
+  });
+
+  it('leaves a later device tool\'s `device` to the tool, the target already chosen', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    await d.ensureDevicesReady({ device: 'emulator-5560' });
+    expect(hoisted.resolved).toEqual([{ platform: 'android', device: undefined }]);
+  });
+
   it('refuses a device other than the one the session already runs on, naming both', async () => {
     writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
     const d = dispatcher();

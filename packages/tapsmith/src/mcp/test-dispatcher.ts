@@ -150,6 +150,13 @@ export interface TestDispatcher {
     retryFailedTargets?: boolean
     /** The project the tool names, if any: its target is the one worth retrying. */
     project?: string
+    /**
+     * The device the tool names, if any. On a session whose targets are not
+     * resolved yet it chooses the device of the one target it can serve, as a
+     * first `run_tests` `device` does — resolving first auto-picked a device
+     * and installed the agent there before the tool switched away.
+     */
+    device?: string
   }): Promise<void>
   runFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult>
   /**

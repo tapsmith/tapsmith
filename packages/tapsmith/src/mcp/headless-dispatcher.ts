@@ -167,8 +167,11 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * no device) comes back on the same device.
    */
   private readonly _devicePins = new Map<string, string>();
-  /** A `run_tests` `device` to pin while the targets are first resolved. */
-  private _pendingPin: { device: string; files: string[]; project?: string } | null = null;
+  /**
+   * A `device` to pin while the targets are first resolved: a `run_tests`
+   * one (with its files), or a device tool's (none).
+   */
+  private _pendingPin: { device: string; files?: string[]; project?: string } | null = null;
 
   constructor(options?: { configFile?: string }) {
     this._configFile = options?.configFile;
@@ -790,7 +793,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * name one, and the documented flow starts with `tapsmith_list_tests`
    * (PILOT-342).
    */
-  async ensureDevicesReady(opts?: { retryFailedTargets?: boolean; project?: string }): Promise<void> {
+  async ensureDevicesReady(opts?: { retryFailedTargets?: boolean; project?: string; device?: string }): Promise<void> {
     if (this._devicesReady) {
       if (opts?.retryFailedTargets) await this._retryFailedTargets(opts.project);
       return;
@@ -799,11 +802,16 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       await this._devicesPromise;
       return;
     }
+    // A device tool's `device` chooses the device while there is still a
+    // choice to make; a `run_tests` pin already pending is left alone.
+    const pending = opts?.device && !this._pendingPin ? { device: opts.device, project: opts.project } : null;
+    if (pending) this._pendingPin = pending;
     this._devicesPromise = this._prepareDevices();
     try {
       await this._devicesPromise;
     } finally {
       this._devicesPromise = null;
+      if (pending && this._pendingPin === pending) this._pendingPin = null;
     }
   }
 
@@ -1012,7 +1020,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   }
 
   /**
-   * Pin the target a pending `run_tests` `device` is for, before anything
+   * Pin the target a pending `device` (run_tests or a device tool) is for, before anything
    * auto-picks one. Only an unambiguous request pins: files spanning two
    * targets would pin one of them to a device it cannot use, and a group
    * member's *name* means nothing until its group's devices are known.
@@ -1022,7 +1030,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     const pin = this._pendingPin;
     if (!pin) return;
     if (this._isGroupMemberName(pin.device)) return;
-    const keys = this._targetKeysFor(pin.files, pin.project);
+    const keys = pin.files ? this._targetKeysFor(pin.files, pin.project) : this._targetKeysForDevice(pin.device, pin.project, config);
     if (keys.length !== 1) return;
     const effective = this._wantedConfigs(config).find((c) => targetKeyFor(c) === keys[0]);
     // A device pinned in the config wins; `deviceChoiceError` says so.
@@ -1043,6 +1051,23 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   /** Whether `device` is a `use.devices` member name rather than a serial. */
   private _isGroupMemberName(device: string): boolean {
     return this._projects.some((p) => resolveDeviceGroup(p.effectiveConfig).some((e) => e.name === device));
+  }
+
+  /**
+   * The targets a device tool's `device` could be the device of: the named
+   * project's, or else every single-device target of the serial's platform.
+   * More than one pins none — which of them the caller meant is not known.
+   */
+  private _targetKeysForDevice(device: string, project: string | undefined, config: TapsmithConfig): string[] {
+    if (project !== undefined) {
+      return this._projects.some((p) => p.name === project)
+        ? [platformKeyForProject(this._projects, project, config.platform)]
+        : [];
+    }
+    const platform = platformOfSerial(device);
+    return this._wantedConfigs(config)
+      .filter((c) => deviceGroupSize(c) <= 1 && (c.platform ?? 'android') === platform)
+      .map(targetKeyFor);
   }
 
   /**

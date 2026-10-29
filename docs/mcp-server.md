@@ -42,7 +42,7 @@ The MCP panel in the UI shows the connection status and a live activity feed of 
 
 ### Stdio mode
 
-Configure your MCP client to launch `tapsmith mcp-server` over stdio. You normally do not run this command directly; Codex, Claude Code, or another MCP client starts it as a subprocess when needed. The agent gets its own headless test session, daemon, and device, fully independent from any UI session — a headless server never attaches to the worker daemons of a running `tapsmith test --ui`, so what it drives does not change when that run starts, scales, or ends. It also stays off the **devices** that UI session is driving: they are skipped when a device is auto-picked, and a config that pins one of them fails with a message naming the UI session rather than starting a second agent on it. Test files and projects are discovered lazily on the first test-management tool call.
+Configure your MCP client to launch `tapsmith mcp-server` over stdio. You normally do not run this command directly; Codex, Claude Code, or another MCP client starts it as a subprocess when needed. The agent gets its own headless test session, daemon, and device, fully independent from any UI session — a headless server never attaches to the worker daemons of a running `tapsmith test --ui`, so what it drives does not change when that run starts, scales, or ends. It also stays off the **devices** that UI session is driving: they are skipped when a device is auto-picked, and a config that pins one of them fails with a message naming the UI session rather than starting a second agent on it. Test files and projects are discovered lazily on the first test-management tool call, and every later `tapsmith_list_tests`, `tapsmith_run_tests`, `tapsmith_suite_status` or `tapsmith_session_info` call first picks up test files written, edited or deleted since — so a test the agent has just written can be run straight away. Changes to the config itself (`testMatch`, projects) take effect when the server restarts.
 
 A multi-platform config gets one device and agent **per platform**, taken from
 each project's own settings, and runs are routed to the device matching the
@@ -99,7 +99,9 @@ either:
 - **One platform** — including a `workers: 2` UI session driving several
   simulator clones — the tool acts on the session's **primary device**: worker
   0 in UI mode, the first device prepared in a headless session. Pass `device`
-  only to single out one worker of a parallel run.
+  only to single out one worker of a parallel run. On a headless session that
+  has not prepared a device yet, the first device tool's `device` is the device
+  it prepares for that platform, as a first `tapsmith_run_tests` `device` is.
 - **More than one platform** (a multi-platform config) — there is no single
   default, so pass `project`. It selects that project's platform, and its
   primary device. `device` still works for a specific serial.
@@ -251,7 +253,7 @@ Run Tapsmith test files and return structured results. Only one test run can exe
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `files` | string[] | Yes | File paths — absolute, relative to the config's directory (`rootDir`) or the server's working directory, or globs matched the same way (e.g. `"tests/login.tapsmith.ts"`, `"**/login.tapsmith.ts"`). Use `tapsmith_list_tests` to find available files. An argument that matches no discovered file is named in the error rather than reported as an empty run. |
+| `files` | string[] | Yes | File paths — absolute, relative to the config's directory (`rootDir`) or the server's working directory, or globs matched the same way (e.g. `"tests/login.tapsmith.ts"`, `"**/login.tapsmith.ts"`). Use `tapsmith_list_tests` to find available files. An argument that matches no discovered file is named in the error rather than reported as an empty run — and a file that exists but that the config's `testMatch` does not select is called out as such. |
 | `test` | string | No | Run only the tests whose full name (`"Describe > test name"`) contains this text, case-insensitively (e.g. `"submits form"`). It can match more than one test, and it applies across every file in `files`. A filter that matches nothing is an error listing the available tests, never a silent pass. |
 | `project` | string | No | Project name to target a specific platform/device (e.g. `"android"`, `"ios"`). Required when a requested file runs under more than one project: such a run is refused rather than sent to the first one. An unknown project name is refused too. |
 | `device` | string | No | Device serial, or a `use.devices` member name, the run must use. Prefer `project` to pick a platform. A session keeps its devices for its whole life, so `device` can confirm the device a run would use — or, on a headless session, choose it: until a test run or a device tool needs a device (listing tests and reading session info do not), `device` pins the device the session will use. A device that cannot be set up is refused with the reason, and nothing is pinned. A device the session cannot use for the run is refused with the one it holds; it is never ignored. In HTTP (UI) mode it is accepted only when exactly one worker of the files' device target could take the run and holds that device, since each run goes to whichever of those workers is free. |
@@ -300,7 +302,7 @@ These tools operate on the current MCP test session. In HTTP mode that is the br
 
 #### `tapsmith_list_tests`
 
-List all test files, projects, and test names discovered by the current MCP test session. Call this before `tapsmith_run_tests` to get exact file paths, test names, and project names.
+List all test files, projects, and test names discovered by the current MCP test session. Call this before `tapsmith_run_tests` to get exact file paths, test names, and project names. Each call picks up test files written, edited or deleted since the previous one.
 
 No parameters.
 

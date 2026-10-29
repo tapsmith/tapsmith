@@ -327,3 +327,62 @@ describe('stdioTestArgs()', () => {
     expect(seen?.grep?.test('cart > checkout v2 works')).toBe(false);
   });
 });
+
+// PILOT-836: a file written mid-session must be matchable by the run, and a
+// file that still matches nothing must be explained by what actually excludes
+// it rather than by path forms and load failures.
+describe('tapsmith_run_tests and files written mid-session', () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-run-unmatched-')));
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('syncs the test files before anything reads them', async () => {
+    const calls: string[] = [];
+    const dispatcher = makeDispatcher({
+      refreshTestFiles: async () => { calls.push('refresh'); },
+      resolveRequestedFiles: (files) => { calls.push('resolve'); return files; },
+      runFiles: async () => { calls.push('run'); return { status: 'passed', passed: 1, failed: 0, skipped: 0, duration: 1 }; },
+    });
+    await callRunTests(dispatcher, { files: [FILE] });
+    expect(calls[0]).toBe('refresh');
+    expect(calls).toContain('run');
+  });
+
+  it('says a file that exists is not selected by the config\'s testMatch', async () => {
+    const configPath = path.join(root, 'tapsmith.config.mjs');
+    fs.writeFileSync(configPath, '');
+    const written = path.join(root, 'tests', 'new.tapsmith.ts');
+    fs.mkdirSync(path.dirname(written));
+    fs.writeFileSync(written, '');
+    const dispatcher = makeDispatcher({
+      resolveRequestedFiles: () => [],
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
+      getSessionInfo: () => ({ timeout: 5000, retries: 0, projects: [], configPath }),
+    });
+
+    for (const arg of [written, 'tests/new.tapsmith.ts']) {
+      const out = text(await callRunTests(dispatcher, { files: [arg] }));
+      expect(out).toContain(`${arg} exists, but the config's testMatch does not select it`);
+      expect(out).toContain(configPath);
+      expect(out).not.toMatch(/Paths may be absolute/);
+    }
+  });
+
+  it('keeps the path advice for an argument that names no file at all', async () => {
+    const dispatcher = makeDispatcher({
+      resolveRequestedFiles: () => [],
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
+      getSessionInfo: () => ({ timeout: 5000, retries: 0, projects: [], configPath: path.join(root, 'tapsmith.config.mjs') }),
+    });
+    const out = text(await callRunTests(dispatcher, { files: ['tests/typo.test.ts'] }));
+    expect(out).toContain('matched no discovered test file');
+    expect(out).toMatch(/Paths may be absolute/);
+    expect(out).not.toContain('testMatch does not select');
+  });
+});
