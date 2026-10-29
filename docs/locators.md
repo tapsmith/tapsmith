@@ -137,8 +137,8 @@ Supported roles map to platform-native element types. On iOS, many React Native 
 | `listitem` | `LinearLayout`, `RelativeLayout`, `FrameLayout` | `XCUIElementTypeCell` |
 | `scrollview` | `ScrollView`, `HorizontalScrollView`, `NestedScrollView` | `XCUIElementTypeScrollView` |
 | `radiogroup` | `RadioGroup`, or RN `accessibilityRole="radiogroup"` | `XCUIElementTypeRadioGroup`, or a named `.other` (RN) |
-| `spinbutton` | `NumberPicker`, or RN `accessibilityRole="spinbutton"` | `XCUIElementTypeStepper` (a `Stepper` or `UIStepper`), or a named `.other` (RN) |
-| `timer` | `Chronometer`, or RN `accessibilityRole="timer"` | a named `.other` (RN) |
+| `spinbutton` | `NumberPicker` (it reports no name of its own: find it by role alone or by scoping), or RN `accessibilityRole="spinbutton"` | `XCUIElementTypeStepper` (a `Stepper` or `UIStepper`), or a named `.other` (RN) |
+| `timer` | `Chronometer` (Android names it by the time it shows, `"5 seconds"`, whatever its `contentDescription`, so find a running one by role alone, by scoping or by test id), or RN `accessibilityRole="timer"` | a named `.other` (RN) |
 | `menu`, `menubar`, `menuitem` | RN `accessibilityRole` of the same name | `XCUIElementTypeMenu`, `XCUIElementTypeMenuBar`, `XCUIElementTypeMenuItem`, or a named `.other` (RN) |
 | `scrollbar`, `summary` | RN `accessibilityRole` of the same name | a named `.other` (RN) |
 
