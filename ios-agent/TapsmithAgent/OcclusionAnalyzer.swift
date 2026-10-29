@@ -102,14 +102,13 @@ struct OcclusionAnalyzer {
 
     init(nodes: [Node], screen: CGRect) {
         var placed = nodes
-        // Pre-order: a parent is placed before its children.
-        var cellAround: [CGRect?] = Array(repeating: nil, count: nodes.count)
+        // Pre-order: a parent is placed before its children. A node's
+        // context is the one its parent hands its children.
+        var childContexts: [CellFrames.Context] = []
+        childContexts.reserveCapacity(nodes.count)
         for i in placed.indices {
-            let around = placed[i].parent.flatMap { p in
-                placed[p].elementType == .cell ? placed[p].frame : cellAround[p]
-            }
-            cellAround[i] = around
-            let frame = CellFrames.effectiveFrame(of: nodes[i].frame, inCell: around)
+            let context = placed[i].parent.map { childContexts[$0] } ?? CellFrames.Context(viewport: screen)
+            let frame = CellFrames.effectiveFrame(of: nodes[i].frame, in: context)
             if frame != nodes[i].frame {
                 let n = nodes[i]
                 placed[i] = Node(
@@ -117,6 +116,7 @@ struct OcclusionAnalyzer {
                     subtreeEnd: n.subtreeEnd, parent: n.parent, window: n.window
                 )
             }
+            childContexts.append(CellFrames.childContext(of: nodes[i].elementType, frame: frame, in: context))
         }
         self.nodes = placed
         self.snapshotFrames = nodes.map(\.frame)

@@ -48,27 +48,37 @@ func children(_ dict: [String: Any]) -> [[String: Any]] {
 
 // MARK: - The rule
 
+let screen = R(0, 0, 402, 874)
+let table = R(0, 168, 402, 672)
+/// Inside the table, as the walk sees it.
+let inTable = CellFrames.childContext(of: .table, frame: table, in: .init(viewport: screen))
+func inCell(_ cell: CGRect) -> CellFrames.Context { CellFrames.childContext(of: .cell, frame: cell, in: inTable) }
+
 let offScreenCell = R(0, 901, 402, 53)
-check("a node that misses its cell is a placeholder: it takes the cell's frame",
-      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), inCell: offScreenCell), offScreenCell)
-check("a node inside its cell keeps its frame",
-      CellFrames.effectiveFrame(of: R(20, 228, 44, 20), inCell: R(0, 212, 402, 53)), R(20, 228, 44, 20))
+check("a node that misses its off-screen cell is a placeholder: it takes the cell's frame",
+      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), in: inCell(offScreenCell)), offScreenCell)
+check("a node inside its on-screen cell keeps its frame",
+      CellFrames.effectiveFrame(of: R(20, 228, 44, 20), in: inCell(R(0, 212, 402, 53))), R(20, 228, 44, 20))
 check("a node outside any cell keeps its frame",
-      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), inCell: nil), R(0, 168, 55, 20))
-check("content overflowing its cell a little still belongs to it",
-      CellFrames.effectiveFrame(of: R(20, 200, 44, 20), inCell: R(0, 212, 402, 53)), R(20, 200, 44, 20))
-check("a separator on the cell's bottom edge belongs to it",
-      CellFrames.effectiveFrame(of: R(20, 265, 362, 1), inCell: R(0, 212, 402, 53)), R(20, 265, 362, 1))
+      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), in: inTable), R(0, 168, 55, 20))
+check("content outside an on-screen cell is real, and keeps its frame (a carousel item past the edge)",
+      CellFrames.effectiveFrame(of: R(800, 228, 150, 20), in: inCell(R(0, 212, 402, 120))), R(800, 228, 150, 20))
 check("a zero-size node is left alone (it is invisible anyway)",
-      CellFrames.effectiveFrame(of: R(0, 168, 0, 0), inCell: offScreenCell), R(0, 168, 0, 0))
+      CellFrames.effectiveFrame(of: R(0, 168, 0, 0), in: inCell(offScreenCell)), R(0, 168, 0, 0))
 check("a zero-size cell vouches for nothing",
-      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), inCell: R(0, 901, 0, 0)), R(0, 168, 55, 20))
-check("a row above the screen (scrolled past) is placed above it",
-      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), inCell: R(0, -400, 402, 53)), R(0, -400, 402, 53))
+      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), in: inCell(R(0, 901, 0, 0))), R(0, 168, 55, 20))
+check("a row scrolled above the table is placed above it",
+      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), in: inCell(R(0, -400, 402, 53))), R(0, -400, 402, 53))
+check("a row ending exactly at the table's top is off it: its placeholder at the top edge moves",
+      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), in: inCell(R(0, 115, 402, 53))), R(0, 115, 402, 53))
+check("a row under the nav bar, above the table's area, is off it too",
+      CellFrames.effectiveFrame(of: R(0, 168, 55, 20), in: inCell(R(0, 100, 402, 53))), R(0, 100, 402, 53))
+check("a row the table's bottom edge cuts is on screen: its content stays",
+      CellFrames.effectiveFrame(of: R(20, 828, 44, 20), in: inCell(R(0, 812, 402, 53))), R(20, 828, 44, 20))
 
 // MARK: - Rewriting a snapshot dictionary
 
-func table() -> [String: Any] {
+func tableApp() -> [String: Any] {
     node(.application, R(0, 0, 402, 874), [
         node(.table, R(0, 168, 402, 672), [
             node(.staticText, R(0, 168, 402, 44), label: "Nothing selected"),
@@ -85,7 +95,7 @@ func table() -> [String: Any] {
     ])
 }
 
-var dict = table()
+var dict = tableApp()
 CellFrames.placeDetachedNodes(in: &dict)
 let tableNode = children(dict)[0]
 check("the table keeps its frame", frame(tableNode), R(0, 168, 402, 672))
@@ -101,12 +111,33 @@ check("nested placeholders move too", frame(children(children(unloaded)[0])[0]),
 check("labels and types are untouched", children(unloaded)[2]["label"] as? String, "Row 14")
 
 // A cell nested in an unloaded cell is measured against its parent's place.
-var nested = node(.cell, R(0, 901, 402, 200), [
-    node(.cell, R(0, 168, 402, 53), [node(.staticText, R(0, 168, 55, 20), label: "Inner")]),
+func app(_ children: [[String: Any]]) -> [String: Any] {
+    node(.application, screen, [node(.table, table, children)])
+}
+var nested = app([
+    node(.cell, R(0, 901, 402, 200), [
+        node(.cell, R(0, 168, 402, 53), [node(.staticText, R(0, 168, 55, 20), label: "Inner")]),
+    ]),
 ])
 CellFrames.placeDetachedNodes(in: &nested)
-check("a placeholder cell inside a cell moves to the outer cell", frame(children(nested)[0]), R(0, 901, 402, 200))
-check("…and so does its content", frame(children(children(nested)[0])[0]), R(0, 901, 402, 200))
+let outer = children(children(nested)[0])[0]
+check("a placeholder cell inside an unloaded cell moves to the outer cell", frame(children(outer)[0]), R(0, 901, 402, 200))
+check("…and so does its content", frame(children(children(outer)[0])[0]), R(0, 901, 402, 200))
+
+// A loaded row holding a horizontal carousel scrolled past the screen edge.
+var carousel = app([
+    node(.cell, R(0, 212, 402, 120), [
+        node(.collectionView, R(0, 212, 402, 120), [
+            node(.cell, R(16, 222, 150, 100), [node(.staticText, R(20, 262, 80, 20), label: "Item 1")]),
+            node(.cell, R(800, 222, 150, 100), [node(.staticText, R(804, 262, 80, 20), label: "Item 8")]),
+        ]),
+    ]),
+])
+CellFrames.placeDetachedNodes(in: &carousel)
+let shelf = children(children(children(children(carousel)[0])[0])[0])
+check("an off-screen carousel cell in an on-screen row keeps its frame", frame(shelf[1]), R(800, 222, 150, 100))
+check("…and so does its text", frame(children(shelf[1])[0]), R(804, 262, 80, 20))
+check("an on-screen carousel item keeps its frame", frame(children(shelf[0])[0]), R(20, 262, 80, 20))
 
 var plain = node(.other, R(0, 0, 402, 874), [node(.staticText, R(0, 168, 55, 20), label: "Hello")])
 CellFrames.placeDetachedNodes(in: &plain)
