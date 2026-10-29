@@ -32,6 +32,7 @@ function dispatcherWith(projects: Array<{ name: string; platform?: string }>): T
     }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    classifyUnmatchedFile: () => undefined,
     refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: false }),
   };

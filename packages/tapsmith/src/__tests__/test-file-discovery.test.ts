@@ -4,6 +4,7 @@ import * as path from 'node:path';
 import { watch as chokidarWatch } from 'chokidar';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  classifyUnmatchedTestFile,
   discoverTestFiles,
   isIgnoredDiscoveryWatchPath,
   isIgnoredWatchModePath,
@@ -524,5 +525,64 @@ describe('test-file-discovery helpers', () => {
       });
       expect(message).not.toContain('init');
     });
+  });
+});
+
+// PILOT-836: run_tests explains an argument that matched none of the
+// session's files by what the config's matcher says about it — not by
+// whether the file is on disk, which a narrowed session, a rootDir away from
+// the config, or a path spelt through a symlink all made misleading.
+describe('classifyUnmatchedTestFile', () => {
+  let root: string;
+
+  beforeEach(() => {
+    // Deliberately not realpath'd: on macOS the tmpdir is a symlink.
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-classify-'));
+    fs.mkdirSync(path.join(root, 'e2e', 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'e2e', 'tests', 'login.test.ts'), '');
+    fs.writeFileSync(path.join(root, 'e2e', 'tests', 'new.tapsmith.ts'), '');
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const opts = (rootDir: string, roots = [rootDir]) => ({
+    roots,
+    rootDir,
+    selectors: [{ testMatch: ['**/*.test.ts'] }],
+  });
+
+  it('calls a file testMatch leaves out excluded', () => {
+    expect(classifyUnmatchedTestFile('tests/new.tapsmith.ts', opts(path.join(root, 'e2e')))).toBe('excluded');
+  });
+
+  it('calls a file testMatch selects not held, so a narrowed session is not blamed on testMatch', () => {
+    expect(classifyUnmatchedTestFile('tests/login.test.ts', opts(path.join(root, 'e2e')))).toBe('not-held');
+  });
+
+  it('resolves relative arguments against the roots matching uses, rootDir first', () => {
+    // rootDir is e2e/, away from where a config would sit.
+    expect(classifyUnmatchedTestFile('tests/login.test.ts', opts(path.join(root, 'e2e'), [path.join(root, 'e2e'), root]))).toBe('not-held');
+    expect(classifyUnmatchedTestFile('e2e/tests/login.test.ts', opts(path.join(root, 'e2e'), [path.join(root, 'e2e'), root]))).toBe('not-held');
+  });
+
+  it('matches through a symlinked spelling of the root', () => {
+    const real = fs.realpathSync(root);
+    expect(classifyUnmatchedTestFile(path.join(real, 'e2e', 'tests', 'login.test.ts'), opts(path.join(root, 'e2e')))).toBe('not-held');
+  });
+
+  it('says nothing about an argument that names no file, or names a glob', () => {
+    expect(classifyUnmatchedTestFile('tests/typo.test.ts', opts(path.join(root, 'e2e')))).toBeUndefined();
+    expect(classifyUnmatchedTestFile('**/*.test.ts', opts(path.join(root, 'e2e')))).toBeUndefined();
+    expect(classifyUnmatchedTestFile('tests', opts(path.join(root, 'e2e')))).toBeUndefined();
+  });
+
+  it('applies each selector\'s testIgnore', () => {
+    expect(classifyUnmatchedTestFile('tests/login.test.ts', {
+      roots: [path.join(root, 'e2e')],
+      rootDir: path.join(root, 'e2e'),
+      selectors: [{ testMatch: ['**/*.test.ts'], testIgnore: ['tests/login.test.ts'] }],
+    })).toBe('excluded');
   });
 });

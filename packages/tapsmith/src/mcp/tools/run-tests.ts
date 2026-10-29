@@ -1,7 +1,5 @@
 import { z } from 'zod';
 import { spawn } from 'node:child_process';
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult, ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/protocol.js';
@@ -515,16 +513,19 @@ function buildNoTestsExecutedMessage(
   if (unmatched.length === 0) {
     return `${summary} The file(s) were found but contained no runnable tests — use tapsmith_list_tests to see what they hold.`;
   }
-  // The session has just synced with the disk (PILOT-836), so a file that is
-  // there and still unmatched is one the config's testMatch leaves out — say
-  // that, not "check the path", which sends the caller after the wrong thing.
-  // Not when the config failed to load, though: then the session has no test
-  // files at all, and its own note says why.
+  // The session has just synced with the disk (PILOT-836), so say what the
+  // config's matcher makes of a file that is there: left out by testMatch, or
+  // selected but not held (a UI session started on a narrower selection).
+  // Not when the config failed to load: the session then holds nothing, and
+  // its own note says why.
   const { configPath, configError } = dispatcher.getSessionInfo();
   const lines: string[] = [];
   const excluded: string[] = [];
+  const notHeld: string[] = [];
   for (const f of unmatched) {
-    if (!configError && existingFileFor(f, configPath)) excluded.push(f);
+    const why = configError ? undefined : dispatcher.classifyUnmatchedFile(f);
+    if (why === 'excluded') excluded.push(f);
+    else if (why === 'not-held') notHeld.push(f);
     else lines.push(f);
   }
   const parts: string[] = [summary];
@@ -533,6 +534,11 @@ function buildNoTestsExecutedMessage(
       + `\nRename the file to match a testMatch pattern, or add a pattern for it in ${configPath ?? 'the Tapsmith config'} `
       + '(a config change takes effect when the MCP server restarts). tapsmith_session_info names the config in use.');
   }
+  if (notHeld.length > 0) {
+    parts.push(notHeld.map((f) => `${f} is a test file by the config's testMatch, but this session does not hold it.`).join('\n')
+      + '\nA UI session started on a file argument or --project holds only that selection: start it without the selection to run other files. '
+      + 'tapsmith_list_tests lists the files this session holds.');
+  }
   if (lines.length > 0) {
     parts.push('These argument(s) matched no discovered test file:\n'
       + lines.map((f) => `  - ${f}`).join('\n')
@@ -540,25 +546,6 @@ function buildNoTestsExecutedMessage(
       + 'Use tapsmith_list_tests for the exact paths — and note that a file which failed to load is reported there as a warning rather than listed.');
   }
   return parts.join(' ');
-}
-
-/**
- * Whether a `files` argument names a file on disk — absolute, or relative to
- * the config's directory or the server's working directory, as the matching
- * reads it. A glob names no one file and is never "existing".
- */
-function existingFileFor(arg: string, configPath: string | undefined): boolean {
-  const candidates = path.isAbsolute(arg)
-    ? [arg]
-    : [configPath ? path.resolve(path.dirname(configPath), arg) : undefined, path.resolve(process.cwd(), arg)];
-  return candidates.some((c) => {
-    if (!c) return false;
-    try {
-      return fs.statSync(c).isFile();
-    } catch {
-      return false;
-    }
-  });
 }
 
 function buildZeroMatchMessage(dispatcher: TestDispatcher, files: string[], testFilter: string): string {

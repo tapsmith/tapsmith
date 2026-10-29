@@ -269,6 +269,50 @@ export function matchesTestFile(
   return patterns.some((pattern) => minimatch(relative, normalizeGlobPattern(pattern)));
 }
 
+/**
+ * Why a `files` argument matched none of a session's test files, as the
+ * config's own matcher sees it (PILOT-836): `excluded` when it names a file
+ * that no `testMatch` selects (or a `testIgnore` drops), `not-held` when it
+ * names one the config does select but the session does not hold (a UI
+ * session started on a file argument or `--project`), `undefined` when it
+ * names no file at all (a typo, a directory, a glob).
+ *
+ * Relative arguments resolve against `roots` — the ones the matching uses —
+ * and paths are compared real, so a symlinked spelling of the root (macOS's
+ * `/tmp`) or a case-insensitive filesystem's spelling does not read as
+ * excluded. Telling the caller "on disk, so testMatch leaves it out" was
+ * wrong in each of those cases and sent it to edit a config that was fine.
+ */
+export function classifyUnmatchedTestFile(
+  arg: string,
+  opts: {
+    roots: string[]
+    rootDir: string
+    selectors: Array<{ testMatch: string[]; testIgnore?: string[] }>
+  },
+): 'excluded' | 'not-held' | undefined {
+  const real = (p: string): string | undefined => {
+    try {
+      return fs.realpathSync.native(p);
+    } catch {
+      return undefined;
+    }
+  };
+  const rootDir = real(opts.rootDir) ?? opts.rootDir;
+  const candidates = path.isAbsolute(arg) ? [arg] : opts.roots.map((r) => path.resolve(r, arg));
+  for (const candidate of candidates) {
+    const file = real(candidate);
+    if (!file) continue;
+    try {
+      if (!fs.statSync(file).isFile()) continue;
+    } catch {
+      continue;
+    }
+    return opts.selectors.some((s) => matchesTestFile(file, s.testMatch, rootDir, s.testIgnore)) ? 'not-held' : 'excluded';
+  }
+  return undefined;
+}
+
 export function matchesTestIgnore(relativePath: string, extraIgnore?: string[]): boolean {
   const relative = normalizeGlobPattern(relativePath).replace(/\/+$/, '');
   if (!relative) return false;

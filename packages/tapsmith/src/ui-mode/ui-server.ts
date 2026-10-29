@@ -88,6 +88,7 @@ import {
   type LaunchProgressSink,
 } from '../launch-progress.js';
 import {
+  classifyUnmatchedTestFile,
   discoverTestFiles,
   getTestDiscoveryWatchRoots,
   isIgnoredDiscoveryWatchPath,
@@ -1036,8 +1037,10 @@ export async function startUIServer(
 
   // ─── MCP Server (SSE) ───
 
-  function collectFailures(): import('../mcp/test-dispatcher.js').TestFailureDetail[] {
-    return [...testResults.values()]
+  function collectFailures(
+    entries: Iterable<UITestResultEntry> = testResults.values(),
+  ): import('../mcp/test-dispatcher.js').TestFailureDetail[] {
+    return [...entries]
       // A stop is not a failure — same rule the headless dispatcher applies.
       .filter((r) => r.status === 'failed' && r.error && !isInterruptedEntry(r))
       .map((r) => ({
@@ -1124,10 +1127,33 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // getResults()/collectFailures() (and thus list_results) reflect the
     // whole multi-file run, not just the last file.
     const accumulated: UITestResultEntry[] = [];
-    for (const f of validFiles) {
+    for (const [index, f] of validFiles.entries()) {
       const r = await runFile(f, testFilter, project);
       // Another run held the workers before this one began: nothing ran.
-      if (r.busy && f === validFiles[0]) return r;
+      if (r.busy && index === 0) return r;
+      if (r.busy) {
+        // Another run took the workers between two of this request's files
+        // (a UI click while a stale worker was recycled). Counting the rest
+        // as zero-test files reported them passed; they never ran. And the
+        // result map is that other run's now, so leave it alone.
+        const notRun = validFiles.slice(index);
+        const failures = [
+          ...collectFailures(accumulated),
+          ...notRun.map((filePath) => ({
+            fullName: path.basename(filePath),
+            filePath,
+            error: 'Not run: another test run started before this file could, so it was skipped. Run it again once that run ends.',
+          })),
+        ];
+        return {
+          status: 'failed',
+          passed: totalPassed,
+          failed: totalFailed + notRun.length,
+          skipped: totalSkipped,
+          duration: totalDuration,
+          failures,
+        };
+      }
       accumulated.push(...testResults.values());
       totalPassed += r.passed;
       totalFailed += r.failed;
@@ -1188,6 +1214,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     getResults: () => [...testResults.values()].map(classifyEntryStatus),
     getTestFiles: () => ctx.testFiles,
     resolveRequestedFiles: (files) => resolveRequested(files),
+    classifyUnmatchedFile: (arg) => classifyUnmatchedTestFile(arg, {
+      roots: [ctx.config.rootDir, process.cwd()].filter((r): r is string => Boolean(r)),
+      rootDir: resolvedRootDir,
+      selectors: ctx.projects
+        ? ctx.projects.map((p) => ({ testMatch: p.testMatch, testIgnore: p.testIgnore }))
+        : [{ testMatch: ctx.config.testMatch }],
+    }),
     getProjects: () => realProjects().map((p) => p.name),
     // Files that failed to load are reported by getDiscoveryErrors, not as
     // a test row (PILOT-545).

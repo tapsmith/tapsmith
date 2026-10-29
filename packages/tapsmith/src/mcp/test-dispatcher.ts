@@ -204,6 +204,14 @@ export interface TestDispatcher {
    * nothing matched, which is a different answer from "ran and found nothing".
    */
   resolveRequestedFiles?(files: string[]): string[]
+  /**
+   * For a `files` argument that matched none of the session's test files,
+   * what the config's own matcher makes of it — see
+   * `classifyUnmatchedTestFile`. `undefined` without a loaded config, or when
+   * the argument names no file. Required, so `run_tests` explains a refused
+   * file the same way over either transport.
+   */
+  classifyUnmatchedFile(arg: string): 'excluded' | 'not-held' | undefined
   getSessionInfo(): SessionInfo
   /**
    * The serial behind a `use.devices` group name (`alice`), so device tools

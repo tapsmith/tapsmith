@@ -29,6 +29,7 @@ function makeDispatcher(overrides: Partial<TestDispatcher> = {}): TestDispatcher
     }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    classifyUnmatchedFile: () => undefined,
     refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: true }),
     ...overrides,
@@ -354,48 +355,41 @@ describe('tapsmith_run_tests and files written mid-session', () => {
     expect(calls).toContain('run');
   });
 
-  it('says a file that exists is not selected by the config\'s testMatch', async () => {
+  it('says a file the config\'s testMatch leaves out is left out', async () => {
     const configPath = path.join(root, 'tapsmith.config.mjs');
-    fs.writeFileSync(configPath, '');
-    const written = path.join(root, 'tests', 'new.tapsmith.ts');
-    fs.mkdirSync(path.dirname(written));
-    fs.writeFileSync(written, '');
+    const asked: string[] = [];
     const dispatcher = makeDispatcher({
       resolveRequestedFiles: () => [],
+      classifyUnmatchedFile: (arg) => { asked.push(arg); return 'excluded'; },
       runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
       getSessionInfo: () => ({ timeout: 5000, retries: 0, projects: [], configPath }),
     });
-
-    for (const arg of [written, 'tests/new.tapsmith.ts']) {
-      const out = text(await callRunTests(dispatcher, { files: [arg] }));
-      expect(out).toContain(`${arg} exists, but the config's testMatch (or testIgnore) leaves it out`);
-      expect(out).toContain(configPath);
-      expect(out).not.toMatch(/Paths may be absolute/);
-    }
+    const out = text(await callRunTests(dispatcher, { files: ['tests/new.tapsmith.ts'] }));
+    expect(asked).toEqual(['tests/new.tapsmith.ts']);
+    expect(out).toContain("tests/new.tapsmith.ts exists, but the config's testMatch (or testIgnore) leaves it out");
+    expect(out).toContain(configPath);
+    expect(out).not.toMatch(/Paths may be absolute/);
   });
 
-  // Two parallel calls both pass the tool's own busy check while their
-  // refreshes run; the dispatcher refuses the second, which must read as busy
-  // rather than as an empty test file.
-  it('reports a run refused as already running as such', async () => {
+  it('says a test file the session does not hold is not held, without blaming testMatch', async () => {
     const dispatcher = makeDispatcher({
-      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0, busy: true }),
+      resolveRequestedFiles: () => [],
+      classifyUnmatchedFile: () => 'not-held',
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
     });
-    const res = await callRunTests(dispatcher, { files: [FILE] });
-    expect(res.isError).toBe(true);
-    expect(text(res)).toContain('A test run is already in progress');
-    expect(text(res)).not.toContain('no runnable tests');
+    const out = text(await callRunTests(dispatcher, { files: ['tests/signup.test.ts'] }));
+    expect(out).toContain('tests/signup.test.ts is a test file by the config\'s testMatch, but this session does not hold it');
+    expect(out).not.toContain('leaves it out');
   });
 
   it('does not blame testMatch when the config failed to load', async () => {
-    const written = path.join(root, 'login.test.ts');
-    fs.writeFileSync(written, '');
     const dispatcher = makeDispatcher({
       resolveRequestedFiles: () => [],
+      classifyUnmatchedFile: () => 'excluded',
       runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
       getSessionInfo: () => ({ timeout: 5000, retries: 0, projects: [], configError: 'SyntaxError: Unexpected token' }),
     });
-    const out = text(await callRunTests(dispatcher, { files: [written] }));
+    const out = text(await callRunTests(dispatcher, { files: [path.join(root, 'login.test.ts')] }));
     expect(out).not.toContain('testMatch');
     expect(out).toContain('matched no discovered test file');
   });
@@ -403,8 +397,8 @@ describe('tapsmith_run_tests and files written mid-session', () => {
   it('keeps the path advice for an argument that names no file at all', async () => {
     const dispatcher = makeDispatcher({
       resolveRequestedFiles: () => [],
+      classifyUnmatchedFile: () => undefined,
       runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
-      getSessionInfo: () => ({ timeout: 5000, retries: 0, projects: [], configPath: path.join(root, 'tapsmith.config.mjs') }),
     });
     const out = text(await callRunTests(dispatcher, { files: ['tests/typo.test.ts'] }));
     expect(out).toContain('matched no discovered test file');

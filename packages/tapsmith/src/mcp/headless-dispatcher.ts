@@ -7,7 +7,7 @@ import type { WatchRunAbortMessage } from '../watch-run.js';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { minimatch } from 'minimatch';
 import { platformOfSerial, resolveProjects, scopeDevicePinToPlatform, topologicalSort, type ResolvedProject } from '../project.js';
-import { discoverTestFiles } from '../test-file-discovery.js';
+import { classifyUnmatchedTestFile, discoverTestFiles } from '../test-file-discovery.js';
 import {
   deserializeTestResult,
   deserializeSuiteResult,
@@ -589,6 +589,18 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   resolveRequestedFiles(files: string[]): string[] {
     const roots = [this._config?.rootDir, process.cwd()].filter((r): r is string => Boolean(r));
     return matchRequestedFiles(files, this._testFiles, roots);
+  }
+
+  classifyUnmatchedFile(arg: string): 'excluded' | 'not-held' | undefined {
+    const config = this._config;
+    if (!config) return undefined;
+    return classifyUnmatchedTestFile(arg, {
+      roots: [config.rootDir, process.cwd()],
+      rootDir: config.rootDir,
+      selectors: this._hasRealProjects()
+        ? this._projects.map((p) => ({ testMatch: p.testMatch, testIgnore: p.testIgnore }))
+        : [{ testMatch: config.testMatch }],
+    });
   }
 
   getDiscoveryErrors(): DiscoveryError[] {
