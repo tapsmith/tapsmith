@@ -467,11 +467,12 @@ async function installAppUnderTest(
     phase('install', 'complete', `installed ${path.basename(resolvedApp)} while booting the simulator`);
     return { freshInstall: true };
   }
-  // Skip only when the installed bundle is byte-identical — simulator state
-  // can outlive a run, and a presence-only skip silently tests a stale build.
+  // Skip only when the whole installed bundle is byte-identical — simulator
+  // state can outlive a run, a presence-only skip silently tests a stale
+  // build, and so does comparing one file (a Debug stub executable, PILOT-913).
   const wasInstalled = !!config.package && isAppInstalled(serial, config.package);
   const upToDate = !opts.freshDevice && wasInstalled
-    && installedAppMatches(serial, config.package!, resolvedApp);
+    && await installedAppMatches(serial, config.package!, resolvedApp);
   if (upToDate && !opts.forceInstall) {
     progress(`app ${config.package} already installed (matching build), skipping app install`);
     phase('install', 'complete', `${config.package} already installed (matching build)`);

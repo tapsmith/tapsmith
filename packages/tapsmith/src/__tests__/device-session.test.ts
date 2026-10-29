@@ -96,7 +96,7 @@ vi.mock('../emulator.js', () => ({
 vi.mock('../ios-simulator.js', () => ({
   installApp: vi.fn(),
   installAppAsync: vi.fn(async () => { mocks.simInstalls++; }),
-  installedAppMatches: vi.fn(() => mocks.simAppMatches),
+  installedAppMatches: vi.fn(async () => mocks.simAppMatches),
   isAppInstalled: vi.fn(() => true),
   probeSimulatorHealth: vi.fn(() => ({ healthy: true })),
   rebootSimulator: vi.fn(),

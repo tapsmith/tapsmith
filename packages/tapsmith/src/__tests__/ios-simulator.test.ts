@@ -43,6 +43,14 @@ vi.mock('../device-claims.js', async (importOriginal) => {
   };
 });
 
+const bundleMatch = vi.hoisted(() => ({ calls: [] as Array<[string, string]>, result: true }));
+vi.mock('../app-bundle-match.js', () => ({
+  appBundlesMatch: (installed: string, candidate: string) => {
+    bundleMatch.calls.push([installed, candidate]);
+    return Promise.resolve(bundleMatch.result);
+  },
+}));
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overloaded execFileSync signatures make proper mock typing impractical
 const mockedExecFileSync = vi.mocked(childProcess.execFileSync) as any;
 const mockedReadFileSync = vi.mocked(fs.readFileSync);
@@ -58,6 +66,7 @@ import {
   waitForSimulatorBootComplete,
   installApp,
   isAppInstalled,
+  installedAppMatches,
   installAppIfAbsent,
   findSimulator,
   provisionSimulator,
@@ -325,6 +334,49 @@ describe('isAppInstalled', () => {
   it('returns false when get_app_container fails', () => {
     mockedExecFileSync.mockImplementation(() => { throw new Error('not installed'); });
     expect(isAppInstalled('AAAA', 'com.example')).toBe(false);
+  });
+});
+
+describe('installedAppMatches', () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overloaded execFile signatures make proper mock typing impractical
+  const mockedExecFile = vi.mocked(childProcess.execFile) as any;
+  const container = '/sims/AAAA/data/Containers/Bundle/Application/X/App.app';
+
+  beforeEach(() => {
+    bundleMatch.calls = [];
+    bundleMatch.result = true;
+  });
+
+  function containerLookup(outcome: { stdout?: string, err?: Error }) {
+    mockedExecFile.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null, stdout: string) => void) => {
+      cb(outcome.err ?? null, outcome.stdout ?? '');
+    });
+  }
+
+  // PILOT-913: the whole bundle is compared, not only CFBundleExecutable,
+  // which a Debug build's stub executable keeps identical across rebuilds.
+  it('compares the installed bundle at its container with the candidate bundle', async () => {
+    containerLookup({ stdout: `${container}\n` });
+    expect(await installedAppMatches('AAAA', 'com.example', '/build/App.app')).toBe(true);
+    expect(mockedExecFile).toHaveBeenCalledWith(
+      'xcrun', ['simctl', 'get_app_container', 'AAAA', 'com.example', 'app'],
+      expect.objectContaining({ timeout: 10_000 }), expect.any(Function),
+    );
+    expect(bundleMatch.calls).toEqual([[container, '/build/App.app']]);
+  });
+
+  it('reports a differing bundle as not matching', async () => {
+    containerLookup({ stdout: container });
+    bundleMatch.result = false;
+    expect(await installedAppMatches('AAAA', 'com.example', '/build/App.app')).toBe(false);
+  });
+
+  it('reports no match when the container lookup fails or prints nothing', async () => {
+    containerLookup({ err: new Error('not installed') });
+    expect(await installedAppMatches('AAAA', 'com.example', '/build/App.app')).toBe(false);
+    containerLookup({ stdout: '  \n' });
+    expect(await installedAppMatches('AAAA', 'com.example', '/build/App.app')).toBe(false);
+    expect(bundleMatch.calls).toEqual([]);
   });
 });
 
