@@ -900,9 +900,9 @@ class CommandHandler {
 
     /// Where a pinch's fingers go on `element`: inside the part of it that is
     /// on screen and not clipped by the keyboard or bars, with no interactive
-    /// control drawn over any point the fingers touch (PILOT-825). `planTouch`
-    /// checks covers only at the area's centre, so the finger paths are checked
-    /// here, waiting up to `timeoutMs` for a cover to go like a tap does.
+    /// control drawn over where either finger touches down (PILOT-825).
+    /// `planTouch` checks covers only at the area's centre, so the touch-down
+    /// points are checked here, waiting up to `timeoutMs` for a cover to go like a tap does.
     /// Throws ELEMENT_COVERED when one outlasts it. Without a readable UI tree
     /// nothing can be checked, so the pinch is refused rather than sent blind.
     private func planPinch(_ element: ElementInfo, scale: Double, timeoutMs: Int64, reserveMs: Int64) throws -> PinchPlan {
@@ -928,11 +928,11 @@ class CommandHandler {
                 )
             }
             let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: snapshotFinder.screenSize)
-            guard let cover = analyzer.interactiveCover(of: target, at: plan.touchPoints()) else { return plan }
+            guard let cover = analyzer.interactiveCover(of: target, at: plan.touchDownPoints) else { return plan }
             let elapsedMs = Int64(Date().timeIntervalSince(started) * 1000)
             if elapsedMs + Int64(TouchPlanClock.pollSeconds * 1000) >= timeoutMs {
                 throw AgentError.elementCovered(
-                    coveredMessage(cover, timeoutMs: timeoutMs) + " — a pinch's fingers reach toward the element's corners"
+                    coveredMessage(cover, timeoutMs: timeoutMs) + " — a pinch's fingers touch down away from the element's centre"
                 )
             }
             NSLog("[TapsmithCommand] pinch on \(element.elementId) would touch \(cover); waiting")

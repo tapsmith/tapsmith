@@ -235,8 +235,8 @@ struct OcclusionAnalyzer {
     /// The interactive control painted after the target that contains any of
     /// `points`, described — or nil. `analyze` checks covers only at the
     /// visible area's centre, which is where a tap lands; a gesture that
-    /// touches elsewhere in the area (a pinch's fingers, PILOT-825) checks its
-    /// own points here. Skips what `analyze` skips: the keyboard's windows
+    /// touches down elsewhere in the area (a pinch's fingers, PILOT-825) checks
+    /// its own points here. Skips what `analyze` skips: the keyboard's windows
     /// (it clips the area instead), scroll indicators and the hooks marker.
     /// nil too when the target cannot be placed in the tree, as there is then
     /// no telling what is painted after it.

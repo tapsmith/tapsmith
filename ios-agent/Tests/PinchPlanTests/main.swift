@@ -77,13 +77,15 @@ for scale in [0.1, 0.5, 0.9, 1.1, 2, 10] {
     }
 }
 
-// The touch points cover both fingers from start to end.
+// The touch-down points are the fingers' starts: the corners when pinching
+// in, near the centre when pinching out.
 if let p = plan(area, 0.5) {
-    let points = p.touchPoints(samples: 3)
-    expect("touch points: 2 per sample", points.count == 6)
-    expect("touch points start at the fingers' starts", near(points[0], p.firstStart) && near(points[1], p.secondStart))
-    expect("touch points end at the fingers' ends", near(points[4], p.firstEnd) && near(points[5], p.secondEnd))
-    expect("touch points take at least the two ends", p.touchPoints(samples: 1).count == 4)
+    expect("pinch in touches down at the inset corners", p.touchDownPoints == [p.firstStart, p.secondStart]
+        && near(p.touchDownPoints[1], CGPoint(x: 320, y: 140)))
+}
+if let p = plan(area, 2) {
+    expect("pinch out touches down halfway to the corners",
+           near(distance(p.touchDownPoints[0], p.touchDownPoints[1]), 200))
 }
 
 // Refusals: a scale that is not a pinch, or no room for two fingers.
