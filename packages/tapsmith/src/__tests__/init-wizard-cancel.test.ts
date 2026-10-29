@@ -153,7 +153,7 @@ describe('init wizard cancelled at a prompt (PILOT-518)', () => {
     expect(output).toContain('✓ tapsmith.config.ts created');
     expect(output).toMatch(/Setup cancelled\. The files above are written, but Tapsmith is not installed: run \S.* tapsmith$/m);
     expect(output).not.toContain('Next steps');
-    expect(fs.readdirSync(dir).sort()).toEqual(['.gitignore', 'AGENTS.md', 'package.json', 'tapsmith.config.ts', 'tests']);
+    expect(fs.readdirSync(dir).sort()).toEqual(['.gitignore', 'AGENTS.md', 'package.json', 'tapsmith.config.ts', 'tests', 'tsconfig.json']);
   });
 
   it('at the iOS simulator agent build offer: stops there instead of carrying on', async () => {
