@@ -256,20 +256,31 @@ final class UIKitGesturesViewController: UIViewController {
         longRecognizer.minimumPressDuration = 0.8
         longPress.addGestureRecognizer(longRecognizer)
 
-        pin(makeStack([status, doubleTap, longPress]), in: view)
+        // PILOT-825: a UIPinchGestureRecognizer, reporting which way it scaled.
+        let pinch = makeTarget("Pinch me", color: .systemPurple, height: 200)
+        pinch.accessibilityIdentifier = "uikit-pinch-area"
+        pinch.addGestureRecognizer(UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:))))
+
+        pin(makeStack([status, doubleTap, longPress, pinch]), in: view)
     }
 
-    private func makeTarget(_ text: String, color: UIColor) -> UILabel {
+    private func makeTarget(_ text: String, color: UIColor, height: CGFloat = 56) -> UILabel {
         let label = makeLabel(text)
         label.textAlignment = .center
         label.backgroundColor = color.withAlphaComponent(0.2)
-        label.heightAnchor.constraint(equalToConstant: 56).isActive = true
+        label.heightAnchor.constraint(equalToConstant: height).isActive = true
         label.isUserInteractionEnabled = true
         label.accessibilityTraits = .button
         return label
     }
 
     @objc private func doubleTapped() { status.text = "Status: Double tapped" }
+
+    @objc private func pinched(_ recognizer: UIPinchGestureRecognizer) {
+        if recognizer.state == .ended {
+            status.text = recognizer.scale < 1 ? "Status: Pinched in" : "Status: Pinched out"
+        }
+    }
 
     @objc private func longPressed(_ recognizer: UILongPressGestureRecognizer) {
         if recognizer.state == .began { status.text = "Status: Long pressed" }

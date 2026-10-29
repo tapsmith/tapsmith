@@ -83,6 +83,18 @@ describe("Occlusion", () => {
       await expect(occlusionScreen.counts).toHaveText(counts({}))
     })
 
+    // PILOT-825: an iOS pinch checks its fingers for covers like a tap. The
+    // Android agent pinches without that check, so this is iOS only.
+    test("pinchIn() refuses a covered target on iOS", async ({ platform, occlusionScreen }) => {
+      if (platform === "android") return
+      await occlusionScreen.showOverlayButton.tap()
+      await expect(occlusionScreen.overlay).toBeVisible()
+
+      expect(await failureOf(occlusionScreen.coveredAction.pinchIn())).toMatch(/covered by/i)
+
+      await expect(occlusionScreen.counts).toHaveText(counts({}))
+    })
+
     test("type() into a field behind the keyboard fails instead of typing into the focused one", async ({ device, platform, occlusionScreen }) => {
       await occlusionScreen.openKeyboard()
 

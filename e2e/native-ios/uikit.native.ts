@@ -160,4 +160,15 @@ describe("UIKit: gestures", () => {
     await uikitGestures.longPressTarget.longPress(1200)
     await expect(uikitGestures.status("Long pressed")).toBeVisible()
   })
+
+  // PILOT-825: a real two-finger pinch that a UIPinchGestureRecognizer reads.
+  test("UIPinchGestureRecognizer pinching in", async ({ uikitGestures }) => {
+    await uikitGestures.pinchTarget.pinchIn({ scale: 0.4 })
+    await expect(uikitGestures.status("Pinched in")).toBeVisible()
+  })
+
+  test("UIPinchGestureRecognizer pinching out", async ({ uikitGestures }) => {
+    await uikitGestures.pinchTarget.pinchOut({ scale: 2.5 })
+    await expect(uikitGestures.status("Pinched out")).toBeVisible()
+  })
 })

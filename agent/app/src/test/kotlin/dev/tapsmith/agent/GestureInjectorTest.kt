@@ -292,4 +292,21 @@ class GestureInjectorTest {
             GestureGeometry.pinchPoints(Box(0, 0, 100, 200), 0.5f),
         )
     }
+
+    // PILOT-825: scale is the end distance over the start distance, as on iOS.
+    @Test
+    fun `pinch percent makes the fingers' distance change by the scale`() {
+        assertEquals(0.5f, GestureGeometry.pinchPercent(0.5f), 1e-6f)
+        assertEquals(0.7f, GestureGeometry.pinchPercent(0.3f), 1e-6f)
+        assertEquals(0.5f, GestureGeometry.pinchPercent(2f), 1e-6f)
+        assertEquals(0.75f, GestureGeometry.pinchPercent(4f), 1e-6f)
+    }
+
+    @Test
+    fun `pinch percent never starts or ends the fingers together or barely moving`() {
+        assertEquals(0.9f, GestureGeometry.pinchPercent(0.01f), 1e-6f)
+        assertEquals(0.9f, GestureGeometry.pinchPercent(1000f), 1e-6f)
+        assertEquals(0.1f, GestureGeometry.pinchPercent(0.95f), 1e-6f)
+        assertEquals(0.1f, GestureGeometry.pinchPercent(1.05f), 1e-6f)
+    }
 }

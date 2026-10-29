@@ -502,5 +502,34 @@ if untouched == R(0, 0, 100, 100) { print("ok   subtract of a disjoint rect is a
     failures += 1; print("FAIL subtract of a disjoint rect: got \(untouched)")
 }
 
+// PILOT-825: a pinch's fingers reach toward the area's corners, where a
+// control floating over a map is drawn; the centre check does not see it.
+let mapRows: [Row] = [
+    (0, .application, "", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .map, "Map", "map", R(0, 100, 402, 600)),
+    (4, .button, "Pin", "", R(150, 350, 40, 40)),
+    (3, .button, "Locate me", "", R(330, 120, 60, 60)),
+    (3, .scrollView, "", "", R(0, 700, 402, 100)),
+    (4, .button, "Clipped", "", R(330, 600, 60, 60)),
+]
+let map = analyzer(mapRows)
+let mapTarget = OcclusionAnalyzer.Target(frame: R(0, 100, 402, 600), elementType: .map, label: "Map", identifier: "map")
+let cornerCover = map.interactiveCover(of: mapTarget, at: [CGPoint(x: 201, y: 400), CGPoint(x: 350, y: 150)])
+if cornerCover == "button \"Locate me\"" { print("ok   a control over a finger's corner is the pinch's cover") } else {
+    failures += 1; print("FAIL a control over a finger's corner is the pinch's cover: got \(String(describing: cornerCover))")
+}
+let clearCover = map.interactiveCover(of: mapTarget, at: [CGPoint(x: 100, y: 500), CGPoint(x: 170, y: 370)])
+if clearCover == nil { print("ok   the target's own children and clipped content are not covers") } else {
+    failures += 1; print("FAIL the target's own children and clipped content are not covers: got \(clearCover!)")
+}
+let lostTarget = OcclusionAnalyzer.Target(frame: R(5, 5, 10, 10), elementType: .map, label: "Gone", identifier: "")
+if map.interactiveCover(of: lostTarget, at: [CGPoint(x: 350, y: 150)]) == nil {
+    print("ok   an unplaced target names no cover")
+} else {
+    failures += 1; print("FAIL an unplaced target names no cover")
+}
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

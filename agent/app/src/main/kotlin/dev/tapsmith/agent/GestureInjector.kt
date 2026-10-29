@@ -172,6 +172,18 @@ object GestureGeometry {
     }
 
     /**
+     * The [pinchPoints] percent for a pinch whose fingers' end distance is
+     * [scale] times their start distance (PILOT-825, the iOS agent's meaning):
+     * closing (below 1) ends at 1 − percent of the outer distance, opening
+     * (above 1) starts there. Kept within 0.1–0.9 so the fingers always move
+     * and never start or end on the same point.
+     */
+    fun pinchPercent(scale: Float): Float {
+        val percent = if (scale > 1f) 1f - 1f / scale else 1f - scale
+        return percent.coerceIn(0.1f, 0.9f)
+    }
+
+    /**
      * The two pointers' outer and inner points for a pinch over [percent] of
      * [area]: bottom-left and top-right corners, and those moved toward the
      * centre. Returned as (bottomLeftOuter, bottomLeftInner, topRightOuter, topRightInner).

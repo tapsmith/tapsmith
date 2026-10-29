@@ -4371,6 +4371,30 @@ describe('pinchIn()', () => {
   });
 });
 
+// PILOT-825: a scale that is not a pinch in the asked direction is refused
+// before any device work, instead of being sent as a no-op (or opposite) pinch.
+describe('pinch scale validation', () => {
+  const cases: Array<[string, (h: ElementHandle) => Promise<void>, RegExp]> = [
+    ['pinchIn scale 1', (h) => h.pinchIn({ scale: 1 }), /pinchIn\(\) scale must be between 0 and 1 \(exclusive\), got 1/],
+    ['pinchIn scale above 1', (h) => h.pinchIn({ scale: 2 }), /pinchIn\(\) scale must be between 0 and 1 \(exclusive\), got 2; use pinchOut\(\) to zoom in/],
+    ['pinchIn scale 0', (h) => h.pinchIn({ scale: 0 }), /pinchIn\(\) scale must be between 0 and 1 \(exclusive\), got 0/],
+    ['pinchIn negative scale', (h) => h.pinchIn({ scale: -0.5 }), /got -0\.5/],
+    ['pinchIn NaN scale', (h) => h.pinchIn({ scale: Number.NaN }), /got NaN/],
+    ['pinchOut scale 1', (h) => h.pinchOut({ scale: 1 }), /pinchOut\(\) scale must be a finite number above 1, got 1/],
+    ['pinchOut scale below 1', (h) => h.pinchOut({ scale: 0.5 }), /pinchOut\(\) scale must be a finite number above 1, got 0\.5; use pinchIn\(\) to zoom out/],
+    ['pinchOut infinite scale', (h) => h.pinchOut({ scale: Number.POSITIVE_INFINITY }), /got Infinity/],
+  ];
+  for (const [name, call, message] of cases) {
+    it(`refuses ${name} without touching the device`, async () => {
+      const client = makeMockClient({ pinchZoom: vi.fn(async () => successResponse()) });
+      const handle = new ElementHandle(client, _text('Map'), 5000);
+      await expect(call(handle)).rejects.toThrow(message);
+      expect(client.pinchZoom).not.toHaveBeenCalled();
+      expect(client.findElement).not.toHaveBeenCalled();
+    });
+  }
+});
+
 describe('pinchOut()', () => {
   it('delegates to client.pinchZoom with default scale 2.0', async () => {
     const pinchZoom = vi.fn(async () => successResponse());

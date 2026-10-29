@@ -232,6 +232,29 @@ struct OcclusionAnalyzer {
         return .clear(point: point, visible: visible)
     }
 
+    /// The interactive control painted after the target that contains any of
+    /// `points`, described — or nil. `analyze` checks covers only at the
+    /// visible area's centre, which is where a tap lands; a gesture that
+    /// touches down elsewhere in the area (a pinch's fingers, PILOT-825) checks
+    /// its own points here. Skips what `analyze` skips: the keyboard's windows
+    /// (it clips the area instead), scroll indicators and the hooks marker.
+    /// nil too when the target cannot be placed in the tree, as there is then
+    /// no telling what is painted after it.
+    func interactiveCover(of target: Target, at points: [CGPoint]) -> String? {
+        guard let t = locate(target) else { return nil }
+        let keyboardWindows = self.keyboardWindows()
+        let targetInKeyboard = isInKeyboard(t, keyboardWindows: keyboardWindows)
+        for i in nodes[t].subtreeEnd..<nodes.count {
+            let node = nodes[i]
+            if let w = node.window, keyboardWindows.contains(w), !targetInKeyboard { continue }
+            if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
+            guard isInteractive(node) else { continue }
+            let frame = clippedFrame(of: i)
+            if points.contains(where: { frame.contains($0) }) { return describe(node) }
+        }
+        return nil
+    }
+
     // MARK: - Target lookup
 
     /// The target's index in `nodes`: the deepest node whose frame matches

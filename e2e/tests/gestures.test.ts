@@ -64,12 +64,15 @@ describe("Gestures screen", () => {
     await expect(gesturesScreen.pinchArea).toBeVisible()
   })
 
+  // PILOT-825: the app must see the pinch, not just the call return.
   test("pinchIn gesture on pinch area", async ({ gesturesScreen }) => {
     await gesturesScreen.pinchArea.pinchIn({ scale: 0.5 })
+    await expect(gesturesScreen.lastGesture).toHaveText("Last gesture: Pinch in")
   })
 
   test("pinchOut gesture on pinch area", async ({ gesturesScreen }) => {
     await gesturesScreen.pinchArea.pinchOut({ scale: 2.0 })
+    await expect(gesturesScreen.lastGesture).toHaveText("Last gesture: Pinch out")
   })
 
   // ─── Swipe ───

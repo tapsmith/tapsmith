@@ -63,6 +63,41 @@ export default function GesturesScreen() {
     }),
   ).current
 
+  // Two-finger pinch (PILOT-825): the fingers' distance when two first touch,
+  // and at their last move. Reported on release as a pinch in or out, so a
+  // test sees whether the app read a real pinch.
+  const pinchSpan = useRef<{ first: number; last: number } | null>(null)
+
+  const pinchResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderMove: (evt) => {
+        const touches = evt.nativeEvent.touches
+        if (touches.length < 2) return
+        const span = Math.hypot(
+          touches[0].pageX - touches[1].pageX,
+          touches[0].pageY - touches[1].pageY,
+        )
+        if (pinchSpan.current) {
+          pinchSpan.current.last = span
+        } else {
+          pinchSpan.current = { first: span, last: span }
+        }
+      },
+      onPanResponderRelease: () => {
+        const span = pinchSpan.current
+        pinchSpan.current = null
+        if (!span) return
+        if (span.last < span.first * 0.9) setLastGesture("Pinch in")
+        else if (span.last > span.first * 1.1) setLastGesture("Pinch out")
+      },
+      onPanResponderTerminate: () => {
+        pinchSpan.current = null
+      },
+    }),
+  ).current
+
   return (
     <View style={styles.container}>
       <Text style={styles.heading} accessibilityRole="header">
@@ -120,7 +155,12 @@ export default function GesturesScreen() {
       </View>
 
       <Text style={styles.sectionHeader}>Pinch Area</Text>
-      <View style={styles.pinchArea} accessibilityLabel="Pinch to zoom area" testID="pinch-area">
+      <View
+        style={styles.pinchArea}
+        accessibilityLabel="Pinch to zoom area"
+        testID="pinch-area"
+        {...pinchResponder.panHandlers}
+      >
         <Text style={styles.gestureText}>Pinch to zoom here</Text>
       </View>
 
