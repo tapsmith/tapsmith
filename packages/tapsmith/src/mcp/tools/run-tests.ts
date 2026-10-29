@@ -121,7 +121,11 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             isError: true,
           };
         }
-        // First of all: the headless dispatcher can still pin an unresolved
+        // Files written since the session last looked — typically the test
+        // the agent just wrote — must be matchable before anything below
+        // reads the file list (PILOT-836).
+        await dispatcher.refreshTestFiles();
+        // Then: the headless dispatcher can still pin an unresolved
         // target to `device` here, before the run resolves targets (and so
         // picks devices). A `device` it cannot honour is refused — ignoring it
         // ran the tests on whatever device the session held, another

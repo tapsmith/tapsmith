@@ -29,6 +29,7 @@ function makeDispatcher(overrides: Partial<TestDispatcher> = {}): TestDispatcher
     }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: true }),
     ...overrides,
   };

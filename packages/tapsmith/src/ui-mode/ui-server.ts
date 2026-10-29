@@ -88,6 +88,7 @@ import {
   type LaunchProgressSink,
 } from '../launch-progress.js';
 import {
+  discoverTestFiles,
   getTestDiscoveryWatchRoots,
   isIgnoredDiscoveryWatchPath,
   matchesTestFile,
@@ -725,7 +726,8 @@ export async function startUIServer(
   let discoveryWatcher: FSWatcher | null = null;
   const pendingDiscoveryFiles = new Set<string>();
   let discoveryTimer: ReturnType<typeof setTimeout> | null = null;
-  let discoveryBatchRunning = false;
+  /** The discovery batch running now, if any (see `flushPendingDiscovery`). */
+  let discoveryBatch: Promise<void> | null = null;
   const discoveredFileNodes = new Map<string, TestTreeNode>();
   // Normalised paths whose source we've served to clients (Source-tab preview).
   // Edits to these are re-broadcast so a not-yet-run test's source stays live.
@@ -1144,6 +1146,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   }
 
   const testDispatcher: TestDispatcher = {
+    refreshTestFiles: () => refreshTestFilesNow(),
     async runFiles(files, options) {
       // One run for the whole request: a file at a time ends each file's run,
       // which would let the MCP tools' WebView connect between files.
@@ -4149,7 +4152,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     if (shouldIgnoreDiscoveryPath(resolved) || !matchesConfiguredTestFile(resolved)) return;
 
     pendingDiscoveryFiles.add(resolved);
-    if (discoveryBatchRunning) return;
+    if (discoveryBatch) return;
     if (discoveryTimer) clearTimeout(discoveryTimer);
     discoveryTimer = setTimeout(() => {
       discoveryTimer = null;
@@ -4157,40 +4160,84 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }, DISCOVERY_DEBOUNCE_MS);
   }
 
-  async function flushPendingDiscovery(): Promise<void> {
-    if (discoveryBatchRunning) return;
-    discoveryBatchRunning = true;
-
-    try {
-      while (pendingDiscoveryFiles.size > 0) {
-        const files = [...pendingDiscoveryFiles].sort();
-        pendingDiscoveryFiles.clear();
-
-        let treeChanged = false;
-        const filesToRun = new Set<string>();
-        const results = await discoverBatch(files);
-        for (const { file, result } of results) {
-          if (result.treeChanged) treeChanged = true;
-          if (result.shouldRun) filesToRun.add(file);
-        }
-
-        if (treeChanged) {
-          sortDiscoveredTestFiles();
-          rebuildTestTreeFromDiscoveredFiles();
-          broadcastTestTreeWithCurrentState();
-        }
-        if (filesToRun.size > 0) {
-          watchQueue.scheduleFiles([...filesToRun]);
-        }
-      }
-    } finally {
-      discoveryBatchRunning = false;
+  /**
+   * Discover every pending file, in batches until none is left. A call while a
+   * batch runs shares it: files added meanwhile join that batch's next round.
+   */
+  function flushPendingDiscovery(): Promise<void> {
+    if (discoveryBatch) return discoveryBatch;
+    const batch = runPendingDiscovery().finally(() => {
+      if (discoveryBatch === batch) discoveryBatch = null;
       if (pendingDiscoveryFiles.size > 0 && !discoveryTimer) {
         discoveryTimer = setTimeout(() => {
           discoveryTimer = null;
           flushPendingDiscovery().catch(broadcastError);
         }, DISCOVERY_DEBOUNCE_MS);
       }
+    });
+    discoveryBatch = batch;
+    return batch;
+  }
+
+  async function runPendingDiscovery(): Promise<void> {
+    while (pendingDiscoveryFiles.size > 0) {
+      const files = [...pendingDiscoveryFiles].sort();
+      pendingDiscoveryFiles.clear();
+
+      let treeChanged = false;
+      const filesToRun = new Set<string>();
+      const results = await discoverBatch(files);
+      for (const { file, result } of results) {
+        if (result.treeChanged) treeChanged = true;
+        if (result.shouldRun) filesToRun.add(file);
+      }
+
+      if (treeChanged) {
+        sortDiscoveredTestFiles();
+        rebuildTestTreeFromDiscoveredFiles();
+        broadcastTestTreeWithCurrentState();
+      }
+      if (filesToRun.size > 0) {
+        watchQueue.scheduleFiles([...filesToRun]);
+      }
+    }
+  }
+
+  /**
+   * Bring the test files up to date with the disk now, not when the watcher
+   * gets round to it (PILOT-836). An MCP `run_tests` for a file the agent has
+   * just written arrived inside the watcher's debounce — or before chokidar
+   * reported the file at all — and was refused as matching nothing. Files the
+   * watcher has not reported yet are found by globbing; files gone from disk
+   * are dropped; everything pending is discovered before this returns.
+   */
+  async function refreshTestFilesNow(): Promise<void> {
+    const globbed = new Set<string>();
+    try {
+      const lists = ctx.projects
+        ? await Promise.all(ctx.projects.map((p) => discoverTestFiles(p.testMatch, resolvedRootDir, p.testIgnore)))
+        : [await discoverTestFiles(ctx.config.testMatch, resolvedRootDir)];
+      for (const file of lists.flat()) globbed.add(path.resolve(file));
+    } catch (err) {
+      // The watcher still catches up on its own; report what it has.
+      broadcastError(err);
+      return;
+    }
+    for (const file of globbed) {
+      if (!ctx.testFiles.includes(file) && !shouldIgnoreDiscoveryPath(file)) pendingDiscoveryFiles.add(file);
+    }
+    for (const file of ctx.testFiles) {
+      if (!globbed.has(file)) pendingDiscoveryFiles.add(file);
+    }
+    // A batch may be running; whatever it leaves pending, the next round takes.
+    while (pendingDiscoveryFiles.size > 0 || discoveryBatch) {
+      if (discoveryTimer) {
+        clearTimeout(discoveryTimer);
+        discoveryTimer = null;
+      }
+      // As the watcher's own flushes do: a failed batch is reported, and the
+      // tools answer from what was discovered.
+      await flushPendingDiscovery().catch(broadcastError);
     }
   }
 

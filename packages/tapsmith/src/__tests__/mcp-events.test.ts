@@ -210,6 +210,7 @@ function makeDispatcher(): TestDispatcher {
     }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: true }),
   };
 }

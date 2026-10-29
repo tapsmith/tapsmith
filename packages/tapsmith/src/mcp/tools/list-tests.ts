@@ -10,7 +10,7 @@ export function registerListTestsTool(server: McpServer, dispatcher: TestDispatc
     'List all test files, projects, and test names discovered by the current MCP test session. Returns the full test tree grouped by project (e.g. "android", "ios"), with absolute file paths, describe blocks, and individual test names. A project whose tests drive several devices at once (`use.devices`) lists its device names (e.g. "alice", "bob"); tapsmith_run_tests runs it against all of them, and device tools accept those names as `device`. Call this before tapsmith_run_tests to get the exact file paths, test names, and project names needed as arguments.',
     {},
     async () => {
-      await dispatcher.ensureInitialized?.();
+      await dispatcher.refreshTestFiles();
       const tree = dispatcher.getTestTree();
       const projects = dispatcher.getProjects();
       const failures = dispatcher.getDiscoveryErrors?.() ?? [];

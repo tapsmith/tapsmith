@@ -127,6 +127,15 @@ export interface SessionInfo {
 export interface TestDispatcher {
   ensureInitialized?(): Promise<void>
   /**
+   * Bring the discovered test files up to date with the disk — files written,
+   * edited or deleted since the session last looked — initializing first if
+   * need be. Every tool that reads or runs the test tree calls it, so a test
+   * an agent has just written is listed and runnable straight away
+   * (PILOT-836). Required: an optional method lets a dispatcher omit it, and
+   * its tools then answer from a stale tree with nothing to say so.
+   */
+  refreshTestFiles(): Promise<void>
+  /**
    * Settle only what a device tool needs — config, projects, and a device per
    * platform — skipping the test-tree discovery `ensureInitialized` also waits
    * for. Optional: a dispatcher that is ready by the time it is handed over

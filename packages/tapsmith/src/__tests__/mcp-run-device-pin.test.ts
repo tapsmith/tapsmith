@@ -344,8 +344,9 @@ describe('run_tests `device` in a headless MCP session', () => {
     internals._resolvePlatformTargets = async (config) => { await gate; await resolve(config); };
     internals._runFileInChild = async () => ({ results: [], suite: { name: 'a', tests: [], suites: [], durationMs: 0 } });
     const first = d.runFiles([path.join(root, 'a.test.ts')]);
-    await new Promise((r) => setImmediate(r));
-    expect(d.isRunning()).toBe(true);
+    // Running before devices resolve: the run first syncs the test files
+    // (PILOT-836), and is marked running the moment that is done.
+    await vi.waitFor(() => expect(d.isRunning()).toBe(true));
     release();
     await first;
   });
