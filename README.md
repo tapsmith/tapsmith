@@ -73,7 +73,7 @@ iOS alike.
 npm install -D tapsmith    # or: yarn add -D tapsmith / pnpm add -D tapsmith
 ```
 
-pnpm 11+ and Yarn Plug'n'Play each need one setting first: see [Installation](docs/getting-started.md#installation).
+pnpm 11+ and Yarn Plug'n'Play each need one setting first: see [Package manager notes](docs/getting-started.md#package-manager-notes).
 
 **2. Configure.** Tapsmith tests a build of your app: an `.apk` for Android, or a simulator `.app`
 for iOS ([how to build one](docs/getting-started.md#build-the-app-under-test), including React
