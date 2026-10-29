@@ -2933,7 +2933,7 @@ Reinstall the app under test (APK or `.app`) on every device the run sets up, ev
 npx tapsmith test --force-install
 ```
 
-Without this flag, Tapsmith checks if the package is already installed and skips the install step to save time.
+Without this flag, Tapsmith skips the install step when the installed build matches the one you built (on a physical iOS device, when the app is installed at all).
 
 ### `tapsmith test --reporter <name>`
 
