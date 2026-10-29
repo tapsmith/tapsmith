@@ -208,6 +208,7 @@ jobs:
               -derivedDataPath ".build-sim-${ARCH}" \
               ARCHS="${ARCH}" ONLY_ACTIVE_ARCH=NO \
               CODE_SIGNING_ALLOWED=NO
+            ./install-runner-icon.sh ".build-sim-${ARCH}/Build/Products/Debug-iphonesimulator"
           done
 
       - name: Stage package contents
