@@ -17,6 +17,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { locateSyntaxErrors } from './config.js';
 import type { TestTreeNode } from './ui-mode/ui-protocol.js';
 
 /**
@@ -142,9 +143,11 @@ const CACHE_BUST_RE = /\?t=\d+/g;
  * file, which must not change under an earlier result), without the
  * cache-bust query tsx's CommonJS resolver leaves in the importer path — it
  * differs on every import, so one error would read as a new one each run — and
- * with a frame at the failing import for a missing module.
+ * with a frame at the failing import for a missing module, or at the
+ * offending token for a syntax error in `filePath` (the file being loaded)
+ * or a module it imports.
  */
-export function loadErrorForReport(err: unknown): Error {
+export function loadErrorForReport(err: unknown, filePath?: string): Error {
   const source = err instanceof Error ? err : new Error(String(err));
   const copy = Object.create(Object.getPrototypeOf(source) as object) as Error;
   // Own enumerable fields (`code`, `requireStack`, …), then the
@@ -157,7 +160,23 @@ export function loadErrorForReport(err: unknown): Error {
   if (source.stack !== undefined) define('stack', source.stack.replace(CACHE_BUST_RE, ''));
   if (Object.prototype.hasOwnProperty.call(source, 'name')) define('name', source.name);
   if (source.cause !== undefined) define('cause', source.cause);
+  const syntax = filePath !== undefined ? locateSyntaxErrors(filePath, source)?.[0] : undefined;
+  if (syntax) return withFrame(copy, `    at ${syntax.file}:${syntax.line}:${syntax.column ?? 1}`);
   return withMissingImportFrame(copy);
+}
+
+/** `error` with `frame` as its first stack frame, ahead of the loader's. */
+function withFrame(error: Error, frame: string): Error {
+  const stack = error.stack ?? '';
+  const lines = stack.split('\n');
+  const firstFrame = lines.findIndex((l) => /^\s+at /.test(l));
+  if (firstFrame === -1) {
+    error.stack = stack ? `${stack}\n${frame}` : `${error.name}: ${error.message}\n${frame}`;
+  } else {
+    lines.splice(firstFrame, 0, frame);
+    error.stack = lines.join('\n');
+  }
+  return error;
 }
 
 /**
@@ -171,16 +190,7 @@ export function withMissingImportFrame(error: Error): Error {
     if (!missing) return error;
     const loc = findImportLocation(missing);
     if (!loc) return error;
-    const frame = `    at ${missing.importer}:${loc.line}:${loc.column}`;
-    const stack = error.stack ?? '';
-    const lines = stack.split('\n');
-    const firstFrame = lines.findIndex((l) => /^\s+at /.test(l));
-    if (firstFrame === -1) {
-      error.stack = stack ? `${stack}\n${frame}` : `${error.name}: ${error.message}\n${frame}`;
-    } else {
-      lines.splice(firstFrame, 0, frame);
-      error.stack = lines.join('\n');
-    }
+    withFrame(error, `    at ${missing.importer}:${loc.line}:${loc.column}`);
   } catch {
     // Best effort: the error itself is what matters.
   }

@@ -223,6 +223,47 @@ describe('loadErrorForReport', () => {
     expect(second.stack!.split('\n').filter((l) => l.includes(`${file}:2:23`))).toHaveLength(1);
   });
 
+  // PILOT-784: a syntax error's stack holds only loader frames (esbuild's, or
+  // Node's compile step), so the reporter had no line to show a code frame for.
+  it('adds a frame at an esbuild syntax error, so the reporter shows the offending line', () => {
+    const file = writeTestFile("import { test } from 'tapsmith';\ntest('a', async () => {\n  const x = ;\n});\n");
+    const err = new Error(`Transform failed with 1 error:\n${file}:3:12: ERROR: Unexpected ";"`);
+    err.stack = `${err.message}\n    at failureErrorWithLog (/x/node_modules/esbuild/lib/main.js:1752:15)`;
+    const report = loadErrorForReport(err, file);
+    expect(extractStack(report.stack!)[0]).toEqual({ file, line: 3, column: 13 });
+    expect(formatError(report).replace(/\x1b\[\d+m/g, '')).toMatch(/> 3 \|\s+const x = ;/);
+  });
+
+  it('points an esbuild syntax error in an imported helper at the helper', () => {
+    const file = writeTestFile(SOURCE);
+    const helper = path.join(tempDir, 'helpers', 'login.ts');
+    const err = new Error(`Transform failed with 1 error:\n${helper}:7:2: ERROR: Expected ")"`);
+    err.stack = `${err.message}\n    at failureErrorWithLog (/x/node_modules/esbuild/lib/main.js:1752:15)`;
+    expect(extractStack(loadErrorForReport(err, file).stack!)[0]).toEqual({ file: helper, line: 7, column: 3 });
+  });
+
+  it('locates a JavaScript test file\'s own syntax error, which Node reports with no location', () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-load-frame-'));
+    const file = path.join(tempDir, 'broken.test.mjs');
+    fs.writeFileSync(file, "export const a = 1;\nconst x = ;\n");
+    // As Node's ESM loader throws it (Vitest would transform a real import).
+    const err = new SyntaxError("Unexpected token ';'");
+    err.stack = `SyntaxError: Unexpected token ';'\n    at compileSourceTextModule (node:internal/modules/esm/utils:318:16)\n    at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:89:18)`;
+    const report = loadErrorForReport(err, file);
+    expect(extractStack(report.stack!)[0]).toEqual({ file, line: 2, column: 11 });
+    expect(report).toBeInstanceOf(SyntaxError);
+  });
+
+  it('adds no frame for a SyntaxError the file\'s code threw at run time', () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-load-frame-'));
+    const file = path.join(tempDir, 'throws.test.mjs');
+    fs.writeFileSync(file, 'JSON.parse("{");\n');
+    let err: unknown;
+    try { JSON.parse('{'); } catch (e) { err = e; }
+    const report = loadErrorForReport(err, file);
+    expect(report.stack).toBe((err as Error).stack);
+  });
+
   it('keeps the error\'s class and code', () => {
     const err = Object.assign(new TypeError('x is not a function'), { code: 'X' });
     const report = loadErrorForReport(err);
