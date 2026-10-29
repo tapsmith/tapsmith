@@ -270,27 +270,65 @@ describe('tapsmith_read_trace test result', () => {
     expect(out).toContain('3. [FAIL] expect toHaveText');
   });
 
-  it('lists every failed step when soft assertions failed before the last one', async () => {
+  // The trace writer records every assertion with `soft: false`, so the
+  // fixtures below do too: the reader must not lean on that field.
+  it('does not blame a step whose failure the test caught when the error came from elsewhere', async () => {
+    // try { await tap() } catch {} around an optional dialog, then a TypeError
+    // in the test body: the caught tap is [FAIL] but did not fail the test.
     const trace = writeTrace({
       metadata: failedMeta,
       events: [
-        { type: 'assertion', assertion: 'toBeVisible', passed: false, soft: true, error: 'soft miss' },
+        { type: 'action', action: 'tap', success: false, error: 'No element found for getByText("Allow")' },
+        { type: 'action', action: 'swipe', success: true },
+      ],
+    });
+    const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+    expect(header).not.toContain('Failed step:');
+    expect(header).toContain('No traced step failed with this error: the error was thrown outside a traced action or assertion');
+    expect(header).toContain('Other failed steps, which did not stop the test (caught by the test code, or soft assertions): 1. tap');
+  });
+
+  it('names the step the test stopped on and lists soft failures separately', async () => {
+    const trace = writeTrace({
+      metadata: {
+        ...failedMeta,
+        error: 'element not found\n\n--- Additionally ---\n1 soft assertion(s) failed:\nsoft miss',
+      },
+      events: [
+        { type: 'assertion', assertion: 'toBeVisible', passed: false, soft: false, error: 'soft miss' },
         { type: 'action', action: 'tap', success: true },
         { type: 'action', action: 'swipe', success: false, error: 'element not found', deviceId: 'bob' },
       ],
     });
     const header = text(await readTrace({ path: trace })).split('## Steps')[0];
-    expect(header).toContain('Failed steps: 1. expect toBeVisible, 3. bob: swipe');
+    expect(header).toContain('Failed step: 3. bob: swipe (marked [FAIL] below)');
+    expect(header).toContain('Other failed steps, which did not stop the test (caught by the test code, or soft assertions): 1. expect toBeVisible');
+    expect(header).not.toContain('No traced step failed');
   });
 
-  it('keeps the failed-step list short and always names the last failure', async () => {
+  it('names every soft assertion when they alone failed the test', async () => {
+    const trace = writeTrace({
+      metadata: { ...failedMeta, error: '2 soft assertion(s) failed:\nfirst miss\nsecond miss' },
+      events: [
+        { type: 'assertion', assertion: 'toBeVisible', passed: false, soft: false, error: 'first miss' },
+        { type: 'action', action: 'tap', success: true },
+        { type: 'assertion', assertion: 'toHaveText', passed: false, soft: false, error: 'second miss' },
+      ],
+    });
+    const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+    expect(header).toContain('Failed steps: 1. expect toBeVisible, 3. expect toHaveText (marked [FAIL] below)');
+    expect(header).not.toContain('Other failed steps');
+  });
+
+  it('keeps a long failed-step list short and always names the last one', async () => {
     const events = Array.from({ length: 25 }, (_, i) => ({
-      type: 'assertion', assertion: `soft${i + 1}`, passed: false, soft: true,
+      type: 'assertion', assertion: `check${i + 1}`, passed: false, soft: false, error: `miss ${i + 1};`,
     }));
-    const header = text(await readTrace({ path: writeTrace({ metadata: failedMeta, events }) })).split('## Steps')[0];
-    expect(header).toContain('1. expect soft1, ');
-    expect(header).toContain('9. expect soft9, … 15 more …, 25. expect soft25');
-    expect(header).not.toContain('soft10,');
+    const error = `25 soft assertion(s) failed:\n${events.map((e) => e.error).join('\n')}`;
+    const header = text(await readTrace({ path: writeTrace({ metadata: { ...failedMeta, error }, events }) })).split('## Steps')[0];
+    expect(header).toContain('Failed steps: 1. expect check1, ');
+    expect(header).toContain('9. expect check9, … 15 more …, 25. expect check25');
+    expect(header).not.toContain('check10,');
   });
 
   it('reports a passing test as passed with no error line', async () => {
