@@ -1,5 +1,6 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
+import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 // PILOT-363: on a screen without a scroll view, iOS hideKeyboard() used to
 // report success with the keyboard still up — and its dismiss drags, aimed
@@ -31,7 +32,7 @@ describe("hideKeyboard() on a screen without a scroll view", () => {
 
   test("dismisses a single-line field's keyboard without touching anything else", async ({ device, platform, keyboardScreen }) => {
     await keyboardScreen.openKeyboard("plain")
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
 
     await device.hideKeyboard()
 
@@ -56,7 +57,7 @@ describe("hideKeyboard() on a screen without a scroll view", () => {
       expect(failure).toMatch(/keyboard is still shown/i)
       expect(failure).toMatch(/return key is "go"/i)
       expect(failure).toContain('device.pressKey("enter")')
-      expect(await device.isKeyboardShown()).toBe(true)
+      await expectSoftwareKeyboardShown(device)
     } else {
       expect(failure).toBe("")
       await expect.poll(() => device.isKeyboardShown()).toBe(false)
@@ -74,7 +75,7 @@ describe("hideKeyboard() on a screen without a scroll view", () => {
     if (platform === "ios") {
       expect(failure).toMatch(/keyboard is still shown/i)
       expect(failure).toMatch(/multi-line/i)
-      expect(await device.isKeyboardShown()).toBe(true)
+      await expectSoftwareKeyboardShown(device)
     } else {
       expect(failure).toBe("")
       await expect.poll(() => device.isKeyboardShown()).toBe(false)

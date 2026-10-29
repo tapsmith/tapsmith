@@ -2339,12 +2339,20 @@ class CommandHandler {
         // ─── Keyboard ───
 
         case "isKeyboardShown":
-            // Use snapshot to check for keyboard instead of app.keyboards.count
-            // which triggers quiescence waiting on Xcode 26.
-            let snapshot = try? app.snapshot()
-            let dict = snapshot.map { $0.dictionaryRepresentation } ?? [:]
-            let shown = hasKeyboardInSnapshot(dict)
-            return ["shown": shown]
+            // Shown means on screen: the same test hideKeyboard uses to decide
+            // there is nothing to dismiss (PILOT-792). A keyboard element alone
+            // is not enough. With a hardware keyboard attached, iOS keeps the
+            // software keyboard in the tree but parks it below the screen.
+            // An element with no on-screen area may also still be sliding in
+            // (a call straight after a focusing tap on a slow runner), so it
+            // gets the moment hideKeyboard gives it before the answer is no,
+            // cut short once it is plainly parked.
+            // Snapshots rather than app.keyboards.count, which waits for
+            // quiescence on Xcode 26. An unreadable tree reads as not shown.
+            let presence = waitWhileKeyboardSlidesIn(
+                until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace), stopWhenParked: true
+            )
+            return ["shown": presence == .onScreen]
 
         case "hideKeyboard":
             // Check if keyboard is actually shown before attempting dismissal.
@@ -2372,11 +2380,11 @@ class CommandHandler {
             // Let the keyboard finish appearing before planning around it. A
             // keyboard element with no on-screen area yet may still be sliding
             // in (hideKeyboard right after a focusing tap on a slow runner):
-            // wait for it rather than call it "nothing to dismiss".
-            let appearDeadline = Date(timeIntervalSinceNow: 1.5)
-            while keyboardPresence() == .offScreen, Date() < appearDeadline {
-                Thread.sleep(forTimeInterval: 0.15)
-            }
+            // wait for it rather than call it "nothing to dismiss". The full
+            // grace, with no early stop for a keyboard that looks parked: a
+            // keyboard that has not started moving looks the same, and calling
+            // it gone would report success with a keyboard about to come up.
+            _ = waitWhileKeyboardSlidesIn(until: Date(timeIntervalSinceNow: Self.keyboardAppearGrace), stopWhenParked: false)
             Thread.sleep(forTimeInterval: 0.3)
             do {
                 try dismissKeyboard()
@@ -2469,9 +2477,10 @@ class CommandHandler {
     }
 
     /// After the keyboard left: off screen first, out of the tree a moment
-    /// later — give it that moment, so isKeyboardShown() (any keyboard
-    /// element) agrees straight after (best effort: it is already off the
-    /// screen). Then let the app's own animated relayout settle.
+    /// later — give it that moment, so a following command that waits for a
+    /// keyboard element to appear (type()) does not find the leaving one
+    /// (best effort: it is already off the screen). Then let the app's own
+    /// animated relayout settle.
     private func settleAfterKeyboardDismissed(by deadline: Date? = nil) {
         var treeDeadline = Date(timeIntervalSinceNow: 1.0)
         if let deadline { treeDeadline = min(treeDeadline, deadline) }
@@ -2563,13 +2572,13 @@ class CommandHandler {
                 throw AgentError.actionFailed("hideKeyboard could not read the screen to dismiss the keyboard")
             }
             guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return }
-            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
+            let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
             // A keyboard element with nothing on screen (zero-sized, off
             // screen, after the appearance wait above) covers nothing: there is
             // nothing to put away, and no reason to touch the app or submit the
             // field. The dismissal checks below use the same notion.
             guard planner.keyboardRegion != nil else {
-                NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area; nothing to dismiss")
+                NSLog("[TapsmithCommand] hideKeyboard: keyboard element has no on-screen area (a hardware keyboard parks it off screen); nothing to dismiss")
                 return
             }
             let outcome = runDismissStrategy(strategy, planner: planner, deadline: deadline)
@@ -2591,6 +2600,10 @@ class CommandHandler {
         guard let deadline else { return wait }
         return max(0, min(wait, deadline.timeIntervalSinceNow))
     }
+
+    /// How long a keyboard element with no on-screen area gets to slide in
+    /// before isKeyboardShown and hideKeyboard treat it as not on screen.
+    private static let keyboardAppearGrace: TimeInterval = 1.5
 
     /// Set by `dismissKeyboard`: whether any strategy touched the screen.
     private var touchedScreen = false
@@ -2631,7 +2644,7 @@ class CommandHandler {
             // first drag may have scrolled a control under the old point.
             guard let snapshot = try? snapshotFinder.takeSnapshot(),
                   hasKeyboardInSnapshot(snapshot.dictionaryRepresentation),
-                  let again = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screen)
+                  let again = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
                       .scrollSwipeStart(focusedFrame: snapshotFinder.liveFocusedTextInput()?.frame)
             else { return .keyboardStayed }
             _ = EventSynthesizer.swipe(
@@ -2694,11 +2707,44 @@ class CommandHandler {
     /// with no on-screen area, or a keyboard on screen. nil when the tree
     /// could not be read or came back empty.
     private func keyboardPresence() -> KeyboardPresence? {
+        keyboardReading()?.presence
+    }
+
+    /// `keyboardPresence()` plus the keyboard elements' frames.
+    private func keyboardReading() -> (presence: KeyboardPresence, frames: [CGRect])? {
         guard let snapshot = try? app.snapshot(),
               !snapshot.dictionaryRepresentation.isEmpty else { return nil }
-        guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return .absent }
-        let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: snapshotFinder.screenSize)
-        return planner.keyboardRegion == nil ? .offScreen : .onScreen
+        guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return (.absent, []) }
+        let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
+        return (planner.keyboardRegion == nil ? .offScreen : .onScreen, planner.keyboardFrames)
+    }
+
+    /// The screen as `snapshot` saw it: the application element's frame,
+    /// which follows any rotation — the cached `screenSize` is refreshed only
+    /// by setOrientation and a rebind, so after a rotation Tapsmith did not
+    /// make it can put an on-screen keyboard off its screen. The cached size
+    /// when the frame is empty.
+    private func screenSize(of snapshot: XCUIElementSnapshot) -> CGSize {
+        let size = snapshot.frame.size
+        return size.width > 0 && size.height > 0 ? size : snapshotFinder.screenSize
+    }
+
+    /// While the keyboard element is in the tree with no on-screen area, give
+    /// it until `deadline` to slide in. With `stopWhenParked`, stop early once
+    /// it looks parked there (a hardware keyboard attached), which
+    /// `ParkedKeyboardWatch` tells from a frame that stops changing — only for
+    /// a read-only answer, since a keyboard that has not started moving looks
+    /// the same. Returns the last presence read (nil: the tree could not be
+    /// read).
+    private func waitWhileKeyboardSlidesIn(until deadline: Date, stopWhenParked: Bool) -> KeyboardPresence? {
+        var watch = ParkedKeyboardWatch()
+        var reading = keyboardReading()
+        while let current = reading, current.presence == .offScreen, Date() < deadline,
+              !(stopWhenParked && watch.isParked(after: current.frames)) {
+            Thread.sleep(forTimeInterval: 0.15)
+            reading = keyboardReading()
+        }
+        return reading?.presence
     }
 
     /// Check if a keyboard is visible in the snapshot tree by looking for

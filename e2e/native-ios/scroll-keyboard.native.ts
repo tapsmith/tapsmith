@@ -1,4 +1,5 @@
 import { describe, expect, openScreen, test } from "./fixtures.js"
+import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 describe("Native: ScrollView + LazyVStack", () => {
   test.beforeEach(async ({ device, scroll }) => {
@@ -31,13 +32,10 @@ describe("Native: keyboard", () => {
     await expect(keyboard.submitted("Ada")).toBeVisible()
   })
 
-  // BUG PILOT-792: hideKeyboard() reports success but the keyboard stays up (6/6). The
-  // agent logs "keyboard element has no on-screen area; nothing to dismiss"
-  // while isKeyboardShown() still says true.
-  test.skip("focus shows the keyboard and hideKeyboard dismisses it", async ({ device, keyboard }) => {
+  test("focus shows the keyboard and hideKeyboard dismisses it", async ({ device, keyboard }) => {
     await keyboard.name.tap()
     await expect(keyboard.name).toBeFocused()
-    expect(await device.isKeyboardShown()).toBe(true)
+    await expectSoftwareKeyboardShown(device)
     await device.hideKeyboard()
     expect(await device.isKeyboardShown()).toBe(false)
   })

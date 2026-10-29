@@ -40,6 +40,29 @@ struct KeyboardFirstGate {
     }
 }
 
+/// Tells a keyboard parked off screen from one still sliding in (PILOT-792).
+///
+/// With a hardware keyboard attached, iOS leaves the software keyboard in the
+/// tree below the screen for as long as a field has focus. A keyboard that is
+/// sliding in is off screen only for a moment. Fed one read at a time, this
+/// calls the keyboard parked once its frames have stayed the same for
+/// `parkedReads` reads in a row, so a wait for it to arrive can stop early.
+struct ParkedKeyboardWatch {
+    /// Identical off-screen reads in a row that make a keyboard parked.
+    static let parkedReads = 4
+
+    private var lastFrames: [CGRect]?
+    private var sameReads = 0
+
+    /// Record the keyboard elements' frames from one read that found the
+    /// keyboard off screen; true once it counts as parked.
+    mutating func isParked(after frames: [CGRect]) -> Bool {
+        sameReads = frames == lastFrames ? sameReads + 1 : 1
+        lastFrames = frames
+        return sameReads >= Self.parkedReads
+    }
+}
+
 /// Decides how `hideKeyboard` may put the software keyboard away (PILOT-363),
 /// from one `app.snapshot()`.
 ///
@@ -191,6 +214,11 @@ struct KeyboardDismissPlanner {
             return CGRect(x: screen.minX, y: top, width: screen.width, height: screen.maxY - top)
         }
         return nil
+    }
+
+    /// The frames of every keyboard element, in tree order.
+    var keyboardFrames: [CGRect] {
+        nodes.filter { $0.elementType == .keyboard }.map(\.frame)
     }
 
     /// The part of the screen an app touch may use: below the status bar and
