@@ -1303,9 +1303,8 @@ async function ensureMemberTarget(
     const visible = serials.filter((s) => !exclude.includes(s));
     discardDaemon(conn);
     await refreshDeviceIndex();
-    if (target && visible.length > 0) {
-      throw new Error(`${configTargetMissMessageWithClaims(target, platform, visible, all)} (needed for group member "${name}")`);
-    }
+    const targetMiss = target && configTargetMissMessageFor(target, platform, { visible: serials, all, unusable }, exclude);
+    if (targetMiss) throw new Error(`${targetMiss} (needed for group member "${name}")`);
     throw new Error(
       `${noDeviceMessageWithClaims(all, platform, wantedSerial, visible, uiHeldDevices(), 'config', unusable)} (needed for group member "${name}"; `
       + `${exclude.join(', ')} already serve the group's other members)`,
@@ -1385,10 +1384,8 @@ async function ensurePrimaryTarget(
     // yet another one.
     discardDaemon(conn);
     await refreshDeviceIndex();
-    const pickable = visible.filter((s) => !exclude.includes(s));
-    throw new Error(target && pickable.length > 0
-      ? configTargetMissMessageWithClaims(target, platform, pickable, all)
-      : noDeviceMessageWithClaims(all, platform, wanted, visible, uiHeldDevices(), pinSource, unusable));
+    const targetMiss = target && configTargetMissMessageFor(target, platform, { visible, all, unusable }, exclude);
+    throw new Error(targetMiss || noDeviceMessageWithClaims(all, platform, wanted, visible, uiHeldDevices(), pinSource, unusable));
   }
 
   conn.claimedBy = key;
@@ -1457,14 +1454,42 @@ function assertPinNotClaimed(wanted: string | undefined): void {
   if (holder) throw new DeviceClaimedError(wanted, holder);
 }
 
-/** {@link configTargetMissMessage}, plus which devices other sessions hold (the target's may be among them). */
-function configTargetMissMessageWithClaims(
+/**
+ * Why no device was picked for a config target, when the answer is about the
+ * target: a device of it runs but is taken (by the group's other members, a UI
+ * session, another session's claim), or other devices run but none of it.
+ * Undefined when neither holds — nothing of the platform runs, or only devices
+ * other sessions hold — which the general no-device message explains.
+ *
+ * "Boot it" is the wrong advice for a target that is running: the user boots
+ * what is already up, and the real reason stays hidden.
+ */
+function configTargetMissMessageFor(
   target: ConfigDeviceTarget,
   platform: string | undefined,
-  visible: readonly string[],
-  candidates: readonly string[],
-): string {
-  return configTargetMissMessage(target, platform, visible) + heldDevicesNote(withoutHeldDevices(candidates, currentSession()).held);
+  devices: { visible: readonly string[]; all: readonly string[]; unusable: readonly AdbStateEntry[] },
+  exclude: readonly string[] = [],
+): string | undefined {
+  const relevant = platform ? devices.unusable.filter((d) => (d.platform ?? platform) === platform) : devices.unusable;
+  const attached = describeUnusableAndroidDevices(relevant);
+  const attachedNote = attached.length > 0 ? ` ${attached.join(' ')}` : '';
+  const running = devices.all.filter((s) => target.accepts(s));
+  const serving = running.filter((s) => exclude.includes(s));
+  const free = new Set(devices.visible);
+  const held = running.filter((s) => !exclude.includes(s) && !free.has(s));
+  if (serving.length === 0 && held.length === 0) {
+    const pickable = devices.visible.filter((s) => !exclude.includes(s));
+    return pickable.length > 0 ? configTargetMissMessage(target, platform, pickable) + attachedNote : undefined;
+  }
+  const claims = withoutHeldDevices(held, currentSession()).held;
+  const ui = uiHeldDevices();
+  const byUi = held.filter((s) => ui.has(s) && !claims.some((c) => c.device === s));
+  const reasons = [
+    ...(serving.length > 0 ? [`${serving.join(', ')} already ${serving.length === 1 ? 'serves' : 'serve'} the group's other members`] : []),
+    ...(byUi.length > 0 ? [`${byUi.join(', ')} ${byUi.length === 1 ? 'is' : 'are'} being driven by a running \`tapsmith test --ui\` session`] : []),
+  ];
+  return `Every running device that matches ${target.description} from your config is taken${reasons.length > 0 ? `: ${reasons.join('; ')}` : ''}. `
+    + `${target.anotherHint}, or pass another \`device\`.${heldDevicesNote(claims)}${attachedNote}`;
 }
 
 /** The no-device message, plus which devices other sessions hold (there may be the missing ones). */

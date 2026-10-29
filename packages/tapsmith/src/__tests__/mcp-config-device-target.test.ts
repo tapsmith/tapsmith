@@ -20,15 +20,19 @@ vi.mock('node:child_process', async (importOriginal) => ({
 
 type Device = Pick<DeviceInfoProto, 'serial' | 'state' | 'platform'>;
 let devices: Device[];
+/** What a daemon at that address lists, when it differs from `devices`. */
+let devicesAt: Record<string, Device[]>;
+/** Daemons already up (found, not started) — answering before any spawn. */
+let upFront: Set<string>;
 let calls: string[];
 vi.mock('../grpc-client.js', () => ({
   TapsmithGrpcClient: class {
     constructor(readonly address: string) {}
-    waitForReady(): Promise<boolean> { return Promise.resolve(spawnMock.mock.calls.length > 0); }
+    waitForReady(): Promise<boolean> { return Promise.resolve(upFront.has(this.address) || spawnMock.mock.calls.length > 0); }
     ping(): Promise<{ version: string; agentConnected: boolean }> { return Promise.resolve({ version: 'test', agentConnected: false }); }
-    listDevices(): Promise<{ devices: Device[] }> { return Promise.resolve({ devices }); }
+    listDevices(): Promise<{ devices: Device[] }> { return Promise.resolve({ devices: devicesAt[this.address] ?? devices }); }
     setDevice(serial: string): Promise<{ success: boolean }> {
-      calls.push(`setDevice ${serial}`);
+      calls.push(upFront.has(this.address) ? `setDevice ${this.address} ${serial}` : `setDevice ${serial}`);
       return Promise.resolve({ success: true });
     }
     startAgent(): Promise<unknown> { return Promise.resolve({}); }
@@ -67,6 +71,7 @@ vi.mock('../mcp/config-loader.js', async (importOriginal) => ({
 }));
 
 const { closeAllClients, configureMcpConnection, ensureConnected, ensurePlatformTarget } = await import('../mcp/connection.js');
+const { claimDevice, releaseSessionClaims } = await import('../device-claims.js');
 
 class FakeDaemon extends EventEmitter {
   pid = 99997;
@@ -106,6 +111,8 @@ beforeEach(() => {
   spawnMock.mockImplementation(() => new FakeDaemon());
   calls = [];
   devices = [];
+  devicesAt = {};
+  upFront = new Set();
   booted = [];
   avds = {};
   vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -171,6 +178,58 @@ describe('a headless session\'s device, with `simulator` in the config', () => {
       + 'change it in your config, or pass one of those as `device`.',
     );
     expect(calls).toEqual([]);
+  });
+
+  it('is the configured simulator on a daemon the session finds pointed at another one', async () => {
+    // The reuse path: a found daemon serving the other simulator is moved to
+    // the configured one, not adopted for the simulator it already drives.
+    const found = 'localhost:47001';
+    mcpConfig = { ...baseConfig, platform: 'ios', simulator: 'iPhone 17', daemonAddress: found };
+    upFront.add(found);
+    devices = twoSims;
+    booted = twoSimsBooted;
+
+    const target = await ensurePlatformTarget(mcpConfig as TapsmithConfig);
+    expect(target).toMatchObject({ address: found, deviceSerial: 'SIM-17' });
+    expect(calls).toContain(`setDevice ${found} SIM-17`);
+    expect(calls).not.toContain(`setDevice ${found} SIM-PRO`);
+    // And again on the daemon it now holds.
+    expect((await ensurePlatformTarget(mcpConfig as TapsmithConfig)).deviceSerial).toBe('SIM-17');
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  describe('when the configured simulator runs but is taken', () => {
+    const other = {
+      id: 'other-session', pid: process.pid, command: 'tapsmith test --ui', project: '/elsewhere', startedAt: new Date().toISOString(),
+    };
+    afterEach(() => releaseSessionClaims(other.id));
+
+    it('says another session holds it, rather than to boot it', async () => {
+      mcpConfig = { ...baseConfig, platform: 'ios', simulator: 'iPhone 17' };
+      // Serials no earlier test claimed: the registry is per worker, not per test.
+      devices = [{ serial: 'SIM-PRO-H', state: 'Active', platform: 'ios' }, { serial: 'SIM-17-H', state: 'Discovered', platform: 'ios' }];
+      booted = [{ udid: 'SIM-PRO-H', name: 'iPhone 17 Pro' }, { udid: 'SIM-17-H', name: 'iPhone 17' }];
+      expect(claimDevice('SIM-17-H', other).ok).toBe(true);
+
+      const err = await ensurePlatformTarget(mcpConfig as TapsmithConfig).then((t) => `resolved ${JSON.stringify(t)}`, (e: Error) => e.message);
+      expect(err).toContain('Every running device that matches simulator "iPhone 17" from your config is taken.');
+      expect(err).toContain('In use by another Tapsmith session: SIM-17-H');
+      expect(err).not.toContain('Boot it');
+      expect(calls).toEqual([]);
+    });
+  });
+
+  it('says a group member\'s only match already serves the primary, rather than to boot it', async () => {
+    mcpConfig = { ...baseConfig, platform: 'ios', simulator: 'iPhone 17', devices: 2 };
+    devices = twoSims;
+    booted = twoSimsBooted;
+
+    const err = await ensurePlatformTarget(mcpConfig as TapsmithConfig).then(() => undefined, (e: Error) => e.message);
+    expect(err).toContain(
+      'Every running device that matches simulator "iPhone 17" from your config is taken: SIM-17 already serves the group\'s other members. '
+      + 'Boot another simulator named "iPhone 17"',
+    );
+    expect(err).toContain('(needed for group member');
   });
 
   it('picks the configured simulator for an unpinned group member too', async () => {

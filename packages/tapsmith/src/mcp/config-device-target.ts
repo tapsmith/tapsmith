@@ -14,6 +14,8 @@ export interface ConfigDeviceTarget {
   readonly description: string
   /** What to do when none of the target's devices is running. */
   readonly startHint: string
+  /** What to do when every one that runs is taken: start one more. */
+  readonly anotherHint: string
   /** Whether the device with this serial is one the config targets. */
   accepts(serial: string): boolean
 }
@@ -64,6 +66,7 @@ export async function configDeviceTarget(
     return {
       description: `simulator "${simulator}"`,
       startHint: `Boot it (\`xcrun simctl boot "${simulator}"\`, or run \`tapsmith test\` once, which boots it)`,
+      anotherHint: `Boot another simulator named "${simulator}" (a \`--workers 2\` run of \`tapsmith test\` boots one, "${simulator} (Tapsmith Worker 2)")`,
       accepts: (serial) => matching.has(serial),
     };
   }
@@ -76,6 +79,7 @@ export async function configDeviceTarget(
   return {
     description: `AVD "${avd}"${config.deviceStrategy === 'avd-only' ? ' (deviceStrategy "avd-only")' : ''}`,
     startHint: `Start it (\`emulator -avd ${avd}\`), set \`deviceStrategy: 'prefer-connected'\` to use any device`,
+    anotherHint: `Start another instance of it (\`emulator -avd ${avd} -read-only\`)`,
     accepts: (serial) => {
       if (!serial.startsWith('emulator-')) return false;
       if (!avdOf.has(serial)) avdOf.set(serial, deps.getRunningAvdName(serial));
