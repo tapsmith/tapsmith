@@ -30,9 +30,22 @@ describe("Native: gestures", () => {
     await expect(gestures.status("Long pressed")).toBeVisible()
   })
 
-  // BUG PILOT-795: doubleTap() never triggers onTapGesture(count: 2), at any intervalMs.
-  test.skip("double tap", async ({ gestures }) => {
+  // PILOT-795: fires onTapGesture(count: 2), at the default and custom intervals.
+  test("double tap", async ({ gestures }) => {
     await gestures.doubleTapTarget.doubleTap()
+    await expect(gestures.status("Double tapped")).toBeVisible()
+  })
+
+  for (const intervalMs of [50, 150]) {
+    test(`double tap with intervalMs ${intervalMs}`, async ({ gestures }) => {
+      await gestures.doubleTapTarget.doubleTap({ intervalMs })
+      await expect(gestures.status("Double tapped")).toBeVisible()
+    })
+  }
+
+  // A positional handle addresses the element by id, a separate daemon route.
+  test("double tap through .first()", async ({ gestures }) => {
+    await gestures.firstDoubleTapTarget.doubleTap()
     await expect(gestures.status("Double tapped")).toBeVisible()
   })
 

@@ -107,6 +107,7 @@ export class NativeGesturesScreen {
   status(text: string) { return this.device.getByText(`Status: ${text}`, { exact: true }) }
   get longPressTarget() { return this.device.getByRole("button", { name: "Long press me" }) }
   get doubleTapTarget() { return this.device.getByRole("button", { name: "Double tap me" }) }
+  get firstDoubleTapTarget() { return this.doubleTapTarget.first() }
   get swipeArea() { return this.device.getByTestId("swipe-area") }
 }
 
