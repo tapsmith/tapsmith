@@ -207,7 +207,7 @@ export class Device {
   /** Successful `route()` calls since the runner last took the count. */
   private _routeRegistrations = 0;
   /**
-   * The runner's starter for network capture on demand (PILOT-775): a
+   * The runner's starter for network capture on demand: a
    * route(), waitForRequest() or waitForResponse() made while capture is not
    * running calls it, so mocking needs no config. Null outside a test file.
    */
@@ -218,7 +218,7 @@ export class Device {
   private _onDemandStart: Promise<void> | null = null;
   /** The proxy came up through an on-demand start since the runner last asked. */
   private _proxyStartedOnDemand = false;
-  /** waitForRequest/waitForResponse calls still waiting (PILOT-543). */
+  /** waitForRequest/waitForResponse calls still waiting. */
   private readonly _pendingWaiters = new Set<PendingWaiter>();
   /**
    * @internal — How the last successful capture start routed this device's
@@ -323,7 +323,7 @@ export class Device {
    * test session's active one, else the inspection one UI mode's picker
    * keeps), or null. Never connects: UI mode's live locators use it only
    * once the picker's connection is up, so the page never gets a second
-   * inspector session (PILOT-288).
+   * inspector session.
    */
   _connectedWebView(): WebViewHandle | null {
     if (this._activeWebView) return this._activeWebView;
@@ -461,9 +461,9 @@ export class Device {
 
   /**
    * Locate an element by visible text. Case-insensitive substring match by
-   * default, as in Playwright (PILOT-522); pass `{ exact: true }` for a
+   * default, as in Playwright; pass `{ exact: true }` for a
    * case-sensitive, whole-text match, or a RegExp to test the element's
-   * text with (PILOT-520).
+   * text with.
    */
   getByText(text: string | RegExp, options?: { exact?: boolean }): ElementHandle {
     return this._handle(options?.exact ? _text(text) : _textContains(text));
@@ -507,7 +507,7 @@ export class Device {
    *   whose `contentDescription` equals the label text.
    * - iOS: matches input elements whose `accessibilityLabel` equals the text.
    *
-   * A RegExp is tested against the label text instead (PILOT-520).
+   * A RegExp is tested against the label text instead.
    */
   getByLabel(text: string | RegExp): ElementHandle {
     return this._handle(_label(text));
@@ -1072,7 +1072,7 @@ export class Device {
 
   /**
    * @internal — Arm (or clear, with null) the runner's starter for network
-   * capture on demand (PILOT-775). Each arm allows one start: a start that
+   * capture on demand. Each arm allows one start: a start that
    * failed is not retried on every later call — its error is what route()
    * and the network waiters report — but the runner re-arms per test.
    */
@@ -1083,7 +1083,7 @@ export class Device {
 
   /**
    * @internal — Whether the proxy came up through an on-demand start since
-   * the last call, then reset (PILOT-775). A route that never fires after
+   * the last call, then reset. A route that never fires after
    * such a start may have missed connections the app opened before it.
    */
   _takeProxyStartedOnDemand(): boolean {
@@ -1118,7 +1118,7 @@ export class Device {
 
   /**
    * @internal — Requests that reached one of this device's route handlers
-   * since the last call, then reset (PILOT-775).
+   * since the last call, then reset.
    */
   _takeRouteHandlerCalls(): number {
     return this._routeManager?.takeHandlerCalls() ?? 0;
@@ -1148,7 +1148,7 @@ export class Device {
     }
   }
 
-  /** @internal — Start video recording on the device (used by the runner, PILOT-114). */
+  /** @internal — Start video recording on the device (used by the runner). */
   async _startVideoRecording(options?: { size?: { width: number; height: number } }): Promise<{
     success: boolean
     errorMessage: string
@@ -1157,7 +1157,7 @@ export class Device {
     return { success: res.success, errorMessage: res.errorMessage };
   }
 
-  /** @internal — Stop video recording and return path to the MP4 (used by the runner, PILOT-114). */
+  /** @internal — Stop video recording and return path to the MP4 (used by the runner). */
   async _stopVideoRecording(): Promise<{
     success: boolean
     videoPath: string
@@ -1300,12 +1300,12 @@ export class Device {
    *
    * Routes run on Tapsmith's network proxy. The test runner starts it for a
    * test whose trace records network traffic, and otherwise on the first
-   * `route()`, `waitForRequest()` or `waitForResponse()` of a test
-   * (PILOT-775); it then stays up for the rest of the session. Connections
+   * `route()`, `waitForRequest()` or `waitForResponse()` of a test;
+   * it then stays up for the rest of the session. Connections
    * the app opened before the proxy started bypass it, so register routes
    * before the app sends the requests they mock. Outside the test runner
    * nothing starts the proxy, route handlers never fire, and the runner
-   * warns at the end of a test whose routes could not fire (PILOT-517).
+   * warns at the end of a test whose routes could not fire.
    */
   async route(
     url: string | RegExp | ((url: URL) => boolean),
@@ -1420,7 +1420,7 @@ export class Device {
 
   /**
    * A pending network waiter, tracked so the runner can end it with the test
-   * that created it (PILOT-543). Without that, a waiter a failed test never
+   * that created it. Without that, a waiter a failed test never
    * awaited timed out later, unhandled, and took the whole run down.
    */
   private _waitForNetworkEvent<T>(
@@ -1482,7 +1482,7 @@ export class Device {
 
   /**
    * Why a network waiter may have timed out, when that is down to capture
-   * rather than the app (PILOT-775): nothing was capturing, or the proxy only
+   * rather than the app: nothing was capturing, or the proxy only
    * came up with this wait, after the app may have opened its connections.
    */
   private _networkWaiterHint(proxyWasRunning: boolean): string {
@@ -1503,7 +1503,7 @@ export class Device {
   /**
    * @internal — End the network waiters created after `since` (a
    * {@link pendingWaiterMark}), or all of them. The runner calls it when a
-   * test attempt ends, and for all of them when a file ends (PILOT-543).
+   * test attempt ends, and for all of them when a file ends.
    */
   _cancelPendingWaiters(since = 0): void {
     for (const waiter of [...this._pendingWaiters]) {
@@ -2096,7 +2096,7 @@ export class Device {
    * @internal — Per-test reset: return to the native context but keep the
    * WebView connection cached for the next test. Re-establishing the iOS
    * inspector session per test churns webinspectord and is the main trigger
-   * for wedged page sessions and stale-target connects (PILOT-288); a dead
+   * for wedged page sessions and stale-target connects; a dead
    * connection is detected by `_isAlive()` and reconnected on next use.
    */
   _resetWebViewContext(): void {

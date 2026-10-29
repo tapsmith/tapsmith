@@ -3,8 +3,6 @@
  *
  * Serializes all test run data into a JSON-based blob file that can later
  * be merged with results from other shards via `npx tapsmith merge-reports`.
- *
- * @see PILOT-74
  */
 
 import * as fs from 'node:fs';

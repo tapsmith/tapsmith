@@ -1,8 +1,7 @@
 /**
  * What to tell a user whose run found no usable device, in terms of the
  * config they actually have. The old wording always ended "or set `avd`",
- * which sent users with `avd` set to change a setting they already had
- * (PILOT-400).
+ * which sent users with `avd` set to change a setting they already had.
  */
 
 import type { TapsmithConfig } from './config.js';
@@ -13,7 +12,7 @@ type AdviceConfig = Pick<TapsmithConfig, 'avd' | 'launchEmulators'>;
 /**
  * Advice for "no online Android device was found". `toolchainBlocker` is
  * `androidToolchainBlocker()`: when adb itself is missing, that is all the
- * user needs to hear — no setting can help yet (PILOT-558).
+ * user needs to hear — no setting can help yet.
  */
 export function noDeviceAdvice(config: AdviceConfig, toolchainBlocker: string | undefined): string {
   if (toolchainBlocker) return `${toolchainBlocker}.`;

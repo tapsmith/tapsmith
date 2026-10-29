@@ -70,7 +70,7 @@ export function runInAttemptContext<T>(token: AttemptToken, fn: () => Promise<T>
 
 /**
  * @internal Run `fn` outside any attempt context: for long-lived resources a
- * test body happens to create (the network route stream, PILOT-775), whose
+ * test body happens to create (the network route stream), whose
  * callbacks would otherwise run as that attempt — closed once it ends, so
  * fenced — in every later test.
  */
@@ -81,7 +81,7 @@ export function runOutsideAttempt<T>(fn: () => T): T {
 /**
  * @internal The attempt token of the calling async context, if any. Node runs
  * `unhandledRejection` listeners in the context of the promise that rejected,
- * so this tells which attempt left a rejection behind (PILOT-543).
+ * so this tells which attempt left a rejection behind.
  */
 export function currentAttemptToken(): AttemptToken | undefined {
   return attemptStorage.getStore();

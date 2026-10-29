@@ -4,8 +4,6 @@
  * Provides `test.extend()` for defining custom fixtures with test or worker
  * scope. Follows the Playwright fixture pattern where setup/teardown is
  * managed via the `use()` callback.
- *
- * @see PILOT-108
  */
 
 import type { Device } from './device.js';

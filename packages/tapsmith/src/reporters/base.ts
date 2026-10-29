@@ -76,7 +76,7 @@ export function formatSummaryLine(
 /**
  * ` (retry #N)` after a retry attempt's title, as Playwright prints it, so a
  * second line for the same test reads as a retry rather than as the test
- * running twice by mistake (PILOT-569). Empty for a first attempt.
+ * running twice by mistake. Empty for a first attempt.
  */
 export function retrySuffix(retry: number | undefined): string {
   return retry != null && retry > 0 ? ` (retry #${retry})` : '';
@@ -136,7 +136,7 @@ const FRAME_LINE_RE = /^\s*at\s/;
 /**
  * The first `max` frames of an error's stack worth showing under its message:
  * Tapsmith's own and Node's internal frames filtered out *before* the cap, so
- * the test's frame is never pushed out by SDK wrappers (PILOT-841). Errors
+ * the test's frame is never pushed out by SDK wrappers. Errors
  * with no user frame keep their raw frames ({@link userStackFrames}).
  */
 export function errorStackFrames(error: Error, max: number): string[] {

@@ -1,6 +1,6 @@
 /**
- * Warning for HTTPS hosts whose client rejected Tapsmith's MITM certificate
- * (PILOT-712). The daemon reports them per test drain
+ * Warning for HTTPS hosts whose client rejected Tapsmith's MITM certificate.
+ * The daemon reports them per test drain
  * (`StopNetworkCaptureResponse.tlsRejectedHosts`); without this the run just
  * captured nothing for them — no entries, `device.route()` never firing,
  * `waitForResponse` timing out — with no hint why.

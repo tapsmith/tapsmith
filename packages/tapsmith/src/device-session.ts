@@ -5,7 +5,7 @@
  * Every run path used to carry its own copy of this sequence (the sequential
  * CLI, parallel workers, UI workers, watch/MCP run children), and each copy
  * drifted — a per-device concern added to one was silently missing from the
- * others. Device groups (`use.devices`, PILOT-310) run the sequence N times
+ * others. Device groups (`use.devices`) run the sequence N times
  * per worker, so it lives here once and the embedders only decide *which*
  * devices and daemons to hand it.
  */
@@ -109,7 +109,7 @@ export interface OpenDeviceSessionOptions {
   label: string
   /**
    * The Tapsmith session this device is opened for (`currentSession()`), which
-   * claims it in the machine-wide registry before selecting it (PILOT-381). A
+   * claims it in the machine-wide registry before selecting it. A
    * device or daemon another live session holds is refused, naming the holder.
    * Required so an embedder cannot open a device without claiming it.
    */

@@ -3,7 +3,7 @@
  *
  * Playwright users call these by reflex. Without a stand-in the call fails as
  * "import_tapsmith.test.step is not a function" — a bundler-mangled TypeError
- * that names neither the API nor what to do instead (PILOT-544). The stand-ins
+ * that names neither the API nor what to do instead. The stand-ins
  * are deliberately left off the TypeScript types, so the type checker still
  * reports the property as missing; they only make the runtime failure clear.
  * Each is replaced by the real API when it lands.

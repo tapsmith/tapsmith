@@ -4,8 +4,6 @@
  * Provides utilities to discover AVDs, launch emulators on specific ports,
  * wait for boot, and clean up on exit. Used by the dispatcher when
  * `avd` is configured to auto-provision devices for workers.
- *
- * @see PILOT-106
  */
 
 import { createHash } from 'node:crypto';
@@ -46,7 +44,7 @@ interface EmulatorManifestEntry {
   launchedAt: string
   /**
    * Still booting: recorded at spawn so an interrupted launch is never
-   * orphaned (PILOT-441), and cleared once it boots healthy. While its
+   * orphaned, and cleared once it boots healthy. While its
    * launching process (`ownerPid`) lives, no other run touches it.
    */
   booting?: boolean
@@ -54,7 +52,7 @@ interface EmulatorManifestEntry {
   ownerPid?: number
   /**
    * Windowed on macOS: whether App Nap was off for it at launch
-   * (`disableEmulatorAppNap`, PILOT-515). Absent for other launches, and for
+   * (`disableEmulatorAppNap`). Absent for other launches, and for
    * any launched by a Tapsmith from before it turned App Nap off.
    */
   appNapDisabled?: boolean
@@ -146,7 +144,7 @@ export interface ReclaimResult {
   /**
    * Serials kept in the manifest, and neither reused nor killed this run:
    * the recorded PID is alive but its command line could not be read; adb
-   * could not be queried or changed its answer (PILOT-710); or the emulator
+   * could not be queried or changed its answer; or the emulator
    * failed its checks while another live Tapsmith session holds it.
    */
   undetermined: string[]
@@ -160,7 +158,7 @@ export interface ReclaimResult {
 interface ReclaimDeps {
   readManifest: () => EmulatorManifestEntry[]
   writeManifest: (entries: EmulatorManifestEntry[]) => void
-  /** `adb devices`, or why it could not be read — never "no devices" for a failure (PILOT-710). */
+  /** `adb devices`, or why it could not be read — never "no devices" for a failure. */
   queryAdbDevices: () => AdbDeviceQuery
   /** Blocks for the settle delay between two `adb devices` looks. */
   sleep: (ms: number) => void
@@ -168,7 +166,7 @@ interface ReclaimDeps {
   readProcessArgs: (pid: number) => string[] | undefined
   findEmulatorPid: (serial: string) => number | undefined
   probeDeviceHealth: (serial: string) => DeviceHealthResult
-  /** Serials another live Tapsmith session holds (PILOT-381 claims): never stopped. */
+  /** Serials another live Tapsmith session holds (its device claims): never stopped. */
   devicesHeldElsewhere: () => ReadonlySet<string>
   killEmulator: (serial: string) => void
   killProcess: (pid: number) => void
@@ -232,7 +230,7 @@ function killProcess(pid: number): void {
  * still the one Tapsmith launched: the recorded PID is alive and its command
  * line carries Tapsmith's launch arguments for that AVD and port. A serial
  * alone proves nothing — it is just a console port, and a user's own
- * emulator started later takes the same default port (PILOT-401).
+ * emulator started later takes the same default port.
  *
  * - **Not provably ours** (PID dead, or reused by another process): drop the
  *   entry and touch nothing — whatever holds that serial now is not ours.
@@ -242,7 +240,7 @@ function killProcess(pid: number): void {
  * "Unresponsive" needs adb to have answered — twice, a settle delay apart —
  * without the emulator online. When `adb devices` cannot be read at all (adb
  * not on PATH, timed out, restarting), an emulator's state is unknown, so
- * every live one is left running and kept on record (PILOT-710): it may be
+ * every live one is left running and kept on record: it may be
  * another session's, mid-test.
  *
  * This is what makes back-to-back `npx tapsmith test` fast — emulators survive
@@ -584,7 +582,7 @@ const ADB_DEVICES_TIMEOUT_MS = 10_000;
 /**
  * {@link listAdbDevices}, but a query that failed (adb not on PATH, timed
  * out, exited non-zero) is reported as such rather than as no devices — for
- * callers that act on a device's absence, such as killing it (PILOT-710).
+ * callers that act on a device's absence, such as killing it.
  */
 export function queryAdbDevices(exec: ExecFileSyncLike = execFileSync): AdbDeviceQuery {
   try {
@@ -984,8 +982,7 @@ export function androidSdkRoots(
  * Locate the Android `emulator` binary: `$ANDROID_HOME/emulator/emulator`,
  * then `$ANDROID_SDK_ROOT/…`, then the default SDK location for the OS
  * (where Android Studio installs it), then PATH. A stock Android Studio setup
- * puts `platform-tools` on PATH but not `emulator`, so PATH comes last
- * (PILOT-417).
+ * puts `platform-tools` on PATH but not `emulator`, so PATH comes last.
  */
 export function resolveEmulatorBinary(
   env: NodeJS.ProcessEnv = process.env,
@@ -1071,7 +1068,7 @@ const MAX_EMULATOR_PORT = 5682;
  */
 const PORT_LOCK_STALE_MS = 60_000;
 
-/** A console port held for one launch until `release` (PILOT-439). */
+/** A console port held for one launch until `release`. */
 export interface PortReservation {
   port: number
   /** Frees the port for other launches. Safe to call more than once. */
@@ -1136,7 +1133,7 @@ async function waitForEmulatorStartup(emu: LaunchedEmulator): Promise<void> {
 }
 
 /**
- * Reserve an emulator console port for one launch (PILOT-439).
+ * Reserve an emulator console port for one launch.
  *
  * Picking a port that merely looks free left a window, between choosing it
  * and the emulator binding it, in which another launch could choose it too —
@@ -1489,7 +1486,7 @@ export function emulatorLaunchArgs(
  * The `emulator` launcher exec's qemu in place, so the PID Tapsmith records
  * is the qemu process and its argv still carries Tapsmith's arguments. A
  * serial is only a port and ports are reused, so this — not the serial — is
- * what proves an emulator is Tapsmith's to reuse or kill (PILOT-401).
+ * what proves an emulator is Tapsmith's to reuse or kill.
  */
 export function isTapsmithLaunchedEmulator(
   argv: readonly string[],
@@ -1594,7 +1591,7 @@ function quoteLogLines(lines: readonly string[]): string[] {
 
 /**
  * A launched emulator still running, but not booted within the boot timeout,
- * with the emulator's last output and where the rest of it is (PILOT-512): a
+ * with the emulator's last output and where the rest of it is: a
  * launch stuck at a prompt says so in its log, and nowhere else.
  */
 export function describeBootTimeout(
@@ -1621,7 +1618,7 @@ export function describeBootTimeout(
 
 /**
  * Why a launched emulator failed to boot, from how its process ended and
- * what it wrote to its log (PILOT-417) — so the user sees the emulator's own
+ * what it wrote to its log — so the user sees the emulator's own
  * reason at once instead of a boot timeout minutes later.
  */
 export function describeEmulatorExit(
@@ -2063,8 +2060,8 @@ interface StopLaunchedEmulatorDeps {
 }
 
 /**
- * Stop an emulator process this process launched, whose launch failed
- * (PILOT-512): SIGTERM, then SIGKILL if it is still running after a grace
+ * Stop an emulator process this process launched, whose launch failed:
+ * SIGTERM, then SIGKILL if it is still running after a grace
  * period. An emulator showing a modal dialog ignores SIGTERM.
  *
  * Only the spawned process is signalled, through its `ChildProcess` — which
@@ -2575,7 +2572,7 @@ const bootingThisProcess = new Map<string, LaunchedEmulator>();
 /**
  * Emulators a provisioning in progress has launched and not yet handed back
  * — for an interrupted run to stop: the caller does not know about them yet,
- * so nothing else will (PILOT-441).
+ * so nothing else will.
  */
 export function emulatorsBootingThisProcess(): LaunchedEmulator[] {
   return [...bootingThisProcess.values()];

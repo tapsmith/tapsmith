@@ -50,6 +50,25 @@ enum NonAppElements {
         elementType == .application || isHooksMarker(label: label, title: title, value: value)
     }
 
+    /// Whether `elementType` is a switch: a UISwitch or a SwiftUI Toggle
+    /// (`.toggle` on newer iOS).
+    static func isSwitch(_ elementType: XCUIElement.ElementType) -> Bool {
+        elementType == .switch || elementType == .toggle
+    }
+
+    /// Whether a node is part of the switch it sits in rather than an element
+    /// of its own (PILOT-790). SwiftUI exposes a labelled `Toggle` as a
+    /// row-sized switch, named by the label, that holds the label's text and
+    /// an unlabelled switch: the knob. They are one control — the outer one
+    /// carries its name and state, and only the knob flips it — so no locator
+    /// matches the knob itself (an unnamed `getByRole("switch")` finds one
+    /// switch per Toggle), and a tap on the outer one is delivered to the
+    /// knob (CommandHandler). A UIKit UISwitch holds no switch.
+    /// `insideSwitch`: whether the node has a switch ancestor.
+    static func isSwitchPart(elementType: XCUIElement.ElementType, insideSwitch: Bool) -> Bool {
+        insideSwitch && isSwitch(elementType)
+    }
+
     /// The identifier of the predictive / input assistant bar the system
     /// draws above the keys.
     static let inputAssistantIdentifier = "SystemInputAssistantView"

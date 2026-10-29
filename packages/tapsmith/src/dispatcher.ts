@@ -4,8 +4,6 @@
  * Coordinates multiple worker processes, each assigned to a dedicated
  * device and daemon instance. Distributes test files using a work-stealing
  * queue for natural load balancing.
- *
- * @see PILOT-106
  */
 
 import { fork, execFileSync, type ChildProcess } from 'node:child_process';
@@ -116,7 +114,7 @@ interface WorkerHandle {
  * dispatcher. `subprocess.send()` can fail synchronously (channel already
  * closed) or asynchronously (EPIPE while the child is dying) — without a
  * callback the async failure is emitted as an unhandled 'error' event and
- * takes down the run (PILOT-228). Failures are routed to `onSendFailure`
+ * takes down the run. Failures are routed to `onSendFailure`
  * so the caller can treat the worker as gone and requeue its work.
  */
 export function sendToWorkerProcess(
@@ -270,7 +268,7 @@ export function pinnedWorkerDevices(
   isIos: boolean,
   /**
    * Devices adb lists but cannot use, with their adb state: a pin among them
-   * is attached, not missing, and is named with its fix (PILOT-457).
+   * is attached, not missing, and is named with its fix.
    */
   unusable: readonly AdbDevice[],
 ): string[] | undefined {
@@ -696,7 +694,7 @@ export interface BucketCoordination {
  * file until every bucket has either finished starting or failed to.
  *
  * A bucket that fails before the barrier does not stop the others (it used
- * to abort the whole run — PILOT-400). Each of its projects' files is
+ * to abort the whole run). Each of its projects' files is
  * reported as one failed result carrying the target-labelled reason, the
  * way Playwright fails every test of a project whose browser cannot launch
  * and runs the rest. Files, not tests: tests are only collected inside a
@@ -861,7 +859,7 @@ export async function coordinateBuckets(
  * The error when no device target of a run or session could start: each
  * target's whole message, its later lines (the hints: per-worker failures, a
  * port squatter's kill command, the advice) indented under it. Shared by the
- * parallel path, UI mode and watch (PILOT-400, PILOT-415).
+ * parallel path, UI mode and watch.
  *
  * @internal — exported for unit testing.
  */
@@ -884,7 +882,7 @@ export function targetUnavailableMessage(label: string, err: unknown): string {
 
 /**
  * A target-start warning line with the target's whole reason under it.
- * Shared by the parallel path and the CLI's (PILOT-464).
+ * Shared by the parallel path and the CLI's.
  */
 export function targetStartNotice(warning: string, reason: string): string {
   return withDetail(warning, reason.split('\n'));
@@ -930,7 +928,7 @@ export function deviceTargetLabel(deviceSignature: string): string {
 
 /**
  * One failed result per test file of `projects`, for a device target that
- * could not start. Shared by the parallel and sequential paths (PILOT-400).
+ * could not start. Shared by the parallel and sequential paths.
  */
 export function targetStartFailureResults(
   label: string,

@@ -1,6 +1,5 @@
 /**
- * Picking an element on a screenshot or the live mirror (PILOT-226,
- * PILOT-848): which node a point lands on, and hover bounds. Geometry and
+ * Picking an element on a screenshot or the live mirror: which node a point lands on, and hover bounds. Geometry and
  * selector generation only — this module must not match locators, so the
  * live picker can use it; the offline trace playground adds its own
  * suggestion ranking in selector-pick.ts.
@@ -9,7 +8,7 @@
 import type { HierarchyNode, Bounds } from './hierarchy-utils.js';
 import { getNodeBounds, hitTest } from './hierarchy-utils.js';
 import { findBetterDescendant, hasGoodSelectors } from './selector-generation.js';
-import { isHooksMarkerCarrier, isNonAppSubtree } from './non-app-nodes.js';
+import { isHooksMarkerCarrier, isNonAppSubtree, isSwitchPartNode } from './non-app-nodes.js';
 
 function findParent(roots: HierarchyNode[], target: HierarchyNode): HierarchyNode | null {
   for (const root of roots) {
@@ -28,6 +27,15 @@ function findParentWalk(node: HierarchyNode, target: HierarchyNode): HierarchyNo
   return null;
 }
 
+/** The switch a SwiftUI Toggle's knob is part of (non-app-nodes.ts): its nearest switch ancestor. */
+function owningSwitch(roots: HierarchyNode[], part: HierarchyNode): HierarchyNode | null {
+  let current = findParent(roots, part);
+  while (current && (current.attributes.get('tapsmith-role') !== 'switch' || isSwitchPartNode(current))) {
+    current = findParent(roots, current);
+  }
+  return current;
+}
+
 function boundsOverlap(a: Bounds, b: Bounds): boolean {
   return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
 }
@@ -44,8 +52,9 @@ export function pickNodeAt(
   clickX: number,
   clickY: number,
 ): { node: HierarchyNode; bounds: Bounds } | null {
-  const hitNode = hitTest(roots, clickX, clickY);
+  let hitNode = hitTest(roots, clickX, clickY);
   if (!hitNode) return null;
+  if (isSwitchPartNode(hitNode)) hitNode = owningSwitch(roots, hitNode) ?? hitNode;
   // A promoted node without parseable bounds would fail the whole pick even
   // though hitNode (found by bounds) is guaranteed to have them — only
   // promote nodes that can be highlighted.

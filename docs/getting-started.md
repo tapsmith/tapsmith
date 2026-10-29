@@ -71,46 +71,7 @@ This installs the TypeScript SDK, test runner, the Tapsmith daemon binary for yo
 
 These docs run the CLI as `npx tapsmith …`. With Yarn, run `yarn tapsmith …` instead, and with pnpm, `pnpm exec tapsmith …` (`npx tapsmith` also works in a pnpm project).
 
-### npm: the `allow-scripts` warning
-
-On npm 11.17 and later, the install may end with an `npm warn allow-scripts` (npm 12: `npm warn install-scripts`) list naming `protobufjs`, `esbuild` and, on macOS, `fsevents`. Tapsmith's own packages have no install scripts. These three come in through gRPC and `tsx`, and Tapsmith works with their scripts blocked: `protobufjs` only prints an advisory, `esbuild` only re-checks the binary npm already installed, and `fsevents` ships prebuilt. To record that decision and silence the warning, add this to your project's `package.json`:
-
-```json
-"allowScripts": { "protobufjs": false, "esbuild": false, "fsevents": false }
-```
-
-### pnpm: `ERR_PNPM_IGNORED_BUILDS`
-
-pnpm blocks dependency build scripts unless the project approves them. From pnpm 11, `pnpm add -D tapsmith` installs everything and then exits 1 with `ERR_PNPM_IGNORED_BUILDS: Ignored build scripts: esbuild, protobufjs` (pnpm 10 prints the same list as a warning). They are the same scripts as in the npm warning above, and Tapsmith works without them. Only the project can approve or deny them, so to record that decision and silence the error, set them to `false` under `allowBuilds` in the `pnpm-workspace.yaml` beside your `pnpm-lock.yaml` (in a monorepo, the one at the workspace root; create it if there isn't one). Some pnpm versions have already added them there with the value `set this to true or false`: replace that value rather than adding a second `allowBuilds:`.
-
-```yaml
-allowBuilds:
-  esbuild: false
-  protobufjs: false
-```
-
-Then run `pnpm install`. If `tapsmith init` ran the install for you, it prints this snippet.
-
-### pnpm: the Android agent package
-
-pnpm 11 and later skip `@tapsmith/agent-android` when installing Tapsmith 0.7.0 or earlier: they read the `-android` in its name as "Android-only" and leave the optional dependency out, so Android runs fail on a device that doesn't already have the agent. Later releases declare the platforms the package installs on. On an affected version, `tapsmith doctor` reports `Android agent not found`; add the package directly:
-
-```bash
-pnpm add -D @tapsmith/agent-android
-```
-
-The same applies to any install that leaves optional dependencies out (`npm install --omit=optional`, `pnpm install --no-optional`).
-
-### Yarn: use the `node-modules` linker
-
-Tapsmith doesn't run under Yarn Plug'n'Play, the default for new Yarn 2+ projects (a `.pnp.cjs` file next to `package.json`). It starts `tsx`, its daemon and its device agents as programs, and Plug'n'Play keeps packages inside zip archives, so `tapsmith test`, `verify` and `mcp-server` stop with an error naming the fix, and `tapsmith doctor` reports it. Switch the project to the `node-modules` linker (React Native and Expo projects already use it):
-
-```yaml
-# .yarnrc.yml
-nodeLinker: node-modules
-```
-
-Then run `yarn install`.
+An install that ends with an `allow-scripts` warning (npm) or `ERR_PNPM_IGNORED_BUILDS` (pnpm), a pnpm project where `tapsmith doctor` reports `Android agent not found`, and Yarn Plug'n'Play each need one small change, covered in [Package manager notes](#package-manager-notes) at the end of this page.
 
 ## Build the app under test
 
@@ -280,7 +241,7 @@ A warm reset re-navigates and runs your own reset, but it does not wipe stored d
 
 ## Manual Configuration
 
-If you prefer to configure manually, create `tapsmith.config.ts` in your project root:
+If you prefer to configure manually, create `tapsmith.config.ts` in your project root. The build paths below are the ones the native build commands in [Build the app under test](#build-the-app-under-test) write; the first samples' comments give the React Native and Expo ones.
 
 ### Android
 
@@ -289,6 +250,7 @@ import { defineConfig } from "tapsmith";
 
 export default defineConfig({
   testMatch: ["**/*.tapsmith.ts"],
+  // React Native or Expo: "./android/app/build/outputs/apk/release/app-release.apk"
   apk: "./app/build/outputs/apk/debug/app-debug.apk",
   package: "com.example.myapp",
   timeout: 30_000,
@@ -306,7 +268,8 @@ import { defineConfig } from "tapsmith";
 export default defineConfig({
   testMatch: ["**/*.tapsmith.ts"],
   platform: "ios",
-  app: "./ios/build/Build/Products/Debug-iphonesimulator/MyApp.app",
+  // React Native or Expo: "./ios/build/Build/Products/Release-iphonesimulator/MyApp.app"
+  app: "./build/Build/Products/Debug-iphonesimulator/MyApp.app",
   package: "com.example.myapp",
   simulator: "iPhone 17",
   timeout: 30_000,
@@ -355,7 +318,7 @@ import { defineConfig } from "tapsmith";
 export default defineConfig({
   testMatch: ["**/*.tapsmith.ts"],
   platform: "ios",
-  app: "./ios/build/Build/Products/Debug-iphonesimulator/MyApp.app",
+  app: "./build/Build/Products/Debug-iphonesimulator/MyApp.app",
   package: "com.example.myapp",
   workers: 4,
   simulator: "iPhone 17",
@@ -492,6 +455,51 @@ describe("Login flow", () => {
 ```
 
 `test.use()` inside a `describe` applies only to the tests in that group. Hooks (`beforeAll`, `beforeEach`, `afterEach`, `afterAll`) are also available. You don't need one to reset the app, because the reset is declared with `appReset` and `appResetScope` instead. See [Writing Tests](writing-tests.md#test-isolation).
+
+## Package manager notes
+
+Most installs need none of this.
+
+### npm: the `allow-scripts` warning
+
+On npm 11.17 and later, the install may end with an `npm warn allow-scripts` (npm 12: `npm warn install-scripts`) list naming `protobufjs`, `esbuild` and, on macOS, `fsevents`. Tapsmith's own packages have no install scripts. These three come in through gRPC and `tsx`, and Tapsmith works with their scripts blocked: `protobufjs` only prints an advisory, `esbuild` only re-checks the binary npm already installed, and `fsevents` ships prebuilt. To record that decision and silence the warning, add this to your project's `package.json`:
+
+```json
+"allowScripts": { "protobufjs": false, "esbuild": false, "fsevents": false }
+```
+
+### pnpm: `ERR_PNPM_IGNORED_BUILDS`
+
+pnpm blocks dependency build scripts unless the project approves them. From pnpm 11, `pnpm add -D tapsmith` installs everything and then exits 1 with `ERR_PNPM_IGNORED_BUILDS: Ignored build scripts: esbuild, protobufjs` (pnpm 10 prints the same list as a warning). They are the same scripts as in the npm warning above, and Tapsmith works without them. Only the project can approve or deny them, so to record that decision and silence the error, set them to `false` under `allowBuilds` in the `pnpm-workspace.yaml` beside your `pnpm-lock.yaml` (in a monorepo, the one at the workspace root; create it if there isn't one). Some pnpm versions have already added them there with the value `set this to true or false`: replace that value rather than adding a second `allowBuilds:`.
+
+```yaml
+allowBuilds:
+  esbuild: false
+  protobufjs: false
+```
+
+Then run `pnpm install`. If `tapsmith init` ran the install for you, it prints this snippet.
+
+### pnpm: the Android agent package
+
+pnpm 11 and later skip `@tapsmith/agent-android` when installing Tapsmith 0.7.0 or earlier: they read the `-android` in its name as "Android-only" and leave the optional dependency out, so Android runs fail on a device that doesn't already have the agent. Later releases declare the platforms the package installs on. On an affected version, `tapsmith doctor` reports `Android agent not found`; add the package directly:
+
+```bash
+pnpm add -D @tapsmith/agent-android
+```
+
+The same applies to any install that leaves optional dependencies out (`npm install --omit=optional`, `pnpm install --no-optional`).
+
+### Yarn: use the `node-modules` linker
+
+Tapsmith doesn't run under Yarn Plug'n'Play, the default for new Yarn 2+ projects (a `.pnp.cjs` file next to `package.json`). It starts `tsx`, its daemon and its device agents as programs, and Plug'n'Play keeps packages inside zip archives, so `tapsmith test`, `verify` and `mcp-server` stop with an error naming the fix, and `tapsmith doctor` reports it. Switch the project to the `node-modules` linker (React Native and Expo projects already use it):
+
+```yaml
+# .yarnrc.yml
+nodeLinker: node-modules
+```
+
+Then run `yarn install`.
 
 ## Next Steps
 

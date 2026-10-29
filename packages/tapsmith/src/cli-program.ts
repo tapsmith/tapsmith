@@ -1,5 +1,5 @@
 /**
- * The `tapsmith` command tree (PILOT-260).
+ * The `tapsmith` command tree.
  *
  * Every command, its flags, its help and its usage errors are declared here
  * on commander, the parser Playwright's own CLI uses. This module only
@@ -134,7 +134,7 @@ export interface RunCliDeps {
   beforeAction?(command: string, opts: Record<string, unknown>): void;
   /**
    * Called before `beforeAction`: a reason the command cannot run in this
-   * environment at all (Yarn Plug'n'Play, PILOT-560). A refusal exits 1 with
+   * environment at all (Yarn Plug'n'Play). A refusal exits 1 with
    * its message and fix — the error envelope under `--json` — and the handler
    * never runs.
    */
@@ -610,8 +610,7 @@ const BANNER_PRINTED_ENV = 'TAPSMITH_BANNER_PRINTED';
 /**
  * Whether this process should print the banner — false when it, or the CLI
  * process that spawned it, already has — marking it printed. `verify` runs
- * `tapsmith test` as a child, which would otherwise print it a second time
- * (PILOT-540).
+ * `tapsmith test` as a child, which would otherwise print it a second time.
  */
 export function claimBanner(env: NodeJS.ProcessEnv = process.env): boolean {
   if (env[BANNER_PRINTED_ENV] === '1') return false;

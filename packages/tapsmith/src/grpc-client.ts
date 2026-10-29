@@ -395,7 +395,7 @@ export class TapsmithGrpcClient {
   private address: string;
   private _abortSignal?: AbortSignal;
   /**
-   * A network capture start in flight (PILOT-775). Every other RPC waits for
+   * A network capture start in flight. Every other RPC waits for
    * it: a waiter created on a cold device starts capture without blocking,
    * and the action after it (`tap()`, `launchApp()`) must not send the app's
    * request before the proxy is there to see it.
@@ -440,7 +440,7 @@ export class TapsmithGrpcClient {
     this._abortSignal = signal;
   }
 
-  /** @internal — Hold other RPCs until this capture start settles (PILOT-775). */
+  /** @internal — Hold other RPCs until this capture start settles. */
   _holdForCaptureStart(start: Promise<unknown>): void {
     this._pendingCaptureStart = start;
     const release = (): void => {
@@ -562,8 +562,8 @@ export class TapsmithGrpcClient {
   }
 
   /**
-   * Evaluate several selectors against one UI snapshot, without waiting
-   * (PILOT-848): the agent's own matching decides every count, so locator
+   * Evaluate several selectors against one UI snapshot, without waiting:
+   * the agent's own matching decides every count, so locator
    * suggestions can't drift from what a test resolves.
    */
   async evaluateSelectors(selectors: Selector[]): Promise<EvaluateSelectorsResponse> {
@@ -1119,7 +1119,7 @@ export class TapsmithGrpcClient {
       responseBodyOmitted?: boolean;
     }>;
     errorMessage: string;
-    /** Hosts whose client rejected the MITM certificate since the previous stop (PILOT-712). */
+    /** Hosts whose client rejected the MITM certificate since the previous stop. */
     tlsRejectedHosts?: string[];
   }> {
     // bypassAbort: stopping capture is cleanup — it must reach the daemon

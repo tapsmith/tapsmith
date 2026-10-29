@@ -23,7 +23,7 @@ const require = createRequire(import.meta.url);
 /**
  * Resolve a single connected, paired, USB-attached physical iOS device UDID.
  * Devices devicectl only remembers (unplugged, or paired with another Mac)
- * are never candidates (PILOT-386). Throws
+ * are never candidates. Throws
  * with an actionable error when zero or multiple are found so users who
  * own several phones get a clear prompt rather than a silent pick.
  *
@@ -62,7 +62,7 @@ export function resolvePhysicalIosDevice(): string {
  *   1. `ios-agent/.build-device` in `startDir` or up to five of its parents
  *      — a Tapsmith checkout's build (`tapsmith ios build-agent` run there);
  *   2. `~/.tapsmith/ios-agent/.build-device` — where `tapsmith ios build-agent`
- *      builds for an npm install (PILOT-264). Used only when that source was
+ *      builds for an npm install. Used only when that source was
  *      extracted by this Tapsmith version: a runner built from an older
  *      version's agent would run against this version's daemon.
  * Returns an absolute path, or `undefined` when no usable build exists
@@ -126,7 +126,7 @@ export function describeMissingDeviceXctestrun(startDir: string): string {
  * The message for an `iosXctestrun` (or `TAPSMITH_IOS_XCTESTRUN`) that
  * points at a file that does not exist. A path into the npm install's agent
  * directory gets the likely cause: upgrading Tapsmith re-extracts that
- * directory, which removes the runner built in it (PILOT-264).
+ * directory, which removes the runner built in it.
  */
 export function describeMissingExplicitXctestrun(xctestrunPath: string, source: string): string {
   const head = `The xctestrun set by ${source} does not exist: ${displayPath(xctestrunPath)}.`;
@@ -187,8 +187,8 @@ function newestIphoneosXctestrun(productsDir: string): string | undefined {
 /**
  * `~/.tapsmith/ios-simulator-agent` — the root of the simulator agent build
  * cache. Builds live in a subdirectory per Tapsmith version
- * ({@link simulatorAgentCacheDir}); releases before PILOT-485 built straight
- * into the root, and still do.
+ * ({@link simulatorAgentCacheDir}); releases from before that layout built
+ * straight into the root, and still do.
  */
 export function simulatorAgentCacheRoot(): string {
   return path.join(os.homedir(), '.tapsmith', 'ios-simulator-agent');
@@ -199,7 +199,7 @@ export function simulatorAgentCacheRoot(): string {
  * (ios-simulator-build.ts): a directory of its own, so a build is only ever
  * used by the version whose agent source it was compiled from, two versions
  * on one Mac never rebuild over each other, and a release that predates the
- * per-version layout never writes into it (PILOT-485).
+ * per-version layout never writes into it.
  */
 export function simulatorAgentCacheDir(version: string = tapsmithPackageVersion()): string {
   return path.join(simulatorAgentCacheRoot(), version);
@@ -233,7 +233,7 @@ export interface SimulatorAgentCache {
  * the newest build another version left (`stale: 'version'`), else
  * undefined. A build is only as current as the agent source it was compiled
  * from: another version's runs that version's agent against this version's
- * SDK and daemon (PILOT-485).
+ * SDK and daemon.
  */
 export function inspectSimulatorAgentCache(
   // Required, not defaulted: an `undefined` (no SDK detected) the caller

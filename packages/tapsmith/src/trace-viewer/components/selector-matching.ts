@@ -16,11 +16,11 @@ export interface ParsedSelector {
   name?: string
   /** getByRole `{ exact: true }`: the name matches case-sensitively and whole. */
   exact?: boolean
-  /** The RegExp of a `textRegex` / `labelRegex` selector (PILOT-520). */
+  /** The RegExp of a `textRegex` / `labelRegex` selector. */
   regex?: ParsedRegex
-  /** getByRole `{ name: RegExp }` (PILOT-520). */
+  /** getByRole `{ name: RegExp }`. */
   nameRegex?: ParsedRegex
-  /** getByRole's state filters (PILOT-655). Absent means "either". */
+  /** getByRole's state filters. Absent means "either". */
   checked?: boolean
   disabled?: boolean
   selected?: boolean
@@ -149,10 +149,10 @@ function getterOptions(
  * Playground shows it, so a caller knows what to change:
  *
  * - an option the getter does not take, e.g. Playwright's `level` or
- *   `includeHidden` (PILOT-655);
+ *   `includeHidden`;
  * - a call chained after the getter — a scoped getter, `filter()`, `and()`,
  *   `or()`, an action — which the parser cannot apply and used to drop, so the
- *   locator matched more than was asked for (PILOT-660).
+ *   locator matched more than was asked for.
  */
 export function locatorStringError(input: string): string | null {
   const chain = parseChain(normalizeLocatorString(input));
@@ -516,7 +516,7 @@ function textIsHint(node: HierarchyNode): boolean {
 
 /**
  * The placeholder a text field is named by when it has no other name, as
- * Playwright names an input with no label (PILOT-834), or '' — the agents'
+ * Playwright names an input with no label, or '' — the agents'
  * fallback: an iOS text input (RoleName.placeholderNamedTypes) whose label and
  * title are empty is named by its placeholderValue; an Android EditText with
  * no content-desc or descendant text by its hint (an empty one reports its
@@ -894,7 +894,7 @@ function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean
 
 /**
  * Why a parsed locator would throw when the test builds it, or `null`. Today
- * that is a native getByRole role the runtime rejects (PILOT-556); WebView
+ * that is a native getByRole role the runtime rejects; WebView
  * roles are DOM ARIA roles and are not checked.
  */
 export function parsedSelectorError(selector: ParsedSelector): string | null {

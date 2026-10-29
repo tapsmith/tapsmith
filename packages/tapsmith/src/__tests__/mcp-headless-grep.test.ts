@@ -69,9 +69,9 @@ describe('headless MCP and the config grep', () => {
     expect(listed(d.getTestTree())).toEqual(['smoke: logs in', 'rejects a bad password', 'adds an item']);
   });
 
-  // Nothing re-discovers a file during the session, so the tree from startup
-  // cannot rule a run out: an edit since may have added a matching test. The
-  // child applies the grep itself.
+  // The tree is only as fresh as the last sync, so it cannot rule a run out:
+  // an edit since may have added a matching test. The child applies the grep
+  // itself.
   it('still runs a file the startup tree says the grep selects nothing in', async () => {
     const { internals } = dispatcher({}, [{ name: 'android', grep: /smoke/ }, { name: 'ios' }]);
     const targets: Array<string | undefined> = [];

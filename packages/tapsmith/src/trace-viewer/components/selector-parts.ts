@@ -18,13 +18,13 @@ export interface SelectorParts {
   fn: string;
   args: string[];
   optionKey?: string;
-  /** Per arg: a RegExp literal, shown unquoted (PILOT-520). */
+  /** Per arg: a RegExp literal, shown unquoted. */
   literal?: boolean[];
   /**
    * The getter's options object — getByRole's `name`, `exact` and state
    * filters, getByText's `exact` — so the locator reads as the code that ran
    * and a copy pasted into the Locator tab or an MCP tool matches what the
-   * action matched (PILOT-717).
+   * action matched.
    */
   options?: SelectorOption[];
   /**

@@ -4,13 +4,14 @@ import * as path from 'node:path';
 import { watch as chokidarWatch } from 'chokidar';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  classifyUnmatchedTestFile,
   discoverTestFiles,
   isIgnoredDiscoveryWatchPath,
   isIgnoredWatchModePath,
   getTestDiscoveryWatchRoots,
   matchesTestIgnore,
   matchesTestFile,
-  noTestFilesFoundMessage,
+  noConfigFoundMessage, noTestFilesFoundMessage,
   relativeTestPath,
   resolveTestFileArgs,
 } from '../test-file-discovery.js';
@@ -472,7 +473,7 @@ describe('test-file-discovery helpers', () => {
   describe('noTestFilesFoundMessage', () => {
     it('says no file matched testMatch when no argument was given', () => {
       const message = noTestFilesFoundMessage({
-        args: [], unmatched: [], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj', configFound: true,
+        args: [], unmatched: [], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj',
       });
       expect(message).toMatch(/^No tests found\./);
       expect(message).toContain('No file under /proj matches testMatch **/*.test.ts');
@@ -485,7 +486,6 @@ describe('test-file-discovery helpers', () => {
         outsideProjects: [],
         testMatch: ['tests/**/*.test.ts'],
         rootDir: '/proj',
-        configFound: true,
       });
       expect(message).toMatch(/^No tests found\./);
       expect(message).toContain('"login" matched no test file');
@@ -496,33 +496,91 @@ describe('test-file-discovery helpers', () => {
 
     it('names a file no project runs', () => {
       const message = noTestFilesFoundMessage({
-        args: ['scripts/x.test.ts'], unmatched: [], outsideProjects: ['scripts/x.test.ts'], testMatch: ['tests/**'], rootDir: '/proj', configFound: true,
+        args: ['scripts/x.test.ts'], unmatched: [], outsideProjects: ['scripts/x.test.ts'], testMatch: ['tests/**'], rootDir: '/proj',
       });
       expect(message).toContain('scripts/x.test.ts is not matched by any project\'s testMatch');
     });
 
     it('blames the --project choice for a file only an unselected project runs', () => {
       const message = noTestFilesFoundMessage({
-        args: ['a.test.ts'], unmatched: [], outsideProjects: ['a.test.ts'], testMatch: ['ios/**'], rootDir: '/proj', projectsSelected: true, configFound: true,
+        args: ['a.test.ts'], unmatched: [], outsideProjects: ['a.test.ts'], testMatch: ['ios/**'], rootDir: '/proj', projectsSelected: true,
       });
       expect(message).toContain('a.test.ts is not matched by any selected project\'s testMatch');
     });
 
-    // `verify` and `doctor` point a project with no config at `init`; so
-    // does `test` now (PILOT-569).
-    it('points a project with no config file at tapsmith init', () => {
+    it('does not mention init', () => {
       const message = noTestFilesFoundMessage({
-        args: [], unmatched: [], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj', configFound: false,
-      });
-      expect(message).toMatch(/^No tests found\./);
-      expect(message).toContain('No tapsmith.config.ts (or .js, .mjs) found in /proj. To set Tapsmith up here, run: npx tapsmith init');
-    });
-
-    it('does not mention init when there is a config', () => {
-      const message = noTestFilesFoundMessage({
-        args: ['nope'], unmatched: ['nope'], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj', configFound: true,
+        args: ['nope'], unmatched: ['nope'], outsideProjects: [], testMatch: ['**/*.test.ts'], rootDir: '/proj',
       });
       expect(message).not.toContain('init');
     });
+  });
+
+  // `verify` and `doctor` point a project with no config at `init`; so does
+  // `test`, before anything else (PILOT-569, PILOT-784).
+  describe('noConfigFoundMessage', () => {
+    it('names the directory and the init command in the project\'s own runner', () => {
+      expect(noConfigFoundMessage('/proj', 'pnpm exec tapsmith'))
+        .toBe('No tapsmith.config.ts (or .js, .mjs) found in /proj. To set Tapsmith up here, run: pnpm exec tapsmith init');
+    });
+  });
+});
+
+// PILOT-836: run_tests explains an argument that matched none of the
+// session's files by what the config's matcher says about it — not by
+// whether the file is on disk, which a narrowed session, a rootDir away from
+// the config, or a path spelt through a symlink all made misleading.
+describe('classifyUnmatchedTestFile', () => {
+  let root: string;
+
+  beforeEach(() => {
+    // Deliberately not realpath'd: on macOS the tmpdir is a symlink.
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-classify-'));
+    fs.mkdirSync(path.join(root, 'e2e', 'tests'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'e2e', 'tests', 'login.test.ts'), '');
+    fs.writeFileSync(path.join(root, 'e2e', 'tests', 'new.tapsmith.ts'), '');
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  const opts = (rootDir: string, roots = [rootDir]) => ({
+    roots,
+    rootDir,
+    selectors: [{ testMatch: ['**/*.test.ts'] }],
+  });
+
+  it('calls a file testMatch leaves out excluded', () => {
+    expect(classifyUnmatchedTestFile('tests/new.tapsmith.ts', opts(path.join(root, 'e2e')))).toBe('excluded');
+  });
+
+  it('calls a file testMatch selects not held, so a narrowed session is not blamed on testMatch', () => {
+    expect(classifyUnmatchedTestFile('tests/login.test.ts', opts(path.join(root, 'e2e')))).toBe('not-held');
+  });
+
+  it('resolves relative arguments against the roots matching uses, rootDir first', () => {
+    // rootDir is e2e/, away from where a config would sit.
+    expect(classifyUnmatchedTestFile('tests/login.test.ts', opts(path.join(root, 'e2e'), [path.join(root, 'e2e'), root]))).toBe('not-held');
+    expect(classifyUnmatchedTestFile('e2e/tests/login.test.ts', opts(path.join(root, 'e2e'), [path.join(root, 'e2e'), root]))).toBe('not-held');
+  });
+
+  it('matches through a symlinked spelling of the root', () => {
+    const real = fs.realpathSync(root);
+    expect(classifyUnmatchedTestFile(path.join(real, 'e2e', 'tests', 'login.test.ts'), opts(path.join(root, 'e2e')))).toBe('not-held');
+  });
+
+  it('says nothing about an argument that names no file, or names a glob', () => {
+    expect(classifyUnmatchedTestFile('tests/typo.test.ts', opts(path.join(root, 'e2e')))).toBeUndefined();
+    expect(classifyUnmatchedTestFile('**/*.test.ts', opts(path.join(root, 'e2e')))).toBeUndefined();
+    expect(classifyUnmatchedTestFile('tests', opts(path.join(root, 'e2e')))).toBeUndefined();
+  });
+
+  it('applies each selector\'s testIgnore', () => {
+    expect(classifyUnmatchedTestFile('tests/login.test.ts', {
+      roots: [path.join(root, 'e2e')],
+      rootDir: path.join(root, 'e2e'),
+      selectors: [{ testMatch: ['**/*.test.ts'], testIgnore: ['tests/login.test.ts'] }],
+    })).toBe('excluded');
   });
 });

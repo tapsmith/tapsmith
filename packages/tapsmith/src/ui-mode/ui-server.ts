@@ -40,7 +40,7 @@ import { collectTransitiveDeps, projectLabel } from '../project.js';
 import { LaunchSetupError, deviceTargetLabel } from '../dispatcher.js';
 import type { ProvisionedTarget, UnavailableTargets } from '../unavailable-targets.js';
 import { STOPPED_BY_USER } from '../abort.js';
-import { classifyEntryStatus, isInterruptedEntry, uiDeviceChoiceError } from '../mcp/test-dispatcher.js';
+import { classifyEntryStatus, isInterruptedEntry, runInProgressResult, uiDeviceChoiceError } from '../mcp/test-dispatcher.js';
 import type { LaunchedEmulator } from '../emulator.js';
 import { preserveEmulatorsForReuse, emulatorsLaunchedThisProcess, getRunningAvdName } from '../emulator.js';
 import { listSimulators, getSimulatorScreenScale } from '../ios-simulator.js';
@@ -88,10 +88,13 @@ import {
   type LaunchProgressSink,
 } from '../launch-progress.js';
 import {
+  classifyUnmatchedTestFile,
+  discoverTestFiles,
   getTestDiscoveryWatchRoots,
   isIgnoredDiscoveryWatchPath,
   matchesTestFile,
 } from '../test-file-discovery.js';
+import { filesToRediscover } from './ui-rediscovery.js';
 
 // ─── SPA paths ───
 
@@ -156,7 +159,7 @@ export interface UIServerContext {
   /**
    * The config the session's workers run under — the primary device target's
    * (`targetSessionConfig`), not the root `config`, which may hold none of the
-   * device keys a config keeps in its projects' `use` (PILOT-654). Multi-target
+   * device keys a config keeps in its projects' `use`. Multi-target
    * sessions override it per device through `configByDevice`. Required so an
    * embedder cannot fall back to the root by omission.
    */
@@ -222,7 +225,7 @@ export interface UIServerContext {
   bucketByDevice?: Map<string, string>
   bucketByProject?: Map<string, string>
   /**
-   * Device targets that could not start (PILOT-415). The session runs the
+   * Device targets that could not start. The session runs the
    * others; a run that includes one of these targets' files tries it again,
    * and its files fail with the reason while it still cannot start. Required
    * so an embedder cannot forget it: empty for a single-target session.
@@ -725,7 +728,8 @@ export async function startUIServer(
   let discoveryWatcher: FSWatcher | null = null;
   const pendingDiscoveryFiles = new Set<string>();
   let discoveryTimer: ReturnType<typeof setTimeout> | null = null;
-  let discoveryBatchRunning = false;
+  /** The discovery batch running now, if any (see `flushPendingDiscovery`). */
+  let discoveryBatch: Promise<void> | null = null;
   const discoveredFileNodes = new Map<string, TestTreeNode>();
   // Normalised paths whose source we've served to clients (Source-tab preview).
   // Edits to these are re-broadcast so a not-yet-run test's source stays live.
@@ -1033,8 +1037,10 @@ export async function startUIServer(
 
   // ─── MCP Server (SSE) ───
 
-  function collectFailures(): import('../mcp/test-dispatcher.js').TestFailureDetail[] {
-    return [...testResults.values()]
+  function collectFailures(
+    entries: Iterable<UITestResultEntry> = testResults.values(),
+  ): import('../mcp/test-dispatcher.js').TestFailureDetail[] {
+    return [...entries]
       // A stop is not a failure — same rule the headless dispatcher applies.
       .filter((r) => r.status === 'failed' && r.error && !isInterruptedEntry(r))
       .map((r) => ({
@@ -1121,8 +1127,33 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // getResults()/collectFailures() (and thus list_results) reflect the
     // whole multi-file run, not just the last file.
     const accumulated: UITestResultEntry[] = [];
-    for (const f of validFiles) {
+    for (const [index, f] of validFiles.entries()) {
       const r = await runFile(f, testFilter, project);
+      // Another run held the workers before this one began: nothing ran.
+      if (r.busy && index === 0) return r;
+      if (r.busy) {
+        // Another run took the workers between two of this request's files
+        // (a UI click while a stale worker was recycled). Counting the rest
+        // as zero-test files reported them passed; they never ran. And the
+        // result map is that other run's now, so leave it alone.
+        const notRun = validFiles.slice(index);
+        const failures = [
+          ...collectFailures(accumulated),
+          ...notRun.map((filePath) => ({
+            fullName: path.basename(filePath),
+            filePath,
+            error: 'Not run: another test run started before this file could, so it was skipped. Run it again once that run ends.',
+          })),
+        ];
+        return {
+          status: 'failed',
+          passed: totalPassed,
+          failed: totalFailed + notRun.length,
+          skipped: totalSkipped,
+          duration: totalDuration,
+          failures,
+        };
+      }
       accumulated.push(...testResults.values());
       totalPassed += r.passed;
       totalFailed += r.failed;
@@ -1144,6 +1175,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   }
 
   const testDispatcher: TestDispatcher = {
+    refreshTestFiles: () => refreshTestFilesNow(),
     async runFiles(files, options) {
       // One run for the whole request: a file at a time ends each file's run,
       // which would let the MCP tools' WebView connect between files.
@@ -1182,6 +1214,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     getResults: () => [...testResults.values()].map(classifyEntryStatus),
     getTestFiles: () => ctx.testFiles,
     resolveRequestedFiles: (files) => resolveRequested(files),
+    classifyUnmatchedFile: (arg) => classifyUnmatchedTestFile(arg, {
+      roots: [ctx.config.rootDir, process.cwd()].filter((r): r is string => Boolean(r)),
+      rootDir: resolvedRootDir,
+      selectors: ctx.projects
+        ? ctx.projects.map((p) => ({ testMatch: p.testMatch, testIgnore: p.testIgnore }))
+        : [{ testMatch: ctx.config.testMatch }],
+    }),
     getProjects: () => realProjects().map((p) => p.name),
     // Files that failed to load are reported by getDiscoveryErrors, not as
     // a test row (PILOT-545).
@@ -3036,7 +3075,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     selection?: ReadonlyMap<string, readonly string[] | undefined>,
     runDeps?: boolean,
   ): Promise<TestRunResult> {
-    if (isRunning) return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+    if (isRunning) return runInProgressResult();
     markRunStarted();
     clearRunBuffers();
     screenPollActive = true;
@@ -3138,7 +3177,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   }
 
   async function runFileParallel(filePath: string, testFilter?: string, explicitProjectName?: string): Promise<TestRunResult> {
-    if (isRunning) return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+    if (isRunning) return runInProgressResult();
     markRunStarted();
     clearRunBuffers();
     screenPollActive = true;
@@ -4149,7 +4188,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     if (shouldIgnoreDiscoveryPath(resolved) || !matchesConfiguredTestFile(resolved)) return;
 
     pendingDiscoveryFiles.add(resolved);
-    if (discoveryBatchRunning) return;
+    if (discoveryBatch) return;
     if (discoveryTimer) clearTimeout(discoveryTimer);
     discoveryTimer = setTimeout(() => {
       discoveryTimer = null;
@@ -4157,40 +4196,95 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }, DISCOVERY_DEBOUNCE_MS);
   }
 
-  async function flushPendingDiscovery(): Promise<void> {
-    if (discoveryBatchRunning) return;
-    discoveryBatchRunning = true;
-
-    try {
-      while (pendingDiscoveryFiles.size > 0) {
-        const files = [...pendingDiscoveryFiles].sort();
-        pendingDiscoveryFiles.clear();
-
-        let treeChanged = false;
-        const filesToRun = new Set<string>();
-        const results = await discoverBatch(files);
-        for (const { file, result } of results) {
-          if (result.treeChanged) treeChanged = true;
-          if (result.shouldRun) filesToRun.add(file);
-        }
-
-        if (treeChanged) {
-          sortDiscoveredTestFiles();
-          rebuildTestTreeFromDiscoveredFiles();
-          broadcastTestTreeWithCurrentState();
-        }
-        if (filesToRun.size > 0) {
-          watchQueue.scheduleFiles([...filesToRun]);
-        }
-      }
-    } finally {
-      discoveryBatchRunning = false;
+  /**
+   * Discover every pending file, in batches until none is left. A call while a
+   * batch runs shares it: files added meanwhile join that batch's next round.
+   */
+  function flushPendingDiscovery(): Promise<void> {
+    if (discoveryBatch) return discoveryBatch;
+    const batch = runPendingDiscovery().finally(() => {
+      if (discoveryBatch === batch) discoveryBatch = null;
       if (pendingDiscoveryFiles.size > 0 && !discoveryTimer) {
         discoveryTimer = setTimeout(() => {
           discoveryTimer = null;
           flushPendingDiscovery().catch(broadcastError);
         }, DISCOVERY_DEBOUNCE_MS);
       }
+    });
+    discoveryBatch = batch;
+    return batch;
+  }
+
+  async function runPendingDiscovery(): Promise<void> {
+    while (pendingDiscoveryFiles.size > 0) {
+      const files = [...pendingDiscoveryFiles].sort();
+      pendingDiscoveryFiles.clear();
+
+      let treeChanged = false;
+      const filesToRun = new Set<string>();
+      const results = await discoverBatch(files);
+      for (const { file, result } of results) {
+        if (result.treeChanged) treeChanged = true;
+        if (result.shouldRun) filesToRun.add(file);
+      }
+
+      if (treeChanged) {
+        sortDiscoveredTestFiles();
+        rebuildTestTreeFromDiscoveredFiles();
+        broadcastTestTreeWithCurrentState();
+      }
+      if (filesToRun.size > 0) {
+        watchQueue.scheduleFiles([...filesToRun]);
+      }
+    }
+  }
+
+  /**
+   * Bring the test files up to date with the disk now, not when the watcher
+   * gets round to it (PILOT-836). An MCP `run_tests` for a file the agent has
+   * just written arrived inside the watcher's debounce — or before chokidar
+   * reported the file at all — and was refused as matching nothing. Files the
+   * watcher has not reported yet are found by globbing (only those written
+   * since the session started: see `filesToRediscover`); files gone from disk
+   * are dropped; everything pending is discovered before this returns.
+   */
+  async function refreshTestFilesNow(): Promise<void> {
+    const globbed = new Set<string>();
+    try {
+      const lists = ctx.projects
+        ? await Promise.all(ctx.projects.map((p) => discoverTestFiles(p.testMatch, resolvedRootDir, p.testIgnore)))
+        : [await discoverTestFiles(ctx.config.testMatch, resolvedRootDir)];
+      for (const file of lists.flat()) globbed.add(path.resolve(file));
+    } catch (err) {
+      // The watcher still catches up on its own; report what it has.
+      broadcastError(err);
+      return;
+    }
+    const queued = filesToRediscover({
+      globbed: [...globbed],
+      known: ctx.testFiles,
+      // The process's start, before the CLI globbed: a file written since then
+      // is one the watcher would have reported too.
+      since: performance.timeOrigin,
+      mtimeOf: (file) => {
+        try {
+          return fs.statSync(file).mtimeMs;
+        } catch {
+          return undefined;
+        }
+      },
+      isIgnored: shouldIgnoreDiscoveryPath,
+    });
+    for (const file of queued) pendingDiscoveryFiles.add(file);
+    // A batch may be running; whatever it leaves pending, the next round takes.
+    while (pendingDiscoveryFiles.size > 0 || discoveryBatch) {
+      if (discoveryTimer) {
+        clearTimeout(discoveryTimer);
+        discoveryTimer = null;
+      }
+      // As the watcher's own flushes do: a failed batch is reported, and the
+      // tools answer from what was discovered.
+      await flushPendingDiscovery().catch(broadcastError);
     }
   }
 

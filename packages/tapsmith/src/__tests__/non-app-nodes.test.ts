@@ -181,6 +181,34 @@ describe('Android: System UI bars, the IME and the hooks marker never match', ()
   });
 });
 
+// PILOT-790: SwiftUI draws a labelled Toggle as a row-sized switch holding its
+// label text and an unlabelled switch, the knob, which the agent marks
+// `tapsmith-switch-part`. They are one control: no locator matches the knob.
+const TOGGLES = `<hierarchy>
+  <XCUIElementTypeWindow label="" identifier="" value="" placeholderValue="" type="XCUIElementTypeWindow" bounds="[0,0][402,874]">
+    <XCUIElementTypeSwitch label="Dark Mode" identifier="" value="0" placeholderValue="" type="XCUIElementTypeSwitch" tapsmith-role="switch" bounds="[16,208][386,260]">
+      <XCUIElementTypeStaticText label="Dark Mode" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" bounds="[36,224][120,244]" />
+      <XCUIElementTypeSwitch label="" identifier="" value="0" placeholderValue="" type="XCUIElementTypeSwitch" tapsmith-role="switch" bounds="[309,220][372,248]" tapsmith-switch-part="true" />
+    </XCUIElementTypeSwitch>
+    <XCUIElementTypeSwitch label="Notifications" identifier="" value="1" placeholderValue="" type="XCUIElementTypeSwitch" tapsmith-role="switch" bounds="[16,260][386,312]">
+      <XCUIElementTypeStaticText label="Notifications" identifier="" value="" placeholderValue="" type="XCUIElementTypeStaticText" tapsmith-role="text" bounds="[36,276][150,296]" />
+      <XCUIElementTypeSwitch label="" identifier="" value="1" placeholderValue="" type="XCUIElementTypeSwitch" tapsmith-role="switch" bounds="[309,272][372,300]" tapsmith-switch-part="true" />
+    </XCUIElementTypeSwitch>
+  </XCUIElementTypeWindow>
+</hierarchy>`;
+
+describe("iOS: a SwiftUI Toggle's knob is part of its switch (PILOT-790)", () => {
+  it('finds one switch per Toggle', () => {
+    expect(count(TOGGLES, 'device.getByRole("switch")')).toBe(2);
+    expect(count(TOGGLES, 'device.getByRole("switch", { checked: true })')).toBe(1);
+    expect(count(TOGGLES, 'device.getByRole("switch", { name: "Dark Mode" })')).toBe(1);
+  });
+
+  it('lands a pick on the knob on the Toggle itself', () => {
+    expect(pickNodeAt(parseHierarchyXml(TOGGLES), 340, 234)?.node.attributes.get('label')).toBe('Dark Mode');
+  });
+});
+
 describe('every copy of the hooks marker prefix agrees', () => {
   const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../..');
   const sources: Array<[string, RegExp]> = [

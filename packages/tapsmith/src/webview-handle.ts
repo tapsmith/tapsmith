@@ -659,7 +659,7 @@ export class WebViewHandle {
   }
 
   /**
-   * @internal — Strict auto-waiting resolution for locator actions (PILOT-227).
+   * @internal — Strict auto-waiting resolution for locator actions.
    *
    * Polls until the locator resolves to a target: exactly one match, or —
    * for positionally-narrowed locators — the nth index in range. Resolving
@@ -704,7 +704,7 @@ export class WebViewHandle {
   }
 
   /**
-   * @internal — Single-tick assertion resolution (expect.ts, PILOT-227).
+   * @internal — Single-tick assertion resolution (expect.ts).
    *
    * When `strict` is true and the locator has no positional modifier,
    * resolving to more than one match throws a StrictModeViolationError
@@ -750,7 +750,7 @@ export class WebViewHandle {
    * @internal — A locator's current matches with their screen bounds, mapped
    * as {@link _dumpDomHierarchy} maps its nodes, so UI mode's live Locator
    * tab can draw them on the device mirror and tell a picked element from
-   * another (PILOT-848). Single tick; at most `max` matches are described.
+   * another. Single tick; at most `max` matches are described.
    * `bounds` is absent when the WebView's place on screen is not known.
    */
   async _liveMatches(loc: WebViewLocator, timeoutMs: number, max = 200): Promise<{

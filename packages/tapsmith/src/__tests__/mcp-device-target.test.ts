@@ -32,6 +32,8 @@ function dispatcherWith(projects: Array<{ name: string; platform?: string }>): T
     }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    classifyUnmatchedFile: () => undefined,
+    refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: false }),
   };
 }
@@ -247,5 +249,22 @@ describe('device tools when no target resolved', () => {
       getSessionInfo: () => ({ timeout: 0, retries: 0, projects: [], deviceTargets: [{ platform: 'android', error: 'No online Android device found' }] }),
     } as unknown as TestDispatcher;
     await expect(deviceClientFor({}, dispatcher)).rejects.toThrow(/No online Android device found/);
+  });
+});
+
+// A device tool naming `device` on a fresh headless session resolved every
+// target first — auto-picking a device and installing the agent on it,
+// another session's leased emulator as likely as not — and only then switched
+// to the device asked for. The request now reaches target resolution.
+describe('device tools naming a device', () => {
+  it('hand the device to target resolution', async () => {
+    const seen: unknown[] = [];
+    const dispatcher = {
+      ensureDevicesReady: async (opts: unknown) => { seen.push(opts); throw new Error('stop here'); },
+      resolveDeviceName: () => undefined,
+      getSessionInfo: () => ({ timeout: 0, retries: 0, projects: [] }),
+    } as unknown as TestDispatcher;
+    await expect(deviceClientFor({ device: 'emulator-5560' }, dispatcher)).rejects.toThrow('stop here');
+    expect(seen).toEqual([{ retryFailedTargets: true, project: undefined, device: 'emulator-5560' }]);
   });
 });

@@ -4,8 +4,6 @@
  * Imports a test file in dry-run mode, collects the test/suite tree
  * structure, and sends it back to the parent via IPC. Does NOT execute
  * any test bodies — only the describe() callbacks run to register the tree.
- *
- * @see PILOT-87
  */
 
 import * as path from 'node:path';
@@ -100,7 +98,7 @@ process.on('message', async (msg: UIDiscoverMessage) => {
   } catch (err) {
     // Without the cache-bust query discovery's import leaves in a CommonJS
     // require stack, so the same load error reads the same each time (PILOT-545).
-    const error = loadErrorForReport(err);
+    const error = loadErrorForReport(err, msg.filePath);
     send({
       type: 'discover-error',
       filePath: msg.filePath,

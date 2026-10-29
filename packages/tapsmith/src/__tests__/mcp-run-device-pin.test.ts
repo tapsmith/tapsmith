@@ -78,6 +78,71 @@ describe('run_tests `device` in a headless MCP session', () => {
     expect(d.getSessionInfo().device).toBe('emulator-5560');
   });
 
+  // A device tool (snapshot, launch_app) as the first call: its `device`
+  // must choose the device, not be applied after an auto-pick has already
+  // installed the agent on another one.
+  it('resolves the target on the device a first device tool names', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    await d.ensureDevicesReady({ retryFailedTargets: true, device: 'emulator-5560' });
+    expect(hoisted.resolved).toEqual([{ platform: 'android', device: 'emulator-5560' }]);
+    expect(d.getSessionInfo().device).toBe('emulator-5560');
+  });
+
+  it('pins only the target of the named device\'s platform', async () => {
+    writeProject(`export default {
+      testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "android", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["b.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    const d = dispatcher();
+    const udid = '11111111-2222-3333-4444-555555555555';
+    await d.ensureDevicesReady({ device: udid });
+    expect(hoisted.resolved).toContainEqual({ platform: 'ios', device: udid });
+    expect(hoisted.resolved).toContainEqual({ platform: 'android', device: undefined });
+  });
+
+  it('pins the named project\'s target', async () => {
+    writeProject(`export default {
+      testMatch: ["**/*.test.ts"],
+      projects: [
+        { name: "phone", testMatch: ["a.test.ts"], use: { platform: "android", package: "com.x" } },
+        { name: "ios", testMatch: ["b.test.ts"], use: { platform: "ios", package: "com.x" } },
+      ],
+    }\n`, ['a.test.ts', 'b.test.ts']);
+    const d = dispatcher();
+    await d.ensureDevicesReady({ device: 'emulator-5560', project: 'phone' });
+    expect(hoisted.resolved).toContainEqual({ platform: 'android', device: 'emulator-5560' });
+  });
+
+  it('drops a device tool\'s pin when its device cannot be set up, so the next call can auto-pick', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady({ retryFailedTargets: true, device: 'emulator-5560' });
+    expect(hoisted.resolved).toEqual([{ platform: 'android', device: 'emulator-5560' }]);
+
+    // The device comes good elsewhere; the session's next retry is free to find one.
+    hoisted.failing.clear();
+    (d as unknown as { _lastTargetRetryAt: number })._lastTargetRetryAt = 0;
+    await d.ensureDevicesReady({ retryFailedTargets: true });
+    expect(hoisted.resolved).toEqual([
+      { platform: 'android', device: 'emulator-5560' },
+      { platform: 'android', device: undefined },
+    ]);
+    expect(d.getSessionInfo().device).toBe('emulator-5556');
+  });
+
+  it('leaves a later device tool\'s `device` to the tool, the target already chosen', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    await d.ensureDevicesReady({ device: 'emulator-5560' });
+    expect(hoisted.resolved).toEqual([{ platform: 'android', device: undefined }]);
+  });
+
   it('refuses a device other than the one the session already runs on, naming both', async () => {
     writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
     const d = dispatcher();
@@ -344,11 +409,12 @@ describe('run_tests `device` in a headless MCP session', () => {
     internals._resolvePlatformTargets = async (config) => { await gate; await resolve(config); };
     internals._runFileInChild = async () => ({ results: [], suite: { name: 'a', tests: [], suites: [], durationMs: 0 } });
     const first = d.runFiles([path.join(root, 'a.test.ts')]);
-    await new Promise((r) => setImmediate(r));
-    expect(d.isRunning()).toBe(true);
+    // Running before devices resolve: the run first syncs the test files
+    // (PILOT-836), and is marked running the moment that is done.
+    await vi.waitFor(() => expect(d.isRunning()).toBe(true), { timeout: 30_000 });
     release();
     await first;
-  });
+  }, 60_000);
 
   // The CLI keeps a root `device` on the projects of its own platform; the
   // headless session resolves projects itself and must do the same.

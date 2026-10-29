@@ -31,7 +31,7 @@ function isPlaceholderNamedClass(className: string): boolean {
 /**
  * A found element's accessible name, as `toHaveAccessibleName` reads it: its
  * content description (iOS: label or title); else, for a text input, its
- * placeholder (PILOT-834) — a field's text is its typed value, not its name —
+ * placeholder — a field's text is its typed value, not its name —
  * and for anything else, its text.
  */
 export function elementAccessibleName(el: {

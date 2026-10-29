@@ -8,8 +8,6 @@
  * Each re-run forks a child process (`watch-run.ts`) to get a fresh ESM
  * module cache, ensuring all file changes (tests, helpers, page objects)
  * are picked up.
- *
- * @see PILOT-120
  */
 
 import { fork, type ChildProcess } from 'node:child_process';
@@ -66,8 +64,8 @@ export interface WatchModeContext {
   /**
    * The config the session's workers and run children run under — the primary
    * device target's (`targetSessionConfig`), not the root `config`, which may
-   * hold none of the device keys a config keeps in its projects' `use`
-   * (PILOT-654). Multi-target sessions override it per device through
+   * hold none of the device keys a config keeps in its projects' `use`.
+   * Multi-target sessions override it per device through
    * `configByDevice`.
    */
   targetConfig: TapsmithConfig
@@ -143,7 +141,7 @@ export interface WatchModeContext {
   bucketByDevice?: Map<string, string>
   bucketByProject?: Map<string, string>
   /**
-   * Device targets that could not start (PILOT-415). Their files are never
+   * Device targets that could not start. Their files are never
    * run on another target's device: a run that includes them tries the
    * target again, and they fail with its reason while it still cannot start.
    * Required so an embedder cannot forget it: empty for a single-target session.
@@ -206,7 +204,7 @@ export function takeFileForWorker<T extends { projectName?: string }>(
 /**
  * The queued files none of the live workers may run — a device target whose
  * workers all failed to start or retired. Waiting on them hung the run with
- * no output (PILOT-313), so the dispatcher fails them instead.
+ * no output, so the dispatcher fails them instead.
  */
 export function filesNoWorkerCanRun<T extends { projectName?: string }>(
   queue: T[],

@@ -1,5 +1,5 @@
 /**
- * Video recording configuration (PILOT-114).
+ * Video recording configuration.
  *
  * Mirrors Playwright's `video` config option. Users supply either a mode
  * string shorthand (`'on'`, `'retain-on-failure'`, …) or an object with a
@@ -16,7 +16,7 @@
 import { shouldRecord, shouldRetain } from '../trace/trace-mode.js';
 
 /**
- * Recording mode. Seven modes total — the four listed in PILOT-114 plus three
+ * Recording mode. Seven modes total — Playwright's four plus three
  * extras (`on-all-retries`, `retain-on-first-failure`,
  * `retain-on-failure-and-retries`) that mirror the trace config for parity.
  * See `shouldRecord` / `shouldRetain` for exact semantics.

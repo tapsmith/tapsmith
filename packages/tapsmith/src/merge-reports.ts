@@ -1,8 +1,6 @@
 /**
  * `tapsmith merge-reports [dir]` — merge sharded blob reports into one run
  * and feed it to the configured reporters.
- *
- * @see PILOT-74, PILOT-257
  */
 
 import * as fs from 'node:fs';

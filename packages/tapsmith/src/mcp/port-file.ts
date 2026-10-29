@@ -92,7 +92,7 @@ export function mcpDaemonRegistryPath(): string {
  *
  * A file, not the server's stderr: the daemon is started `--outlive-parent`
  * so another session can adopt it, and a pipe to a server that has exited is
- * one nobody reads (PILOT-453).
+ * one nobody reads.
  */
 export function mcpDaemonLogPath(): string {
   return path.join(daemonStateDir(), `mcp-daemon-${projectHash()}.log`);

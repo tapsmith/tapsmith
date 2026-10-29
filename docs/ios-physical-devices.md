@@ -131,7 +131,7 @@ If you need HTTPS request/response bodies in your traces, set up [iOS physical d
 
 ## Want video recording?
 
-Tapsmith records physical-device video via `ffmpeg`'s AVFoundation backend (PILOT-114). Two prerequisites beyond the standard physical-device setup above:
+Tapsmith records physical-device video via `ffmpeg`'s AVFoundation backend. Two prerequisites beyond the standard physical-device setup above:
 
 1. **Install ffmpeg.** `brew install ffmpeg` is enough; the daemon checks `PATH` and surfaces an actionable error if it's missing.
 2. **Pair and trust the device.** AVFoundation only sees iPhones that have been paired in Xcode and have accepted the "Trust This Computer" prompt — the same prompt you accepted during the one-time setup above.
