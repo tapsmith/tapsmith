@@ -95,13 +95,14 @@ export default defineConfig({
   // Tapsmith tests end in .tapsmith.ts, so your Jest or Vitest run leaves them alone
   testMatch: ["**/*.tapsmith.ts"],
 
-  // Android
-  apk: "./android/app/build/outputs/apk/debug/app-debug.apk",
+  // Android (React Native or Expo: "./android/app/build/outputs/apk/release/app-release.apk")
+  apk: "./app/build/outputs/apk/debug/app-debug.apk",
   package: "com.example.myapp", // needed to launch and reset the app
 
   // Or iOS (`platform` and `simulator` are required for simulator runs)
   // platform: "ios",
-  // app: "./ios/build/Build/Products/Debug-iphonesimulator/MyApp.app",
+  // app: "./build/Build/Products/Debug-iphonesimulator/MyApp.app",
+  //   (React Native or Expo: "./ios/build/Build/Products/Release-iphonesimulator/MyApp.app")
   // package: "com.example.myapp",
   // simulator: "iPhone 17",
 });
