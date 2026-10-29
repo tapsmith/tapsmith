@@ -23,6 +23,11 @@ describe("Native: toggles and controls", () => {
     await expect(toggles.notifications).not.toBeChecked()
   })
 
+  test("setChecked flips a Toggle found by its label", async ({ toggles }) => {
+    await toggles.labelled("Dark Mode").setChecked(true)
+    await expect(toggles.darkMode).toBeChecked()
+  })
+
   // A SwiftUI Toggle is a row-sized switch holding an unlabelled switch, its
   // knob: one control, found once and tapped on the knob (PILOT-790).
   test("each Toggle is one switch", async ({ toggles }) => {

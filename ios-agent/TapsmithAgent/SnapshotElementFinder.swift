@@ -39,6 +39,10 @@ class SnapshotElementFinder {
         /// Whether the element had a `.tabBar` ancestor, so a live re-read
         /// still reports a tab bar's button as a tab (PILOT-514).
         let inTabBar: Bool
+        /// Whether the element is a switch holding a switch — a SwiftUI
+        /// Toggle and its knob (NonAppElements.isSwitchPart, PILOT-790) — so
+        /// a tap on it is delivered to the knob.
+        var holdsSwitchPart = false
     }
 
     /// Maximum number of cached elements before eviction. Prevents unbounded
@@ -181,7 +185,8 @@ class SnapshotElementFinder {
         // by its index within the live query that finds it again
         // (cacheQueryElement, PILOT-549, PILOT-520, PILOT-522).
         var queryNodes: [QueryNode] = []
-        if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel) {
+        if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel
+            || selector.roleOnlySwitch) {
             SnapshotElementFinder.numberDescendants(of: &snapshotDict, into: &queryNodes)
         }
         var liveFocusedTextInputFetched = false
@@ -312,7 +317,8 @@ class SnapshotElementFinder {
                 lock.lock()
                 boundsCache[elementId] = frame
                 identityCache[elementId] = CachedIdentity(
-                    elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar
+                    elementType: elType, label: label, identifier: identifier, inTabBar: inTabBar,
+                    holdsSwitchPart: NonAppElements.isSwitch(elType) && Self.holdsSwitch(nodeDict)
                 )
                 // Every minted id takes part in eviction, with or without a live
                 // query — ids that get none (placeholder, className, …) would
@@ -845,6 +851,16 @@ class SnapshotElementFinder {
     /// Number every descendant of `dict` (not `dict` itself — XCUIElement
     /// `descendants` queries exclude the root) in pre-order, storing the
     /// ordinal under `ordinalKey` and the node's query fields in `nodes`.
+    /// Whether a descendant of `node` is a switch: the knob of a SwiftUI
+    /// Toggle when `node` is itself one (NonAppElements.isSwitchPart).
+    static func holdsSwitch(_ node: [String: Any]) -> Bool {
+        for child in node["children"] as? [[String: Any]] ?? [] {
+            let type = XCUIElement.ElementType(rawValue: parseUInt(child["elementType"]) ?? 0) ?? .other
+            if NonAppElements.isSwitch(type) || holdsSwitch(child) { return true }
+        }
+        return false
+    }
+
     static func numberDescendants(of dict: inout [String: Any], into nodes: inout [QueryNode]) {
         guard var children = dict["children"] as? [[String: Any]] else { return }
         for i in children.indices {
@@ -1072,9 +1088,7 @@ class SnapshotElementFinder {
     /// Key under which `findMatches` records, on a match after the keyboard
     /// in tree order, the element types of the keyboard's nodes that match
     /// the selector: a live query re-resolving the match by position returns
-    /// those of its own type (or all, unscoped) too. A SwiftUI Toggle's knob
-    /// that matches is recorded the same way (NonAppElements.isSwitchPart):
-    /// left out of the matches, but returned by a live switch query.
+    /// those of its own type (or all, unscoped) too.
     static let keyboardMatchesKey = "tapsmithKeyboardMatches"
 
     /// The element types of the nodes of the subtree at `nodeDict` (itself
@@ -1167,21 +1181,11 @@ class SnapshotElementFinder {
             value: nodeDict["value"] as? String ?? ""
         )
         // A SwiftUI Toggle's knob is part of the switch it sits in, not a
-        // match of its own (NonAppElements.isSwitchPart, PILOT-790). Like the
-        // keyboard's nodes, it is counted when it matches: a live type query
-        // re-resolving a later match by position returns it too.
+        // match of its own (NonAppElements.isSwitchPart, PILOT-790). A live
+        // switch query still returns it, and not in tree order (after every
+        // outer switch, measured on iOS 26), so a role-only switch match is
+        // found again by its own label (cacheQueryElement).
         let isSwitchPart = NonAppElements.isSwitchPart(elementType: nodeType, insideSwitch: insideSwitch)
-        if isSwitchPart, isAppNode, matchesSelector(
-            nodeDict,
-            inTabBar: inTabBar,
-            containerLabel: containerLabel,
-            selector: selector,
-            keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
-            liveFocusedTextInput: liveFocusedTextInput,
-            focusedHint: focusedHint
-        ) {
-            keyboardMatches.append(nodeType.rawValue)
-        }
         var pushedAncestor = false
         if isAppNode, !isSwitchPart, matchesSelector(
             nodeDict,
@@ -1585,8 +1589,7 @@ class SnapshotElementFinder {
         // the query does too: it never counts the hooks marker. It can't leave
         // out the keyboard, so a match after the keyboard in tree order (an
         // accessory toolbar, a later window) is indexed past the keyboard's
-        // nodes that match the selector (`keyboardMatchesKey`) — and past
-        // the SwiftUI Toggle knobs before it, which a switch query returns.
+        // nodes that match the selector (`keyboardMatchesKey`).
         let keyboardTypes = snapshotNode?[SnapshotElementFinder.keyboardMatchesKey] as? [UInt] ?? []
         let scopedToType = nodeElType.map { $0 != .other && $0 != .any } ?? false
         // `resolve` re-finds by a query on the match's type when it is specific
@@ -1740,6 +1743,13 @@ class SnapshotElementFinder {
                 } else {
                     element = nil
                 }
+            } else if selector.roleOnlySwitch, !nodeLabel.isEmpty, let labelIndex {
+                // A live switch query also returns SwiftUI Toggle knobs, which
+                // the match set leaves out (NonAppElements.isSwitchPart), and
+                // after the switches that hold them rather than in tree order,
+                // so no index into it can be trusted: find a named switch by
+                // its own label, which a knob doesn't have (PILOT-790).
+                element = byOwnLabel(nodeLabel, at: labelIndex)
             } else if let types = try? RoleMapping.elementTypes(for: role), let firstType = types.first {
                 // Role-only: match by type.
                 element = resolve(app.descendants(matching: firstType))

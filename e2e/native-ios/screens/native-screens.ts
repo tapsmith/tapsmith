@@ -31,6 +31,8 @@ export class NativeTogglesScreen {
   get notifications() { return this.device.getByRole("switch", { name: "Notifications" }) }
   /** Every switch by role alone: one per Toggle, not its knob too (PILOT-790). */
   switches(options: { checked?: boolean } = {}) { return this.device.getByRole("switch", options) }
+  /** A Toggle by its label (getByLabel keeps no live element on iOS). */
+  labelled(name: string) { return this.device.getByLabel(name) }
   sizeSegment(name: string, options: { selected?: boolean } = {}) {
     return this.device.getByRole("button", { name, exact: true, ...options })
   }

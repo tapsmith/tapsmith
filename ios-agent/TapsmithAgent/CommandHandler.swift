@@ -879,24 +879,36 @@ class CommandHandler {
     }
 
     /// The knob of a SwiftUI Toggle, as an element of its own, when `element`
-    /// is a switch holding one (NonAppElements.isSwitchPart, PILOT-790): a
-    /// Form Toggle ignores a touch on the rest of its row, where
-    /// `XCUIElement.tap()` lands (the row's centre). Its touch is then planned
-    /// like any other, covers and all. nil for a UISwitch, which holds no
-    /// switch, and for any other element.
+    /// is a switch that held one when it was found (NonAppElements
+    /// .isSwitchPart, PILOT-790): a Form Toggle ignores a touch on the rest of
+    /// its row, where `XCUIElement.tap()` lands (the row's centre). Its touch
+    /// is then planned like any other, covers and all. nil for a UISwitch,
+    /// which holds no switch, and for any other element.
     ///
-    /// **Cost**, for a switch only: one query for the knob; when there is
-    /// one, its property reads (`cacheElement`).
+    /// The knob is the unlabelled switch whose centre lies inside the
+    /// Toggle's frame — live when the Toggle can be read, else as found — so
+    /// a Toggle found by a locator that keeps no live element (`getByLabel`)
+    /// is handled too.
+    ///
+    /// **Cost**, for such a Toggle only: one query, a frame read per
+    /// unlabelled switch on screen, and the knob's property reads
+    /// (`cacheElement`).
     private func switchKnob(of element: ElementInfo) -> ElementInfo? {
-        let switchClassNames = [XCUIElement.ElementType.switch, .toggle].map(RoleMapping.typeName(for:))
-        guard switchClassNames.contains(element.className),
-              let outer = try? getXCUIElement(element.elementId) else { return nil }
+        guard snapshotFinder.getIdentity(element.elementId)?.holdsSwitchPart == true else { return nil }
+        let b = element.bounds
+        var frame = CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
+        if let outer = try? getXCUIElement(element.elementId), outer.exists { frame = outer.frame }
         let switchTypes = [XCUIElement.ElementType.switch, .toggle].map { NSNumber(value: $0.rawValue) }
-        let knob = outer.descendants(matching: .any)
-            .matching(NSPredicate(format: "elementType IN %@", switchTypes))
-            .firstMatch
-        guard knob.exists else { return nil }
-        return snapshotFinder.cacheElement(knob)
+        let knobs = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "elementType IN %@ AND label == ''", switchTypes))
+        for knob in knobs.allElementsBoundByIndex where knob.exists {
+            let knobFrame = knob.frame
+            // Not the Toggle itself (one with an empty label).
+            if knobFrame.width < frame.width, frame.contains(CGPoint(x: knobFrame.midX, y: knobFrame.midY)) {
+                return snapshotFinder.cacheElement(knob)
+            }
+        }
+        return nil
     }
 
     /// Double-tap a resolved element. Prefer coordinate synthesis: it encodes
