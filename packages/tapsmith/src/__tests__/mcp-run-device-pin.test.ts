@@ -411,7 +411,7 @@ describe('run_tests `device` in a headless MCP session', () => {
     const first = d.runFiles([path.join(root, 'a.test.ts')]);
     // Running before devices resolve: the run first syncs the test files
     // (PILOT-836), and is marked running the moment that is done.
-    await vi.waitFor(() => expect(d.isRunning()).toBe(true));
+    await vi.waitFor(() => expect(d.isRunning()).toBe(true), { timeout: 30_000 });
     release();
     await first;
   });

@@ -749,7 +749,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       + 'it started there), so `device` can confirm that device but not choose another. '
       + (configPin
         ? `The config pins ${configPin}; change \`device\` there and restart the MCP server to run on ${device}.`
-        : `To run on ${device}, restart the MCP server and pass \`device\` to run_tests before any other run or device tool, `
+        : `To run on ${device}, restart the MCP server and pass \`device\` to its first run_tests or device tool, `
           + `or set \`device: '${device}'\` in the config.`);
   }
 

@@ -219,7 +219,9 @@ describe('headless MCP rediscovers test files (PILOT-836)', () => {
       return { results: [{ status: 'passed' }], suite: { durationMs: 1 } };
     };
     const first = d.runFiles([file]);
-    await vi.waitFor(() => expect(d.isRunning()).toBe(true));
+    // Behind the session's first discovery child, which a loaded CI runner
+    // takes well over vi.waitFor's 1 s default to fork.
+    await vi.waitFor(() => expect(d.isRunning()).toBe(true), { timeout: 30_000 });
     const second = await d.runFiles([file]);
     expect(second.busy).toBe(true);
     release();
