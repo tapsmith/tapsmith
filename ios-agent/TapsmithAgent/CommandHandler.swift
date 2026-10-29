@@ -864,6 +864,17 @@ class CommandHandler {
         xcElem: XCUIElement?,
         isHittable: Bool
     ) -> OcclusionAnalyzer.Verdict? {
+        let target = occlusionTarget(for: element, xcElem: xcElem)
+        let screenSize = snapshotFinder.screenSize
+        // takeSnapshot retries a transiently failing or empty snapshot.
+        guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
+        return OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+            .analyze(target, isHittable: isHittable)
+    }
+
+    /// The element as the occlusion analyzer identifies it: read live, or from
+    /// what was cached when it was found.
+    private func occlusionTarget(for element: ElementInfo, xcElem: XCUIElement?) -> OcclusionAnalyzer.Target {
         let target: OcclusionAnalyzer.Target
         if let snap = try? xcElem?.snapshot() {
             target = .init(frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier)
@@ -884,11 +895,49 @@ class CommandHandler {
                 isLive: false
             )
         }
-        let screenSize = snapshotFinder.screenSize
-        // takeSnapshot retries a transiently failing or empty snapshot.
-        guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
-        return OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
-            .analyze(target, isHittable: isHittable)
+        return target
+    }
+
+    /// Where a pinch's fingers go on `element`: inside the part of it that is
+    /// on screen and not clipped by the keyboard or bars, with no interactive
+    /// control drawn over any point the fingers touch (PILOT-825). `planTouch`
+    /// checks covers only at the area's centre, so the finger paths are checked
+    /// here, waiting up to `timeoutMs` for a cover to go like a tap does.
+    /// Throws ELEMENT_COVERED when one outlasts it. Without a readable UI tree
+    /// nothing can be checked, so the pinch is refused rather than sent blind.
+    private func planPinch(_ element: ElementInfo, scale: Double, timeoutMs: Int64, reserveMs: Int64) throws -> PinchPlan {
+        let started = Date()
+        while true {
+            let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
+            let visible: CGRect
+            switch try planSettledTouch(element, timeoutMs: remaining, preferElementTap: false, reserveMs: reserveMs) {
+            case .point(_, let area):
+                visible = area
+            case .hittableElement:
+                throw AgentError.actionFailed(
+                    "The UI hierarchy could not be read to check what covers the element, so it was not pinched"
+                )
+            case .offScreen:
+                throw AgentError.actionFailed("Element is not on screen, so it cannot be pinched; scroll it into view first")
+            }
+            let plan = try ActionExecutor.pinchPlan(in: visible, scale: scale)
+            let target = occlusionTarget(for: element, xcElem: try? getXCUIElement(element.elementId))
+            guard let appSnapshot = try? snapshotFinder.takeSnapshot() else {
+                throw AgentError.actionFailed(
+                    "The UI hierarchy could not be read to check what covers the element, so it was not pinched"
+                )
+            }
+            let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: snapshotFinder.screenSize)
+            guard let cover = analyzer.interactiveCover(of: target, at: plan.touchPoints()) else { return plan }
+            let elapsedMs = Int64(Date().timeIntervalSince(started) * 1000)
+            if elapsedMs + Int64(TouchPlanClock.pollSeconds * 1000) >= timeoutMs {
+                throw AgentError.elementCovered(
+                    coveredMessage(cover, timeoutMs: timeoutMs) + " — a pinch's fingers reach toward the element's corners"
+                )
+            }
+            NSLog("[TapsmithCommand] pinch on \(element.elementId) would touch \(cover); waiting")
+            Thread.sleep(forTimeInterval: TouchPlanClock.pollSeconds)
+        }
     }
 
     private func coveredMessage(_ cover: String, timeoutMs: Int64) -> String {
@@ -1917,16 +1966,7 @@ class CommandHandler {
             putKeyboardAwayIfItWouldEatTheTouch(element)
             let gestureMs = Int64((ActionExecutor.pinchMoveDuration + ActionExecutor.pinchHoldDuration) * 1000)
             let coverBudget = max(0, actionTimeoutMs(params) - gestureMs)
-            let area: CGRect
-            switch try planSettledTouch(element, timeoutMs: coverBudget, preferElementTap: false, reserveMs: gestureMs) {
-            case .point(_, let visible):
-                area = visible
-            case .hittableElement(let xcElem):
-                area = xcElem.frame
-            case .offScreen:
-                throw AgentError.actionFailed("Element is not on screen, so it cannot be pinched; scroll it into view first")
-            }
-            try actionExecutor.pinch(in: area, scale: scale)
+            try actionExecutor.pinch(try planPinch(element, scale: scale, timeoutMs: coverBudget, reserveMs: gestureMs))
             touchBarrier()
             return ["success": true]
 

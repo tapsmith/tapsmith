@@ -78,6 +78,17 @@ struct PinchPlan: Equatable {
         ))
     }
 
+    /// Points along both fingers' paths, start and end included, `samples`
+    /// per finger (at least 2) — where the gesture touches, for checking that
+    /// nothing is drawn over any of it.
+    func touchPoints(samples: Int = 5) -> [CGPoint] {
+        let n = max(2, samples)
+        return (0..<n).flatMap { i -> [CGPoint] in
+            let (first, second) = positions(at: CGFloat(i) / CGFloat(n - 1))
+            return [first, second]
+        }
+    }
+
     /// The fingers' positions `fraction` (0...1) of the way through the move.
     func positions(at fraction: CGFloat) -> (CGPoint, CGPoint) {
         func lerp(_ a: CGPoint, _ b: CGPoint) -> CGPoint {

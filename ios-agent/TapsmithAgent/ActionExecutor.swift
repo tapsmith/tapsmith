@@ -476,15 +476,13 @@ class ActionExecutor {
     static let pinchMoveDuration: TimeInterval = 0.5
     static let pinchHoldDuration: TimeInterval = 0.25
 
-    /// Pinch with two fingers inside `area` (screen points). Scale above 1
-    /// opens the fingers (zoom in), below 1 closes them (zoom out). Throws
-    /// when the pinch cannot be planned or synthesized — never reports a
-    /// pinch it did not send (PILOT-825).
-    func pinch(in area: CGRect, scale: Double) throws {
-        let plan: PinchPlan
+    /// The fingers of a pinch inside `area` (screen points). Scale above 1
+    /// opens them (zoom in), below 1 closes them (zoom out). Throws when the
+    /// scale or the area leaves no pinch to make (PILOT-825).
+    static func pinchPlan(in area: CGRect, scale: Double) throws -> PinchPlan {
         switch PinchPlan.make(in: area, scale: scale) {
-        case .success(let p):
-            plan = p
+        case .success(let plan):
+            return plan
         case .failure(.invalidScale):
             throw AgentError.invalidRequest("Pinch scale must be a finite number above 0, got \(scale)")
         case .failure(.noChange):
@@ -494,6 +492,11 @@ class ActionExecutor {
                 "Element's visible area is too small to pinch (its diagonal less margins is \(Int(span.rounded())) pt; two fingers need more than \(Int(PinchPlan.minimumSpan)) pt)"
             )
         }
+    }
+
+    /// Send `plan` as one two-finger gesture. Throws when XCTest cannot
+    /// synthesize it — never reports a pinch it did not send (PILOT-825).
+    func pinch(_ plan: PinchPlan) throws {
         guard EventSynthesizer.pinch(
             plan,
             moveDuration: Self.pinchMoveDuration,
