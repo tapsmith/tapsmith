@@ -75,7 +75,10 @@ export default function GesturesScreen() {
       onPanResponderMove: (evt) => {
         const touches = evt.nativeEvent.touches
         if (touches.length < 2) return
-        const span = Math.hypot(touches[0].pageX - touches[1].pageX, touches[0].pageY - touches[1].pageY)
+        const span = Math.hypot(
+          touches[0].pageX - touches[1].pageX,
+          touches[0].pageY - touches[1].pageY,
+        )
         if (pinchSpan.current) {
           pinchSpan.current.last = span
         } else {
