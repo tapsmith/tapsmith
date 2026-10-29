@@ -495,7 +495,7 @@ If the tap fails, the test ends before it awaits `responsePromise`, and the wait
 
 ### File naming conventions
 
-Tapsmith finds test files with `testMatch`. A config from `tapsmith init` sets it to `**/*.tapsmith.ts`, a suffix Jest and Vitest don't run, so the app's unit-test suite and Tapsmith don't pick up each other's files, as long as Tapsmith tests stay out of `__tests__` folders, where Jest runs every file ([more](getting-started.md#tapsmith-tests-and-your-unit-tests)). Without `testMatch`, Tapsmith runs `**/*.test.ts` and `**/*.spec.ts` files. Use one convention consistently:
+Tapsmith finds test files with `testMatch`. A config from `tapsmith init` sets it to `**/*.tapsmith.ts`, a suffix Jest and Vitest don't run, so the app's unit-test suite and Tapsmith don't pick up each other's files, as long as Tapsmith tests stay out of `__tests__` folders, where Jest runs every file ([more](getting-started.md#tapsmith-tests-and-your-unit-tests)). Without `testMatch`, Tapsmith runs `**/*.test.ts`, `**/*.spec.ts` and `**/*.tapsmith.ts` files. Use one convention consistently:
 
 ```
 tests/
