@@ -317,7 +317,7 @@ enum RoleMapping {
     }
 
     /// Whether a role-only match must be found again as a live element by its
-    /// own label (QueryIndex) rather than by the role's first element type:
+    /// own label (QueryIndex) rather than by a query on the role's element types:
     /// a type query can't express a trait, a description or an ancestor, so
     /// its positional index would count every static text (heading), look
     /// for a native type an RN app never has (checkbox), or miss a tab bar's
