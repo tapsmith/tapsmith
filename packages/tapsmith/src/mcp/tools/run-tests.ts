@@ -172,6 +172,12 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             clearInterval(heartbeat);
             store.merge(dispatcher.getResults());
           });
+        if (result.busy) {
+          return {
+            content: [{ type: 'text' as const, text: 'A test run is already in progress. Wait for it to finish or use tapsmith_stop_tests to abort.' }],
+            isError: true,
+          };
+        }
         const content: CallToolResult['content'] = [];
         const screenshots: Buffer[] = [];
 

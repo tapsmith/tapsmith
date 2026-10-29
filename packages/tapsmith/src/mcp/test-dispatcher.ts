@@ -9,6 +9,18 @@ export interface TestRunResult {
   interrupted?: number
   duration: number
   failures?: TestFailureDetail[]
+  /**
+   * Set when the run never started because another was under way. Without it
+   * the refusal reads exactly like a run of files that hold no tests: two
+   * parallel `run_tests` calls both pass the tool's own check while their
+   * file refreshes run, and the second was told its valid file was empty.
+   */
+  busy?: true
+}
+
+/** The result of a run refused because another is under way. */
+export function runInProgressResult(): TestRunResult {
+  return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0, busy: true };
 }
 
 export interface TestFailureDetail {

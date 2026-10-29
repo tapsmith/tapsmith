@@ -40,7 +40,7 @@ import { collectTransitiveDeps, projectLabel } from '../project.js';
 import { LaunchSetupError, deviceTargetLabel } from '../dispatcher.js';
 import type { ProvisionedTarget, UnavailableTargets } from '../unavailable-targets.js';
 import { STOPPED_BY_USER } from '../abort.js';
-import { classifyEntryStatus, isInterruptedEntry, uiDeviceChoiceError } from '../mcp/test-dispatcher.js';
+import { classifyEntryStatus, isInterruptedEntry, runInProgressResult, uiDeviceChoiceError } from '../mcp/test-dispatcher.js';
 import type { LaunchedEmulator } from '../emulator.js';
 import { preserveEmulatorsForReuse, emulatorsLaunchedThisProcess, getRunningAvdName } from '../emulator.js';
 import { listSimulators, getSimulatorScreenScale } from '../ios-simulator.js';
@@ -1126,6 +1126,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     const accumulated: UITestResultEntry[] = [];
     for (const f of validFiles) {
       const r = await runFile(f, testFilter, project);
+      // Another run held the workers before this one began: nothing ran.
+      if (r.busy && f === validFiles[0]) return r;
       accumulated.push(...testResults.values());
       totalPassed += r.passed;
       totalFailed += r.failed;
@@ -3040,7 +3042,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     selection?: ReadonlyMap<string, readonly string[] | undefined>,
     runDeps?: boolean,
   ): Promise<TestRunResult> {
-    if (isRunning) return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+    if (isRunning) return runInProgressResult();
     markRunStarted();
     clearRunBuffers();
     screenPollActive = true;
@@ -3142,7 +3144,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   }
 
   async function runFileParallel(filePath: string, testFilter?: string, explicitProjectName?: string): Promise<TestRunResult> {
-    if (isRunning) return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+    if (isRunning) return runInProgressResult();
     markRunStarted();
     clearRunBuffers();
     screenPollActive = true;

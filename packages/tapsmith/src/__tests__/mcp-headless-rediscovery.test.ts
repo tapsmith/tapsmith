@@ -205,6 +205,27 @@ describe('headless MCP rediscovers test files (PILOT-836)', () => {
     expect(d.getTestFiles()).toContain(added);
   }, 60_000);
 
+  it('marks a run refused because another is under way', async () => {
+    const file = writeTest('a.test.ts', ['first']);
+    const d = dispatcher();
+    await d.ensureDevicesReady();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const internals = d as unknown as {
+      _runFileInChild(file: string): Promise<{ results: unknown[]; suite: { durationMs: number } }>
+    };
+    internals._runFileInChild = async () => {
+      await gate;
+      return { results: [{ status: 'passed' }], suite: { durationMs: 1 } };
+    };
+    const first = d.runFiles([file]);
+    await vi.waitFor(() => expect(d.isRunning()).toBe(true));
+    const second = await d.runFiles([file]);
+    expect(second.busy).toBe(true);
+    release();
+    expect((await first).busy).toBeUndefined();
+  }, 60_000);
+
   it('runs a file written mid-session', async () => {
     const d = dispatcher();
     await d.ensureDevicesReady();

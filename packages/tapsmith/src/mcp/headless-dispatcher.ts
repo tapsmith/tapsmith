@@ -32,7 +32,7 @@ import type {
   DiscoveryError,
   DeviceTarget,
 } from './test-dispatcher.js';
-import { classifyEntryStatus, isInterruptedEntry } from './test-dispatcher.js';
+import { classifyEntryStatus, isInterruptedEntry, runInProgressResult } from './test-dispatcher.js';
 import { loadMcpConfig } from './config-loader.js';
 import { pickResolvedDeviceName } from './tools/device-target.js';
 
@@ -256,7 +256,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   async runFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult> {
     await this.refreshTestFiles();
     if (this._isRunning) {
-      return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+      return runInProgressResult();
     }
     // After the guard: a request rejected as already-running is not a new run,
     // and resetting the budget from here would hand the *in-flight* run a fresh
@@ -326,7 +326,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     await this.refreshTestFiles();
     await this.ensureDevicesReady();
     if (this._isRunning) {
-      return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+      return runInProgressResult();
     }
     // After the guard: a request rejected as already-running is not a new run,
     // and resetting the budget from here would hand the *in-flight* run a fresh

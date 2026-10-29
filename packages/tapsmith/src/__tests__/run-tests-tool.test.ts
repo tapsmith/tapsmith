@@ -374,6 +374,19 @@ describe('tapsmith_run_tests and files written mid-session', () => {
     }
   });
 
+  // Two parallel calls both pass the tool's own busy check while their
+  // refreshes run; the dispatcher refuses the second, which must read as busy
+  // rather than as an empty test file.
+  it('reports a run refused as already running as such', async () => {
+    const dispatcher = makeDispatcher({
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0, busy: true }),
+    });
+    const res = await callRunTests(dispatcher, { files: [FILE] });
+    expect(res.isError).toBe(true);
+    expect(text(res)).toContain('A test run is already in progress');
+    expect(text(res)).not.toContain('no runnable tests');
+  });
+
   it('does not blame testMatch when the config failed to load', async () => {
     const written = path.join(root, 'login.test.ts');
     fs.writeFileSync(written, '');
