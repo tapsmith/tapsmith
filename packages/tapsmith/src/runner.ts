@@ -4107,7 +4107,7 @@ export function fileLevelFailureResult(
     fullName: title,
     status: 'failed',
     durationMs: 0,
-    error: loadErrorForReport(err),
+    error: loadErrorForReport(err, opts.testFilePath),
     project: opts.projectName,
     filePath: opts.testFilePath,
     fileLevelFailure: true,
