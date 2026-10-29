@@ -296,22 +296,26 @@ enum EventSynthesizer {
     ///   reliably) are COALESCED when the inter-tap gap is small: at a
     ///   ~150ms gap only one tap reaches the app. The same is true of the
     ///   public XCUICoordinate.doubleTap(). Gaps of 200ms+ deliver both.
-    /// So on iOS 26+ the primary is the sequential two-record route with the
-    /// requested interval floored at 250ms — safely above the observed
-    /// coalescing threshold (≲150-200ms) and below common double-tap
-    /// recognizer windows (~300-500ms). The host-side sleep is shortened by
-    /// the first record's dispatch latency to keep the app-visible gap at
-    /// ~the interval.
+    /// So with the Xcode 26 toolchain on iOS 26+ the primary is the
+    /// sequential two-record route with the requested interval floored at
+    /// 250ms — safely above the observed coalescing threshold (≲150-200ms)
+    /// and below common double-tap recognizer windows (~300-500ms).
+    ///
+    /// With Xcode 27's XCTest (PILOT-795, iOS 26.4 and 26.5 simulators) that
+    /// flips: the sequential route never fired a native double-tap
+    /// recognizer (0/8) while the single record did (8/8), so the single
+    /// record is the primary there again. `DoubleTapRoute` makes the choice.
     static func doubleTap(at point: CGPoint, intervalMs: Int = 0) -> DoubleTapResult {
         var interval = intervalMs > 0 ? TimeInterval(intervalMs) / 1000.0 : 0.15
 
-        if runtimeCoalescesRapidTaps {
-            interval = max(interval, 0.25)
-        } else {
+        if doubleTapRoute == .singleRecord {
             if doubleTapSingleRecord(at: point, interval: interval) {
                 return .done
             }
             NSLog("[EventSynth] double-tap single-record dispatch failed; falling back to sequential taps")
+        }
+        if runtimeCoalescesRapidTaps {
+            interval = max(interval, 0.25)
         }
 
         let start = Date()
@@ -366,6 +370,20 @@ enum EventSynthesizer {
     private static let runtimeCoalescesRapidTaps: Bool = {
         if #available(iOS 26.0, *) { return true }
         return false
+    }()
+
+    /// The double-tap route for this runtime and the XCTest the runner was
+    /// built with (its bundle's `DTXcode`, e.g. "2710" for Xcode 27.1).
+    private static let doubleTapRoute: DoubleTapRoute = {
+        let runtimeMajor = ProcessInfo.processInfo.operatingSystemVersion.majorVersion
+        let dtXcode = Bundle(for: XCUIApplication.self).infoDictionary?["DTXcode"] as? String
+        let route = DoubleTapRoute.choose(
+            runtimeMajor: runtimeMajor,
+            xcodeVersion: DoubleTapRoute.xcodeVersion(fromDTXcode: dtXcode)
+        )
+        NSLog("[EventSynth] double-tap route: %@ (iOS %d, XCTest DTXcode %@)",
+              String(describing: route), runtimeMajor, dtXcode ?? "unknown")
+        return route
     }()
 
     /// Build and dispatch a single event record containing two sequential

@@ -116,3 +116,9 @@ xcrun swiftc -sdk "$SDK" \
   TapsmithAgent/TypingFocus.swift \
   -o "$OUT/typing-focus-tests"
 "$OUT/typing-focus-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/DoubleTapRouteTests/main.swift \
+  TapsmithAgent/DoubleTapRoute.swift \
+  -o "$OUT/double-tap-route-tests"
+"$OUT/double-tap-route-tests"
