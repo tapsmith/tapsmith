@@ -4,6 +4,7 @@ import starlight from '@astrojs/starlight'
 import starlightLinksValidator from 'starlight-links-validator'
 import starlightImageZoom from 'starlight-image-zoom'
 import tailwindcss from '@tailwindcss/vite'
+import emailOff from './integrations/email-off.mjs'
 
 export default defineConfig({
   site: 'https://tapsmith.dev',
@@ -115,6 +116,7 @@ export default defineConfig({
         { label: 'Changelog', slug: 'changelog' },
       ],
     }),
+    emailOff(),
   ],
   vite: {
     plugins: [tailwindcss()],
