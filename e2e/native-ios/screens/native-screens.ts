@@ -29,6 +29,8 @@ export class NativeTogglesScreen {
 
   get darkMode() { return this.device.getByRole("switch", { name: "Dark Mode" }) }
   get notifications() { return this.device.getByRole("switch", { name: "Notifications" }) }
+  /** Every switch by role alone: one per Toggle, not its knob too (PILOT-790). */
+  switches(options: { checked?: boolean } = {}) { return this.device.getByRole("switch", options) }
   sizeSegment(name: string, options: { selected?: boolean } = {}) {
     return this.device.getByRole("button", { name, exact: true, ...options })
   }

@@ -11,19 +11,29 @@ describe("Native: toggles and controls", () => {
     await expect(toggles.notifications).toBeChecked()
   })
 
-  // BUG PILOT-790: tap() lands on the centre of the Toggle's row (the label), which a
-  // Form Toggle ignores; only the knob flips it. tapXY() near the knob works.
-  test.skip("setChecked flips a SwiftUI Toggle both ways", async ({ toggles }) => {
+  test("setChecked flips a SwiftUI Toggle both ways", async ({ toggles }) => {
     await toggles.darkMode.setChecked(true)
     await expect(toggles.darkMode).toBeChecked()
     await toggles.darkMode.setChecked(false)
     await expect(toggles.darkMode).not.toBeChecked()
   })
 
-  // BUG PILOT-790: same as above.
-  test.skip("tapping a Toggle flips it", async ({ toggles }) => {
+  test("tapping a Toggle flips it", async ({ toggles }) => {
     await toggles.notifications.tap()
     await expect(toggles.notifications).not.toBeChecked()
+  })
+
+  // A SwiftUI Toggle is a row-sized switch holding an unlabelled switch, its
+  // knob: one control, found once and tapped on the knob (PILOT-790).
+  test("each Toggle is one switch", async ({ toggles }) => {
+    await expect(toggles.switches()).toHaveCount(2)
+    await expect(toggles.switches({ checked: true })).toHaveCount(1)
+  })
+
+  test("nth() by role alone taps the right Toggle", async ({ toggles }) => {
+    await toggles.switches().nth(1).tap()
+    await expect(toggles.notifications).not.toBeChecked()
+    await expect(toggles.darkMode).not.toBeChecked()
   })
 
   test("segmented Picker: tap a segment and read selection", async ({ toggles }) => {

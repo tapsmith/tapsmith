@@ -864,6 +864,8 @@ class CommandHandler {
         var staleError: Error?
         do { _ = try getXCUIElement(element.elementId) } catch { staleError = error }
 
+        // A SwiftUI Toggle only flips from its knob: touch that (PILOT-790).
+        let element = switchKnob(of: element) ?? element
         putKeyboardAwayIfItWouldEatTheTouch(element)
         switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
         case .hittableElement(let xcElem):
@@ -874,6 +876,27 @@ class CommandHandler {
         case .offScreen:
             throw staleError ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
+    }
+
+    /// The knob of a SwiftUI Toggle, as an element of its own, when `element`
+    /// is a switch holding one (NonAppElements.isSwitchPart, PILOT-790): a
+    /// Form Toggle ignores a touch on the rest of its row, where
+    /// `XCUIElement.tap()` lands (the row's centre). Its touch is then planned
+    /// like any other, covers and all. nil for a UISwitch, which holds no
+    /// switch, and for any other element.
+    ///
+    /// **Cost**, for a switch only: one query for the knob; when there is
+    /// one, its property reads (`cacheElement`).
+    private func switchKnob(of element: ElementInfo) -> ElementInfo? {
+        let switchClassNames = [XCUIElement.ElementType.switch, .toggle].map(RoleMapping.typeName(for:))
+        guard switchClassNames.contains(element.className),
+              let outer = try? getXCUIElement(element.elementId) else { return nil }
+        let switchTypes = [XCUIElement.ElementType.switch, .toggle].map { NSNumber(value: $0.rawValue) }
+        let knob = outer.descendants(matching: .any)
+            .matching(NSPredicate(format: "elementType IN %@", switchTypes))
+            .firstMatch
+        guard knob.exists else { return nil }
+        return snapshotFinder.cacheElement(knob)
     }
 
     /// Double-tap a resolved element. Prefer coordinate synthesis: it encodes

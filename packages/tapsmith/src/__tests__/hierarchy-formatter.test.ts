@@ -56,3 +56,14 @@ describe('non-app nodes (PILOT-756, PILOT-830)', () => {
     expect(formatHierarchy([statusBar, app], new Map()).tree).toBe('- text "Settings"\n- button "Save"');
   });
 });
+
+describe("a SwiftUI Toggle's knob (PILOT-790)", () => {
+  // The agent marks it part of the switch it sits in: no locator matches it.
+  const knob = node({ type: 'XCUIElementTypeSwitch', label: '', value: '0', 'tapsmith-role': 'switch', 'tapsmith-switch-part': 'true' });
+  const text = node({ type: 'XCUIElementTypeStaticText', label: 'Dark Mode', 'tapsmith-role': 'text' });
+  const toggle = node({ type: 'XCUIElementTypeSwitch', label: 'Dark Mode', value: '0', 'tapsmith-role': 'switch' }, [text, knob]);
+
+  it('leaves it out of the nodes offered for suggestions', () => {
+    expect(semanticNodes([toggle])).toEqual([toggle, text]);
+  });
+});

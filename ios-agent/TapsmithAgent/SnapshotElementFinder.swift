@@ -1072,7 +1072,9 @@ class SnapshotElementFinder {
     /// Key under which `findMatches` records, on a match after the keyboard
     /// in tree order, the element types of the keyboard's nodes that match
     /// the selector: a live query re-resolving the match by position returns
-    /// those of its own type (or all, unscoped) too.
+    /// those of its own type (or all, unscoped) too. A SwiftUI Toggle's knob
+    /// that matches is recorded the same way (NonAppElements.isSwitchPart):
+    /// left out of the matches, but returned by a live switch query.
     static let keyboardMatchesKey = "tapsmithKeyboardMatches"
 
     /// The element types of the nodes of the subtree at `nodeDict` (itself
@@ -1116,6 +1118,7 @@ class SnapshotElementFinder {
     private func findMatches(
         in nodeDict: [String: Any],
         inTabBar: Bool,
+        insideSwitch: Bool = false,
         containerLabel: String,
         selector: ElementSelector,
         results: inout [([String: Any], CGRect)],
@@ -1163,8 +1166,24 @@ class SnapshotElementFinder {
             title: nodeDict["title"] as? String ?? "",
             value: nodeDict["value"] as? String ?? ""
         )
+        // A SwiftUI Toggle's knob is part of the switch it sits in, not a
+        // match of its own (NonAppElements.isSwitchPart, PILOT-790). Like the
+        // keyboard's nodes, it is counted when it matches: a live type query
+        // re-resolving a later match by position returns it too.
+        let isSwitchPart = NonAppElements.isSwitchPart(elementType: nodeType, insideSwitch: insideSwitch)
+        if isSwitchPart, isAppNode, matchesSelector(
+            nodeDict,
+            inTabBar: inTabBar,
+            containerLabel: containerLabel,
+            selector: selector,
+            keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
+            liveFocusedTextInput: liveFocusedTextInput,
+            focusedHint: focusedHint
+        ) {
+            keyboardMatches.append(nodeType.rawValue)
+        }
         var pushedAncestor = false
-        if isAppNode, matchesSelector(
+        if isAppNode, !isSwitchPart, matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
             containerLabel: containerLabel,
@@ -1255,6 +1274,7 @@ class SnapshotElementFinder {
                 findMatches(
                     in: child,
                     inTabBar: childrenInTabBar,
+                    insideSwitch: insideSwitch || NonAppElements.isSwitch(nodeType),
                     containerLabel: childContainerLabel,
                     selector: selector,
                     results: &results,
@@ -1565,7 +1585,8 @@ class SnapshotElementFinder {
         // the query does too: it never counts the hooks marker. It can't leave
         // out the keyboard, so a match after the keyboard in tree order (an
         // accessory toolbar, a later window) is indexed past the keyboard's
-        // nodes that match the selector (`keyboardMatchesKey`).
+        // nodes that match the selector (`keyboardMatchesKey`) — and past
+        // the SwiftUI Toggle knobs before it, which a switch query returns.
         let keyboardTypes = snapshotNode?[SnapshotElementFinder.keyboardMatchesKey] as? [UInt] ?? []
         let scopedToType = nodeElType.map { $0 != .other && $0 != .any } ?? false
         // `resolve` re-finds by a query on the match's type when it is specific
