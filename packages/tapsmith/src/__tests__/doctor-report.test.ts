@@ -450,6 +450,208 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
     });
   });
 
+  // The config's `simulator` is looked up as the runner looks it up: an exact
+  // UDID, else an exact name, among the available simulators.
+  describe('the configured simulator', () => {
+    const SIMCTL_KEY = 'xcrun simctl list devices available -j';
+    const IOS_26 = 'com.apple.CoreSimulator.SimRuntime.iOS-26-0';
+    const IOS_18 = 'com.apple.CoreSimulator.SimRuntime.iOS-18-5';
+    function withSimulators(devices: Record<string, unknown[]>): void {
+      exec.table.set('xcodebuild -version', XCODE_VERSION);
+      exec.table.set(SIMCTL_KEY, JSON.stringify({ devices }));
+    }
+    const rows = (json: DoctorJson) => json.checks.filter((c) => c.id === 'simulator');
+    const ios = (simulator: string, extra = '') => `export default { platform: 'ios', simulator: '${simulator}'${extra} }\n`;
+    const STOCK = {
+      [IOS_26]: [
+        { name: 'iPhone 17', udid: 'AAAA-1111', state: 'Shutdown' },
+        { name: 'iPhone 17 Pro', udid: 'BBBB-2222', state: 'Shutdown' },
+        { name: 'iPhone 17 (Tapsmith Worker 1)', udid: 'CCCC-3333', state: 'Shutdown' },
+      ],
+    };
+
+    it('passes when a simulator has that name', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('iPhone 17'));
+      const { code, json } = await doctorJson();
+      expect(rows(json)).toEqual([{ id: 'simulator', status: 'pass', label: 'Simulator "iPhone 17" found', detail: 'iOS 26.0, AAAA-1111' }]);
+      expect(code).toBe(0);
+    });
+
+    it('passes when a simulator has that UDID', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('BBBB-2222'));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([{ id: 'simulator', status: 'pass', label: 'Simulator "BBBB-2222" found', detail: 'iPhone 17 Pro, iOS 26.0' }]);
+    });
+
+    it('fails a name no simulator has, listing the iOS simulators there are', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('iPhone 71'));
+      const { code, json } = await doctorJson();
+      expect(rows(json)).toEqual([{
+        id: 'simulator',
+        status: 'fail',
+        label: 'Simulator "iPhone 71" not found — tapsmith test cannot boot it',
+        fix: 'Set simulator to the name or UDID of one of this Mac\'s iOS simulators: iPhone 17, iPhone 17 Pro — or create it in Xcode → Window → Devices and Simulators',
+      }]);
+      expect(code).toBe(1);
+    });
+
+    it('lists at most 12 simulators, saying how many more there are', async () => {
+      withSimulators({ [IOS_26]: Array.from({ length: 15 }, (_, i) => ({ name: `iPad ${i + 1}`, udid: `PAD-${i}`, state: 'Shutdown' })) });
+      writeConfig(ios('iPhone 71'));
+      const { json } = await doctorJson();
+      const fix = rows(json)[0]?.fix ?? '';
+      expect(fix).toContain('iPad 12 and 3 more (xcrun simctl list devices available)');
+      expect(fix).not.toContain('iPad 13');
+    });
+
+    it('prints the failure and its fix in the text report', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('iPhone 71'));
+      const { text } = await doctorText();
+      expect(text).toContain('Simulator "iPhone 71" not found');
+      expect(text).toContain('iPhone 17, iPhone 17 Pro');
+    });
+
+    it('matches case-sensitively, as the runner does, and suggests the name that differs only in case', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('iphone 17 pro'));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({ status: 'fail', fix: expect.stringMatching(/^Did you mean "iPhone 17 Pro"\? Simulator names and UDIDs match case-sensitively\. /) })]);
+    });
+
+    it('matches a UDID as typed, suggesting the one that differs only in case', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('aaaa-1111'));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({ status: 'fail', fix: expect.stringMatching(/^Did you mean "AAAA-1111"\?/) })]);
+    });
+
+    it('warns when several simulators share the name, saying which one a run takes and how to pin one', async () => {
+      withSimulators({
+        [IOS_18]: [{ name: 'iPhone 16 Pro', udid: 'OLD-1', state: 'Shutdown' }],
+        [IOS_26]: [{ name: 'iPhone 16 Pro', udid: 'NEW-2', state: 'Shutdown' }],
+      });
+      writeConfig(ios('iPhone 16 Pro'));
+      const { code, json } = await doctorJson();
+      expect(rows(json)).toEqual([{
+        id: 'simulator',
+        status: 'warn',
+        label: '2 simulators are named "iPhone 16 Pro" (iOS 18.5, iOS 26.0)',
+        fix: 'tapsmith test uses a booted one, else the first in xcrun simctl list devices -j (iOS 18.5, OLD-1), so a run may not get the iOS version you expect. '
+          + 'To pin one, set simulator to its UDID: OLD-1 (iOS 18.5), NEW-2 (iOS 26.0)',
+      }]);
+      expect(code).toBe(0);
+    });
+
+    it('names the booted one of several, which is the one a run takes', async () => {
+      withSimulators({
+        [IOS_18]: [{ name: 'iPhone 16 Pro', udid: 'OLD-1', state: 'Shutdown' }],
+        [IOS_26]: [{ name: 'iPhone 16 Pro', udid: 'NEW-2', state: 'Booted' }],
+      });
+      writeConfig(ios('iPhone 16 Pro'));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({
+        status: 'warn',
+        fix: expect.stringMatching(/^tapsmith test uses the booted one \(iOS 26\.0, NEW-2\); with none booted, the first in xcrun simctl list devices -j \(iOS 18\.5, OLD-1\), /),
+      })]);
+    });
+
+    it('says it once when the booted one is also the first listed, and sorts the iOS versions', async () => {
+      withSimulators({
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-4': [{ name: 'iPhone 17 Pro', udid: 'MID', state: 'Booted' }],
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-10': [{ name: 'iPhone 17 Pro', udid: 'NEW', state: 'Shutdown' }],
+        'com.apple.CoreSimulator.SimRuntime.iOS-26-1': [{ name: 'iPhone 17 Pro', udid: 'OLD', state: 'Shutdown' }],
+      });
+      writeConfig(ios('iPhone 17 Pro'));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({
+        label: '3 simulators are named "iPhone 17 Pro" (iOS 26.1, iOS 26.4, iOS 26.10)',
+        fix: expect.stringMatching(/^tapsmith test uses the booted one \(iOS 26\.4, MID\), which is also the first in xcrun simctl list devices -j, so /),
+      })]);
+    });
+
+    it('a UDID is never ambiguous', async () => {
+      withSimulators({
+        [IOS_18]: [{ name: 'iPhone 16 Pro', udid: 'OLD-1', state: 'Shutdown' }],
+        [IOS_26]: [{ name: 'iPhone 16 Pro', udid: 'NEW-2', state: 'Shutdown' }],
+      });
+      writeConfig(ios('NEW-2'));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({ status: 'pass', detail: 'iPhone 16 Pro, iOS 26.0' })]);
+    });
+
+    it('checks every iOS project\'s simulator, one row each, naming the projects', async () => {
+      withSimulators(STOCK);
+      writeConfig(`export default { platform: 'ios', simulator: 'iPhone 17', projects: [
+        { name: 'phone' },
+        { name: 'phone-2' },
+        { name: 'pro', use: { simulator: 'iPhone 17 Pro' } },
+        { name: 'typo', use: { simulator: 'iPhone 71' } },
+      ] }\n`);
+      const { code, json } = await doctorJson();
+      expect(rows(json)).toEqual([
+        expect.objectContaining({ status: 'pass', label: 'Simulator "iPhone 17" found (projects phone, phone-2)' }),
+        expect.objectContaining({ status: 'pass', label: 'Simulator "iPhone 17 Pro" found (project pro)' }),
+        expect.objectContaining({ status: 'fail', label: 'Simulator "iPhone 71" (project typo) not found — tapsmith test cannot boot it' }),
+      ]);
+      expect(code).toBe(1);
+    });
+
+    it('in a mixed config whose Android projects can run here, a missing simulator only warns', async () => {
+      withAdb();
+      withSimulators(STOCK);
+      writeConfig("export default { projects: [{ name: 'a' }, { name: 'i', use: { platform: 'ios', simulator: 'iPhone 71' } }] }\n");
+      const { code, json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({
+        status: 'warn',
+        label: 'Simulator "iPhone 71" (project i) not found — tapsmith test cannot boot it',
+        fix: expect.stringMatching(/iPhone 17, iPhone 17 Pro.*Meanwhile, select the other projects with --project$/),
+      })]);
+      expect(code).toBe(0);
+    });
+
+    it('skips a scope whose every device is pinned: the run never looks the simulator up', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('iPhone 71', ", device: 'AAAA-1111'"));
+      expect(rows((await doctorJson()).json)).toEqual([]);
+      writeConfig(ios('iPhone 71', ", devices: [{ name: 'a', device: 'AAAA-1111' }, { name: 'b', device: 'BBBB-2222' }]"));
+      expect(rows((await doctorJson()).json)).toEqual([]);
+    });
+
+    it('checks a device group with an unpinned member, which is booted from the simulator', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('iPhone 71', ", devices: [{ name: 'a', device: 'AAAA-1111' }, { name: 'b' }]"));
+      const { json } = await doctorJson();
+      expect(rows(json)).toEqual([expect.objectContaining({ status: 'fail' })]);
+    });
+
+    it('adds no row when simctl fails or lists no iOS simulator — the simctl row already says so', async () => {
+      withSimulators({});
+      writeConfig(ios('iPhone 17'));
+      expect(rows((await doctorJson()).json)).toEqual([]);
+      exec.table.delete(SIMCTL_KEY);
+      expect(rows((await doctorJson()).json)).toEqual([]);
+    });
+
+    it('adds no row without Xcode or off a Mac', async () => {
+      writeConfig(ios('iPhone 71'));
+      expect(rows((await doctorJson()).json)).toEqual([]);
+      withSimulators(STOCK);
+      setPlatform('linux');
+      expect(rows((await doctorJson()).json)).toEqual([]);
+    });
+
+    it('reads simctl once for the count, the simulator lookup and the inventory', async () => {
+      withSimulators(STOCK);
+      writeConfig(ios('iPhone 17'));
+      await doctorJson();
+      expect(exec.calls.filter((c) => c === SIMCTL_KEY)).toHaveLength(1);
+    });
+  });
+
   it('iOS-only fields without platform fail, as tapsmith test does', async () => {
     withXcode();
     writeConfig("export default { app: 'x.app', simulator: 'iPhone 16' }\n");
