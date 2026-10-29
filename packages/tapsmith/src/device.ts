@@ -951,7 +951,11 @@ export class Device {
     return res.orientation as Orientation;
   }
 
-  /** Whether the soft keyboard is showing right now. Does not wait. */
+  /**
+   * Whether the soft keyboard is showing right now. Does not wait for a
+   * keyboard to open; on iOS, one already sliding onto the screen gets a
+   * moment to arrive.
+   */
   async isKeyboardShown(): Promise<boolean> {
     const res = await this._client.isKeyboardShown();
     return res.shown;

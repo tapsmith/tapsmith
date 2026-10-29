@@ -599,7 +599,7 @@ const orientation = await device.getOrientation(); // "portrait" | "landscape"
 
 ### `device.isKeyboardShown(): Promise<boolean>`
 
-Check if the soft keyboard is currently visible. On iOS, the keyboard counts as shown only while part of it is on screen, which is the same check `hideKeyboard()` uses. When a hardware keyboard is attached to a simulator, iOS keeps the software keyboard off screen, so this returns `false` even while a text field has focus.
+Check if the soft keyboard is currently visible. On iOS, the keyboard counts as shown only while part of it is on screen, which is the same check `hideKeyboard()` uses. A keyboard that is still sliding in gets a moment to arrive before the answer is `false`. When a hardware keyboard is connected to an iPhone simulator, iOS keeps the software keyboard off screen, so this returns `false` even while a text field has focus.
 
 ```typescript
 if (await device.isKeyboardShown()) {

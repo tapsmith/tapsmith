@@ -2343,9 +2343,18 @@ class CommandHandler {
             // there is nothing to dismiss (PILOT-792). A keyboard element alone
             // is not enough. With a hardware keyboard attached, iOS keeps the
             // software keyboard in the tree but parks it below the screen.
-            // A snapshot rather than app.keyboards.count, which waits for
+            // An element with no on-screen area may also still be sliding in
+            // (a call straight after a focusing tap on a slow runner), so it
+            // gets the moment hideKeyboard gives it before the answer is no.
+            // Snapshots rather than app.keyboards.count, which waits for
             // quiescence on Xcode 26. An unreadable tree reads as not shown.
-            return ["shown": keyboardPresence() == .onScreen]
+            let appearDeadline = Date(timeIntervalSinceNow: Self.keyboardAppearGrace)
+            var presence = keyboardPresence()
+            while presence == .offScreen, Date() < appearDeadline {
+                Thread.sleep(forTimeInterval: 0.15)
+                presence = keyboardPresence()
+            }
+            return ["shown": presence == .onScreen]
 
         case "hideKeyboard":
             // Check if keyboard is actually shown before attempting dismissal.
@@ -2374,7 +2383,7 @@ class CommandHandler {
             // keyboard element with no on-screen area yet may still be sliding
             // in (hideKeyboard right after a focusing tap on a slow runner):
             // wait for it rather than call it "nothing to dismiss".
-            let appearDeadline = Date(timeIntervalSinceNow: 1.5)
+            let appearDeadline = Date(timeIntervalSinceNow: Self.keyboardAppearGrace)
             while keyboardPresence() == .offScreen, Date() < appearDeadline {
                 Thread.sleep(forTimeInterval: 0.15)
             }
@@ -2593,6 +2602,10 @@ class CommandHandler {
         guard let deadline else { return wait }
         return max(0, min(wait, deadline.timeIntervalSinceNow))
     }
+
+    /// How long a keyboard element with no on-screen area gets to slide in
+    /// before isKeyboardShown and hideKeyboard treat it as not on screen.
+    private static let keyboardAppearGrace: TimeInterval = 1.5
 
     /// Set by `dismissKeyboard`: whether any strategy touched the screen.
     private var touchedScreen = false
