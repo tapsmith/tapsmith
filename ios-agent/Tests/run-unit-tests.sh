@@ -19,6 +19,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/OcclusionAnalyzerTests/main.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/Models/AgentError.swift \
@@ -43,6 +44,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   Tests/KeyboardDismissPlannerTests/main.swift \
   TapsmithAgent/KeyboardDismissPlanner.swift \
   TapsmithAgent/OcclusionAnalyzer.swift \
+  TapsmithAgent/CellFrames.swift \
   TapsmithAgent/NonAppElements.swift \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/Models/AgentError.swift \
@@ -116,6 +118,13 @@ xcrun swiftc -sdk "$SDK" \
   TapsmithAgent/TypingFocus.swift \
   -o "$OUT/typing-focus-tests"
 "$OUT/typing-focus-tests"
+
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/CellFramesTests/main.swift \
+  TapsmithAgent/CellFrames.swift \
+  -o "$OUT/cell-frames-tests"
+"$OUT/cell-frames-tests"
 
 xcrun swiftc -sdk "$SDK" \
   Tests/DoubleTapRouteTests/main.swift \

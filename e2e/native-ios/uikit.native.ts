@@ -60,15 +60,6 @@ describe("UIKit: table view", () => {
     await expect(uikitTable.selection).toHaveText("Selected: Row 3")
   })
 
-  // BUG PILOT-800: UITableView exposes every row; off-screen ones carry a
-  // placeholder frame inside the viewport, so they count as visible and
-  // scrollIntoView() never scrolls.
-  test.skip("scrollIntoView reaches a reused cell far down", async ({ uikitTable }) => {
-    await uikitTable.rowText(80).scrollIntoView({ maxScrolls: 30 })
-    await uikitTable.rowText(80).tap()
-    await expect(uikitTable.selection).toHaveText("Selected: Row 80")
-  })
-
   test("a full swipe left deletes a row", async ({ device, uikitTable }) => {
     const box = await uikitTable.rowText(2).boundingBox()
     if (!box) throw new Error("Row 2 has no bounds")
@@ -76,6 +67,34 @@ describe("UIKit: table view", () => {
     await device.dragXY({ x: 380, y }, { x: 20, y })
     await expect(uikitTable.rowText(2)).toBeHidden()
     await expect(uikitTable.rowText(3)).toBeVisible()
+  })
+
+  // UITableView exposes every row; one with no loaded cell reports its
+  // contents at a placeholder frame on screen (PILOT-800).
+  test("an off-screen row is not visible, and is placed below the screen", async ({ uikitTable }) => {
+    await expect(uikitTable.rowText(80)).toHaveCount(1)
+    await expect(uikitTable.rowText(80)).not.toBeVisible()
+    const first = await uikitTable.rowText(1).boundingBox()
+    const far = await uikitTable.rowText(80).boundingBox()
+    if (!first || !far) throw new Error("a row has no bounds")
+    expect(far.y).toBeGreaterThan(first.y + 70 * first.height)
+  })
+
+  test("tap() refuses an off-screen row instead of tapping its placeholder", async ({ uikitTable }) => {
+    const error = await uikitTable.rowText(80).tap({ timeout: 1_000 }).catch((err: unknown) => err)
+    expect(String(error)).toContain("is off-screen")
+    await expect(uikitTable.selection).toHaveText("Nothing selected")
+  })
+
+  // Last: it leaves the table scrolled.
+  test("scrollIntoView reaches a reused cell far down, and back up", async ({ uikitTable }) => {
+    await uikitTable.rowText(80).scrollIntoView({ maxScrolls: 30 })
+    await uikitTable.rowText(80).tap()
+    // Row 1 is now unloaded, above the screen; the selection label is the
+    // table's header, scrolled away with it.
+    await expect(uikitTable.rowText(1)).not.toBeVisible()
+    await uikitTable.rowText(1).scrollIntoView({ direction: "down", maxScrolls: 30 })
+    await expect(uikitTable.selection).toHaveText("Selected: Row 80")
   })
 })
 

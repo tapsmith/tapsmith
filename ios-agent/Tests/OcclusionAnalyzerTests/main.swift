@@ -462,6 +462,37 @@ checkKF("a web view is not a React Native scroll view: touched as is",
 
 check("off screen", analyzer(screenRows()).analyze(button("Gone", R(16, 900, 370, 56)), isHittable: false),
       .offScreen)
+
+// ─── Unloaded table rows (PILOT-800) ───
+// A plain UITableView as recorded on iOS 26: an unloaded row keeps its real
+// cell frame (below the screen) while its contents sit at a placeholder at
+// the table's origin, over the table header.
+let tableRows: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .table, "", "", R(0, 168, 402, 672)),
+    (3, .staticText, "Nothing selected", "", R(0, 168, 402, 44)),
+    (3, .cell, "", "", R(0, 212, 402, 53)),
+    (4, .staticText, "Row 1", "", R(20, 228, 44, 20)),
+    (4, .button, "chevron", "", R(371, 231, 11, 14)),
+    (3, .cell, "", "", R(0, 901, 402, 53)),
+    (4, .button, "chevron", "", R(0, 168, 10, 14)),
+    (4, .staticText, "Row 14", "", R(0, 168, 55, 20)),
+]
+let table = analyzer(tableRows)
+let row14 = OcclusionAnalyzer.Target(frame: R(0, 168, 55, 20), elementType: .staticText, label: "Row 14", identifier: "")
+check("an unloaded row's text, read live at its placeholder: off screen, not touched there",
+      table.analyze(row14, isHittable: false), .offScreen)
+check("…even if XCUITest were to call it hittable", table.analyze(row14, isHittable: true), .offScreen)
+let row1 = OcclusionAnalyzer.Target(frame: R(20, 228, 44, 20), elementType: .staticText, label: "Row 1", identifier: "")
+checkPoint("a loaded row's text is touched where it is", table.analyze(row1, isHittable: false), CGPoint(x: 42, y: 238))
+let header = OcclusionAnalyzer.Target(frame: R(0, 168, 402, 44), elementType: .staticText, label: "Nothing selected", identifier: "")
+checkPoint("placeholder contents do not cover what is really at the table's origin",
+           table.analyze(header, isHittable: false), CGPoint(x: 201, y: 190))
+if table.nodes[8].frame == R(0, 901, 402, 53) { print("ok   placeholder nodes are placed at their cell") } else {
+    failures += 1; print("FAIL placeholder nodes are placed at their cell: got \(table.nodes[8].frame)")
+}
+
 let piece = OcclusionAnalyzer.subtract(R(0, 50, 100, 10), from: R(0, 0, 100, 100))
 if piece == R(0, 0, 100, 50) { print("ok   subtract keeps the largest piece") } else {
     failures += 1; print("FAIL subtract keeps the largest piece: got \(piece)")

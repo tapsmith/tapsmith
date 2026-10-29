@@ -91,11 +91,35 @@ struct OcclusionAnalyzer {
     /// docked; the strip below it (globe / dictation row) belongs to it.
     static let dockedKeyboardSlack: CGFloat = 120
 
+    /// The nodes, with an unloaded table row's contents placed at their row
+    /// (`CellFrames`, PILOT-800): their snapshot frames are a placeholder on
+    /// screen, which would make them covers of whatever really is there.
     let nodes: [Node]
     let screen: CGRect
+    /// Each node's frame as the snapshot reported it — what a live read of
+    /// the target reports too, so the target is located by it.
+    private let snapshotFrames: [CGRect]
 
     init(nodes: [Node], screen: CGRect) {
-        self.nodes = nodes
+        var placed = nodes
+        // Pre-order: a parent is placed before its children. A node's
+        // context is the one its parent hands its children.
+        var childContexts: [CellFrames.Context] = []
+        childContexts.reserveCapacity(nodes.count)
+        for i in placed.indices {
+            let context = placed[i].parent.map { childContexts[$0] } ?? CellFrames.Context(viewport: screen)
+            let frame = CellFrames.effectiveFrame(of: nodes[i].frame, in: context)
+            if frame != nodes[i].frame {
+                let n = nodes[i]
+                placed[i] = Node(
+                    elementType: n.elementType, label: n.label, identifier: n.identifier, frame: frame,
+                    subtreeEnd: n.subtreeEnd, parent: n.parent, window: n.window
+                )
+            }
+            childContexts.append(CellFrames.childContext(of: nodes[i].elementType, frame: frame, in: context))
+        }
+        self.nodes = placed
+        self.snapshotFrames = nodes.map(\.frame)
         self.screen = screen
     }
 
@@ -138,6 +162,9 @@ struct OcclusionAnalyzer {
         }
         let targetIndex = locate(target)
         if targetIndex == nil, !target.isLive, !nodes.isEmpty { return .gone }
+        // A live read of an unloaded table row's content returns its
+        // placeholder frame, on screen; the row itself is not (PILOT-800).
+        if let t = targetIndex, nodes[t].frame != snapshotFrames[t] { return .offScreen }
         // Content scrolled past its scroll view's edge is clipped, whatever
         // is drawn there (a JS header is painted before the list, so the
         // painted-after check would not see it).
@@ -211,10 +238,13 @@ struct OcclusionAnalyzer {
     /// and whose type/label/identifier match where known. Deepest, because
     /// React Native often wraps an element in a same-frame, same-label parent
     /// — picking the parent would count the target itself as painted after.
+    /// A frame matches as the snapshot reported it (a live read) or as placed
+    /// (a find-time frame, which `CellFrames` placed the same way).
     func locate(_ target: Target) -> Int? {
         var match: Int?
         for (i, node) in nodes.enumerated() {
-            guard Self.framesMatch(node.frame, target.frame) else { continue }
+            guard Self.framesMatch(node.frame, target.frame) || Self.framesMatch(snapshotFrames[i], target.frame)
+            else { continue }
             if let t = target.elementType, node.elementType != t { continue }
             if let l = target.label, node.label != l { continue }
             if let id = target.identifier, node.identifier != id { continue }

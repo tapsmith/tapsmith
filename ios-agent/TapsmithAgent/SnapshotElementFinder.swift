@@ -156,10 +156,15 @@ class SnapshotElementFinder {
     }
 
     /// The snapshot as the string-keyed dictionary the match walk reads,
-    /// with accessibility traits annotated.
+    /// with accessibility traits annotated and unloaded table rows' contents
+    /// placed at their rows (`CellFrames`).
     private func matchableDict(of snapshot: XCUIElementSnapshot) -> [String: Any] {
         var snapshotDict = convertKeys(snapshot.dictionaryRepresentation)
         Self.annotateTraits(dict: &snapshotDict, snapshot: snapshot)
+        // After annotateTraits, which pairs nodes by their snapshot frames:
+        // an unloaded table row's contents report a placeholder frame on
+        // screen (PILOT-800).
+        CellFrames.placeDetachedNodes(in: &snapshotDict)
         return snapshotDict
     }
 
