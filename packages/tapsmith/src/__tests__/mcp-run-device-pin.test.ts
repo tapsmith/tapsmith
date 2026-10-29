@@ -117,6 +117,24 @@ describe('run_tests `device` in a headless MCP session', () => {
     expect(hoisted.resolved).toContainEqual({ platform: 'android', device: 'emulator-5560' });
   });
 
+  it('drops a device tool\'s pin when its device cannot be set up, so the next call can auto-pick', async () => {
+    writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
+    hoisted.failing.add('android');
+    const d = dispatcher();
+    await d.ensureDevicesReady({ retryFailedTargets: true, device: 'emulator-5560' });
+    expect(hoisted.resolved).toEqual([{ platform: 'android', device: 'emulator-5560' }]);
+
+    // The device comes good elsewhere; the session's next retry is free to find one.
+    hoisted.failing.clear();
+    (d as unknown as { _lastTargetRetryAt: number })._lastTargetRetryAt = 0;
+    await d.ensureDevicesReady({ retryFailedTargets: true });
+    expect(hoisted.resolved).toEqual([
+      { platform: 'android', device: 'emulator-5560' },
+      { platform: 'android', device: undefined },
+    ]);
+    expect(d.getSessionInfo().device).toBe('emulator-5556');
+  });
+
   it('leaves a later device tool\'s `device` to the tool, the target already chosen', async () => {
     writeProject('export default { platform: "android", package: "com.x", testMatch: ["**/*.test.ts"] }\n');
     const d = dispatcher();

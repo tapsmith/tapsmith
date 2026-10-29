@@ -368,10 +368,23 @@ describe('tapsmith_run_tests and files written mid-session', () => {
 
     for (const arg of [written, 'tests/new.tapsmith.ts']) {
       const out = text(await callRunTests(dispatcher, { files: [arg] }));
-      expect(out).toContain(`${arg} exists, but the config's testMatch does not select it`);
+      expect(out).toContain(`${arg} exists, but the config's testMatch (or testIgnore) leaves it out`);
       expect(out).toContain(configPath);
       expect(out).not.toMatch(/Paths may be absolute/);
     }
+  });
+
+  it('does not blame testMatch when the config failed to load', async () => {
+    const written = path.join(root, 'login.test.ts');
+    fs.writeFileSync(written, '');
+    const dispatcher = makeDispatcher({
+      resolveRequestedFiles: () => [],
+      runFiles: async () => ({ status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 }),
+      getSessionInfo: () => ({ timeout: 5000, retries: 0, projects: [], configError: 'SyntaxError: Unexpected token' }),
+    });
+    const out = text(await callRunTests(dispatcher, { files: [written] }));
+    expect(out).not.toContain('testMatch');
+    expect(out).toContain('matched no discovered test file');
   });
 
   it('keeps the path advice for an argument that names no file at all', async () => {
@@ -383,6 +396,6 @@ describe('tapsmith_run_tests and files written mid-session', () => {
     const out = text(await callRunTests(dispatcher, { files: ['tests/typo.test.ts'] }));
     expect(out).toContain('matched no discovered test file');
     expect(out).toMatch(/Paths may be absolute/);
-    expect(out).not.toContain('testMatch does not select');
+    expect(out).not.toContain('leaves it out');
   });
 });

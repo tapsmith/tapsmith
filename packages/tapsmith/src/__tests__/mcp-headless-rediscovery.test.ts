@@ -144,6 +144,24 @@ describe('headless MCP rediscovers test files (PILOT-836)', () => {
     expect(testNames(d.getTestTree())).toEqual(['fixed']);
   }, 60_000);
 
+  it('clears a load failure fixed in a module the test imports', async () => {
+    const helper = path.join(root, 'screens', 'cart.ts');
+    fs.mkdirSync(path.dirname(helper));
+    fs.writeFileSync(helper, 'throw new Error("broken screen object");\n');
+    const file = path.join(root, 'cart.test.ts');
+    fs.writeFileSync(file, `import ${JSON.stringify(helper)};\nimport { test } from ${JSON.stringify(SDK_ENTRY)};\ntest("adds an item", async () => {});\n`);
+    const d = dispatcher();
+    await d.refreshTestFiles();
+    expect(d.getDiscoveryErrors().map((e) => e.filePath)).toEqual([file]);
+
+    // Only the helper changes: the test file's own stamp does not move.
+    fs.writeFileSync(helper, 'export {};\n');
+    await d.refreshTestFiles();
+
+    expect(d.getDiscoveryErrors()).toEqual([]);
+    expect(testNames(d.getTestTree())).toEqual(['adds an item']);
+  }, 60_000);
+
   it('discovers the first file of a session that started with none', async () => {
     const d = dispatcher();
     await d.refreshTestFiles();

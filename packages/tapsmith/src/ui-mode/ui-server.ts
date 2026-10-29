@@ -93,6 +93,7 @@ import {
   isIgnoredDiscoveryWatchPath,
   matchesTestFile,
 } from '../test-file-discovery.js';
+import { filesToRediscover } from './ui-rediscovery.js';
 
 // ─── SPA paths ───
 
@@ -4208,7 +4209,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
    * gets round to it (PILOT-836). An MCP `run_tests` for a file the agent has
    * just written arrived inside the watcher's debounce — or before chokidar
    * reported the file at all — and was refused as matching nothing. Files the
-   * watcher has not reported yet are found by globbing; files gone from disk
+   * watcher has not reported yet are found by globbing (only those written
+   * since the session started: see `filesToRediscover`); files gone from disk
    * are dropped; everything pending is discovered before this returns.
    */
   async function refreshTestFilesNow(): Promise<void> {
@@ -4223,12 +4225,22 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       broadcastError(err);
       return;
     }
-    for (const file of globbed) {
-      if (!ctx.testFiles.includes(file) && !shouldIgnoreDiscoveryPath(file)) pendingDiscoveryFiles.add(file);
-    }
-    for (const file of ctx.testFiles) {
-      if (!globbed.has(file)) pendingDiscoveryFiles.add(file);
-    }
+    const queued = filesToRediscover({
+      globbed: [...globbed],
+      known: ctx.testFiles,
+      // The process's start, before the CLI globbed: a file written since then
+      // is one the watcher would have reported too.
+      since: performance.timeOrigin,
+      mtimeOf: (file) => {
+        try {
+          return fs.statSync(file).mtimeMs;
+        } catch {
+          return undefined;
+        }
+      },
+      isIgnored: shouldIgnoreDiscoveryPath,
+    });
+    for (const file of queued) pendingDiscoveryFiles.add(file);
     // A batch may be running; whatever it leaves pending, the next round takes.
     while (pendingDiscoveryFiles.size > 0 || discoveryBatch) {
       if (discoveryTimer) {

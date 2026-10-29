@@ -512,16 +512,18 @@ function buildNoTestsExecutedMessage(
   // The session has just synced with the disk (PILOT-836), so a file that is
   // there and still unmatched is one the config's testMatch leaves out — say
   // that, not "check the path", which sends the caller after the wrong thing.
-  const configPath = dispatcher.getSessionInfo().configPath;
+  // Not when the config failed to load, though: then the session has no test
+  // files at all, and its own note says why.
+  const { configPath, configError } = dispatcher.getSessionInfo();
   const lines: string[] = [];
   const excluded: string[] = [];
   for (const f of unmatched) {
-    if (existingFileFor(f, configPath)) excluded.push(f);
+    if (!configError && existingFileFor(f, configPath)) excluded.push(f);
     else lines.push(f);
   }
   const parts: string[] = [summary];
   if (excluded.length > 0) {
-    parts.push(excluded.map((f) => `${f} exists, but the config's testMatch does not select it, so the session never treats it as a test file.`).join('\n')
+    parts.push(excluded.map((f) => `${f} exists, but the config's testMatch (or testIgnore) leaves it out, so the session never treats it as a test file.`).join('\n')
       + `\nRename the file to match a testMatch pattern, or add a pattern for it in ${configPath ?? 'the Tapsmith config'} `
       + '(a config change takes effect when the MCP server restarts). tapsmith_session_info names the config in use.');
   }

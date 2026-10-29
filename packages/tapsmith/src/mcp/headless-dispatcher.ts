@@ -171,7 +171,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * A `device` to pin while the targets are first resolved: a `run_tests`
    * one (with its files), or a device tool's (none).
    */
-  private _pendingPin: { device: string; files?: string[]; project?: string } | null = null;
+  private _pendingPin: PendingPin | null = null;
 
   constructor(options?: { configFile?: string }) {
     this._configFile = options?.configFile;
@@ -804,7 +804,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     }
     // A device tool's `device` chooses the device while there is still a
     // choice to make; a `run_tests` pin already pending is left alone.
-    const pending = opts?.device && !this._pendingPin ? { device: opts.device, project: opts.project } : null;
+    const pending: PendingPin | null = opts?.device && !this._pendingPin ? { device: opts.device, project: opts.project } : null;
     if (pending) this._pendingPin = pending;
     this._devicesPromise = this._prepareDevices();
     try {
@@ -812,6 +812,12 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     } finally {
       this._devicesPromise = null;
       if (pending && this._pendingPin === pending) this._pendingPin = null;
+      // As `deviceChoiceError` does for a run: a device that could not be set
+      // up pins nothing. Kept, every later resolution retried the dead serial
+      // and the session never found the device that would have worked.
+      if (pending?.pinnedKey !== undefined && !this._targets.has(pending.pinnedKey)) {
+        this._devicePins.delete(pending.pinnedKey);
+      }
     }
   }
 
@@ -1036,6 +1042,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     // A device pinned in the config wins; `deviceChoiceError` says so.
     if (effective && !primaryDevicePin(effective) && this._canPinPrimary(effective, pin.device)) {
       this._devicePins.set(keys[0], pin.device);
+      pin.pinnedKey = keys[0];
     }
   }
 
@@ -1319,7 +1326,11 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       } catch { /* deleted since the glob */ }
     }));
     const files = globbed.files.filter((f) => stamps.has(f));
-    const changed = files.filter((f) => this._fileStamps.get(f) !== stamps.get(f));
+    // A file that failed to load is tried again every time, whatever its
+    // stamp: the fix is as likely to land in a module it imports (a screen
+    // object written alongside it) as in the file, and a discovery that timed
+    // out under load deserves another go. Such files are few.
+    const changed = files.filter((f) => this._fileStamps.get(f) !== stamps.get(f) || this._discoveryErrors.has(f));
     const setChanged = files.length !== this._testFiles.length || files.some((f, i) => this._testFiles[i] !== f);
     if (!setChanged && changed.length === 0) return;
 
@@ -1839,6 +1850,16 @@ export function resultEntryKey(
   fullName: string,
 ): string {
   return `${projectName ?? ''}::${filePath}::${fullName}`;
+}
+
+/** A `device` waiting to pin a target as the targets are first resolved. */
+interface PendingPin {
+  device: string
+  /** A `run_tests` pin's files; absent for a device tool's. */
+  files?: string[]
+  project?: string
+  /** The target it pinned, once `_applyPendingPin` has. */
+  pinnedKey?: string
 }
 
 interface WatchedEntry {
