@@ -885,30 +885,42 @@ class CommandHandler {
     /// is then planned like any other, covers and all. nil for a UISwitch,
     /// which holds no switch, and for any other element.
     ///
-    /// The knob is the unlabelled switch whose centre lies inside the
-    /// Toggle's frame — live when the Toggle can be read, else as found — so
-    /// a Toggle found by a locator that keeps no live element (`getByLabel`)
-    /// is handled too.
+    /// The knob is the switch inside the live Toggle. A Toggle found by a
+    /// locator that keeps no live element (`getByLabel`) is matched to the
+    /// unlabelled switch whose centre lies inside its frame as found.
     ///
-    /// **Cost**, for such a Toggle only: one query, a frame read per
-    /// unlabelled switch on screen, and the knob's property reads
-    /// (`cacheElement`).
+    /// **Cost**, for such a Toggle only: a query for the knob and one
+    /// snapshot of it; without a live Toggle, a frame read per unlabelled
+    /// switch on screen until the knob.
     private func switchKnob(of element: ElementInfo) -> ElementInfo? {
         guard snapshotFinder.getIdentity(element.elementId)?.holdsSwitchPart == true else { return nil }
-        let b = element.bounds
-        var frame = CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
-        if let outer = try? getXCUIElement(element.elementId), outer.exists { frame = outer.frame }
         let switchTypes = [XCUIElement.ElementType.switch, .toggle].map { NSNumber(value: $0.rawValue) }
+        if let outer = try? getXCUIElement(element.elementId), outer.exists {
+            let knob = outer.descendants(matching: .any)
+                .matching(NSPredicate(format: "elementType IN %@", switchTypes))
+                .firstMatch
+            guard let snap = try? knob.snapshot(), Self.isUsable(snap.frame) else { return nil }
+            return snapshotFinder.cachePart(knob, of: element, frame: snap.frame, elementType: snap.elementType)
+        }
+        let b = element.bounds
+        let frame = CGRect(x: b.left, y: b.top, width: b.width, height: b.height)
         let knobs = app.descendants(matching: .any)
             .matching(NSPredicate(format: "elementType IN %@ AND label == ''", switchTypes))
-        for knob in knobs.allElementsBoundByIndex where knob.exists {
-            let knobFrame = knob.frame
+        for knob in knobs.allElementsBoundByIndex {
+            guard let snap = try? knob.snapshot(), Self.isUsable(snap.frame) else { continue }
             // Not the Toggle itself (one with an empty label).
-            if knobFrame.width < frame.width, frame.contains(CGPoint(x: knobFrame.midX, y: knobFrame.midY)) {
-                return snapshotFinder.cacheElement(knob)
+            if snap.frame.width < frame.width, frame.contains(CGPoint(x: snap.frame.midX, y: snap.frame.midY)) {
+                return snapshotFinder.cachePart(knob, of: element, frame: snap.frame, elementType: snap.elementType)
             }
         }
         return nil
+    }
+
+    /// A frame that can be turned into whole-point bounds (Int of a null or
+    /// infinite rect's origin is a fatal error).
+    private static func isUsable(_ frame: CGRect) -> Bool {
+        !frame.isNull && !frame.isInfinite && frame.width > 0 && frame.height > 0
+            && abs(frame.origin.x) < 100_000 && abs(frame.origin.y) < 100_000
     }
 
     /// Double-tap a resolved element. Prefer coordinate synthesis: it encodes

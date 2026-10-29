@@ -578,6 +578,47 @@ class SnapshotElementFinder {
         return toElementInfo(elem, elementId: elementId)
     }
 
+    /// Cache `element`, the part of the element `info` describes that an
+    /// action is delivered to in its place — a SwiftUI Toggle's knob
+    /// (NonAppElements.isSwitchPart, PILOT-790) — at `frame`. It reports the
+    /// whole element's state, so nothing more is read from the device.
+    func cachePart(
+        _ element: XCUIElement, of info: ElementInfo, frame: CGRect, elementType: XCUIElement.ElementType
+    ) -> ElementInfo {
+        let elementId = UUID().uuidString
+        let bounds = ElementBounds(
+            left: Int(frame.origin.x), top: Int(frame.origin.y),
+            right: Int(frame.origin.x + frame.width), bottom: Int(frame.origin.y + frame.height)
+        )
+        lock.lock()
+        elementCache[elementId] = element
+        boundsCache[elementId] = frame
+        identityCache[elementId] = CachedIdentity(elementType: elementType, label: "", identifier: "", inTabBar: false)
+        cacheOrder.append(elementId)
+        pruneCacheLocked()
+        lock.unlock()
+        return ElementInfo(
+            elementId: elementId,
+            className: info.className,
+            text: info.text,
+            contentDescription: info.contentDescription,
+            resourceId: info.resourceId,
+            hint: info.hint,
+            bounds: bounds,
+            isEnabled: info.isEnabled,
+            isChecked: info.isChecked,
+            isFocused: info.isFocused,
+            isClickable: info.isClickable,
+            isFocusable: info.isFocusable,
+            isScrollable: info.isScrollable,
+            isVisible: info.isVisible,
+            isSelected: info.isSelected,
+            childCount: 0,
+            role: info.role,
+            viewportRatio: computeViewportRatio(bounds, screenSize: screenSize)
+        )
+    }
+
     /// Cache an XCUIElement and return its ElementInfo.
     func cacheElement(_ element: XCUIElement) -> ElementInfo {
         let elementId = UUID().uuidString
