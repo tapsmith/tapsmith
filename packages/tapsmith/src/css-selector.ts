@@ -1,5 +1,5 @@
 /**
- * CSS selectors for WebView locator suggestions (PILOT-666). An id or class
+ * CSS selectors for WebView locator suggestions. An id or class
  * is only safe after `#` or `.` when it is a plain CSS identifier: `#1st` and
  * `#:r1:` (React's useId) throw in querySelectorAll, and `#order.total`
  * selects something else. Any other id is suggested as an attribute selector.

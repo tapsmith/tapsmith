@@ -103,9 +103,9 @@ function isTapsmithCloneOf(name: string, source: string): boolean {
  * The booted simulators a run may adopt for `simulator: <configured>`: those
  * whose name or UDID is the configured value, and Tapsmith's own clones of it
  * (`<configured> (Tapsmith Worker N)`, the names `provisionSimulators` gives
- * them) (PILOT-511). Any other booted simulator is left alone — it may be one
+ * them). Any other booted simulator is left alone — it may be one
  * the developer is using — and so is one another live Tapsmith session has
- * claimed (PILOT-381).
+ * claimed.
  *
  * Only simulators on one iOS runtime are returned, because the agent's
  * xctestrun is OS-version-specific (one built for iOS 26.4 fails on 26.1):
@@ -310,7 +310,7 @@ const SIMCTL_APP_NOT_INSTALLED_EXIT = 2;
  *
  * Done here rather than only in the session: on a hosted CI runner a freshly
  * installed app's first launch was slow enough that installing it right
- * before the agent started pushed the agent past its startup bound (PILOT-496).
+ * before the agent started pushed the agent past its startup bound.
  */
 export function installAppIfAbsent(
   udid: string,

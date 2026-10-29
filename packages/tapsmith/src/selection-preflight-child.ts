@@ -1,5 +1,5 @@
 /**
- * Child process for `tapsmith test`'s selection check (PILOT-553).
+ * Child process for `tapsmith test`'s selection check.
  *
  * Imports each test file to read its test names — no test body runs — and
  * sends them back over IPC. Out of the CLI's process so a test file's

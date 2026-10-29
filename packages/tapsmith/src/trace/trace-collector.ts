@@ -210,7 +210,7 @@ export function extractStack(stack: string): SourceLocation[] {
 }
 
 /**
- * The stack lines worth showing a user under a failure (PILOT-841): every
+ * The stack lines worth showing a user under a failure: every
  * frame except Tapsmith's own and Node's internals, and those with no file
  * at all (`at new Promise (<anonymous>)`). Third-party dependency frames stay,
  * as in Playwright's filtered stacks — only the framework hides itself. Lines

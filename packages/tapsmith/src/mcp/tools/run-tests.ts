@@ -69,7 +69,7 @@ export function stdioTestArgs(opts: { files: string[]; testFilter?: string; proj
 const LISTED_MISSED_LOCATORS = 3;
 
 /**
- * The step an agent should take when failures are locator misses (PILOT-849),
+ * The step an agent should take when failures are locator misses,
  * or undefined. A native miss is told by the sentence every one ends with
  * (locator-miss-hint.ts); the locator is the one its first sentence names.
  */

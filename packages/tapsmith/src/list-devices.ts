@@ -60,7 +60,7 @@ export interface DeviceRow {
    * pair, then Developer Mode, then DDI). */
   blockers: string[]
   /**
-   * The live Tapsmith session that has claimed this device (PILOT-381), or
+   * The live Tapsmith session that has claimed this device, or
    * null when none has. A claimed device is refused to every other session.
    */
   inUseBy: DeviceHolder | null
@@ -487,7 +487,7 @@ export interface ListDevicesDeps {
   fetchDevices: () => Promise<DeviceInfoProto[]>;
   /** devicectl + USB cross-reference for physical iOS devices. */
   enrich: () => { physical: PhysicalDeviceInfo[]; usbAttached: Set<string> };
-  /** Live claims of other Tapsmith sessions, by device (PILOT-381). */
+  /** Live claims of other Tapsmith sessions, by device. */
   claims: () => ReadonlyMap<string, DeviceClaim>;
   /** Why each platform cannot run here (`androidToolchainBlocker` / `iosToolchainBlocker`); read only when nothing was found. */
   toolchain: () => ToolchainBlockers;

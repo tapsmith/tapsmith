@@ -8,12 +8,12 @@ import { Minimatch, minimatch } from 'minimatch';
  * dependency, build and tooling trees of a JS / React Native / Expo project.
  * They are never tests, and an Expo app's `ios/Pods` and `ios/build` alone hold
  * tens of thousands of files — watching them kept UI mode unresponsive for
- * minutes after it said it was ready (PILOT-713). `ios/Pods` also symlinks
+ * minutes after it said it was ready. `ios/Pods` also symlinks
  * headers back into `node_modules`, which a watcher would otherwise follow.
  *
  * Build directories are anchored under `ios/` and `android/`, so a `build`
  * directory elsewhere (one holding tests, say) is still searched. A native
- * project builds at its root (PILOT-832), so the trees Gradle and
+ * project builds at its root, so the trees Gradle and
  * `xcodebuild -derivedDataPath build` write inside any `build/` are skipped
  * by name instead.
  */

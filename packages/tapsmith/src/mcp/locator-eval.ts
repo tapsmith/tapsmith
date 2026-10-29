@@ -1,6 +1,5 @@
 /**
- * Locator strings from MCP clients, built by the SDK's own locator builder
- * (PILOT-848).
+ * Locator strings from MCP clients, built by the SDK's own locator builder.
  *
  * `device.getByRole("list").getByText("Row 2")` sent to an MCP tool becomes
  * exactly the handle a test writing that line gets: the string is parsed

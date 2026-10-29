@@ -74,7 +74,7 @@ interface DaemonConnection {
   activeDevice?: string
   /**
    * The device discovery claimed for this session because the adopted daemon
-   * was already pointed at it (PILOT-381) — given back with the connection.
+   * was already pointed at it — given back with the connection.
    */
   claimedDevice?: string
   /**
@@ -131,7 +131,7 @@ export function configureMcpConnection(options?: {
   uiMode?: boolean
   /**
    * The UI server's own answer to "which daemons and devices are this
-   * session's", read in-process by its MCP endpoint (PILOT-564). Without it a
+   * session's", read in-process by its MCP endpoint. Without it a
    * UI-mode endpoint asks over HTTP via the per-project port file, which a
    * second UI session in the project overwrites.
    */
@@ -587,11 +587,11 @@ export function mergeDeviceLists(
  * tool, and `prepareTarget` selects the device and starts the agent then — on
  * the device the run named, if it named one. Selecting here first put an
  * agent on whichever device looked best, another session's as likely as not,
- * on nothing more than a `list_devices` (PILOT-342).
+ * on nothing more than a `list_devices`.
  *
  * That holds with no config file too (the session runs on the defaults, which
  * still resolve targets), and with one that fails to load: the load error is
- * the session's answer, not a reason to claim a device (PILOT-262).
+ * the session's answer, not a reason to claim a device.
  *
  * @internal — exported for unit testing.
  */
@@ -1496,7 +1496,7 @@ export function noDeviceMessage(
   /**
    * Attached devices adb cannot use, with their adb state (the daemon's
    * `unusableDevices`): a pin among them is attached, not missing, and any of
-   * them is the likeliest reason nothing is available (PILOT-457).
+   * them is the likeliest reason nothing is available.
    */
   unusable: readonly AdbStateEntry[] = [],
 ): string {
@@ -2422,9 +2422,9 @@ async function startAgentFromConfig(
  * (`iosXctestrun` / `TAPSMITH_IOS_XCTESTRUN`) or a physical device resolves
  * exactly like every test run path (`resolveAgentArtifacts`): a missing
  * hand-set file is refused, and a physical device gets the device build — a
- * checkout's or the npm install's — instead of a simulator one (PILOT-264).
+ * checkout's or the npm install's — instead of a simulator one.
  * A simulator with nothing set resolves like a test run too, building the
- * agent when nothing current exists (a first run, an upgrade — PILOT-485 —
+ * agent when nothing current exists (a first run, a Tapsmith upgrade
  * or an Xcode update), with its progress logged to stderr: stdout is the
  * stdio MCP protocol channel. The build holds the tool call until it ends.
  * With no device known (discovery recovering an orphaned daemon's agent,
@@ -2507,7 +2507,7 @@ export function closeAllClients(): void {
 
 /**
  * `setDevice`, except that the daemon's "not found" for a phone devicectl
- * only remembers is thrown as the not-connected error (PILOT-386). Any other
+ * only remembers is thrown as the not-connected error. Any other
  * refusal (`success: false`) is left as before: not thrown here.
  * Exported for tests.
  */

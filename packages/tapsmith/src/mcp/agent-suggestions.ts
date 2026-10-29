@@ -1,13 +1,12 @@
 /**
- * Locator suggestions validated by the device agent (PILOT-848).
+ * Locator suggestions validated by the device agent.
  *
  * Candidates are still generated here from the hierarchy dump, but whether a
  * candidate matches, and how many times, is decided by the agent's own
  * matching — the code a test resolves locators with — through one
  * evaluateSelectors batch per screen. A candidate is offered only when the
  * agent resolves it to the node it is attached to, so a suggestion can't
- * drift from runtime the way the TypeScript re-implementation did
- * (PILOT-833).
+ * drift from runtime the way the TypeScript re-implementation did.
  */
 
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';

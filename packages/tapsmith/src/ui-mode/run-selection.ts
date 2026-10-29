@@ -1,5 +1,5 @@
 /**
- * The tests a filtered "Run all" runs (PILOT-729).
+ * The tests a filtered "Run all" runs.
  *
  * Playwright's UI mode runs only the tests visible in the tree when a filter is
  * applied. The client derives that set from the tree it is showing and sends it

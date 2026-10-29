@@ -175,7 +175,7 @@ export interface TestDispatcher {
    * Why `run_tests` cannot run `files` on `device` (a serial or a group
    * member's name), or `null` when it can. Asked before the run so a `device`
    * the dispatcher cannot honour is refused rather than ignored — ignoring it
-   * ran the tests on another session's device (PILOT-342). The headless
+   * ran the tests on another session's device. The headless
    * dispatcher may pin an unresolved target to `device` while answering.
    * Required, like `resolveDeviceName`.
    */

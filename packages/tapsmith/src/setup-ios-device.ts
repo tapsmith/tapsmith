@@ -349,7 +349,7 @@ const CONNECT_STEPS = [
  * Check connected physical devices and their pairing / DDI / Developer Mode
  * state. devicectl also lists devices this Mac only remembers (unplugged, or
  * paired with another Mac); those are returned as `notConnected` and never
- * count toward the verdict (PILOT-386).
+ * count toward the verdict.
  */
 export function checkDeviceConnection(
   listed: PhysicalDeviceInfo[] = listPhysicalDevices(),
@@ -426,7 +426,7 @@ function printDeviceStatus(devices: PhysicalDeviceInfo[]): void {
 /**
  * Where network capture goes from here, printed on every exit: this device's
  * own capture setup, and the simulator track for a user who is in the wrong
- * place (PILOT-271).
+ * place.
  */
 export function networkCaptureNextSteps(): string[] {
   return [

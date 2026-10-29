@@ -162,7 +162,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   /** Per-project serialized configs handed to workers, built on first use. */
   private _projectConfigs = new Map<string, SerializedConfig>();
   /**
-   * The device a `run_tests` call pinned each target to (PILOT-342). Kept for
+   * The device a `run_tests` call pinned each target to. Kept for
    * the session's life, so a target resolved again (its daemon died, it had
    * no device) comes back on the same device.
    */
@@ -802,8 +802,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * Only what needs a device calls this — runs and device tools. Listing tests
    * or reading session info used to resolve every target too, auto-picking a
    * device (another session's, as likely as not) before a `run_tests` could
-   * name one, and the documented flow starts with `tapsmith_list_tests`
-   * (PILOT-342).
+   * name one, and the documented flow starts with `tapsmith_list_tests`.
    */
   async ensureDevicesReady(opts?: { retryFailedTargets?: boolean; project?: string; device?: string }): Promise<void> {
     if (this._devicesReady) {

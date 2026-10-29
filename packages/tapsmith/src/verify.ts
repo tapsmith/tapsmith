@@ -128,7 +128,7 @@ export function noTestsRanError(
 /**
  * The NO_TESTS_RAN error for a run that refused to start because a grep in the
  * config selects none of the file's tests — `tapsmith test` checks that before
- * any device work and writes no report (PILOT-553) — from its stderr; else
+ * any device work and writes no report — from its stderr; else
  * undefined. Without captured stderr (verify without --json inherits it) the
  * run's own message has already reached the user.
  */
@@ -212,7 +212,7 @@ function emitError(json: boolean, code: string, message: string, fix?: string): 
 
 /**
  * The fix for a config that could not be loaded: the install command when
- * the project lacks Tapsmith itself (PILOT-551), else the config.
+ * the project lacks Tapsmith itself, else the config.
  */
 export function configLoadFix(err: unknown): string {
   if (isTapsmithNotInstalledError(err)) return `Run: ${err.installCommand.display}`;

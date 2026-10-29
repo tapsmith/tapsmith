@@ -165,7 +165,7 @@ networksetup -setwebproxystate Wi-Fi off
 networksetup -setsecurewebproxystate Wi-Fi off
 ```
 
-You can also remove the (no-longer-used) legacy sudoers file from pre-PILOT-182 versions:
+You can also remove the (no-longer-used) legacy sudoers file that older Tapsmith versions installed:
 
 ```sh
 sudo rm /etc/sudoers.d/zzz-tapsmith-networksetup

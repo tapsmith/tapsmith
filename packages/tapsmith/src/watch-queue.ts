@@ -2,8 +2,6 @@
  * Run queue and keypress mapping for watch mode.
  *
  * Extracted from watch.ts for independent unit testing.
- *
- * @see PILOT-120
  */
 
 // ─── Keypress mapping ───
@@ -13,7 +11,7 @@ export type WatchAction = 'run-all' | 'run-failed' | 'rerun' | 'quit'
 /**
  * The keys watch mode lists after each run, in order. docs/watch-mode.md's
  * keyboard table carries the same text (a unit test holds them together:
- * they had drifted apart, PILOT-569).
+ * they had drifted apart).
  */
 export const WATCH_KEYS: ReadonlyArray<{ key: string; action: string }> = [
   { key: 'a', action: 'run all test files' },

@@ -1,5 +1,5 @@
 /**
- * Renderers for the action-progress channel (PILOT-232).
+ * Renderers for the action-progress channel.
  *
  * `createActionProgressMessenger` holds the shared timing policy: a start
  * message only fires if the action is still running after `startDelayMs`

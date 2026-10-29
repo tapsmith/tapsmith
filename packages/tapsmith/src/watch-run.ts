@@ -5,8 +5,6 @@
  * already-running daemon(s), resets the app, runs a single test file, and
  * streams results back to the parent via IPC. Exits after completion so
  * the next run gets a fresh ESM module cache.
- *
- * @see PILOT-120
  */
 
 import { runTestFile, collectResults, type RunDevice } from './runner.js';
@@ -70,8 +68,7 @@ export interface WatchRunMessage {
   /**
    * The config's grep filters for this file's project, root and project.
    * Required, not read from `config`: the root's alone left a project's
-   * `grep` / `grepInvert` unapplied in watch mode and headless MCP runs
-   * (PILOT-730).
+   * `grep` / `grepInvert` unapplied in watch mode and headless MCP runs.
    */
   grep: SerializedGrepFilters
   /**

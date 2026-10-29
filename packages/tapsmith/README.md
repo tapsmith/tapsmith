@@ -62,7 +62,7 @@ React Native and Expo). If something is missing, `npx tapsmith doctor` checks yo
 suggests a fix for each problem.
 
 With Yarn, run the CLI as `yarn tapsmith`; with pnpm, `pnpm exec tapsmith`. pnpm 11+ and Yarn
-Plug'n'Play each need one setting first: see [Installation](https://tapsmith.dev/getting-started/#installation).
+Plug'n'Play each need one setting first: see [Package manager notes](https://tapsmith.dev/getting-started/#package-manager-notes).
 
 ## Requirements
 

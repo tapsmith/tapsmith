@@ -1,5 +1,5 @@
 /**
- * XML entity decoding for UI hierarchy dumps (PILOT-658).
+ * XML entity decoding for UI hierarchy dumps.
  *
  * Every hierarchy producer — the stock UIAutomator dump (which also writes a
  * newline as `&#10;`), the Android and iOS agents, and the WebView DOM walker —

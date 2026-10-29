@@ -60,7 +60,7 @@ export interface BoundingBox {
  * also the budget of each read the action and probe loops issue (see
  * {@link tickBudget}); `waitFor` and the assertion poller keep their own,
  * deliberately longer, 500 ms read budget. One constant, so the cadences
- * cannot drift apart again (PILOT-345 found it hand-copied in seven places).
+ * cannot drift apart again (it was once hand-copied in seven places).
  * @internal
  */
 export const POLL_INTERVAL_MS = 250;
@@ -144,7 +144,7 @@ interface ElementHandleOptions {
    * Parent scope for a `getBy*`/`locator()` call made on a handle (e.g.
    * `list.getByText('Row')`, `dialog.first().getByRole('button')`). The
    * parent is resolved to concrete element(s) and the child is kept when its
-   * centre lies inside one of them (see inScope, PILOT-850): the agents do
+   * centre lies inside one of them (see inScope): the agents do
    * not scope by a nested parent Selector.
    */
   scopeParent?: ElementHandle;
@@ -156,8 +156,8 @@ interface ElementHandleOptions {
   doubleTapInterval?: number;
   /**
    * The device's platform, for failure hints that only hold on one
-   * (`iosUnnamedRoleMissHint`, PILOT-718), and for a chained getter's iOS-only
-   * parent fallback (scopeToParents, PILOT-850). Absent on handles built
+   * (`iosUnnamedRoleMissHint`), and for a chained getter's iOS-only
+   * parent fallback (scopeToParents). Absent on handles built
    * outside a Device, which then get neither.
    */
   platform?: Platform;
@@ -559,7 +559,7 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
 
 /** @internal — Build the Playwright-style strict mode violation error.
  *
- * `options` lets non-native surfaces (WebView locators, PILOT-227) reuse the
+ * `options` lets non-native surfaces (WebView locators) reuse the
  * same message format: `totalCount` when `elements` is a truncated sample of
  * a larger match set, and `suggest` to override the per-element unambiguous
  * locator suggestion (the default suggests native `device.getBy*` locators).
@@ -601,7 +601,7 @@ export function buildStrictModeViolationError(
  * carrying the accessibility attributes (testID, traits) and an inner
  * StaticText child with the same label and pixel-identical bounds. Acting on
  * either taps the same point, so treating them as distinct matches would
- * raise false strict-mode violations (PILOT-226). Only elements with
+ * raise false strict-mode violations. Only elements with
  * identical text AND identical non-degenerate bounds are collapsed —
  * distinct elements that merely overlap keep their own entries. Keeps the
  * first occurrence (document order — the attribute-carrying parent).
@@ -643,7 +643,7 @@ function hasUsableGeometry(el: ElementInfo): boolean {
  * never shares an id. Anything that combines two reads — `and()` intersects
  * its operands, `or()` de-duplicates their union — has to key on what IS
  * stable within one hierarchy: the element's bounds and text, the same "same
- * visual target" notion `collapseSameTargetDuplicates` uses (PILOT-349).
+ * visual target" notion `collapseSameTargetDuplicates` uses.
  *
  * An element without usable geometry — no bounds, or a zero-size rect — has
  * no cross-read identity and keys by its per-read id, so it only ever matches
@@ -655,7 +655,7 @@ function hasUsableGeometry(el: ElementInfo): boolean {
  * unions that lose members. A clipped element has nothing to lose by being
  * unmatchable across reads: `toBeVisible` is false either way,
  * `scrollIntoView` treats a miss as "keep scrolling", and a tap cannot land
- * on it. Same rule as the collapser (PILOT-226), for the same reason.
+ * on it. Same rule as the collapser, for the same reason.
  *
  * @internal
  */
@@ -790,8 +790,7 @@ const MIN_ACTION_BUDGET_MS = 1000;
  * @internal — The time budget for each dispatch of one action, pinned to a
  * deadline that starts at the first dispatch (not when the action is set up:
  * a traced action captures the screen in between). The agent can spend a
- * dispatch's whole budget waiting out a covered target (PILOT-223,
- * PILOT-362), so a stale-element retry — or setChecked's re-tap — must get
+ * dispatch's whole budget waiting out a covered target, so a stale-element retry — or setChecked's re-tap — must get
  * what is left, not the full budget again. A zero budget (the explicit
  * no-wait timeout) stays zero; a late retry is floored at
  * `MIN_ACTION_BUDGET_MS`.
@@ -858,9 +857,9 @@ export class ElementHandle {
 
   /**
    * Locate a descendant by visible text. Case-insensitive substring match by
-   * default, as in Playwright (PILOT-522); pass `{ exact: true }` for a
+   * default, as in Playwright; pass `{ exact: true }` for a
    * case-sensitive, whole-text match, or a RegExp to test the element's
-   * text with (PILOT-520).
+   * text with.
    */
   getByText(text: string | RegExp, options?: { exact?: boolean }): ElementHandle {
     return this._scoped(options?.exact ? _text(text) : _textContains(text));
@@ -916,8 +915,7 @@ export class ElementHandle {
    * {@link inScope}). Every parent goes this
    * way, modified or not: the agents scope a find only by a resolved element,
    * never by a nested parent selector, so a plain parent sent as one was
-   * silently ignored and the child matched across the whole screen
-   * (PILOT-850).
+   * silently ignored and the child matched across the whole screen.
    */
   private _scoped(child: Selector): ElementHandle {
     return new ElementHandle(this._client, child, this._timeoutMs, {
@@ -1206,8 +1204,8 @@ export class ElementHandle {
    * A positional parent is resolved live by index, like every reader on it:
    * re-identifying a previously seen row in a fresh read has no reliable key —
    * element ids go stale, bounds move with any layout shift, text mutates and
-   * testIDs repeat — so every "smarter" match has a silent wrong-row failure
-   * (PILOT-346). A missing or out-of-range parent resolves to an empty scope
+   * testIDs repeat — so every "smarter" match has a silent wrong-row failure.
+   * A missing or out-of-range parent resolves to an empty scope
    * (no children in scope) rather than throwing — so `count()`/`exists()` and
    * absence assertions on a scoped handle report 0/false/empty like
    * Playwright, instead of surfacing the parent's "not found" error.
@@ -1293,7 +1291,7 @@ export class ElementHandle {
   /**
    * @internal — Resolve to a single target element, respecting nth index.
    *
-   * Strict mode (PILOT-226): without a positional modifier, resolving to
+   * Strict mode: without a positional modifier, resolving to
    * more than one element is an error — never a silent first-match.
    */
   private async _resolveOne(): Promise<ElementInfo> {
@@ -1333,7 +1331,7 @@ export class ElementHandle {
    * @internal — The Selector this locator sends the agent as it is, or
    * undefined when it carries anything a Selector cannot hold (a position,
    * filter, and/or, or a parent scope). MCP snapshot suggestions are checked
-   * by sending such selectors in one batch (PILOT-848).
+   * by sending such selectors in one batch.
    */
   _plainSelector(): Selector | undefined {
     const o = this._options;
@@ -1344,8 +1342,8 @@ export class ElementHandle {
 
   /**
    * @internal — What this locator matches right now, without waiting for a
-   * match, read the way `count()` reads it (a stale snapshot is re-read) (MCP `tapsmith_test_locator`,
-   * PILOT-848). `total` is the matches before a positional index narrowed
+   * match, read the way `count()` reads it (a stale snapshot is re-read) (MCP `tapsmith_test_locator`).
+   * `total` is the matches before a positional index narrowed
    * them (equal to `matches.length` without one); `positional` says whether
    * one did — such a locator is exempt from strict mode.
    */
@@ -1412,9 +1410,9 @@ export class ElementHandle {
   /**
    * @internal — The platform hint a miss carries, as ". On iOS …" to append
    * to the failure message, or '': on iOS for an unnamed `getByRole()` of a
-   * role React Native publishes nothing for there (PILOT-718), on Android
+   * role React Native publishes nothing for there, on Android
    * for a `getByTestId()`, which a Jetpack Compose testTag reaches only with
-   * testTagsAsResourceId (PILOT-828). Not for and()/or(): the miss may be the
+   * testTagsAsResourceId. Not for and()/or(): the miss may be the
    * other operand's. Not after a `positionalDetail` either: the locator did
    * match, only not at that index.
    */
@@ -1426,7 +1424,7 @@ export class ElementHandle {
 
   /**
    * @internal — Everything a not-found message says after its first
-   * sentence, as ". …" to append to it (PILOT-849): the locators that do
+   * sentence, as ". …" to append to it: the locators that do
    * match the same words on screen now (asked of the device agent, for an
    * unmodified native locator), then `hints` (by default the platform hint,
    * {@link _missHint}), then where to find a locator that matches.
@@ -1624,7 +1622,7 @@ export class ElementHandle {
    * in this file reads through — action auto-wait (`_strictResolve`,
    * `_waitForEnabled`), the visibility probes (`_probeOnce`) and
    * `scrollIntoView`'s probe and stabilisation — so they cannot disagree
-   * about what a tick meant. (PILOT-345: the scroll probe read the raw
+   * about what a tick meant. (The scroll probe once read the raw
    * selector and ignored filter/and/or/scope, so it judged the scroll against
    * the wrong element.)
    *
@@ -1679,7 +1677,7 @@ export class ElementHandle {
   /**
    * @internal — One bounded, modifier-aware, NON-STRICT read of this handle's
    * current matches, classified for a poll loop: the presence primitive behind
-   * `exists()` (PILOT-344). Where {@link _resolveTick} resolves the single
+   * `exists()`. Where {@link _resolveTick} resolves the single
    * target and throws on an ambiguous selector, this resolves every match
    * (after the positional modifier) and answers `found` when there is at
    * least one — `exists()` is a multi-element query like `count()` and
@@ -1700,13 +1698,13 @@ export class ElementHandle {
     }
   }
 
-  /** @internal — This locator with another timeout (MCP actions, PILOT-848). */
+  /** @internal — This locator with another timeout (MCP actions). */
   _withTimeout(timeoutMs: number): ElementHandle {
     return ElementHandle._cloneWithTimeout(this, timeoutMs);
   }
 
   /**
-   * @internal — Check a public method's options (PILOT-840) and return the
+   * @internal — Check a public method's options and return the
    * handle the call should run on: `this`, or a copy re-timed to the options'
    * `timeout` when one was given. A method that gets a copy back calls itself
    * on it without the options, so the per-call timeout bounds every wait the
@@ -2044,7 +2042,7 @@ export class ElementHandle {
    * Returns whether the element exists in the UI hierarchy **right now** —
    * attached, visible or not.
    *
-   * Does **not** wait for the element to appear (PILOT-344): like a Playwright
+   * Does **not** wait for the element to appear: like a Playwright
    * presence check (Playwright has no `exists()`; `locator.count() > 0` is the
    * idiom), it reads the current hierarchy and answers `false` without
    * waiting for the element when nothing matches, so it is safe to branch on presence
@@ -2144,7 +2142,7 @@ export class ElementHandle {
   }
 
   /**
-   * Return the number of elements the locator matches (PILOT-14). Every
+   * Return the number of elements the locator matches. Every
    * modifier applies — filter/and/or/scope and the positional index — so
    * `first().count()` is 1 or 0, like Playwright. Always a live read: on a
    * handle from `all()` (a plain `nth(i)` locator) it is 1 while a row is at
@@ -2169,12 +2167,12 @@ export class ElementHandle {
   }
 
   /**
-   * Return an array of ElementHandles, one for each matching element (PILOT-13).
+   * Return an array of ElementHandles, one for each matching element.
    *
    * Each handle is a plain `nth(i)` locator with nothing cached, as in
    * Playwright: every reader and action on it resolves live, so a check and
    * the action it guards always describe the same element — whatever is at
-   * index `i` when each runs (PILOT-346). Every modifier applies, as for
+   * index `i` when each runs. Every modifier applies, as for
    * `count()`: `list.first().all()` (or `.nth(i)`/`.last()`) is that one
    * positional locator, or an empty array. Like `count()`, it reads the
    * screen as it is now and does not wait for matches.
@@ -2216,7 +2214,7 @@ export class ElementHandle {
    *
    * Prefer it to `for (const row of await rows.all()) await row.getText()`
    * for a batch read: each handle from `all()` is a live locator, so that
-   * loop is one hierarchy read per row (PILOT-346).
+   * loop is one hierarchy read per row.
    */
   allTextContents(): Promise<string[]>;
   // The arguments are only checked (PILOT-840): under tsx an option passed
@@ -2495,7 +2493,7 @@ export class ElementHandle {
 
   /**
    * @internal — Run a tap-family dispatch, retrying while the agent refuses
-   * the element as not hittable (PILOT-716): a row its list clips behind a
+   * the element as not hittable: a row its list clips behind a
    * header is still "visible" to the auto-wait, so the agent is the one to
    * refuse it — and the refusal is waited out until the action's deadline,
    * like an off-screen element, not returned at once. A refusal means nothing
@@ -3205,7 +3203,7 @@ export class ElementHandle {
   /**
    * Returns whether the element is currently visible on screen.
    *
-   * Does **not** wait for the element to appear (PILOT-287): reads the state
+   * Does **not** wait for the element to appear: reads the state
    * right now, and reports `false` when no element matches — like
    * Playwright's `locator.isVisible()`, so it can be used as a presence
    * branch (`if (!(await x.isVisible())) …`). To wait for visibility use
@@ -3301,7 +3299,7 @@ export class ElementHandle {
 
   /**
    * @internal — Shared implementation of the non-waiting visibility probes
-   * `isVisible`/`isHidden` (PILOT-287).
+   * `isVisible`/`isHidden`.
    *
    * Unlike `find()` these must never wait for the element to appear: callers
    * use them to branch on presence, and absence has a definite answer — an
@@ -3386,7 +3384,7 @@ export class ElementHandle {
    *
    * An **empty read** is an answer, not an unreliable tick — but the first one
    * is confirmed before it is trusted: the accessibility tree can lag a
-   * just-rendered screen with no error (PILOT-283), so the probe waits for the
+   * just-rendered screen with no error, so the probe waits for the
    * UI to settle (best effort, bounded by {@link PROBE_MISS_CONFIRM_IDLE_MS})
    * and reads once more, exactly as `scrollIntoView` confirms its first miss.
    * A present element still answers from one read; an absent one costs two.

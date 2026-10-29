@@ -1,6 +1,6 @@
 /**
  * Whether this machine has each platform's toolchain at all, and what to
- * install when it does not (PILOT-558). Advice for "no device found" means
+ * install when it does not. Advice for "no device found" means
  * nothing to someone who has not installed Android Studio or Xcode yet: they
  * must hear what is missing first, not "set `avd`" or "run `xcrun simctl`".
  */
@@ -79,7 +79,7 @@ function locateAdb(deps: ToolchainDeps): AdbLocation {
 
 /**
  * The SDK `platform-tools` directory that has adb when adb is not on PATH —
- * undefined when it is on PATH or no SDK has it (PILOT-832): init says adb
+ * undefined when it is on PATH or no SDK has it: init says adb
  * is off PATH rather than missing.
  */
 export function adbOffPathDir(overrides: Partial<ToolchainDeps> = {}): string | undefined {
@@ -92,7 +92,7 @@ export function adbOffPathDir(overrides: Partial<ToolchainDeps> = {}): string | 
 /**
  * doctor's fix for an unset ANDROID_HOME (and ANDROID_SDK_ROOT): the SDK
  * found at the OS default location, where Android Studio installs it
- * without setting either (PILOT-832), else the generic advice.
+ * without setting either, else the generic advice.
  */
 export function androidHomeUnsetFix(overrides: Partial<ToolchainDeps> = {}): string {
   const deps = hostDeps(overrides);

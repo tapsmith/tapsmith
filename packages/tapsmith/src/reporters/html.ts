@@ -4,8 +4,6 @@
  * Generates a single HTML file with an embedded test report that includes
  * filtering by status, test details with errors and screenshots, and
  * summary statistics. No external dependencies required to view.
- *
- * @see PILOT-70
  */
 
 import * as fs from 'node:fs';

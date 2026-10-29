@@ -1,9 +1,9 @@
 /**
- * Device targets a UI or watch session could not start (PILOT-415).
+ * Device targets a UI or watch session could not start.
  *
  * A multi-target session (an `android` and an `ios` project, say) goes on
  * without a target whose devices cannot be provisioned, as `tapsmith test`
- * does (PILOT-400): the target's test files fail with its labelled reason,
+ * does: the target's test files fail with its labelled reason,
  * and a run that includes them tries the target again — the way Playwright
  * launches a project's browser again on every run.
  */

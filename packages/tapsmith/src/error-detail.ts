@@ -7,7 +7,7 @@
  * daemon, the worker, its device target, the run), and each layer used to
  * either cut the message to its first line or paste it in flush-left. Every
  * layer formatting with this one shape is what lets the innermost detail
- * survive, readably nested, to the outermost message (PILOT-463, PILOT-464).
+ * survive, readably nested, to the outermost message.
  */
 
 // ─── Bounds ───

@@ -296,7 +296,7 @@ import { defineConfig } from "tapsmith";
 
 export default defineConfig({
   platform: "ios",
-  app: "./ios/build/Build/Products/Debug-iphonesimulator/MyApp.app",
+  app: "./build/Build/Products/Debug-iphonesimulator/MyApp.app",
   package: "com.example.myapp",
   simulator: "iPhone 17",
 });

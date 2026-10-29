@@ -159,7 +159,7 @@ export interface UIServerContext {
   /**
    * The config the session's workers run under — the primary device target's
    * (`targetSessionConfig`), not the root `config`, which may hold none of the
-   * device keys a config keeps in its projects' `use` (PILOT-654). Multi-target
+   * device keys a config keeps in its projects' `use`. Multi-target
    * sessions override it per device through `configByDevice`. Required so an
    * embedder cannot fall back to the root by omission.
    */
@@ -225,7 +225,7 @@ export interface UIServerContext {
   bucketByDevice?: Map<string, string>
   bucketByProject?: Map<string, string>
   /**
-   * Device targets that could not start (PILOT-415). The session runs the
+   * Device targets that could not start. The session runs the
    * others; a run that includes one of these targets' files tries it again,
    * and its files fail with the reason while it still cannot start. Required
    * so an embedder cannot forget it: empty for a single-target session.

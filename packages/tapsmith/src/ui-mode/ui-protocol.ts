@@ -4,8 +4,6 @@
  * Defines all message types exchanged between the UI server and the
  * browser-based Preact SPA. JSON messages use a `type` discriminator;
  * binary WebSocket frames carry device screenshots.
- *
- * @see PILOT-87
  */
 
 import type { WorkerReadiness } from './device-readiness.js';
@@ -310,7 +308,7 @@ export interface LocatorBounds {
 }
 
 /**
- * What a live Locator tab locator matches on the device (PILOT-848), in
+ * What a live Locator tab locator matches on the device, in
  * answer to `evaluate-locator`. Broadcast; clients keep only the reply to
  * their latest request.
  */
@@ -509,7 +507,7 @@ export interface RunStateMessage {
  * (between-file preflight reset, recovery). Lets the Actions panel show
  * what's happening (e.g. "Clearing app data (com.foo)…") instead of a
  * generic waiting state. No `message` means the action finished — clear
- * the indicator for that worker. @see PILOT-232
+ * the indicator for that worker.
  */
 export interface RunProgressMessage {
   type: 'run-progress'
@@ -583,7 +581,7 @@ export interface RunAllCommand {
   type: 'run-all'
   /**
    * Run only these tests — the ones visible in a filtered tree, as
-   * Playwright's UI mode runs only the visible tests (PILOT-729). Omitted =
+   * Playwright's UI mode runs only the visible tests. Omitted =
    * the whole suite.
    */
   selection?: RunSelectionEntry[]
@@ -627,7 +625,7 @@ export interface RequestHierarchyCommand {
   deviceIndex?: number
 }
 
-/** Evaluate a Locator tab locator on the live device (PILOT-848). */
+/** Evaluate a Locator tab locator on the live device. */
 export interface EvaluateLocatorCommand {
   type: 'evaluate-locator'
   /** Echoed in the `locator-evaluation` reply. */
@@ -639,7 +637,7 @@ export interface EvaluateLocatorCommand {
   deviceIndex?: number
 }
 
-/** Suggest locators for an element picked on the live hierarchy (PILOT-848). */
+/** Suggest locators for an element picked on the live hierarchy. */
 export interface SuggestLocatorsCommand {
   type: 'suggest-locators'
   /** Echoed in the `locator-suggestions` reply. */
@@ -986,12 +984,12 @@ export interface UIWorkerRunFileMessage {
   projectUseOptions?: import('../worker-protocol.js').RunFileUseOptions
   projectName?: string
   testFilter?: string
-  /** Exact full names of the tests to run (UI mode's filtered Run all, PILOT-729). Omitted = every test the other filters pass. */
+  /** Exact full names of the tests to run (UI mode's filtered Run all). Omitted = every test the other filters pass. */
   fullNames?: string[]
   /**
    * The config's grep filters for this file's project (root and project).
    * Required: the worker holds no projects, and without them it ran every
-   * test the config filters out (PILOT-730).
+   * test the config filters out.
    */
   grep: import('../worker-protocol.js').SerializedGrepFilters
   /** The device already satisfies this file's policy (background preparation). */
@@ -1080,7 +1078,7 @@ export interface UIWorkerPrepareFailedMessage {
 
 /** UI worker → server: progress during initialization, and live slow-device-
  * action progress during the between-file preflight (empty string = clear).
- * @see PILOT-232 */
+ */
 export interface UIWorkerProgressMessage {
   type: 'progress'
   workerId: number

@@ -3,8 +3,6 @@
  *
  * Generates JUnit-style XML that CI systems (Jenkins, GitHub Actions,
  * GitLab CI, CircleCI, etc.) can ingest for test result display.
- *
- * @see PILOT-72
  */
 
 import * as fs from 'node:fs';

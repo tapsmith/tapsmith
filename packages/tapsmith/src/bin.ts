@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * The `tapsmith` bin (PILOT-542). Checks the Node.js version before loading
+ * The `tapsmith` bin. Checks the Node.js version before loading
  * the CLI, so an unsupported Node gets one clear line instead of a shebang
  * "bad option", a module link error or an unknown command.
  *

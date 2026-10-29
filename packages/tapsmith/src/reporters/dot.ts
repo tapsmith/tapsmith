@@ -3,8 +3,6 @@
  *
  * Outputs a single character per test: · passed, F failed, ○ skipped,
  * × retried, ± flaky (passed on retry). Auto-selected in CI.
- *
- * @see PILOT-69
  */
 
 import type { TapsmithReporter, FullResult } from '../reporter.js';

@@ -1,5 +1,5 @@
 /**
- * Keep macOS from throttling a windowed Android emulator (PILOT-515).
+ * Keep macOS from throttling a windowed Android emulator.
  *
  * macOS App Nap demotes a GUI app whose window is hidden — or every app, once
  * the display sleeps — to background priority. A windowed emulator's qemu
