@@ -1064,15 +1064,7 @@ class ActionExecutor(
         scale: Float,
     ) {
         try {
-            if (scale > 1.0f) {
-                // Pinch out (zoom in) — percentage is how far apart fingers end
-                val percent = ((scale - 1.0f) * 100).coerceIn(10f, 100f) / 100f
-                input.pinch(element, open = true, percent)
-            } else {
-                // Pinch in (zoom out) — percentage is how far fingers move inward
-                val percent = ((1.0f - scale) * 100).coerceIn(10f, 100f) / 100f
-                input.pinch(element, open = false, percent)
-            }
+            input.pinch(element, open = scale > 1.0f, GestureGeometry.pinchPercent(scale))
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: Exception) {
