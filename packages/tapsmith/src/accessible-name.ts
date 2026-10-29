@@ -3,7 +3,7 @@
 /**
  * The iOS element types whose getByRole name falls back to the placeholder
  * when their label and title are empty — the iOS agent's
- * `RoleName.placeholderNamedTypes`, pinned by role-name-conformance.test.ts.
+ * `RoleName.placeholderNamedTypes`, pinned by role-conformance.test.ts.
  * Playwright names an input with no label by its placeholder; SwiftUI's
  * `TextField("Title", text:)` publishes an empty label and "Title" only as
  * its placeholder.

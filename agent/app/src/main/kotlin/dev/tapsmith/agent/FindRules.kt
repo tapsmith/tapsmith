@@ -41,6 +41,17 @@ internal object FindRules {
     }
 
     /**
+     * The role an element publishes: "heading" for a heading (React
+     * Native's `accessibilityRole="header"` sets the heading flag), else its
+     * [canonicalRoleDescription]. getByRole matches with it, and the
+     * hierarchy dump writes it as `tapsmith-role`, so the two agree.
+     */
+    fun publishedRole(
+        isHeading: Boolean,
+        rawDescription: String?,
+    ): String? = if (isHeading) "heading" else canonicalRoleDescription(rawDescription)
+
+    /**
      * An element's expanded state from the accessibility actions it offers:
      * one that can collapse is expanded, one that can only expand is
      * collapsed, and one with neither has no expanded state (null), which

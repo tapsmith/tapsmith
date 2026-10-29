@@ -94,7 +94,7 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/RoleMapping.swift \
   TapsmithAgent/Models/AgentError.swift \
   -o "$OUT/role-name-tests"
-"$OUT/role-name-tests" "../packages/tapsmith/src/__tests__/fixtures/role-name-conformance.json"
+"$OUT/role-name-tests" "../packages/tapsmith/src/__tests__/fixtures/role-conformance.json"
 
 xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \

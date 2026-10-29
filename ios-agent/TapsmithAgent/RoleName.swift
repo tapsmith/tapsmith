@@ -2,7 +2,7 @@ import XCTest
 
 /// getByRole's name rule, shared by the snapshot walk and the live
 /// XCUIElement query, and replayed against the SDK's conformance fixture
-/// (`role-name-conformance.json`) so the locator playground names elements
+/// (`role-conformance.json`) so the locator playground names elements
 /// the same way: an element is named by its label or title — or, when both
 /// are empty and it is a text input (`placeholderNamedTypes`), by its
 /// placeholder (PILOT-834). Playwright names an input with no label by its
