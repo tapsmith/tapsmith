@@ -4,7 +4,7 @@
 
 import * as fs from 'node:fs';
 import { buildCodeSnippet } from '../trace/code-frame.js';
-import { extractStack } from '../trace/trace-collector.js';
+import { extractStack, userStackFrames } from '../trace/trace-collector.js';
 import type { TestResult } from '../runner.js';
 
 // ─── ANSI codes ───
@@ -130,6 +130,30 @@ export function projectTag(project: string | undefined): string {
   return dim(`[${project}]`) + ' ';
 }
 
+/** A stack line that is a frame (`    at …`). */
+const FRAME_LINE_RE = /^\s*at\s/;
+
+/**
+ * The first `max` frames of an error's stack worth showing under its message:
+ * Tapsmith's own and Node's internal frames filtered out *before* the cap, so
+ * the test's frame is never pushed out by SDK wrappers (PILOT-841). Errors
+ * with no user frame keep their raw frames ({@link userStackFrames}).
+ */
+export function errorStackFrames(error: Error, max: number): string[] {
+  if (!error.stack) return [];
+  // The stack opens with "<name>: <message>", which the reporter prints on its
+  // own: the frames start at its first "at" line. Matching the header against
+  // error.name and error.message instead misses whenever they changed after
+  // the stack was taken — --workers, watch and merged reports rebuild errors
+  // as new Error(message) under another name, and the runner appends
+  // "--- Additionally ---" blocks to the message — and a multi-line message's
+  // later lines then fill the frame cap.
+  const lines = error.stack.split('\n');
+  const first = lines.findIndex((line) => FRAME_LINE_RE.test(line));
+  if (first === -1) return [];
+  return userStackFrames(lines.slice(first)).slice(0, max);
+}
+
 export function formatError(error: Error, indent: string = '        '): string {
   const lines: string[] = [];
   // Every line under the indent: a multi-line message's later lines (a
@@ -138,13 +162,6 @@ export function formatError(error: Error, indent: string = '        '): string {
   for (const line of error.message.split('\n')) lines.push(line === '' ? '' : `${indent}${red(line)}`);
 
   if (error.stack) {
-    // The stack opens with "<name>: <message>" — every line of the message,
-    // which is already printed above. Only what follows is frames.
-    const opensWithMessage = error.stack.startsWith(`${error.name}: ${error.message}`)
-      || error.stack.startsWith(`Error: ${error.message}`);
-    const header = opensWithMessage ? error.message.split('\n').length : 1;
-    const stackLines = error.stack.split('\n').slice(header);
-
     // Find the first user-code frame via extractStack, which owns the
     // framework-frame classification: it skips tapsmith internals in BOTH
     // layouts (packages/tapsmith/* in the monorepo, node_modules/* for npm
@@ -167,8 +184,7 @@ export function formatError(error: Error, indent: string = '        '): string {
       lines.push('');
     }
 
-    // Show first 3 stack frames
-    for (const line of stackLines.slice(0, 3)) {
+    for (const line of errorStackFrames(error, 3)) {
       lines.push(`${indent}${dim(line.trim())}`);
     }
   }

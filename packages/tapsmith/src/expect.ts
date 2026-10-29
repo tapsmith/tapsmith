@@ -21,7 +21,7 @@ import { ElementHandle, ELEMENT_HANDLE_BRAND, isStrictModeViolation, isRetryable
 import type { ElementInfo } from "./grpc-client.js";
 import { formatSelector } from "./selectors.js";
 import { ANDROID_ROLE_CLASSES, normalizeRole, type Role } from "./roles.js";
-import { extractStack, getActiveTraceCollector } from "./trace/trace-collector.js";
+import { extractStack, getActiveTraceCollector, isFrameworkFrame } from "./trace/trace-collector.js";
 import { WebViewLocator, WEBVIEW_LOCATOR_BRAND } from "./webview-locator.js";
 import { defineStandIns, notSupportedYet } from "./not-supported.js";
 import { elementAccessibleName } from "./accessible-name.js";
@@ -550,14 +550,16 @@ function createAssertions(
     // assertion was called) rather than to Tapsmith internals.
     const source = callsite ?? err;
     if (source.stack) {
-      const frames = source.stack.split('\n').slice(1);
+      // A stack opens with every line of its message (one for a callsite's
+      // message-less Error): skip them all, or a multi-line message's later
+      // lines (a toHaveText's element text) land among the frames.
+      const header = source === err ? message.split('\n').length : 1;
+      const frames = source.stack.split('\n').slice(header);
       // Move user frames (non-Tapsmith-internal) to the top so the test file
-      // location is the first thing developers see.
-      const isInternal = (line: string) =>
-        line.includes('/packages/tapsmith/') ||
-        line.includes('node:internal/');
-      const userFrames = frames.filter((l) => !isInternal(l));
-      const internalFrames = frames.filter((l) => isInternal(l));
+      // location is the first thing developers see — in every install
+      // layout, not only the monorepo's packages/tapsmith (PILOT-841).
+      const userFrames = frames.filter((l) => !isFrameworkFrame(l));
+      const internalFrames = frames.filter((l) => isFrameworkFrame(l));
       const reordered = [...userFrames, ...internalFrames];
       err.stack = `Error: ${message}\n${reordered.join('\n')}`;
     }

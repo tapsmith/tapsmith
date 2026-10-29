@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { TraceCollector, extractSourceLocation, extractStack, collectReferencedFiles } from '../trace/trace-collector.js';
+import { TraceCollector, extractSourceLocation, extractStack, collectReferencedFiles, userStackFrames, isFrameworkFrame } from '../trace/trace-collector.js';
 import type { TraceConfig, ActionTraceEvent, AssertionTraceEvent, ConsoleTraceEvent, GroupTraceEvent, AnyTraceEvent } from '../trace/types.js';
 
 describe('TraceCollector', () => {
@@ -587,6 +587,97 @@ describe('extractStack', () => {
   it('strips ?query and #fragment from file:// URLs (loader cache-busting)', () => {
     const stack = 'Error\n    at Object.<anonymous> (file:///Users/me/proj/tests/a.test.ts?t=1700000000000:4:9)';
     expect(extractStack(stack)).toEqual([{ file: '/Users/me/proj/tests/a.test.ts', line: 4, column: 9 }]);
+  });
+});
+
+describe('userStackFrames (PILOT-841)', () => {
+  // The frames an npm install really produced for a failed toBeVisible: the
+  // SDK's own frames are source-mapped to node_modules/tapsmith/src/*.ts, the
+  // runner's stay node_modules/tapsmith/dist/*.js.
+  const npmAssertion = [
+    '    at fail (/proj/node_modules/tapsmith/src/expect.ts:548:17)',
+    '    at Object.toBeVisible (/proj/node_modules/tapsmith/src/expect.ts:632:9)',
+    '    at async Object.toBeVisible (/proj/node_modules/tapsmith/src/expect.ts:475:7)',
+    '    at async Object.fn (/proj/tests/tabs.tapsmith.ts:6:5)',
+    '    at async testFn (/proj/node_modules/tapsmith/dist/runner.js:2167:33)',
+    '    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)',
+  ];
+
+  it('drops Tapsmith-internal and node-internal frames from an npm install', () => {
+    expect(userStackFrames(npmAssertion)).toEqual(['    at async Object.fn (/proj/tests/tabs.tapsmith.ts:6:5)']);
+  });
+
+  it('drops the monorepo SDK (packages/tapsmith/src|dist) and pnpm layouts', () => {
+    expect(userStackFrames([
+      '    at ElementHandle.tap (/repo/packages/tapsmith/src/element-handle.ts:1884:15)',
+      '    at testFn (/repo/packages/tapsmith/dist/runner.js:10:1)',
+      '    at x (/proj/node_modules/.pnpm/tapsmith@0.7.1/node_modules/tapsmith/dist/expect.js:331:9)',
+      '    at internal/main/run_main_module:23:47',
+      '    at /proj/tests/x.test.ts:3:1',
+    ])).toEqual(['    at /proj/tests/x.test.ts:3:1']);
+  });
+
+  it('keeps every user frame in order, and third-party node_modules frames (as Playwright does)', () => {
+    expect(userStackFrames([
+      '    at Object.tap (/proj/node_modules/tapsmith/dist/element-handle.js:10:5)',
+      '    at retry (/proj/node_modules/p-retry/index.js:4:2)',
+      '    at loginHelper (/proj/tests/helpers/login.ts:8:3)',
+      '    at /proj/tests/auth.test.ts:42:7',
+    ])).toEqual([
+      '    at retry (/proj/node_modules/p-retry/index.js:4:2)',
+      '    at loginHelper (/proj/tests/helpers/login.ts:8:3)',
+      '    at /proj/tests/auth.test.ts:42:7',
+    ]);
+  });
+
+  it('keeps a user project whose own path is named tapsmith', () => {
+    const frame = '    at async Object.fn (/Users/me/tapsmith/tests/a.test.ts:1:1)';
+    expect(userStackFrames([frame])).toEqual([frame]);
+  });
+
+  it('classifies file:// URL and Windows frames like plain paths', () => {
+    expect(userStackFrames([
+      '    at fail (file:///proj/node_modules/tapsmith/dist/expect.js:5:5)',
+      '    at fail (C:\\proj\\node_modules\\tapsmith\\dist\\expect.js:5:5)',
+      '    at Object.fn (file:///proj/tests/a.test.ts?t=1:4:9)',
+    ])).toEqual(['    at Object.fn (file:///proj/tests/a.test.ts?t=1:4:9)']);
+  });
+
+  it('drops frames with no file location (new Promise (<anonymous>))', () => {
+    expect(userStackFrames([
+      '    at new Promise (<anonymous>)',
+      '    at /proj/tests/a.test.ts:1:1',
+    ])).toEqual(['    at /proj/tests/a.test.ts:1:1']);
+  });
+
+  it('keeps lines that are not frames (a "Caused by:" line)', () => {
+    expect(userStackFrames([
+      '    at /proj/tests/a.test.ts:1:1',
+      'Caused by: Error: boom',
+      '    at /proj/node_modules/tapsmith/dist/config.js:1:1',
+    ])).toEqual(['    at /proj/tests/a.test.ts:1:1', 'Caused by: Error: boom']);
+  });
+
+  it('falls back to the raw frames when no user frame is left (a runner timeout)', () => {
+    const raw = [
+      '    at Timeout.check (/proj/node_modules/tapsmith/dist/runner.js:1701:115)',
+      '    at listOnTimeout (node:internal/timers:585:17)',
+    ];
+    expect(userStackFrames(raw)).toEqual(raw);
+  });
+
+  it('returns [] for no lines', () => {
+    expect(userStackFrames([])).toEqual([]);
+  });
+
+  it('isFrameworkFrame classifies one line the same way (expect() moves the others to the top)', () => {
+    expect(isFrameworkFrame(npmAssertion[0])).toBe(true);
+    expect(isFrameworkFrame(npmAssertion[4])).toBe(true);
+    expect(isFrameworkFrame(npmAssertion[5])).toBe(true);
+    expect(isFrameworkFrame('    at fail (/repo/packages/tapsmith/src/expect.ts:1:1)')).toBe(true);
+    expect(isFrameworkFrame(npmAssertion[3])).toBe(false);
+    expect(isFrameworkFrame('    at retry (/proj/node_modules/p-retry/index.js:4:2)')).toBe(false);
+    expect(isFrameworkFrame('    at new Promise (<anonymous>)')).toBe(false);
   });
 });
 

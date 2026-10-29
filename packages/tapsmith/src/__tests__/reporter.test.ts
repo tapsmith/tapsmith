@@ -1048,6 +1048,37 @@ describe('HtmlReporter', () => {
   });
 });
 
+describe('HtmlReporter stack (PILOT-841)', () => {
+  it('shows the user frames under the message, not the SDK frames or the message again', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const os = await import('node:os');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-html-'));
+    const { HtmlReporter } = await import('../reporters/html.js');
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      const err = new Error('Expected: 1\nReceived: 2');
+      err.stack = [
+        'Error: Expected: 1',
+        'Received: 2',
+        ...Array.from({ length: 5 }, (_, i) => `    at f${i} (/proj/node_modules/tapsmith/dist/expect.js:${i + 1}:1)`),
+        '    at async Object.fn (/proj/tests/login.test.ts:12:7)',
+      ].join('\n');
+      const reporter = new HtmlReporter({ outputFolder: tmpDir, open: 'never' });
+      reporter.onRunStart!(makeConfig({ rootDir: '/' }), 1);
+      await reporter.onRunEnd!(makeFullResult({
+        tests: [makeTestResult({ status: 'failed', fullName: 'test b', error: err })],
+      }));
+      const html = fs.readFileSync(path.join(tmpDir, 'index.html'), 'utf-8');
+      expect(html).toContain('/proj/tests/login.test.ts:12:7');
+      expect(html).not.toContain('tapsmith/dist/expect.js');
+    } finally {
+      stderrSpy.mockRestore();
+      fs.rmSync(tmpDir, { recursive: true });
+    }
+  });
+});
+
 describe('BlobReporter', () => {
   it('writes a blob file and can be merged', async () => {
     const fs = await import('node:fs');
@@ -1180,6 +1211,86 @@ describe('base formatting utilities', () => {
     expect(plain.split('\n').filter((l) => l.includes('Received: 2'))).toHaveLength(1);
     expect(plain).toContain('at one (/x/a.js:1:1)');
     expect(plain).toContain('at two (/x/b.js:2:2)');
+  });
+
+  it('formatError shows the user frame of an npm install, not the first three SDK frames (PILOT-841)', async () => {
+    const { formatError } = await import('../reporters/base.js');
+    const err = new Error('Expected element getByText("x") to be visible, but it was not.');
+    err.stack = [
+      `Error: ${err.message}`,
+      '    at fail (/proj/node_modules/tapsmith/src/expect.ts:548:17)',
+      '    at Object.toBeVisible (/proj/node_modules/tapsmith/src/expect.ts:632:9)',
+      '    at async Object.toBeVisible (/proj/node_modules/tapsmith/src/expect.ts:475:7)',
+      '    at async Object.fn (/proj/tests/tabs.tapsmith.ts:6:5)',
+      '    at async testFn (/proj/node_modules/tapsmith/dist/runner.js:2167:33)',
+      '    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)',
+    ].join('\n');
+    const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('at async Object.fn (/proj/tests/tabs.tapsmith.ts:6:5)');
+    expect(plain).not.toContain('expect.ts');
+    expect(plain).not.toContain('runner.js');
+    expect(plain).not.toContain('node:internal');
+  });
+
+  it('formatError skips a multi-line message under any error name, even after a worker rebuilt the error as a plain Error (PILOT-841)', async () => {
+    // --workers and watch send errors across a process boundary as
+    // { message, stack } and rebuild them with new Error(message): the name
+    // is lost, but the stack still opens with the original one.
+    const { formatError } = await import('../reporters/base.js');
+    const message = 'strict mode violation: getByText(/^Item/) resolved to 3 elements:\n  1) text "Item 1"\n  2) text "Item 2"\n  3) text "Item 3"';
+    for (const header of ['StrictModeViolationError', 'TypeError', 'TypeError [ERR_INVALID_ARG_TYPE]']) {
+      const err = Object.assign(new Error(message), {
+        stack: [
+          `${header}: ${message}`,
+          '    at ElementHandle.tap (/proj/node_modules/tapsmith/src/element-handle.ts:2651:37)',
+          '    at async Object.fn (/proj/tests/strict.test.ts:5:3)',
+        ].join('\n'),
+      });
+      const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+      expect(plain, header).toContain('at async Object.fn (/proj/tests/strict.test.ts:5:3)');
+      expect(plain.split('\n').filter((l) => l.includes('text "Item 2"')), header).toHaveLength(1);
+    }
+  });
+
+  it('formatError skips the stack header even when the message grew after the stack was set (soft / unhandled errors appended)', async () => {
+    // The runner appends "--- Additionally ---" blocks to a failed test's
+    // message; expect() set the stack before that, so the stack no longer
+    // opens with the whole message. Whatever the header holds, the frames
+    // are what starts at the first "at" line.
+    const { formatError, errorStackFrames } = await import('../reporters/base.js');
+    const first = 'Expected element getByTestId("x") to contain text zulu, but got "alpha\nbravo\ncharlie\ndelta"';
+    const err = new Error(`${first}\n\n--- Additionally ---\nExpected 2, received 1`);
+    err.stack = [`Error: ${first}`, '    at async Object.fn (/proj/tests/softlong.test.ts:8:3)'].join('\n');
+    expect(errorStackFrames(err, 3)).toEqual(['    at async Object.fn (/proj/tests/softlong.test.ts:8:3)']);
+    const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain.split('\n').filter((l) => l.trim() === 'bravo')).toHaveLength(1);
+  });
+
+  it('formatError keeps the first frame of a stack with no header line', async () => {
+    const { errorStackFrames } = await import('../reporters/base.js');
+    const err = Object.assign(new Error('boom'), { stack: '    at /proj/tests/a.test.ts:1:1\n    at /proj/tests/b.test.ts:2:2' });
+    expect(errorStackFrames(err, 3)).toEqual(['    at /proj/tests/a.test.ts:1:1', '    at /proj/tests/b.test.ts:2:2']);
+  });
+
+  it('formatError caps the user frames at three', async () => {
+    const { formatError } = await import('../reporters/base.js');
+    const err = new Error('boom');
+    err.stack = ['Error: boom', ...[1, 2, 3, 4].map((n) => `    at f${n} (/proj/tests/h${n}.ts:${n}:1)`)].join('\n');
+    const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('h3.ts');
+    expect(plain).not.toContain('h4.ts');
+  });
+
+  it('formatError still prints frames for an error with no user frame (a runner timeout)', async () => {
+    const { formatError } = await import('../reporters/base.js');
+    const err = new Error('Test timed out after 90000ms');
+    err.stack = [
+      'Error: Test timed out after 90000ms',
+      '    at Timeout.check (/proj/node_modules/tapsmith/dist/runner.js:1701:115)',
+      '    at listOnTimeout (node:internal/timers:585:17)',
+    ].join('\n');
+    const plain = formatError(err).replace(/\x1b\[[0-9;]*m/g, '');
+    expect(plain).toContain('at Timeout.check (/proj/node_modules/tapsmith/dist/runner.js:1701:115)');
   });
 
   it('formatError renders the snippet from the user frame, skipping npm-installed framework frames', async () => {
