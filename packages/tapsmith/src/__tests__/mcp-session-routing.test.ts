@@ -283,6 +283,8 @@ function makeDispatcher(): TestDispatcher {
     }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    classifyUnmatchedFile: () => undefined,
+    refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: true }),
   };
 }

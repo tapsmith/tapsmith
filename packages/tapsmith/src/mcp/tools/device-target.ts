@@ -50,7 +50,7 @@ export async function deviceTargetFor(
   //
   // Devices only: waiting for the test tree as well would make the first device
   // tool of a session pay for a discovery child per test file.
-  if (dispatcher?.ensureDevicesReady) await dispatcher.ensureDevicesReady({ retryFailedTargets: true, project: request.project });
+  if (dispatcher?.ensureDevicesReady) await dispatcher.ensureDevicesReady({ retryFailedTargets: true, project: request.project, device: request.device });
   else await dispatcher?.ensureInitialized?.();
   // A config that failed to load gives the session no projects and no
   // targets. Unless the caller named a device outright, say that, rather than

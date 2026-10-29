@@ -47,6 +47,8 @@ function dispatcherWith(results: TestResultEntry[]): TestDispatcher {
     getSessionInfo: () => ({ timeout: 0, retries: 0, projects: [] }),
     resolveDeviceName: () => undefined,
     deviceChoiceError: async () => null,
+    classifyUnmatchedFile: () => undefined,
+    refreshTestFiles: async () => {},
     toggleWatch: () => ({ enabled: false }),
   };
 }

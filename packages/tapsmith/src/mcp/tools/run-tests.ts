@@ -121,7 +121,11 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             isError: true,
           };
         }
-        // First of all: the headless dispatcher can still pin an unresolved
+        // Files written since the session last looked — typically the test
+        // the agent just wrote — must be matchable before anything below
+        // reads the file list (PILOT-836).
+        await dispatcher.refreshTestFiles();
+        // Then: the headless dispatcher can still pin an unresolved
         // target to `device` here, before the run resolves targets (and so
         // picks devices). A `device` it cannot honour is refused — ignoring it
         // ran the tests on whatever device the session held, another
@@ -166,6 +170,12 @@ export function registerRunTestsTool(server: McpServer, dispatcher?: TestDispatc
             clearInterval(heartbeat);
             store.merge(dispatcher.getResults());
           });
+        if (result.busy) {
+          return {
+            content: [{ type: 'text' as const, text: 'A test run is already in progress. Wait for it to finish or use tapsmith_stop_tests to abort.' }],
+            isError: true,
+          };
+        }
         const content: CallToolResult['content'] = [];
         const screenshots: Buffer[] = [];
 
@@ -503,10 +513,39 @@ function buildNoTestsExecutedMessage(
   if (unmatched.length === 0) {
     return `${summary} The file(s) were found but contained no runnable tests — use tapsmith_list_tests to see what they hold.`;
   }
-  return `${summary} These argument(s) matched no discovered test file:\n`
-    + unmatched.map((f) => `  - ${f}`).join('\n')
-    + '\n\nPaths may be absolute, relative to the config\'s directory (rootDir) or the server\'s working directory, or globs. '
-    + 'Use tapsmith_list_tests for the exact paths — and note that a file which failed to load is reported there as a warning rather than listed.';
+  // The session has just synced with the disk (PILOT-836), so say what the
+  // config's matcher makes of a file that is there: left out by testMatch, or
+  // selected but not held (a UI session started on a narrower selection).
+  // Not when the config failed to load: the session then holds nothing, and
+  // its own note says why.
+  const { configPath, configError } = dispatcher.getSessionInfo();
+  const lines: string[] = [];
+  const excluded: string[] = [];
+  const notHeld: string[] = [];
+  for (const f of unmatched) {
+    const why = configError ? undefined : dispatcher.classifyUnmatchedFile(f);
+    if (why === 'excluded') excluded.push(f);
+    else if (why === 'not-held') notHeld.push(f);
+    else lines.push(f);
+  }
+  const parts: string[] = [summary];
+  if (excluded.length > 0) {
+    parts.push(excluded.map((f) => `${f} exists, but the config's testMatch (or testIgnore) leaves it out, so the session never treats it as a test file.`).join('\n')
+      + `\nRename the file to match a testMatch pattern, or add a pattern for it in ${configPath ?? 'the Tapsmith config'} `
+      + '(a config change takes effect when the MCP server restarts). tapsmith_session_info names the config in use.');
+  }
+  if (notHeld.length > 0) {
+    parts.push(notHeld.map((f) => `${f} is a test file by the config's testMatch, but this session does not hold it.`).join('\n')
+      + '\nA UI session started on a file argument or --project holds only that selection: start it without the selection to run other files. '
+      + 'tapsmith_list_tests lists the files this session holds.');
+  }
+  if (lines.length > 0) {
+    parts.push('These argument(s) matched no discovered test file:\n'
+      + lines.map((f) => `  - ${f}`).join('\n')
+      + '\n\nPaths may be absolute, relative to the config\'s directory (rootDir) or the server\'s working directory, or globs. '
+      + 'Use tapsmith_list_tests for the exact paths — and note that a file which failed to load is reported there as a warning rather than listed.');
+  }
+  return parts.join(' ');
 }
 
 function buildZeroMatchMessage(dispatcher: TestDispatcher, files: string[], testFilter: string): string {

@@ -7,7 +7,7 @@ import type { WatchRunAbortMessage } from '../watch-run.js';
 import { watch as chokidarWatch, type FSWatcher } from 'chokidar';
 import { minimatch } from 'minimatch';
 import { platformOfSerial, resolveProjects, scopeDevicePinToPlatform, topologicalSort, type ResolvedProject } from '../project.js';
-import { discoverTestFiles } from '../test-file-discovery.js';
+import { classifyUnmatchedTestFile, discoverTestFiles } from '../test-file-discovery.js';
 import {
   deserializeTestResult,
   deserializeSuiteResult,
@@ -32,7 +32,7 @@ import type {
   DiscoveryError,
   DeviceTarget,
 } from './test-dispatcher.js';
-import { classifyEntryStatus, isInterruptedEntry } from './test-dispatcher.js';
+import { classifyEntryStatus, isInterruptedEntry, runInProgressResult } from './test-dispatcher.js';
 import { loadMcpConfig } from './config-loader.js';
 import { pickResolvedDeviceName } from './tools/device-target.js';
 
@@ -132,6 +132,15 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   private _watchQueue: RunQueue;
   private _scripts: ResolvedScripts | null = null;
   private _discoveryErrors = new Map<string, string>();
+  /**
+   * Each discovered file's mtime and size when its tree was last taken. A file
+   * whose stamp moves is discovered again; the rest keep their tree, so a
+   * refresh forks a child only for what changed (PILOT-836).
+   */
+  private _fileStamps = new Map<string, string>();
+  /** The refresh running now, and the one queued behind it (see `refreshTestFiles`). */
+  private _syncInFlight: Promise<void> | null = null;
+  private _syncQueued: Promise<void> | null = null;
   private _devicesReady = false;
   private _devicesPromise: Promise<void> | null = null;
   /** Config, projects and test files loaded — see `_ensureSession`. */
@@ -158,8 +167,11 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * no device) comes back on the same device.
    */
   private readonly _devicePins = new Map<string, string>();
-  /** A `run_tests` `device` to pin while the targets are first resolved. */
-  private _pendingPin: { device: string; files: string[]; project?: string } | null = null;
+  /**
+   * A `device` to pin while the targets are first resolved: a `run_tests`
+   * one (with its files), or a device tool's (none).
+   */
+  private _pendingPin: PendingPin | null = null;
 
   constructor(options?: { configFile?: string }) {
     this._configFile = options?.configFile;
@@ -182,6 +194,52 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   }
 
   /**
+   * Bring the test files up to date with the disk: files written, edited or
+   * deleted since the last look (PILOT-836).
+   *
+   * The session globbed once, on the first call that needed it — usually a
+   * device tool, since an agent snapshots the screen before it writes a test.
+   * The file it wrote next was then neither listed nor runnable for the life
+   * of the server, and `run_tests` blamed the path. Globbing is cheap; only a
+   * new or changed file is discovered again, so a large suite pays only for
+   * what moved.
+   */
+  async refreshTestFiles(): Promise<void> {
+    // A first initialization that starts here globs after this call began, so
+    // it is already the pass this caller needs. One already under way may
+    // have globbed before the caller's file existed.
+    const startsHere = !this._initialized && !this._initPromise;
+    await this._ensureInitialized();
+    if (startsHere) return;
+    await this._scheduleSync();
+  }
+
+  /**
+   * One sync at a time, and at most one queued. A caller arriving while a sync
+   * runs gets the queued one, which starts after its call — the running one may
+   * have globbed before the caller's file was written.
+   */
+  private _scheduleSync(): Promise<void> {
+    if (this._syncQueued) return this._syncQueued;
+    const running = this._syncInFlight;
+    if (!running) return this._startSync();
+    const queued = running.catch(() => { /* reported by its own caller */ }).then(() => {
+      this._syncQueued = null;
+      return this._startSync();
+    });
+    this._syncQueued = queued;
+    return queued;
+  }
+
+  private _startSync(): Promise<void> {
+    const sync: Promise<void> = this._syncTestFiles().finally(() => {
+      if (this._syncInFlight === sync) this._syncInFlight = null;
+    });
+    this._syncInFlight = sync;
+    return sync;
+  }
+
+  /**
    * Give every platform its retry back, once per run the caller asks for.
    *
    * The budget stops a platform with no device being re-resolved once per file,
@@ -196,9 +254,9 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   }
 
   async runFiles(files: string[], options?: { testFilter?: string; project?: string }): Promise<TestRunResult> {
-    await this._ensureInitialized();
+    await this.refreshTestFiles();
     if (this._isRunning) {
-      return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+      return runInProgressResult();
     }
     // After the guard: a request rejected as already-running is not a new run,
     // and resetting the budget from here would hand the *in-flight* run a fresh
@@ -265,10 +323,10 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   }
 
   async runAll(): Promise<TestRunResult> {
-    await this._ensureInitialized();
+    await this.refreshTestFiles();
     await this.ensureDevicesReady();
     if (this._isRunning) {
-      return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
+      return runInProgressResult();
     }
     // After the guard: a request rejected as already-running is not a new run,
     // and resetting the budget from here would hand the *in-flight* run a fresh
@@ -533,6 +591,18 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     return matchRequestedFiles(files, this._testFiles, roots);
   }
 
+  classifyUnmatchedFile(arg: string): 'excluded' | 'not-held' | undefined {
+    const config = this._config;
+    if (!config) return undefined;
+    return classifyUnmatchedTestFile(arg, {
+      roots: [config.rootDir, process.cwd()],
+      rootDir: config.rootDir,
+      selectors: this._hasRealProjects()
+        ? this._projects.map((p) => ({ testMatch: p.testMatch, testIgnore: p.testIgnore }))
+        : [{ testMatch: config.testMatch }],
+    });
+  }
+
   getDiscoveryErrors(): DiscoveryError[] {
     return [...this._discoveryErrors].map(([filePath, error]) => ({ filePath, error }));
   }
@@ -679,7 +749,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       + 'it started there), so `device` can confirm that device but not choose another. '
       + (configPin
         ? `The config pins ${configPin}; change \`device\` there and restart the MCP server to run on ${device}.`
-        : `To run on ${device}, restart the MCP server and pass \`device\` to run_tests before any other run or device tool, `
+        : `To run on ${device}, restart the MCP server and pass \`device\` to its first run_tests or device tool, `
           + `or set \`device: '${device}'\` in the config.`);
   }
 
@@ -735,7 +805,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
    * name one, and the documented flow starts with `tapsmith_list_tests`
    * (PILOT-342).
    */
-  async ensureDevicesReady(opts?: { retryFailedTargets?: boolean; project?: string }): Promise<void> {
+  async ensureDevicesReady(opts?: { retryFailedTargets?: boolean; project?: string; device?: string }): Promise<void> {
     if (this._devicesReady) {
       if (opts?.retryFailedTargets) await this._retryFailedTargets(opts.project);
       return;
@@ -744,11 +814,22 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       await this._devicesPromise;
       return;
     }
+    // A device tool's `device` chooses the device while there is still a
+    // choice to make; a `run_tests` pin already pending is left alone.
+    const pending: PendingPin | null = opts?.device && !this._pendingPin ? { device: opts.device, project: opts.project } : null;
+    if (pending) this._pendingPin = pending;
     this._devicesPromise = this._prepareDevices();
     try {
       await this._devicesPromise;
     } finally {
       this._devicesPromise = null;
+      if (pending && this._pendingPin === pending) this._pendingPin = null;
+      // As `deviceChoiceError` does for a run: a device that could not be set
+      // up pins nothing. Kept, every later resolution retried the dead serial
+      // and the session never found the device that would have worked.
+      if (pending?.pinnedKey !== undefined && !this._targets.has(pending.pinnedKey)) {
+        this._devicePins.delete(pending.pinnedKey);
+      }
     }
   }
 
@@ -810,10 +891,11 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   private async _initialize(): Promise<void> {
     log('Initializing test dispatcher...');
     await this._ensureSession();
-
-    if (this._testFiles.length > 0 && this._scripts) {
-      await this._discoverTestTree();
-    }
+    // Globs again rather than trusting the session's list: a device tool may
+    // have loaded the session long before, and files written since belong in
+    // the tree too. Nothing else syncs before initialization ends — every
+    // other caller waits on it first.
+    await this._syncTestFiles();
 
     this._initialized = true;
     log(`Initialized: ${this._testFiles.length} test file(s)`);
@@ -843,10 +925,10 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     this._projectWaves = [];
     this._projectConfigs.clear();
     this._fileNodes = new Map();
-    // Including the load failures: `_discoverTestTree` clears them, but
-    // `_initialize` only runs it when files were found. A second pass that
-    // discovers none kept reporting "N test file(s) failed to load" for paths
-    // this session no longer knows anything about.
+    this._fileStamps.clear();
+    // Including the load failures and the stamps: a second pass must discover
+    // every file afresh, or it kept reporting "N test file(s) failed to load"
+    // for paths this session no longer knows anything about.
     this._discoveryErrors.clear();
     const config = await this._loadConfigWithFallback();
     this._config = config;
@@ -876,25 +958,9 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       // now, and a `testMatch` glob that throws would otherwise take down
       // `snapshot` and `tap` — tools with no interest in the test tree at all.
       try {
-        if (this._hasRealProjects()) {
-          const seen = new Set<string>();
-          for (const project of this._projects) {
-            const files = await discoverTestFiles(
-              project.testMatch,
-              config.rootDir,
-              project.testIgnore,
-            );
-            project.testFiles = files;
-            for (const f of files) {
-              if (!seen.has(f)) {
-                seen.add(f);
-                this._testFiles.push(f);
-              }
-            }
-          }
-        } else {
-          this._testFiles = await discoverTestFiles(config.testMatch, config.rootDir);
-        }
+        const globbed = await this._globTestFiles(config);
+        this._testFiles = globbed.files;
+        for (const [project, files] of globbed.byProject) project.testFiles = files;
       } catch (err) {
         log(`Test file discovery failed: ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -972,7 +1038,7 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   }
 
   /**
-   * Pin the target a pending `run_tests` `device` is for, before anything
+   * Pin the target a pending `device` (run_tests or a device tool) is for, before anything
    * auto-picks one. Only an unambiguous request pins: files spanning two
    * targets would pin one of them to a device it cannot use, and a group
    * member's *name* means nothing until its group's devices are known.
@@ -982,12 +1048,13 @@ export class HeadlessTestDispatcher implements TestDispatcher {
     const pin = this._pendingPin;
     if (!pin) return;
     if (this._isGroupMemberName(pin.device)) return;
-    const keys = this._targetKeysFor(pin.files, pin.project);
+    const keys = pin.files ? this._targetKeysFor(pin.files, pin.project) : this._targetKeysForDevice(pin.device, pin.project, config);
     if (keys.length !== 1) return;
     const effective = this._wantedConfigs(config).find((c) => targetKeyFor(c) === keys[0]);
     // A device pinned in the config wins; `deviceChoiceError` says so.
     if (effective && !primaryDevicePin(effective) && this._canPinPrimary(effective, pin.device)) {
       this._devicePins.set(keys[0], pin.device);
+      pin.pinnedKey = keys[0];
     }
   }
 
@@ -1003,6 +1070,23 @@ export class HeadlessTestDispatcher implements TestDispatcher {
   /** Whether `device` is a `use.devices` member name rather than a serial. */
   private _isGroupMemberName(device: string): boolean {
     return this._projects.some((p) => resolveDeviceGroup(p.effectiveConfig).some((e) => e.name === device));
+  }
+
+  /**
+   * The targets a device tool's `device` could be the device of: the named
+   * project's, or else every single-device target of the serial's platform.
+   * More than one pins none — which of them the caller meant is not known.
+   */
+  private _targetKeysForDevice(device: string, project: string | undefined, config: TapsmithConfig): string[] {
+    if (project !== undefined) {
+      return this._projects.some((p) => p.name === project)
+        ? [platformKeyForProject(this._projects, project, config.platform)]
+        : [];
+    }
+    const platform = platformOfSerial(device);
+    return this._wantedConfigs(config)
+      .filter((c) => deviceGroupSize(c) <= 1 && (c.platform ?? 'android') === platform)
+      .map(targetKeyFor);
   }
 
   /**
@@ -1202,24 +1286,105 @@ export class HeadlessTestDispatcher implements TestDispatcher {
 
   // ─── Test tree discovery ───
 
-  private async _discoverTestTree(): Promise<void> {
-    const scripts = this._scripts!;
-    const fileNodes = new Map<string, TestTreeNode>();
-    this._discoveryErrors.clear();
+  /** The config's test files, overall and per project, as `testMatch` selects them now. */
+  private async _globTestFiles(config: TapsmithConfig): Promise<{ files: string[]; byProject: Map<ResolvedProject, string[]> }> {
+    const byProject = new Map<ResolvedProject, string[]>();
+    if (!this._hasRealProjects()) {
+      return { files: await discoverTestFiles(config.testMatch, config.rootDir), byProject };
+    }
+    const files: string[] = [];
+    const seen = new Set<string>();
+    for (const project of this._projects) {
+      const own = await discoverTestFiles(project.testMatch, config.rootDir, project.testIgnore);
+      byProject.set(project, own);
+      for (const f of own) {
+        if (!seen.has(f)) {
+          seen.add(f);
+          files.push(f);
+        }
+      }
+    }
+    return { files, byProject };
+  }
 
-    const discovered = await mapWithConcurrency(this._testFiles, DISCOVERY_CONCURRENCY, async (file) => {
+  /**
+   * Glob the test files again and discover each one that is new or changed
+   * since its tree was taken; drop the ones that are gone. Run through
+   * `_scheduleSync` (or by `_initialize`, which nothing runs beside).
+   *
+   * File lists are replaced, never mutated: a run walking the old list
+   * finishes the files it was given.
+   */
+  private async _syncTestFiles(): Promise<void> {
+    const config = this._config;
+    if (!config) return;
+    let globbed: Awaited<ReturnType<HeadlessTestDispatcher['_globTestFiles']>>;
+    try {
+      globbed = await this._globTestFiles(config);
+    } catch (err) {
+      // Keep what the session had: a glob that throws once says nothing about
+      // the files already found.
+      log(`Test file rediscovery failed: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+
+    // Stamped before discovery: an edit landing while a child imports the
+    // file moves the stamp again, and the next sync takes it.
+    const stamps = new Map<string, string>();
+    await Promise.all(globbed.files.map(async (file) => {
+      try {
+        const stat = await fs.promises.stat(file);
+        if (stat.isFile()) stamps.set(file, `${stat.mtimeMs}:${stat.size}`);
+      } catch { /* deleted since the glob */ }
+    }));
+    const files = globbed.files.filter((f) => stamps.has(f));
+    // A file that failed to load is tried again every time, whatever its
+    // stamp: the fix is as likely to land in a module it imports (a screen
+    // object written alongside it) as in the file, and a discovery that timed
+    // out under load deserves another go. Such files are few.
+    const changed = files.filter((f) => this._fileStamps.get(f) !== stamps.get(f) || this._discoveryErrors.has(f));
+    const setChanged = files.length !== this._testFiles.length || files.some((f, i) => this._testFiles[i] !== f);
+    if (!setChanged && changed.length === 0) return;
+
+    this._testFiles = files;
+    for (const [project, own] of globbed.byProject) project.testFiles = own.filter((f) => stamps.has(f));
+    // The loader the children need depends on the files (TypeScript or not).
+    if (setChanged || !this._scripts) this._scripts = resolveScripts(files);
+    const scripts = this._scripts;
+
+    const discovered = await mapWithConcurrency(changed, DISCOVERY_CONCURRENCY, async (file) => {
       const { tree, error } = await discoverFile(file, scripts);
       return { file, tree, error };
     });
+
+    const known = new Set(files);
+    const fileNodes = new Map<string, TestTreeNode>();
+    for (const file of files) {
+      const node = this._fileNodes.get(file);
+      if (node) fileNodes.set(file, node);
+    }
+    for (const file of [...this._discoveryErrors.keys()]) {
+      if (!known.has(file)) this._discoveryErrors.delete(file);
+    }
+    for (const file of [...this._fileStamps.keys()]) {
+      if (!known.has(file)) this._fileStamps.delete(file);
+    }
     for (const { file, tree, error } of discovered) {
-      if (tree) fileNodes.set(file, tree);
-      // A file that fails to load has no tests to show, so it would otherwise
-      // vanish from the tree with nothing to distinguish it from a file that
-      // genuinely holds no tests. Keep the reason for the caller.
-      else this._discoveryErrors.set(file, error ?? 'Discovery failed (no result returned)');
+      this._fileStamps.set(file, stamps.get(file)!);
+      if (tree) {
+        fileNodes.set(file, tree);
+        this._discoveryErrors.delete(file);
+      } else {
+        // A file that fails to load has no tests to show, so it would
+        // otherwise vanish from the tree with nothing to distinguish it from
+        // a file that genuinely holds no tests. Keep the reason for the caller.
+        fileNodes.delete(file);
+        this._discoveryErrors.set(file, error ?? 'Discovery failed (no result returned)');
+      }
     }
 
-    this._fileNodes = fileNodes;
+    // In glob order, as the tree has always been listed.
+    this._fileNodes = new Map(files.filter((f) => fileNodes.has(f)).map((f) => [f, fileNodes.get(f)!]));
     this._rebuildTestTree();
   }
 
@@ -1281,9 +1446,9 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       throw new Error('No Tapsmith config is loaded, so there is nothing to run against.');
     }
 
-    // The child applies the config's grep itself. Nothing re-discovers a file
-    // here after startup, so the tree cannot say a file has nothing to run:
-    // an edit since may have added the test the grep selects (PILOT-730).
+    // The child applies the config's grep itself. The tree is only as fresh as
+    // the last sync, so it cannot say a file has nothing to run: an edit since
+    // may have added the test the grep selects (PILOT-730).
     const grep = this._grepFiltersFor(projectName);
 
     const target = await this._ensureTargetForProject(projectName);
@@ -1441,11 +1606,9 @@ export class HeadlessTestDispatcher implements TestDispatcher {
       this._watcher = chokidarWatch([], { ignoreInitial: true });
       this._watcher.on('change', (changedPath) => {
         if (this._watchedEntries.has(changedPath)) {
-          // Nothing re-runs discovery in watch mode, so an import failure
-          // recorded once was reported by `list_tests` for the life of the
-          // server — including after the edit that fixed it. The file just
-          // changed; the old reason no longer describes it, and the run about
-          // to be scheduled reports whatever is true now.
+          // The file just changed, so the import failure recorded for it no
+          // longer describes it: the run about to be scheduled (which syncs
+          // the files first) reports whatever is true now.
           this._discoveryErrors.delete(changedPath);
           this._watchQueue.scheduleFiles([changedPath]);
         }
@@ -1699,6 +1862,16 @@ export function resultEntryKey(
   fullName: string,
 ): string {
   return `${projectName ?? ''}::${filePath}::${fullName}`;
+}
+
+/** A `device` waiting to pin a target as the targets are first resolved. */
+interface PendingPin {
+  device: string
+  /** A `run_tests` pin's files; absent for a device tool's. */
+  files?: string[]
+  project?: string
+  /** The target it pinned, once `_applyPendingPin` has. */
+  pinnedKey?: string
 }
 
 interface WatchedEntry {
