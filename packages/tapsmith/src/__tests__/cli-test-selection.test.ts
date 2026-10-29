@@ -4,6 +4,9 @@
  * a missing file, or a grep that selects no test, fails with "No tests found"
  * at once instead of after a device boot.
  *
+ * A selected test file that fails to load is reported the same way, before
+ * any device work (PILOT-784), and so is a missing config.
+ *
  * Drives the *built* CLI in a scratch project, with `adb` and the daemon
  * replaced by stand-ins that record being reached — so "before any device
  * work" is asserted, not inferred from timing. Rebuild (`npm run build`) after
@@ -313,6 +316,111 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('tapsmith test selection', { tim
     expect(grep.output).toContain('No tests found: no test matches grep /zzzz/.');
     expect(grep.output).toContain('  - example > opens the app');
     expect(grep.reachedDevice).toBe(false);
+  });
+  // ─── Load failures before any device work (PILOT-784) ───
+
+  const BROKEN = 'import { test } from "tapsmith";\ntest("bad", async () => {\n  const x = ;\n});\n';
+  const plain = (output: string): string => output.replace(/\x1b\[\d+m/g, '');
+
+  it('reports a test file with a syntax error, with a code frame, before any device work, and runs nothing', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'broken.test.ts'), BROKEN);
+    const { status, output, reachedDevice } = run();
+    expect(plain(output)).toContain('broken.test.ts — failed to load');
+    expect(plain(output)).toMatch(/> 3 \|\s+const x = ;/);
+    expect(plain(output)).toContain('No tests ran: 1 test file failed to load.');
+    expect(output).not.toContain('Config:');
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+  });
+
+  it('points a missing import at its line, before any device work', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'),
+      'import { test } from "tapsmith";\nimport { helper } from "./helpers/nope.js";\ntest("m", async () => { helper(); });\n');
+    const { status, output, reachedDevice } = run();
+    expect(plain(output)).toContain('login.test.ts — failed to load');
+    expect(plain(output)).toMatch(/> 2 \| import \{ helper \} from "\.\/helpers\/nope\.js";/);
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+  });
+
+  it('reports a top-level throw and a describe body that throws, every file in one go', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'login.test.ts'), 'throw new Error("boom at load");\n');
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'signup.test.ts'),
+      'import { describe } from "tapsmith";\ndescribe("s", () => { throw new Error("boom in describe"); });\n');
+    const { status, output, reachedDevice } = run();
+    expect(output).toContain('boom at load');
+    expect(output).toContain('boom in describe');
+    expect(plain(output)).toContain('No tests ran: 2 test files failed to load.');
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+  });
+
+  it('reports a load failure, not "no test matches", when a grep is active', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'broken.test.ts'), BROKEN);
+    const { status, output, reachedDevice } = run('--grep', 'signs in');
+    expect(output).not.toContain('No tests found');
+    expect(plain(output)).toContain('broken.test.ts — failed to load');
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+  });
+
+  it('reports a load failure before any device work with --workers', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'broken.test.ts'), BROKEN);
+    const { status, output, reachedDevice } = run('--workers', '2');
+    expect(plain(output)).toContain('broken.test.ts — failed to load');
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+  });
+
+  it('reports a load failure in a dependency project\'s file, and gives it to the configured reporters', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'auth.setup.ts'), BROKEN);
+    fs.writeFileSync(path.join(root, 'tapsmith.config.mjs'),
+      'export default { platform: "android", package: "com.example", launchEmulators: false, '
+      + 'reporter: [["list"], ["json", { outputFile: "report.json" }]], projects: ['
+      + '{ name: "setup", testMatch: ["**/*.setup.ts"] }, '
+      + '{ name: "e2e", testMatch: ["tests/pw/**/*.test.ts"], dependencies: ["setup"] }] };\n');
+    const { status, output, reachedDevice } = run('login');
+    expect(plain(output)).toContain('auth.setup.ts — failed to load');
+    expect(status).toBe(1);
+    expect(reachedDevice).toBe(false);
+    const report = JSON.parse(fs.readFileSync(path.join(root, 'report.json'), 'utf-8')) as { stats?: { failed?: number } };
+    expect(JSON.stringify(report)).toContain('auth.setup.ts — failed to load');
+  });
+
+  it('checks only the files of its own shard', () => {
+    fs.writeFileSync(path.join(root, 'tests', 'pw', 'signup.test.ts'), BROKEN);
+    const outcomes = ['1/2', '2/2'].map((shard) => {
+      fs.rmSync(marker, { force: true });
+      const { output, reachedDevice } = run(`--shard=${shard}`);
+      return { failedToLoad: plain(output).includes('signup.test.ts — failed to load'), reachedDevice };
+    });
+    expect(outcomes).toEqual(expect.arrayContaining([
+      { failedToLoad: true, reachedDevice: false },
+      { failedToLoad: false, reachedDevice: true },
+    ]));
+  });
+
+  // ─── No config (PILOT-784) ───
+
+  it.each([[[] as string[]], [['--ui']], [['--watch']], [['tests/pw/login.test.ts']]])(
+    'refuses to run without a config, naming init, before any device work (%j)',
+    (args) => {
+      fs.rmSync(path.join(root, 'tapsmith.config.mjs'));
+      const { status, output, reachedDevice } = run(...args);
+      expect(plain(output)).toContain(`No tapsmith.config.ts (or .js, .mjs) found in ${root}. To set Tapsmith up here, run: npx tapsmith init`);
+      expect(output).not.toContain('Config:');
+      expect(output).not.toContain('No tests found');
+      expect(status).toBe(1);
+      expect(reachedDevice).toBe(false);
+    },
+  );
+
+  it('names the project\'s own runner in the init hint', () => {
+    fs.rmSync(path.join(root, 'tapsmith.config.mjs'));
+    fs.writeFileSync(path.join(root, 'pnpm-lock.yaml'), 'lockfileVersion: \'9.0\'\n');
+    const { status, output } = run();
+    expect(plain(output)).toContain('To set Tapsmith up here, run: pnpm exec tapsmith init');
+    expect(status).toBe(1);
   });
 });
 

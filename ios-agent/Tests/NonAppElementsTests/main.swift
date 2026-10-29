@@ -69,6 +69,23 @@ check("a toolbar button above it does not",
 check("no keyboard: nothing lies in it",
       NonAppElements.liesInKeyboard(CGRect(x: 300, y: 800, width: 90, height: 40), keyboardFrame: .zero), false)
 
+// ─── A switch's part (PILOT-790) ───
+// SwiftUI draws a labelled Toggle as a row-sized switch holding its label text
+// and an unlabelled switch, the knob: one control, which only the knob flips.
+
+check("a switch inside a switch is its part",
+      NonAppElements.isSwitchPart(elementType: .switch, insideSwitch: true), true)
+check("a toggle inside a switch is its part",
+      NonAppElements.isSwitchPart(elementType: .toggle, insideSwitch: true), true)
+check("the outer switch is not",
+      NonAppElements.isSwitchPart(elementType: .switch, insideSwitch: false), false)
+check("the Toggle's label text is not",
+      NonAppElements.isSwitchPart(elementType: .staticText, insideSwitch: true), false)
+check("a switch and a toggle are switches",
+      [XCUIElement.ElementType.switch, .toggle].map(NonAppElements.isSwitch), [true, true])
+check("a button and a checkbox are not",
+      [XCUIElement.ElementType.button, .checkBox, .other].map(NonAppElements.isSwitch), [false, false, false])
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)

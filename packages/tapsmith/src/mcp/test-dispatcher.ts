@@ -142,8 +142,8 @@ export interface TestDispatcher {
    * Bring the discovered test files up to date with the disk — files written,
    * edited or deleted since the session last looked — initializing first if
    * need be. Every tool that reads or runs the test tree calls it, so a test
-   * an agent has just written is listed and runnable straight away
-   * (PILOT-836). Required: an optional method lets a dispatcher omit it, and
+   * an agent has just written is listed and runnable
+   * straight away. Required: an optional method lets a dispatcher omit it, and
    * its tools then answer from a stale tree with nothing to say so.
    */
   refreshTestFiles(): Promise<void>

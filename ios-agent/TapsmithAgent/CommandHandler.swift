@@ -913,6 +913,8 @@ class CommandHandler {
         var staleError: Error?
         do { _ = try getXCUIElement(element.elementId) } catch { staleError = error }
 
+        // A SwiftUI Toggle only flips from its knob: touch that (PILOT-790).
+        let element = switchKnob(of: element) ?? element
         putKeyboardAwayIfItWouldEatTheTouch(element)
         switch try planSettledTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
         case .hittableElement(let xcElem):
@@ -923,6 +925,64 @@ class CommandHandler {
         case .offScreen:
             throw staleError ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
+    }
+
+    /// The knob of a SwiftUI Toggle, as an element of its own, when `element`
+    /// is a switch that held one when it was found (NonAppElements
+    /// .isSwitchPart, PILOT-790): a Form Toggle ignores a touch on the rest of
+    /// its row, where `XCUIElement.tap()` lands (the row's centre). Its touch
+    /// is then planned like any other, covers and all. nil for a UISwitch,
+    /// which holds no switch, and for any other element.
+    ///
+    /// The knob is the switch inside the live Toggle. A Toggle found by a
+    /// locator that keeps no live element (`getByLabel`) is found again as
+    /// the switch with its label and identifier still at the frame it was
+    /// found at. One that moved or went away gets no knob, so the touch is
+    /// planned on it as found and reported stale (`planTouch`) rather than
+    /// sent to another Toggle that took its place.
+    ///
+    /// **Cost**, for such a Toggle only: a query for the knob and one
+    /// snapshot of it; without a live Toggle, first a snapshot of each switch
+    /// carrying its label until the one at its frame.
+    private func switchKnob(of element: ElementInfo) -> ElementInfo? {
+        guard let identity = snapshotFinder.getIdentity(element.elementId), identity.holdsSwitchPart,
+              let toggle = liveToggle(of: element, identity: identity) else { return nil }
+        let switchTypes = [XCUIElement.ElementType.switch, .toggle].map { NSNumber(value: $0.rawValue) }
+        let knob = toggle.descendants(matching: .any)
+            .matching(NSPredicate(format: "elementType IN %@", switchTypes))
+            .firstMatch
+        guard let snap = try? knob.snapshot(), Self.isUsable(snap.frame) else { return nil }
+        return snapshotFinder.cachePart(knob, of: element, frame: snap.frame, elementType: snap.elementType)
+    }
+
+    /// The live Toggle `element` was found as: its own live element, or else
+    /// the switch with the label and identifier it was found with, at the
+    /// frame it was found at.
+    private func liveToggle(of element: ElementInfo, identity: SnapshotElementFinder.CachedIdentity) -> XCUIElement? {
+        if let live = try? getXCUIElement(element.elementId), live.exists { return live }
+        guard let found = snapshotFinder.getBounds(element.elementId) else { return nil }
+        var predicates = [
+            NSPredicate(format: "elementType == %@", NSNumber(value: identity.elementType.rawValue)),
+            NSPredicate(format: "label == %@", identity.label),
+        ]
+        if !identity.identifier.isEmpty {
+            predicates.append(NSPredicate(format: "identifier == %@", identity.identifier))
+        }
+        let candidates = app.descendants(matching: .any)
+            .matching(NSCompoundPredicate(andPredicateWithSubpredicates: predicates))
+        for candidate in candidates.allElementsBoundByIndex {
+            if let snap = try? candidate.snapshot(), OcclusionAnalyzer.framesMatch(snap.frame, found) {
+                return candidate
+            }
+        }
+        return nil
+    }
+
+    /// A frame that can be turned into whole-point bounds (Int of a null or
+    /// infinite rect's origin is a fatal error).
+    private static func isUsable(_ frame: CGRect) -> Bool {
+        !frame.isNull && !frame.isInfinite && frame.width > 0 && frame.height > 0
+            && abs(frame.origin.x) < 100_000 && abs(frame.origin.y) < 100_000
     }
 
     /// Double-tap a resolved element. Prefer coordinate synthesis: it encodes

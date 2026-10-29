@@ -63,12 +63,14 @@ class HierarchyDumper {
     /// an ancestor is keyboard UI no locator matches, and the window's
     /// keyboard top so far (NonAppElements.excludesSubtree). Each such
     /// subtree's root is written `tapsmith-non-app="true"`, so the trace
-    /// viewer leaves it out too.
+    /// viewer leaves it out too. `insideSwitch`: whether an ancestor is a
+    /// switch, whose switch descendants are its parts.
     private func dumpNode(
         _ node: [String: Any],
         depth: Int,
         inTabBar: Bool,
         insideNonApp: Bool,
+        insideSwitch: Bool = false,
         keyboardTop: inout CGFloat?,
         into xml: inout String
     ) {
@@ -123,6 +125,12 @@ class HierarchyDumper {
             xml += " tapsmith-non-app=\"true\""
             if elType == .keyboard { keyboardTop = frame.minY }
         }
+        // A SwiftUI Toggle's knob, part of the switch it sits in: no locator
+        // matches it (NonAppElements.isSwitchPart, PILOT-790), so the trace
+        // viewer and the MCP snapshot leave it out too.
+        if NonAppElements.isSwitchPart(elementType: elType, insideSwitch: insideSwitch) {
+            xml += " tapsmith-switch-part=\"true\""
+        }
 
         let children = node["children"] as? [[String: Any]] ?? []
 
@@ -139,6 +147,7 @@ class HierarchyDumper {
                     depth: depth + 1,
                     inTabBar: inTabBar || elType == .tabBar,
                     insideNonApp: insideNonApp || nonApp,
+                    insideSwitch: insideSwitch || NonAppElements.isSwitch(elType),
                     keyboardTop: &keyboardTop,
                     into: &xml
                 )

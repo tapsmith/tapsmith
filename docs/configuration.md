@@ -20,7 +20,9 @@ Without `--config`, Tapsmith uses the first of `tapsmith.config.ts`, `tapsmith.c
 `tapsmith.config.mjs` that exists in the working directory. If that file cannot be loaded (a syntax
 error, an import that does not resolve, an exception at the top level), the command stops with the
 error and the file's path; it never falls back to another candidate or to the defaults. The
-defaults apply only when no config file exists.
+defaults apply only when no config file exists, and `tapsmith test` does not run without one: it
+says so and names the `init` command that creates it (`npx tapsmith init`, or your package
+manager's equivalent).
 
 The config must be the file's default export (`export default defineConfig({ ... })`), and Tapsmith
 checks it before doing any work, because a config runs without type-checking. An unknown option, a
@@ -751,7 +753,7 @@ Tapsmith searches for configuration files in this order:
 
 Tapsmith loads the first file that exists. If that file cannot be loaded, the command stops with
 the error; it does not try the next candidate. Tapsmith uses the default values for all options
-only when no config file exists.
+only when no config file exists (`tapsmith test` refuses to run without one).
 
 `.ts` config files need no TypeScript loader in your environment: Tapsmith imports them natively
 when Node can, and otherwise through its bundled `tsx`.

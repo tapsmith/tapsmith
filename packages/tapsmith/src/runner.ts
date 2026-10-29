@@ -4101,13 +4101,24 @@ export function fileLevelFailureResult(
   opts: Pick<RunOptions, 'testFilePath' | 'projectName'>,
   err: unknown,
 ): TestResult {
+  return loadFailureResult(opts, loadErrorForReport(err, opts.testFilePath));
+}
+
+/**
+ * {@link fileLevelFailureResult} for an error `loadErrorForReport` already
+ * prepared — in the child that loaded the file before the run.
+ */
+export function loadFailureResult(
+  opts: Pick<RunOptions, 'testFilePath' | 'projectName'>,
+  error: Error,
+): TestResult {
   const title = fileLoadFailureTitle(opts.testFilePath ?? '');
   return {
     name: title,
     fullName: title,
     status: 'failed',
     durationMs: 0,
-    error: loadErrorForReport(err),
+    error,
     project: opts.projectName,
     filePath: opts.testFilePath,
     fileLevelFailure: true,
