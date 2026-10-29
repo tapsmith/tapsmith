@@ -3084,20 +3084,29 @@ export class ElementHandle {
   }
 
   /**
-   * Pinch in on (zoom out of) this element.
+   * Pinch in on (zoom out of) this element: two fingers close in on its
+   * centre.
    *
-   * @param options.scale - Pinch scale factor. Defaults to `0.5`.
+   * @param options.scale - The fingers' end distance as a share of their start
+   *   distance, between 0 and 1 (exclusive). Defaults to `0.5`.
    * @param options.timeout - Maximum time in milliseconds for the whole call,
    *   auto-wait included. Defaults to the device timeout.
    */
   async pinchIn(options?: TimeoutOptions & { scale?: number }): Promise<void> {
+    const scale = options?.scale ?? 0.5;
+    // A scale of 1 or more is not a pinch in: refuse it rather than send a
+    // pinch that does nothing or zooms the wrong way (PILOT-825).
+    if (!(scale > 0 && scale < 1)) {
+      throw new Error(
+        `pinchIn() scale must be between 0 and 1 (exclusive), got ${scale}${scale > 1 ? '; use pinchOut() to zoom in' : ''}`,
+      );
+    }
     const call = this._forCall('pinchIn()', options, ['scale', 'timeout']);
     if (call !== this) return call.pinchIn({ scale: options?.scale });
     const { target, remainingMs } = await this._tracedResolve('pinchIn', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
     });
-    const scale = options?.scale ?? 0.5;
     return this._tracedAction('pinchIn', 'other',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
         ? this._client.pinchZoom(undefined, scale, remainingMs, t.elementId)
@@ -3106,20 +3115,27 @@ export class ElementHandle {
   }
 
   /**
-   * Pinch out on (zoom into) this element.
+   * Pinch out on (zoom into) this element: two fingers spread apart from its
+   * centre.
    *
-   * @param options.scale - Pinch scale factor. Defaults to `2`.
+   * @param options.scale - The fingers' end distance as a multiple of their
+   *   start distance, above 1. Defaults to `2`.
    * @param options.timeout - Maximum time in milliseconds for the whole call,
    *   auto-wait included. Defaults to the device timeout.
    */
   async pinchOut(options?: TimeoutOptions & { scale?: number }): Promise<void> {
+    const scale = options?.scale ?? 2;
+    if (!(scale > 1 && Number.isFinite(scale))) {
+      throw new Error(
+        `pinchOut() scale must be a finite number above 1, got ${scale}${scale > 0 && scale < 1 ? '; use pinchIn() to zoom out' : ''}`,
+      );
+    }
     const call = this._forCall('pinchOut()', options, ['scale', 'timeout']);
     if (call !== this) return call.pinchOut({ scale: options?.scale });
     const { target, remainingMs } = await this._tracedResolve('pinchOut', 'other', async () => {
       const { remainingMs, element } = await this._strictResolve();
       return { target: await this._actionTarget(element), remainingMs };
     });
-    const scale = options?.scale ?? 2;
     return this._tracedAction('pinchOut', 'other',
       () => this._dispatchTargeted(target, (t) => 'elementId' in t
         ? this._client.pinchZoom(undefined, scale, remainingMs, t.elementId)

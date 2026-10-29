@@ -1331,7 +1331,9 @@ await device.getByRole("textfield", { name: "Email" }).blur();
 
 #### `elementHandle.pinchIn(options?): Promise<void>`
 
-Perform a pinch-in (zoom out) gesture on this element. Options: `scale` (default `0.5`) and the [per-call timeout](#per-call-timeout).
+Pinch in on (zoom out of) this element: two fingers on its diagonal close in on its centre, inside the part of it that is on screen and not covered. Options: `scale`, the fingers' end distance as a share of their start distance, between 0 and 1 exclusive (default `0.5`), and the [per-call timeout](#per-call-timeout).
+
+A `scale` outside that range throws before anything is sent to the device. The call also fails, rather than reporting a pinch that did not happen, when the element is off screen, when its visible part is too small for two fingers, or when the device cannot synthesize the gesture. On a very small element or with an extreme `scale`, the fingers stop short of the asked distance (at least 40 pt apart on iOS, a tenth of the full span on Android) rather than touching.
 
 ```typescript
 await device.getByText("Map", { exact: true }).pinchIn();
@@ -1340,7 +1342,7 @@ await device.getByText("Map", { exact: true }).pinchIn({ scale: 0.3 });
 
 #### `elementHandle.pinchOut(options?): Promise<void>`
 
-Perform a pinch-out (zoom in) gesture on this element. Options: `scale` (default `2`) and the [per-call timeout](#per-call-timeout).
+Pinch out on (zoom into) this element: two fingers spread apart from its centre along its diagonal. Options: `scale`, the fingers' end distance as a multiple of their start distance, above 1 (default `2`), and the [per-call timeout](#per-call-timeout). It fails the same ways as [`pinchIn()`](#elementhandlepinchinoptions-promisevoid).
 
 ```typescript
 await device.getByText("Map", { exact: true }).pinchOut();
