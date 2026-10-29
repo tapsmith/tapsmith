@@ -184,6 +184,10 @@ class SnapshotElementFinder {
         // so a role+name, RegExp or substring-text match can be re-resolved
         // by its index within the live query that finds it again
         // (cacheQueryElement, PILOT-549, PILOT-520, PILOT-522).
+        // Whether the tree holds a SwiftUI Toggle's knob, which a live switch
+        // query returns out of tree order (cacheQueryElement).
+        let treeHasSwitchPart = register && selector.roleOnlySwitch
+            && SnapshotElementFinder.containsSwitchPart(snapshotDict, insideSwitch: false)
         var queryNodes: [QueryNode] = []
         if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel
             || selector.roleOnlySwitch) {
@@ -332,7 +336,8 @@ class SnapshotElementFinder {
                 // a property (like .isHittable) is accessed. Pass the snapshot node so the
                 // query can use element type + identifier for more precise matching.
                 cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, idIndex: idIndices[matchIndex],
-                    labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict
+                    labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict,
+                    treeHasSwitchPart: treeHasSwitchPart
                 )
             }
             // The snapshot's hasFocus is unreliable on Xcode 26 — it can
@@ -887,6 +892,18 @@ class SnapshotElementFinder {
         RoleName.placeholderName(
             elementType: type, label: node.label, title: node.title, placeholder: node.placeholder
         ) != nil
+    }
+
+    /// Whether `node` or a descendant is part of a switch
+    /// (NonAppElements.isSwitchPart); `insideSwitch`: whether `node` has a
+    /// switch ancestor.
+    static func containsSwitchPart(_ node: [String: Any], insideSwitch: Bool) -> Bool {
+        let type = XCUIElement.ElementType(rawValue: parseUInt(node["elementType"]) ?? 0) ?? .other
+        if NonAppElements.isSwitchPart(elementType: type, insideSwitch: insideSwitch) { return true }
+        let childInsideSwitch = insideSwitch || NonAppElements.isSwitch(type)
+        return (node["children"] as? [[String: Any]] ?? []).contains {
+            containsSwitchPart($0, insideSwitch: childInsideSwitch)
+        }
     }
 
     /// Whether a descendant of `node` is a switch: the knob of a SwiftUI
@@ -1598,7 +1615,8 @@ class SnapshotElementFinder {
         matchIndex: Int,
         idIndex: Int,
         labelIndex: Int?,
-        snapshotNode: [String: Any]? = nil
+        snapshotNode: [String: Any]? = nil,
+        treeHasSwitchPart: Bool = false
     ) {
         // Build a query that matches this element
         let element: XCUIElement?
@@ -1791,6 +1809,12 @@ class SnapshotElementFinder {
                 // so no index into it can be trusted: find a named switch by
                 // its own label, which a knob doesn't have (PILOT-790).
                 element = byOwnLabel(nodeLabel, at: labelIndex)
+            } else if selector.roleOnlySwitch, treeHasSwitchPart {
+                // An unnamed switch beside SwiftUI Toggles: nothing but a
+                // position in that query could find it again, so cache
+                // nothing, as for the roles above — a tap goes to its bounds
+                // (or, for a Toggle, its knob by frame).
+                element = nil
             } else if let types = try? RoleMapping.elementTypes(for: role), let firstType = types.first {
                 // Role-only: match by type.
                 element = resolve(app.descendants(matching: firstType))
