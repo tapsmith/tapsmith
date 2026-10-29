@@ -848,9 +848,6 @@ class SnapshotElementFinder {
         ) != nil
     }
 
-    /// Number every descendant of `dict` (not `dict` itself — XCUIElement
-    /// `descendants` queries exclude the root) in pre-order, storing the
-    /// ordinal under `ordinalKey` and the node's query fields in `nodes`.
     /// Whether a descendant of `node` is a switch: the knob of a SwiftUI
     /// Toggle when `node` is itself one (NonAppElements.isSwitchPart).
     static func holdsSwitch(_ node: [String: Any]) -> Bool {
@@ -861,6 +858,9 @@ class SnapshotElementFinder {
         return false
     }
 
+    /// Number every descendant of `dict` (not `dict` itself — XCUIElement
+    /// `descendants` queries exclude the root) in pre-order, storing the
+    /// ordinal under `ordinalKey` and the node's query fields in `nodes`.
     static func numberDescendants(of dict: inout [String: Any], into nodes: inout [QueryNode]) {
         guard var children = dict["children"] as? [[String: Any]] else { return }
         for i in children.indices {
