@@ -125,3 +125,9 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/CellFrames.swift \
   -o "$OUT/cell-frames-tests"
 "$OUT/cell-frames-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/DoubleTapRouteTests/main.swift \
+  TapsmithAgent/DoubleTapRoute.swift \
+  -o "$OUT/double-tap-route-tests"
+"$OUT/double-tap-route-tests"

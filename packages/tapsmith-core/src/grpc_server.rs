@@ -1977,6 +1977,7 @@ impl TapsmithServiceImpl {
     async fn try_hid_double_tap(
         &self,
         selector: &Value,
+        element_id: &Option<String>,
         timeout_ms: u64,
         interval_ms: u64,
     ) -> HidOutcome {
@@ -1991,7 +1992,10 @@ impl TapsmithServiceImpl {
             debug!(%udid, error = %e, "iOS HID helper unavailable for double-tap; using agent route");
             return HidOutcome::NotHandled;
         }
-        let (x, y) = match self.resolve_hid_point(selector, timeout_ms).await {
+        let (x, y) = match self
+            .resolve_hid_point(selector, element_id, timeout_ms)
+            .await
+        {
             HidTarget::Point { x, y } => (x, y),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             HidTarget::AgentRoute => return HidOutcome::NotHandled,
@@ -2019,11 +2023,19 @@ impl TapsmithServiceImpl {
     /// Ask the agent where a HID touch on `selector` can land without hitting
     /// something drawn over the element (PILOT-223). A raw HID press lands on
     /// whatever is on top, so the element's bounds center is not enough.
+    /// `element_id` addresses the exact element a positional or filtered
+    /// handle resolved (the agent honours it ahead of the selector).
     #[cfg(target_os = "macos")]
-    async fn resolve_hid_point(&self, selector: &Value, timeout_ms: u64) -> HidTarget {
+    async fn resolve_hid_point(
+        &self,
+        selector: &Value,
+        element_id: &Option<String>,
+        timeout_ms: u64,
+    ) -> HidTarget {
         let resolve = AgentCommand::ResolveActionPoint {
             selector: selector.clone(),
             timeout_ms: opt_timeout(timeout_ms),
+            element_id: element_id.clone(),
         };
         hid_target(
             self.send_agent_command_with_timeout(&resolve, timeout_ms)
@@ -2061,7 +2073,11 @@ impl TapsmithServiceImpl {
             return HidOutcome::NotHandled;
         }
         let (x, y) = match self
-            .resolve_hid_point(selector, long_press_resolve_budget(timeout_ms, duration_ms))
+            .resolve_hid_point(
+                selector,
+                &None,
+                long_press_resolve_budget(timeout_ms, duration_ms),
+            )
             .await
         {
             HidTarget::Point { x, y } => (x, y),
@@ -3235,21 +3251,20 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         // gaps, offset second taps, and the public XCUICoordinate.doubleTap()
         // alike (verified empirically on iOS 26.5: the app receives exactly
         // one tap). HID events enter below XCTest and are indistinguishable
-        // from real touches, so the pair always arrives. Selector-addressed
-        // targets only — cached-element-id bounds are agent-internal; those
-        // (and any HID failure) fall through to the agent route.
+        // from real touches, so the pair always arrives. Element-id targets
+        // (`.first()`, `.nth()`, `filter()`…) take it too: the agent resolves
+        // the point of that exact cached element (PILOT-795). Any HID failure
+        // falls through to the agent route.
         #[cfg(target_os = "macos")]
-        if element_id.is_none() {
-            match self
-                .try_hid_double_tap(&selector, req.timeout_ms, req.interval_ms)
-                .await
-            {
-                HidOutcome::Injected => return Ok(Self::success_action_response(request_id)),
-                HidOutcome::Refused(resp) => {
-                    return self.make_action_response(request_id, Ok(resp)).await
-                }
-                HidOutcome::NotHandled => {}
+        match self
+            .try_hid_double_tap(&selector, &element_id, req.timeout_ms, req.interval_ms)
+            .await
+        {
+            HidOutcome::Injected => return Ok(Self::success_action_response(request_id)),
+            HidOutcome::Refused(resp) => {
+                return self.make_action_response(request_id, Ok(resp)).await
             }
+            HidOutcome::NotHandled => {}
         }
 
         let command = AgentCommand::DoubleTap {

@@ -10,6 +10,7 @@ Create `tapsmith.config.ts` in your project root:
 import { defineConfig } from "tapsmith";
 
 export default defineConfig({
+  testMatch: ["**/*.tapsmith.ts"],
   apk: "./app/build/outputs/apk/debug/app-debug.apk",
   package: "com.example.myapp",
 });
@@ -20,7 +21,9 @@ Without `--config`, Tapsmith uses the first of `tapsmith.config.ts`, `tapsmith.c
 `tapsmith.config.mjs` that exists in the working directory. If that file cannot be loaded (a syntax
 error, an import that does not resolve, an exception at the top level), the command stops with the
 error and the file's path; it never falls back to another candidate or to the defaults. The
-defaults apply only when no config file exists.
+defaults apply only when no config file exists, and `tapsmith test` does not run without one: it
+says so and names the `init` command that creates it (`npx tapsmith init`, or your package
+manager's equivalent).
 
 The config must be the file's default export (`export default defineConfig({ ... })`), and Tapsmith
 checks it before doing any work, because a config runs without type-checking. An unknown option, a
@@ -53,7 +56,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `typingDelay` | `number` | `0` | Delay in milliseconds between keystrokes when typing text. Helps prevent dropped characters on slow CI simulators/emulators. Can be overridden per-call via `type("text", { delay: 50 })`. |
 | `retries` | `number` | `0` | Number of times to retry a failed test. A retry starts from a freshly reset app, with the enclosing `beforeAll` hooks run again (see [Retries start from a fresh app](writing-tests.md#retries-start-from-a-fresh-app)). |
 | `screenshot` | `ScreenshotMode` | `"only-on-failure"` | When to capture screenshots: `"always"`, `"only-on-failure"`, or `"never"`. |
-| `testMatch` | `string[]` | `["**/*.test.ts", "**/*.spec.ts"]` | Glob patterns for discovering test files. To exclude files, use a project's `testIgnore` ([Projects](writing-tests.md#filtering-with-testmatch-and-testignore)); there is no root-level `testIgnore`. Test discovery skips `node_modules`, `dist` and a native app's generated directories (`Pods`, `ios/build`, `DerivedData`, `build` under `android/`, `.cxx`, `.gradle`, `.expo`, `vendor/bundle`, `.yarn`, and the output Gradle and `xcodebuild -derivedDataPath build` write inside any other `build` directory: Gradle's `intermediates`, `tmp`, `generated`, `kotlin`, `outputs`, `bin`, `classes`, `reports`, `kspCaches` and `xcode-frameworks`, and xcodebuild's `Build`, `SourcePackages`, `Logs`, `SDKExplicitPrecompiledModules` and `*.noindex`), and inside `rootDir`, UI and watch mode don't watch them, `.git` or the `outputDir` for new test files. Discovery matches these names case-sensitively. |
+| `testMatch` | `string[]` | `["**/*.test.ts", "**/*.spec.ts", "**/*.tapsmith.ts"]` | Glob patterns for discovering test files. `tapsmith init` sets `["**/*.tapsmith.ts"]`, a suffix Jest and Vitest don't run ([why](getting-started.md#tapsmith-tests-and-your-unit-tests)). To exclude files, use a project's `testIgnore` ([Projects](writing-tests.md#filtering-with-testmatch-and-testignore)); there is no root-level `testIgnore`. Test discovery skips `node_modules`, `dist` and a native app's generated directories (`Pods`, `ios/build`, `DerivedData`, `build` under `android/`, `.cxx`, `.gradle`, `.expo`, `vendor/bundle`, `.yarn`, and the output Gradle and `xcodebuild -derivedDataPath build` write inside any other `build` directory: Gradle's `intermediates`, `tmp`, `generated`, `kotlin`, `outputs`, `bin`, `classes`, `reports`, `kspCaches` and `xcode-frameworks`, and xcodebuild's `Build`, `SourcePackages`, `Logs`, `SDKExplicitPrecompiledModules` and `*.noindex`), and inside `rootDir`, UI and watch mode don't watch them, `.git` or the `outputDir` for new test files. Discovery matches these names case-sensitively. |
 | `daemonAddress` | `string` | `"localhost:50051"` | Address of the Tapsmith daemon (host:port). If another live Tapsmith session already answers on that port, this session starts its own daemon on a free port instead of taking it over. |
 | `daemonBin` | `string` | `undefined` | Path to the `tapsmith-core` binary. If unset, Tapsmith auto-resolves it from several common locations (including npm packages and monorepo build outputs) before falling back to `PATH`. |
 | `device` | `string` | `undefined` | Explicit single-device override. Useful for debugging or forcing one specific physical device/emulator/simulator. |
@@ -77,7 +80,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `grepInvert` | `RegExp \| RegExp[]` | `undefined` | Leave out the tests whose fullName matches any of these regular expressions (they are not run, listed or counted as skipped). Mirrors Playwright's `grepInvert` and the `--grep-invert` CLI flag. |
 | `baseURL` | `string` | `undefined` | Base URL for the `request` fixture. Relative paths in `request.get("/path")` are resolved against this. |
 | `extraHTTPHeaders` | `Record<string, string>` | `undefined` | Default headers sent with every `request` fixture call (e.g., `Authorization`). Per-request headers override these when names collide. |
-| `doubleTapInterval` | `number` | `100` | Default interval in milliseconds between the two taps in `doubleTap()`. Can be overridden per-call via `doubleTap({ intervalMs: 150 })`. |
+| `doubleTapInterval` | `number` | `100` | Default interval in milliseconds between the two taps in `doubleTap()`. Can be overridden per-call via `doubleTap({ intervalMs: 150 })`. Ignored on iOS simulators, which send the two taps about 120 ms apart. |
 | `appReset` | `'auto' \| 'clear' \| 'restart' \| 'warm' \| 'none'` | `'auto'` | How the app is reset to a known state before tests (see [Test isolation](writing-tests.md#test-isolation)). `auto` = `warm` when the app's in-app reset hooks are detected ([`@tapsmith/react-native`](warm-reset.md)) or `resetAppDeepLink` is set, otherwise `clear`. Overridable per project and per `test.use()` scope. |
 | `appResetScope` | `'auto' \| 'file' \| 'test'` | `'auto'` | Reset once per test file, or before every test. `auto` = `file` — one reset at file/scope entry. Set `'test'` on scopes that need a reset before every test (still warm when the app mounts `@tapsmith/react-native`). |
 | `appResetColdEvery` | `number` | `10` | With `appReset: 'warm'`, deliver every Nth reset cold (terminate + relaunch) so long all-warm iOS simulator sessions can't drift from a fresh launch. `0` disables. |
@@ -751,7 +754,7 @@ Tapsmith searches for configuration files in this order:
 
 Tapsmith loads the first file that exists. If that file cannot be loaded, the command stops with
 the error; it does not try the next candidate. Tapsmith uses the default values for all options
-only when no config file exists.
+only when no config file exists (`tapsmith test` refuses to run without one).
 
 `.ts` config files need no TypeScript loader in your environment: Tapsmith imports them natively
 when Node can, and otherwise through its bundled `tsx`.

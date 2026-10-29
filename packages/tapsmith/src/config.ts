@@ -81,7 +81,7 @@ export interface TapsmithConfig {
   /** When to capture screenshots. */
   screenshot: ScreenshotMode;
 
-  /** Glob patterns for discovering test files. */
+  /** Glob patterns for discovering test files. Default: `**\/*.test.ts`, `**\/*.spec.ts` and `**\/*.tapsmith.ts`. */
   testMatch: string[];
 
   /** Address of the Tapsmith daemon. */
@@ -493,7 +493,11 @@ const DEFAULT_CONFIG: TapsmithConfig = {
   timeout: 30_000,
   retries: 0,
   screenshot: 'only-on-failure',
-  testMatch: ['**/*.test.ts', '**/*.spec.ts'],
+  // `*.tapsmith.ts` is the name init, the guides and the migration guides use
+  // (PILOT-837); `*.test.ts` / `*.spec.ts` stay for existing projects. Not
+  // Playwright's `*.@(spec|test).?(c|m)[jt]s?(x)`: a config without testMatch
+  // would then pick up a React Native project's Jest `__tests__/App.test.tsx`.
+  testMatch: ['**/*.test.ts', '**/*.spec.ts', '**/*.tapsmith.ts'],
   daemonAddress: 'localhost:50051',
   rootDir: process.cwd(),
   outputDir: 'tapsmith-results',
@@ -1826,7 +1830,7 @@ function errorMessage(err: unknown): string {
  * that tsx then trips over something else on).
  */
 function configLoadError(configPath: string, err: unknown, nativeError?: unknown, note?: string): Error {
-  const syntax = syntaxErrorsOf(configPath, err);
+  const syntax = locateSyntaxErrors(configPath, err);
   let detail = syntax ? syntaxErrorDetail(configPath, syntax) : errorMessage(err);
   if (nativeError !== undefined && errorMessage(nativeError) !== errorMessage(err) && isUnresolvedForTsxToo(nativeError)) {
     detail += `\n(Without tsx, Node reported: ${errorMessage(nativeError)})`;
@@ -1873,19 +1877,19 @@ export function configLoadFailureOf(err: unknown): ConfigLoadFailure | undefined
 }
 
 /**
- * The syntax errors a load failure is, located: esbuild's (tsx compiling a
- * TypeScript config) are parsed from its message; Node's own carry no
- * location in an ES module, so `node --check` finds it for a JavaScript
- * config. `undefined` for anything else, or a syntax error that cannot be
- * located (one in a module the config imports, which `--check` does not
- * follow).
+ * The syntax errors a failure to import `file` (a config, or a test file) is,
+ * located: esbuild's (tsx compiling TypeScript) are parsed from its message;
+ * Node's own carry no location in an ES module, so `node --check` finds it
+ * for a JavaScript file. `undefined` for anything else, or a syntax error
+ * that cannot be located (one in a JavaScript module the file imports, which
+ * `--check` does not follow).
  */
-function syntaxErrorsOf(configPath: string, err: unknown): ConfigErrorLocation[] | undefined {
+export function locateSyntaxErrors(file: string, err: unknown): ConfigErrorLocation[] | undefined {
   const esbuild = parseEsbuildErrors(errorMessage(err));
   if (esbuild) return esbuild;
   if (!(err instanceof SyntaxError) || !firstStackFrameIsCompileStep(err)) return undefined;
-  if (!/\.[cm]?js$/.test(configPath)) return undefined;
-  const located = checkSyntaxLocation(configPath);
+  if (!/\.[cm]?js$/.test(file)) return undefined;
+  const located = checkSyntaxLocation(file);
   return located ? [{ ...located, text: err.message }] : undefined;
 }
 
@@ -1930,9 +1934,14 @@ function sameFile(a: string, b: string): boolean {
 function checkSyntaxLocation(file: string): { file: string; line: number; column?: number } | undefined {
   const result = spawnSync(process.execPath, ['--check', file], { encoding: 'utf-8', timeout: 10_000 });
   const lines = (result.stderr ?? '').split('\n');
-  const header = lines.findIndex((l) => l.startsWith(`${file}:`));
-  if (header === -1) return undefined;
-  const line = Number(lines[header].slice(file.length + 1));
+  // Node names the file by its real path: a symlinked directory (macOS's
+  // /var → /private/var) changes it.
+  let real = file;
+  try { real = fs.realpathSync(file); } catch { /* the given path, then */ }
+  const named = [file, real].find((p) => lines.some((l) => l.startsWith(`${p}:`)));
+  if (named === undefined) return undefined;
+  const header = lines.findIndex((l) => l.startsWith(`${named}:`));
+  const line = Number(lines[header].slice(named.length + 1));
   if (!Number.isInteger(line) || line < 1) return undefined;
   const caret = lines[header + 2]?.indexOf('^') ?? -1;
   return { file, line, ...(caret >= 0 ? { column: caret + 1 } : {}) };

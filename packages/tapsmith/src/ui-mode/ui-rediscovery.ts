@@ -1,5 +1,5 @@
 /**
- * Which files a UI-mode refresh queues for discovery (PILOT-836).
+ * Which files a UI-mode refresh queues for discovery.
  *
  * An MCP call syncs the session's test files with the disk instead of waiting
  * for the watcher, so it must pick up exactly what the watcher would have:

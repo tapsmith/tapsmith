@@ -1,6 +1,8 @@
 #ifndef TAPSMITH_HID_PROTOCOL_H
 #define TAPSMITH_HID_PROTOCOL_H
 
+#include <stddef.h>
+
 /* One parsed stdin command for the iOS HID helper.
  * Wire protocol (whitespace-delimited, coords in LOGICAL POINTS):
  *   d <x> <y>   touch down
@@ -35,5 +37,14 @@ HidEvent hid_parse_line(const char *line);
 /* Convert a logical-point coordinate to a normalized 0..1 ratio, clamped to
  * [0,1]. Returns 0.0 when extentPt <= 0 (divide-by-zero guard). */
 double hid_normalize(double point, double extentPt);
+
+/* Write the index-th place to look for SimulatorKit's binary, for the
+ * developer dir `devDir`, into `buf`. Xcode 26 and earlier ship it in the
+ * developer dir's Library/PrivateFrameworks (index 0); Xcode 27 moved it to
+ * the app's Contents/SharedFrameworks (index 1). `devDir` may also name the
+ * app bundle itself ("/Applications/Xcode.app"), as DEVELOPER_DIR can.
+ * Returns 1 when a path was written, 0 for no such index, a missing devDir,
+ * or a path that does not fit in `len` bytes. */
+int hid_simulatorkit_path(const char *devDir, int index, char *buf, size_t len);
 
 #endif /* TAPSMITH_HID_PROTOCOL_H */

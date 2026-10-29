@@ -151,8 +151,7 @@ describe("UIKit: gestures", () => {
     await expect(uikitGestures.status("Waiting")).toBeVisible()
   })
 
-  // BUG PILOT-795: no native double-tap recognizer fires.
-  test.skip("UITapGestureRecognizer with two taps", async ({ uikitGestures }) => {
+  test("UITapGestureRecognizer with two taps", async ({ uikitGestures }) => {
     await uikitGestures.doubleTapTarget.doubleTap()
     await expect(uikitGestures.status("Double tapped")).toBeVisible()
   })

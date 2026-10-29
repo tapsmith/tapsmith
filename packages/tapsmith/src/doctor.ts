@@ -19,7 +19,7 @@ import { formatJson, jsonError, stripAnsi, type JsonCheck } from './cli-json.js'
 import { PLAY_IMAGE_CAPTURE_EFFECT, avdCaptureSupport, captureAvdFix, scanAvdImageTags, type AvdImageInfo } from './avd-images.js';
 import { parseSimctlDevicesJson, simulatorChoices, tryExec } from './env-scan.js';
 import { androidUnusableDeviceFix, parseAdbDevicesOutput, type AdbDevice } from './adb-devices.js';
-import { isTapsmithNotInstalledError, type TapsmithConfig } from './config.js';
+import { isTapsmithNotInstalledError, resolveDeviceGroup, type TapsmithConfig } from './config.js';
 import { MIN_NODE_MAJOR, isSupportedNodeVersion } from './node-runtime.js';
 import { emulatorNotFoundMessage, resolveEmulatorBinary, type EmulatorBinary } from './emulator.js';
 import { hostArch, nodeUnderRosetta, ROSETTA_NODE_FIX } from './host-arch.js';
@@ -579,6 +579,84 @@ function checkSimctl(report: Reporter, required: boolean, named: 'required' | 'o
   else warn(report, 'simctl', label, fix);
 }
 
+/**
+ * Each distinct `simulator` the config's iOS scopes boot, with the projects
+ * that name it. A scope whose every device is pinned is left out: the run
+ * never looks its `simulator` up (a pinned device hosts one worker, and every
+ * group member has its device).
+ */
+function configuredSimulators(scopes: TapsmithConfig[], projects: Array<string | undefined>): Map<string, string[]> {
+  const bySimulator = new Map<string, string[]>();
+  scopes.forEach((scope, i) => {
+    if (scopePlatform(scope) !== 'ios' || !scope.simulator) return;
+    if (resolveDeviceGroup(scope).every((e) => e.device)) return;
+    const names = bySimulator.get(scope.simulator) ?? [];
+    const project = projects[i];
+    if (project !== undefined) names.push(project);
+    bySimulator.set(scope.simulator, names);
+  });
+  return bySimulator;
+}
+
+/** How many of this Mac's simulators a not-found fix lists, best first. */
+const MAX_LISTED_SIMULATORS = 12;
+
+/**
+ * Looks each configured simulator up as the runner does (`findSimulator`):
+ * an exact UDID, else an exact name, among the available simulators of any
+ * runtime — a booted one of that name first, else the first simctl lists.
+ * Nothing to add when simctl failed or lists no iOS simulator: the `simctl`
+ * row already says so. `required`: as `checkSimctl`'s `named` — a mixed
+ * config whose Android projects run here only warns.
+ */
+function checkConfiguredSimulators(report: Reporter, configured: Map<string, string[]>, required: boolean): void {
+  if (configured.size === 0) return;
+  const output = run(report, 'xcrun', ['simctl', 'list', 'devices', 'available', '-j']);
+  if (output === undefined || !countIosSimulators(output)) return;
+  const all = parseSimctlDevicesJson(output);
+  for (const [simulator, projects] of configured) {
+    const quoted = `"${simulator}"`;
+    const owner = projects.length === 0 ? '' : ` (project${projects.length === 1 ? '' : 's'} ${projects.join(', ')})`;
+    const byUdid = all.find((s) => s.udid === simulator);
+    if (byUdid) {
+      pass(report, 'simulator', `Simulator ${quoted} found${owner}`, `${byUdid.name}, ${byUdid.runtime}`);
+      continue;
+    }
+    const byName = all.filter((s) => s.name === simulator);
+    if (byName.length === 1) {
+      pass(report, 'simulator', `Simulator ${quoted} found${owner}`, `${byName[0].runtime}, ${byName[0].udid}`);
+      continue;
+    }
+    if (byName.length > 1) {
+      const runtimes = [...new Set(byName.map((s) => s.runtime))]
+        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).join(', ');
+      const booted = byName.find((s) => s.state === 'Booted');
+      // simctl's JSON order, which the runner reads — its text listing can differ.
+      const first = `the first in xcrun simctl list devices -j (${byName[0].runtime}, ${byName[0].udid})`;
+      const picks = !booted
+        ? `tapsmith test uses a booted one, else ${first}`
+        : booted === byName[0]
+          ? `tapsmith test uses the booted one (${booted.runtime}, ${booted.udid}), which is also the first in xcrun simctl list devices -j`
+          : `tapsmith test uses the booted one (${booted.runtime}, ${booted.udid}); with none booted, ${first}`;
+      warn(report, 'simulator', `${byName.length} simulators are named ${quoted}${owner} (${runtimes})`,
+        `${picks}, so a run may not get the iOS version you expect. `
+        + `To pin one, set simulator to its UDID: ${byName.map((s) => `${s.udid} (${s.runtime})`).join(', ')}`);
+      continue;
+    }
+    const lower = simulator.toLowerCase();
+    const near = all.find((s) => s.udid.toLowerCase() === lower) ?? all.find((s) => s.name.toLowerCase() === lower);
+    const suggestion = near ? `Did you mean "${near.udid.toLowerCase() === lower ? near.udid : near.name}"? Simulator names and UDIDs match case-sensitively. ` : '';
+    const choices = simulatorChoices(all).map((s) => s.name);
+    const label = `Simulator ${quoted}${owner} not found — tapsmith test cannot boot it`;
+    const listed = choices.length > MAX_LISTED_SIMULATORS
+      ? `${choices.slice(0, MAX_LISTED_SIMULATORS).join(', ')} and ${choices.length - MAX_LISTED_SIMULATORS} more (xcrun simctl list devices available)`
+      : choices.join(', ');
+    const fix = `${suggestion}Set simulator to the name or UDID of one of this Mac's iOS simulators: ${listed} — or create it in Xcode → Window → Devices and Simulators`;
+    if (required) fail(report, 'simulator', label, fix);
+    else warn(report, 'simulator', label, `${fix}. Meanwhile, select the other projects with --project`);
+  }
+}
+
 async function checkSimulatorXctestrun(report: Reporter): Promise<void> {
   try {
     const {
@@ -1076,12 +1154,14 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
   // throw, report that as the config error it is (as `tapsmith test` does),
   // not as doctor crashing.
   const scopes: TapsmithConfig[] = [];
+  const projectNames: Array<string | undefined> = [];
   if (config && configPathOf(config)) {
     if (config.projects && config.projects.length > 0) {
       const projectErrors: string[] = [];
       for (const project of config.projects) {
         try {
           scopes.push(effectiveConfigForProject(config, project));
+          projectNames.push(project.name);
         } catch (err) {
           projectErrors.push(`project ${project.name}: ${err instanceof Error ? err.message : String(err)}`);
         }
@@ -1092,6 +1172,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
       }
     } else {
       scopes.push(config);
+      projectNames.push(undefined);
     }
   }
   const avdLaunches: AvdLaunch[] = scopes
@@ -1171,6 +1252,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
       // With Xcode here, the config's iOS projects run on this machine.
       const named = !targets || !config || !configNamesSimulator(config) ? 'none' : iosPlan.required ? 'required' : 'optional';
       checkSimctl(report, !!targets, named);
+      checkConfiguredSimulators(report, configuredSimulators(scopes, projectNames), iosPlan.required);
       await checkSimulatorXctestrun(report);
     } else {
       // A config that targets iOS still gets its capture guidance (mitmproxy,
