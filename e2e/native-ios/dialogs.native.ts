@@ -21,10 +21,10 @@ describe("Native: alerts, confirmation dialogs and sheets", () => {
     await expect(dialogs.result("Cancelled")).toBeVisible()
   })
 
-  // BUG PILOT-791: the tap lands while the iOS 26 popover is still animating in — the
-  // button highlights but its action never fires (4/4). Waiting ~1.5s first
-  // makes it pass. tap() needs a stability check before it touches.
-  test.skip("confirmation dialog action", async ({ dialogs }) => {
+  // Tapped straight away, while the iOS 26 popover is still animating in: tap() must
+  // wait for the button to stop changing on screen first, or the touch highlights it
+  // without firing its action (PILOT-791).
+  test("confirmation dialog action", async ({ dialogs }) => {
     await dialogs.showConfirmation.tap()
     await dialogs.copyLink.tap()
     await expect(dialogs.result("Copied")).toBeVisible()

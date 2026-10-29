@@ -802,6 +802,55 @@ class CommandHandler {
         }
     }
 
+    /// `planTouch`, then wait for the target to stop changing on screen before
+    /// it is touched — Playwright's "stable" actionability check, which click,
+    /// dblclick and tap all make (PILOT-791). A touch that lands while a
+    /// popover is still animating in highlights the button without firing its
+    /// action.
+    ///
+    /// A coordinate plan is made again when the target changed during the
+    /// wait: its point and cover check describe the screen from before the
+    /// wait, and a target that was moving (a row in a list still flinging) or
+    /// a cover that came over it would otherwise be touched where it used to
+    /// be. The new plan has what is left of `timeoutMs`, and is not settled
+    /// again. An element plan needs no new plan: `XCUIElement.tap()` works out
+    /// its own hit point when it touches.
+    private func planSettledTouch(
+        _ element: ElementInfo,
+        timeoutMs: Int64,
+        preferElementTap: Bool,
+        reserveMs: Int64 = 0
+    ) throws -> TouchPlan {
+        let started = Date()
+        let plan = try planTouch(element, timeoutMs: timeoutMs, preferElementTap: preferElementTap, reserveMs: reserveMs)
+        let outcome = settleBeforeTouch(plan, reserveMs: reserveMs)
+        guard case .point = plan, outcome.sawChange else { return plan }
+        let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
+        NSLog("[TapsmithCommand] \(element.elementId) changed while settling; planning the touch again")
+        return try planTouch(element, timeoutMs: remaining, preferElementTap: preferElementTap, reserveMs: reserveMs)
+    }
+
+    /// Wait for the planned touch's target to stop changing on screen
+    /// (`TouchSettle`). Bounded by `TouchSettle.maxWaitSeconds` and by the
+    /// daemon's read deadline (less `reserveMs` for a long press's hold); a
+    /// target that never settles is touched at the bound.
+    @discardableResult
+    private func settleBeforeTouch(_ plan: TouchPlan, reserveMs: Int64 = 0) -> TouchSettle.Outcome {
+        let deadline = TouchSettle.deadline(
+            now: Date(),
+            readDeadline: commandReadDeadline,
+            reserveSeconds: Double(max(0, reserveMs)) / 1000
+        )
+        switch plan {
+        case .hittableElement(let xcElem):
+            return actionExecutor.waitUntilSettled(xcElem, deadline: deadline)
+        case .point(_, let visible):
+            return actionExecutor.waitUntilSettled(region: visible, deadline: deadline)
+        case .offScreen:
+            return .unreadable
+        }
+    }
+
     private func refuseIfLate(_ clock: TouchPlanClock) throws {
         guard clock.isTooLateToAct(at: Date()) else { return }
         throw AgentError.actionFailed(
@@ -865,9 +914,9 @@ class CommandHandler {
         do { _ = try getXCUIElement(element.elementId) } catch { staleError = error }
 
         putKeyboardAwayIfItWouldEatTheTouch(element)
-        switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
+        switch try planSettledTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
         case .hittableElement(let xcElem):
-            actionExecutor.tapHittable(xcElem)
+            xcElem.tap()
         case .point(let point, _):
             NSLog("[TapsmithCommand] \(element.elementId) is not hittable; tapping the uncovered point \(point)")
             actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
@@ -887,7 +936,7 @@ class CommandHandler {
         // it gone. Ids that never had a query (placeholder, className, …)
         // still take the coordinate path.
         putKeyboardAwayIfItWouldEatTheTouch(element)
-        switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
+        switch try planSettledTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
         case .point(let point, _):
             actionExecutor.doubleTapCoordinates(
                 x: Int(point.x.rounded()),
@@ -1329,7 +1378,7 @@ class CommandHandler {
                 putKeyboardAwayIfItWouldEatTheTouch(element)
                 // The press itself must still fit the daemon's read timeout.
                 let coverBudget = max(0, actionTimeoutMs(params) - duration)
-                switch try planTouch(element, timeoutMs: coverBudget, preferElementTap: false, reserveMs: duration) {
+                switch try planSettledTouch(element, timeoutMs: coverBudget, preferElementTap: false, reserveMs: duration) {
                 case .point(let point, _):
                     actionExecutor.longPressCoordinates(
                         x: Int(point.x.rounded()),
@@ -1364,7 +1413,9 @@ class CommandHandler {
             // The daemon's HID double tap and long press land at this point.
             putKeyboardAwayIfItWouldEatTheTouch(element)
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
-            switch try planTouch(element, timeoutMs: remaining, preferElementTap: false) {
+            // The daemon touches the point as soon as it has it, so the target
+            // must have stopped changing first (PILOT-791).
+            switch try planSettledTouch(element, timeoutMs: remaining, preferElementTap: false) {
             case .point(let point, _):
                 return ["x": Double(point.x), "y": Double(point.y)]
             case .hittableElement, .offScreen:

@@ -22,39 +22,109 @@ class ActionExecutor {
 
     // MARK: - Tap Actions
 
-    /// Tap on an element's center point.
-    ///
-    /// Waits for the element's frame to stop moving first (Playwright-style
-    /// actionability, mirroring the Android agent): a tap whose hit point is
-    /// computed mid-animation — e.g. layout resettling after a keyboard
-    /// dismissal — can land on a non-interactive pixel and silently miss.
+    /// Tap on an element's center point, once it has stopped changing on
+    /// screen (`waitUntilSettled`).
     func tap(_ element: XCUIElement) throws {
         guard element.isHittable else {
             throw AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
-        tapHittable(element)
-    }
-
-    /// `tap(_:)` for an element the caller has just read as hittable — skips
-    /// the repeat `isHittable` round-trip.
-    func tapHittable(_ element: XCUIElement) {
-        waitForStableFrame(element)
+        waitUntilSettled(
+            element,
+            deadline: TouchSettle.deadline(now: Date(), readDeadline: nil, reserveSeconds: 0)
+        )
         element.tap()
     }
 
-    /// Wait until two consecutive reads of the element's live frame agree, or
-    /// the deadline passes. Each read is one IPC. On timeout we proceed with
-    /// the freshest state rather than failing — tap() recomputes its hit
-    /// point at dispatch time.
-    private func waitForStableFrame(_ element: XCUIElement, timeout: TimeInterval = 1.0) {
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        var prev = element.frame
-        while Date() < deadline {
-            Thread.sleep(forTimeInterval: 0.05)
-            let current = element.frame
-            if current.equalTo(prev) { return }
-            prev = current
+    // MARK: - Settling before a touch (PILOT-791)
+
+    /// What a touch on the target would land on: where it is, and what it
+    /// shows there (RGBA pixels at point resolution).
+    struct SettleSample: Equatable {
+        let frame: CGRect
+        let pixels: [UInt8]
+    }
+
+    /// Wait until `element` stops changing on screen — its frame and the
+    /// pixels inside it are the same in two consecutive samples — or the
+    /// deadline passes (Playwright's "stable" check; see `TouchSettle`).
+    /// The frame alone is not enough: it is the model-layer value, final from
+    /// the first read while a popover is still scaling in. Each sample is one
+    /// frame read plus one element screenshot (~45 ms on a simulator).
+    @discardableResult
+    func waitUntilSettled(_ element: XCUIElement, deadline: Date) -> TouchSettle.Outcome {
+        let outcome = TouchSettle.wait(
+            deadline: deadline,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:),
+            sample: { () -> SettleSample? in
+                let frame = element.frame
+                guard !frame.isEmpty,
+                      let pixels = Self.pixels(of: element.screenshot().image, in: nil) else { return nil }
+                return SettleSample(frame: frame, pixels: pixels)
+            }
+        )
+        Self.logUnsettled(outcome, "element")
+        return outcome
+    }
+
+    /// `waitUntilSettled(_:deadline:)` for a touch planned at a fixed point:
+    /// watches the screen region the touch lands in (the element's uncovered
+    /// part) — one full-screen screenshot per sample.
+    @discardableResult
+    func waitUntilSettled(region: CGRect, deadline: Date) -> TouchSettle.Outcome {
+        guard !region.isEmpty else { return .unreadable }
+        let outcome = TouchSettle.wait(
+            deadline: deadline,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:),
+            sample: { () -> SettleSample? in
+                Self.pixels(of: XCUIScreen.main.screenshot().image, in: region)
+                    .map { SettleSample(frame: region, pixels: $0) }
+            }
+        )
+        Self.logUnsettled(outcome, "region \(region)")
+        return outcome
+    }
+
+    private static func logUnsettled(_ outcome: TouchSettle.Outcome, _ what: String) {
+        if case .stillChanging(let samples) = outcome {
+            NSLog("[ActionExecutor] \(what) still changing after \(samples) samples; touching it anyway")
         }
+    }
+
+    /// RGBA pixels of `image` (or of `rect` within it, in points), drawn at
+    /// point resolution so two samples compare by value. Drawn, not read
+    /// from the data provider: a cropped CGImage can share its parent's
+    /// whole buffer.
+    private static func pixels(of image: UIImage, in rect: CGRect?) -> [UInt8]? {
+        guard let cgImage = image.cgImage, image.size.width > 0 else { return nil }
+        let scale = CGFloat(cgImage.width) / image.size.width
+        let pointRect = rect ?? CGRect(origin: .zero, size: image.size)
+        let pixelRect = CGRect(
+            x: pointRect.minX * scale,
+            y: pointRect.minY * scale,
+            width: pointRect.width * scale,
+            height: pointRect.height * scale
+        ).integral
+        guard let source = rect == nil ? cgImage : cgImage.cropping(to: pixelRect) else { return nil }
+        let width = max(1, Int(pointRect.width.rounded()))
+        let height = max(1, Int(pointRect.height.rounded()))
+        var buffer = [UInt8](repeating: 0, count: width * height * 4)
+        let drawn = buffer.withUnsafeMutableBytes { bytes -> Bool in
+            guard let context = CGContext(
+                data: bytes.baseAddress,
+                width: width,
+                height: height,
+                bitsPerComponent: 8,
+                bytesPerRow: width * 4,
+                space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ) else { return false }
+            context.interpolationQuality = .low
+            context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+            return true
+        }
+        return drawn ? buffer : nil
     }
 
     /// Tap at specific screen coordinates using event synthesis.
