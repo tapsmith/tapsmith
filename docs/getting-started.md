@@ -258,7 +258,7 @@ export default defineConfig({
 });
 ```
 
-`testMatch` makes Tapsmith run `*.tapsmith.ts` files, the names `tapsmith init` uses, which your Jest or Vitest run leaves alone ([why](#tapsmith-tests-and-your-unit-tests)); without it Tapsmith runs `*.test.ts` and `*.spec.ts` files. `apk` is the path to the Android APK you want to test; Tapsmith installs it. `package` is its package name, and you need it too: without `package`, Tapsmith never launches the app and never resets it between test files, so tests start on whatever happens to be on screen. `activity` is optional and usually not needed.
+`testMatch` makes Tapsmith run `*.tapsmith.ts` files, the names `tapsmith init` uses, which your Jest or Vitest run leaves alone ([why](#tapsmith-tests-and-your-unit-tests)); without it Tapsmith runs `*.test.ts`, `*.spec.ts` and `*.tapsmith.ts` files. `apk` is the path to the Android APK you want to test; Tapsmith installs it. `package` is its package name, and you need it too: without `package`, Tapsmith never launches the app and never resets it between test files, so tests start on whatever happens to be on screen. `activity` is optional and usually not needed.
 
 ### iOS
 
@@ -366,7 +366,7 @@ Tapsmith will:
 1. Connect to the Tapsmith daemon (starting it if needed).
 2. Detect your connected device or emulator.
 3. Install the APK under test and the Tapsmith agent.
-4. Discover the test files your config's `testMatch` matches (`**/*.tapsmith.ts` in a config from `tapsmith init`; `**/*.test.ts` and `**/*.spec.ts` when the config doesn't set it).
+4. Discover the test files your config's `testMatch` matches (`**/*.tapsmith.ts` in a config from `tapsmith init`; `**/*.test.ts`, `**/*.spec.ts` and `**/*.tapsmith.ts` when the config doesn't set it).
 5. Run each test sequentially and report results.
 
 For multi-worker runs, Tapsmith will assign one device per worker. If

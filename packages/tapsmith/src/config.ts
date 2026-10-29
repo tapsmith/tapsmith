@@ -81,7 +81,7 @@ export interface TapsmithConfig {
   /** When to capture screenshots. */
   screenshot: ScreenshotMode;
 
-  /** Glob patterns for discovering test files. */
+  /** Glob patterns for discovering test files. Default: `**\/*.test.ts`, `**\/*.spec.ts` and `**\/*.tapsmith.ts`. */
   testMatch: string[];
 
   /** Address of the Tapsmith daemon. */
@@ -493,7 +493,11 @@ const DEFAULT_CONFIG: TapsmithConfig = {
   timeout: 30_000,
   retries: 0,
   screenshot: 'only-on-failure',
-  testMatch: ['**/*.test.ts', '**/*.spec.ts'],
+  // `*.tapsmith.ts` is the name init, the guides and the migration guides use
+  // (PILOT-837); `*.test.ts` / `*.spec.ts` stay for existing projects. Not
+  // Playwright's `*.@(spec|test).?(c|m)[jt]s?(x)`: a config without testMatch
+  // would then pick up a React Native project's Jest `__tests__/App.test.tsx`.
+  testMatch: ['**/*.test.ts', '**/*.spec.ts', '**/*.tapsmith.ts'],
   daemonAddress: 'localhost:50051',
   rootDir: process.cwd(),
   outputDir: 'tapsmith-results',

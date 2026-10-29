@@ -828,7 +828,7 @@ describe('defineConfig()', () => {
     expect(config.timeout).toBe(30_000);
     expect(config.retries).toBe(0);
     expect(config.screenshot).toBe('only-on-failure');
-    expect(config.testMatch).toEqual(['**/*.test.ts', '**/*.spec.ts']);
+    expect(config.testMatch).toEqual(['**/*.test.ts', '**/*.spec.ts', '**/*.tapsmith.ts']);
     expect(config.daemonAddress).toBe('localhost:50051');
     expect(config.rootDir).toBe(process.cwd());
     expect(config.outputDir).toBe('tapsmith-results');
@@ -841,6 +841,30 @@ describe('defineConfig()', () => {
     expect(config.shard).toBeUndefined();
     expect(config.launchEmulators).toBe(false);
     expect(config.avd).toBeUndefined();
+  });
+
+  // PILOT-837: init, getting-started and the migration guides name test files
+  // `*.tapsmith.ts`, so a config that leaves testMatch out (configuration.md's
+  // Basic Setup) must still find them, without newly picking up a React Native
+  // project's Jest tests (`__tests__/App.test.tsx`) or plain helpers.
+  it('discovers *.tapsmith.ts, *.test.ts and *.spec.ts files with the default testMatch', async () => {
+    const { discoverTestFiles } = await import('../test-file-discovery.js');
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-default-match-')));
+    try {
+      const files = [
+        'tests/login.tapsmith.ts', 'tests/a.test.ts', 'e2e/b.spec.ts',
+        '__tests__/App.test.tsx', 'tests/helpers.ts', 'tests/c.test.js',
+      ];
+      for (const f of files) {
+        fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+        fs.writeFileSync(path.join(dir, f), '');
+      }
+      const found = await discoverTestFiles(defineConfig().testMatch, dir);
+      expect(found.map((f) => path.relative(dir, f).split(path.sep).join('/')).sort())
+        .toEqual(['e2e/b.spec.ts', 'tests/a.test.ts', 'tests/login.tapsmith.ts']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('returns defaults when called with empty object', () => {
