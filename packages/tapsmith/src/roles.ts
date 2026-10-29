@@ -249,7 +249,8 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   searchfield: ['XCUIElementTypeSearchField'],
   tablist: ['XCUIElementTypeTabBar'],
   // React Native's generic-view roles that also have a native type
-  // (PILOT-702): a UIMenu and its items, a Stepper.
+  // (PILOT-702): a Stepper; the menu and radio group types match where
+  // XCUITest reports them (an open SwiftUI or UIKit menu's items are buttons).
   menu: ['XCUIElementTypeMenu'],
   menubar: ['XCUIElementTypeMenuBar'],
   menuitem: ['XCUIElementTypeMenuItem'],
@@ -355,13 +356,24 @@ export function iosDescribedRole(value: string | undefined): string {
 }
 
 /**
+ * What finds an iOS native widget with one of React Native's generic-view
+ * roles, for the unnamed-role miss hint (PILOT-702). XCUITest shows an open
+ * SwiftUI or UIKit menu's items as buttons, never as menu items.
+ */
+const IOS_NATIVE_WIDGET_NOTES: Readonly<Record<string, string>> = {
+  spinbutton: ' (a native Stepper matches without one)',
+  menu: ' (an open native menu\'s items are buttons: getByRole("button", { name: "…" }))',
+  menuitem: ' (an open native menu\'s items are buttons: getByRole("button", { name: "…" }))',
+};
+
+/**
  * What to add to a "not found" failure of `getByRole(role)` with no name on
  * iOS, for a role React Native publishes nothing for there — alert, combobox
  * and the undescribed generic-view roles but tablist — so the miss is explained instead of
- * looking like a flaky screen (PILOT-718). For a role that also has a native
- * iOS type (a Stepper is a spinbutton, PILOT-702) it says the name is needed
- * only for the React Native view. Empty in every other case. Leads with a
- * space, ready to append to a sentence.
+ * looking like a flaky screen (PILOT-718). For a role an iOS native widget
+ * also has, it says what finds that widget instead (PILOT-702): a Stepper
+ * matches without a name, and an open menu's items are buttons. Empty in
+ * every other case. Leads with a space, ready to append to a sentence.
  */
 export function iosUnnamedRoleMissHint(
   role: { role: string; name: string; nameRegex?: unknown },
@@ -374,8 +386,7 @@ export function iosUnnamedRoleMissHint(
     || (IOS_UNDESCRIBED_OTHER_ROLES.has(canonical) && canonical !== 'tablist');
   if (!nameOnly) return '';
   const quoted = JSON.stringify(role.role);
-  const native = IOS_ROLE_TYPES[canonical]?.map((t) => t.replace(/^XCUIElementType/, '')).join(' or ');
-  const unnamed = native ? ` (a native ${native} matches without one)` : '';
+  const unnamed = IOS_NATIVE_WIDGET_NOTES[canonical] ?? '';
   return ` On iOS, React Native publishes no ${quoted} role that getByRole(${quoted}) can see without a name${unnamed}: ` +
     `pass the element's name — getByRole(${quoted}, { name: "…" }) — or use getByText() or getByTestId().`;
 }
