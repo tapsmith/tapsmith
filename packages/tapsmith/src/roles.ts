@@ -202,8 +202,8 @@ export const ANDROID_DUAL_PATH_ROLES: ReadonlySet<string> = new Set([
  * Android roles the agent resolves only from a role description (no class) —
  * the agent's `TRAIT_ONLY_ROLES`, which `roles.test.ts` pins. React Native
  * renders each as a generic android.view.View whose role description names
- * it ("Menu Item", "Timer"): the menu, radiogroup, scrollbar,
- * spinbutton, summary and timer families. A tab item is one too: RN, Material
+ * it ("Menu Item", "Timer"): the alert, combobox, menu, radiogroup,
+ * scrollbar, spinbutton, summary and timer families. A tab item is one too: RN, Material
  * and Compose all publish "Tab" on a generic layout.
  */
 export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
