@@ -743,6 +743,109 @@ enum EventSynthesizer {
         return false
     }
 
+    /// Two-finger pinch (PILOT-825): ONE event record carrying two pointer
+    /// paths that touch down together, move along `plan` over `moveDuration`,
+    /// hold still for `holdDuration` (so the recognizer does not read the lift
+    /// as a fling, as Android's pinchClose pauses before release), and lift
+    /// together. Overlapping time ranges make the two paths one two-finger
+    /// gesture — the reverse of the double tap's disjoint ranges.
+    ///
+    /// `XCUIElement.pinch(withScale:velocity:)` is not used: it crashed the
+    /// XCUITest runner on Xcode 26, and it pinches about the element's own
+    /// frame, so a covered element would be pinched through its cover.
+    static func pinch(
+        _ plan: PinchPlan,
+        moveDuration: TimeInterval,
+        holdDuration: TimeInterval
+    ) -> Bool {
+        guard let pathClass = objc_lookUpClass("XCPointerEventPath"),
+              let recordClass = objc_lookUpClass("XCSynthesizedEventRecord")
+        else {
+            NSLog("[EventSynth] pinch: XCPointerEventPath or XCSynthesizedEventRecord not found")
+            return false
+        }
+
+        let initSel = NSSelectorFromString("initForTouchAtPoint:offset:")
+        let moveSel = NSSelectorFromString("moveToPoint:atOffset:")
+        let liftSel = NSSelectorFromString("liftUpAtOffset:")
+        let allocSel = NSSelectorFromString("alloc")
+        guard let pathType = pathClass as? NSObject.Type,
+              pathType.instancesRespond(to: initSel),
+              pathType.instancesRespond(to: moveSel),
+              pathType.instancesRespond(to: liftSel),
+              let meta = object_getClass(pathClass),
+              let allocImp = class_getMethodImplementation(meta, allocSel),
+              let initImp = class_getMethodImplementation(pathClass, initSel)
+        else {
+            NSLog("[EventSynth] pinch: XCPointerEventPath lacks the touch methods")
+            return false
+        }
+
+        // Alloc as a RAW pointer so ARC never manages the uninitialized
+        // instance (init via IMP consumes alloc's +1) — the same double-free
+        // avoidance as swipePath and drag.
+        typealias AllocFn = @convention(c) (AnyClass, Selector) -> UnsafeMutableRawPointer
+        typealias InitMethod = @convention(c) (UnsafeMutableRawPointer, Selector, CGPoint, TimeInterval) -> Unmanaged<NSObject>?
+        typealias MoveMethod = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> Void
+        typealias OffsetMethod = @convention(c) (NSObject, Selector, TimeInterval) -> Void
+
+        // Enough intermediate points for a smooth scale change at 60 Hz-ish.
+        let steps = max(2, Int((moveDuration * 60).rounded()))
+        // A touch that moves on its first event can be dropped as a stray;
+        // the move starts a beat after touch-down.
+        let settle: TimeInterval = 0.05
+
+        func makePath(finger: Int) -> NSObject? {
+            let start = finger == 0 ? plan.firstStart : plan.secondStart
+            let raw = unsafeBitCast(allocImp, to: AllocFn.self)(pathClass, allocSel)
+            guard let path = unsafeBitCast(initImp, to: InitMethod.self)(raw, initSel, start, 0.0)?.takeRetainedValue()
+            else { return nil }
+            let move = unsafeBitCast(path.method(for: moveSel), to: MoveMethod.self)
+            for step in 1...steps {
+                let fraction = CGFloat(step) / CGFloat(steps)
+                let (first, second) = plan.positions(at: fraction)
+                move(path, moveSel, finger == 0 ? first : second, settle + moveDuration * Double(fraction))
+            }
+            let lift = unsafeBitCast(path.method(for: liftSel), to: OffsetMethod.self)
+            lift(path, liftSel, settle + moveDuration + holdDuration)
+            return path
+        }
+
+        guard let first = makePath(finger: 0), let second = makePath(finger: 1) else {
+            NSLog("[EventSynth] pinch: could not create the pointer paths")
+            return false
+        }
+
+        let record: NSObject
+        let recordInitSel = NSSelectorFromString("initWithName:interfaceOrientation:")
+        if (recordClass as! NSObject.Type).instancesRespond(to: recordInitSel),
+           let recordMeta = object_getClass(recordClass),
+           let recordAllocImp = class_getMethodImplementation(recordMeta, allocSel),
+           let recordInitImp = class_getMethodImplementation(recordClass, recordInitSel) {
+            typealias RMethod = @convention(c) (UnsafeMutableRawPointer, Selector, NSString, Int) -> Unmanaged<NSObject>?
+            let recordRaw = unsafeBitCast(recordAllocImp, to: AllocFn.self)(recordClass, allocSel)
+            guard let r = unsafeBitCast(recordInitImp, to: RMethod.self)(
+                recordRaw,
+                recordInitSel,
+                "tapsmith-pinch" as NSString,
+                currentOrientation
+            )?.takeRetainedValue() else { return false }
+            record = r
+        } else {
+            record = (recordClass as! NSObject.Type).init()
+        }
+
+        let addPathSel = NSSelectorFromString("addPointerEventPath:")
+        guard record.responds(to: addPathSel) else {
+            NSLog("[EventSynth] pinch: XCSynthesizedEventRecord cannot take pointer paths")
+            return false
+        }
+        record.perform(addPathSel, with: first)
+        record.perform(addPathSel, with: second)
+
+        return dispatchViaDaemonSession(record) || dispatchSync(record) || dispatchViaDevice(record)
+    }
+
     /// Modifier flags for key press events.
     struct KeyModifiers: OptionSet {
         let rawValue: UInt64

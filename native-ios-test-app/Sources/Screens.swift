@@ -213,6 +213,15 @@ struct GesturesView: View {
                     status = value.translation.width < 0 ? "Swiped left" : "Swiped right"
                 })
                 .accessibilityIdentifier("swipe-area")
+            // PILOT-825: reports the direction a pinch moved the scale in.
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.purple.opacity(0.3))
+                .frame(height: 200)
+                .overlay(Text("Pinch area"))
+                .gesture(MagnifyGesture().onEnded { value in
+                    status = value.magnification < 1 ? "Pinched in" : "Pinched out"
+                })
+                .accessibilityIdentifier("pinch-area")
         }
         .padding()
         .navigationTitle("Gestures")

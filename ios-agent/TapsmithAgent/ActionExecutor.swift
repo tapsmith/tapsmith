@@ -471,25 +471,38 @@ class ActionExecutor {
 
     // MARK: - Pinch Zoom
 
-    /// Pinch zoom on an element.
-    /// Scale > 1.0 zooms in (pinch out), scale < 1.0 zooms out (pinch in).
-    func pinchZoom(_ element: XCUIElement, scale: Float) throws {
-        guard element.isHittable else {
-            throw AgentError.actionFailed("Element is not hittable for pinch zoom")
-        }
-        // XCUIElement.pinch() is crashing the XCUITest runner on Xcode 26.
-        // Keep pinch as a best-effort no-op until stable multi-touch synthesis
-        // is implemented; the current iOS e2e coverage only asserts that the
-        // command succeeds without destabilizing the session.
-        _ = scale
-        Thread.sleep(forTimeInterval: 0.05)
-    }
+    /// How long the fingers take to move, and how long they then hold still
+    /// before lifting.
+    static let pinchMoveDuration: TimeInterval = 0.5
+    static let pinchHoldDuration: TimeInterval = 0.25
 
-    /// Best-effort pinch centered on a coordinate without touching XCUIElement.
-    func pinch(at center: CGPoint, scale: Float) {
-        _ = center
-        _ = scale
-        Thread.sleep(forTimeInterval: 0.05)
+    /// Pinch with two fingers inside `area` (screen points). Scale above 1
+    /// opens the fingers (zoom in), below 1 closes them (zoom out). Throws
+    /// when the pinch cannot be planned or synthesized — never reports a
+    /// pinch it did not send (PILOT-825).
+    func pinch(in area: CGRect, scale: Double) throws {
+        let plan: PinchPlan
+        switch PinchPlan.make(in: area, scale: scale) {
+        case .success(let p):
+            plan = p
+        case .failure(.invalidScale):
+            throw AgentError.invalidRequest("Pinch scale must be a finite number above 0, got \(scale)")
+        case .failure(.noChange):
+            throw AgentError.invalidRequest("Pinch scale 1 would not move the fingers; use a scale below 1 to pinch in or above 1 to pinch out")
+        case .failure(.areaTooSmall(let span)):
+            throw AgentError.actionFailed(
+                "Element's visible area is too small to pinch (its diagonal less margins is \(Int(span.rounded())) pt; two fingers need more than \(Int(PinchPlan.minimumSpan)) pt)"
+            )
+        }
+        guard EventSynthesizer.pinch(
+            plan,
+            moveDuration: Self.pinchMoveDuration,
+            holdDuration: Self.pinchHoldDuration
+        ) else {
+            throw AgentError.actionFailed(
+                "Failed to pinch: XCTest could not synthesize the two-finger gesture on this iOS runtime"
+            )
+        }
     }
 
     // MARK: - Focus / Blur

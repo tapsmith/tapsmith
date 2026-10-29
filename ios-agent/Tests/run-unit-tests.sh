@@ -131,3 +131,9 @@ xcrun swiftc -sdk "$SDK" \
   TapsmithAgent/DoubleTapRoute.swift \
   -o "$OUT/double-tap-route-tests"
 "$OUT/double-tap-route-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/PinchPlanTests/main.swift \
+  TapsmithAgent/PinchPlan.swift \
+  -o "$OUT/pinch-plan-tests"
+"$OUT/pinch-plan-tests"

@@ -1908,12 +1908,26 @@ class CommandHandler {
         // ─── Pinch Zoom ───
 
         case "pinchZoom":
-            let scale = Float(params["scale"] as? Double ?? 1.0)
-            // Keep iOS pinch best-effort for now. XCUITest pinch APIs and
-            // lower-level synthesized multi-touch are still destabilizing the
-            // runner on Xcode 26, and the current e2e coverage only asserts
-            // that the command completes without crashing the session.
-            actionExecutor.pinch(at: .zero, scale: scale)
+            // A real two-finger pinch over the element's uncovered part, or an
+            // error — never a reported pinch that did not happen (PILOT-825).
+            guard let scale = (params["scale"] as? NSNumber)?.doubleValue else {
+                throw AgentError.invalidRequest("pinchZoom requires a numeric 'scale'")
+            }
+            let element = try resolveElement(params)
+            putKeyboardAwayIfItWouldEatTheTouch(element)
+            let gestureMs = Int64((ActionExecutor.pinchMoveDuration + ActionExecutor.pinchHoldDuration) * 1000)
+            let coverBudget = max(0, actionTimeoutMs(params) - gestureMs)
+            let area: CGRect
+            switch try planSettledTouch(element, timeoutMs: coverBudget, preferElementTap: false, reserveMs: gestureMs) {
+            case .point(_, let visible):
+                area = visible
+            case .hittableElement(let xcElem):
+                area = xcElem.frame
+            case .offScreen:
+                throw AgentError.actionFailed("Element is not on screen, so it cannot be pinched; scroll it into view first")
+            }
+            try actionExecutor.pinch(in: area, scale: scale)
+            touchBarrier()
             return ["success": true]
 
         // ─── Focus / Blur ───

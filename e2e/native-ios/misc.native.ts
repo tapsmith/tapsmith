@@ -56,6 +56,17 @@ describe("Native: gestures", () => {
     await device.dragXY({ x: box.x + box.width - 30, y }, { x: box.x + 30, y })
     await expect(gestures.status("Swiped left")).toBeVisible()
   })
+
+  // PILOT-825: a real two-finger pinch that a MagnifyGesture reads.
+  test("pinchIn fires a MagnifyGesture, scaling down", async ({ gestures }) => {
+    await gestures.pinchArea.pinchIn()
+    await expect(gestures.status("Pinched in")).toBeVisible()
+  })
+
+  test("pinchOut fires a MagnifyGesture, scaling up", async ({ gestures }) => {
+    await gestures.pinchArea.pinchOut()
+    await expect(gestures.status("Pinched out")).toBeVisible()
+  })
 })
 
 describe("Native: slow load", () => {

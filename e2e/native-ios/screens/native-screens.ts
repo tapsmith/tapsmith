@@ -113,6 +113,7 @@ export class NativeGesturesScreen {
   get doubleTapTarget() { return this.device.getByRole("button", { name: "Double tap me" }) }
   get firstDoubleTapTarget() { return this.doubleTapTarget.first() }
   get swipeArea() { return this.device.getByTestId("swipe-area") }
+  get pinchArea() { return this.device.getByTestId("pinch-area") }
 }
 
 export class NativeSlowLoadScreen {
@@ -198,4 +199,5 @@ export class UIKitGesturesScreen {
   status(text: string) { return this.device.getByText(`Status: ${text}`, { exact: true }) }
   get doubleTapTarget() { return this.device.getByRole("button", { name: "Double tap me" }) }
   get longPressTarget() { return this.device.getByRole("button", { name: "Long press me" }) }
+  get pinchTarget() { return this.device.getByRole("button", { name: "Pinch me" }) }
 }
