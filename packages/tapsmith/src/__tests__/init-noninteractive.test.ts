@@ -922,6 +922,24 @@ describe('executeInitPlan()', () => {
     }
   });
 
+  it('writes a tsconfig.json covering the tests when there is none, even with --no-example-test, and lists it (PILOT-838)', () => {
+    const tmp = makeTmp();
+    try {
+      const args = initArgs({ yes: true, platform: 'android', exampleTest: false });
+      const result = executeInitPlan(resolveInitPlan(args, baseEnv, detectStubs, tmp), args, tmp);
+      expect(JSON.parse(fs.readFileSync(path.join(tmp, 'tsconfig.json'), 'utf8')).include).toContain('tests');
+      expect(result.filesCreated).toContain('tsconfig.json');
+
+      // The project's own tsconfig.json is never touched, nor listed.
+      fs.writeFileSync(path.join(tmp, 'tsconfig.json'), '{}\n');
+      const again = executeInitPlan(resolveInitPlan({ ...args, force: true }, baseEnv, detectStubs, tmp), { ...args, force: true }, tmp);
+      expect(fs.readFileSync(path.join(tmp, 'tsconfig.json'), 'utf8')).toBe('{}\n');
+      expect(again.filesCreated).not.toContain('tsconfig.json');
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   it('adds node_modules/ to a native project\'s .gitignore, listing the file once (PILOT-832)', () => {
     const tmp = makeTmp();
     try {

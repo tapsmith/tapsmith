@@ -386,7 +386,21 @@ Run it with `npx eslint tests/`. Change `files` to match where your tests are.
 
 - `tseslint.configs.base` sets the TypeScript parser. Without it, ESLint stops at the first type annotation with `Parsing error: Unexpected token :`.
 - `eslintPlugin.configs.recommended` registers the plugin and turns on its rules (below).
-- `@typescript-eslint/no-floating-promises` reports an action or assertion you forgot to `await`, such as `expect(item).toBeVisible()`. Without the `await`, the test does not wait for the action or assertion, so a failure can be missed or reported in the wrong test. This rule needs type information, so your `tsconfig.json` must include the test files. If ESLint reports a file "was not found by the project service", add that folder to the tsconfig's `include`.
+- `@typescript-eslint/no-floating-promises` reports an action or assertion you forgot to `await`, such as `expect(item).toBeVisible()`. Without the `await`, the test does not wait for the action or assertion, so a failure can be missed or reported in the wrong test. This rule needs type information, so your `tsconfig.json` must include the test files. `tapsmith init` writes one that does when the project has no `tsconfig.json` (or `jsconfig.json`). If ESLint reports a file "was not found by the project service", add that folder to your tsconfig's `include`, or, in a project with no tsconfig, create this one:
+
+```json
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": ["tapsmith.config.ts", "tests", "**/*.tapsmith.ts"]
+}
+```
 
 The `.mjs` extension makes Node load the config as an ES module whether or not your `package.json` has `"type": "module"`.
 

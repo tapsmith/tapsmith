@@ -37,6 +37,7 @@ import { DEFAULT_TEST_IGNORE } from './test-file-discovery.js';
 import { confirmQuestion } from './confirm-prompt.js';
 import { isPromptCancel, tolerateClosedReadline } from './prompt-cancel.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
+import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { projectUsesYarnPnp, YARN_PNP_INIT_STEP, YARN_PNP_INIT_WARNING } from './yarn-pnp.js';
 
 const DIM = '\x1b[2m';
@@ -1533,6 +1534,10 @@ async function runInitInner(): Promise<void> {
   if (exampleTestExisted) console.log(`  ${YELLOW}⚠${RESET} ${EXAMPLE_TEST_PATH} already exists, skipping.`);
   else if (written.includes(EXAMPLE_TEST_PATH)) console.log(`  ${green('✓')} ${EXAMPLE_TEST_PATH} created`);
   if (written.includes('AGENTS.md')) console.log(`  ${green('✓')} AGENTS.md updated`);
+  // For the documented ESLint setup's type information (PILOT-838).
+  const tsconfig = writeTsconfigOrWarn(process.cwd());
+  if (tsconfig === 'created') console.log(`  ${green('✓')} tsconfig.json created (so editors and typescript-eslint type-check your tests)`);
+  else if (typeof tsconfig === 'object') console.log(`  ${YELLOW}⚠${RESET} ${tsconfig.warning}`);
 
   // Step 8.6: Tapsmith itself, which the config and test import (PILOT-551)
   const installStep = await offerTapsmithInstall(process.cwd());

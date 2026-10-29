@@ -112,10 +112,11 @@ describe('init wizard when a file cannot be written (PILOT-624)', () => {
   it('writes the config, example test, AGENTS.md and .gitignore when it can', async () => {
     const { exit, output } = await wizard();
     expect(exit).toBeUndefined();
-    expect(fs.readdirSync(dir).sort()).toEqual(['.gitignore', 'AGENTS.md', 'tapsmith.config.ts', 'tests']);
+    expect(fs.readdirSync(dir).sort()).toEqual(['.gitignore', 'AGENTS.md', 'tapsmith.config.ts', 'tests', 'tsconfig.json']);
     expect(output).toContain('✓ tapsmith.config.ts created');
     expect(output).toContain('✓ tests/example.tapsmith.ts created');
     expect(output).toContain('✓ AGENTS.md updated');
+    expect(output).toContain('✓ tsconfig.json created (so editors and typescript-eslint type-check your tests)');
     expect(output).toContain('Next steps');
   });
 

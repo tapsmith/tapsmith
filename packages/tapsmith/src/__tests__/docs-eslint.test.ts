@@ -19,6 +19,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { docFiles, fencedBlocksIn, REPO, type FencedBlock } from './doc-samples.js';
+import { TSCONFIG_JSON } from '../init-tsconfig.js';
 
 const PKG_DIR = path.resolve(import.meta.dirname, '..', '..');
 const DIST_BUILT = fs.existsSync(path.join(PKG_DIR, 'dist', 'index.js'));
@@ -78,9 +79,8 @@ describe.skipIf(!DIST_BUILT && !process.env.CI)('ESLint config samples in the do
       const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-eslint-')));
       root = dir;
       fs.writeFileSync(path.join(dir, 'package.json'), '{ "name": "app", "private": true }\n');
-      fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({
-        compilerOptions: { strict: true, module: 'esnext', moduleResolution: 'bundler', noEmit: true, skipLibCheck: true },
-      }));
+      // The one `tapsmith init` writes into a project without one (PILOT-838).
+      fs.writeFileSync(path.join(dir, 'tsconfig.json'), TSCONFIG_JSON);
       // Under the name the sample gives, so a `.js` sample loads as CommonJS.
       fs.writeFileSync(path.join(dir, CONFIG_HEADER.exec(sample.code)![1]!), sample.code);
       fs.mkdirSync(path.join(dir, 'tests'));

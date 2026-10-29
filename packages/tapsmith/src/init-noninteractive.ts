@@ -11,6 +11,7 @@ import type { AndroidConfig, IosConfig, Platform } from './init.js';
 import { EXAMPLE_TEST_PATH, customSimulatorDeviceType, networkCaptureDefault, generateConfig, withTapsmithCommand, tapsmithTestsOutsideGeneratedMatch, testsOutsideGeneratedMatchWarning, writeExampleTest } from './init.js';
 import { writeAgentsMd } from './agents-md.js';
 import { ignoreNodeModulesOrWarn, ignoreTestResultsOrWarn } from './init-gitignore.js';
+import { writeTsconfigOrWarn } from './init-tsconfig.js';
 import { avdCaptureWarning, captureAvdNextStep, noAvdsListedMessage, preferredAvd } from './avd-images.js';
 import * as detectDefaults from './init-detect.js';
 import type { InitCommandOptions } from './cli-program.js';
@@ -614,6 +615,11 @@ export function executeInitPlan(
 
   if (exampleTestExisted) warnings.push(`${EXAMPLE_TEST_PATH} already exists — left untouched`);
   filesCreated.push(...written.filter((f) => f !== 'tapsmith.config.ts'));
+
+  // For the documented ESLint setup's type information (PILOT-838).
+  const tsconfig = writeTsconfigOrWarn(cwd);
+  if (tsconfig === 'created') filesCreated.push('tsconfig.json');
+  else if (typeof tsconfig === 'object') warnings.push(tsconfig.warning);
 
   if (missingTapsmith) {
     warnings.push(`Tapsmith isn't installed in this project, and the files init wrote import it: run ${missingTapsmith.display} ${yarnPnp ? 'once Yarn is switched to node_modules (above)' : 'before anything else'}${missingTapsmith.note ? `. ${missingTapsmith.note}` : ''}`);
