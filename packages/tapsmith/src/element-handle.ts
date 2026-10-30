@@ -85,8 +85,9 @@ const SCROLL_FIRST_SWIPE_IDLE_TIMEOUT_MS = 1500;
 const SCROLL_SCREEN_READ_DEADLINE_MS = 5000;
 /** Idle wait before re-reading a screen that a swipe seems not to have
  *  changed, so a tree that lags the swipe is not taken for the end of the
- *  content (PILOT-929). Android's dump waits for idle by itself; this bounds
- *  the wait on a screen that never goes idle. */
+ *  content (PILOT-929). On both platforms this wait is the only catch-up: the
+ *  Android agent sets uiautomator's idle timeout to 0, so its hierarchy dump
+ *  does not wait for idle. Bounded for a screen that never goes idle. */
 const SCROLL_END_CONFIRM_IDLE_MS = 1000;
 /** Cap for the best-effort screenshot/hierarchy capture taken when an action's
  *  element resolution has *already* failed. Tighter than the normal 5s
