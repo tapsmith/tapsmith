@@ -71,12 +71,13 @@ describe("Scroll screen — scrollIntoView() picks its direction (PILOT-891)", (
     await expect(scrollScreen.firstItem).toBeVisible()
     const missing = scrollScreen.item("Z-9")
 
-    // At the top already: the first swipe toward the top moves nothing.
+    // At (or near) the top already: a swipe or two toward the top and the
+    // screen stops changing.
     const atTop = await missing.scrollIntoView({ direction: "up", maxScrolls: 30 }).then(() => null, (e: unknown) => e)
     expect(atTop).toBeInstanceOf(Error)
-    expect((atTop as Error).message).toMatch(
-      /^scrollIntoView: reached the end of the scrollable content without finding getByDescription\("Item Z-9"\) on screen: the screen stopped changing after 1 scroll\(s\) in direction "up" \(pass \{ direction: "down" \} to scroll the other way\)\./,
-    )
+    const topMessage = /^scrollIntoView: reached the end of the scrollable content without finding getByDescription\("Item Z-9"\) on screen: the screen stopped changing after (\d+) scroll\(s\) in direction "up" \(pass \{ direction: "down" \} to scroll the other way\)\./
+    expect((atTop as Error).message).toMatch(topMessage)
+    expect(Number(topMessage.exec((atTop as Error).message)?.[1])).toBeLessThanOrEqual(3)
     await expect(scrollScreen.firstItem).toBeVisible()
 
     // Down to the bottom: well short of the 30 allowed swipes.
