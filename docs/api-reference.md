@@ -1726,7 +1726,7 @@ await expect(device.getByText("Item", { exact: true })).toHaveAttribute("classNa
 
 #### `.toHaveAccessibleName(name: string | RegExp, options?): Promise<void>`
 
-Assert that the element has the given accessible name: its content description (iOS: accessibility label) if set; otherwise, for a text field, its placeholder (a field's text is its typed value, not its name); otherwise its text.
+Assert that the element has the given accessible name: its content description (iOS: accessibility label) if set; otherwise, for a text field, its placeholder (a field's text is its typed value, not its name); otherwise its text. An iOS list row (`XCUIElementTypeCell`) is the exception: its text is joined from what it contains, so with no label of its own it has no name, as `getByRole("listitem", { name })` sees it.
 
 ```typescript
 await expect(device.getByRole("button")).toHaveAccessibleName("Submit form");
