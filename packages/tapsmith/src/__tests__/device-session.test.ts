@@ -399,6 +399,32 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     expect(device.startAgent).toHaveBeenCalledWith('com.example.app', '/agents/agent.apk', '/agents/agent-test.apk', '/derived/TapsmithAgent.xctestrun', '/proj/Build/App.app', false);
   });
 
+  it('on an iOS simulator, says a reinstall is for a differing build only when the build was compared and differed', async () => {
+    const { installedAppMatches } = await import('../ios-simulator.js');
+    const open = async (opts: { forceInstall?: boolean }) => {
+      const progress: string[] = [];
+      await openDeviceSession(
+        { name: 'device-1', serial: 'SIM-1', daemonAddress: 'localhost:50052' },
+        makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app' }),
+        { claimSession: SESSION, label: 'Device', ...opts, onProgress: (m) => progress.push(m) },
+      );
+      return progress;
+    };
+
+    // A rebuilt bundle: compared, differs, reinstalled with the reason.
+    mocks.simAppMatches = false;
+    expect(await open({})).toContain('reinstalling App.app (installed build differs)');
+
+    // --force-install over a matching build: reinstalled without comparing,
+    // and without claiming the build differs.
+    mocks.simAppMatches = true;
+    vi.mocked(installedAppMatches).mockClear();
+    const forced = await open({ forceInstall: true });
+    expect(forced).toContain('reinstalling App.app');
+    expect(forced).not.toContain('reinstalling App.app (installed build differs)');
+    expect(installedAppMatches).not.toHaveBeenCalled();
+  });
+
   it('trusts an install made right after the simulator booted: no recheck, no reinstall, and a fresh-install launch (PILOT-496)', async () => {
     // The sequential CLI installs the app straight after booting a simulator
     // that lacked it. The session must neither check and reinstall it nor
