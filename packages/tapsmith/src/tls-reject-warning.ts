@@ -26,6 +26,17 @@ export function tlsRejectWarning(hosts: readonly string[]): string {
   );
 }
 
+/**
+ * One-line trace note for hosts whose certificate only OS services rejected
+ * (PILOT-782): Google Play services, Chrome or an iOS system daemon pinning
+ * its hosts says nothing about the app, so it never reaches the terminal.
+ */
+export function osServiceTlsRejectNote(hosts: readonly string[]): string {
+  const named = hosts.slice(0, MAX_NAMED_HOSTS).join(', ');
+  const more = hosts.length > MAX_NAMED_HOSTS ? ` and ${hosts.length - MAX_NAMED_HOSTS} more` : '';
+  return `Network capture: OS services on the device (not the app) rejected Tapsmith's certificate for ${named}${more}; that traffic was not captured.`;
+}
+
 // ─── Per-run dedupe ───
 
 /**
