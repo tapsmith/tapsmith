@@ -188,6 +188,11 @@ function isReachable(connProps: Record<string, unknown>): boolean {
 /** A simulator UDID; physical ones are `8-16` or 40 hex digits. */
 const SIMULATOR_UDID = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/i;
 
+/** Whether `udid` has a simulator's shape (a UUID), which no physical device's UDID has. */
+export function isSimulatorUdid(udid: string): boolean {
+  return SIMULATOR_UDID.test(udid);
+}
+
 /**
  * Returns true if `udid` matches a physical iOS device currently listed by
  * devicectl. Used by the CLI to branch install/launch between simctl and

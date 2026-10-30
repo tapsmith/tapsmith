@@ -25,6 +25,8 @@ import { emulatorNotFoundMessage, resolveEmulatorBinary, type EmulatorBinary } f
 import { hostArch, nodeUnderRosetta, ROSETTA_NODE_FIX } from './host-arch.js';
 import { adbMissingFix, androidHomeUnsetFix, XCODE_FIX } from './toolchain.js';
 import { mitmproxyRedirectorSource } from './setup-ios.js';
+import { readIosAppInfo, type IosAppInfo } from './ios-app-bundle.js';
+import { isSimulatorUdid } from './ios-devicectl.js';
 import { isYarnPnp, YARN_PNP_FIX } from './yarn-pnp.js';
 
 // ─── ANSI helpers ───
@@ -657,6 +659,131 @@ function checkConfiguredSimulators(report: Reporter, configured: Map<string, str
   }
 }
 
+// ─── iOS app under test (PILOT-918) ───
+
+type IosTarget = 'simulator' | 'device';
+
+/**
+ * What an iOS scope's devices are, as the runner picks them: a pinned
+ * `device` is a simulator when it has a simulator's UDID shape, else a
+ * physical device; an unpinned one boots `simulator`, or without it the
+ * runner auto-detects a paired physical device.
+ */
+function iosScopeTargets(scope: Pick<TapsmithConfig, 'devices' | 'device' | 'simulator'>): Set<IosTarget> {
+  return new Set(resolveDeviceGroup(scope).map((entry): IosTarget => (entry.device
+    ? (isSimulatorUdid(entry.device) ? 'simulator' : 'device')
+    : (scope.simulator ? 'simulator' : 'device'))));
+}
+
+/** How a build's `CFBundleSupportedPlatforms` reads in a label. */
+function describeBuild(platforms: string[]): string {
+  if (platforms.includes('iPhoneSimulator')) return 'a simulator build';
+  if (platforms.includes('iPhoneOS')) return 'a device (iphoneos) build';
+  return `built for ${platforms.join(', ') || 'no platform'}`;
+}
+
+const SIMULATOR_BUILD_FIX = 'Build it for the iOS Simulator (xcodebuild … -sdk iphonesimulator, or npx expo run:ios) and set app to the .app under Build/Products/<Configuration>-iphonesimulator';
+const DEVICE_BUILD_FIX = 'Build it for iOS devices (xcodebuild … -sdk iphoneos, signed for the device) and set app to the .app under Build/Products/<Configuration>-iphoneos — see https://tapsmith.dev/platform/ios-physical-devices/';
+
+/**
+ * The `app` and `package` of every iOS scope, as one `ios-app` row: the
+ * bundle must exist, be a built `.app` directory, be built for where the
+ * scope runs (an iphoneos build cannot install on a simulator, nor a
+ * simulator build on a phone), and carry `package` as its bundle id —
+ * failures, since the run fails on each (or `required` false: warnings, as
+ * for `app-apk` in a mixed config). An unset `app` or `package` is a
+ * warning: the run goes on, but installs nothing or launches nothing.
+ */
+function checkIosApp(report: Reporter, scopes: TapsmithConfig[], projects: Array<string | undefined>, required: boolean): void {
+  const ios = scopes.map((scope, i) => ({ scope, project: projects[i] })).filter(({ scope }) => scopePlatform(scope) === 'ios');
+  if (ios.length === 0) return;
+  try {
+    const mark: 'fail' | 'warn' = required ? 'fail' : 'warn';
+    // Keyed by label, so a problem several projects share is one entry naming them all.
+    // A fix is its sentences, so one two problems share (a build hint) is printed once.
+    const issues = new Map<string, { status: 'fail' | 'warn'; fix: string[]; owners: string[] }>();
+    const found = new Map<string, string>();
+    const infos = new Map<string, IosAppInfo>();
+    for (const { scope, project } of ios) {
+      const add = (status: 'fail' | 'warn', label: string, ...fix: string[]): void => {
+        const entry = issues.get(label) ?? { status, fix, owners: [] };
+        if (project !== undefined && !entry.owners.includes(project)) entry.owners.push(project);
+        issues.set(label, entry);
+      };
+      let bundleId: string | undefined;
+      let name = 'the app';
+      if (!scope.app) {
+        add('warn', 'No app set — Tapsmith does not install the app, so tests run whatever build is already on the device',
+          'Set app to your app\'s built .app bundle (npx tapsmith init finds it once the app is built)');
+      } else {
+        const app = path.resolve(scope.rootDir ?? process.cwd(), scope.app);
+        name = path.basename(app);
+        const targets = iosScopeTargets(scope);
+        const buildFix = targets.has('simulator') ? SIMULATOR_BUILD_FIX : DEVICE_BUILD_FIX;
+        let stat: fs.Stats | undefined;
+        try {
+          stat = fs.statSync(app);
+        } catch { /* reported below */ }
+        if (!stat) {
+          add(mark, `iOS app not found at ${app}`, 'Fix the app path in your Tapsmith config, or build the app', buildFix);
+        } else if (!stat.isDirectory()) {
+          add(mark, `${app} is not an .app bundle — app must be the .app directory Xcode builds, not a file`, buildFix);
+        } else if (!fs.existsSync(path.join(app, 'Info.plist'))) {
+          add(mark, `${app} has no Info.plist — not a built .app bundle`, buildFix);
+        } else {
+          let info = infos.get(app);
+          if (!info) {
+            info = readIosAppInfo(app);
+            infos.set(app, info);
+          }
+          bundleId = info.bundleId;
+          let ok = true;
+          const flag = (label: string, fix: string): void => {
+            ok = false;
+            add(mark, label, fix);
+          };
+          if (!bundleId) {
+            ok = false;
+            add('warn', `Could not read ${name}'s Info.plist — its bundle id and build were not checked`, `Run: plutil -p "${path.join(app, 'Info.plist')}" to see why`);
+          }
+          const platforms = info.platforms;
+          if (platforms) {
+            if (targets.has('simulator') && !platforms.includes('iPhoneSimulator')) {
+              flag(`${name} is ${describeBuild(platforms)}, but it runs on an iOS simulator`, SIMULATOR_BUILD_FIX);
+            }
+            if (targets.has('device') && !platforms.includes('iPhoneOS')) {
+              flag(`${name} is ${describeBuild(platforms)}, but it runs on a physical iOS device`, DEVICE_BUILD_FIX);
+            }
+          }
+          if (bundleId && scope.package && scope.package !== bundleId) {
+            flag(`${name}'s bundle identifier is ${bundleId}, but package is ${scope.package} — Tapsmith would install one app and launch another`,
+              `Set package: '${bundleId}', or set app to the build of ${scope.package}`);
+          }
+          if (ok) {
+            const kind = platforms?.includes('iPhoneSimulator') ? ', simulator build' : platforms?.includes('iPhoneOS') ? ', device build' : '';
+            found.set(app, `${name} (${bundleId}${kind})`);
+          }
+        }
+      }
+      if (!scope.package) {
+        add('warn', 'No package (bundle identifier) set — Tapsmith never launches the app or resets it between test files, so tests start on whatever is on screen',
+          bundleId ? `Set package: '${bundleId}' (${name}'s bundle identifier)` : 'Set package to your app\'s bundle identifier (CFBundleIdentifier in its Info.plist)');
+      }
+    }
+    if (issues.size === 0) {
+      pass(report, 'ios-app', `iOS app${found.size === 1 ? '' : 's'} found`, [...found.values()].join(', '));
+      return;
+    }
+    const entries = [...issues];
+    const label = entries.map(([text, { owners }]) => (owners.length === 0 ? text : `${text} (project${owners.length === 1 ? '' : 's'} ${owners.join(', ')})`)).join('; ');
+    const fix = [...new Set(entries.flatMap(([, { fix: f }]) => f))].join('; ');
+    if (entries.some(([, e]) => e.status === 'fail')) fail(report, 'ios-app', label, fix);
+    else warn(report, 'ios-app', label, fix);
+  } catch {
+    warn(report, 'ios-app', 'Could not check the iOS app');
+  }
+}
+
 async function checkSimulatorXctestrun(report: Reporter): Promise<void> {
   try {
     const {
@@ -1248,11 +1375,17 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
     }
   } else {
     iosChecked = true;
-    if (checkXcode(report, iosPlan.required, !!targets)) {
+    const xcodeOk = checkXcode(report, iosPlan.required, !!targets);
+    if (xcodeOk) {
       // With Xcode here, the config's iOS projects run on this machine.
       const named = !targets || !config || !configNamesSimulator(config) ? 'none' : iosPlan.required ? 'required' : 'optional';
       checkSimctl(report, !!targets, named);
       checkConfiguredSimulators(report, configuredSimulators(scopes, projectNames), iosPlan.required);
+    }
+    // Filesystem and plutil only, so it runs without Xcode too, as app-apk
+    // runs without adb; with Xcode here the iOS projects run on this machine.
+    checkIosApp(report, scopes, projectNames, iosPlan.required || xcodeOk);
+    if (xcodeOk) {
       await checkSimulatorXctestrun(report);
     } else {
       // A config that targets iOS still gets its capture guidance (mitmproxy,
