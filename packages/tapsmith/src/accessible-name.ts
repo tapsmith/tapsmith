@@ -29,15 +29,24 @@ function isPlaceholderNamedClass(className: string): boolean {
 }
 
 /**
+ * iOS element types whose text is their content, never their name: a table
+ * row's text is joined from its descendants (PILOT-895), but the iOS agent
+ * names an element by its label, title or placeholder only, as Playwright
+ * names a listitem by its author alone.
+ */
+const IOS_CONTENT_NOT_NAME_TYPES: ReadonlySet<string> = new Set(['XCUIElementTypeCell']);
+
+/**
  * A found element's accessible name, as `toHaveAccessibleName` reads it: its
  * content description (iOS: label or title); else, for a text input, its
  * placeholder — a field's text is its typed value, not its name —
- * and for anything else, its text.
+ * and for anything else but an iOS table row, its text.
  */
 export function elementAccessibleName(el: {
   className: string; contentDescription: string; text: string; hint: string;
 }): string {
   if (el.contentDescription.trim()) return el.contentDescription;
   if (isPlaceholderNamedClass(el.className) && el.hint) return el.hint;
+  if (IOS_CONTENT_NOT_NAME_TYPES.has(el.className)) return '';
   return el.text;
 }

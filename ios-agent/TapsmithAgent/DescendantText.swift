@@ -41,11 +41,22 @@ enum DescendantText {
                     value: child["value"] as? String ?? ""
                 ) { continue }
                 if CellAccessories.isMarkedIndicator(child) { continue }
-                // A switch's "0"/"1", a slider's or a stepper's value is not
-                // text on screen, nor is the label that only names it
-                // (TextContent.nameOnlyTypes): a settings row with a switch
-                // reads "Wi-Fi", not "Wi-Fi 1".
-                if TextContent.nameOnlyTypes.contains(elementType(of: child)) { continue }
+                // A control whose label only names it and whose value is
+                // not text on screen (TextContent.nameOnlyTypes: a switch's
+                // "0"/"1", a slider's or a stepper's value) adds none of its
+                // own: a UIKit settings row with a switch reads "Wi-Fi", not
+                // "Wi-Fi 1". A SwiftUI Toggle row's switch holds the label's
+                // static text (and its unlabelled knob), so its children
+                // still count. A stepper's are its "<label>, Increment"
+                // buttons and a slider has none: neither is text on screen.
+                let type = elementType(of: child)
+                if TextContent.nameOnlyTypes.contains(type) {
+                    if type == .switch || type == .toggle {
+                        let nested = collect(child, depth: depth + 1)
+                        if !nested.isEmpty { parts.append(nested) }
+                    }
+                    continue
+                }
                 let ownText: String?
                 if let v = child["value"] as? String, !v.isEmpty {
                     ownText = v

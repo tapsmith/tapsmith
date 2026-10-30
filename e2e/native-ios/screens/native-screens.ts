@@ -45,6 +45,8 @@ export class NativeTogglesScreen {
   /** A Stepper is a spin button, as ARIA has it (PILOT-702). */
   get stepper() { return this.device.getByRole("spinbutton", { name: "Quantity" }) }
   get slider() { return this.device.getByRole("slider", { name: "Volume" }) }
+  /** A Form row by its text: a Toggle row reads its label, not its "0"/"1" (PILOT-895). */
+  row(text: string) { return this.device.getByRole("listitem").filter({ hasText: text }) }
 }
 
 export class NativeListScreen {

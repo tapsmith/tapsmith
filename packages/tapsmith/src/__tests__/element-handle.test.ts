@@ -1074,6 +1074,17 @@ describe('tap()', () => {
     expect(tap).not.toHaveBeenCalled();
   });
 
+  it("never suggests a role name from an iOS table row's joined text (PILOT-895)", () => {
+    // A UIKit row's text is its child label's, but the agent names a cell by
+    // its own (empty) label only: getByRole("listitem", { name }) would miss.
+    const row = (text: string) => makeElementInfo({
+      className: 'XCUIElementTypeCell', role: 'listitem', text, contentDescription: '',
+    });
+    const err = buildStrictModeViolationError('getByRole("listitem")', [row('Row 1'), row('Row 10')]);
+    expect(err.message).not.toContain('getByRole("listitem", { name');
+    expect(err.message).not.toContain('aka');
+  });
+
   it('suggests a long role name as a matching prefix, not an ellipsis (PILOT-549)', () => {
     const long = 'Login Form, Text inputs, buttons, focus and blur, keyboard handling';
     const err = buildStrictModeViolationError('getByRole("button")', [

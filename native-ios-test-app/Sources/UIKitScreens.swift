@@ -132,7 +132,7 @@ final class UIKitTableViewController: UITableViewController {
             cell.accessoryView = buy
         case "Row 9":
             // A custom accessory drawn like UIKit's checkmark: an image-only
-            // button, disabled, that UIKit names after its symbol.
+            // button, disabled (XCUITest labels it "selected").
             let done = UIButton(type: .system)
             done.setImage(UIImage(systemName: "checkmark"), for: .normal)
             done.isEnabled = false

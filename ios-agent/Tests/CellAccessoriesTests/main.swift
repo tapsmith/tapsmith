@@ -165,6 +165,12 @@ do {
         node(.stepper, label: "Count", [node(.button, label: "Count, Increment")]), node(.toggle, value: "1"),
     ])
     check("sliders, steppers and toggles add no text", DescendantText.collect(controls), "Volume")
+    // A SwiftUI Form Toggle row: the row-sized switch holds the label's text
+    // and the knob (measured on an iOS 26 simulator).
+    let toggleRow = node(.cell, [node(.other, [node(.other, [
+        node(.switch, label: "Dark Mode", value: "0", [node(.staticText, label: "Dark Mode"), node(.switch, value: "0")]),
+    ])])])
+    check("a SwiftUI Toggle row reads its label's text", DescendantText.collect(toggleRow), "Dark Mode")
     let nested = node(.cell, [node(.other, [node(.other, [node(.staticText, label: "Deep")])])])
     check("text nested under unlabelled views is found", DescendantText.collect(nested), "Deep")
     var deep = node(.staticText, label: "Too deep")

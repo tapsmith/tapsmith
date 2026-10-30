@@ -1297,6 +1297,20 @@ describe("toHaveAccessibleName()", () => {
     await tapsmithExpect(handle).toHaveAccessibleName("Submit", { timeout: 50 });
   });
 
+  // PILOT-895: an iOS table row's text is joined from its child label; the
+  // agent names a cell by its own label only, so its text is not its name.
+  it("does not name an iOS table row by its joined text", async () => {
+    const client = makeMockClient(async () => ({
+      requestId: "1",
+      found: true,
+      element: makeElementInfo({ className: "XCUIElementTypeCell", role: "listitem", text: "Row 1", contentDescription: "" }),
+      errorMessage: "",
+    }));
+    const handle = makeHandle(client);
+    await tapsmithExpect(handle).not.toHaveAccessibleName("Row 1", { timeout: 50 });
+    await tapsmithExpect(handle).toHaveAccessibleName("", { timeout: 50 });
+  });
+
   // PILOT-834: an input with no label is named by its placeholder, as
   // getByRole's name is — never by its typed value.
   it.each([
