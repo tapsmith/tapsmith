@@ -129,8 +129,9 @@ export function initArgsFromOptions(opts: InitCommandOptions): InitArgs {
 
 // ─── Resolution ───
 
-const NO_APK_MESSAGE = 'No Android APK found in the project\'s build outputs (**/build/outputs/apk/)';
-const NO_IOS_APP_MESSAGE = 'No simulator .app bundle found in the project (**/*-iphonesimulator/*.app) or in Xcode\'s DerivedData';
+const noApkMessage = (layout: detectDefaults.ProjectLayout): string => `No Android APK found in the project's build outputs (${detectDefaults.apkSearchedIn(layout)})`;
+const noIosAppMessage = (layout: detectDefaults.ProjectLayout): string =>
+  `No simulator .app bundle found in the project (${detectDefaults.simulatorAppSearchedIn(layout)}) or in Xcode's DerivedData`;
 
 export function resolveInitPlan(
   args: InitArgs,
@@ -219,11 +220,11 @@ export function resolveInitPlan(
         const installed = 'or --package <id> if the app is already installed on the device (a dev client, say)';
         const expoProject = expo();
         if (expoProject) {
-          throw new InitError('NO_APK', NO_APK_MESSAGE, {
+          throw new InitError('NO_APK', noApkMessage(layout), {
             fix: detectDefaults.expoBuildHint(['android'], expoProject, `Or pass --apk <path>, ${installed}.`),
           });
         }
-        throw new InitError('NO_APK', NO_APK_MESSAGE, {
+        throw new InitError('NO_APK', noApkMessage(layout), {
           fix: `${detectDefaults.nativeBuildHint('android', layout, reactNative)}, or pass --apk <path>, ${installed}`,
         });
       }
@@ -310,11 +311,11 @@ export function resolveInitPlan(
       if (candidates.length === 0) {
         const expoProject = expo();
         if (expoProject) {
-          throw new InitError('NO_IOS_APP', NO_IOS_APP_MESSAGE, {
+          throw new InitError('NO_IOS_APP', noIosAppMessage(layout), {
             fix: detectDefaults.expoBuildHint(['ios'], expoProject, 'Or pass --app <path>.'),
           });
         }
-        throw new InitError('NO_IOS_APP', NO_IOS_APP_MESSAGE, {
+        throw new InitError('NO_IOS_APP', noIosAppMessage(layout), {
           fix: `${detectDefaults.nativeBuildHint('ios', layout, reactNative)}, or pass --app <path>`,
         });
       }

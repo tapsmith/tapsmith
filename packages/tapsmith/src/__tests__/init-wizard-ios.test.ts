@@ -1,5 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import * as fs from 'node:fs';
 import * as os from 'node:os';
+import * as path from 'node:path';
 import type { EnvScan } from '../env-scan.js';
 import type { ExpoProject } from '../init-detect.js';
 
@@ -325,6 +327,43 @@ describe('configureIos() build detection (PILOT-513)', () => {
     expect(ids.length).toBeGreaterThan(0);
     expect(ids[0].initial).toBeUndefined();
     expect(JSON.stringify(questions)).not.toContain('com.example');
+  });
+});
+
+describe('configureIos() on a Flutter project (PILOT-868)', () => {
+  let logged: string[] = [];
+  let project: string;
+
+  beforeEach(() => {
+    answers.clear();
+    asked.length = 0;
+    questions.length = 0;
+    bundleIds.clear();
+    simCandidates = [];
+    deviceCandidates = [];
+    logged = [];
+    vi.spyOn(console, 'log').mockImplementation((...args: unknown[]) => { logged.push(args.join(' ')); });
+    project = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-flutter-'));
+    fs.writeFileSync(path.join(project, 'pubspec.yaml'), 'name: app\nflutter:\n  uses-material-design: true\n');
+    fs.mkdirSync(path.join(project, 'ios', 'Runner.xcworkspace'), { recursive: true });
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+  });
+
+  afterEach(() => {
+    vi.mocked(process.cwd).mockRestore();
+    fs.rmSync(project, { recursive: true, force: true });
+  });
+
+  it('with no builds found, says how to build each with flutter build, not xcodebuild', async () => {
+    script('both', [[/bundle identifier/, 'com.acme.flutter']]);
+
+    await configureIos(env);
+
+    const out = logged.join('\n');
+    expect(out).toContain('`flutter build ios --simulator --debug`, which writes build/ios/iphonesimulator/Runner.app');
+    expect(out).toContain('`flutter build ios --release`');
+    expect(out).toContain('build/ios/iphoneos/Runner.app');
+    expect(out).not.toContain('xcodebuild');
   });
 });
 

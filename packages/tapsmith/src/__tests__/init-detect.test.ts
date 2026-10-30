@@ -119,13 +119,13 @@ describe('detectProjectLayout() (PILOT-832)', () => {
     touch(path.join(tmp, 'android', 'settings.gradle'));
     fs.mkdirSync(path.join(tmp, 'ios', 'MyApp.xcworkspace'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'ios', 'MyApp.xcodeproj'), { recursive: true });
-    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: 'android', iosProjects: ['ios/MyApp.xcworkspace', 'ios/MyApp.xcodeproj'], hasIosDir: true });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: 'android', iosProjects: ['ios/MyApp.xcworkspace', 'ios/MyApp.xcodeproj'], hasIosDir: true, flutter: false });
   }));
 
   it('reads a native Xcode project at the root (xcodegen, Xcode\'s App template)', () => withTmp((tmp) => {
     fs.mkdirSync(path.join(tmp, 'Notekeeper.xcodeproj', 'project.xcworkspace'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'Notekeeper'), { recursive: true });
-    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['Notekeeper.xcodeproj'], hasIosDir: false });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['Notekeeper.xcodeproj'], hasIosDir: false, flutter: false });
   }));
 
   it('reads a native Gradle project at the root (Android Studio\'s templates), Kotlin or Groovy DSL', () => {
@@ -133,7 +133,7 @@ describe('detectProjectLayout() (PILOT-832)', () => {
       withTmp((tmp) => {
         touch(path.join(tmp, settings));
         touch(path.join(tmp, 'app', 'build.gradle.kts'));
-        expect(detectProjectLayout(tmp)).toEqual({ androidRoot: '.', iosProjects: [], hasIosDir: false });
+        expect(detectProjectLayout(tmp)).toEqual({ androidRoot: '.', iosProjects: [], hasIosDir: false, flutter: false });
       });
     }
   });
@@ -141,7 +141,7 @@ describe('detectProjectLayout() (PILOT-832)', () => {
   it('finds an Xcode project one folder down beside a root Gradle project (Kotlin Multiplatform)', () => withTmp((tmp) => {
     touch(path.join(tmp, 'settings.gradle.kts'));
     fs.mkdirSync(path.join(tmp, 'iosApp', 'iosApp.xcodeproj'), { recursive: true });
-    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: '.', iosProjects: ['iosApp/iosApp.xcodeproj'], hasIosDir: false });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: '.', iosProjects: ['iosApp/iosApp.xcodeproj'], hasIosDir: false, flutter: false });
   }));
 
   it('ignores Xcode projects inside node_modules, Pods and build output', () => withTmp((tmp) => {
@@ -149,11 +149,11 @@ describe('detectProjectLayout() (PILOT-832)', () => {
     fs.mkdirSync(path.join(tmp, 'Pods', 'Pods.xcodeproj'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'build', 'Thing.xcodeproj'), { recursive: true });
     fs.mkdirSync(path.join(tmp, '.hidden', 'Thing.xcodeproj'), { recursive: true });
-    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: [], hasIosDir: false });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: [], hasIosDir: false, flutter: false });
   }));
 
   it('finds nothing in an empty directory', () => withTmp((tmp) => {
-    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: [], hasIosDir: false });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: [], hasIosDir: false, flutter: false });
   }));
 });
 
@@ -279,7 +279,7 @@ describe('searching a project in a folder with a skipped name (PILOT-832)', () =
 
 describe('names with spaces and nested iOS projects (PILOT-832)', () => {
   it('quotes a project, scheme or folder with a space in the xcodebuild hint', () => {
-    const hint = nativeBuildHint('ios', { androidRoot: undefined, iosProjects: ['My Apps/My App.xcodeproj'], hasIosDir: false }, false);
+    const hint = nativeBuildHint('ios', { androidRoot: undefined, iosProjects: ['My Apps/My App.xcodeproj'], hasIosDir: false, flutter: false }, false);
     expect(hint).toContain("`cd 'My Apps' && xcodebuild -project 'My App.xcodeproj' -scheme 'My App' -configuration Debug");
     expect(hint).toContain('under My Apps/build/Build/Products/Debug-iphonesimulator/');
   });
@@ -338,7 +338,7 @@ describe('where builds are searched for (PILOT-832)', () => {
   }));
 
   it('hints a Release iOS build for React Native, whose Debug build needs Metro', () => {
-    const layout = { androidRoot: 'android' as const, iosProjects: ['ios/App.xcworkspace'], hasIosDir: true };
+    const layout = { androidRoot: 'android' as const, iosProjects: ['ios/App.xcworkspace'], hasIosDir: true, flutter: false };
     const hint = nativeBuildHint('ios', layout, true);
     expect(hint).toContain('`cd ios && xcodebuild -workspace App.xcworkspace -scheme App -configuration Release -sdk iphonesimulator -derivedDataPath build build`');
     expect(hint).toContain('under ios/build/Build/Products/Release-iphonesimulator/');
@@ -353,12 +353,12 @@ describe('case and React Native corners (PILOT-832)', () => {
     fs.mkdirSync(path.join(tmp, 'iOS'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'Shared'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'MyApp.app'), { recursive: true });
-    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['MyApp.xcodeproj'], hasIosDir: false });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['MyApp.xcodeproj'], hasIosDir: false, flutter: false });
     expect(findIosAppCandidates(tmp)).toEqual(['build/Build/Products/Debug-iphonesimulator/MyApp.app']);
   }));
 
   it('gives the Release build in the DerivedData warning for React Native', () => {
-    const layout = { androidRoot: 'android' as const, iosProjects: ['ios/App.xcworkspace'], hasIosDir: true };
+    const layout = { androidRoot: 'android' as const, iosProjects: ['ios/App.xcworkspace'], hasIosDir: true, flutter: false };
     expect(derivedDataBuildWarning('/dd/App.app', layout, 'iphonesimulator', true)).toContain('-configuration Release');
     expect(derivedDataBuildWarning('/dd/App.app', layout, 'iphonesimulator', false)).toContain('-configuration Debug');
   });
@@ -403,7 +403,7 @@ describe('a native repository\'s Android/ Gradle project (PILOT-832)', () => {
     touch(path.join(tmp, 'Android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
     fs.mkdirSync(path.join(tmp, 'iOS', 'App.xcodeproj'), { recursive: true });
     const layout = detectProjectLayout(tmp);
-    expect(layout).toEqual({ androidRoot: 'Android', iosProjects: ['iOS/App.xcodeproj'], hasIosDir: false });
+    expect(layout).toEqual({ androidRoot: 'Android', iosProjects: ['iOS/App.xcodeproj'], hasIosDir: false, flutter: false });
     expect(findApkCandidates(tmp)).toEqual(['Android/app/build/outputs/apk/debug/app-debug.apk']);
     expect(nativeBuildHint('android', layout, false)).toContain('`cd Android && ./gradlew assembleDebug`');
   }));
@@ -436,7 +436,7 @@ describe('root Gradle projects with an android/ module, and iOS/<App>/ projects 
   it('finds an Xcode project two folders down in a native iOS/ folder', () => withTmp((tmp) => {
     fs.mkdirSync(path.join(tmp, 'iOS', 'MyApp', 'MyApp.xcodeproj'), { recursive: true });
     fs.mkdirSync(path.join(tmp, 'iOS', 'build', 'Build', 'Products', 'Debug-iphonesimulator', 'MyApp.app'), { recursive: true });
-    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['iOS/MyApp/MyApp.xcodeproj'], hasIosDir: false });
+    expect(detectProjectLayout(tmp)).toEqual({ androidRoot: undefined, iosProjects: ['iOS/MyApp/MyApp.xcodeproj'], hasIosDir: false, flutter: false });
     expect(findIosAppCandidates(tmp)).toEqual(['iOS/build/Build/Products/Debug-iphonesimulator/MyApp.app']);
   }));
 });
@@ -496,4 +496,115 @@ describe('detectGradleApplicationId() (PILOT-778)', () => {
     expect(detectGradleApplicationId(root)).toBeUndefined();
     expect(detectGradleApplicationId(fs.mkdtempSync(path.join(root, 'empty-')))).toBeUndefined();
   });
+});
+
+describe('Flutter projects (PILOT-868)', () => {
+  const PUBSPEC = 'name: shoplist\ndependencies:\n  flutter:\n    sdk: flutter\n\nflutter:\n  uses-material-design: true\n';
+  /** What `flutter create` lays out: pubspec.yaml, android/ (a Gradle project) and ios/Runner.xcworkspace. */
+  const flutterProject = (dir: string, pubspec = PUBSPEC): void => {
+    touch(path.join(dir, 'pubspec.yaml'), pubspec);
+    touch(path.join(dir, 'android', 'settings.gradle.kts'));
+    fs.mkdirSync(path.join(dir, 'ios', 'Runner.xcworkspace'), { recursive: true });
+    fs.mkdirSync(path.join(dir, 'ios', 'Runner.xcodeproj'), { recursive: true });
+  };
+  const app = (dir: string, rel: string): void => {
+    fs.mkdirSync(path.join(dir, rel), { recursive: true });
+  };
+
+  it('reads a pubspec.yaml with a flutter: section as a Flutter project', () => withTmp((tmp) => {
+    flutterProject(tmp);
+    expect(detectProjectLayout(tmp)).toEqual({
+      androidRoot: 'android',
+      iosProjects: ['ios/Runner.xcworkspace', 'ios/Runner.xcodeproj'],
+      hasIosDir: true,
+      flutter: true,
+    });
+  }));
+
+  it('reads a Flutter SDK dependency as Flutter without a flutter: section', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'pubspec.yaml'), 'name: app\ndependencies:\n  flutter:\n    sdk: flutter\n');
+    expect(detectProjectLayout(tmp).flutter).toBe(true);
+  }));
+
+  it('does not read a pure Dart package, or a commented-out section, as Flutter', () => withTmp((tmp) => {
+    touch(path.join(tmp, 'pubspec.yaml'), 'name: dart_pkg\n# flutter:\n#   uses-material-design: true\ndependencies:\n  http: ^1.0.0\n');
+    expect(detectProjectLayout(tmp).flutter).toBe(false);
+  }));
+
+  it('finds the APK `flutter build apk` writes, once, beside Gradle\'s copy of it', () => withTmp((tmp) => {
+    flutterProject(tmp);
+    touch(path.join(tmp, 'build', 'app', 'outputs', 'flutter-apk', 'app-debug.apk'));
+    touch(path.join(tmp, 'build', 'app', 'outputs', 'flutter-apk', 'app-debug.apk.sha1'));
+    touch(path.join(tmp, 'build', 'app', 'outputs', 'apk', 'debug', 'app-debug.apk'));
+    expect(findApkCandidates(tmp)).toEqual(['build/app/outputs/flutter-apk/app-debug.apk']);
+  }));
+
+  it('lists every APK in flutter-apk/ (flavors, --split-per-abi), debug first as elsewhere', () => withTmp((tmp) => {
+    flutterProject(tmp);
+    for (const apk of ['app-release.apk', 'app-debug.apk', 'app-arm64-v8a-release.apk']) {
+      touch(path.join(tmp, 'build', 'app', 'outputs', 'flutter-apk', apk));
+    }
+    const found = findApkCandidates(tmp);
+    expect(found).toEqual([
+      'build/app/outputs/flutter-apk/app-arm64-v8a-release.apk',
+      'build/app/outputs/flutter-apk/app-debug.apk',
+      'build/app/outputs/flutter-apk/app-release.apk',
+    ]);
+    expect(preferDebugApk(found)).toEqual(['build/app/outputs/flutter-apk/app-debug.apk']);
+  }));
+
+  it('falls back to Gradle\'s outputs in build/ (a `./gradlew assembleDebug` in android/), then to android/', () => withTmp((tmp) => {
+    flutterProject(tmp);
+    touch(path.join(tmp, 'build', 'app', 'outputs', 'apk', 'debug', 'app-debug.apk'));
+    expect(findApkCandidates(tmp)).toEqual(['build/app/outputs/apk/debug/app-debug.apk']);
+  }));
+
+  it('still finds an APK under android/ when build/ holds none', () => withTmp((tmp) => {
+    flutterProject(tmp);
+    touch(path.join(tmp, 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'));
+    expect(findApkCandidates(tmp)).toEqual(['android/app/build/outputs/apk/debug/app-debug.apk']);
+  }));
+
+  it('finds the simulator and device apps `flutter build ios` writes, once, beside Xcode\'s copies', () => withTmp((tmp) => {
+    flutterProject(tmp);
+    app(tmp, 'build/ios/iphonesimulator/Runner.app');
+    app(tmp, 'build/ios/Debug-iphonesimulator/Runner.app');
+    app(tmp, 'build/ios/iphoneos/Runner.app');
+    app(tmp, 'build/ios/Release-iphoneos/Runner.app');
+    expect(findIosAppCandidates(tmp)).toEqual(['build/ios/iphonesimulator/Runner.app']);
+    expect(findIosDeviceAppCandidates(tmp)).toEqual(['build/ios/iphoneos/Runner.app']);
+  }));
+
+  it('finds an app Xcode built into Flutter\'s build/ios/ (a build from the Xcode UI)', () => withTmp((tmp) => {
+    flutterProject(tmp);
+    app(tmp, 'build/ios/Debug-iphonesimulator/Runner.app');
+    app(tmp, 'build/ios/Debug-iphonesimulator/RunnerTests-Runner.app');
+    expect(findIosAppCandidates(tmp)).toEqual(['build/ios/Debug-iphonesimulator/Runner.app']);
+    expect(findIosDeviceAppCandidates(tmp)).toEqual([]);
+  }));
+
+  it('searches no build/ folder outside a Flutter project', () => withTmp((tmp) => {
+    flutterProject(tmp, 'name: dart_pkg\n');
+    touch(path.join(tmp, 'build', 'app', 'outputs', 'flutter-apk', 'app-debug.apk'));
+    app(tmp, 'build/ios/iphonesimulator/Runner.app');
+    expect(findApkCandidates(tmp)).toEqual([]);
+    expect(findIosAppCandidates(tmp)).toEqual([]);
+  }));
+
+  it('hints `flutter build`, not Gradle or xcodebuild, and where the build lands', () => withTmp((tmp) => {
+    flutterProject(tmp);
+    const layout = detectProjectLayout(tmp);
+    const android = nativeBuildHint('android', layout, false);
+    expect(android).toContain('`flutter build apk --debug`');
+    expect(android).toContain('build/app/outputs/flutter-apk/app-debug.apk');
+    expect(android).not.toContain('gradlew');
+    const ios = nativeBuildHint('ios', layout, false);
+    expect(ios).toMatch(/^Build one for the simulator first/);
+    expect(ios).toContain('`flutter build ios --simulator --debug`');
+    expect(ios).toContain('build/ios/iphonesimulator/Runner.app');
+    expect(ios).not.toContain('xcodebuild');
+    const warning = derivedDataBuildWarning('/dd/Runner.app', layout);
+    expect(warning).toContain('`flutter build ios --simulator --debug`');
+    expect(warning).not.toContain('xcodebuild');
+  }));
 });

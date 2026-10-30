@@ -34,6 +34,11 @@ export interface ProjectLayout {
   iosProjects: string[];
   /** An `ios/` directory exists (React Native), with or without an Xcode project in it yet. */
   hasIosDir: boolean;
+  /**
+   * A Flutter app: `flutter build` writes its builds to the
+   * project's root `build/`, not under `android/` or `ios/`.
+   */
+  flutter: boolean;
 }
 
 /** Folders never searched for projects or builds: dependencies, tooling output and hidden folders. */
@@ -127,6 +132,21 @@ function androidRootOf(cwd: string): string | undefined {
   return rootGradle ? '.' : undefined;
 }
 
+/**
+ * A `pubspec.yaml` with a top-level `flutter:` section (every `flutter
+ * create` app has one) or a Flutter SDK dependency. A pure Dart package has
+ * a pubspec.yaml too, with neither.
+ */
+function isFlutterProject(cwd: string): boolean {
+  let pubspec: string;
+  try {
+    pubspec = fs.readFileSync(path.join(cwd, 'pubspec.yaml'), 'utf8');
+  } catch {
+    return false;
+  }
+  return /^flutter:/m.test(pubspec) || /^[ \t]+flutter:[ \t]*\r?\n[ \t]+sdk:[ \t]*["']?flutter\b/m.test(pubspec);
+}
+
 export function detectProjectLayout(cwd: string): ProjectLayout {
   const hasIosDir = hasDirNamed(cwd, 'ios');
   // A native repository's `iOS/` folder may hold its Xcode project a level
@@ -138,7 +158,7 @@ export function detectProjectLayout(cwd: string): ProjectLayout {
       '*.xcworkspace', '*.xcodeproj', '*/*.xcworkspace', '*/*.xcodeproj',
       ...(iosVariant ? [`${iosVariant}/*/*.xcworkspace`, `${iosVariant}/*/*.xcodeproj`] : []),
     ]);
-  return { androidRoot: androidRootOf(cwd), iosProjects, hasIosDir };
+  return { androidRoot: androidRootOf(cwd), iosProjects, hasIosDir, flutter: isFlutterProject(cwd) };
 }
 
 /** The layout has an Android project. */
@@ -153,17 +173,9 @@ export function hasIosProject(layout: ProjectLayout): boolean {
 
 // ─── Android ───
 
-/**
- * Returns project-relative APK paths (posix-style globs, deterministic order):
- * any Gradle module's `build/outputs/apk/` in the Android project, so
- * `android/app/…` in a React Native project and `app/…` in an Android Studio
- * one. Outside an Android project there is nothing to search, and
- * a walk of a home directory would stall init.
- */
-export function findApkCandidates(cwd: string): string[] {
-  const root = detectProjectLayout(cwd).androidRoot;
-  if (root === undefined) return [];
-  return globSync(`${root === '.' ? '' : `${root}/`}**/build/outputs/apk/**/*.apk`, {
+/** APKs matching `pattern` (project-relative, posix, sorted), instrumentation APKs left out. */
+function globApks(cwd: string, pattern: string): string[] {
+  return globSync(pattern, {
     cwd,
     nodir: true,
     posix: true,
@@ -173,6 +185,33 @@ export function findApkCandidates(cwd: string): string[] {
     const parts = candidate.split(/[\\/]/);
     return !parts.includes('androidTest') && !/-androidTest\.apk$/i.test(candidate);
   }).sort();
+}
+
+/**
+ * Returns project-relative APK paths (posix-style globs, deterministic order):
+ * any Gradle module's `build/outputs/apk/` in the Android project, so
+ * `android/app/…` in a React Native project and `app/…` in an Android Studio
+ * one. Outside an Android project there is nothing to search, and
+ * a walk of a home directory would stall init.
+ *
+ * A Flutter app's Gradle build writes to the project's root `build/`:
+ * `flutter build apk` leaves its APKs in
+ * `build/app/outputs/flutter-apk/`, and the same file again in Gradle's
+ * `build/app/outputs/apk/<variant>/`. Only the first folder that holds one
+ * is offered, so that copy never makes the choice ambiguous: flutter-apk/,
+ * then Gradle's (a `./gradlew` build run in `android/`), then `android/`.
+ */
+export function findApkCandidates(cwd: string): string[] {
+  const layout = detectProjectLayout(cwd);
+  const root = layout.androidRoot;
+  if (layout.flutter) {
+    for (const pattern of ['build/app/outputs/flutter-apk/*.apk', 'build/app/outputs/apk/**/*.apk']) {
+      const found = globApks(cwd, pattern);
+      if (found.length > 0) return found;
+    }
+  }
+  if (root === undefined) return [];
+  return globApks(cwd, `${root === '.' ? '' : `${root}/`}**/build/outputs/apk/**/*.apk`);
 }
 
 /** A literal `applicationId "com.x"` (Groovy) or `applicationId = "com.x"` (Kotlin DSL). */
@@ -281,6 +320,18 @@ function findIosBuilds(cwd: string, sdk: AppleSdk): string[] {
   // whole-tree walk would reach other projects' builds in ~/Library.
   const layout = detectProjectLayout(cwd);
   if (!hasIosProject(layout)) return [];
+  // Flutter (PILOT-868): `flutter build ios` / `flutter run` build into
+  // `build/ios/<Configuration>-<sdk>/` and copy the app to `build/ios/<sdk>/`
+  // after every successful build, so the copy is never the older one; the
+  // configuration folder is the fallback when only it exists. The first folder
+  // that holds an app is offered, so the copy never makes the choice
+  // ambiguous; then the search below. (An Xcode UI build goes to DerivedData.)
+  if (layout.flutter) {
+    for (const pattern of [`build/ios/${sdk}/*.app`, `build/ios/*-${sdk}/*.app`]) {
+      const found = globSync(pattern, { cwd, posix: true }).filter((app) => !isTestRunner(app) && isDir(path.join(cwd, app))).sort();
+      if (found.length > 0) return found;
+    }
+  }
   const tops = layout.hasIosDir ? ['ios'] : [...new Set(layout.iosProjects.map((p) => (p.includes('/') ? p.split('/')[0] : '.')))];
   const patterns = tops.includes('.')
     ? [`**/*-${sdk}/*.app`]
@@ -416,6 +467,7 @@ function xcodeBuildTarget(layout: ProjectLayout): { dir: string; flag: '-workspa
  * React Native Debug build needs Metro, which a native one does not.
  */
 export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayout, reactNative: boolean): string {
+  if (layout.flutter) return flutterBuildHint(platform);
   if (platform === 'android') {
     const metro = reactNative ? '; a React Native Debug build also needs Metro running' : '';
     if (layout.androidRoot === '.') {
@@ -437,6 +489,43 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
   return `Build one for the simulator first with \`${cd}xcodebuild ${target.flag} ${shellArg(target.file)} -scheme ${shellArg(target.scheme)} -configuration ${configuration} -sdk iphonesimulator -derivedDataPath build build\`, `
     + `which writes the .app under ${out} (\`xcodebuild -list\` shows the schemes if yours is not ${target.scheme}${metro}; see ${BUILD_DOCS})`;
 }
+
+/**
+ * A Flutter app's build, with `flutter build`, which knows to run
+ * the Dart build first: a bare Gradle or Xcode build of a fresh checkout
+ * misses it. A simulator build can only be Debug (`--simulator` refuses
+ * `--release`).
+ */
+function flutterBuildHint(platform: 'android' | 'ios'): string {
+  if (platform === 'android') {
+    return `Build one with \`flutter build apk --debug\`, which writes ${FLUTTER_BUILDS.apk}app-debug.apk (see ${BUILD_DOCS})`;
+  }
+  return `Build one for the simulator first with \`flutter build ios --simulator --debug\`, which writes ${FLUTTER_BUILDS.iphonesimulator}Runner.app (see ${BUILD_DOCS})`;
+}
+
+/** Where `flutter build` leaves each kind of build, as init's messages name them. */
+export const FLUTTER_BUILDS = {
+  apk: 'build/app/outputs/flutter-apk/',
+  iphonesimulator: 'build/ios/iphonesimulator/',
+  iphoneos: 'build/ios/iphoneos/',
+} as const;
+
+/** Where init looks for an APK, as its messages say it: Flutter's own folder first in a Flutter app. */
+export function apkSearchedIn(layout: ProjectLayout): string {
+  return layout.flutter ? `${FLUTTER_BUILDS.apk} or **/build/outputs/apk/` : '**/build/outputs/apk/';
+}
+
+/** Where init looks for a simulator app in the project, as its messages say it. */
+export function simulatorAppSearchedIn(layout: ProjectLayout): string {
+  return layout.flutter ? `${FLUTTER_BUILDS.iphonesimulator} or **/*-iphonesimulator/` : '**/*-iphonesimulator/*.app';
+}
+
+/**
+ * How to build a Flutter app for a physical iOS device: a
+ * Release build, since a Debug one starts only from the flutter tool or
+ * Xcode, signed with the team set in Xcode.
+ */
+export const FLUTTER_DEVICE_BUILD_HINT = `build one with \`flutter build ios --release\` (signed with the team set for ios/Runner in Xcode; a Debug Flutter build only starts from the flutter tool or Xcode), which writes ${FLUTTER_BUILDS.iphoneos}Runner.app`;
 
 /**
  * The warning for a build init took from Xcode's DerivedData: the path is

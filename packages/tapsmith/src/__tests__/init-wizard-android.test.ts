@@ -178,6 +178,31 @@ describe('configureAndroid() build detection (PILOT-513)', () => {
     expect(out).not.toContain('Metro');
   });
 
+  it('in a Flutter project with no APK, says to run flutter build apk, and prefills the app module\'s id (PILOT-868)', async () => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-flutter-'));
+    fs.writeFileSync(path.join(project, 'pubspec.yaml'), 'name: app\nflutter:\n  uses-material-design: true\n');
+    fs.mkdirSync(path.join(project, 'android', 'app'), { recursive: true });
+    fs.writeFileSync(path.join(project, 'android', 'settings.gradle.kts'), '');
+    fs.writeFileSync(path.join(project, 'android', 'app', 'build.gradle.kts'), 'android { defaultConfig { applicationId = "dev.acme.flutter" } }\n');
+    vi.spyOn(process, 'cwd').mockReturnValue(project);
+    script([
+      [/Where is your Android APK/, ''],
+      [/package name/, (q: Question) => q.choices?.[0]?.name],
+    ]);
+    let android;
+    try {
+      android = await configureAndroid(env);
+    } finally {
+      vi.mocked(process.cwd).mockRestore();
+      fs.rmSync(project, { recursive: true, force: true });
+    }
+    const out = logged.join('\n');
+    expect(out).toContain('No APK found in the project\'s build outputs (build/app/outputs/flutter-apk/ or **/build/outputs/apk/)');
+    expect(out).toContain('`flutter build apk --debug`, which writes build/app/outputs/flutter-apk/app-debug.apk');
+    expect(out).not.toContain('gradlew');
+    expect(android.packageName).toBe('dev.acme.flutter');
+  });
+
   it('never defaults the package name to a placeholder when it cannot be read', async () => {
     apkCandidates = [DEBUG_APK];
     script([
