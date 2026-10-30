@@ -27,8 +27,8 @@ export function tlsRejectWarning(hosts: readonly string[]): string {
 }
 
 /**
- * One-line trace note for hosts whose certificate only OS services rejected
- * (PILOT-782): Google Play services, Chrome or an iOS system daemon pinning
+ * One-line trace note for hosts whose certificate only OS services rejected:
+ * Google Play services, Chrome or an iOS system daemon pinning
  * its hosts says nothing about the app, so it never reaches the terminal.
  */
 export function osServiceTlsRejectNote(hosts: readonly string[]): string {

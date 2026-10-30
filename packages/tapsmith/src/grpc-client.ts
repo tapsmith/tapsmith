@@ -1125,7 +1125,7 @@ export class TapsmithGrpcClient {
       captureId?: string;
       requestBodyOmitted?: boolean;
       responseBodyOmitted?: boolean;
-      /** A passthrough marker for a connection an OS service opened, not an app (PILOT-782). */
+      /** A passthrough marker for a connection an OS service opened, not an app. */
       osService?: boolean;
     }>;
     errorMessage: string;
@@ -1134,7 +1134,7 @@ export class TapsmithGrpcClient {
      * stop, except those only OS services rejected.
      */
     tlsRejectedHosts?: string[];
-    /** Hosts whose MITM certificate an OS service rejected (PILOT-782); absent from older daemons. */
+    /** Hosts whose MITM certificate an OS service rejected; absent from older daemons. */
     osServiceTlsRejectedHosts?: string[];
   }> {
     // bypassAbort: stopping capture is cleanup — it must reach the daemon
