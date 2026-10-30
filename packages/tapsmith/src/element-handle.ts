@@ -25,6 +25,7 @@ import {
 } from './selectors.js';
 import { iosUnnamedRoleMissHint, unknownRoleMessage, type Role } from './roles.js';
 import type { SwipeDirection } from './input-names.js';
+import { onScreenSignature } from './screen-signature.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
@@ -3686,15 +3687,16 @@ export class ElementHandle {
       }
     };
 
-    // The whole screen as the device describes it, to tell whether a swipe
+    // What is on screen, as the device describes it, to tell whether a swipe
     // moved anything (PILOT-929): a swipe that leaves it unchanged reached the
-    // end of the content, or missed the list. `undefined` when it cannot be
-    // read, which leaves the swipe unjudged rather than failing the scroll; a
-    // user stop propagates (PILOT-222).
+    // end of the content, or missed the list. Off-screen elements are left
+    // out (see onScreenSignature). `undefined` when it cannot be read, which
+    // leaves the swipe unjudged rather than failing the scroll; a user stop
+    // propagates (PILOT-222).
     const readScreen = async (): Promise<string | undefined> => {
       try {
         const res = await this._client.getUiHierarchy(SCROLL_SCREEN_READ_DEADLINE_MS);
-        return res.errorMessage || !res.hierarchyXml ? undefined : res.hierarchyXml;
+        return res.errorMessage || !res.hierarchyXml ? undefined : onScreenSignature(res.hierarchyXml);
       } catch (err) {
         if (isAbortError(err)) throw err;
         return undefined;

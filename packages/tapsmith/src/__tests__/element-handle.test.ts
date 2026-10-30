@@ -5851,6 +5851,23 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
     );
   });
 
+  it('judges only what is on screen, so off-screen cells a table relabels do not hide the end (UITableView)', async () => {
+    const dump = (offScreenLabel: string) =>
+      `<hierarchy><Application bounds="[0,0][402,874]"><Cell label="${offScreenLabel}" bounds="[0,-300][402,-256]"/>` +
+      '<Cell label="Row 100" bounds="[0,760][402,804]"/></Application></hierarchy>';
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([dump('Row 11'), dump('Row 15'), dump('Row 12')])),
+    });
+
+    await expect(new ElementHandle(client, _text('Row 999'), 5000).scrollIntoView({ maxScrolls: 10 })).rejects.toThrow(
+      /reached the end of the scrollable content .* stopped changing after 1 scroll\(s\)/,
+    );
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
   it('re-reads once after an idle wait before calling it the end, so a lagging tree is not mistaken for one', async () => {
     let probes = 0;
     const findElements = vi.fn(async () => makeFindElementsResponse(++probes >= 4 ? [makeElementInfo({ visible: true })] : []));
