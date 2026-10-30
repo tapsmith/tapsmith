@@ -1122,7 +1122,7 @@ test('app launches successfully', async ({ device }) => {
   expect(['foreground', 'background']).toContain(await device.getAppState())
 
   // Next, assert on your app's first screen. Pick an element in
-  // UI mode (tapsmith test --ui) to get a locator for it, for example:
+  // UI mode (npx tapsmith test --ui) to get a locator for it, for example:
   // await expect(device.getByRole('button', { name: 'Sign in' })).toBeVisible()
 })
 `;

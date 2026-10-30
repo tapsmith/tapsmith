@@ -683,7 +683,7 @@ describe('generateExampleTest()', () => {
   });
 
   it('points at where to find a locator for the first screen', () => {
-    expect(generateExampleTest()).toContain('UI mode (tapsmith test --ui)');
+    expect(generateExampleTest()).toContain('UI mode (npx tapsmith test --ui)');
   });
 });
 
