@@ -65,7 +65,7 @@ export interface VerifySummary {
 
 export interface VerifyFailure {
   fullName: string;
-  /** The project the test failed in, when the config has projects (PILOT-933). */
+  /** The project the test failed in, when the config has projects. */
   project?: string;
   /** The runner's whole message, near-miss hint included. */
   error: string;
@@ -74,7 +74,7 @@ export interface VerifyFailure {
 
 /**
  * A failure's line in verify's text output. With projects, a test runs once
- * per project, so the line names the one that failed (PILOT-933).
+ * per project, so the line names the one that failed.
  */
 export function formatVerifyFailure(f: VerifyFailure): string {
   return `  - ${f.project ? `[${f.project}] ` : ''}${f.fullName}: ${f.error}`;
