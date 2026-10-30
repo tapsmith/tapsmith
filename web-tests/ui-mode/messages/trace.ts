@@ -17,7 +17,11 @@ export interface ActionOptions {
   projectName?: string
   screenshotBefore?: string
   screenshotAfter?: string
+  /** The element box the recorder looked up, if it found one. */
+  bounds?: Bounds
 }
+
+type Bounds = { left: number; top: number; right: number; bottom: number }
 
 /** The `started` half — an action the device has begun but not finished. */
 export function actionStarted(o: ActionOptions): TraceEventMessage {
@@ -35,6 +39,7 @@ export function actionStarted(o: ActionOptions): TraceEventMessage {
       timestamp: 1_700_000_000_000 + o.actionIndex * 100,
       duration: 0,
       success: true,
+      bounds: o.bounds,
       hasScreenshotBefore: o.screenshotBefore != null,
       hasScreenshotAfter: false,
       hasHierarchyBefore: false,
@@ -61,6 +66,7 @@ export function actionCompleted(o: ActionOptions): TraceEventMessage {
       duration: o.duration ?? 42,
       success: o.success ?? true,
       error: o.error,
+      bounds: o.bounds,
       hasScreenshotBefore: o.screenshotBefore != null,
       hasScreenshotAfter: o.screenshotAfter != null,
       hasHierarchyBefore: false,
@@ -74,6 +80,77 @@ export function actionCompleted(o: ActionOptions): TraceEventMessage {
 /** Both halves, as a completed action arrives in practice. */
 export function action(o: ActionOptions): TraceEventMessage[] {
   return [actionStarted(o), actionCompleted(o)]
+}
+
+export interface AssertionOptions {
+  testFullName: string
+  actionIndex: number
+  /** The matcher name, e.g. `toBeVisible`, `toBe`. */
+  assertion: string
+  /** Absent for a value assertion (`expect(value).toBe(…)`). */
+  selector?: string
+  passed?: boolean
+  error?: string
+  bounds?: Bounds
+  screenshotBefore?: string
+}
+
+/**
+ * The `started` half of a locator assertion. Value assertions never send one:
+ * they complete synchronously.
+ */
+export function assertionStarted(o: AssertionOptions): TraceEventMessage {
+  return {
+    type: "trace-event",
+    testFullName: o.testFullName,
+    lifecycle: "started",
+    event: {
+      type: "assertion",
+      assertion: o.assertion,
+      selector: o.selector,
+      actionIndex: o.actionIndex,
+      timestamp: 1_700_000_000_000 + o.actionIndex * 100,
+      passed: true,
+      soft: false,
+      negated: false,
+      duration: 0,
+      attempts: 0,
+      bounds: o.bounds,
+      hasScreenshotBefore: o.screenshotBefore != null,
+      hasScreenshotAfter: false,
+      hasHierarchyBefore: false,
+      hasHierarchyAfter: false,
+    },
+    screenshotBefore: o.screenshotBefore,
+  }
+}
+
+/** The `completed` half. */
+export function assertionCompleted(o: AssertionOptions): TraceEventMessage {
+  return {
+    type: "trace-event",
+    testFullName: o.testFullName,
+    lifecycle: "completed",
+    event: {
+      type: "assertion",
+      assertion: o.assertion,
+      selector: o.selector,
+      actionIndex: o.actionIndex,
+      timestamp: 1_700_000_000_000 + o.actionIndex * 100 + 50,
+      passed: o.passed ?? true,
+      soft: false,
+      negated: false,
+      duration: 42,
+      attempts: 1,
+      error: o.error,
+      bounds: o.bounds,
+      hasScreenshotBefore: o.screenshotBefore != null,
+      hasScreenshotAfter: false,
+      hasHierarchyBefore: false,
+      hasHierarchyAfter: false,
+    },
+    screenshotBefore: o.screenshotBefore,
+  }
 }
 
 /**

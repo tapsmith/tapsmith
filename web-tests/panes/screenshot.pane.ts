@@ -23,6 +23,11 @@ export class ScreenshotPane {
     return this.page.getByTestId("viewer-empty")
   }
 
+  /** The box drawn around the element the selected step acted on or checked. */
+  get elementBox() {
+    return this.page.getByTestId("screenshot-element-box")
+  }
+
   get stages() {
     return this.page.getByRole("tablist", { name: "Screenshot stage" })
   }

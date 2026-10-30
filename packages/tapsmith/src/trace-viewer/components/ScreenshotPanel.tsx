@@ -1016,6 +1016,7 @@ function BoundsOverlay({ bounds, point, naturalSize, renderedWidth, renderedHeig
       {bounds && (
         <div
           class="bounds-rect"
+          data-testid="screenshot-element-box"
           style={{
             left: `${bounds.left * scaleX}px`,
             top: `${bounds.top * scaleY}px`,
