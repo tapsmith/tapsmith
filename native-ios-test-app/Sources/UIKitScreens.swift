@@ -219,7 +219,14 @@ final class UIKitKeyboardViewController: UIViewController, UITextFieldDelegate {
         notes.layer.borderColor = UIColor.separator.cgColor
         notes.heightAnchor.constraint(equalToConstant: 100).isActive = true
 
-        let content = makeStack([city, entered, notes])
+        // Display text, not an input: a UITextView that can't be edited (PILOT-697).
+        let terms = UITextView()
+        terms.text = "By continuing you accept the terms."
+        terms.isEditable = false
+        terms.accessibilityIdentifier = "uikit-terms"
+        terms.isScrollEnabled = false
+
+        let content = makeStack([terms, city, entered, notes])
         content.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(content)
         NSLayoutConstraint.activate([

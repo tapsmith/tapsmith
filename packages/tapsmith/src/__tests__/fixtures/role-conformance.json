@@ -477,6 +477,115 @@
       "matches": true
     },
     {
+      "why": "a multi-line text view is a textfield",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "traits": [
+        "textEntry"
+      ],
+      "reportedRole": "textfield",
+      "role": "textfield",
+      "matches": true
+    },
+    {
+      "why": "a text view by its label",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "traits": [
+        "textEntry"
+      ],
+      "reportedRole": "textfield",
+      "label": "Notes",
+      "role": "textfield",
+      "name": "Notes",
+      "matches": true
+    },
+    {
+      "why": "a text view by another name",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "traits": [
+        "textEntry"
+      ],
+      "reportedRole": "textfield",
+      "label": "Notes",
+      "role": "textfield",
+      "name": "Email",
+      "matches": false
+    },
+    {
+      "why": "a label-less text view is named by its placeholder",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "traits": [
+        "textEntry"
+      ],
+      "reportedRole": "textfield",
+      "label": "",
+      "placeholder": "Notes",
+      "role": "textfield",
+      "name": "Notes",
+      "matches": true
+    },
+    {
+      "why": "an editable text view is not text",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "traits": [
+        "textEntry"
+      ],
+      "reportedRole": "textfield",
+      "label": "Notes",
+      "role": "text",
+      "matches": false
+    },
+    {
+      "why": "a read-only text view is no textfield",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "traits": [
+        "staticText"
+      ],
+      "reportedRole": "text",
+      "label": "Terms",
+      "role": "textfield",
+      "matches": false
+    },
+    {
+      "why": "nor by its name",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "traits": [
+        "staticText"
+      ],
+      "reportedRole": "text",
+      "label": "Terms",
+      "role": "textfield",
+      "name": "Terms",
+      "matches": false
+    },
+    {
+      "why": "a read-only text view is text",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "traits": [
+        "staticText"
+      ],
+      "reportedRole": "text",
+      "label": "Terms",
+      "role": "text",
+      "matches": true
+    },
+    {
+      "why": "a text view whose traits were not read is taken for an input",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "reportedRole": "textfield",
+      "label": "Notes",
+      "role": "textfield",
+      "matches": true
+    },
+    {
       "why": "a switch by its type",
       "platform": "ios",
       "type": "XCUIElementTypeSwitch",

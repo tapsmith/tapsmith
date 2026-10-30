@@ -44,6 +44,37 @@ check(".other with the button trait is \"button\"",
 check(".other with the image trait is \"image\"",
       RoleMapping.resolveRole(for: .other, traits: imageTrait, inTabBar: false), "image")
 
+// ─── Multi-line text views (PILOT-697) ───
+
+// Traits seen on an iOS 26 simulator: an editable UITextView, SwiftUI
+// TextEditor or React Native multi-line TextInput, and a read-only UITextView.
+let editableTextViewTraits: UInt64 = 0x8022_0004_0000
+let editingTextViewTraits: UInt64 = 0x8022_0024_0000
+let readOnlyTextViewTraits: UInt64 = 0x8022_0000_0040
+check("an editable text view is a \"textfield\"",
+      RoleMapping.resolveRole(for: .textView, traits: editableTextViewTraits, inTabBar: false), "textfield")
+check("a text view being edited is a \"textfield\"",
+      RoleMapping.resolveRole(for: .textView, traits: editingTextViewTraits, inTabBar: false), "textfield")
+check("a text view whose traits were not read is a \"textfield\"",
+      RoleMapping.resolveRole(for: .textView, traits: 0, inTabBar: false), "textfield")
+check("a read-only text view is \"text\"",
+      RoleMapping.resolveRole(for: .textView, traits: readOnlyTextViewTraits, inTabBar: false), "text")
+check("a read-only text view without the static-text trait has no role",
+      RoleMapping.resolveRole(for: .textView, traits: 0x8022_0000_0000, inTabBar: false), "")
+check("a read-only text view is no textfield",
+      RoleMapping.matches(role: "textfield", elementType: .textView, traits: readOnlyTextViewTraits, value: "",
+                          hasNameFilter: true, inTabBar: false, inAlert: false), false)
+check("a read-only text view matches getByRole(\"text\")",
+      RoleMapping.matches(role: "text", elementType: .textView, traits: readOnlyTextViewTraits, value: "",
+                          hasNameFilter: false, inTabBar: false, inAlert: false), true)
+check("a read-only text field is still a textfield (only text views are gated)",
+      RoleMapping.isReadOnlyTextView(.textField, traits: readOnlyTextViewTraits), false)
+check("getByRole(\"textfield\") queries text fields, secure fields and text views",
+      (try? RoleMapping.queryTypes(for: "textfield")) ?? [], [.textField, .secureTextField, .textView])
+check("an unnamed textfield query matches an editable text view",
+      RoleMapping.matches(role: "textfield", elementType: .textView, traits: editableTextViewTraits, value: "",
+                          hasNameFilter: false, inTabBar: false, inAlert: false), true)
+
 // ─── Native alert (PILOT-919) ───
 
 check("a native alert is \"alert\"", RoleMapping.resolveRole(for: .alert, traits: 0, inTabBar: false), "alert")

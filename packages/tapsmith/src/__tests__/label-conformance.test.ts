@@ -49,6 +49,9 @@ const CASES: Case[] = [
   { why: 'secure text field', platform: 'ios', type: 'XCUIElementTypeSecureTextField', label: 'Password', query: 'Password', matches: true },
   { why: 'multi-line text view', platform: 'ios', type: 'XCUIElementTypeTextView', label: 'Notes', query: 'Notes', matches: true },
   { why: 'switch', platform: 'ios', type: 'XCUIElementTypeSwitch', label: 'Dark Mode', query: 'Dark Mode', matches: true },
+  // A toggle is a switch (the switch role's other type), as every Android switch class is a getByLabel input (PILOT-697).
+  { why: 'toggle', platform: 'ios', type: 'XCUIElementTypeToggle', label: 'Wi-Fi', query: 'Wi-Fi', matches: true },
+  { why: 'RegExp on a toggle', platform: 'ios', type: 'XCUIElementTypeToggle', label: 'Wi-Fi', query: { source: '^wi-?fi$', flags: 'i' }, matches: true },
   { why: 'slider', platform: 'ios', type: 'XCUIElementTypeSlider', label: 'Volume', query: 'Volume', matches: true },
   { why: 'stepper', platform: 'ios', type: 'XCUIElementTypeStepper', label: 'Quantity', query: 'Quantity', matches: true },
   { why: 'picker', platform: 'ios', type: 'XCUIElementTypePicker', label: 'Country', query: 'Country', matches: true },

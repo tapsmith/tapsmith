@@ -71,6 +71,7 @@ const I = {
   other: 'XCUIElementTypeOther',
   text: 'XCUIElementTypeStaticText',
   field: 'XCUIElementTypeTextField',
+  textView: 'XCUIElementTypeTextView',
   link: 'XCUIElementTypeLink',
   image: 'XCUIElementTypeImage',
   slider: 'XCUIElementTypeSlider',
@@ -168,6 +169,20 @@ const CASES: Case[] = [
   { why: 'a slider is a seekbar', platform: 'ios', type: I.slider, reportedRole: 'seekbar', role: 'seekbar', matches: true },
   { why: 'by its React Native spelling', platform: 'ios', type: I.slider, reportedRole: 'seekbar', role: 'slider', matches: true },
   { why: 'a generic view with the adjustable trait is a seekbar', platform: 'ios', type: I.other, traits: ['adjustable'], reportedRole: 'seekbar', role: 'seekbar', matches: true },
+  // A multi-line text view (React Native's <TextInput multiline />, a
+  // UITextView, a SwiftUI TextEditor) is a textfield, as Android's multi-line
+  // EditText is — while it can be edited, which UIKit marks with the
+  // text-entry trait. A read-only one carries the static-text trait instead
+  // and is text (PILOT-697).
+  { why: 'a multi-line text view is a textfield', platform: 'ios', type: I.textView, traits: ['textEntry'], reportedRole: 'textfield', role: 'textfield', matches: true },
+  { why: 'a text view by its label', platform: 'ios', type: I.textView, traits: ['textEntry'], reportedRole: 'textfield', label: 'Notes', role: 'textfield', name: 'Notes', matches: true },
+  { why: 'a text view by another name', platform: 'ios', type: I.textView, traits: ['textEntry'], reportedRole: 'textfield', label: 'Notes', role: 'textfield', name: 'Email', matches: false },
+  { why: 'a label-less text view is named by its placeholder', platform: 'ios', type: I.textView, traits: ['textEntry'], reportedRole: 'textfield', label: '', placeholder: 'Notes', role: 'textfield', name: 'Notes', matches: true },
+  { why: 'an editable text view is not text', platform: 'ios', type: I.textView, traits: ['textEntry'], reportedRole: 'textfield', label: 'Notes', role: 'text', matches: false },
+  { why: 'a read-only text view is no textfield', platform: 'ios', type: I.textView, traits: ['staticText'], reportedRole: 'text', label: 'Terms', role: 'textfield', matches: false },
+  { why: 'nor by its name', platform: 'ios', type: I.textView, traits: ['staticText'], reportedRole: 'text', label: 'Terms', role: 'textfield', name: 'Terms', matches: false },
+  { why: 'a read-only text view is text', platform: 'ios', type: I.textView, traits: ['staticText'], reportedRole: 'text', label: 'Terms', role: 'text', matches: true },
+  { why: 'a text view whose traits were not read is taken for an input', platform: 'ios', type: I.textView, reportedRole: 'textfield', label: 'Notes', role: 'textfield', matches: true },
   { why: 'a switch by its type', platform: 'ios', type: I.switch, reportedRole: 'switch', role: 'switch', matches: true },
   { why: 'a toggle is a switch', platform: 'ios', type: I.toggle, reportedRole: 'switch', role: 'switch', matches: true },
   { why: 'a search field by its React Native spelling', platform: 'ios', type: I.search, reportedRole: 'searchfield', role: 'search', matches: true },

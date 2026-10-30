@@ -5,8 +5,14 @@ export class KeyboardScreen {
 
   get plainInput() { return this.device.getByRole("textfield", { name: "Plain input" }) }
   get goInput() { return this.device.getByRole("textfield", { name: "Go input" }) }
-  /** iOS exposes a multiline field as a text view (no textfield role, no placeholder). */
+  /** iOS exposes a multiline field as a text view (no placeholder). */
   get multilineInput() { return this.device.getByTestId("keyboard-multiline-input") }
+  /** The multiline field by its role, a textfield on both platforms (PILOT-697). */
+  get multilineInputByRole() { return this.device.getByRole("textfield", { name: "Multiline input" }) }
+  /** The multiline field by its label. */
+  get multilineInputByLabel() { return this.device.getByLabel("Multiline input") }
+  /** Every text field on the screen: plain, go and multiline ("Done input" shows only on request). */
+  get textFields() { return this.device.getByRole("textfield") }
   /** A field whose return key is "done", beside the app's own "Done" button (PILOT-756). */
   get doneInput() { return this.device.getByRole("textfield", { name: "Done input" }) }
   get doneButton() { return this.device.getByRole("button", { name: "Done", exact: true }) }

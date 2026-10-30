@@ -538,11 +538,17 @@ describe('getByLabel suggestions follow the runtime fields (PILOT-666)', () => {
     expect(generateSelectors(node).some((s) => s.code === 'device.getByLabel("Country")')).toBe(true);
   });
 
-  it('a multi-line iOS text view is found by its label, not by a textfield role the runtime does not give it', () => {
-    const node = makeNode('XCUIElementTypeTextView', { type: 'XCUIElementTypeTextView', label: 'Notes' });
-    const selectors = generateSelectors(node);
-    expect(selectors[0].code).toBe('device.getByLabel("Notes")');
-    expect(selectors.some((s) => s.code.startsWith('device.getByRole("textfield"'))).toBe(false);
+  it('a multi-line iOS text view is a textfield, like a text field (PILOT-697)', () => {
+    // An older dump carries no tapsmith-role for a text view; a current one says "textfield".
+    for (const attrs of [{}, { 'tapsmith-role': 'textfield' }] as Record<string, string>[]) {
+      const node = makeNode('XCUIElementTypeTextView', { type: 'XCUIElementTypeTextView', label: 'Notes', ...attrs });
+      const codes = generateSelectors(node).map((s) => s.code);
+      expect(codes.slice(0, 2)).toEqual(['device.getByRole("textfield", { name: "Notes" })', 'device.getByLabel("Notes")']);
+    }
+  });
+
+  it('getByLabel for an iOS toggle, a switch getByLabel finds (PILOT-697)', () => {
+    expect(hasLabel(makeNode('XCUIElementTypeToggle', { type: 'XCUIElementTypeToggle', label: 'Wi-Fi' }))).toBe(true);
   });
 
   it('no getByLabel for an Android view that only reports a checkbox role', () => {
