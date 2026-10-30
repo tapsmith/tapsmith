@@ -7,7 +7,7 @@ import { resolveDeviceStrategy, type TapsmithConfig } from '../config.js';
  *
  * A headless MCP session with no `device` pin took whichever free device
  * its daemon listed first, so a config naming `simulator: 'iPhone 17'` drove
- * a booted iPhone 17 Pro — often another session's (PILOT-915).
+ * a booted iPhone 17 Pro — often another session's.
  */
 export interface ConfigDeviceTarget {
   /** The platform of the target's devices — Android for a config that names none. */

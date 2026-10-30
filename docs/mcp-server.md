@@ -122,8 +122,10 @@ says so, names the devices that are, and suggests how to start it.
 A headless server never takes a device, or a daemon, that another running
 Tapsmith session holds — a `tapsmith test` run, a UI session, or another MCP
 server (see [Several sessions on one machine](./parallel-and-sharding.md#several-sessions-on-one-machine)).
-It picks a free device instead, and a pinned one that is held is refused with
-an error naming the session that holds it.
+It picks a free device instead (a free one of the configured simulator or AVD,
+when the config names one; with none free, it refuses and says who holds the
+others), and a pinned one that is held is refused with an error naming the
+session that holds it.
 
 A daemon the server finds rather than starts — on its `daemonAddress`, by
 default `localhost:50051` — is never moved to another platform: one that is
