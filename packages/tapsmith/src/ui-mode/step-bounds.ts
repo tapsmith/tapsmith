@@ -11,10 +11,9 @@ type ElementBounds = NonNullable<StepEvent['bounds']>;
  *
  * Nothing else borrows. A failed step has nothing on screen to point at
  * (`show-trace` shows no box either). A locator assertion or an action that
- * recorded no bounds did look its element up and found it hidden or gone:
- * `toBeHidden`, `waitFor({ state: 'detached' })`, `isVisible()` returning
- * false, `count()` returning 0. A borrowed box there would sit over empty
- * space. Bounds never cross devices.
+ * recorded no bounds did look its element up and did not find it on screen:
+ * `toBeHidden`, `waitFor({ state: 'detached' })`, `count()` returning 0. A
+ * borrowed box there would sit over empty space. Bounds never cross devices.
  */
 export function inheritedStepBounds(
   ev: StepEvent,
