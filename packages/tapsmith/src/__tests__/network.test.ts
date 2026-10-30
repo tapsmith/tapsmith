@@ -1,8 +1,10 @@
 import { EventEmitter } from 'node:events';
+import * as zlib from 'node:zlib';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   TapsmithRequest, Route, FetchedAPIResponse, NetworkRouteManager,
   matchUrlPattern, patternsEqual, runInRouteScope, currentRouteScope, type RouteScope,
+  type NetworkResponseEventData,
 } from '../network.js';
 import type { TapsmithGrpcClient } from '../grpc-client.js';
 import { currentAttemptToken, runInAttemptContext } from '../attempt-fence.js';
@@ -825,6 +827,81 @@ describe('NetworkRouteManager stream reconnect (PILOT-581)', () => {
     const handle = setTimeoutSpy.mock.results.at(-1)?.value as { hasRef?: () => boolean } | undefined;
     expect(handle?.hasRef?.()).toBe(false);
     setTimeoutSpy.mockRestore();
+    await manager.dispose();
+  });
+});
+
+describe('NetworkRouteManager network event bodies (PILOT-944)', () => {
+  function makeManager(): { manager: NetworkRouteManager; stream: AutoAckStream } {
+    const stream = new AutoAckStream();
+    const client = { networkRouteStream: () => stream } as unknown as TapsmithGrpcClient;
+    return { manager: new NetworkRouteManager(client), stream };
+  }
+  const json = JSON.stringify({ userId: 1, id: 1, title: 'delectus aut autem', completed: false });
+  /** `body` as a gzipping, chunking server sends it: `53\r\n\x1f\x8b…`. */
+  const gzipChunked = (body: string): Buffer => {
+    const gz = zlib.gzipSync(Buffer.from(body));
+    return Buffer.concat([Buffer.from(`${gz.length.toString(16)}\r\n`), gz, Buffer.from('\r\n0\r\n\r\n')]);
+  };
+  const wireHeaders = [
+    { name: 'Content-Type', value: 'application/json; charset=utf-8' },
+    { name: 'Transfer-Encoding', value: 'chunked' },
+    { name: 'Content-Encoding', value: 'gzip' },
+  ];
+
+  it('hands response listeners the decoded body and the wire headers', async () => {
+    const { manager, stream } = makeManager();
+    const seen: NetworkResponseEventData[] = [];
+    manager.addResponseListener((resp) => { seen.push(resp); });
+
+    stream.emitData({ responseEvent: {
+      method: 'GET', url: 'https://jsonplaceholder.typicode.com/todos/1', status: 200,
+      headers: wireHeaders, body: gzipChunked(json), routeAction: '',
+    } });
+
+    expect(seen).toHaveLength(1);
+    const [resp] = seen;
+    expect(JSON.parse(resp.body!.toString())).toEqual(JSON.parse(json));
+    // The same Buffer on every read, and in a copy of the event.
+    expect(resp.body).toBe(resp.body);
+    expect({ ...resp }.body).toBe(resp.body);
+    expect(resp.headers['content-encoding']).toBe('gzip');
+    expect(resp.headers['transfer-encoding']).toBe('chunked');
+    await manager.dispose();
+  });
+
+  it('hands request listeners the decoded postData', async () => {
+    const { manager, stream } = makeManager();
+    const seen: TapsmithRequest[] = [];
+    manager.addRequestListener((req) => { seen.push(req); });
+
+    stream.emitData({ requestEvent: {
+      method: 'POST', url: 'https://example.com/api/orders', headers: wireHeaders,
+      body: gzipChunked(json), isHttps: true, routeAction: '',
+    } });
+
+    expect(seen).toHaveLength(1);
+    expect(JSON.parse(seen[0].postData!.toString())).toEqual(JSON.parse(json));
+    expect({ ...seen[0] }.postData).toBe(seen[0].postData);
+    await manager.dispose();
+  });
+
+  it('keeps a body it cannot decode as received, and an empty one empty', async () => {
+    const { manager, stream } = makeManager();
+    const seen: NetworkResponseEventData[] = [];
+    manager.addResponseListener((resp) => { seen.push(resp); });
+    const opaque = Buffer.from('not gzip at all');
+
+    stream.emitData({ responseEvent: {
+      method: 'GET', url: 'https://example.com/a', status: 200,
+      headers: [{ name: 'Content-Encoding', value: 'gzip' }], body: opaque, routeAction: '',
+    } });
+    stream.emitData({ responseEvent: {
+      method: 'GET', url: 'https://example.com/b', status: 204, headers: wireHeaders, body: Buffer.alloc(0), routeAction: '',
+    } });
+
+    expect(seen[0].body?.toString()).toBe('not gzip at all');
+    expect(seen[1].body?.length ?? 0).toBe(0);
     await manager.dispose();
   });
 });
