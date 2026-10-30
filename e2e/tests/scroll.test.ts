@@ -63,4 +63,28 @@ describe("Scroll screen — scrollIntoView() picks its direction (PILOT-891)", (
     }
     await expect(scrollScreen.firstItem).toBeVisible()
   })
+
+  // PILOT-929: a swipe that changes nothing on screen means the content is at
+  // its end, so scrollIntoView() stops there instead of swiping out maxScrolls.
+  test("scrollIntoView() stops at the end of the content and says so", async ({ device, scrollScreen }) => {
+    await device.openDeepLink("tapsmithtest:///scroll")
+    await expect(scrollScreen.firstItem).toBeVisible()
+    const missing = scrollScreen.item("Z-9")
+
+    // At the top already: the first swipe toward the top moves nothing.
+    const atTop = await missing.scrollIntoView({ direction: "up", maxScrolls: 30 }).then(() => null, (e: unknown) => e)
+    expect(atTop).toBeInstanceOf(Error)
+    expect((atTop as Error).message).toMatch(
+      /^scrollIntoView: reached the end of the scrollable content without finding getByDescription\("Item Z-9"\) on screen: the screen stopped changing after 1 scroll\(s\) in direction "up" \(pass \{ direction: "down" \} to scroll the other way\)\./,
+    )
+    await expect(scrollScreen.firstItem).toBeVisible()
+
+    // Down to the bottom: well short of the 30 allowed swipes.
+    const atBottom = await missing.scrollIntoView({ maxScrolls: 30 }).then(() => null, (e: unknown) => e)
+    expect(atBottom).toBeInstanceOf(Error)
+    const swipes = Number(/the screen stopped changing after (\d+) scroll\(s\) in direction "down"/.exec((atBottom as Error).message)?.[1])
+    expect(swipes).toBeGreaterThan(1)
+    expect(swipes).toBeLessThan(30)
+    await expect(scrollScreen.item("D-10")).toBeVisible()
+  })
 })

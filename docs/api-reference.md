@@ -1264,7 +1264,7 @@ The device agents don't apply `distance` yet: each call scrolls by a fixed step 
 
 Scroll the viewport until this element is visible on screen. Useful for reaching elements that are below the fold in a scrollable container.
 
-Swipes, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Taps do not scroll for you (see [Off-screen elements](#elementhandletapoptions-promisevoid)), so call this first for an element that may be off-screen.
+Swipes, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts, or sooner, as soon as a swipe changes nothing on screen: then the content has reached its end (or the swipe, which crosses the middle of the screen, missed the list), and the error says `reached the end of the scrollable content without finding …`, with the direction to try instead. To tell, it reads the screen's hierarchy once per swipe. On a screen whose content keeps changing by itself (a running timer, an animation), every swipe looks like progress, so there it swipes up to `maxScrolls` times as before. Taps do not scroll for you (see [Off-screen elements](#elementhandletapoptions-promisevoid)), so call this first for an element that may be off-screen.
 
 `direction` is the way the view scrolls, as [`scroll()`](#elementhandlescrolldirection-swipedirection-options-promisevoid) takes it: `"down"` reveals what is below and `"up"` what is above (each swipe moves the finger the opposite way). Without a `direction`, it scrolls the way the element lies, when the device reports where it is: `"up"` for an element above the screen, `"left"` for one to its left, and `"down"` otherwise. The position is re-read before every swipe, so a swipe that carries the element past the screen is followed by one back. iOS lists off-screen elements with their positions, so there a plain `scrollIntoView()` reaches a row above the screen, such as one the list was scrolled past. Android lists only the elements on screen, so there the position of an off-screen element is not known. Then, and on iOS for a row a lazy list has not created yet, it keeps the direction it last used, starting with `"down"`, which reveals what is below. So on Android, pass `{ direction: "up" }` for an element above the screen. A below-the-screen element and one to its right look the same without the screen's size, so both get `"down"`: pass `{ direction: "right" }` for one to the right. Every swipe crosses the middle of the screen, so for an element in a horizontal list elsewhere on it, [`scroll()`](#elementhandlescrolldirection-swipedirection-options-promisevoid) that list.
 
@@ -1275,7 +1275,7 @@ The visibility check honours every modifier on the locator — `filter()`, `and(
 | Option | Default | Description |
 |---|---|---|
 | `direction` | from the element's position, else `"down"` | The way the view scrolls, as `scroll()` takes it: `"down"` reveals content below, `"up"` content above, `"left"` and `"right"` likewise. Case-insensitive; any other value throws. Given, it is used for every swipe, wherever the element is. |
-| `maxScrolls` | `5` | Maximum swipe attempts before throwing |
+| `maxScrolls` | `5` | Maximum swipe attempts before throwing (fewer if the content reaches its end first) |
 | `speed` | `2000` | Swipe speed in pixels/second |
 
 ```typescript

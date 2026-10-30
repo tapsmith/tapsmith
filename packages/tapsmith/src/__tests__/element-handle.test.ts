@@ -13,6 +13,7 @@ import type {
   ActionResponse,
   ElementInfo,
   ScreenshotResponse,
+  UiHierarchyResponse,
 } from '../grpc-client.js';
 
 // ─── Mock helpers ───
@@ -99,8 +100,21 @@ function makeMockClient(overrides: Partial<TapsmithGrpcClient> = {}): TapsmithGr
     takeElementScreenshot: vi.fn(async () => screenshotResponse()),
     takeScreenshot: vi.fn(async () => screenshotResponse()),
     waitForIdle: vi.fn(async () => successResponse()),
+    // A screen that changes after every swipe, so scrollIntoView() never
+    // sees the end of the content unless a test says so (PILOT-929).
+    getUiHierarchy: vi.fn(hierarchySequence()),
     ...overrides,
   } as unknown as TapsmithGrpcClient;
+}
+
+/** getUiHierarchy answers: each call a new dump, or `script` in order, repeating its last entry. */
+function hierarchySequence(script?: string[]) {
+  let i = 0;
+  return async (): Promise<UiHierarchyResponse> => {
+    const xml = script ? script[Math.min(i, script.length - 1)] : `<hierarchy n="${i}"/>`;
+    i++;
+    return { requestId: '1', hierarchyXml: xml, errorMessage: '' };
+  };
 }
 
 // ─── Constructor ───
@@ -5764,6 +5778,163 @@ describe('scrollIntoView() direction is the way the view scrolls, as scroll() ta
     );
     expect(swipe).not.toHaveBeenCalled();
     expect(findElements).not.toHaveBeenCalled();
+  });
+});
+
+// PILOT-929: a swipe that changes nothing on screen means the content is at
+// its end (or the swipe missed the list): stop there, and say so, instead of
+// swiping out the rest of maxScrolls.
+describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929)', () => {
+  const absent = () => vi.fn(async () => makeFindElementsResponse([]));
+  const directions = (swipe: ReturnType<typeof vi.fn>) => swipe.mock.calls.map((c) => c[0]);
+
+  it('fails after the first swipe that changes nothing, not after maxScrolls', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence(['<a/>', '<b/>', '<c/>', '<c/>'])),
+    });
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 10 })).rejects.toThrow(
+      'scrollIntoView: reached the end of the scrollable content without finding getByText("Item 99", { exact: true }) ' +
+        'on screen: the screen stopped changing after 3 scroll(s) in direction "down" ' +
+        '(the default: the element was not on screen or in the tree, so its position was not known; ' +
+        'pass { direction: "up" } for an element above the screen). ' +
+        'If the content can scroll further, the swipe, which crosses the middle of the screen, did not move it: ' +
+        'scroll() the list that holds the element.',
+    );
+    expect(swipe).toHaveBeenCalledTimes(3);
+  });
+
+  it('fails after one swipe when the content is already at its end', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence(['<same/>'])),
+    });
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView()).rejects.toThrow(
+      /^scrollIntoView: reached the end of the scrollable content without finding .* the screen stopped changing after 1 scroll\(s\)/,
+    );
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('with an explicit direction, suggests the other one', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence(['<same/>'])),
+    });
+
+    await expect(
+      new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ direction: 'up' }),
+    ).rejects.toThrow(
+      'the screen stopped changing after 1 scroll(s) in direction "up" (pass { direction: "down" } to scroll the other way). ',
+    );
+    expect(directions(swipe)).toEqual(['down']);
+  });
+
+  it('with a direction chosen from the element\'s position, says so', async () => {
+    const above = makeElementInfo({ visible: false, bounds: { left: 0, top: -900, right: 340, bottom: -770 } });
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: vi.fn(async () => makeFindElementsResponse([above])),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence(['<same/>'])),
+    });
+
+    await expect(new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView()).rejects.toThrow(
+      'the screen stopped changing after 1 scroll(s) in direction "up" (chosen from where the element was). ',
+    );
+  });
+
+  it('re-reads once after an idle wait before calling it the end, so a lagging tree is not mistaken for one', async () => {
+    let probes = 0;
+    const findElements = vi.fn(async () => makeFindElementsResponse(++probes >= 4 ? [makeElementInfo({ visible: true })] : []));
+    const swipe = vi.fn(async () => successResponse());
+    const waitForIdle = vi.fn(async () => successResponse());
+    // Before swipe 1: <a/>. After it, still <a/> at first, then <b/> once idle.
+    const client = makeMockClient({
+      findElements,
+      swipe,
+      waitForIdle,
+      getUiHierarchy: vi.fn(hierarchySequence(['<a/>', '<a/>', '<b/>', '<c/>'])),
+    });
+
+    await new ElementHandle(client, _text('Item 9'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(2);
+    // One idle wait confirms the first miss (as before), one confirms the unchanged screen.
+    expect(waitForIdle).toHaveBeenCalledTimes(2);
+  });
+
+  it('reads the screen once per swipe, and not after the element comes into view', async () => {
+    let probes = 0;
+    const findElements = vi.fn(async () => makeFindElementsResponse(++probes >= 4 ? [makeElementInfo({ visible: true })] : []));
+    const getUiHierarchy = vi.fn(hierarchySequence());
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, getUiHierarchy, swipe });
+
+    await new ElementHandle(client, _text('Item 9'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(2);
+    expect(getUiHierarchy).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps swiping to maxScrolls when the screen cannot be read', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(async () => ({ requestId: '1', hierarchyXml: '', errorMessage: 'dump failed' })),
+    });
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 3 })).rejects.toThrow(
+      /was not visible after 3 scroll\(s\)/,
+    );
+    expect(swipe).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps swiping when a screen read throws', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(async () => { throw new Error('Agent command timed out'); }),
+    });
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(
+      /was not visible after 2 scroll\(s\)/,
+    );
+    expect(swipe).toHaveBeenCalledTimes(2);
+  });
+
+  it('propagates a user stop from a screen read', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(async () => { throw new TestAbortedError(); }),
+    });
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView()).rejects.toSatisfy(isAbortError);
+    expect(swipe).not.toHaveBeenCalled();
+  });
+
+  it('says it reached the end when the last allowed swipe changed nothing', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence(['<a/>', '<b/>', '<b/>'])),
+    });
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(
+      /reached the end of the scrollable content .* stopped changing after 2 scroll\(s\)/,
+    );
   });
 });
 
