@@ -6423,6 +6423,17 @@ describe('scrollIntoView() checks the element is still on screen once the list h
     expect(swipe).toHaveBeenCalledTimes(2);
   });
 
+  it('drops the unknown-position hint once the element was seen and carried off', async () => {
+    const findElements = scripted([null, null, at(400, 472), gone]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await expect(new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(
+      'scrollIntoView: getByText("Item 40", { exact: true }) was not visible after 1 scroll(s) in direction "down". ' +
+        'It was on screen after a scroll, but the list kept moving and carried it off; raise maxScrolls (1) to let it scroll back further.',
+    );
+  });
+
   it('mentions maxScrolls when the swipe budget runs out', async () => {
     const swipe = vi.fn(async () => successResponse());
     const client = listClient(vi.fn(async () => makeFindElementsResponse([])), swipe);

@@ -4113,10 +4113,14 @@ export class ElementHandle {
       const used = directionsUsed.length ? directionsUsed : [direction];
       let how = `in direction ${used.map((d) => `"${d}"`).join(', then ')}`;
       if (explicitDirection === undefined && swipes > 0) {
-        how += positioned
-          ? ' (chosen from where the element was)'
-          : ' (the default: the element was not on screen or in the tree, so its position was not known; ' +
+        // An element the list carried off was seen, so the default's hint
+        // about an unknown position does not apply to it.
+        if (positioned) how += ' (chosen from where the element was)';
+        else if (!carriedOff) {
+          how +=
+            ' (the default: the element was not on screen or in the tree, so its position was not known; ' +
             'pass { direction: "up" } for an element above the screen)';
+        }
       } else if (reachedEnd && explicitDirection !== undefined) {
         how += ` (pass { direction: "${OPPOSITE_DIRECTION[explicitDirection]}" } to scroll the other way)`;
       }
