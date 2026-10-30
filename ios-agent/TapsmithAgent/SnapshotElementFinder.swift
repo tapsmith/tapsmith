@@ -422,7 +422,8 @@ class SnapshotElementFinder {
                 isSelected: isSelected,
                 childCount: (nodeDict["children"] as? [[String: Any]])?.count ?? 0,
                 role: role,
-                viewportRatio: viewportRatio
+                viewportRatio: viewportRatio,
+                inAlert: nodeDict[SnapshotElementFinder.inAlertKey] as? Bool ?? false
             )
         }
 
@@ -1148,6 +1149,10 @@ class SnapshotElementFinder {
     /// `.tabBar` ancestor (RoleMapping.isTabBarItem, PILOT-514).
     static let inTabBarKey = "tapsmithInTabBar"
 
+    /// Key under which `findMatches` marks a matched node that is a native
+    /// alert or has one as an ancestor (ElementInfo.inAlert, PILOT-862).
+    static let inAlertKey = "tapsmithInAlert"
+
     /// Key under which `findMatches` records, on a match after the keyboard
     /// in tree order, the element types of the keyboard's nodes that match
     /// the selector: a live query re-resolving the match by position returns
@@ -1312,6 +1317,7 @@ class SnapshotElementFinder {
             let frame = parseFrame(nodeDict)
             var matched = nodeDict
             if inTabBar { matched[SnapshotElementFinder.inTabBarKey] = true }
+            if inAlert || nodeType == .alert { matched[SnapshotElementFinder.inAlertKey] = true }
             if !keyboardMatches.isEmpty { matched[SnapshotElementFinder.keyboardMatchesKey] = keyboardMatches }
             results.append((matched, frame))
             let myIndex = results.count - 1

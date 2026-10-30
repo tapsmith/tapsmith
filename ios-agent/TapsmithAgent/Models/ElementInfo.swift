@@ -127,6 +127,12 @@ struct ElementInfo {
     let childCount: Int
     let role: String
     let viewportRatio: Float
+    /// The element is a native alert or inside one (PILOT-862): the SDK
+    /// keeps an alert's contents and the app views behind it out of each
+    /// other's scope by it. Only the snapshot walk can see an element's
+    /// ancestors, so the live `XCUIElement` path leaves it false; the SDK
+    /// scopes with snapshot (`findElements`) results only.
+    var inAlert: Bool = false
 
     func toDict() -> [String: Any] {
         var dict: [String: Any] = [
@@ -144,6 +150,7 @@ struct ElementInfo {
             "childCount": childCount,
             "role": role,
             "viewportRatio": Double(viewportRatio),
+            "inAlert": inAlert,
         ]
         // Use NSNull for nil values to match Android's JSONObject.NULL behavior
         dict["text"] = text as Any? ?? NSNull()

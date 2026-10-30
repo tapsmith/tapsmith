@@ -5625,6 +5625,7 @@ pub(crate) fn parse_element_info(data: &Value) -> Option<proto::ElementInfo> {
         focused: json_bool(el, "focused"),
         role: json_str(el, "role"),
         viewport_ratio: json_float(el, "viewportRatio"),
+        in_alert: json_bool(el, "inAlert"),
     })
 }
 
@@ -6936,6 +6937,7 @@ mod tests {
             "focused": true,
             "role": "button",
             "viewportRatio": 0.75,
+            "inAlert": true,
             "bounds": { "left": 10, "top": 20, "right": 100, "bottom": 60 }
         });
         let el = parse_element_info(&data).unwrap();
@@ -6955,6 +6957,7 @@ mod tests {
         assert!(el.focused);
         assert_eq!(el.role, "button");
         assert!((el.viewport_ratio - 0.75).abs() < 0.01);
+        assert!(el.in_alert);
         let b = el.bounds.unwrap();
         assert_eq!((b.left, b.top, b.right, b.bottom), (10, 20, 100, 60));
     }
@@ -6969,6 +6972,8 @@ mod tests {
         assert!(!el.focused);
         assert_eq!(el.role, "");
         assert_eq!(el.viewport_ratio, 0.0);
+        // An Android agent, or an iOS agent that predates PILOT-862.
+        assert!(!el.in_alert);
         assert!(el.bounds.is_none());
     }
 

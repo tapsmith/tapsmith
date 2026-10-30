@@ -35,6 +35,12 @@ export interface ElementInfo {
   focused: boolean;
   role: string;
   viewportRatio: number;
+  /**
+   * iOS: the element is a native alert or inside one. Scoping
+   * keeps an alert's contents and the app behind it apart by it. Always
+   * false on Android, and absent from a daemon that predates the field.
+   */
+  inAlert?: boolean;
 }
 
 export interface ActionResponse {
