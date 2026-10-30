@@ -132,6 +132,8 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/CellAccessories.swift \
   TapsmithAgent/DescendantText.swift \
   TapsmithAgent/NonAppElements.swift \
+  TapsmithAgent/TextContent.swift \
+  TapsmithAgent/TextMatch.swift \
   -o "$OUT/cell-accessories-tests"
 "$OUT/cell-accessories-tests"
 

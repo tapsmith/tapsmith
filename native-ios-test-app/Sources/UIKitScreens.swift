@@ -130,6 +130,14 @@ final class UIKitTableViewController: UITableViewController {
             buy.isEnabled = false
             buy.sizeToFit()
             cell.accessoryView = buy
+        case "Row 9":
+            // A custom accessory drawn like UIKit's checkmark: an image-only
+            // button, disabled, that UIKit names after its symbol.
+            let done = UIButton(type: .system)
+            done.setImage(UIImage(systemName: "checkmark"), for: .normal)
+            done.isEnabled = false
+            done.sizeToFit()
+            cell.accessoryView = done
         default: cell.accessoryType = .disclosureIndicator
         }
         return cell

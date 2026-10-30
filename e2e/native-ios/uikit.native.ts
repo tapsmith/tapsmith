@@ -92,6 +92,7 @@ describe("UIKit: table view", () => {
 
   test("a custom accessory button that is disabled stays disabled", async ({ uikitTable }) => {
     await expect(uikitTable.buy).toBeDisabled()
+    await expect(uikitTable.done).toBeDisabled()
   })
 
   // UITableView exposes every row; one with no loaded cell reports its

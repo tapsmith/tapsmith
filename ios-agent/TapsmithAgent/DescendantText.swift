@@ -27,8 +27,9 @@ enum DescendantText {
     /// Walk a snapshot subtree and join its descendants' text: each child
     /// gives its value, title or label, or, when it has none, its own
     /// descendants' text. Not part of any text: the hooks marker
-    /// (`NonAppElements`) and a table row's accessory indicator
-    /// (`CellAccessories`, marked by `normalizeIndicators`).
+    /// (`NonAppElements`), a table row's accessory indicator
+    /// (`CellAccessories`, marked by `normalizeIndicators`) and a control
+    /// whose label and value are not text on screen (`TextContent`).
     static func collect(_ node: [String: Any], depth: Int = 0) -> String {
         if depth >= maxDepth { return "" }
         var parts: [String] = []
@@ -40,6 +41,11 @@ enum DescendantText {
                     value: child["value"] as? String ?? ""
                 ) { continue }
                 if CellAccessories.isMarkedIndicator(child) { continue }
+                // A switch's "0"/"1", a slider's or a stepper's value is not
+                // text on screen, nor is the label that only names it
+                // (TextContent.nameOnlyTypes): a settings row with a switch
+                // reads "Wi-Fi", not "Wi-Fi 1".
+                if TextContent.nameOnlyTypes.contains(elementType(of: child)) { continue }
                 let ownText: String?
                 if let v = child["value"] as? String, !v.isEmpty {
                     ownText = v
@@ -63,5 +69,16 @@ enum DescendantText {
             }
         }
         return parts.joined(separator: " ")
+    }
+
+    private static func elementType(of dict: [String: Any]) -> XCUIElement.ElementType {
+        let raw: UInt?
+        switch dict["elementType"] {
+        case let v as UInt: raw = v
+        case let v as Int: raw = v >= 0 ? UInt(v) : nil
+        case let v as NSNumber: raw = UInt(v.uint64Value)
+        default: raw = nil
+        }
+        return raw.flatMap { XCUIElement.ElementType(rawValue: $0) } ?? .other
     }
 }

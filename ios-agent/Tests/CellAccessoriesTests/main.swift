@@ -153,8 +153,18 @@ check("a button does not", DescendantText.aggregates(.button), false)
 do {
     let hooks = node(.other, [node(.staticText, label: "tapsmith-hooks:1"), node(.staticText, label: "Hello")])
     check("the hooks marker is no one's text", DescendantText.collect(hooks), "Hello")
-    let valued = node(.cell, [node(.staticText, label: "Volume"), node(.slider, label: "Volume", value: "50%")])
-    check("a child's value comes before its label", DescendantText.collect(valued), "Volume 50%")
+    let valued = node(.other, [node(.staticText, label: "Name"), node(.button, label: "Plan", value: "Pro")])
+    check("a child's value comes before its label", DescendantText.collect(valued), "Name Pro")
+    // A switch's "0"/"1" and a slider's value are not text on screen.
+    let wifi = node(.cell, [node(.staticText, label: "Wi-Fi"), node(.switch, label: "Wi-Fi", value: "1")])
+    check("a row's switch adds no text", DescendantText.collect(wifi), "Wi-Fi")
+    let unlabelled = node(.cell, [node(.staticText, label: "Bluetooth"), node(.switch, value: "0")])
+    check("an unlabelled switch adds no text", DescendantText.collect(unlabelled), "Bluetooth")
+    let controls = node(.cell, [
+        node(.staticText, label: "Volume"), node(.slider, label: "Volume", value: "50%"),
+        node(.stepper, label: "Count", [node(.button, label: "Count, Increment")]), node(.toggle, value: "1"),
+    ])
+    check("sliders, steppers and toggles add no text", DescendantText.collect(controls), "Volume")
     let nested = node(.cell, [node(.other, [node(.other, [node(.staticText, label: "Deep")])])])
     check("text nested under unlabelled views is found", DescendantText.collect(nested), "Deep")
     var deep = node(.staticText, label: "Too deep")

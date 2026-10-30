@@ -181,6 +181,8 @@ export class UIKitTableScreen {
   moreInfo(n: number) { return this.row(n).getByRole("button", { name: "More Info", exact: true }) }
   /** Row 8's custom accessory: a UIButton that really is disabled. */
   get buy() { return this.device.getByRole("button", { name: "Buy", exact: true }) }
+  /** Row 9's custom accessory: a disabled image-only button showing a checkmark. */
+  get done() { return this.row(9).getByRole("button") }
   rowText(n: number) { return this.device.getByText(`Row ${n}`, { exact: true }) }
   get selection() { return this.device.getByTestId("uikit-table-selection") }
 }
