@@ -194,6 +194,10 @@ message ElementInfo {
   bool focused = 15;
   string role = 16;
   float viewport_ratio = 17;
+  // iOS: the element is a native alert (XCUIElementTypeAlert) or inside one
+  // (PILOT-862). The SDK keeps an alert's contents and the app views behind
+  // it out of each other's scope by it. Always false on Android.
+  bool in_alert = 18;
 }
 
 message Bounds {

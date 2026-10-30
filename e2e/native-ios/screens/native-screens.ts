@@ -71,6 +71,8 @@ export class NativeDialogsScreen {
   get alertMessage() { return this.device.getByText("This cannot be undone.", { exact: true }) }
   get alertDelete() { return this.alert.getByRole("button", { name: "Delete" }) }
   get alertCancel() { return this.alert.getByRole("button", { name: "Cancel" }) }
+  /** Every button in the alert (PILOT-862). */
+  get alertButtons() { return this.alert.getByRole("button") }
 
   get copyLink() { return this.device.getByRole("button", { name: "Copy Link" }) }
   get sheetContent() { return this.device.getByText("Sheet content", { exact: true }) }
@@ -184,7 +186,9 @@ export class UIKitDialogsScreen {
   result(text: string) { return this.device.getByText(`Result: ${text}`, { exact: true }) }
   get alert() { return this.device.getByRole("alert", { name: "Remove item?" }) }
   get anyAlert() { return this.device.getByRole("alert") }
-  get remove() { return this.device.getByRole("button", { name: "Remove" }) }
+  /** Every button in the alert (PILOT-862). */
+  get alertButtons() { return this.alert.getByRole("button") }
+  get remove() { return this.alert.getByRole("button", { name: "Remove" }) }
   get exportPdf() { return this.device.getByRole("button", { name: "Export PDF" }) }
 }
 

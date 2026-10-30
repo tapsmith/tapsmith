@@ -299,6 +299,77 @@ describe('getBy* scoping', () => {
     });
   });
 
+  // A native iOS alert's contents are the agent's `inAlert` elements: the
+  // app's views behind a React Native Alert.alert stay in the tree, and their
+  // centres lie under the alert, so bounds alone put them inside it
+  // (PILOT-862).
+  describe('scope across a native iOS alert\'s edge (PILOT-862)', () => {
+    const alert = makeElementInfo({ elementId: 'A', role: 'alert', className: 'XCUIElementTypeAlert', text: 'Confirm', inAlert: true, bounds: { left: 50, top: 300, right: 350, bottom: 500 } });
+    const cancel = makeElementInfo({ elementId: 'c', role: 'button', text: 'Cancel', inAlert: true, bounds: { left: 50, top: 450, right: 200, bottom: 500 } });
+    const ok = makeElementInfo({ elementId: 'o', role: 'button', text: 'OK', inAlert: true, bounds: { left: 200, top: 450, right: 350, bottom: 500 } });
+    // An app button behind the alert, its centre under it.
+    const behind = makeElementInfo({ elementId: 'b', role: 'button', text: 'Show toast', bounds: { left: 60, top: 380, right: 340, bottom: 420 } });
+    const screen = makeElementInfo({ elementId: 'S', className: 'XCUIElementTypeOther', resourceId: 'screen', text: '', bounds: { left: 0, top: 0, right: 400, bottom: 800 } });
+    const client = () => makeMockClient({
+      findElements: vi.fn(async (selector: Selector) => {
+        if (selector.kind.type === 'role' && selector.kind.value.role === 'alert') return makeFindElementsResponse([alert]);
+        if (selector.kind.type === 'testId') return makeFindElementsResponse([screen]);
+        return makeFindElementsResponse([behind, cancel, ok]);
+      }),
+    });
+    const ids = (els: ElementInfo[]) => els.map((e) => e.elementId);
+
+    it('finds only the alert\'s own buttons, not the app\'s behind it', async () => {
+      const buttons = new ElementHandle(client(), _role('alert'), 5000, { platform: 'ios' }).getByRole('button');
+      expect(ids(await buttons._resolveAll())).toEqual(['c', 'o']);
+    });
+
+    it('keeps an app container\'s scope out of the alert in front of it', async () => {
+      const buttons = new ElementHandle(client(), _testId('screen'), 5000, { platform: 'ios' }).getByRole('button');
+      expect(ids(await buttons._resolveAll())).toEqual(['b']);
+    });
+
+    it('scopes by bounds within the alert', async () => {
+      const okArea = makeElementInfo({ elementId: 'Z', className: 'XCUIElementTypeOther', resourceId: 'ok-area', inAlert: true, bounds: { left: 200, top: 440, right: 350, bottom: 500 } });
+      const c = makeMockClient({
+        findElements: vi.fn(async (selector: Selector) =>
+          makeFindElementsResponse(selector.kind.type === 'testId' ? [okArea] : [behind, cancel, ok])),
+      });
+      const buttons = new ElementHandle(c, _testId('ok-area'), 5000, { platform: 'ios' }).getByRole('button');
+      expect(ids(await buttons._resolveAll())).toEqual(['o']);
+    });
+
+    it('applies the same edge to filter({ has }) and filter({ hasNot })', async () => {
+      const c = client();
+      const appButton = new ElementHandle(c, _text('Show toast'), 5000);
+      const alertButton = new ElementHandle(c, _text('OK'), 5000);
+      const alerts = new ElementHandle(c, _role('alert'), 5000, { platform: 'ios' });
+      const findElements = c.findElements as ReturnType<typeof vi.fn>;
+      findElements.mockImplementation(async (selector: Selector) => {
+        if (selector.kind.type === 'role') return makeFindElementsResponse([alert]);
+        if (selector.kind.type === 'testId') return makeFindElementsResponse([screen]);
+        return makeFindElementsResponse(selector.kind.value === 'OK' ? [ok] : [behind]);
+      });
+      expect(await alerts.filter({ has: appButton }).count()).toBe(0);
+      expect(await alerts.filter({ has: alertButton }).count()).toBe(1);
+      expect(await alerts.filter({ hasNot: appButton }).count()).toBe(1);
+      const screens = new ElementHandle(c, _testId('screen'), 5000, { platform: 'ios' });
+      expect(await screens.filter({ has: alertButton }).count()).toBe(0);
+      expect(await screens.filter({ has: appButton }).count()).toBe(1);
+    });
+
+    it('leaves elements without the flag (Android, an older agent) to bounds alone', async () => {
+      const { inAlert: _a, ...plainAlert } = alert;
+      const plain = [behind, cancel, ok].map(({ inAlert: _i, ...e }) => e as ElementInfo);
+      const c = makeMockClient({
+        findElements: vi.fn(async (selector: Selector) =>
+          makeFindElementsResponse(selector.kind.type === 'role' && selector.kind.value.role === 'alert' ? [plainAlert as ElementInfo] : plain)),
+      });
+      const buttons = new ElementHandle(c, _role('alert'), 5000, { platform: 'ios' }).getByRole('button');
+      expect(ids(await buttons._resolveAll())).toEqual(['b', 'c', 'o']);
+    });
+  });
+
   it('preserves client and timeout in child handle', () => {
     const client = makeMockClient();
     const parent = new ElementHandle(client, _role('list'), 7000);

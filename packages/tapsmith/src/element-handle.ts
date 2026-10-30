@@ -197,17 +197,31 @@ export function locatorOptionsToSelector(options: LocatorOptions): Selector {
  */
 type ContainmentResult = 'contained' | 'not_contained' | 'indeterminate';
 
-function boundsContain(
-  parent?: { left: number; top: number; right: number; bottom: number },
-  child?: { left: number; top: number; right: number; bottom: number },
-): ContainmentResult {
-  if (!parent || !child) return 'indeterminate';
+function boundsContain(parent: ElementInfo, child: ElementInfo): ContainmentResult {
+  if (!parent.bounds || !child.bounds) return 'indeterminate';
+  if (!sameAlertSide(parent, child)) return 'not_contained';
+  const p = parent.bounds;
+  const c = child.bounds;
   const contained =
-    child.left >= parent.left &&
-    child.top >= parent.top &&
-    child.right <= parent.right &&
-    child.bottom <= parent.bottom;
+    c.left >= p.left &&
+    c.top >= p.top &&
+    c.right <= p.right &&
+    c.bottom <= p.bottom;
   return contained ? 'contained' : 'not_contained';
+}
+
+/**
+ * Whether `parent` and `child` are on the same side of a native iOS alert's
+ * edge (`inAlert`, PILOT-862): both in the alert, or both outside it. While
+ * a React Native `Alert.alert` is up the app's views stay in the tree behind
+ * it, their centres under it, so bounds alone would put them inside the
+ * alert — and the alert's buttons inside an app container behind it. iOS
+ * shows one alert at a time, so the two sides are all there is. Android and
+ * an older agent never set the flag: both sides read as outside, and bounds
+ * decide alone.
+ */
+function sameAlertSide(parent: ElementInfo, child: ElementInfo): boolean {
+  return Boolean(parent.inAlert) === Boolean(child.inAlert);
 }
 
 /** A positional index as the call that set it: `.first()`, `.last()` or `.nth(n)`. */
@@ -228,12 +242,13 @@ function renderNth(n: number): string {
  * centre, not the whole box, decides, so a row half-scrolled past its list's
  * edge — iOS reports unclipped frames — is still in the list; an element with
  * no area has no centre on screen and never is. An element drawn over the
- * parent from elsewhere is in scope too; that is the price of bounds.
+ * parent from elsewhere is in scope too; that is the price of bounds. The
+ * one edge the agent does report is a native iOS alert's (sameAlertSide).
  */
 function inScope(parent: ElementInfo, child: ElementInfo): boolean {
   const p = parent.bounds;
   const c = child.bounds;
-  if (!p || !c || !hasUsableGeometry(child)) return false;
+  if (!p || !c || !hasUsableGeometry(child) || !sameAlertSide(parent, child)) return false;
   const encloses = c.left <= p.left && c.top <= p.top && c.right >= p.right && c.bottom >= p.bottom;
   const sameRect = c.left === p.left && c.top === p.top && c.right === p.right && c.bottom === p.bottom;
   if (encloses && !sameRect) return false;
@@ -1325,7 +1340,7 @@ export class ElementHandle {
       result = result.filter((parent) => {
         // If parent has no bounds, we can't determine geometric containment — skip it
         if (!parent.bounds) return false;
-        const results = childElements.map((child) => boundsContain(parent.bounds, child.bounds));
+        const results = childElements.map((child) => boundsContain(parent, child));
         const hasContained = results.some((r) => r === 'contained');
         if (hasContained) return true;
         // Fallback: if all results are indeterminate (child bounds undefined)
@@ -1345,7 +1360,7 @@ export class ElementHandle {
       const childElements = childRes.elements ?? [];
       result = result.filter((parent) => {
         if (!parent.bounds) return true;
-        const results = childElements.map((child) => boundsContain(parent.bounds, child.bounds));
+        const results = childElements.map((child) => boundsContain(parent, child));
         // Exclude if any child is definitively contained
         if (results.some((r) => r === 'contained')) return false;
         // Mirror the `has` logic: if all results are indeterminate (child

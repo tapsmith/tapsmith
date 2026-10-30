@@ -109,6 +109,7 @@ describe("UIKit: UIAlertController", () => {
     await uikitDialogs.showAlert.tap()
     await expect(uikitDialogs.alert).toBeVisible()
     await expect(uikitDialogs.anyAlert).toHaveCount(1)
+    await expect(uikitDialogs.alertButtons).toHaveCount(2)
     await uikitDialogs.remove.tap()
     await expect(uikitDialogs.result("Removed")).toBeVisible()
   })
