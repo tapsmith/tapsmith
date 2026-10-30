@@ -11,10 +11,10 @@
  */
 
 import { execFile, execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { appBundlesMatch } from './app-bundle-match.js';
 import { withFileLockSync } from './file-lock.js';
 import { iosToolchainBlocker } from './toolchain.js';
 import { DeviceClaimedError, claimDevice, currentSession, devicesHeldElsewhere, withoutHeldDevices } from './device-claims.js';
@@ -344,33 +344,28 @@ export function installAppIfAbsent(
 }
 
 /**
- * True when the app installed on the simulator has a main executable
- * byte-identical to the candidate bundle's. Presence alone is not a safe
- * install-skip signal: simulator state can outlive a run (CI runners have
- * handed back device sets with an app from a previous job; local reruns
- * follow app rebuilds), and skipping install on a stale bundle silently
- * tests old app code. Any read/lookup failure returns false so callers
- * reinstall — the only cost of a false negative is one redundant install.
+ * True when the app installed on the simulator is the same build as the
+ * candidate bundle: the whole installed bundle is byte-identical to it
+ * (`appBundlesMatch`). Presence alone is not a safe install-skip signal:
+ * simulator state can outlive a run (CI runners have handed back device sets
+ * with an app from a previous job; local reruns follow app rebuilds), and
+ * skipping install on a stale bundle silently tests old app code. Nor is any
+ * one file: a Debug build's main executable is a stub that stays identical
+ * across rebuilds, its code being in `<App>.debug.dylib`. Any
+ * lookup or read failure returns false so callers reinstall — the only cost
+ * of a false negative is one redundant install.
  */
-export function installedAppMatches(udid: string, bundleId: string, appPath: string): boolean {
-  try {
-    const container = execFileSync('xcrun', ['simctl', 'get_app_container', udid, bundleId, 'app'], {
-      timeout: 10_000,
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    if (!container) return false;
-    const executable = execFileSync(
-      '/usr/libexec/PlistBuddy',
-      ['-c', 'Print :CFBundleExecutable', path.join(appPath, 'Info.plist')],
-      { timeout: 10_000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] },
-    ).trim();
-    if (!executable) return false;
-    const digest = (p: string) => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-    return digest(path.join(container, executable)) === digest(path.join(appPath, executable));
-  } catch {
-    return false;
-  }
+export async function installedAppMatches(udid: string, bundleId: string, appPath: string): Promise<boolean> {
+  const container = await new Promise<string>((resolve) => {
+    execFile(
+      'xcrun',
+      ['simctl', 'get_app_container', udid, bundleId, 'app'],
+      { timeout: 10_000, encoding: 'utf8' },
+      (err, stdout) => resolve(err ? '' : String(stdout).trim()),
+    );
+  });
+  if (!container) return false;
+  return appBundlesMatch(container, appPath);
 }
 
 /**

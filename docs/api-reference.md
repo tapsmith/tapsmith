@@ -2927,13 +2927,13 @@ npx tapsmith test --config=./configs/ios.config.mjs
 
 ### `tapsmith test --force-install`
 
-Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK is already detected and reinstalled without it.
+Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
 
 ```bash
 npx tapsmith test --force-install
 ```
 
-Without this flag, Tapsmith checks if the package is already installed and skips the install step to save time.
+Without this flag, Tapsmith skips the install step when the installed build matches the one you built (on a physical iOS device, when the app is installed at all). On iOS the installed app is found by its bundle ID, so without `package` set Tapsmith cannot see it and installs the app every run.
 
 ### `tapsmith test --reporter <name>`
 
