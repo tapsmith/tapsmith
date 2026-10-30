@@ -91,6 +91,18 @@ const SCROLL_SCREEN_READ_DEADLINE_MS = 5000;
  *  Android agent sets uiautomator's idle timeout to 0, so its hierarchy dump
  *  does not wait for idle. Bounded for a screen that never goes idle. */
 const SCROLL_END_CONFIRM_IDLE_MS = 1000;
+/** The swipe scrollIntoView() makes once momentum has carried its element
+ *  past where it should stop (PILOT-935): a shorter one, and slow enough to
+ *  leave little momentum. The iOS agent turns a speed of 1000 or less into an
+ *  0.8 s drag instead of an 0.3 s fling; the Android agent settles after every
+ *  swipe, and at 1000 its drag is about as fast per pixel as the default. */
+const SCROLL_GENTLE_DISTANCE = 0.3;
+/** How often scrollIntoView() looks for its element while a swipe's momentum
+ *  is still moving the list (PILOT-935). One default fling moves a Flutter
+ *  list on iOS by about 1.4 screens, mostly in the first half second, so
+ *  reading only once it stops never sees the rows it went past. */
+const SCROLL_WATCH_INTERVAL_MS = 100;
+const SCROLL_GENTLE_MAX_SPEED = 1000;
 /** Cap for the best-effort screenshot/hierarchy capture taken when an action's
  *  element resolution has *already* failed. Tighter than the normal 5s
  *  TRACE_CAPTURE_TIMEOUT_MS so a slow/unresponsive device can't add seconds of
@@ -745,6 +757,34 @@ function scrollToward(el: ElementInfo | undefined): SwipeDirection | undefined {
 function usableFrame(el: ElementInfo | undefined): Rect | undefined {
   const b = el?.bounds;
   return b && b.right > b.left && b.bottom > b.top ? b : undefined;
+}
+
+/**
+ * The way to scroll to bring an on-screen element fully inside the scroll
+ * container `region`, when an edge of the container cuts it along the axis of
+ * `direction` (the way the last swipe scrolled), else `undefined` (PILOT-935).
+ * Momentum can leave a row cut at either edge: past the edge the view scrolled
+ * toward, or short of the other. A frame within a pixel of an edge counts as
+ * cut, since Flutter clips its frames to the viewport, so a row sliding out
+ * keeps the edge's coordinate. A frame that reaches both edges spans the
+ * container and cannot fit any better.
+ */
+function cutByEdge(frame: Rect, region: Rect, direction: SwipeDirection): SwipeDirection | undefined {
+  const vertical = direction === 'up' || direction === 'down';
+  const [start, end, regionStart, regionEnd] = vertical
+    ? [frame.top, frame.bottom, region.top, region.bottom]
+    : [frame.left, frame.right, region.left, region.right];
+  const atStart = start <= regionStart + 1;
+  const atEnd = end >= regionEnd - 1;
+  if (atStart === atEnd) return undefined;
+  if (atStart) return vertical ? 'up' : 'left';
+  return vertical ? 'down' : 'right';
+}
+
+/** An element's frame as one comparable value, or `undefined` without one. */
+function frameKey(el: ElementInfo): string | undefined {
+  const b = el.bounds;
+  return b?.top === undefined ? undefined : `${b.left},${b.top},${b.right},${b.bottom}`;
 }
 
 /** Bounds as the hierarchy dump writes them: `[left,top][right,bottom]`. */
@@ -3667,11 +3707,11 @@ export class ElementHandle {
     // about where the element is, so swiping on it would be a blind gesture
     // that can displace an already-visible target — e.g. shift it under a
     // pinned app bar so the follow-up tap silently misses (PILOT-283).
-    const probe = async (): Promise<
+    type Probe =
       | { outcome: 'visible'; el: ElementInfo }
       | { outcome: 'miss'; el?: ElementInfo }
-      | { outcome: 'unreliable' }
-    > => {
+      | { outcome: 'unreliable' };
+    const probe = async (): Promise<Probe> => {
       // One modifier-aware read: filter/and/or/scope and the positional index
       // all apply, so the scroll is judged against the element the handle
       // actually denotes — not the raw selector's first match (PILOT-345).
@@ -3751,8 +3791,53 @@ export class ElementHandle {
       // when it swiped the screen because nothing on screen scrolls. Kept for
       // the next swipe when the screen cannot be read.
       let region: Rect | undefined;
+      // Momentum carried the element off screen after a scroll brought it on
+      // (PILOT-935): `overshot` until the next swipe scrolls back for it,
+      // `carriedOff` until it is seen on screen again (for the failure
+      // message), and `gentle` from then on, so later swipes leave little
+      // momentum to carry it past again.
+      let overshot = false;
+      let carriedOff = false;
+      let gentle = false;
+      // The element, seen on screen while the list was still moving after the
+      // last swipe: the next probe, so the settle below follows it from there.
+      let seenMoving: Probe | undefined;
+      const swipe = async (): Promise<void> => {
+        const opts = gentle
+          ? { speed: Math.min(speed, SCROLL_GENTLE_MAX_SPEED), distance: SCROLL_GENTLE_DISTANCE }
+          : { speed, distance: 0.6 };
+        const swipeRes = await this._client.swipe(OPPOSITE_DIRECTION[direction], region ? { ...opts, region } : opts);
+        if (!swipeRes.success) {
+          throw new Error(swipeRes.errorMessage || 'Swipe failed during scrollIntoView');
+        }
+        swipes++;
+        // Watch for the element while the momentum carries the list on
+        // (PILOT-935), rather than sleeping through it: a row the list moves
+        // past between two reads is never seen, and the scroll would go on
+        // to the end of the content without it. Seen once, the settle below
+        // follows it, and scrolls back if the list carries it off. Reads that
+        // tell nothing (a fault, a stale or ambiguous snapshot) are skipped.
+        // SCROLL_SETTLE_MS in all before the next probe, as the sleep this
+        // replaced; a read in between, at each interval but the last.
+        for (let waited = SCROLL_WATCH_INTERVAL_MS; ; waited += SCROLL_WATCH_INTERVAL_MS) {
+          await sleep(SCROLL_WATCH_INTERVAL_MS, this._client._getAbortSignal?.());
+          if (waited >= SCROLL_SETTLE_MS) return;
+          let seen: Probe;
+          try {
+            seen = await probe();
+          } catch (err) {
+            if (!isStrictModeViolation(err)) throw err;
+            continue;
+          }
+          if (seen.outcome === 'visible') {
+            seenMoving = seen;
+            return;
+          }
+        }
+      };
       for (;;) {
-        let result = await probe();
+        let result = seenMoving ?? (await probe());
+        seenMoving = undefined;
 
         // Right after navigation or app launch the accessibility tree can lag
         // the rendered screen — it may briefly describe the PREVIOUS screen
@@ -3777,16 +3862,22 @@ export class ElementHandle {
 
         if (result.outcome === 'visible') {
           const el = result.el;
+          carriedOff = false;
           // Wait for scroll momentum to fully stop.  On iOS, momentum
           // deceleration continues after a swipe, and the first tap during
           // deceleration is consumed by the ScrollView (stops the scroll)
           // rather than being delivered to the child view.  Poll until the
-          // element's position is stable for two consecutive checks.
+          // element's frame is stable for two consecutive checks.
           // The last clean read of the settle loop, so the trace shows where
           // the row ended up rather than where the probe saw it mid-motion.
           let settled: ElementInfo = el;
+          // What the last read of the settle loop saw (PILOT-935): the element
+          // on screen, in the tree but off screen, not in the tree at all, or
+          // nothing usable. Momentum can carry an element that the probe saw
+          // on screen past the edge before the list stops.
+          let last: 'visible' | 'hidden' | 'gone' | 'unknown' = 'visible';
           if (swipes > 0) {
-            // Settled = the position has held for two consecutive ticks (three
+            // Settled = the frame has held for two consecutive ticks (three
             // equal reads, ~200ms of observed stillness on top of
             // SCROLL_SETTLE_MS). The reads below are single live snapshots, so
             // one matching pair could be a momentary velocity null or a
@@ -3795,20 +3886,22 @@ export class ElementHandle {
             // positional re-checks) before it answered, so a lone match used
             // to carry that margin already. An unreadable tick (miss, stale,
             // ambiguous, bounds missing) clears both the count AND the last
-            // position, so the three equal reads are always adjacent — a
-            // post-gap read never counts against a pre-gap one.
+            // frame, so the three equal reads are always adjacent — a
+            // post-gap read never counts against a pre-gap one. The whole
+            // frame is compared, not just one edge: Flutter clips a frame to
+            // the viewport, so a row sliding off the top keeps the top edge's
+            // coordinate while its bottom moves (PILOT-935).
             const trackable = el.bounds?.top !== undefined;
-            let lastY = el.bounds?.top;
+            let lastFrame = frameKey(el);
             let stableTicks = 0;
             for (let s = 0; s < 10; s++) {
               await sleep(100, this._client._getAbortSignal?.());
               // The same modifier-aware, live read as the probe, so a filtered
               // or scoped handle tracks ITS element's position, not the raw
               // selector's first match. Transport errors and a user abort
-              // propagate. The target was already found visible, so nothing
-              // here may fail the scroll or fall through to another swipe
-              // (which could scroll it back off-screen); the tick just decides
-              // how to keep waiting for the position to settle:
+              // propagate. Nothing here may fail the scroll; the tick just
+              // decides how to keep waiting for the position to settle, and
+              // where the element was when it did:
               // - a slow agent (`fault`: command timeout / momentary fault)
               //   stops stabilizing — each further read could cost the daemon's
               //   ~5s headroom, and the old single-probe loop stopped here too;
@@ -3825,17 +3918,23 @@ export class ElementHandle {
                 if (!isStrictModeViolation(err)) throw err;
                 // An ambiguous read is an unreadable tick like any other.
                 stableTicks = 0;
-                lastY = undefined;
+                lastFrame = undefined;
+                last = 'unknown';
                 continue;
               }
-              if (stabilityTick.kind === 'fault') break;
+              if (stabilityTick.kind === 'fault') {
+                last = 'unknown';
+                break;
+              }
               if (stabilityTick.kind !== 'found') {
                 stableTicks = 0;
-                lastY = undefined;
+                lastFrame = undefined;
+                last = stabilityTick.kind === 'miss' ? 'gone' : 'unknown';
                 continue;
               }
-              const curY = stabilityTick.element.bounds?.top;
-              if (curY === undefined) {
+              const curFrame = frameKey(stabilityTick.element);
+              last = stabilityTick.element.visible ? 'visible' : 'hidden';
+              if (curFrame === undefined) {
                 // An element the probe already saw without bounds has no
                 // position to track — nothing to stabilize, and waiting out
                 // all 10 ticks would only add dead time (a full chain read
@@ -3844,25 +3943,51 @@ export class ElementHandle {
                 // (a cell mid-recycle): an unreadable tick, like a miss.
                 if (!trackable) break;
                 stableTicks = 0;
-                lastY = undefined;
+                lastFrame = undefined;
+                last = 'unknown';
                 continue;
               }
               settled = stabilityTick.element;
-              if (curY === lastY) {
+              if (curFrame === lastFrame) {
                 if (++stableTicks >= 2) break;
               } else {
                 stableTicks = 0;
-                lastY = curY;
+                lastFrame = curFrame;
               }
             }
           }
-          await this._traceQuery(
-            'scrollIntoView',
-            `Visible after ${swipes} scroll(s)`,
-            Date.now() - start,
-            settled.bounds,
-          );
-          return;
+          // Where the list stopped (PILOT-935). Gone from the screen: the
+          // momentum carried it past, so scroll back (below). Cut by an edge
+          // of the container the last swipe ran in: nudge it inside, so a
+          // tap at its centre lands on it. Either way gently, so the momentum
+          // does not carry it past again, and within maxScrolls.
+          const lost = swipes > 0 && (last === 'hidden' || last === 'gone');
+          const nudge =
+            swipes > 0 && last === 'visible' && region && settled.bounds
+              ? cutByEdge(settled.bounds, region, direction)
+              : undefined;
+          if (!lost && (!nudge || swipes >= maxScrolls)) {
+            await this._traceQuery(
+              'scrollIntoView',
+              `Visible after ${swipes} scroll(s)`,
+              Date.now() - start,
+              settled.bounds,
+            );
+            return;
+          }
+          gentle = true;
+          if (nudge) {
+            direction = nudge;
+            if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
+            // This swipe moves an element already found, so it is not judged
+            // for the end of the content: no screen to compare it with.
+            screenBeforeSwipe = undefined;
+            await swipe();
+            continue;
+          }
+          carriedOff = true;
+          overshot = true;
+          result = { outcome: 'miss', el: last === 'hidden' ? settled : undefined };
         }
 
         if (result.outcome === 'unreliable') {
@@ -3895,10 +4020,20 @@ export class ElementHandle {
         // Affirmative miss with the swipe budget spent — give up.
         if (swipes >= maxScrolls) break;
         screenBeforeSwipe = screen;
-        if (explicitDirection === undefined) {
-          // Re-judged before every swipe, so an overshoot is scrolled back.
+        if (overshot) {
+          // Scroll back for an element the momentum carried past (PILOT-935),
+          // toward its frame when the tree reports one, else back the way
+          // the list came — even with an explicit direction: the element was
+          // on screen, so which way it lies is known.
+          direction = scrollToward(result.el) ?? OPPOSITE_DIRECTION[direction];
+          positioned = true;
+          overshot = false;
+        } else if (explicitDirection === undefined) {
+          // Re-judged before every swipe, so an overshoot is scrolled back,
+          // gently from then on (PILOT-935).
           const toward = scrollToward(result.el);
           if (toward) {
+            if (swipes > 0 && toward === OPPOSITE_DIRECTION[direction]) gentle = true;
             direction = toward;
             positioned = true;
           }
@@ -3910,15 +4045,7 @@ export class ElementHandle {
         // which container that is, and the last region stands in while the
         // element is still moving and its frame matches nothing in the dump.
         if (read) region = scrollRegion(read.xml, usableFrame(result.el), region);
-        const swipeRes = await this._client.swipe(
-          OPPOSITE_DIRECTION[direction],
-          region ? { speed, distance: 0.6, region } : { speed, distance: 0.6 },
-        );
-        if (!swipeRes.success) {
-          throw new Error(swipeRes.errorMessage || 'Swipe failed during scrollIntoView');
-        }
-        swipes++;
-        await sleep(SCROLL_SETTLE_MS, this._client._getAbortSignal?.());
+        await swipe();
       }
 
       if (lastTransientErr) throw lastTransientErr;
@@ -3945,9 +4072,17 @@ export class ElementHandle {
               : `${screenSwiped}if the content can scroll further, scroll() the list that holds the element ${scrollExample}.`),
         );
       }
+      let budget = '';
+      if (swipes >= maxScrolls) {
+        budget = carriedOff
+          ? '. It was on screen after a scroll, but the list kept moving and carried it off; ' +
+            `raise maxScrolls (${maxScrolls}) to let it scroll back further.`
+          : `. Raise maxScrolls (${maxScrolls}) to scroll further.`;
+      }
       throw new Error(
         `scrollIntoView: ${this._describe()} was not visible after ${swipes} scroll(s) ${how}` +
-          (swipes > 0 && !region ? `. ${screenSwiped}if the element is in a list, scroll() that list instead ${scrollExample}.` : ''),
+          (swipes > 0 && !region ? `. ${screenSwiped}if the element is in a list, scroll() that list instead ${scrollExample}` : '') +
+          (budget || (swipes > 0 && !region ? '.' : '')),
       );
     } catch (err) {
       await this._traceQueryFailed('scrollIntoView', err, Date.now() - start);
