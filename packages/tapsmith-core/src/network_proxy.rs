@@ -54,6 +54,27 @@ const MAX_BODY_SIZE: usize = 1_048_576;
 /// upstream even though we only store a truncated copy in the capture.
 const MAX_PROXY_BODY: usize = 10 * 1024 * 1024;
 
+/// Which kind of process on the device opened a proxied connection, as far
+/// as the route that delivered it can tell (PILOT-782).
+///
+/// With capture on, the transparent proxy sees every process on the device,
+/// not only the app under test. OS services (Google Play services, the Play
+/// Store and Chrome on Android; system daemons on the iOS simulator) pin or
+/// distrust the Tapsmith CA, so their certificate rejects say nothing about
+/// the app. Only connections positively identified as an OS service are
+/// tagged; everything else stays [`TrafficOrigin::Unattributed`] and is
+/// treated as the app's, as before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TrafficOrigin {
+    /// The app under test, another app, or a route that cannot tell.
+    #[default]
+    Unattributed,
+    /// An OS service: on Android a UID below 10000 or a system package's UID
+    /// (sent to the OS-service listener by iptables owner rules); on the iOS
+    /// simulator a process outside every installed app bundle.
+    OsService,
+}
+
 /// A captured network request/response pair.
 #[derive(Debug, Clone)]
 pub struct CapturedEntry {
@@ -80,6 +101,10 @@ pub struct CapturedEntry {
     /// Still open at snapshot time; sizes and duration are elapsed so far.
     pub in_flight: bool,
     pub capture_id: u64,
+    /// The connection came from an OS service rather than an app (see
+    /// [`TrafficOrigin::OsService`]). Only set on `passthrough` markers, the
+    /// one entry kind the SDK reads it for.
+    pub os_service: bool,
 }
 
 /// Body acknowledgements are scoped by the proxy's unique session prefix.
@@ -125,6 +150,7 @@ impl CapturedEntry {
             route_action: self.route_action.clone(),
             in_flight: self.in_flight,
             capture_id: self.capture_id,
+            os_service: self.os_service,
         };
         SnapshotEntry {
             entry,
@@ -408,6 +434,11 @@ pub(crate) struct ProxyState {
     /// Tapsmith CA says so instead of silently capturing nothing (PILOT-712).
     /// Bounded by [`MAX_TLS_REJECTED_HOSTS`].
     tls_rejected_hosts: BTreeSet<String>,
+    /// As `tls_rejected_hosts`, for connections from an OS service
+    /// ([`TrafficOrigin::OsService`]). Reported separately so the SDK does not
+    /// blame the app for a system daemon that pins its certificates
+    /// (PILOT-782). Bounded by [`MAX_TLS_REJECTED_HOSTS`].
+    os_service_tls_rejected_hosts: BTreeSet<String>,
     /// Tunnel every TLS connection end-to-end instead of MITM'ing it: set
     /// when the device cannot be made to trust the Tapsmith CA (an Android
     /// emulator on a Google Play image, where there is no `adb root` to
@@ -421,15 +452,20 @@ pub(crate) struct ProxyState {
     tunnel_all_tls: Option<String>,
 }
 
-/// Cap on [`ProxyState::tls_rejected_hosts`] between drains: enough to name
+/// Cap on each of [`ProxyState::tls_rejected_hosts`] and
+/// [`ProxyState::os_service_tls_rejected_hosts`] between drains: enough to name
 /// every host a real app talks to, small enough that a client probing
 /// arbitrary SNIs cannot grow it without bound.
 const MAX_TLS_REJECTED_HOSTS: usize = 64;
 
 impl ProxyState {
-    fn record_tls_reject(&mut self, host: &str) {
-        if self.tls_rejected_hosts.len() < MAX_TLS_REJECTED_HOSTS {
-            self.tls_rejected_hosts.insert(host.to_string());
+    fn record_tls_reject(&mut self, host: &str, origin: TrafficOrigin) {
+        let hosts = match origin {
+            TrafficOrigin::Unattributed => &mut self.tls_rejected_hosts,
+            TrafficOrigin::OsService => &mut self.os_service_tls_rejected_hosts,
+        };
+        if hosts.len() < MAX_TLS_REJECTED_HOSTS {
+            hosts.insert(host.to_string());
         }
     }
 
@@ -466,11 +502,24 @@ impl ProxyState {
     }
 }
 
+/// Hosts whose client rejected the MITM certificate since the last drain,
+/// split by [`TrafficOrigin`]; each list is sorted.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct TlsRejects {
+    /// Rejects not attributed to an OS service: possibly the app's.
+    pub hosts: Vec<String>,
+    /// Rejects by OS services.
+    pub os_service_hosts: Vec<String>,
+}
+
 /// Handle to the running proxy. Dropping it stops the proxy.
 pub struct NetworkProxy {
     port: u16,
     state: Arc<Mutex<ProxyState>>,
-    shutdown_tx: tokio::sync::oneshot::Sender<()>,
+    mitm_ca: Arc<MitmAuthority>,
+    /// Stops every accept loop (the main listener and the OS-service one):
+    /// on `stop()`, or when the proxy is dropped.
+    shutdown_tx: tokio::sync::watch::Sender<()>,
     capture_session: String,
 }
 
@@ -541,39 +590,24 @@ impl NetworkProxy {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            os_service_tls_rejected_hosts: BTreeSet::new(),
             tunnel_all_tls: None,
         }));
 
-        let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel::<()>();
-
-        let state_clone = state.clone();
-        tokio::spawn(async move {
-            info!(port, "Network capture proxy started (MITM enabled)");
-            loop {
-                tokio::select! {
-                    accept = listener.accept() => {
-                        match accept {
-                            Ok((stream, addr)) => {
-                                let st = state_clone.clone();
-                                let ca = mitm_ca.clone();
-                                tokio::spawn(handle_connection(stream, addr, st, ca));
-                            }
-                            Err(e) => {
-                                warn!("Proxy accept error: {e}");
-                            }
-                        }
-                    }
-                    _ = &mut shutdown_rx => {
-                        info!("Network capture proxy stopping");
-                        break;
-                    }
-                }
-            }
-        });
+        let (shutdown_tx, _) = tokio::sync::watch::channel(());
+        info!(port, "Network capture proxy started (MITM enabled)");
+        spawn_accept_loop(
+            listener,
+            state.clone(),
+            mitm_ca.clone(),
+            TrafficOrigin::Unattributed,
+            shutdown_tx.subscribe(),
+        );
 
         Ok(Self {
             port,
             state,
+            mitm_ca,
             shutdown_tx,
             capture_session: uuid::Uuid::new_v4().to_string(),
         })
@@ -582,6 +616,28 @@ impl NetworkProxy {
     /// The port the proxy is listening on.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Open a second loopback listener whose connections are all
+    /// [`TrafficOrigin::OsService`], and return its port. The Android route
+    /// sends OS-service UIDs' traffic here (iptables owner rules), so their
+    /// certificate rejects are not reported as the app's (PILOT-782). It is
+    /// the same proxy in every other respect: same capture, routes and
+    /// passthrough rules. Stops with the proxy.
+    pub async fn start_os_service_listener(&self) -> Result<u16> {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .context("Failed to bind the OS-service proxy listener")?;
+        let port = listener.local_addr()?.port();
+        spawn_accept_loop(
+            listener,
+            self.state.clone(),
+            self.mitm_ca.clone(),
+            TrafficOrigin::OsService,
+            self.shutdown_tx.subscribe(),
+        );
+        debug!(port, "OS-service proxy listener started");
+        Ok(port)
     }
 
     /// Clone the shared `ProxyState` handle so modules like `ios_redirect`
@@ -678,14 +734,22 @@ impl NetworkProxy {
         state.mitm_rejected_hosts.clear();
         state.mitm_handshake_aborts.clear();
         state.tls_rejected_hosts.clear();
+        state.os_service_tls_rejected_hosts.clear();
     }
 
     /// Return (sorted) and clear the hosts whose client rejected our MITM
-    /// certificate since the last call — see `ProxyState::tls_rejected_hosts`.
-    pub async fn take_tls_rejected_hosts(&self) -> Vec<String> {
-        std::mem::take(&mut self.state.lock().await.tls_rejected_hosts)
-            .into_iter()
-            .collect()
+    /// certificate since the last call — see `ProxyState::tls_rejected_hosts`
+    /// and `ProxyState::os_service_tls_rejected_hosts`.
+    pub async fn take_tls_rejects(&self) -> TlsRejects {
+        let mut state = self.state.lock().await;
+        TlsRejects {
+            hosts: std::mem::take(&mut state.tls_rejected_hosts)
+                .into_iter()
+                .collect(),
+            os_service_hosts: std::mem::take(&mut state.os_service_tls_rejected_hosts)
+                .into_iter()
+                .collect(),
+        }
     }
 
     /// Return captured entries and clear the buffer without stopping the
@@ -757,12 +821,45 @@ impl NetworkProxy {
 
     /// Stop the proxy and return all captured entries.
     pub async fn stop(self) -> Vec<CapturedEntry> {
-        let _ = self.shutdown_tx.send(());
+        self.shutdown_tx.send_replace(());
         // Give in-flight requests a moment to complete
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         let mut state = self.state.lock().await;
         state.drain_entries()
     }
+}
+
+/// Accept connections on `listener` until the proxy stops (a value is sent
+/// on, or the sender of, `shutdown_rx`), handling each as coming from `origin`.
+fn spawn_accept_loop(
+    listener: TcpListener,
+    state: Arc<Mutex<ProxyState>>,
+    mitm_ca: Arc<MitmAuthority>,
+    origin: TrafficOrigin,
+    mut shutdown_rx: tokio::sync::watch::Receiver<()>,
+) {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                accept = listener.accept() => {
+                    match accept {
+                        Ok((stream, addr)) => {
+                            let st = state.clone();
+                            let ca = mitm_ca.clone();
+                            tokio::spawn(handle_connection(stream, addr, st, ca, origin));
+                        }
+                        Err(e) => {
+                            warn!("Proxy accept error: {e}");
+                        }
+                    }
+                }
+                _ = shutdown_rx.changed() => {
+                    info!(?origin, "Network capture proxy listener stopping");
+                    break;
+                }
+            }
+        }
+    });
 }
 
 fn now_ms() -> u64 {
@@ -808,6 +905,7 @@ async fn handle_connection(
     addr: SocketAddr,
     state: Arc<Mutex<ProxyState>>,
     mitm_ca: Arc<MitmAuthority>,
+    origin: TrafficOrigin,
 ) {
     debug!(%addr, "New proxy connection");
 
@@ -839,7 +937,7 @@ async fn handle_connection(
         debug!(%addr, "Detected transparent TLS connection");
         let chained = PrefixedStream::new(buf, client);
         // Port 443: the iptables rules only redirect --dport 443 to TLS.
-        handle_transparent_tls(chained, String::new(), 443, state, mitm_ca).await;
+        handle_transparent_tls_from(chained, String::new(), 443, state, mitm_ca, origin).await;
         return;
     }
 
@@ -901,7 +999,7 @@ async fn handle_connection(
     }
 
     if method == "CONNECT" {
-        handle_connect(client, target, state, mitm_ca).await;
+        handle_connect(client, target, state, mitm_ca, origin).await;
     } else if target.starts_with("http://") || target.starts_with("https://") {
         // Forward-proxy HTTP — absolute URL in the request line.
         handle_http(client, method, target, &header_buf, state).await;
@@ -1055,6 +1153,7 @@ async fn handle_connect(
     target: &str,
     state: Arc<Mutex<ProxyState>>,
     mitm_ca: Arc<MitmAuthority>,
+    origin: TrafficOrigin,
 ) {
     let (connect_host, connect_port) = parse_connect_target(target);
 
@@ -1067,7 +1166,7 @@ async fn handle_connect(
         return;
     }
 
-    handle_transparent_tls(client, connect_host, connect_port, state, mitm_ca).await;
+    handle_transparent_tls_from(client, connect_host, connect_port, state, mitm_ca, origin).await;
 }
 
 fn parse_connect_target(target: &str) -> (String, u16) {
@@ -1711,6 +1810,7 @@ async fn serve_h2_stream(
         route_action: route_action.to_string(),
         in_flight: true,
         capture_id: 0,
+        os_service: false,
     }));
     let stream_key = {
         let mut state = state.lock().await;
@@ -2944,6 +3044,7 @@ async fn record_entry_sized(
         is_https,
         in_flight: false,
         capture_id: 0,
+        os_service: false,
         route_action: route_action.to_string(),
     });
 }
@@ -3404,6 +3505,7 @@ async fn handle_http(
                 is_https: false,
                 in_flight: false,
                 capture_id: 0,
+                os_service: false,
                 route_action: String::new(),
             });
             return;
@@ -3519,6 +3621,7 @@ async fn handle_http(
         is_https: false,
         in_flight: false,
         capture_id: 0,
+        os_service: false,
         route_action: if was_continued {
             "continued".to_string()
         } else {
@@ -3689,6 +3792,7 @@ pub(crate) async fn handle_transparent_tcp<S>(
     dst_port: u16,
     state: Arc<Mutex<ProxyState>>,
     mitm_ca: Arc<MitmAuthority>,
+    origin: TrafficOrigin,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -3722,7 +3826,7 @@ pub(crate) async fn handle_transparent_tcp<S>(
     let chained = PrefixedStream::new(peek.to_vec(), client);
 
     if is_tls {
-        handle_transparent_tls(chained, dst_host, dst_port, state, mitm_ca).await;
+        handle_transparent_tls_from(chained, dst_host, dst_port, state, mitm_ca, origin).await;
     } else if peek == *b"PRI" {
         handle_cleartext_h2(chained, state, Some((dst_host, dst_port))).await;
     } else {
@@ -4012,7 +4116,12 @@ fn host_glob_matches(pattern: &str, host: &str) -> bool {
 /// hosts) is absent rather than silently omitting it. One entry per
 /// connection, not per request — the proxy never sees the encrypted
 /// requests inside the tunnel.
-async fn record_passthrough_entry(state: &Arc<Mutex<ProxyState>>, host: &str, port: u16) {
+async fn record_passthrough_entry(
+    state: &Arc<Mutex<ProxyState>>,
+    host: &str,
+    port: u16,
+    origin: TrafficOrigin,
+) {
     let url = if port == 443 {
         format!("https://{host}/")
     } else {
@@ -4034,6 +4143,7 @@ async fn record_passthrough_entry(state: &Arc<Mutex<ProxyState>>, host: &str, po
         is_https: true,
         in_flight: false,
         capture_id: 0,
+        os_service: origin == TrafficOrigin::OsService,
         route_action: "passthrough".to_string(),
     });
 }
@@ -4089,12 +4199,36 @@ async fn tunnel_tls_passthrough<S>(
 /// Android iptables transparent redirect ([`handle_connection`]), iOS
 /// Network Extension redirect ([`handle_transparent_tcp`]), and
 /// forward-proxy CONNECT ([`handle_connect`]).
+#[cfg(test)]
 async fn handle_transparent_tls<S>(
+    client: S,
+    dst_host: String,
+    dst_port: u16,
+    state: Arc<Mutex<ProxyState>>,
+    mitm_ca: Arc<MitmAuthority>,
+) where
+    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    handle_transparent_tls_from(
+        client,
+        dst_host,
+        dst_port,
+        state,
+        mitm_ca,
+        TrafficOrigin::Unattributed,
+    )
+    .await;
+}
+
+/// [`handle_transparent_tls`] for a connection from `origin`, which decides
+/// where a certificate reject is reported and tags passthrough markers.
+async fn handle_transparent_tls_from<S>(
     mut client: S,
     dst_host: String,
     dst_port: u16,
     state: Arc<Mutex<ProxyState>>,
     mitm_ca: Arc<MitmAuthority>,
+    origin: TrafficOrigin,
 ) where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -4155,7 +4289,7 @@ async fn handle_transparent_tls<S>(
         // Every connection takes this path, so debug-level: the capture
         // start warning has already said why HTTPS is not captured.
         debug!(%sni, %upstream_host, dst_port, "TLS connection tunneled without capture: the device does not trust the Tapsmith CA");
-        record_passthrough_entry(&state, &sni, dst_port).await;
+        record_passthrough_entry(&state, &sni, dst_port, origin).await;
         tunnel_tls_passthrough(client, hello.recorded, upstream_host, dst_port, &sni).await;
         return;
     }
@@ -4174,7 +4308,7 @@ async fn handle_transparent_tls<S>(
             mitm_rejected = mitm_rejected_passthrough,
             "TLS connection tunneled without capture (ALPN, passthrough host, or MITM certificate reject)"
         );
-        record_passthrough_entry(&state, &sni, dst_port).await;
+        record_passthrough_entry(&state, &sni, dst_port, origin).await;
         tunnel_tls_passthrough(client, hello.recorded, upstream_host, dst_port, &sni).await;
         return;
     }
@@ -4223,7 +4357,7 @@ async fn handle_transparent_tls<S>(
             // just as uncapturable, and is the common case when the device
             // trusts a different Tapsmith CA (PILOT-712).
             if is_likely_client_cert_reject(&e) {
-                state.lock().await.record_tls_reject(&sni_key);
+                state.lock().await.record_tls_reject(&sni_key, origin);
             }
             if offers_h2(&hello.alpn) {
                 let alpn_dbg = hello
@@ -5256,6 +5390,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            os_service_tls_rejected_hosts: BTreeSet::new(),
             tunnel_all_tls: None,
         }));
 
@@ -5562,6 +5697,7 @@ mod tests {
             is_https: true,
             in_flight: false,
             capture_id: 0,
+            os_service: false,
             route_action: String::new(),
         });
 
@@ -5892,6 +6028,22 @@ mod tests {
         Arc::new(config)
     }
 
+    /// A `NetworkProxy` handle over `state` with no listener, for tests that
+    /// drive the connection handlers directly.
+    fn test_proxy_handle(state: Arc<Mutex<ProxyState>>) -> NetworkProxy {
+        let dir = tempfile::tempdir().unwrap();
+        let ca =
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap();
+        NetworkProxy {
+            port: 0,
+            state,
+            mitm_ca: Arc::new(ca),
+            shutdown_tx: tokio::sync::watch::channel(()).0,
+            capture_session: uuid::Uuid::new_v4().to_string(),
+        }
+    }
+
     fn empty_proxy_state(passthrough_hosts: Vec<String>) -> Arc<Mutex<ProxyState>> {
         let mut root_store = rustls::RootCertStore::empty();
         root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -5917,6 +6069,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            os_service_tls_rejected_hosts: BTreeSet::new(),
             tunnel_all_tls: None,
         }))
     }
@@ -6156,23 +6309,115 @@ mod tests {
         assert!(result.is_err(), "client must reject the MITM certificate");
         proxy_task.await.unwrap();
 
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let proxy = NetworkProxy {
-            port: 0,
-            state: state.clone(),
-            shutdown_tx: tx,
-            capture_session: "test".to_string(),
-        };
+        let proxy = test_proxy_handle(state.clone());
         assert_eq!(
-            proxy.take_tls_rejected_hosts().await,
-            vec!["api.example.com"]
+            proxy.take_tls_rejects().await,
+            TlsRejects {
+                hosts: vec!["api.example.com".to_string()],
+                os_service_hosts: Vec::new(),
+            }
         );
-        assert!(
-            proxy.take_tls_rejected_hosts().await.is_empty(),
+        assert_eq!(
+            proxy.take_tls_rejects().await,
+            TlsRejects::default(),
             "a drain clears the reported hosts"
         );
         // http/1.1 never arms the h2 passthrough fallback.
         assert!(state.lock().await.mitm_rejected_hosts.is_empty());
+    }
+
+    // PILOT-782: a connection accepted on the OS-service listener is an OS
+    // service's, so its certificate reject is reported apart from the app's
+    // and its passthrough marker is tagged; the main listener is unchanged.
+    #[tokio::test]
+    async fn os_service_listener_reports_its_rejects_and_passthroughs_apart() {
+        let dir = tempfile::tempdir().unwrap();
+        let ca = Arc::new(
+            MitmAuthority::generate_new(&dir.path().join("ca.pem"), &dir.path().join("ca-key.pem"))
+                .unwrap(),
+        );
+        let proxy = NetworkProxy::start(ca).await.unwrap();
+        let os_port = proxy.start_os_service_listener().await.unwrap();
+        assert_ne!(os_port, proxy.port());
+        proxy
+            .set_passthrough_hosts(
+                vec!["pinned.invalid".to_string()],
+                EmbeddedRootDefaults::Skip,
+            )
+            .await;
+
+        // A client that does not trust the Tapsmith CA, once per listener.
+        let (_server_config, origin_cert) = origin_server_config("api.example.com", &[b"http/1.1"]);
+        for (port, host) in [
+            (proxy.port(), "app.example.com"),
+            (os_port, "gms.example.com"),
+        ] {
+            let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let server_name = rustls::pki_types::ServerName::try_from(host.to_string()).unwrap();
+            let result = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                TlsConnector::from(client_config_trusting(&origin_cert, &[b"http/1.1"]))
+                    .connect(server_name, tcp),
+            )
+            .await
+            .unwrap();
+            assert!(
+                result.is_err(),
+                "{host}: client must reject the MITM certificate"
+            );
+        }
+        // A passthrough host on each listener: the marker is recorded before
+        // the (unresolvable) upstream dial.
+        for port in [proxy.port(), os_port] {
+            let tcp = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+            let server_name =
+                rustls::pki_types::ServerName::try_from("pinned.invalid".to_string()).unwrap();
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                TlsConnector::from(client_config_trusting(&origin_cert, &[b"http/1.1"]))
+                    .connect(server_name, tcp),
+            )
+            .await;
+        }
+
+        // The handshake failure reaches the proxy task asynchronously.
+        let rejects = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                {
+                    let s = proxy.state.lock().await;
+                    if !s.tls_rejected_hosts.is_empty()
+                        && !s.os_service_tls_rejected_hosts.is_empty()
+                    {
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await;
+        assert!(rejects.is_ok(), "both rejects are recorded");
+        assert_eq!(
+            proxy.take_tls_rejects().await,
+            TlsRejects {
+                hosts: vec!["app.example.com".to_string()],
+                os_service_hosts: vec!["gms.example.com".to_string()],
+            }
+        );
+        let markers: Vec<bool> = proxy
+            .drain_entries()
+            .await
+            .into_iter()
+            .filter(|e| e.route_action == "passthrough")
+            .map(|e| e.os_service)
+            .collect();
+        let mut sorted = markers.clone();
+        sorted.sort();
+        assert_eq!(
+            sorted,
+            vec![false, true],
+            "one marker per listener, tagged by origin"
+        );
+        proxy.stop().await;
     }
 
     // PILOT-711: on an emulator where the CA could not be installed (Google
@@ -6190,13 +6435,7 @@ mod tests {
         let origin_port = spawn_tls_origin(server_config, b"real-origin").await;
 
         let state = empty_proxy_state(Vec::new());
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let proxy = NetworkProxy {
-            port: 0,
-            state: state.clone(),
-            shutdown_tx: tx,
-            capture_session: "test".to_string(),
-        };
+        let proxy = test_proxy_handle(state.clone());
         proxy
             .set_tunnel_all_tls(Some("CA not installed".to_string()))
             .await;
@@ -6234,8 +6473,9 @@ mod tests {
             entries[0].url,
             format!("https://api.example.com:{origin_port}/")
         );
-        assert!(
-            proxy.take_tls_rejected_hosts().await.is_empty(),
+        assert_eq!(
+            proxy.take_tls_rejects().await,
+            TlsRejects::default(),
             "a tunneled connection is not a certificate reject"
         );
     }
@@ -6246,19 +6486,18 @@ mod tests {
         {
             let mut s = state.lock().await;
             for i in 0..(MAX_TLS_REJECTED_HOSTS + 10) {
-                s.record_tls_reject(&format!("h{i}.example.com"));
+                s.record_tls_reject(&format!("h{i}.example.com"), TrafficOrigin::Unattributed);
+                s.record_tls_reject(&format!("o{i}.example.com"), TrafficOrigin::OsService);
             }
             assert_eq!(s.tls_rejected_hosts.len(), MAX_TLS_REJECTED_HOSTS);
+            assert_eq!(
+                s.os_service_tls_rejected_hosts.len(),
+                MAX_TLS_REJECTED_HOSTS
+            );
         }
-        let (tx, _rx) = tokio::sync::oneshot::channel();
-        let proxy = NetworkProxy {
-            port: 0,
-            state: state.clone(),
-            shutdown_tx: tx,
-            capture_session: "test".to_string(),
-        };
+        let proxy = test_proxy_handle(state.clone());
         proxy.reset_capture_state().await;
-        assert!(proxy.take_tls_rejected_hosts().await.is_empty());
+        assert_eq!(proxy.take_tls_rejects().await, TlsRejects::default());
     }
 
     #[tokio::test]
@@ -6384,6 +6623,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            os_service_tls_rejected_hosts: BTreeSet::new(),
             tunnel_all_tls: None,
         }));
 
@@ -6627,6 +6867,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            os_service_tls_rejected_hosts: BTreeSet::new(),
             tunnel_all_tls: None,
         }))
     }
@@ -7023,6 +7264,7 @@ mod tests {
                 port,
                 proxy.state.clone(),
                 ca,
+                TrafficOrigin::Unattributed,
             ));
             let (client, conn) = h2::client::handshake(tcp).await.unwrap();
             tokio::spawn(async move {
@@ -7171,16 +7413,7 @@ mod tests {
         tokio::spawn(async move {
             let _ = conn.await;
         });
-        let (shutdown_tx, _) = tokio::sync::oneshot::channel();
-        (
-            NetworkProxy {
-                port: 0,
-                state,
-                shutdown_tx,
-                capture_session: uuid::Uuid::new_v4().to_string(),
-            },
-            send,
-        )
+        (test_proxy_handle(state), send)
     }
 
     async fn open_echo_stream(
@@ -7479,6 +7712,7 @@ mod tests {
             mitm_rejected_hosts: HashSet::new(),
             mitm_handshake_aborts: HashMap::new(),
             tls_rejected_hosts: BTreeSet::new(),
+            os_service_tls_rejected_hosts: BTreeSet::new(),
             tunnel_all_tls: None,
         }))
     }
@@ -7731,6 +7965,7 @@ mod tests {
             is_https: true,
             in_flight: false,
             capture_id: 0,
+            os_service: false,
             route_action: String::new(),
         };
         for _ in 0..40 {
