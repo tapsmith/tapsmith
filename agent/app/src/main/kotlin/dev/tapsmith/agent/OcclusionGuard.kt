@@ -195,6 +195,7 @@ class OcclusionGuard(
         override val drawingOrder: Int by lazy { if (Build.VERSION.SDK_INT >= 24) node.drawingOrder else 0 }
         override val isVisible: Boolean by lazy { node.isVisibleToUser }
         override val takesTouches: Boolean by lazy { node.isClickable || node.isLongClickable }
+        override val offersDismiss: Boolean by lazy { node.isDismissable }
         private val childCount: Int by lazy { node.childCount }
         private val children = HashMap<Int, A11yHitNode?>()
 
