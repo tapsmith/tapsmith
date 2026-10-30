@@ -37,6 +37,18 @@ test.describe("Worker startup", () => {
     await expect(runControls.workerChip("iPhone 16")).toBeVisible()
   })
 
+  test("a page reconnecting to a new session drops the old session's devices while it starts", async ({ ui, runControls }) => {
+    // A tab left open on a pinned --ui-port reconnects to the next session
+    // while its workers start; the old chips would claim devices are ready.
+    ui.seed([...idleSeed(singleFileTree()), WORKERS])
+    await ui.open()
+    await expect(runControls.workerChips).toHaveCount(2)
+
+    ui.send({ type: "workers-starting", ready: 0, total: 2 })
+    await expect(runControls.workerChips).toHaveCount(0)
+    await expect(runControls.workersStarting).toHaveText("Starting devices… 0/2")
+  })
+
   test("a single device says it is starting, with no count", async ({ ui, runControls }) => {
     ui.seed([...idleSeed(singleFileTree()), { type: "workers-starting", ready: 0, total: 1 }])
     await ui.open()

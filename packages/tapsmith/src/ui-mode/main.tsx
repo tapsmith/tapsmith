@@ -1236,6 +1236,10 @@ function App() {
         break;
       }
       case 'workers-starting':
+        // This session's workers are not up yet: any chips held from before a
+        // reconnect belong to an earlier session (a tab left open on a pinned
+        // --ui-port), and would claim devices are ready that are not.
+        setWorkers([]);
         setWorkersStarting({ ready: msg.ready, total: msg.total });
         break;
       case 'workers-info':
