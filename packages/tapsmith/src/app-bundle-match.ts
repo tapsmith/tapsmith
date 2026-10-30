@@ -1,5 +1,5 @@
 /**
- * Whole-bundle "same build" check for an installed app (PILOT-913).
+ * Whole-bundle "same build" check for an installed app.
  *
  * An app bundle is a directory tree, and a rebuild can change any file in
  * it: since Xcode 15, a Debug build's main executable is a stub that never

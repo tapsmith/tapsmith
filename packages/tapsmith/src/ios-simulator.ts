@@ -351,7 +351,7 @@ export function installAppIfAbsent(
  * with an app from a previous job; local reruns follow app rebuilds), and
  * skipping install on a stale bundle silently tests old app code. Nor is any
  * one file: a Debug build's main executable is a stub that stays identical
- * across rebuilds, its code being in `<App>.debug.dylib` (PILOT-913). Any
+ * across rebuilds, its code being in `<App>.debug.dylib`. Any
  * lookup or read failure returns false so callers reinstall — the only cost
  * of a false negative is one redundant install.
  */
