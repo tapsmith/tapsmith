@@ -95,6 +95,10 @@ import {
   matchesTestFile,
 } from '../test-file-discovery.js';
 import { filesToRediscover } from './ui-rediscovery.js';
+import { WorkerStartupGate } from './worker-startup.js';
+
+/** No worker came up at startup, and none can be respawned: there is no device chip to respawn from. */
+const NO_WORKER_STARTED_MESSAGE = 'No test worker could be started — the terminal says why. Fix that, then restart UI mode.';
 
 // ─── SPA paths ───
 
@@ -816,6 +820,22 @@ export async function startUIServer(
   const launchProgress = options.launchProgress;
   const uiWorkers: UIWorkerHandle[] = [];
   let workersInitialized = false;
+  /** How many of the session's workers are up while they start (`workers-starting`). */
+  const startupProgress = {
+    ready: 0,
+    total: workersEnabled ? Math.max(1, Math.min(ctx.workers ?? workerSerials.length, workerSerials.length)) : 0,
+  };
+  /** When the run waiting on startup was requested (its elapsed time counts from here). */
+  let startupWaitStartedAt = 0;
+  /**
+   * The page, MCP and watch can ask for a run before the workers are up; it
+   * waits here, and the page shows it waiting (PILOT-936).
+   */
+  const workerStartup = new WorkerStartupGate(workersEnabled, (waiting) => {
+    if (!waiting) return;
+    startupWaitStartedAt = Date.now();
+    broadcast({ type: 'run-state', isRunning: true, startedAt: startupWaitStartedAt, waitingForWorkers: true });
+  });
   /** Which worker's device to mirror. Defaults to 0. */
   let selectedWorkerId = 0;
   let lastMirrorInteraction = 0;
@@ -1744,14 +1764,26 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }
   }
 
-  const NO_WORKER_MESSAGE = 'No test worker is available for this device — check the startup log, then use "Respawn worker".';
+  /**
+   * Why a run has no worker, naming a control that exists: a worker that died
+   * has a device chip whose menu respawns it; with none started there is none.
+   */
+  function noWorkerMessage(): string {
+    return uiWorkers.length === 0
+      ? NO_WORKER_STARTED_MESSAGE
+      : 'No test worker is available — the terminal says why. Right-click a device in the top bar and choose "Respawn worker", or restart UI mode.';
+  }
   /** Every run needs at least one live worker; without one, say so instead of hanging. */
   function reportNoWorkers(): TestRunResult {
-    broadcast({ type: 'error', message: NO_WORKER_MESSAGE });
+    broadcast({ type: 'error', message: noWorkerMessage() });
     return { status: 'failed', passed: 0, failed: 0, skipped: 0, duration: 0 };
   }
 
-  async function runProjectOnly(projectName: string): Promise<void> {
+  function runProjectOnly(projectName: string): Promise<void> {
+    return afterWorkerStartup(() => runProjectOnlyNow(projectName), () => undefined);
+  }
+
+  async function runProjectOnlyNow(projectName: string): Promise<void> {
     if (!ctx.projects) return;
     const target = ctx.projects.find((p) => p.name === projectName);
     if (!target) return;
@@ -1888,7 +1920,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       ? path.resolve(ctx.config.rootDir, rawBin)
       : rawBin;
 
-    const numWorkers = Math.max(1, Math.min(ctx.workers ?? workerSerials.length, workerSerials.length));
+    const numWorkers = startupProgress.total;
 
     if (launchProgress) {
       launchProgress.start('ui-workers', `starting ${numWorkers} UI worker(s)`);
@@ -1938,6 +1970,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
             },
             onReady: () => {
               readyWorkerCount++;
+              startupProgress.ready = readyWorkerCount;
+              broadcast(workersStartingMessage());
               launchProgress?.update('ui-workers', {
                 state: 'running',
                 detail: `Worker ${i} (${deviceSerial}): ready`,
@@ -2000,7 +2034,11 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }
 
     if (uiWorkers.length === 0) {
-      const message = 'No test worker could be started — runs will fail until a worker is respawned.';
+      // A device target that could not start is tried again by a run of its
+      // tests (its notice above says so); otherwise only a restart helps.
+      const message = ctx.unavailableTargets.size > 0
+        ? 'No test worker could be started — running a device target\'s tests tries it again.'
+        : NO_WORKER_STARTED_MESSAGE;
       if (launchProgress) launchProgress.fail('ui-workers', message);
       else console.error(`${YELLOW}${message}${RESET}`);
       workersInitialized = true;
@@ -2453,7 +2491,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   function unservableReason(file: TaggedFile): string {
     const bucket = bucketOfFile(file);
     return (bucket && ctx.unavailableTargets.reason(bucket))
-      ?? 'No worker could run this file: its device target has no live worker. Use "Respawn worker", or restart UI mode.';
+      ?? 'No worker could run this file: its device target has no live worker. Right-click its device in the top bar and choose "Respawn worker", or restart UI mode.';
   }
 
   /** The tests of a file in the tree: under its project, narrowed by its test filter. */
@@ -2592,6 +2630,96 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     for (const w of started) broadcastWorkerStatus(w, 'idle');
   }
 
+  function workersStartingMessage(): ServerMessage {
+    return { type: 'workers-starting', ready: startupProgress.ready, total: startupProgress.total };
+  }
+
+  /** One `error` per device target the session went on without (PILOT-415). */
+  function unavailableTargetNotices(): ServerMessage[] {
+    return ctx.unavailableTargets.entries().map(({ signature }) => ({
+      type: 'error',
+      message: ctx.unavailableTargets.notice(signature, 'Its tests fail until it starts; running them again retries it.')!,
+    }));
+  }
+
+  /**
+   * What a client needs to know about the session's workers: sent on connect,
+   * and broadcast when startup ends so a page opened while the workers were
+   * starting learns of them without a reload (PILOT-936).
+   */
+  function workerStateMessages(): ServerMessage[] {
+    if (!workersInitialized) {
+      const messages: ServerMessage[] = [];
+      if (workerStartup.starting) messages.push(workersStartingMessage());
+      if (ctx.deviceSerial) {
+        messages.push({
+          type: 'device-info',
+          serial: singleWorkerDisplayName ?? ctx.deviceSerial,
+          model: undefined,
+          isEmulator: isEmulatorOrSimulator(ctx.deviceSerial, singleWorkerPlatform),
+          platform: singleWorkerPlatform,
+          tapsmithVersion: TAPSMITH_VERSION,
+          devicePixelRatio: cachedScreenScale(ctx.deviceSerial, singleWorkerPlatform),
+        });
+      }
+      return messages;
+    }
+    const messages: ServerMessage[] = [workersInfoMessage()];
+    // Device info for the selected worker
+    const selectedWorker = uiWorkers.find((w) => w.id === selectedWorkerId);
+    if (selectedWorker) {
+      const platform = resolveWorkerPlatform(ctx, selectedWorker);
+      messages.push({
+        type: 'device-info',
+        serial: selectedWorker.displayName || selectedWorker.deviceSerial,
+        model: undefined,
+        isEmulator: isEmulatorOrSimulator(selectedWorker.deviceSerial, platform),
+        platform,
+        tapsmithVersion: TAPSMITH_VERSION,
+        devicePixelRatio: cachedScreenScale(selectedWorker.deviceSerial, platform),
+      });
+    }
+    // Current worker statuses (including currentFile/currentTest)
+    for (const w of uiWorkers) {
+      messages.push(workerStatusMessage(w, w.retired ? 'error' : w.busy ? 'running' : 'idle'));
+    }
+    messages.push({ type: 'preferences', preferences });
+    messages.push(...deviceActivityBuffer);
+    // Replay in-flight slow-action labels ("Clearing app data…") so a
+    // client that connects mid-preflight sees what the device is doing.
+    for (const [workerId, message] of lastProgressByWorker) {
+      messages.push({ type: 'run-progress', workerId, message });
+    }
+    // Replay active tests so they highlight as running in the tree.
+    // worker-status updates the worker panel but not the tree nodes.
+    for (const w of uiWorkers) {
+      if (w.busy && w.currentFile && w.currentTest) {
+        messages.push({
+          type: 'test-status',
+          fullName: w.currentTest,
+          filePath: w.currentFile.filePath,
+          status: 'running',
+          projectName: w.currentFile.projectName,
+          workerId: w.id,
+        });
+      }
+    }
+    return messages;
+  }
+
+  /**
+   * Startup is over, whether or not a worker came up: tell every page already
+   * open what it has, then let a run that waited for it go ahead.
+   */
+  function finishWorkerStartup(): void {
+    for (const msg of workerStateMessages()) broadcast(msg);
+    for (const msg of unavailableTargetNotices()) broadcast(msg);
+    if (uiWorkers.length === 0 && ctx.unavailableTargets.size === 0) {
+      broadcast({ type: 'error', message: NO_WORKER_STARTED_MESSAGE });
+    }
+    workerStartup.finish();
+  }
+
   function workersInfoMessage(): ServerMessage {
     return {
       type: 'workers-info',
@@ -2648,12 +2776,13 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // Reached with only unavailable targets keeping the session runnable:
       // fail the rest alongside the target's files, so the counts and the
       // tree agree, rather than throwing them away.
+      const message = noWorkerMessage();
       for (const f of fileQueue) {
-        const n = failUnservableFile(f, NO_WORKER_MESSAGE);
+        const n = failUnservableFile(f, message);
         failed += n;
         if (n > 0 && f.projectName) failedProjectsInDispatch.add(f.projectName);
       }
-      broadcast({ type: 'error', message: NO_WORKER_MESSAGE });
+      broadcast({ type: 'error', message });
       return { passed, failed, skipped, duration, anyFailed: true, failedProjectNames: failedProjectsInDispatch };
     }
 
@@ -3221,6 +3350,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
    * poll loops. Wedged workers are SIGKILLed after STOP_GRACE_MS.
    */
   function stopRun(): void {
+    // A run still waiting for the workers to start ends here (`afterWorkerStartup` reports it).
+    if (workerStartup.cancel()) return;
     if (!isRunning) return;
     stopRequested = true;
     stopParallelRun();
@@ -3538,10 +3669,39 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   const useParallel = () => workersEnabled && workersInitialized
     && (uiWorkers.some((w) => !w.retired) || ctx.unavailableTargets.size > 0);
 
+  /**
+   * Run `run` once the session's workers have started (PILOT-936). A run asked
+   * for while they start waits, shown to the page as a waiting run (Stop ends
+   * it); one asked for while another already waits is refused as busy.
+   */
+  async function afterWorkerStartup<T>(run: () => Promise<T>, notRun: (result: TestRunResult) => T): Promise<T> {
+    const { outcome, waited } = await workerStartup.wait();
+    if (outcome === 'busy') return notRun(runInProgressResult());
+    if (outcome === 'stopped') {
+      const stopped: TestRunResult = { status: 'stopped', passed: 0, failed: 0, skipped: 0, duration: 0 };
+      broadcast({ type: 'run-end', ...stopped });
+      lastRunEnd = stopped;
+      return notRun(stopped);
+    }
+    if (!waited) return run();
+    // Still running as far as the page knows, no longer waiting; the run's
+    // own run-start follows.
+    broadcast({ type: 'run-state', isRunning: true, startedAt: startupWaitStartedAt });
+    try {
+      return await run();
+    } finally {
+      // A run that never started (no worker came up, say) sent no run-end:
+      // without this the page would show it running for good.
+      if (!isRunning) broadcast({ type: 'run-state', isRunning: false });
+    }
+  }
+
   async function runFile(filePath: string, testFilter?: string, explicitProjectName?: string): Promise<TestRunResult> {
-    await ensureWorkersReady();
-    if (!useParallel()) return reportNoWorkers();
-    return runFileParallel(filePath, runFilterForFile(filePath, testFilter), explicitProjectName);
+    return afterWorkerStartup(async () => {
+      await ensureWorkersReady();
+      if (!useParallel()) return reportNoWorkers();
+      return runFileParallel(filePath, runFilterForFile(filePath, testFilter), explicitProjectName);
+    }, (result) => result);
   }
 
   /** Parallel-mode batch dispatch: send multiple TaggedFile entries to
@@ -3583,12 +3743,18 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     selection?: ReadonlyMap<string, readonly string[] | undefined>,
     runDeps?: boolean,
   ): Promise<TestRunResult> {
-    await ensureWorkersReady();
-    if (!useParallel()) return reportNoWorkers();
-    return runAllFilesParallel(selection, runDeps);
+    return afterWorkerStartup(async () => {
+      await ensureWorkersReady();
+      if (!useParallel()) return reportNoWorkers();
+      return runAllFilesParallel(selection, runDeps);
+    }, (result) => result);
   }
 
-  async function runProject(projectName: string): Promise<void> {
+  function runProject(projectName: string): Promise<void> {
+    return afterWorkerStartup(() => runProjectNow(projectName), () => undefined);
+  }
+
+  async function runProjectNow(projectName: string): Promise<void> {
     await ensureWorkersReady();
     if (!useParallel()) { reportNoWorkers(); return; }
     // Project runs with deps use the same wave-based approach in parallel
@@ -3668,7 +3834,11 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     }
   }
 
-  async function runFileWithDeps(filePath: string, requestedFilter?: string, explicitProjectName?: string): Promise<void> {
+  function runFileWithDeps(filePath: string, requestedFilter?: string, explicitProjectName?: string): Promise<void> {
+    return afterWorkerStartup(() => runFileWithDepsNow(filePath, requestedFilter, explicitProjectName), () => undefined);
+  }
+
+  async function runFileWithDepsNow(filePath: string, requestedFilter?: string, explicitProjectName?: string): Promise<void> {
     const testFilter = runFilterForFile(filePath, requestedFilter);
     await ensureWorkersReady();
     if (!useParallel()) { reportNoWorkers(); return; }
@@ -5011,7 +5181,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
     // Sync run state so the client knows whether a run is in progress.
     // Sent before test results so the Running indicator appears immediately.
-    ws.send(JSON.stringify({ type: 'run-state', isRunning, startedAt: runStartedAt } satisfies ServerMessage));
+    ws.send(JSON.stringify(workerStartup.waiting
+      ? { type: 'run-state', isRunning: true, startedAt: startupWaitStartedAt, waitingForWorkers: true }
+      : { type: 'run-state', isRunning, startedAt: runStartedAt } satisfies ServerMessage));
 
     // Replay accumulated test results so a reconnecting client (e.g. after
     // the laptop wakes from sleep) sees the same passed/failed statuses it
@@ -5052,76 +5224,17 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
     // The session went on without these targets: say so to every client,
     // not only the terminal (PILOT-415).
-    for (const { signature } of ctx.unavailableTargets.entries()) {
-      ws.send(JSON.stringify({
-        type: 'error',
-        message: ctx.unavailableTargets.notice(signature, 'Its tests fail until it starts; running them again retries it.')!,
-      } satisfies ServerMessage));
-    }
+    for (const msg of unavailableTargetNotices()) ws.send(JSON.stringify(msg));
 
     ws.send(JSON.stringify(getMcpStatus()));
     for (const mcpMsg of mcpToolCallBuffer) {
       ws.send(JSON.stringify(mcpMsg));
     }
 
-    if (workersInitialized) {
-      // Send workers info
-      ws.send(JSON.stringify(workersInfoMessage()));
-
-      // Send device info for selected worker
-      const selectedWorker = uiWorkers.find((w) => w.id === selectedWorkerId);
-      if (selectedWorker) {
-        const platform = resolveWorkerPlatform(ctx, selectedWorker);
-        ws.send(JSON.stringify({
-          type: 'device-info',
-          serial: selectedWorker.displayName || selectedWorker.deviceSerial,
-          model: undefined,
-          isEmulator: isEmulatorOrSimulator(selectedWorker.deviceSerial, platform),
-          platform,
-          tapsmithVersion: TAPSMITH_VERSION,
-          devicePixelRatio: cachedScreenScale(selectedWorker.deviceSerial, platform),
-        } satisfies ServerMessage));
-      }
-
-      // Send current worker statuses (including currentFile/currentTest)
-      for (const w of uiWorkers) {
-        ws.send(JSON.stringify(workerStatusMessage(w, w.retired ? 'error' : w.busy ? 'running' : 'idle')));
-      }
-      ws.send(JSON.stringify({ type: 'preferences', preferences } satisfies ServerMessage));
-      for (const activity of deviceActivityBuffer) {
-        ws.send(JSON.stringify(activity));
-      }
-      // Replay in-flight slow-action labels ("Clearing app data…") so a
-      // client that connects mid-preflight sees what the device is doing.
-      for (const [workerId, message] of lastProgressByWorker) {
-        ws.send(JSON.stringify({ type: 'run-progress', workerId, message } satisfies ServerMessage));
-      }
-
-      // Replay active tests so they highlight as running in the tree.
-      // worker-status updates the worker panel but not the tree nodes.
-      for (const w of uiWorkers) {
-        if (w.busy && w.currentFile && w.currentTest) {
-          ws.send(JSON.stringify({
-            type: 'test-status',
-            fullName: w.currentTest,
-            filePath: w.currentFile.filePath,
-            status: 'running' as const,
-            projectName: w.currentFile.projectName,
-            workerId: w.id,
-          } satisfies ServerMessage));
-        }
-      }
-    } else if (ctx.deviceSerial) {
-      ws.send(JSON.stringify({
-        type: 'device-info',
-        serial: singleWorkerDisplayName ?? ctx.deviceSerial,
-        model: undefined,
-        isEmulator: isEmulatorOrSimulator(ctx.deviceSerial, singleWorkerPlatform),
-        platform: singleWorkerPlatform,
-        tapsmithVersion: TAPSMITH_VERSION,
-        devicePixelRatio: cachedScreenScale(ctx.deviceSerial, singleWorkerPlatform),
-      } satisfies ServerMessage));
-    }
+    // Workers, devices and their state — or, while they start, how far along
+    // they are. A client that connects first gets the same set the moment
+    // startup ends (PILOT-936).
+    for (const msg of workerStateMessages()) ws.send(JSON.stringify(msg));
 
     // Replay watch state so toggle icons restore on reconnect.
     // Derive project-level watches from watchedEntries rather than tracking
@@ -5244,7 +5357,11 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
   // Initialize multi-worker if configured
   if (workersEnabled) {
-    await initializeWorkers();
+    try {
+      await initializeWorkers();
+    } finally {
+      finishWorkerStartup();
+    }
   }
 
   // Start screen polling
