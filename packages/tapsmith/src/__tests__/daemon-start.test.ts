@@ -151,6 +151,35 @@ describe('awaitDaemonStart()', () => {
     expect(outcome).toEqual({ ok: true });
   });
 
+  // Losing the port race, ours usually exits (bind failure) before the other
+  // daemon's answer arrives: that is still a taken port, not a crash.
+  it('reports a taken port when ours exits and another daemon answers on the address', async () => {
+    const { child, capture } = start(fakeDaemon('echo "Error: Address already in use (os error 48)" >&2\nexit 1'));
+    const outcome = await awaitDaemonStart(
+      ours(child),
+      probe(async () => { await new Promise((r) => setTimeout(r, 200)); return true; }, { instanceId: 'instance-theirs', pid: 4242 }),
+      { budgetMs: 30_000, address: 'localhost:50051' },
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      cause: 'another tapsmith-core (pid 4242) answered on localhost:50051, so the one this session started could not take that port',
+      spawnFailed: false,
+      portTaken: true,
+    });
+    capture.dispose();
+  });
+
+  it('reports a taken port when ours exits and a daemon too old to name itself answers: it cannot be ours', async () => {
+    const { child, capture } = start(fakeDaemon('exit 1'));
+    const outcome = await awaitDaemonStart(
+      ours(child),
+      probe(async () => { await new Promise((r) => setTimeout(r, 100)); return true; }, { instanceId: '', pid: 0 }),
+      { budgetMs: 30_000, address: 'localhost:50051' },
+    );
+    expect(outcome).toMatchObject({ ok: false, portTaken: true, cause: expect.stringContaining('another tapsmith-core (pid unknown)') });
+    capture.dispose();
+  });
+
   it('keeps waiting while what answers cannot be asked who it is, and reports our daemon\'s exit', async () => {
     const { child, capture } = start(fakeDaemon('sleep 0.3\necho "Error: Address already in use (os error 48)" >&2\nexit 1'));
     const outcome = await awaitDaemonStart(

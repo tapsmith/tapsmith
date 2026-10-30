@@ -221,6 +221,28 @@ export function planDaemonPort(opts: {
 
 // ─── Waiting for it to answer ───
 
+/** How long a daemon that exited before answering gives the port's new holder to answer. */
+const TAKEN_PORT_PROBE_MS = 2_000;
+
+/** `promise`, or undefined once `ms` have passed. */
+async function within<T>(ms: number, promise: Promise<T>): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([promise, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function portTaken(who: { pid?: number }, address: string): DaemonStartFailed {
+  return {
+    ok: false,
+    cause: `another tapsmith-core (pid ${who.pid || 'unknown'}) answered on ${address}, so the one this session started could not take that port`,
+    spawnFailed: false,
+    portTaken: true,
+  };
+}
+
 /** The client calls {@link awaitDaemonStart} needs: a `TapsmithGrpcClient` on the daemon's address. */
 export interface DaemonProbe {
   waitForReady(timeoutMs: number): Promise<boolean>
@@ -259,7 +281,9 @@ export async function awaitDaemonStart(
     ended ??= outcome;
     notifyEnded();
   };
+  let exited = false;
   const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+    exited = true;
     end({
       ok: false,
       cause: signal
@@ -288,22 +312,13 @@ export async function awaitDaemonStart(
       const answered = await Promise.race([probe.waitForReady(window), endedPromise.then(() => false)]);
       if (answered && !ended) {
         // Bounded by the budget: a ping carries a long deadline of its own.
-        let pingTimer: NodeJS.Timeout | undefined;
-        const who = await Promise.race([
-          probe.ping().then((answer) => answer, () => undefined),
-          endedPromise.then(() => undefined),
-          new Promise<undefined>((resolve) => { pingTimer = setTimeout(() => resolve(undefined), Math.max(0, deadline - Date.now())); }),
-        ]);
-        clearTimeout(pingTimer);
+        const who = await within(
+          Math.max(0, deadline - Date.now()),
+          Promise.race([probe.ping().then((answer) => answer, () => undefined), endedPromise.then(() => undefined)]),
+        );
         if (who && !ended) {
-          const pid = who.pid ?? 0;
-          if ((who.instanceId ?? '') === daemon.instanceId || (pid === 0 && !who.instanceId)) return { ok: true };
-          return {
-            ok: false,
-            cause: `another tapsmith-core (pid ${pid}) answered on ${opts.address}, so the one this session started could not take that port`,
-            spawnFailed: false,
-            portTaken: true,
-          };
+          if ((who.instanceId ?? '') === daemon.instanceId || (!who.pid && !who.instanceId)) return { ok: true };
+          return portTaken(who, opts.address);
         }
         // It could not be asked: not answering after all, or something that
         // is no Tapsmith daemon. Wait on, for ours to answer or exit.
@@ -319,6 +334,15 @@ export async function awaitDaemonStart(
     }
   } finally {
     child.off('exit', onExit);
+  }
+  // Ours exited before it answered. Losing the race for the port ends that
+  // way too: ours fails to bind and exits, usually before the daemon that
+  // took the port has answered us. Whatever answers there now is not ours.
+  if (exited) {
+    const who = await within(TAKEN_PORT_PROBE_MS, probe.waitForReady(TAKEN_PORT_PROBE_MS)
+      .then((ready) => (ready ? probe.ping() : undefined))
+      .catch(() => undefined));
+    if (who) return portTaken(who, opts.address);
   }
   return ended ?? {
     ok: false,
