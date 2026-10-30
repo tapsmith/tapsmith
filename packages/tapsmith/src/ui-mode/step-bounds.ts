@@ -5,31 +5,24 @@ type ElementBounds = NonNullable<StepEvent['bounds']>;
 
 /**
  * The element box UI mode draws for a step: its own recorded bounds, or the
- * box of the step right before it when the two are provably about the same
- * element.
+ * box of the step right before it when the step is a passing value assertion
+ * checking what that step read, e.g. `expect(await el.textContent()).toBe(...)`
+ * (value assertions have no element of their own to look up).
  *
- * Borrowing is for the chains where the recorder could not look the element
- * up itself:
- * - a passing value assertion (no selector) checking what the step before
- *   read, e.g. `expect(await el.textContent()).toBe(...)`;
- * - a passing action on the same element whose own bounds lookup missed.
- *
- * Never borrowed: a failed step (nothing matched — `show-trace` shows no box
- * either), a step on another element or device, a device-level action, or a
- * locator assertion (expect.ts records no bounds on purpose when the element
- * is hidden or gone, rather than a box over empty space).
+ * Nothing else borrows. A failed step has nothing on screen to point at
+ * (`show-trace` shows no box either). A locator assertion or an action that
+ * recorded no bounds did look its element up and found it hidden or gone:
+ * `toBeHidden`, `waitFor({ state: 'detached' })`, `isVisible()` returning
+ * false, `count()` returning 0. A borrowed box there would sit over empty
+ * space. Bounds never cross devices.
  */
 export function inheritedStepBounds(
   ev: StepEvent,
   previous: StepEvent | undefined,
 ): ElementBounds | undefined {
   if (ev.bounds) return ev.bounds;
-  if (!previous?.bounds) return undefined;
-  if (ev.deviceId !== previous.deviceId) return undefined;
-  if (ev.type === 'assertion') {
-    return ev.passed !== false && !ev.selector ? previous.bounds : undefined;
-  }
-  return ev.success !== false && ev.selector !== undefined && ev.selector === previous.selector
-    ? previous.bounds
-    : undefined;
+  const isValueAssertion = ev.type === 'assertion' && !ev.selector;
+  if (!isValueAssertion || ev.passed === false) return undefined;
+  if (!previous?.bounds || ev.deviceId !== previous.deviceId) return undefined;
+  return previous.bounds;
 }

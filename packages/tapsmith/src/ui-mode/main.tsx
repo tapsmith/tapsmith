@@ -1130,8 +1130,8 @@ function App() {
           }
 
           // Completed (or no lifecycle = legacy completed). Append event.
-          // Borrow the previous step's box only where it is provably the same
-          // element (inheritedStepBounds) — never for a failed step (PILOT-920).
+          // Only a passing value assertion borrows the previous step's box
+          // (inheritedStepBounds) — never a failed step (PILOT-920).
           let eventToStore = ev;
           if ((ev.type === 'assertion' || ev.type === 'action') && !ev.bounds) {
             const inherited = inheritedStepBounds(ev, data.actionEvents.at(-1));

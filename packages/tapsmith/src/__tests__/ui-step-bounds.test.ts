@@ -81,15 +81,25 @@ describe('inheritedStepBounds (PILOT-920)', () => {
     expect(inheritedStepBounds(assertion({ assertion: 'toBe', passed: false }), read)).toBeUndefined();
   });
 
-  it('carries the box to an action on the same element whose own lookup missed', () => {
+  it('gives an action that recorded no bounds no box, even on the same element', () => {
+    // Its own lookup ran; no bounds means the element was not found then.
     const prev = action({ selector: WELCOME_SEL, bounds: WELCOME });
-    expect(inheritedStepBounds(action({ selector: WELCOME_SEL }), prev)).toEqual(WELCOME);
-  });
-
-  it('gives a failed action on the same element no box', () => {
-    const prev = action({ selector: WELCOME_SEL, bounds: WELCOME });
+    expect(inheritedStepBounds(action({ selector: WELCOME_SEL }), prev)).toBeUndefined();
     expect(inheritedStepBounds(action({ selector: WELCOME_SEL, success: false }), prev)).toBeUndefined();
   });
+
+  // Queries that succeed precisely because the element is gone (or that never
+  // look bounds up) record the same selector and no bounds.
+  for (const query of ['waitFor', 'isVisible', 'isHidden', 'exists', 'count', 'all', 'allTextContents']) {
+    it(`gives a successful ${query}() after acting on the same element no box`, () => {
+      const tap = action({ selector: WELCOME_SEL, bounds: WELCOME });
+      const probe = action({ category: 'other', action: query, selector: WELCOME_SEL });
+      expect(inheritedStepBounds(probe, tap)).toBeUndefined();
+      // Nor does a value assertion on its answer pick the box up through it.
+      const stored = { ...probe, bounds: inheritedStepBounds(probe, tap) };
+      expect(inheritedStepBounds(assertion({ assertion: 'toBe' }), stored)).toBeUndefined();
+    });
+  }
 
   it('gives a locator assertion that recorded no bounds no box, even on the same element', () => {
     // tap(x) then expect(x).toBeHidden(): the recorder leaves bounds unset
