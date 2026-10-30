@@ -53,7 +53,7 @@ import {
   listBootedSimulators,
   type ClonedSimulator,
 } from './ios-simulator.js';
-import { freeStaleAgentPort, findPidsOnPort } from './port-utils.js';
+import { freeStaleAgentPort } from './port-utils.js';
 import { describeUnusableAndroidDevice, isUsableAndroidState, moreDevicesAdvice, noOnlineDeviceMessage, workerStartAdvice } from './device-advice.js';
 import { androidToolchainBlocker, iosToolchainBlocker, toolchainBlocker } from './toolchain.js';
 import type { AdbDevice } from './adb-devices.js';
@@ -1226,7 +1226,7 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
 
   // Wait for daemon to be ready
   const discoveryClient = new TapsmithGrpcClient(`localhost:${firstDaemonPort}`);
-  const firstDaemonStart = await awaitDaemonStart(firstDaemon, (ms) => discoveryClient.waitForReady(ms), {
+  const firstDaemonStart = await awaitDaemonStart(firstDaemonSpawn, discoveryClient, {
     budgetMs: 10_000,
     address: `localhost:${firstDaemonPort}`,
   });
@@ -1236,24 +1236,6 @@ export async function runParallel(opts: DispatcherOptions, _portOffset = 0): Pro
     throw await firstDaemonFailure(firstDaemonStart);
   }
   firstDaemonOutput.dispose();
-
-  // Verify the daemon we connected to is actually OUR firstDaemon and not a
-  // stale tapsmith-core left over from a previous run squatting on the same port.
-  // If our spawn failed to bind silently (firstDaemon.on('error') swallows it),
-  // waitForReady would have happily connected to the squatter, and the entire
-  // run would proceed against an incoherent daemon — wrong simulators, wrong
-  // worker config, mysterious test failures. Fail fast with a clear hint
-  // instead of autonomously killing the squatter (it might belong to another
-  // concurrent Tapsmith run, which the slot allocator would handle by walking).
-  const listenerPids = findPidsOnPort(firstDaemonPort);
-  if (firstDaemon.pid !== undefined && !listenerPids.includes(firstDaemon.pid)) {
-    firstDaemon.kill();
-    const squatterHint = listenerPids.length > 0
-      ? `Port ${firstDaemonPort} is held by PID ${listenerPids.join(', ')}. A stale tapsmith-core daemon may be running.\nRun: lsof -ti tcp:${firstDaemonPort} | xargs kill`
-      : `Port ${firstDaemonPort} is held by an unknown process.\nRun: lsof -ti tcp:${firstDaemonPort} | xargs kill`;
-    failStep('daemon', 'spawned process bound to a different port');
-    throw new LaunchSetupError(`Failed to start worker daemon: spawned process bound to a different port.\n${squatterHint}`);
-  }
 
   // Discover available devices
   const deviceList = await discoveryClient.listDevices();
@@ -2332,7 +2314,7 @@ async function initializeWorker(opts: InitializeWorkerOptions): Promise<WorkerHa
     proc.unref();
 
     const client = new TapsmithGrpcClient(`localhost:${port}`);
-    const started = await awaitDaemonStart(proc, (ms) => client.waitForReady(ms), {
+    const started = await awaitDaemonStart(spawned, client, {
       budgetMs: 10_000,
       address: `localhost:${port}`,
     });

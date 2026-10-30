@@ -137,7 +137,11 @@ others), and a pinned one that is held is refused with an error naming the
 session that holds it.
 
 A daemon the server finds rather than starts — on its `daemonAddress`, by
-default `localhost:50051` — is never moved to another platform: one that is
+default `localhost:50051` — is used only if no other Tapsmith session started
+it: a `tapsmith test` run's daemon is left to that run, even when the run
+uses another HOME or has not picked its device yet, and the server
+starts its own. A daemon you start by hand (`tapsmith-core --port 50051`) is
+used. Nor is a found daemon ever moved to another platform: one that is
 driving an Android device, or serves only Android devices, is not used for
 iOS, and the other way round. An iOS config next to an Android `tapsmith test`
 starts its own daemon instead of taking that run's. The

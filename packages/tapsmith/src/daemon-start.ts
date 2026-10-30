@@ -10,6 +10,7 @@
  */
 
 import { spawn, type ChildProcess, type SpawnOptions, type StdioOptions } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -107,9 +108,29 @@ export interface DaemonStartFailed {
   spawnFailed: boolean
   /** What to do about a binary that could not be run, in place of the install question. */
   spawnHint?: string
+  /**
+   * Another daemon answered on the address — one that took the port first, so
+   * ours could not bind it. Starting again on a free port can succeed.
+   */
+  portTaken?: true
 }
 
 export type DaemonStartOutcome = { ok: true } | DaemonStartFailed;
+
+/**
+ * The environment variable each daemon a session spawns is started with, set
+ * to a fresh value: the daemon reports it back from `Ping`, which is how the
+ * session tells the daemon it started from another one answering on the same
+ * address.
+ */
+export const DAEMON_INSTANCE_ENV = 'TAPSMITH_DAEMON_INSTANCE';
+
+/** A spawned daemon, and the instance id it was started with. */
+export interface SpawnedDaemon {
+  ok: true
+  child: ChildProcess
+  instanceId: string
+}
 
 /**
  * macOS's "Bad CPU type in executable". Node has no name for it, so it
@@ -133,9 +154,11 @@ export function spawnDaemonBinary(
   bin: string,
   args: readonly string[],
   options: SpawnOptions,
-): { ok: true; child: ChildProcess } | DaemonStartFailed {
+): SpawnedDaemon | DaemonStartFailed {
+  const instanceId = randomUUID();
+  const env = { ...(options.env ?? process.env), [DAEMON_INSTANCE_ENV]: instanceId };
   try {
-    return { ok: true, child: spawn(bin, args, options) };
+    return { ok: true, child: spawn(bin, args, { ...options, env }), instanceId };
   } catch (err) {
     const errno = err as NodeJS.ErrnoException;
     if (!(err instanceof Error) || errno.syscall !== 'spawn') throw err;
@@ -156,24 +179,101 @@ export function spawnDaemonBinary(
   }
 }
 
+// ─── Choosing its port ───
+
+/** What to do with the port a daemon was asked to start on. */
+export type DaemonPortPlan =
+  /** Start there, after stopping these daemons of this process's that are still exiting. */
+  | { kind: 'take'; stopOwn: number[] }
+  /** Leave whoever holds it alone and start on a free port. */
+  | { kind: 'move'; reason: string };
+
+/**
+ * Whether `tapsmith test` may start its daemon on `port`.
+ *
+ * A daemon answering there belongs to another live session. So may one that
+ * holds the port without answering a short probe: still starting, or slow on
+ * a loaded machine — or the port's listener is no daemon at all. None of
+ * those is ours to stop. A daemon that has lost its session shuts down by
+ * itself (it watches the process that started it), so the only listeners this
+ * process stops are its own earlier daemons that are still exiting.
+ */
+export function planDaemonPort(opts: {
+  port: string
+  /** Whether a daemon answered a probe on the port. */
+  answered: boolean
+  /** The processes listening on it. */
+  listeners: readonly number[]
+  /** Daemons this process started and has since stopped. */
+  ownDaemons: ReadonlySet<number>
+}): DaemonPortPlan {
+  if (opts.answered) return { kind: 'move', reason: `port ${opts.port} is in use by another Tapsmith session` };
+  const others = opts.listeners.filter((pid) => !opts.ownDaemons.has(pid));
+  if (others.length > 0) {
+    return {
+      kind: 'move',
+      reason: `port ${opts.port} is held by pid ${others.join(', ')}, which did not answer as a Tapsmith daemon in time `
+        + '(it may be another session\'s daemon still starting)',
+    };
+  }
+  return { kind: 'take', stopOwn: [...opts.listeners] };
+}
+
 // ─── Waiting for it to answer ───
+
+/** How long a daemon that exited before answering gives the port's new holder to answer. */
+const TAKEN_PORT_PROBE_MS = 2_000;
+
+/** `promise`, or undefined once `ms` have passed. */
+async function within<T>(ms: number, promise: Promise<T>): Promise<T | undefined> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([promise, new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), ms); })]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function portTaken(who: { pid?: number }, address: string): DaemonStartFailed {
+  return {
+    ok: false,
+    cause: `another tapsmith-core (pid ${who.pid || 'unknown'}) answered on ${address}, so the one this session started could not take that port`,
+    spawnFailed: false,
+    portTaken: true,
+  };
+}
+
+/** The client calls {@link awaitDaemonStart} needs: a `TapsmithGrpcClient` on the daemon's address. */
+export interface DaemonProbe {
+  waitForReady(timeoutMs: number): Promise<boolean>
+  ping(): Promise<{ instanceId?: string; pid?: number }>
+}
 
 /**
  * Wait for a just-spawned daemon to answer, for up to `budgetMs` — and stop
  * waiting the moment it exits or cannot be spawned, which a gRPC readiness
  * wait alone cannot see: a daemon that died at once used to be waited out
- * for the whole budget. `ready` is asked in windows of `windowMs` (grpc-js
+ * for the whole budget. Readiness is asked in windows of `windowMs` (grpc-js
  * backs off between connection attempts, so one long wait can sleep through
  * the moment the daemon comes up).
+ *
+ * Something answering is not enough: it must be *this* daemon.
+ * Another daemon that took the port first answers there too, while ours
+ * fails to bind it — and a session that took the answer as its own drove
+ * another session's daemon and device. So whatever answers is asked its
+ * instance id, and one that is not ours is reported (`portTaken`), never
+ * adopted. A daemon too old to report one (no pid either) cannot be told
+ * apart and is accepted, as before.
  *
  * Call it straight after `spawn`, in the same tick, so an immediate spawn
  * error is not missed.
  */
 export async function awaitDaemonStart(
-  child: ChildProcess,
-  ready: (timeoutMs: number) => Promise<boolean>,
+  daemon: { child: ChildProcess; instanceId: string },
+  probe: DaemonProbe,
   opts: { budgetMs: number; windowMs?: number; address: string },
 ): Promise<DaemonStartOutcome> {
+  const { child } = daemon;
   let ended: DaemonStartOutcome | undefined;
   let notifyEnded!: () => void;
   const endedPromise = new Promise<void>((resolve) => { notifyEnded = resolve; });
@@ -181,7 +281,9 @@ export async function awaitDaemonStart(
     ended ??= outcome;
     notifyEnded();
   };
+  let exited = false;
   const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
+    exited = true;
     end({
       ok: false,
       cause: signal
@@ -207,8 +309,20 @@ export async function awaitDaemonStart(
       if (remaining <= 0) break;
       const window = Math.min(windowMs, remaining);
       const windowEnd = Date.now() + window;
-      const answered = await Promise.race([ready(window), endedPromise.then(() => false)]);
-      if (answered) return { ok: true };
+      const answered = await Promise.race([probe.waitForReady(window), endedPromise.then(() => false)]);
+      if (answered && !ended) {
+        // Bounded by the budget: a ping carries a long deadline of its own.
+        const who = await within(
+          Math.max(0, deadline - Date.now()),
+          Promise.race([probe.ping().then((answer) => answer, () => undefined), endedPromise.then(() => undefined)]),
+        );
+        if (who && !ended) {
+          if ((who.instanceId ?? '') === daemon.instanceId || (!who.pid && !who.instanceId)) return { ok: true };
+          return portTaken(who, opts.address);
+        }
+        // It could not be asked: not answering after all, or something that
+        // is no Tapsmith daemon. Wait on, for ours to answer or exit.
+      }
       // A wait that gave up early (a closed channel) must not become a busy
       // loop: sit out the rest of the window, still watching for an exit.
       const rest = windowEnd - Date.now();
@@ -220,6 +334,15 @@ export async function awaitDaemonStart(
     }
   } finally {
     child.off('exit', onExit);
+  }
+  // Ours exited before it answered. Losing the race for the port ends that
+  // way too: ours fails to bind and exits, usually before the daemon that
+  // took the port has answered us. Whatever answers there now is not ours.
+  if (exited) {
+    const who = await within(TAKEN_PORT_PROBE_MS, probe.waitForReady(TAKEN_PORT_PROBE_MS)
+      .then((ready) => (ready ? probe.ping() : undefined))
+      .catch(() => undefined));
+    if (who) return portTaken(who, opts.address);
   }
   return ended ?? {
     ok: false,

@@ -495,6 +495,14 @@ message PingRequest {}
 message PingResponse {
   string version = 1;
   bool agent_connected = 2;
+  // Who answered (PILOT-914). The value of the TAPSMITH_DAEMON_INSTANCE
+  // environment variable the daemon was started with: a Tapsmith session sets
+  // a fresh one on every daemon it spawns, and checks it here to know that
+  // what answers on the port is the daemon it started rather than another
+  // session's. Empty for a daemon started by hand.
+  string instance_id = 3;
+  // The daemon's process id, so a session can name a daemon it will not use.
+  uint32 pid = 4;
 }
 
 // ─── Element Actions (PILOT-2) ───

@@ -525,7 +525,10 @@ devices.
   ```
 
 - **Daemons** another session is driving a device through are never adopted or repointed, including the one on
-  the default `localhost:50051` that a headless MCP server or a `tapsmith test` would otherwise connect to.
+  the default `localhost:50051` that a headless MCP server or a `tapsmith test` would otherwise connect to. A
+  session uses only the daemon it started. If another session's daemon takes the port first, `tapsmith test`
+  starts its own on a free port, and other modes stop with an error naming the other daemon's pid. A session
+  never stops a daemon it did not start, even one that is slow to answer.
 - **`tapsmith list-devices`** shows which session holds each device (`inUseBy` in `--json`).
 
 A session's claims end when it exits, and a claim stands only while a process of that session that claimed it

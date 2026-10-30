@@ -466,7 +466,7 @@ export async function runWatchMode(ctx: WatchModeContext): Promise<void> {
     spawned.push(daemonProcess);
 
     const daemonClient = new TapsmithGrpcClient(`localhost:${daemonPort}`);
-    const daemonStart = await awaitDaemonStart(daemonProcess, (ms) => daemonClient.waitForReady(ms), {
+    const daemonStart = await awaitDaemonStart(daemonSpawn, daemonClient, {
       budgetMs: 10_000,
       address: `localhost:${daemonPort}`,
     });

@@ -119,6 +119,14 @@ export interface ListDevicesResponse {
 export interface PingResponse {
   version: string;
   agentConnected: boolean;
+  /**
+   * The instance id the daemon was started with (`TAPSMITH_DAEMON_INSTANCE`),
+   * empty for one started by hand. Absent from a daemon that
+   * predates the field, along with `pid`.
+   */
+  instanceId?: string;
+  /** The daemon's process id; 0 or absent from a daemon that predates the field. */
+  pid?: number;
 }
 
 // ─── Device Management (PILOT-10) ───

@@ -25,13 +25,13 @@ type Device = Pick<DeviceInfoProto, 'serial' | 'state' | 'platform'>;
 let listDevices: (address: string) => Promise<{ devices: Device[] }>;
 let setDevice: (address: string, serial: string) => Promise<{ success: boolean }>;
 let startAgent: (address: string) => Promise<unknown>;
-let ping: (address: string) => Promise<{ version: string; agentConnected?: boolean }>;
+let ping: (address: string) => Promise<{ version: string; agentConnected?: boolean; instanceId?: string; pid?: number }>;
 let readyAt: (address: string) => boolean;
 vi.mock('../grpc-client.js', () => ({
   TapsmithGrpcClient: class {
     constructor(readonly address: string) {}
     waitForReady(): Promise<boolean> { return Promise.resolve(readyAt(this.address)); }
-    ping(): Promise<{ version: string; agentConnected?: boolean }> { return ping(this.address); }
+    ping(): Promise<{ version: string; agentConnected?: boolean; instanceId?: string; pid?: number }> { return ping(this.address); }
     listDevices(): Promise<{ devices: Device[] }> { return listDevices(this.address); }
     setDevice(serial: string): Promise<{ success: boolean }> { return setDevice(this.address, serial); }
     startAgent(): Promise<unknown> { return startAgent(this.address); }
@@ -303,6 +303,53 @@ describe('a found daemon serving another platform', () => {
   });
 });
 
+// PILOT-914: a daemon another Tapsmith session started answers on the default
+// port (or the config's address) like any other. The claims registry cannot
+// see that session when it runs under another HOME, or in the moment before
+// it claims a device — and adopting its daemon as `configured` repointed it at
+// this session's device and app, so that session's next reset ran against
+// ours. What a session starts reports the instance id it was started with.
+describe('a found daemon another Tapsmith session started', () => {
+  const theirs = (address: string): Promise<{ version: string; agentConnected: boolean; instanceId?: string; pid?: number }> =>
+    Promise.resolve(address === FOREIGN
+      ? { version: 'test', agentConnected: true, instanceId: 'their-session', pid: 4242 }
+      : { version: 'test', agentConnected: false });
+  const androidEverywhere = (): Promise<{ devices: Device[] }> =>
+    Promise.resolve({ devices: [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }, { serial: 'emulator-5556', state: 'Discovered', platform: 'android' }] });
+
+  it('is not adopted from the default address, even by a session of its platform: it starts its own', async () => {
+    mcpConfig = { ...baseConfig, platform: 'android', daemonAddress: undefined };
+    listDevices = androidEverywhere;
+    ping = theirs;
+
+    await ensureConnected();
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(getAllDaemonAddresses()).not.toContain('50051');
+    expect(stderr).toContain(`Ignoring ${FOREIGN} — another Tapsmith session started it (daemon pid 4242)`);
+    expect(calls.filter((c) => c.includes(FOREIGN))).toEqual([]);
+  });
+
+  it('is not adopted from the config\'s address either', async () => {
+    mcpConfig = { ...baseConfig, platform: 'android' };
+    listDevices = androidEverywhere;
+    ping = theirs;
+
+    await ensureConnected();
+    expect(getAllDaemonAddresses()).not.toContain('50051');
+    expect(calls.filter((c) => c.includes(FOREIGN))).toEqual([]);
+  });
+
+  it('is told from a daemon started by hand, which reports no instance id and is still adopted', async () => {
+    mcpConfig = { ...baseConfig, platform: 'android', daemonAddress: undefined };
+    listDevices = androidEverywhere;
+    ping = () => Promise.resolve({ version: 'test', agentConnected: true, instanceId: '', pid: 4242 });
+
+    await ensureConnected();
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(getAllDaemonAddresses()).toBe(FOREIGN);
+  });
+});
+
 describe('the UI server\'s MCP endpoint', () => {
   let server: http.Server;
   const uiPrimary = 'localhost:51999';
@@ -393,7 +440,8 @@ describe('the UI server\'s MCP endpoint', () => {
     mcpConfig = { ...baseConfig, platform: 'android' };
     await serveUi({ daemons: [], owned: ['127.0.0.1:50051'], devices: [] });
     listDevices = () => Promise.resolve({ devices: [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }] });
-    ping = () => Promise.resolve({ version: 'test', agentConnected: true });
+    // The UI session started it, so it reports that session's instance id.
+    ping = () => Promise.resolve({ version: 'test', agentConnected: true, instanceId: 'ui-session', pid: 4242 });
     configureMcpConnection({ uiMode: true });
 
     await ensureConnected();

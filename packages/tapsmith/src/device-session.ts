@@ -274,7 +274,7 @@ export async function startDaemon(
   const client = new TapsmithGrpcClient(address);
   let started: DaemonStartOutcome;
   try {
-    started = await awaitDaemonStart(child, (ms) => client.waitForReady(ms), {
+    started = await awaitDaemonStart(spawned, client, {
       budgetMs: opts.timeoutMs ?? 10_000,
       address,
     });

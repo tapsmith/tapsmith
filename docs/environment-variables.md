@@ -64,6 +64,7 @@ These are set by Tapsmith internally and generally should not be modified by use
 | `TAPSMITH_DEVICE_SESSION` | Set once by the CLI or MCP server at startup and inherited by every forked worker: the session that claims devices (see [Several sessions on one machine](parallel-and-sharding.md#several-sessions-on-one-machine)). Every process of one invocation claims as that session. Not intended to be set by hand. |
 | `TAPSMITH_TELEMETRY_SESSION` | Set once by the CLI or MCP server at startup and inherited by every forked worker, so all of one invocation's telemetry events share a `session_id`. Not intended to be set by hand. |
 | `TAPSMITH_DAEMON_ADDRESS` | Comma-separated daemon addresses. Used internally by MCP server mode. |
+| `TAPSMITH_DAEMON_INSTANCE` | Set to a fresh value on each `tapsmith-core` a session starts. The daemon reports it back, so the session uses the daemon it started and never another one answering on the same port. Not intended to be set by hand. |
 | `TAPSMITH_UI_DEV_URL` | Development server URL for UI mode's frontend. Internal use only. |
 
 ## Examples

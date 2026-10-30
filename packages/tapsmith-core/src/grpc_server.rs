@@ -154,6 +154,11 @@ async fn android_agent_start_diagnostics(serial: &str) -> String {
     out
 }
 
+/// The environment variable a Tapsmith session sets to a fresh value on each
+/// daemon it spawns. `Ping` reports it back, so the session can tell the
+/// daemon it started from another one answering on the same port (PILOT-914).
+pub(crate) const DAEMON_INSTANCE_ENV: &str = "TAPSMITH_DAEMON_INSTANCE";
+
 pub struct TapsmithServiceImpl {
     device_manager: Arc<RwLock<DeviceManager>>,
     agent: Arc<RwLock<AgentConnection>>,
@@ -3229,6 +3234,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         Ok(Response::new(proto::PingResponse {
             version: env!("CARGO_PKG_VERSION").to_string(),
             agent_connected,
+            instance_id: std::env::var(DAEMON_INSTANCE_ENV).unwrap_or_default(),
+            pid: std::process::id(),
         }))
     }
 
@@ -6266,6 +6273,7 @@ fn capture_port_update(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::proto::tapsmith_service_server::TapsmithService;
     use serde_json::json;
 
     #[test]
@@ -6341,6 +6349,28 @@ mod tests {
         assert!(msg.contains("start it again"), "{msg}");
         assert!(msg.contains("passed through"), "{msg}");
         assert!(msg.contains("device.route()"), "{msg}");
+    }
+
+    // PILOT-914: a session tells its own daemon from another one on the same
+    // port by the instance id it started it with, echoed by Ping.
+    #[tokio::test]
+    async fn ping_reports_the_instance_id_it_was_started_with_and_its_pid() {
+        let svc = test_service();
+        std::env::set_var(DAEMON_INSTANCE_ENV, "session-nonce-1");
+        let with = svc
+            .ping(Request::new(proto::PingRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        std::env::remove_var(DAEMON_INSTANCE_ENV);
+        let without = svc
+            .ping(Request::new(proto::PingRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(with.instance_id, "session-nonce-1");
+        assert_eq!(with.pid, std::process::id());
+        assert_eq!(without.instance_id, "", "a daemon started by hand has none");
     }
 
     fn test_service() -> TapsmithServiceImpl {

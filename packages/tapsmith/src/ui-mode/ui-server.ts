@@ -2249,7 +2249,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
 
       daemonClient = new TapsmithGrpcClient(`localhost:${daemonPort}`);
       const client = daemonClient;
-      const daemonStart = await awaitDaemonStart(daemonProcess, (ms) => client.waitForReady(ms), {
+      const daemonStart = await awaitDaemonStart(daemonSpawn, client, {
         budgetMs: 10_000,
         address: `localhost:${daemonPort}`,
       });

@@ -856,6 +856,22 @@ async function discover(): Promise<void> {
     }
   }
 
+  // A daemon found at an address rather than started or adopted from the
+  // registry is ours to drive only when nobody else started it (PILOT-914).
+  // One a Tapsmith session started reports that session's instance id; its
+  // session is alive as long as it is (a daemon stops with the process that
+  // started it), and the claims registry cannot see that session when it runs
+  // under another HOME or has not claimed a device yet. A daemon started by
+  // hand reports none. A UI session's own daemons, which its endpoint is
+  // here to drive, are the exception.
+  const startedByAnotherSession = async (client: TapsmithGrpcClient, address: string, source: DaemonSource): Promise<boolean> => {
+    if (source !== 'configured' || uiOwnsCandidates || _connections.some((c) => c.address === address)) return false;
+    const who = await client.ping().catch(() => undefined);
+    if (!who?.instanceId) return false;
+    log(`Ignoring ${address} — another Tapsmith session started it (daemon pid ${who.pid ?? 'unknown'})`);
+    return true;
+  };
+
   // Probe candidates in parallel
   type LiveDaemon = { client: TapsmithGrpcClient; address: string; source: DaemonSource; claimedDevice?: string };
   const probeAll = async (entries: Array<[string, DaemonSource]>): Promise<LiveDaemon[]> => {
@@ -864,6 +880,10 @@ async function discover(): Promise<void> {
       try {
         client = new TapsmithGrpcClient(address);
         const alive = await client.waitForReady(1_000);
+        if (alive && await startedByAnotherSession(client, address, source)) {
+          client.close();
+          return null;
+        }
         if (alive) return { client, address, source };
         client.close();
       } catch {
@@ -1151,7 +1171,7 @@ export async function startDaemon(
     const client = new TapsmithGrpcClient(address);
     // Ends early when the daemon exits or cannot be spawned, which a gRPC
     // readiness wait cannot see.
-    const started = await awaitDaemonStart(daemonProcess, (ms) => client.waitForReady(ms), {
+    const started = await awaitDaemonStart(daemonSpawn, client, {
       budgetMs: 10_000,
       address,
     });
