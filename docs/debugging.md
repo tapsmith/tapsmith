@@ -397,7 +397,7 @@ Now and then, as an iOS simulator run or session ends, macOS shows a crash dialo
 
 **What to do:**
 
-- Nothing, usually: dismiss the dialog (or choose **Ignore**). `tapsmith doctor` reports these crashes from the last 7 days as `ios-springboard-crashes`, so you can tell them apart from a crash of your own.
+- Nothing, usually: dismiss the dialog (or choose **Ignore**). On a Mac with Xcode, `tapsmith doctor` reports these crashes from the last 7 days as `ios-springboard-crashes`, so you can tell them apart from a crash of your own.
 - To get a notification instead of the dialog for every crash report on your Mac, run `defaults write com.apple.CrashReporter UseUNC 1` (`defaults delete com.apple.CrashReporter UseUNC` undoes it). This is a macOS-wide setting, so Tapsmith never changes it for you.
 
 ### Tapsmith was loaded without `import.meta.dirname`
