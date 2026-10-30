@@ -5587,6 +5587,141 @@ describe('scrollIntoView no-op on already-visible targets (PILOT-283)', () => {
   });
 });
 
+describe('scrollIntoView() picks the swipe direction from where the element is (PILOT-891)', () => {
+  const onScreen = { left: 0, top: 372, right: 340, bottom: 502 };
+  // iOS lists off-screen elements with their real frames (PILOT-800).
+  const above = { left: 0, top: -900, right: 340, bottom: -770 };
+  const below = { left: 0, top: 1400, right: 340, bottom: 1530 };
+  const leftOf = { left: -800, top: 372, right: -460, bottom: 502 };
+
+  /** findElements answers from `script` in order, repeating the last entry. */
+  function scripted(script: (ElementInfo | null)[]) {
+    let i = 0;
+    return vi.fn(async () => {
+      const el = script[Math.min(i++, script.length - 1)];
+      return makeFindElementsResponse(el ? [el] : []);
+    });
+  }
+  const offScreen = (bounds: ElementInfo['bounds']) => makeElementInfo({ visible: false, bounds });
+  const visible = makeElementInfo({ visible: true, bounds: onScreen });
+  const directions = (swipe: ReturnType<typeof vi.fn>) => swipe.mock.calls.map((c) => c[0]);
+
+  it('swipes "down" (revealing what is above) for an element whose frame is above the screen', async () => {
+    // Probe + confirming re-probe both see it above; one swipe brings it on.
+    const findElements = scripted([offScreen(above), offScreen(above), visible]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView();
+
+    expect(directions(swipe)).toEqual(['down']);
+  });
+
+  it('swipes "up" (revealing what is below) for an element whose frame is below the screen', async () => {
+    const findElements = scripted([offScreen(below), offScreen(below), visible]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Item 80'), 5000).scrollIntoView();
+
+    expect(directions(swipe)).toEqual(['up']);
+  });
+
+  it('swipes "right" (revealing what is to the left) for an element whose frame is left of the screen', async () => {
+    const findElements = scripted([offScreen(leftOf), offScreen(leftOf), visible]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Card 1'), 5000).scrollIntoView();
+
+    expect(directions(swipe)).toEqual(['right']);
+  });
+
+  it('swipes "up", the old default, while the element is not in the tree (Android lists on-screen nodes only)', async () => {
+    const findElements = scripted([null, null, null, visible]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Item 25'), 5000).scrollIntoView();
+
+    expect(directions(swipe)).toEqual(['up', 'up']);
+  });
+
+  it('treats a zero-size frame (a row Android clipped out of view) as an unknown position', async () => {
+    const clipped = offScreen({ left: 0, top: 0, right: 0, bottom: 0 });
+    const findElements = scripted([clipped, clipped, visible]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Item 25'), 5000).scrollIntoView();
+
+    expect(directions(swipe)).toEqual(['up']);
+  });
+
+  it('keeps the last direction its position called for while the element drops out of the tree', async () => {
+    const findElements = scripted([offScreen(above), offScreen(above), null, visible]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView();
+
+    expect(directions(swipe)).toEqual(['down', 'down']);
+  });
+
+  it('re-reads the position before every swipe, so an overshoot is scrolled back', async () => {
+    const findElements = scripted([offScreen(above), offScreen(above), offScreen(below), visible]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView();
+
+    expect(directions(swipe)).toEqual(['down', 'up']);
+  });
+
+  it('an explicit direction overrides the position', async () => {
+    const findElements = scripted([offScreen(above), offScreen(above), offScreen(above), visible]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction: 'up' });
+
+    expect(directions(swipe)).toEqual(['up', 'up']);
+  });
+
+  it('names the directions its position chose when it gives up', async () => {
+    const findElements = scripted([offScreen(above), offScreen(above), offScreen(below)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await expect(new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(
+      'scrollIntoView: getByText("Item 1", { exact: true }) was not visible after 2 scroll(s) in direction "down", then "up" ' +
+        '(chosen from where the element was)',
+    );
+  });
+
+  it('says the position was unknown, and how to scroll up instead, when the element never showed its frame', async () => {
+    const findElements = scripted([null]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await expect(new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(
+      'scrollIntoView: getByText("Item 1", { exact: true }) was not visible after 1 scroll(s) in direction "up" ' +
+        '(the default: the element was not on screen or in the tree, so its position was not known; ' +
+        'pass { direction: "down" } for an element above the screen)',
+    );
+  });
+
+  it('keeps the explicit-direction failure message', async () => {
+    const findElements = scripted([null]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await expect(
+      new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction: 'down', maxScrolls: 1 }),
+    ).rejects.toThrow(/was not visible after 1 scroll\(s\) in direction "down"$/);
+  });
+});
+
 describe("scrollIntoView honours the handle's modifiers (PILOT-345)", () => {
   const rowBounds = (top: number) => ({ left: 0, top, right: 400, bottom: top + 60 });
   const row = (id: string, text: string, visible: boolean, top: number) =>

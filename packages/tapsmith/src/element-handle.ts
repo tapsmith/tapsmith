@@ -708,6 +708,27 @@ function isOffScreen(el: ElementInfo): boolean {
 }
 
 /**
+ * The swipe that moves `el` toward the screen, judged from its frame
+ * (PILOT-891), for a `scrollIntoView()` given no direction. Directions are the
+ * way the finger moves, as `scrollIntoView({ direction })` takes them: an
+ * element above the screen needs `"down"`, one to its left `"right"`.
+ *
+ * Below the screen and to its right look alike without the screen's size,
+ * which the SDK does not know, so any other off-screen frame gets `"up"`
+ * (reveal what is below), the documented default. An element with no usable
+ * frame — not in the tree (Android lists on-screen nodes only), without
+ * bounds, or zero-size (a row Android clipped out of view) — has no known
+ * position: `undefined`.
+ */
+function swipeToward(el: ElementInfo | undefined): SwipeDirection | undefined {
+  if (!el || !isOffScreen(el)) return undefined;
+  const b = el.bounds!;
+  if (b.bottom <= 0) return 'down';
+  if (b.right <= 0) return 'right';
+  return 'up';
+}
+
+/**
  * The advice both platforms give when a tap-family action cannot reach its
  * element because it may be off-screen. Tapsmith's taps do not scroll, unlike
  * a Playwright click: Android cannot see an off-screen row to scroll to, so
@@ -3548,11 +3569,18 @@ export class ElementHandle {
   /**
    * Scroll the viewport until this element is visible on screen.
    *
-   * Repeatedly swipes in the given direction, checking visibility between
-   * each attempt. Useful for reaching elements that are off-screen in a
-   * scrollable container (e.g. a long list of navigation cards).
+   * Repeatedly swipes, checking visibility between each attempt. Useful for
+   * reaching elements that are off-screen in a scrollable container (e.g. a
+   * long list of navigation cards).
    *
-   * @param options.direction - Swipe direction: `"up"` (scroll down), `"down"` (scroll up). Default `"up"`.
+   * Without a `direction`, each swipe goes the way the element lies, when the
+   * device reports where it is (iOS lists off-screen elements with their
+   * frames): `"down"` for one above the screen, `"right"` for one to its left,
+   * `"up"` otherwise. While its position is unknown (Android lists only
+   * on-screen elements), it keeps the last direction used, starting with
+   * `"up"`, which reveals what is below.
+   *
+   * @param options.direction - Swipe direction, the way the finger moves: `"up"` (scroll down), `"down"` (scroll up), `"left"`, `"right"`. Default: chosen from the element's position, else `"up"`.
    * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`.
    * @param options.speed - Swipe speed in pixels/second. Default `2000`.
    */
@@ -3562,7 +3590,7 @@ export class ElementHandle {
     speed?: number;
   }): Promise<void> {
     checkOptions('scrollIntoView()', options, ['direction', 'maxScrolls', 'speed']);
-    const direction = options?.direction ?? 'up';
+    const explicitDirection = options?.direction;
     const maxScrolls = options?.maxScrolls ?? 5;
     const speed = options?.speed ?? 2000;
 
@@ -3580,7 +3608,7 @@ export class ElementHandle {
     // pinned app bar so the follow-up tap silently misses (PILOT-283).
     const probe = async (): Promise<
       | { outcome: 'visible'; el: ElementInfo }
-      | { outcome: 'miss' }
+      | { outcome: 'miss'; el?: ElementInfo }
       | { outcome: 'unreliable' }
     > => {
       // One modifier-aware read: filter/and/or/scope and the positional index
@@ -3610,7 +3638,9 @@ export class ElementHandle {
           return { outcome: 'miss' };
         case 'found':
           lastTransientErr = undefined;
-          return tick.element.visible ? { outcome: 'visible', el: tick.element } : { outcome: 'miss' };
+          return tick.element.visible
+            ? { outcome: 'visible', el: tick.element }
+            : { outcome: 'miss', el: tick.element };
       }
     };
 
@@ -3626,6 +3656,13 @@ export class ElementHandle {
       // still 0) would re-trigger the idle wait on the next miss, stacking
       // redundant multi-second delays.
       let confirmedFirstMiss = false;
+      // With no explicit direction (PILOT-891): the direction of the last
+      // swipe, kept while the element's position is unknown; the directions
+      // used, in order, for the failure message; and whether any of them came
+      // from the element's frame rather than the default.
+      let direction: string = explicitDirection ?? 'up';
+      const directionsUsed: string[] = [];
+      let positioned = false;
       for (;;) {
         let result = await probe();
 
@@ -3749,6 +3786,15 @@ export class ElementHandle {
         }
         // Affirmative miss with the swipe budget spent — give up.
         if (swipes >= maxScrolls) break;
+        if (explicitDirection === undefined) {
+          // Re-judged before every swipe, so an overshoot is scrolled back.
+          const toward = swipeToward(result.el);
+          if (toward) {
+            direction = toward;
+            positioned = true;
+          }
+        }
+        if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
         const swipeRes = await this._client.swipe(direction, { speed, distance: 0.6 });
         if (!swipeRes.success) {
           throw new Error(swipeRes.errorMessage || 'Swipe failed during scrollIntoView');
@@ -3758,9 +3804,15 @@ export class ElementHandle {
       }
 
       if (lastTransientErr) throw lastTransientErr;
-      throw new Error(
-        `scrollIntoView: ${this._describe()} was not visible after ${swipes} scroll(s) in direction "${direction}"`,
-      );
+      const used = directionsUsed.length ? directionsUsed : [direction];
+      let how = `in direction ${used.map((d) => `"${d}"`).join(', then ')}`;
+      if (explicitDirection === undefined && swipes > 0) {
+        how += positioned
+          ? ' (chosen from where the element was)'
+          : ' (the default: the element was not on screen or in the tree, so its position was not known; ' +
+            'pass { direction: "down" } for an element above the screen)';
+      }
+      throw new Error(`scrollIntoView: ${this._describe()} was not visible after ${swipes} scroll(s) ${how}`);
     } catch (err) {
       await this._traceQueryFailed('scrollIntoView', err, Date.now() - start);
       throw err;
