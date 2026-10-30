@@ -10,6 +10,8 @@ import { resolveDeviceStrategy, type TapsmithConfig } from '../config.js';
  * a booted iPhone 17 Pro — often another session's (PILOT-915).
  */
 export interface ConfigDeviceTarget {
+  /** The platform of the target's devices — Android for a config that names none. */
+  readonly platform: 'ios' | 'android'
   /** How the config names the target, for messages: `simulator "iPhone 17"`. */
   readonly description: string
   /** What to do when none of the target's devices is running. */
@@ -64,6 +66,7 @@ export async function configDeviceTarget(
         .map((s) => s.udid),
     );
     return {
+      platform: 'ios',
       description: `simulator "${simulator}"`,
       startHint: `Boot it (\`xcrun simctl boot "${simulator}"\`, or run \`tapsmith test\` once, which boots it)`,
       anotherHint: `Boot another simulator named "${simulator}" (a \`--workers 2\` run of \`tapsmith test\` boots one, "${simulator} (Tapsmith Worker 2)")`,
@@ -77,6 +80,7 @@ export async function configDeviceTarget(
   const deps = injected ?? await defaultDeps();
   const avdOf = new Map<string, string | undefined>();
   return {
+    platform: 'android',
     description: `AVD "${avd}"${config.deviceStrategy === 'avd-only' ? ' (deviceStrategy "avd-only")' : ''}`,
     startHint: `Start it (\`emulator -avd ${avd}\`), set \`deviceStrategy: 'prefer-connected'\` to use any device`,
     anotherHint: `Start another instance of it (\`emulator -avd ${avd} -read-only\`)`,

@@ -269,6 +269,21 @@ describe('a headless session\'s device, with `avd` in the config', () => {
     expect((await ensurePlatformTarget(mcpConfig as TapsmithConfig)).deviceSerial).toBe('emulator-5554');
   });
 
+  it('offers only Android devices instead when the config names no platform', async () => {
+    // Such a config's daemon lists both platforms; a booted simulator is no
+    // way out of a missing AVD.
+    mcpConfig = { ...baseConfig, avd: 'Tapsmith_Phone_API_36' };
+    devices = [
+      { serial: 'SIM-1', state: 'Active', platform: 'ios' },
+      { serial: 'emulator-5554', state: 'Discovered', platform: 'android' },
+    ];
+    avds = { 'emulator-5554': 'Medium_Phone_API_36' };
+
+    const err = await ensurePlatformTarget(mcpConfig as TapsmithConfig).then((t) => `resolved ${JSON.stringify(t)}`, (e: Error) => e.message);
+    expect(err).toContain('No running android device matches AVD "Tapsmith_Phone_API_36" from your config. Visible android devices: emulator-5554.');
+    expect(err).not.toContain('SIM-1');
+  });
+
   it('is refused when no emulator runs that AVD', async () => {
     mcpConfig = { ...baseConfig, platform: 'android', avd: 'Tapsmith_Phone_API_36' };
     devices = twoEmulators;

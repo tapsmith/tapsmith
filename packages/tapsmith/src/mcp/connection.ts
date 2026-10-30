@@ -1299,11 +1299,12 @@ async function ensureMemberTarget(
   const target = wantedSerial ? undefined : await configDeviceTarget(config);
   const serial = (await pickDevice(conn, platform, wantedSerial, exclude, target))?.serial;
   if (!serial) {
-    const { serials, all, unusable } = await visibleDevices(conn, platform);
+    // Of the target's platform, as for the primary.
+    const { serials, all, unusable } = await visibleDevices(conn, platform ?? target?.platform);
     const visible = serials.filter((s) => !exclude.includes(s));
     discardDaemon(conn);
     await refreshDeviceIndex();
-    const targetMiss = target && configTargetMissMessageFor(target, platform, { visible: serials, all, unusable }, exclude);
+    const targetMiss = target && configTargetMissMessageFor(target, platform ?? target.platform, { visible: serials, all, unusable }, exclude);
     if (targetMiss) throw new Error(`${targetMiss} (needed for group member "${name}")`);
     throw new Error(
       `${noDeviceMessageWithClaims(all, platform, wantedSerial, visible, uiHeldDevices(), 'config', unusable)} (needed for group member "${name}"; `
@@ -1378,13 +1379,16 @@ async function ensurePrimaryTarget(
     // Ask what it *could* see before discarding it, so a config pinning a
     // serial that does not exist is not reported as "no device available"
     // while the device the user is looking at sits there booted.
-    const { serials: visible, all, unusable } = await visibleDevices(conn, platform);
+    // A config that names no platform starts a daemon that lists both, but
+    // its target is Android: offering a booted simulator as the way out of a
+    // missing AVD sends the user to a device the run cannot use.
+    const { serials: visible, all, unusable } = await visibleDevices(conn, platform ?? target?.platform);
     // A daemon with no device to drive is dead weight: it would sit in the pool
     // and the shared registry, and a second unsatisfiable platform would start
     // yet another one.
     discardDaemon(conn);
     await refreshDeviceIndex();
-    const targetMiss = target && configTargetMissMessageFor(target, platform, { visible, all, unusable }, exclude);
+    const targetMiss = target && configTargetMissMessageFor(target, platform ?? target.platform, { visible, all, unusable }, exclude);
     throw new Error(targetMiss || noDeviceMessageWithClaims(all, platform, wanted, visible, uiHeldDevices(), pinSource, unusable));
   }
 
