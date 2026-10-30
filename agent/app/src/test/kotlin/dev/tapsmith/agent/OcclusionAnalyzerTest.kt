@@ -409,6 +409,17 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
+    fun `a dismissible sibling with content of its own still covers at drawing order 0`() {
+        // A Flutter SnackBar or sheet offers dismiss too, but it is drawn
+        // over the body, and its controls are its children.
+        val button = FakeNode(Box(40, 2100, 1040, 2250), takesTouches = true)
+        val undo = FakeNode(Box(400, 2120, 700, 2230), takesTouches = true, name = "button \"Undo\"")
+        val snackBar = FakeNode(Box(0, 2080, 1080, 2270), offersDismiss = true).add(undo)
+        root(FakeNode(screen).add(button), snackBar)
+        assertCoveredBy(analyze(button), "button \"Undo\"")
+    }
+
+    @Test
     fun `a dismissible sibling drawn after the target still covers it`() {
         // Real drawing orders say the dismissible scrim is on top.
         val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)

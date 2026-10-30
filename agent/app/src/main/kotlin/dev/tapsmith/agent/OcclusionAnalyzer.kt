@@ -65,9 +65,11 @@ data class Box(
  *   every node and sorts the barrier after the route's content in traversal
  *   order, though it is painted under it, so child order would make it cover
  *   every control in every Flutter dialog. It is recognised as a later
- *   sibling that offers the dismiss action (Flutter's barrier always does:
- *   one that cannot be dismissed is left out of the tree) with no drawing
- *   order to tell the two apart (both 0). Other siblings without drawing
+ *   sibling with no children that offers the dismiss action (Flutter's
+ *   barrier always does: one that cannot be dismissed is left out of the
+ *   tree), with no drawing order to tell the two apart (both 0). A SnackBar
+ *   or sheet offers dismiss too, but it is drawn on top, and its controls
+ *   are its children. Other siblings without drawing
  *   order still fall back to child order: Compose before 1.9, and every app
  *   below API 24, report 0 for all nodes, and there child order is paint
  *   order.
@@ -386,7 +388,7 @@ object OcclusionAnalyzer {
         sibling: HitNode,
         key: Pair<Int, Int>,
         branchKey: Pair<Int, Int>,
-    ): Boolean = key.first == 0 && branchKey.first == 0 && sibling.offersDismiss
+    ): Boolean = key.first == 0 && branchKey.first == 0 && sibling.offersDismiss && sibling.childCount() == 0
 
     private fun compareKeys(
         a: Pair<Int, Int>,
