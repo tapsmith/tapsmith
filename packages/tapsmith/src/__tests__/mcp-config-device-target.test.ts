@@ -36,6 +36,8 @@ vi.mock('../grpc-client.js', () => ({
       return Promise.resolve({ success: true });
     }
     startAgent(): Promise<unknown> { return Promise.resolve({}); }
+    // The round trip an Android agent start confirms the agent with.
+    getUiHierarchy(): Promise<unknown> { return Promise.resolve({ hierarchyXml: '<hierarchy/>', errorMessage: '' }); }
     close(): void {}
   },
 }));
@@ -165,6 +167,18 @@ describe('a headless session\'s device, with `simulator` in the config', () => {
     booted = twoSimsBooted;
 
     expect((await ensurePlatformTarget(mcpConfig as TapsmithConfig)).deviceSerial).toBe('SIM-PRO');
+  });
+
+  it('says booting it is enough when the config has an `app` this server installs', async () => {
+    mcpConfig = { ...baseConfig, platform: 'ios', simulator: 'iPhone 17', app: 'build/App.app' };
+    devices = [{ serial: 'SIM-PRO', state: 'Active', platform: 'ios' }];
+    booted = [{ udid: 'SIM-PRO', name: 'iPhone 17 Pro' }];
+
+    await expect(ensurePlatformTarget(mcpConfig as TapsmithConfig)).rejects.toThrow(
+      'No running ios device matches simulator "iPhone 17" from your config. Visible ios devices: SIM-PRO. '
+      + 'Boot it (`xcrun simctl boot "iPhone 17"`; this server installs the app from `app`), '
+      + 'change it in your config, or pass one of those as `device`.',
+    );
   });
 
   it('is refused, naming the target and what is running, when no such simulator is booted', async () => {

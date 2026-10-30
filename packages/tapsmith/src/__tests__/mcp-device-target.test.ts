@@ -1,5 +1,16 @@
-import { describe, it, expect } from 'vitest';
-import { deviceClientFor } from '../mcp/tools/device-target.js';
+import { describe, it, expect, vi } from 'vitest';
+
+let resolveOverride: ((request: unknown) => Promise<unknown>) | undefined;
+vi.mock('../mcp/connection.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../mcp/connection.js')>();
+  return {
+    ...actual,
+    resolveDeviceTarget: (request: Parameters<typeof actual.resolveDeviceTarget>[0]) =>
+      (resolveOverride ? resolveOverride(request) : actual.resolveDeviceTarget(request)),
+  };
+});
+
+const { deviceClientFor } = await import('../mcp/tools/device-target.js');
 import { selectProjectDevice, retiredUiConnections, sessionDevicesFrom } from '../mcp/connection.js';
 import { uiDeviceChoiceError, type TestDispatcher } from '../mcp/test-dispatcher.js';
 
@@ -266,5 +277,52 @@ describe('device tools naming a device', () => {
     } as unknown as TestDispatcher;
     await expect(deviceClientFor({ device: 'emulator-5560' }, dispatcher)).rejects.toThrow('stop here');
     expect(seen).toEqual([{ retryFailedTargets: true, project: undefined, device: 'emulator-5560' }]);
+  });
+});
+
+// The ticket's audit (PILOT-916): `tapsmith_snapshot {device}` on a simulator
+// whose agent could not start answered with the pool's "not found", while
+// the reason the target failed was known to the session all along.
+describe('device tools naming a device no target could set up', () => {
+  const failedDispatcher = {
+    ensureDevicesReady: async () => {},
+    resolveDeviceName: () => undefined,
+    getSessionInfo: () => ({
+      timeout: 0, retries: 0, projects: [],
+      deviceTargets: [{ platform: 'ios', error: 'Failed to start the agent on SIM-1: The iOS agent could not launch com.x' }],
+    }),
+  } as unknown as TestDispatcher;
+
+  it('report why the target failed, ahead of the pool\'s miss', async () => {
+    resolveOverride = () => Promise.reject(new Error('Device "SIM-1" not found in any connected daemon. Available devices: (none)'));
+    try {
+      const err = await deviceClientFor({ device: 'SIM-1' }, failedDispatcher).then(() => undefined, (e: unknown) => e as Error);
+      expect(err?.message).toMatch(/^This session could not set up its device — ios: Failed to start the agent on SIM-1: The iOS agent could not launch com\.x/);
+      expect(err?.message).toContain('Device "SIM-1" not found in any connected daemon');
+    } finally {
+      resolveOverride = undefined;
+    }
+  });
+
+  // A typo, or a device no target was ever for: the failed target is worth
+  // knowing, but it is not why this device is missing.
+  it('lead with the pool\'s miss for a device the failed target was not for', async () => {
+    resolveOverride = () => Promise.reject(new Error('Device "SIM-9" not found in any connected daemon. Available devices: (none)'));
+    try {
+      const err = await deviceClientFor({ device: 'SIM-9' }, failedDispatcher).then(() => undefined, (e: unknown) => e as Error);
+      expect(err?.message).toMatch(/^Device "SIM-9" not found in any connected daemon/);
+      expect(err?.message).toContain('ios: Failed to start the agent on SIM-1');
+    } finally {
+      resolveOverride = undefined;
+    }
+  });
+
+  it('leave any other failure as it is', async () => {
+    resolveOverride = () => Promise.reject(new Error('Another session has pointed that daemon at SIM-2'));
+    try {
+      await expect(deviceClientFor({ device: 'SIM-1' }, failedDispatcher)).rejects.toThrow(/^Another session has pointed/);
+    } finally {
+      resolveOverride = undefined;
+    }
   });
 });

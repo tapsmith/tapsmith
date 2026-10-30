@@ -51,7 +51,7 @@ async function defaultDeps(): Promise<ConfigDeviceTargetDeps> {
  * A `device` pin is not considered here: callers honour a pin before asking.
  */
 export async function configDeviceTarget(
-  config: Pick<TapsmithConfig, 'platform' | 'simulator' | 'avd' | 'deviceStrategy'>,
+  config: Pick<TapsmithConfig, 'platform' | 'simulator' | 'avd' | 'deviceStrategy' | 'app'>,
   injected?: ConfigDeviceTargetDeps,
 ): Promise<ConfigDeviceTarget | undefined> {
   if (config.platform === 'ios') {
@@ -68,9 +68,13 @@ export async function configDeviceTarget(
     return {
       platform: 'ios',
       description: `simulator "${simulator}"`,
-      // `tapsmith test` first: it also installs the app, which this server does
-      // not, and an agent cannot start on a simulator without it.
-      startHint: `Run \`tapsmith test\` once, which boots it and installs the app (or \`xcrun simctl boot "${simulator}"\` where the app is already installed)`,
+      // This server installs the config's `app` before it starts the agent,
+      // so booting is enough. Without one it can install nothing, and an
+      // agent cannot start on a simulator without the app: `tapsmith test`
+      // first, whose run installs it.
+      startHint: config.app
+        ? `Boot it (\`xcrun simctl boot "${simulator}"\`; this server installs the app from \`app\`)`
+        : `Run \`tapsmith test\` once, which boots it and installs the app (or \`xcrun simctl boot "${simulator}"\` where the app is already installed)`,
       anotherHint: `Boot another simulator named "${simulator}" (a \`--workers 2\` run of \`tapsmith test\` boots one, "${simulator} (Tapsmith Worker 2)")`,
       accepts: (serial) => matching.has(serial),
     };

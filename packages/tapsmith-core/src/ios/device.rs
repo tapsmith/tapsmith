@@ -1104,6 +1104,21 @@ pub async fn shutdown_simulator(udid: &str) -> Result<()> {
     Ok(())
 }
 
+/// Whether `bundle_id` is installed on a simulator: `Ok(false)` when simctl
+/// answered with a failure (the app is absent, or the simulator could not
+/// look it up), an error when simctl could not be asked at all (it failed to
+/// start or timed out) — which says nothing either way.
+#[instrument]
+pub async fn is_app_installed(udid: &str, bundle_id: &str) -> Result<bool> {
+    let output = bounded_output(
+        "simctl get_app_container",
+        Command::new("xcrun").args(["simctl", "get_app_container", udid, bundle_id, "app"]),
+        SIMCTL_TIMEOUT,
+    )
+    .await?;
+    Ok(output.status.success())
+}
+
 /// Get the app container path on a simulator.
 #[instrument]
 pub async fn get_app_container(udid: &str, bundle_id: &str) -> Result<String> {

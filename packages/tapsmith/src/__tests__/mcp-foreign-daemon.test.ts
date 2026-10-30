@@ -35,6 +35,8 @@ vi.mock('../grpc-client.js', () => ({
     listDevices(): Promise<{ devices: Device[] }> { return listDevices(this.address); }
     setDevice(serial: string): Promise<{ success: boolean }> { return setDevice(this.address, serial); }
     startAgent(): Promise<unknown> { return startAgent(this.address); }
+    // The round trip an Android agent start confirms the agent with.
+    getUiHierarchy(): Promise<unknown> { return Promise.resolve({ hierarchyXml: '<hierarchy/>', errorMessage: '' }); }
     close(): void {}
   },
 }));

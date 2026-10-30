@@ -207,8 +207,14 @@ async fn start_agent_impl(
     };
 
     // Launch xcodebuild test-without-building in background.
-    let (mut child, mut stdout_tail, mut stderr_tail) =
-        spawn_agent_xcodebuild(&patched_xctestrun, udid, &derived_data_path, is_physical).await?;
+    let (mut child, mut stdout_tail, mut stderr_tail, mut launch_failure) = spawn_agent_xcodebuild(
+        &patched_xctestrun,
+        udid,
+        &derived_data_path,
+        is_physical,
+        target_bundle_id,
+    )
+    .await?;
 
     // Wait for the agent to start accepting connections.
     // Freshly booted/cloned simulators can take 90+ seconds for xcodebuild to
@@ -251,6 +257,62 @@ async fn start_agent_impl(
             );
         }
 
+        // The runner could not launch the app under test at all — most often
+        // because it is not installed. XCTest says so within a second, but
+        // xcodebuild then lingers for minutes finalizing the .xcresult, and
+        // waiting for it used to burn the whole 150 s deadline before the
+        // caller saw a bare timeout. Stop xcodebuild now. An app that is
+        // installed may have hit a transient launch refusal, so it gets the
+        // one in-place relaunch; a missing one never will launch.
+        let runner_error = launch_failure.lock().unwrap().take();
+        if let Some(runner_error) = runner_error {
+            let _ = child.kill().await;
+            // `None`: not known — a physical device, or a simctl that could
+            // not be asked. Only a confirmed absence rules the relaunch out.
+            let installed = if is_physical {
+                None
+            } else {
+                super::device::is_app_installed(udid, target_bundle_id)
+                    .await
+                    .ok()
+            };
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if may_relaunch_after_launch_failure(is_physical, installed)
+                && relaunches_left > 0
+                && remaining > Duration::from_secs(30)
+            {
+                relaunches_left -= 1;
+                warn!(
+                    udid,
+                    error = %runner_error,
+                    "XCUITest runner failed to launch the target app; relaunching once"
+                );
+                kill_existing_agents_on(udid).await;
+                let _ = super::device::terminate_app(udid, target_bundle_id).await;
+                (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
+                    &patched_xctestrun,
+                    udid,
+                    &derived_data_path,
+                    is_physical,
+                    target_bundle_id,
+                )
+                .await?;
+                continue;
+            }
+            drop(iproxy_handle);
+            let target_kind = if is_physical { "device" } else { "simulator" };
+            bail!(
+                "{}",
+                app_launch_failure_message(
+                    target_kind,
+                    udid,
+                    target_bundle_id,
+                    &runner_error,
+                    installed
+                )
+            );
+        }
+
         // A runner-side "Timed out attempting to launch app" is terminal for
         // this xcodebuild run, but xcodebuild can spend minutes finalizing
         // the .xcresult before exiting — waiting for the exit burns the rest
@@ -276,11 +338,12 @@ async fn start_agent_impl(
                 if !target_bundle_id.is_empty() {
                     let _ = super::device::terminate_app(udid, target_bundle_id).await;
                 }
-                (child, stdout_tail, stderr_tail) = spawn_agent_xcodebuild(
+                (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
                     &patched_xctestrun,
                     udid,
                     &derived_data_path,
                     is_physical,
+                    target_bundle_id,
                 )
                 .await?;
                 continue;
@@ -321,11 +384,12 @@ async fn start_agent_impl(
                     if !attach_to_running_app && !target_bundle_id.is_empty() {
                         let _ = super::device::terminate_app(udid, target_bundle_id).await;
                     }
-                    (child, stdout_tail, stderr_tail) = spawn_agent_xcodebuild(
+                    (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
                         &patched_xctestrun,
                         udid,
                         &derived_data_path,
                         is_physical,
+                        target_bundle_id,
                     )
                     .await?;
                     continue;
@@ -371,6 +435,52 @@ async fn start_agent_impl(
     }
 }
 
+/// The runner's own error when `XCUIApplication.launch()` could not start the
+/// app under test, from one line of xcodebuild's output: everything from
+/// "Failed to launch <bundle>:" on. Only for `target_bundle_id` — a launch
+/// failure of anything else (the runner itself) is not this one.
+fn runner_launch_failure<'a>(line: &'a str, target_bundle_id: &str) -> Option<&'a str> {
+    if target_bundle_id.is_empty() {
+        return None;
+    }
+    let needle = format!("Failed to launch {target_bundle_id}:");
+    line.find(&needle).map(|at| line[at..].trim_end())
+}
+
+/// Whether a runner that could not launch the app under test gets the one
+/// in-place relaunch. A simulator app that is installed, or whose presence
+/// could not be checked, may have hit a transient refusal; one simctl says is
+/// missing never launches. Physical devices are not relaunched here: the
+/// relaunch clears the stuck app with simctl, which cannot reach them.
+fn may_relaunch_after_launch_failure(is_physical: bool, installed: Option<bool>) -> bool {
+    !is_physical && installed != Some(false)
+}
+
+/// The agent-start error for an app the runner could not launch. `installed`
+/// is whether the app is on the simulator (`None` where that is not known: a
+/// physical device, or a simctl that could not be asked): a missing app is by far the commonest cause, and the
+/// one the runner's own wording ("returned nil for …") never names.
+fn app_launch_failure_message(
+    target_kind: &str,
+    udid: &str,
+    target_bundle_id: &str,
+    runner_error: &str,
+    installed: Option<bool>,
+) -> String {
+    let mut message = format!(
+        "The iOS agent could not launch {target_bundle_id} on {target_kind} {udid}: {runner_error}"
+    );
+    if installed == Some(false) {
+        message.push_str(&format!(
+            "\n{target_bundle_id} is not installed on this simulator. Set `app` in your Tapsmith \
+             config to the built .app so Tapsmith installs it, or install it yourself \
+             (xcrun simctl install {udid} <path/to/App.app>), and check that `package` is \
+             the app's bundle identifier."
+        ));
+    }
+    message
+}
+
 /// What to do when xcodebuild refused the agent because it was built for an
 /// architecture the destination cannot run — on Apple Silicon, an x86_64
 /// agent, which is what an x64 Node under Rosetta used to install or build
@@ -390,6 +500,10 @@ fn architecture_mismatch_hint(stdout_tail: &str, stderr_tail: &str) -> Option<&'
 }
 
 type OutputTail = std::sync::Arc<std::sync::Mutex<Vec<String>>>;
+/// The runner's first "Failed to launch <app>" error, kept apart from the
+/// rolling tail: xcodebuild prints a dozen more lines right after it, which
+/// can roll it out of the tail before the wait loop looks.
+type LaunchFailure = std::sync::Arc<std::sync::Mutex<Option<String>>>;
 
 /// Spawn `xcodebuild test-without-building` for the agent and drain its
 /// stdout/stderr into rolling 20-line tails for error reporting.
@@ -408,7 +522,8 @@ async fn spawn_agent_xcodebuild(
     udid: &str,
     derived_data_path: &std::path::Path,
     is_physical: bool,
-) -> Result<(TrackedAgent, OutputTail, OutputTail)> {
+    target_bundle_id: &str,
+) -> Result<(TrackedAgent, OutputTail, OutputTail, LaunchFailure)> {
     use std::sync::{Arc, Mutex};
 
     let mut cmd = Command::new("xcodebuild");
@@ -439,6 +554,9 @@ async fn spawn_agent_xcodebuild(
     let stderr_tail_writer = stderr_tail.clone();
     let stdout_tail: OutputTail = Arc::new(Mutex::new(Vec::new()));
     let stdout_tail_writer = stdout_tail.clone();
+    let launch_failure: LaunchFailure = Arc::new(Mutex::new(None));
+    let launch_failure_writer = launch_failure.clone();
+    let bundle_id = target_bundle_id.to_string();
 
     tokio::spawn(async move {
         use tokio::io::{AsyncBufReadExt, BufReader};
@@ -446,6 +564,12 @@ async fn spawn_agent_xcodebuild(
             let mut reader = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = reader.next_line().await {
                 info!(target: "xcodebuild", "{}", line);
+                if let Some(error) = runner_launch_failure(&line, &bundle_id) {
+                    launch_failure_writer
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(|| error.to_string());
+                }
                 let mut tail = stdout_tail_writer.lock().unwrap();
                 tail.push(line);
                 if tail.len() > 20 {
@@ -471,7 +595,7 @@ async fn spawn_agent_xcodebuild(
 
     let child =
         TrackedAgent::track(child, udid, is_physical, super::agent_registry::global()).await?;
-    Ok((child, stdout_tail, stderr_tail))
+    Ok((child, stdout_tail, stderr_tail, launch_failure))
 }
 
 /// Kill any existing xcodebuild test-without-building processes and the agent.
@@ -988,6 +1112,84 @@ mod tests {
         assert!(
             architecture_mismatch_hint("include none that iPhone 17 can execute", "").is_some()
         );
+    }
+
+    // As the runner prints it (TapsmithAgentRunner's XCUIApplication.launch())
+    // when the target app is not installed on the simulator.
+    const RUNNER_LAUNCH_FAILURE: &str =
+        "/tmp/wt/ios-agent/TapsmithAgent/TapsmithAgentRunner.swift:105: \
+        error: -[TapsmithAgentUITests.TapsmithAgentRunner testRunAgent] : Failed to launch \
+        com.example.ShopNotes: The request to open \"com.example.ShopNotes\" failed. \
+        (Underlying Error: The operation couldn\u{2019}t be completed. Application info provider \
+        (FBSApplicationLibrary) returned nil for \"com.example.ShopNotes\")";
+
+    #[test]
+    fn runner_launch_failure_reads_the_runners_error_for_the_target_app() {
+        let error = runner_launch_failure(RUNNER_LAUNCH_FAILURE, "com.example.ShopNotes")
+            .expect("the runner's launch failure");
+        assert!(error.starts_with("Failed to launch com.example.ShopNotes: The request to open"));
+        assert!(error.contains("FBSApplicationLibrary"));
+    }
+
+    #[test]
+    fn runner_launch_failure_ignores_other_lines_and_other_apps() {
+        assert!(runner_launch_failure(
+            "    t =     0.25s     Launch com.example.ShopNotes",
+            "com.example.ShopNotes"
+        )
+        .is_none());
+        assert!(runner_launch_failure(RUNNER_LAUNCH_FAILURE, "com.example.Other").is_none());
+        // A prefix of another bundle id is not this app.
+        assert!(runner_launch_failure(RUNNER_LAUNCH_FAILURE, "com.example.Shop").is_none());
+        assert!(runner_launch_failure(RUNNER_LAUNCH_FAILURE, "").is_none());
+    }
+
+    #[test]
+    fn app_launch_failure_message_says_the_app_is_missing() {
+        let error = runner_launch_failure(RUNNER_LAUNCH_FAILURE, "com.example.ShopNotes").unwrap();
+        let message = app_launch_failure_message(
+            "simulator",
+            "SIM-1",
+            "com.example.ShopNotes",
+            error,
+            Some(false),
+        );
+        assert!(message.contains("could not launch com.example.ShopNotes on simulator SIM-1"));
+        assert!(message.contains("Failed to launch com.example.ShopNotes: The request to open"));
+        assert!(message.contains("com.example.ShopNotes is not installed on this simulator"));
+        assert!(message.contains("`app`"));
+        assert!(message.contains("`package`"));
+    }
+
+    #[test]
+    fn app_launch_failure_message_keeps_only_the_runners_reason_when_installed() {
+        let message = app_launch_failure_message(
+            "device",
+            "PHONE",
+            "com.x",
+            "Failed to launch com.x: boom",
+            None,
+        );
+        assert!(message
+            .contains("could not launch com.x on device PHONE: Failed to launch com.x: boom"));
+        assert!(!message.contains("not installed"));
+        let installed = app_launch_failure_message(
+            "simulator",
+            "SIM",
+            "com.x",
+            "Failed to launch com.x: boom",
+            Some(true),
+        );
+        assert!(!installed.contains("not installed"));
+    }
+
+    #[test]
+    fn a_launch_failure_is_relaunched_unless_the_app_is_known_to_be_missing() {
+        assert!(may_relaunch_after_launch_failure(false, Some(true)));
+        // simctl could not be asked (timed out): unknown, not missing.
+        assert!(may_relaunch_after_launch_failure(false, None));
+        assert!(!may_relaunch_after_launch_failure(false, Some(false)));
+        assert!(!may_relaunch_after_launch_failure(true, None));
     }
 
     #[test]

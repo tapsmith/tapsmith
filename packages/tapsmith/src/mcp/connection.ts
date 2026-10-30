@@ -85,6 +85,12 @@ interface DaemonConnection {
    * act on, so it must not be counted as one.
    */
   agentFailed?: boolean
+  /**
+   * Why that agent would not start, while `agentFailed` holds — what a device
+   * tool naming the device answers with, instead of acting through a daemon
+   * with no agent and reporting only "Not connected to agent".
+   */
+  agentError?: string
 }
 
 let _connections: DaemonConnection[] = [];
@@ -333,7 +339,17 @@ async function clientPointedAt(serial: string): Promise<TapsmithGrpcClient> {
   // which `sessionDevicesFrom` counts and `resolveDeviceTarget` may select.
   // The tool then failed with "which is driving X … use the device it already
   // holds", where X was the device it had just been asked for.
-  if (pointedAt === serial) return client;
+  if (pointedAt === serial) {
+    // Pointed here, but its agent would not start: acting through it can only
+    // fail with "Not connected to agent". Say why instead. Only a successful
+    // `prepareTarget` clears this — the dispatcher's failed-target retry
+    // (budgeted; a tool naming the project always gets one) — so the reason
+    // can outlive a fix made outside the session until that retry runs. The
+    // reason is the prepared device's: another session may have moved the
+    // daemon to this one since and started its agent.
+    if (conn.agentFailed && conn.agentError && conn.preparedDevice === serial) throw new Error(conn.agentError);
+    return client;
+  }
 
   if (conn.preparedDevice === serial) {
     throw new Error(
@@ -1845,6 +1861,7 @@ async function prepareTarget(
   try {
     await startAgentFromConfig(conn.client, config, { force: repointed, required: true, serial });
     conn.agentFailed = false;
+    conn.agentError = undefined;
   } catch (err) {
     // Deliberately *not* rolling `preparedDevice` back: `set_device` already
     // happened, and a later claim that assumed the daemon never moved would
@@ -1852,6 +1869,7 @@ async function prepareTarget(
     // keeps both facts, so a broken target is not counted as a device the
     // session drives.
     conn.agentFailed = true;
+    conn.agentError = err instanceof Error ? err.message : String(err);
     releaseOnFailure();
     throw err;
   }
@@ -2438,6 +2456,11 @@ async function setDeviceAndAgent(
  * agents opportunistically and must survive a failure — but a platform target
  * that cannot start its agent is not a working target, and reporting it as one
  * gives the session a device whose every run fails.
+ *
+ * With the device known, the config's app is installed first unless the
+ * device already holds it, by the check every test run makes: the iOS
+ * agent launches the app the moment it is up, and on a simulator without it
+ * never comes up at all.
  */
 async function startAgentFromConfig(
   client: TapsmithGrpcClient,
@@ -2449,6 +2472,11 @@ async function startAgentFromConfig(
     if (agentConnected) return;
   }
 
+  const fail = (what: string, msg: string): void => {
+    log(`Warning: ${what} (${msg}). Device tools may not work.`);
+    if (options?.required) throw new Error(`Failed to start the agent on ${options.serial ?? 'this device'}: ${msg}`);
+  };
+
   const rootDir = config?.rootDir ?? process.cwd();
   const agentApk = config?.agentApk ? path.resolve(rootDir, config.agentApk) : undefined;
   const agentTestApk = config?.agentTestApk ? path.resolve(rootDir, config.agentTestApk) : undefined;
@@ -2458,27 +2486,72 @@ async function startAgentFromConfig(
     try {
       iosXctestrun = await iosXctestrunForAgentStart(config, options?.serial);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log(`Warning: no iOS agent to start (${msg}). Device tools may not work.`);
-      if (options?.required) throw new Error(`Failed to start the agent on this device: ${msg}`);
-      return;
+      return fail('no iOS agent to start', err instanceof Error ? err.message : String(err));
     }
   }
 
+  if (config && options?.serial) {
+    try {
+      const { installConfiguredApp } = await import('../device-session.js');
+      await installConfiguredApp(config, client, options.serial, { onProgress: log });
+    } catch (err) {
+      return fail('the app could not be installed', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  let failure: string | undefined;
   try {
     log('Starting agent on device...');
-    await client.startAgent(
+    const res = await client.startAgent(
       config?.package ?? '',
       agentApk,
       agentTestApk,
       iosXctestrun,
     );
-    log('Agent started');
+    // A refusal is an answer, not an error: the daemon's reason is in it.
+    if (res?.success === false) failure = res.errorMessage || 'the daemon refused to start the agent';
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log(`Warning: agent start failed (${msg}). Device tools may not work.`);
-    if (options?.required) throw new Error(`Failed to start the agent on this device: ${msg}`);
+    failure = err instanceof Error ? err.message : String(err);
   }
+  if (failure !== undefined) return fail('agent start failed', failure);
+  // Android: StartAgent can answer while the agent it replaced is still being
+  // torn down — measured after a fresh app install, where the first device
+  // tool then failed "Agent connection dropped" and one a second later
+  // worked. A test run's launch rides that out with its readiness retries; a
+  // device tool has none, so confirm the agent answers before handing it out.
+  if (config?.platform !== 'ios') {
+    try {
+      await confirmAgentAnswers(client);
+    } catch (err) {
+      return fail('agent does not answer', err instanceof Error ? err.message : String(err));
+    }
+  }
+  log('Agent started');
+}
+
+/**
+ * Resolve once the agent answers a real request (a hierarchy dump), retrying
+ * a dropped or refused one; throw with its last answer when it never does.
+ * @internal — exported for unit testing.
+ */
+export async function confirmAgentAnswers(
+  client: TapsmithGrpcClient,
+  opts: { attempts?: number; delayMs?: number } = {},
+): Promise<void> {
+  const attempts = opts.attempts ?? 10;
+  const delayMs = opts.delayMs ?? 1_000;
+  let last = '';
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await client.getUiHierarchy(10_000);
+      if (!res.errorMessage) return;
+      last = res.errorMessage;
+    } catch (err) {
+      last = err instanceof Error ? err.message : String(err);
+    }
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new Error(`The agent started but does not answer: ${last}`);
 }
 
 /**

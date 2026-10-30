@@ -502,6 +502,26 @@ async function installAppUnderTest(
 }
 
 /**
+ * Install the config's app on `serial` unless it already holds it — the
+ * check every test run makes: the exact build on a simulator or emulator,
+ * the bundle's presence on a physical iOS device — and wait for the install
+ * to end.
+ * For a caller that starts the agent itself (the MCP server): the iOS agent
+ * launches the app as soon as it is up, so it must be in place first.
+ * `client`'s daemon must already be pointed at `serial`.
+ */
+export async function installConfiguredApp(
+  config: TapsmithConfig,
+  client: TapsmithGrpcClient,
+  serial: string,
+  opts: { onProgress?: (m: string) => void } = {},
+): Promise<void> {
+  const device = new Device(client, config);
+  const install = await installAppUnderTest(config, device, serial, { onProgress: opts.onProgress });
+  if (install.pending) await install.pending;
+}
+
+/**
  * Bring a simulator app to the foreground before the XCUITest agent attaches,
  * which avoids a brief black-screen flicker. Best-effort: the app may already
  * be running. Physical devices are skipped — `simctl launch` is simulator-only.
