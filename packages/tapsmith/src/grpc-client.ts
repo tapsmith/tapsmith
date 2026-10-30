@@ -1128,10 +1128,17 @@ export class TapsmithGrpcClient {
       captureId?: string;
       requestBodyOmitted?: boolean;
       responseBodyOmitted?: boolean;
+      /** A passthrough marker for a connection an OS service opened, not an app. */
+      osService?: boolean;
     }>;
     errorMessage: string;
-    /** Hosts whose client rejected the MITM certificate since the previous stop. */
+    /**
+     * Hosts whose client rejected the MITM certificate since the previous
+     * stop, except those only OS services rejected.
+     */
     tlsRejectedHosts?: string[];
+    /** Hosts whose MITM certificate an OS service rejected; absent from older daemons. */
+    osServiceTlsRejectedHosts?: string[];
   }> {
     // bypassAbort: stopping capture is cleanup — it must reach the daemon
     // even when the run was stopped, or the proxy keeps capturing into a

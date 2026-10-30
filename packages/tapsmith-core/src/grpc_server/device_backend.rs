@@ -240,7 +240,7 @@ pub(super) trait DeviceBackend: Send + Sync {
     async fn release_capture_route(
         &self,
         serial: &str,
-        reverse_port: Option<u16>,
+        reverse_ports: Vec<u16>,
         ca_cert_path: Option<String>,
         used_iptables: bool,
     );
@@ -248,7 +248,7 @@ pub(super) trait DeviceBackend: Send + Sync {
     async fn release_capture_route_on_shutdown(
         &self,
         serial: &str,
-        reverse_port: Option<u16>,
+        reverse_ports: Vec<u16>,
         ca_cert_path: Option<String>,
         used_iptables: bool,
     );

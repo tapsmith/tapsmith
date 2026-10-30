@@ -170,6 +170,10 @@ pub struct TapsmithServiceImpl {
     proxy_platform: Arc<RwLock<Option<Platform>>>,
     /// Device-side port used for `adb reverse` (for cleanup, Android only).
     proxy_reverse_port: Arc<RwLock<Option<u16>>>,
+    /// The OS-service redirect of the Android transparent route (PILOT-782):
+    /// its `adb reverse` device port (for cleanup) and UID ranges (re-applied
+    /// when the capture ports change).
+    proxy_os_service_redirect: Arc<RwLock<Option<adb::OsServiceRedirect>>>,
     proxy_http_ports: Arc<RwLock<Vec<u16>>>,
     /// On-device path of the installed CA cert (for cleanup, Android only).
     proxy_ca_cert_path: Arc<RwLock<Option<String>>>,
@@ -392,6 +396,7 @@ impl TapsmithServiceImpl {
             proxy_device_serial: Arc::new(RwLock::new(None)),
             proxy_platform: Arc::new(RwLock::new(None)),
             proxy_reverse_port: Arc::new(RwLock::new(None)),
+            proxy_os_service_redirect: Arc::new(RwLock::new(None)),
             proxy_http_ports: Arc::new(RwLock::new(Vec::new())),
             proxy_ca_cert_path: Arc::new(RwLock::new(None)),
             preinstalled_ca_serial: Arc::new(RwLock::new(None)),
@@ -1536,7 +1541,10 @@ impl TapsmithServiceImpl {
         let system_proxy = self.ios_system_proxy.write().await.take();
         let serial = self.proxy_device_serial.write().await.take();
         let platform = self.proxy_platform.write().await.take();
-        let reverse_port = self.proxy_reverse_port.write().await.take();
+        let reverse_ports = capture_reverse_ports(
+            self.proxy_reverse_port.write().await.take(),
+            self.proxy_os_service_redirect.write().await.take(),
+        );
         let ca_cert_path = self.proxy_ca_cert_path.write().await.take();
         let preinstalled_ca_serial = self.preinstalled_ca_serial.write().await.take();
         self.proxy_http_ports.write().await.clear();
@@ -1572,7 +1580,7 @@ impl TapsmithServiceImpl {
             device_backend::for_platform(self, platform.unwrap_or(Platform::Android))
                 .release_capture_route_on_shutdown(
                     serial,
-                    reverse_port,
+                    reverse_ports,
                     ca_cert_path,
                     used_iptables,
                 )
@@ -4126,8 +4134,23 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             match capture_port_update(&old_ports, &http_ports, uses_iptables, reverse_port) {
                 Ok(Some(port)) => {
                     let serial = self.active_serial().await?;
-                    if !adb::setup_iptables_redirect(&serial, port, &http_ports).await {
-                        if !adb::setup_iptables_redirect(&serial, port, &old_ports).await {
+                    let os_service = self.proxy_os_service_redirect.read().await.clone();
+                    if !adb::setup_iptables_redirect(
+                        &serial,
+                        port,
+                        &http_ports,
+                        os_service.as_ref(),
+                    )
+                    .await
+                    {
+                        if !adb::setup_iptables_redirect(
+                            &serial,
+                            port,
+                            &old_ports,
+                            os_service.as_ref(),
+                        )
+                        .await
+                        {
                             // The rules are now unknown. Tear down so retries
                             // cannot mistake stale bookkeeping for applied ports.
                             drop(proxy_guard);
@@ -4429,13 +4452,14 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
             let captured = proxy.drain_entries().await;
             let entries = captured_entries_to_proto(captured, proxy.capture_session());
-            let tls_rejected_hosts = proxy.take_tls_rejected_hosts().await;
+            let tls_rejects = proxy.take_tls_rejects().await;
             return Ok(Response::new(proto::StopNetworkCaptureResponse {
                 request_id,
                 success: true,
                 entries,
                 error_message: String::new(),
-                tls_rejected_hosts,
+                tls_rejected_hosts: tls_rejects.hosts,
+                os_service_tls_rejected_hosts: tls_rejects.os_service_hosts,
             }));
         }
 
@@ -4455,7 +4479,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         *self.proxy_route.write().await = proto::NetworkCaptureRoute::Unspecified;
         let serial = self.proxy_device_serial.write().await.take();
         let platform = self.proxy_platform.write().await.take();
-        let reverse_port = self.proxy_reverse_port.write().await.take();
+        let reverse_ports = capture_reverse_ports(
+            self.proxy_reverse_port.write().await.take(),
+            self.proxy_os_service_redirect.write().await.take(),
+        );
         let ca_cert_path = self.proxy_ca_cert_path.write().await.take();
         let used_iptables = std::mem::replace(&mut *self.proxy_uses_iptables.write().await, false);
         #[cfg(target_os = "macos")]
@@ -4481,12 +4508,12 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         if let Some(serial) = &serial {
             // A capture with no recorded platform is reverted the Android way, as before.
             device_backend::for_platform(self, platform.unwrap_or(Platform::Android))
-                .release_capture_route(serial, reverse_port, ca_cert_path, used_iptables)
+                .release_capture_route(serial, reverse_ports, ca_cert_path, used_iptables)
                 .await;
         }
 
         let capture_session = proxy.capture_session().to_string();
-        let tls_rejected_hosts = proxy.take_tls_rejected_hosts().await;
+        let tls_rejects = proxy.take_tls_rejects().await;
         let captured = proxy.stop().await;
         let entries = captured_entries_to_proto(captured, &capture_session);
 
@@ -4495,7 +4522,8 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             success: true,
             entries,
             error_message: String::new(),
-            tls_rejected_hosts,
+            tls_rejected_hosts: tls_rejects.hosts,
+            os_service_tls_rejected_hosts: tls_rejects.os_service_hosts,
         }))
     }
 
@@ -5828,6 +5856,7 @@ fn captured_entry_to_proto(
         capture_id: format!("{capture_session}:{}", e.capture_id),
         request_body_omitted: false,
         response_body_omitted: false,
+        os_service: e.os_service,
     }
 }
 
@@ -6259,6 +6288,18 @@ fn join_capture_warnings(warnings: &[String]) -> String {
         .map(|w| w.split_whitespace().collect::<Vec<_>>().join(" "))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The device ports of a capture's `adb reverse` rules, for cleanup: the
+/// main one and the OS-service one (PILOT-782).
+fn capture_reverse_ports(
+    reverse_port: Option<u16>,
+    os_service: Option<adb::OsServiceRedirect>,
+) -> Vec<u16> {
+    reverse_port
+        .into_iter()
+        .chain(os_service.map(|o| o.device_port))
+        .collect()
 }
 
 /// An applied port set is meaningful only while its redirect still exists.

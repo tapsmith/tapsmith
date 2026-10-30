@@ -967,6 +967,10 @@ message CapturedNetworkEntry {
   // Omission may mean unchanged bytes or transfer deferred to a later poll.
   bool request_body_omitted = 17;
   bool response_body_omitted = 18;
+  // The connection came from an OS service (a system daemon or system app),
+  // not an app. Set on route_action "passthrough" markers only, on routes
+  // that can tell (Android transparent capture, iOS simulator redirector).
+  bool os_service = 19;
 }
 
 message StopNetworkCaptureResponse {
@@ -978,7 +982,14 @@ message StopNetworkCaptureResponse {
   // certificate with a TLS certificate alert since the previous stop. Their
   // HTTPS requests were not captured and routes could not intercept them —
   // typically the device trusts a different Tapsmith CA, or the app pins.
+  // Excludes hosts whose only rejecting clients were OS services: those are
+  // in os_service_tls_rejected_hosts.
   repeated string tls_rejected_hosts = 5;
+  // As tls_rejected_hosts, for connections that came from an OS service
+  // (system daemons and system apps that pin or distrust the CA). They say
+  // nothing about the app under test. Only routes that can attribute a
+  // connection fill it: Android transparent capture, iOS simulator redirector.
+  repeated string os_service_tls_rejected_hosts = 6;
 }
 
 // ─── Physical iOS device network capture (PILOT-185) ───

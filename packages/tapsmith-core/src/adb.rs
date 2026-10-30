@@ -1437,6 +1437,67 @@ pub async fn forward_abstract_socket_with_timeout(
 // ─── iptables transparent redirect (PILOT-187) ───
 
 const IPTABLES_CHAIN: &str = "TAPSMITH_REDIRECT";
+/// Sub-chain that sends OS-service UIDs' traffic to the proxy's OS-service
+/// listener (PILOT-782). Jumped to from [`IPTABLES_CHAIN`] by owner match.
+const IPTABLES_OS_SERVICE_CHAIN: &str = "TAPSMITH_OS_SERVICE";
+
+/// Where OS-service traffic goes in the transparent redirect (PILOT-782): the
+/// device port `adb reverse` maps to the proxy's OS-service listener, and the
+/// UID ranges that count as OS services.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OsServiceRedirect {
+    pub device_port: u16,
+    pub uid_ranges: Vec<(u32, u32)>,
+}
+
+/// Every UID below this is a system UID (root, system, shell, …), not an app.
+const FIRST_APPLICATION_UID: u32 = 10_000;
+/// Per-user app UIDs end here; anything above belongs to another user or an
+/// isolated process and is left unattributed.
+const LAST_APPLICATION_UID: u32 = 19_999;
+
+/// The UIDs of the device's OS services, as inclusive ranges: every UID below
+/// [`FIRST_APPLICATION_UID`], plus the UIDs of system packages (Google Play
+/// services, the Play Store, Chrome on a Google APIs image…). An app
+/// installed as a user app, the app under test included, is never among them;
+/// a system app (Chrome serving a Custom Tab, the downloads provider) is, even
+/// when it works on an app's behalf. Best-effort: when
+/// the package list cannot be read, only the system-UID range is returned.
+pub async fn os_service_uid_ranges(serial: &str) -> Vec<(u32, u32)> {
+    let listing = match shell_lenient(serial, "pm list packages -s -U").await {
+        Ok(out) => out,
+        Err(e) => {
+            debug!(%serial, "listing system packages failed: {e}");
+            String::new()
+        }
+    };
+    parse_os_service_uid_ranges(&listing)
+}
+
+/// Pure half of [`os_service_uid_ranges`]: the `uid:` values of
+/// `pm list packages -s -U` (`package:com.google.android.gms uid:10123`, with
+/// a comma-separated list on multi-user devices), merged with the system-UID
+/// range into sorted, coalesced ranges.
+fn parse_os_service_uid_ranges(listing: &str) -> Vec<(u32, u32)> {
+    let mut uids: Vec<u32> = listing
+        .lines()
+        .filter_map(|line| line.split_once("uid:").map(|(_, rest)| rest))
+        .flat_map(|rest| rest.split(',').filter_map(|u| u.trim().parse::<u32>().ok()))
+        .filter(|uid| (FIRST_APPLICATION_UID..=LAST_APPLICATION_UID).contains(uid))
+        .collect();
+    uids.sort_unstable();
+    uids.dedup();
+    let mut ranges = vec![(0, FIRST_APPLICATION_UID - 1)];
+    for uid in uids {
+        let last = ranges.last_mut().expect("starts non-empty");
+        if uid == last.1 + 1 {
+            last.1 = uid;
+        } else {
+            ranges.push((uid, uid));
+        }
+    }
+    ranges
+}
 
 /// Whether the device can route IPv6 traffic off-device, i.e. whether it has an
 /// IPv6 default route.
@@ -1482,11 +1543,39 @@ fn parse_has_default_route(output: &str) -> bool {
 /// Uses a dedicated chain (`TAPSMITH_REDIRECT`) for easy identification and
 /// cleanup. Traffic destined for `127.0.0.1` is excluded to prevent redirect
 /// loops (the proxy is reached via `adb reverse` on loopback).
-pub async fn setup_iptables_redirect(serial: &str, proxy_port: u16, http_ports: &[u16]) -> bool {
+///
+/// With `os_service`, OS-service UIDs' traffic goes to its own port instead,
+/// so the proxy can tell it from the app's (PILOT-782). That part is
+/// best-effort: if the owner-match rules cannot be installed, the redirect is
+/// set up without them and every connection stays unattributed, as before.
+pub async fn setup_iptables_redirect(
+    serial: &str,
+    proxy_port: u16,
+    http_ports: &[u16],
+    os_service: Option<&OsServiceRedirect>,
+) -> bool {
+    if let Some(os_service) = os_service {
+        if setup_iptables_redirect_with(serial, proxy_port, http_ports, Some(os_service)).await {
+            return true;
+        }
+        warn!(
+            %serial,
+            "iptables owner-match rules unavailable; OS-service traffic will not be told apart from the app's"
+        );
+    }
+    setup_iptables_redirect_with(serial, proxy_port, http_ports, None).await
+}
+
+async fn setup_iptables_redirect_with(
+    serial: &str,
+    proxy_port: u16,
+    http_ports: &[u16],
+    os_service: Option<&OsServiceRedirect>,
+) -> bool {
     // Clean up any stale chain from a prior crash
     cleanup_iptables_redirect(serial).await;
 
-    let commands = iptables_redirect_commands(proxy_port, http_ports);
+    let commands = iptables_redirect_commands(proxy_port, http_ports, os_service);
 
     if !apply_iptables_commands(serial, &commands).await {
         return false;
@@ -1515,11 +1604,20 @@ pub async fn setup_iptables_redirect(serial: &str, proxy_port: u16, http_ports: 
     // for new TCP connections before the caller starts routing traffic.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    info!(%serial, proxy_port, "iptables transparent redirect configured");
+    info!(
+        %serial,
+        proxy_port,
+        os_service_port = os_service.map(|o| o.device_port),
+        "iptables transparent redirect configured"
+    );
     true
 }
 
-fn iptables_redirect_commands(proxy_port: u16, http_ports: &[u16]) -> Vec<String> {
+fn iptables_redirect_commands(
+    proxy_port: u16,
+    http_ports: &[u16],
+    os_service: Option<&OsServiceRedirect>,
+) -> Vec<String> {
     let mut ports = vec![80, 443];
     ports.extend_from_slice(http_ports);
     ports.sort_unstable();
@@ -1528,6 +1626,28 @@ fn iptables_redirect_commands(proxy_port: u16, http_ports: &[u16]) -> Vec<String
         format!("iptables -t nat -N {IPTABLES_CHAIN}"),
         format!("iptables -t nat -A {IPTABLES_CHAIN} -d 127.0.0.0/8 -j RETURN"),
     ];
+    if let Some(os_service) = os_service {
+        // An OS-service UID jumps to the sub-chain, which redirects the
+        // captured ports to the OS-service listener. Any other port falls
+        // back through to the rules below, which do not match it either.
+        commands.push(format!("iptables -t nat -N {IPTABLES_OS_SERVICE_CHAIN}"));
+        for &port in &ports {
+            commands.push(format!(
+                "iptables -t nat -A {IPTABLES_OS_SERVICE_CHAIN} -p tcp --dport {port} -j REDIRECT --to-port {}",
+                os_service.device_port
+            ));
+        }
+        for &(first, last) in &os_service.uid_ranges {
+            let uids = if first == last {
+                first.to_string()
+            } else {
+                format!("{first}-{last}")
+            };
+            commands.push(format!(
+                "iptables -t nat -A {IPTABLES_CHAIN} -p tcp -m owner --uid-owner {uids} -j {IPTABLES_OS_SERVICE_CHAIN}"
+            ));
+        }
+    }
     for port in ports {
         commands.push(format!("iptables -t nat -A {IPTABLES_CHAIN} -p tcp --dport {port} -j REDIRECT --to-port {proxy_port}"));
     }
@@ -1595,13 +1715,22 @@ pub async fn cleanup_iptables_redirect(serial: &str) {
         CLEANUP_TIMEOUT,
     )
     .await;
+    // The OS-service sub-chain, once nothing jumps to it (PILOT-782).
+    let _ = shell_with_timeout(
+        serial,
+        &format!(
+            "iptables -t nat -F {IPTABLES_OS_SERVICE_CHAIN}; iptables -t nat -X {IPTABLES_OS_SERVICE_CHAIN}"
+        ),
+        CLEANUP_TIMEOUT,
+    )
+    .await;
 }
 
 #[cfg(test)]
 mod tests {
     #[test]
     fn capture_ports_keep_defaults_and_loopback_exclusion() {
-        let commands = super::iptables_redirect_commands(45678, &[8080, 9099, 8080, 80]);
+        let commands = super::iptables_redirect_commands(45678, &[8080, 9099, 8080, 80], None);
         assert!(commands[1].contains("127.0.0.0/8 -j RETURN"));
         for port in [80, 443, 8080, 9099] {
             assert_eq!(
@@ -1614,6 +1743,62 @@ mod tests {
         }
         assert!(commands.last().unwrap().contains("-I OUTPUT"));
         assert_eq!(commands.len(), 7);
+        assert!(!commands.iter().any(|c| c.contains("owner")));
+    }
+
+    // PILOT-782: OS-service UIDs jump to a sub-chain that redirects every
+    // captured port to the OS-service listener, ahead of the app rules.
+    #[test]
+    fn os_service_uids_are_redirected_to_their_own_port() {
+        let os = super::OsServiceRedirect {
+            device_port: 45679,
+            uid_ranges: vec![(0, 10169), (10171, 10171)],
+        };
+        let commands = super::iptables_redirect_commands(45678, &[8080], Some(&os));
+        let pos = |needle: &str| {
+            commands
+                .iter()
+                .position(|c| c.contains(needle))
+                .unwrap_or_else(|| panic!("no command contains {needle:?}: {commands:#?}"))
+        };
+        assert!(pos("-N TAPSMITH_OS_SERVICE") < pos("--uid-owner 0-10169 -j TAPSMITH_OS_SERVICE"));
+        assert!(commands
+            .iter()
+            .any(|c| c.ends_with("--uid-owner 10171 -j TAPSMITH_OS_SERVICE")));
+        for port in [80, 443, 8080] {
+            assert!(commands.iter().any(|c| c.contains(&format!(
+                "-A TAPSMITH_OS_SERVICE -p tcp --dport {port} -j REDIRECT --to-port 45679"
+            ))));
+        }
+        // The jumps come before the app redirect, and after the loopback exclusion.
+        assert!(pos("127.0.0.0/8 -j RETURN") < pos("--uid-owner 0-10169"));
+        assert!(
+            pos("--uid-owner 10171")
+                < pos("-A TAPSMITH_REDIRECT -p tcp --dport 80 -j REDIRECT --to-port 45678")
+        );
+        assert!(commands
+            .last()
+            .unwrap()
+            .contains("-I OUTPUT -j TAPSMITH_REDIRECT"));
+    }
+
+    #[test]
+    fn os_service_uid_ranges_merge_system_packages_with_system_uids() {
+        let listing = "package:com.google.android.gms uid:10123\n\
+                       package:com.android.chrome uid:10124\n\
+                       package:android uid:1000\n\
+                       package:com.android.vending uid:10000\n\
+                       package:com.android.systemui uid:10125,1010125\n\
+                       package:com.android.phone uid:1001\n\
+                       package:com.android.shell uid:2000\n\
+                       package:com.example.sys uid:10200\n\
+                       garbage line\n";
+        assert_eq!(
+            super::parse_os_service_uid_ranges(listing),
+            vec![(0, 10000), (10123, 10125), (10200, 10200)]
+        );
+        // Unreadable listing: the system-UID range alone.
+        assert_eq!(super::parse_os_service_uid_ranges(""), vec![(0, 9999)]);
     }
 
     use super::*;

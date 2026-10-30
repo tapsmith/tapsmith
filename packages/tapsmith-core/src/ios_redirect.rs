@@ -45,7 +45,7 @@ type FlowTaskList = Arc<StdMutex<Vec<JoinHandle<()>>>>;
 use crate::ios::simulator_processes;
 use crate::ipc;
 use crate::mitm_ca::MitmAuthority;
-use crate::network_proxy::{handle_transparent_tcp, join_host_port, ProxyState};
+use crate::network_proxy::{handle_transparent_tcp, join_host_port, ProxyState, TrafficOrigin};
 
 /// How often the PID refresh task re-queries `ps` and pushes a new
 /// `InterceptConf` if the simulator's process tree has changed. Short enough
@@ -919,6 +919,7 @@ async fn handle_flow(
                 remote.port as u16,
                 proxy_state,
                 mitm_ca,
+                simulator_flow_origin(tunnel.process_name.as_deref()),
             )
             .await;
             Ok(())
@@ -933,6 +934,32 @@ async fn handle_flow(
             relay_udp_dns(stream).await
         }
     }
+}
+
+/// Attribute a simulator flow from the executable path the System Extension
+/// reports for its process (PILOT-782).
+///
+/// The redirector intercepts every process of the simulator, so system
+/// daemons (`trustd` checking OCSP, iCloud's daemons) reach the proxy too, and
+/// they reject its certificate. A process whose executable lives in the
+/// simulator runtime's system root is an OS service — except the daemons that
+/// do networking on an app's behalf (WebKit's networking process for
+/// `WKWebView`, `nsurlsessiond` for background `URLSession`s), which stay with
+/// the app. Installed apps, host-side processes and a missing or bare name
+/// stay unattributed, as before.
+fn simulator_flow_origin(process_path: Option<&str>) -> TrafficOrigin {
+    const APP_NETWORKING_HELPERS: &[&str] = &["com.apple.WebKit.Networking", "nsurlsessiond"];
+    let Some(path) = process_path else {
+        return TrafficOrigin::Unattributed;
+    };
+    if !path.contains("/RuntimeRoot/") {
+        return TrafficOrigin::Unattributed;
+    }
+    let executable = path.rsplit('/').next().unwrap_or(path);
+    if APP_NETWORKING_HELPERS.contains(&executable) {
+        return TrafficOrigin::Unattributed;
+    }
+    TrafficOrigin::OsService
 }
 
 /// Relay an intercepted UDP flow back out to its real destination *iff it is
@@ -1349,6 +1376,42 @@ mod launch_lock_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simulator_flow_origin_tags_only_runtime_system_processes() {
+        const RT: &str = "/Library/Developer/CoreSimulator/Volumes/iOS_23A343/Library/Developer/CoreSimulator/Profiles/Runtimes/iOS 26.0.simruntime/Contents/Resources/RuntimeRoot";
+        // System daemons: OS services.
+        for exe in [
+            "/usr/libexec/trustd",
+            "/System/Library/PrivateFrameworks/CloudKitDaemon.framework/Support/cloudd",
+        ] {
+            assert_eq!(
+                simulator_flow_origin(Some(&format!("{RT}{exe}"))),
+                TrafficOrigin::OsService,
+                "{exe}"
+            );
+        }
+        // Daemons that do an app's networking stay with the app.
+        for exe in [
+            "/System/Library/Frameworks/WebKit.framework/XPCServices/com.apple.WebKit.Networking.xpc/com.apple.WebKit.Networking",
+            "/usr/libexec/nsurlsessiond",
+        ] {
+            assert_eq!(
+                simulator_flow_origin(Some(&format!("{RT}{exe}"))),
+                TrafficOrigin::Unattributed,
+                "{exe}"
+            );
+        }
+        // Installed apps, host processes, bare names and no name: unattributed.
+        for path in [
+            Some("/Users/me/Library/Developer/CoreSimulator/Devices/972FB67E-B94F-40EC-9388-7F3EFB761246/data/Containers/Bundle/Application/0D5E/TestApp.app/TestApp"),
+            Some("/Applications/Xcode.app/Contents/Developer/usr/bin/xctest"),
+            Some("trustd"),
+            None,
+        ] {
+            assert_eq!(simulator_flow_origin(path), TrafficOrigin::Unattributed, "{path:?}");
+        }
+    }
 
     #[test]
     fn extract_owner_pid_from_canonical_args() {

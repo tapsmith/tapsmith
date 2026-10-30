@@ -1170,7 +1170,7 @@ impl DeviceBackend for AndroidBackend<'_> {
         request_id: String,
         serial: String,
         _req: &proto::StartNetworkCaptureRequest,
-        _proxy: &NetworkProxy,
+        proxy: &NetworkProxy,
         _mitm_ca: &Arc<MitmAuthority>,
         host_port: u16,
         http_ports: &[u16],
@@ -1206,8 +1206,16 @@ impl DeviceBackend for AndroidBackend<'_> {
             // HTTPS through the system proxy, causing HTTPS traffic to be
             // recorded as http://. Transparent redirect intercepts at the
             // TCP level, so TLS is correctly detected from the ClientHello.
-            let iptables_ok = adb::setup_iptables_redirect(&serial, device_port, http_ports).await;
+            // PILOT-782: OS services' traffic goes to its own listener, so
+            // their certificate rejects are not blamed on the app.
+            let os_service = os_service_redirect(&serial, proxy).await;
+            let iptables_ok =
+                adb::setup_iptables_redirect(&serial, device_port, http_ports, os_service.as_ref())
+                    .await;
             *self.svc.proxy_uses_iptables.write().await = iptables_ok;
+            // Recorded even when the redirect fell back without it, so its
+            // reverse rule is removed with the capture.
+            *self.svc.proxy_os_service_redirect.write().await = os_service;
             route = if iptables_ok {
                 proto::NetworkCaptureRoute::AndroidTransparent
             } else {
@@ -1268,7 +1276,7 @@ impl DeviceBackend for AndroidBackend<'_> {
     async fn release_capture_route(
         &self,
         serial: &str,
-        reverse_port: Option<u16>,
+        reverse_ports: Vec<u16>,
         ca_cert_path: Option<String>,
         used_iptables: bool,
     ) {
@@ -1293,7 +1301,7 @@ impl DeviceBackend for AndroidBackend<'_> {
             }
         };
         let reverse_cleanup = async move {
-            if let Some(port) = reverse_port {
+            for port in reverse_ports {
                 if let Err(e) =
                     adb::remove_reverse_with_timeout(&serial_b, port, ANDROID_PROXY_CLEANUP_TIMEOUT)
                         .await
@@ -1321,7 +1329,7 @@ impl DeviceBackend for AndroidBackend<'_> {
     async fn release_capture_route_on_shutdown(
         &self,
         serial: &str,
-        reverse_port: Option<u16>,
+        reverse_ports: Vec<u16>,
         ca_cert_path: Option<String>,
         used_iptables: bool,
     ) {
@@ -1337,7 +1345,7 @@ impl DeviceBackend for AndroidBackend<'_> {
         {
             warn!(%serial, "Failed to reset http_proxy on shutdown: {e}");
         }
-        if let Some(port) = reverse_port {
+        for port in reverse_ports {
             if let Err(e) =
                 adb::remove_reverse_with_timeout(serial, port, ANDROID_PROXY_CLEANUP_TIMEOUT).await
             {
@@ -1356,4 +1364,31 @@ impl DeviceBackend for AndroidBackend<'_> {
             }
         }
     }
+}
+
+/// The OS-service side of the Android transparent redirect (PILOT-782): a
+/// second proxy listener, reachable on the device through its own
+/// `adb reverse`, and the UIDs whose traffic goes there. Best-effort — `None`
+/// leaves every connection unattributed, as before.
+async fn os_service_redirect(serial: &str, proxy: &NetworkProxy) -> Option<adb::OsServiceRedirect> {
+    let host_port = match proxy.start_os_service_listener().await {
+        Ok(port) => port,
+        Err(e) => {
+            warn!(%serial, "OS-service proxy listener unavailable: {e:#}");
+            return None;
+        }
+    };
+    let device_port = match setup_android_reverse_with_fallback(serial, host_port).await {
+        Ok(port) => port,
+        Err(e) => {
+            warn!(%serial, "adb reverse for the OS-service proxy listener failed: {e}");
+            return None;
+        }
+    };
+    let uid_ranges = adb::os_service_uid_ranges(serial).await;
+    debug!(%serial, device_port, host_port, ?uid_ranges, "OS-service redirect");
+    Some(adb::OsServiceRedirect {
+        device_port,
+        uid_ranges,
+    })
 }

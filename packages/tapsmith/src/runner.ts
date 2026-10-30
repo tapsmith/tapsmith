@@ -53,7 +53,7 @@ import { startLiveNetwork } from './trace/live-network.js';
 import { telemetry, runEventFromResults, type RunMode } from './telemetry.js';
 import { isRecoverableInfrastructureError } from './worker-protocol.js';
 import { filterEntriesByHosts } from './trace/filter-hosts.js';
-import { TlsRejectWarnings, tlsRejectWarning } from './tls-reject-warning.js';
+import { TlsRejectWarnings, osServiceTlsRejectNote, tlsRejectWarning } from './tls-reject-warning.js';
 import { defineStandIns, notSupportedYet } from './not-supported.js';
 
 // ─── Trace Device Info ───
@@ -2599,8 +2599,10 @@ async function runSuiteContext(
       const unfiredRouteDevices = new Map<Device, boolean>();
       const passthroughHosts = new Map<Device, Set<string>>();
       const notePassthrough = (d: Device, entries: RawNetworkEntries): void => {
+        // Not an OS service's tunnel (PILOT-782): Google Play services passing
+        // its pinned hosts through is no reason for the app's routes not firing.
         const tunneled = filterEntriesByHosts(
-          entries.filter((e) => e.routeAction === 'passthrough' && e.isHttps),
+          entries.filter((e) => e.routeAction === 'passthrough' && e.isHttps && !e.osService),
           { allow: traceConfig.networkHosts, deny: traceConfig.networkIgnoreHosts },
         );
         if (tunneled.length === 0) return;
@@ -3162,12 +3164,14 @@ async function runSuiteContext(
               // are never named. Skipped on the host-wide macOS system proxy:
               // there every Mac process's rejects reach the proxy, and none
               // of them can be attributed to the app.
-              const rejectedHosts = res.success && d._networkCaptureRoute !== 'ios-system-proxy'
-                ? filterEntriesByHosts((res.tlsRejectedHosts ?? []).map((host) => ({ host, url: `https://${host}/` })), {
-                  allow: traceConfig.networkHosts,
-                  deny: traceConfig.networkIgnoreHosts,
-                }).map((e) => e.host)
-                : [];
+              const scopedHosts = (hosts: string[] | undefined): string[] =>
+                res.success && d._networkCaptureRoute !== 'ios-system-proxy'
+                  ? filterEntriesByHosts((hosts ?? []).map((host) => ({ host, url: `https://${host}/` })), {
+                    allow: traceConfig.networkHosts,
+                    deny: traceConfig.networkIgnoreHosts,
+                  }).map((e) => e.host)
+                  : [];
+              const rejectedHosts = scopedHosts(res.tlsRejectedHosts);
               if (rejectedHosts.length > 0) {
                 tlsRejectNotices.push({ device: d, hosts: rejectedHosts });
                 traceCollector.addDaemonLogEntry(
@@ -3175,6 +3179,13 @@ async function runSuiteContext(
                   `Network capture warning: ${tlsRejectWarning(rejectedHosts)}`,
                   d._traceDeviceId,
                 );
+              }
+              // OS services' rejects (PILOT-782): one line in the trace, so a
+              // reader can see why those hosts are missing, and never the
+              // terminal — they say nothing about the app.
+              const osServiceHosts = scopedHosts(res.osServiceTlsRejectedHosts);
+              if (osServiceHosts.length > 0) {
+                traceCollector.addDaemonLogEntry('info', osServiceTlsRejectNote(osServiceHosts), d._traceDeviceId);
               }
               if (res.success) {
                 // Apply user-supplied host filters, if any. On physical iOS

@@ -19,7 +19,7 @@ The startup `Config` line says which applies: `network: captured` when the trace
 
 When a test fails and its routes were live but none of them fired, Tapsmith names the test and lists the possible reasons the capture shows: `device.route() handlers never fired: "…" registered route handlers and none of them fired. Possible reasons: …`. They are:
 
-- *HTTPS to `<hosts>` passed through the network proxy uncaptured* — the device cannot trust Tapsmith's CA (an Android emulator on a Google Play system image, see [Android emulator image requirements](#android-emulator-image-requirements)), the host is in `trace.networkPassthroughHosts`, or the app rejected Tapsmith's certificate;
+- *HTTPS to `<hosts>` passed through the network proxy uncaptured* — the device cannot trust Tapsmith's CA (an Android emulator on a Google Play system image, see [Android emulator image requirements](#android-emulator-image-requirements)), the host is in `trace.networkPassthroughHosts`, or the app rejected Tapsmith's certificate. Hosts that only OS services passed through are not listed;
 - *the network proxy started on demand during this test or its hooks* — the case above;
 - *the app never sent a request matching the route patterns* — check the pattern.
 
@@ -1016,6 +1016,8 @@ When an HTTPS client on the device still refuses Tapsmith's certificate, those r
 ```
 
 If every host your app uses is rejected, the device or app does not trust the current CA. For example, the CA could only be installed in Android's user store, which apps ignore unless their `network_security_config.xml` opts in. If only some hosts are rejected, those clients probably pin their certificates. List your app's pinned hosts in `trace.networkPassthroughHosts` so they are tunnelled without capture instead of failing. On system-wide capture routes the hosts can also belong to background services, which you can drop with `trace.networkIgnoreHosts`.
+
+OS services that pin or distrust the CA are left out of the warning: with Android transparent capture (a rootable emulator), system UIDs and preinstalled system apps such as Google Play services, the Play Store and Chrome; on the iOS simulator, system daemons such as `trustd` and iCloud's. Their rejects say nothing about your app, so they only get a one-line `info` note in the trace. Background `URLSession`s and `WKWebView` traffic on the iOS simulator count as the app's. Routes that cannot tell which process opened a connection (the Android system HTTP proxy fallback, a physical iOS device) still name every rejected host.
 
 ---
 

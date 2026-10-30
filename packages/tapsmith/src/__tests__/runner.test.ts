@@ -1150,8 +1150,9 @@ describe('runner execution', () => {
     describe('on-demand capture (PILOT-775)', () => {
       const makeOnDemandDevice = (opts: {
         handled: number
-        drained?: Array<{ url: string; routeAction: string; isHttps: boolean }>
+        drained?: Array<{ url: string; routeAction: string; isHttps: boolean; osService?: boolean }>
         tlsRejectedHosts?: string[]
+        osServiceTlsRejectedHosts?: string[]
         name?: string
       }) => {
         const base = makeRoutedDevice({ proxyRunning: false, registered: 0, name: opts.name });
@@ -1174,7 +1175,11 @@ describe('runner execution', () => {
         device._stopNetworkCapture = vi.fn(async () => {
           const entries = drained;
           drained = [];
-          return { success: true, entries, errorMessage: '', tlsRejectedHosts: opts.tlsRejectedHosts ?? [] };
+          return {
+            success: true, entries, errorMessage: '',
+            tlsRejectedHosts: opts.tlsRejectedHosts ?? [],
+            osServiceTlsRejectedHosts: opts.osServiceTlsRejectedHosts ?? [],
+          };
         }) as unknown as typeof device._stopNetworkCapture;
         return device;
       };
@@ -1249,6 +1254,39 @@ describe('runner execution', () => {
           expect(warnings[0]).toContain('HTTPS to api.example.com passed through the network proxy uncaptured');
           expect(warnings[0]).not.toContain('plain.example.com');
           expect(warnings[0]).toContain('Google Play emulator image');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      // PILOT-782: a system app's tunneled connection is no reason for the
+      // app's routes not firing.
+      it('does not name hosts that only OS services passed through', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const device = makeOnDemandDevice({
+          handled: 0,
+          drained: [
+            { url: 'https://phonedeviceverification-pa.googleapis.com/', routeAction: 'passthrough', isHttps: true, osService: true },
+            { url: 'https://api.example.com/', routeAction: 'passthrough', isHttps: true },
+          ],
+        });
+        try {
+          await runBody('mocks beside gms', failAfter(() => device.route()), [{ name: 'device-1', device }]);
+          const warnings = routeWarnings(warn);
+          expect(warnings).toHaveLength(1);
+          expect(warnings[0]).toContain('HTTPS to api.example.com passed through the network proxy uncaptured');
+          expect(warnings[0]).not.toContain('phonedeviceverification-pa');
+        } finally {
+          warn.mockRestore();
+        }
+      });
+
+      it('warns about no OS-service certificate rejects when no trace records network', async () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+          const device = makeOnDemandDevice({ handled: 1, osServiceTlsRejectedHosts: ['gms-pilot782.example.com'] });
+          await runBody('gms rejects untraced', () => device.route(), [{ name: 'device-1', device }]);
+          expect(warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('gms-pilot782'))).toEqual([]);
         } finally {
           warn.mockRestore();
         }
@@ -1462,6 +1500,72 @@ describe('runner execution', () => {
       expect(traceWarnings[2][0].message).toContain('pilot712-b.example.com');
     } finally {
       warn.mockRestore();
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  // PILOT-782: OS services (Google Play services, Chrome, iOS system
+  // daemons) pin or distrust the CA; their rejects say nothing about the app.
+  it('keeps OS-service certificate rejects off the terminal: one info line in the trace', async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-tls-os-'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const mockDevice = {
+      tracing: new Tracing(async () => undefined, async () => undefined),
+      waitForIdle: vi.fn(async () => {}),
+      _startNetworkCapture: vi.fn(async () => ({ success: true, proxyPort: 12345, errorMessage: '' })),
+      _stopNetworkCapture: vi.fn(async () => ({
+        success: true, entries: [], errorMessage: '',
+        tlsRejectedHosts: ['pilot782-app.example.com'],
+        osServiceTlsRejectedHosts: ['android.googleapis.com', 'www.gstatic.com', 'x.noise.example'],
+      })),
+      _stopDeviceLogStream: vi.fn(),
+      _startDaemonLogStream: vi.fn(),
+      _stopDaemonLogStream: vi.fn(),
+      _disposeRouteManager: vi.fn(async () => {}),
+      _disposeWebViewManager: vi.fn(async () => {}),
+      _resetWebViewContext: vi.fn(),
+    };
+    try {
+      pushContext();
+      tapsmithTest('os rejects', async () => {});
+      const ctx = popContext();
+      const result = await runSuiteContext(ctx, '', [], [], makeOpts({
+        config: makeConfig({
+          rootDir: tempRoot,
+          outputDir: 'out',
+          trace: {
+            mode: 'on', network: true, screenshots: false, snapshots: false, sources: false, deviceLogs: false,
+            networkIgnoreHosts: ['*.noise.example'],
+          },
+        }),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any -- focused runner lifecycle mock
+        devices: [{ name: 'device-1', device: mockDevice as any }],
+      }));
+
+      const printed = [...warn.mock.calls, ...log.mock.calls].map((c) => String(c[0]));
+      // The app's reject still warns, without the OS services' hosts.
+      const appWarning = printed.filter((m) => m.includes('rejected Tapsmith'));
+      expect(appWarning).toHaveLength(1);
+      expect(appWarning[0]).toContain('pilot782-app.example.com');
+      for (const host of ['android.googleapis.com', 'www.gstatic.com']) {
+        expect(printed.filter((m) => m.includes(host))).toEqual([]);
+      }
+
+      const files = unzipSync(new Uint8Array(fs.readFileSync(result.tests[0].tracePath!)));
+      const events = Buffer.from(files['trace.json']).toString('utf8').trim().split('\n').filter(Boolean)
+        .map((line) => JSON.parse(line) as { type: string; source?: string; level?: string; message?: string });
+      const notes = events.filter((e) => e.type === 'console' && e.message?.includes('android.googleapis.com'));
+      expect(notes).toHaveLength(1);
+      expect(notes[0]).toMatchObject({ source: 'daemon', level: 'info' });
+      expect(notes[0].message).toContain('www.gstatic.com');
+      expect(notes[0].message).toContain('OS services');
+      expect(notes[0].message).not.toContain('\n');
+      expect(notes[0].message).not.toContain('noise.example');
+      expect(notes[0].message).not.toContain('pilot782-app.example.com');
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
       fs.rmSync(tempRoot, { recursive: true, force: true });
     }
   });

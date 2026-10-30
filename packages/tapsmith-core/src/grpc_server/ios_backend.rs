@@ -2093,7 +2093,7 @@ impl DeviceBackend for IosBackend<'_> {
     async fn release_capture_route(
         &self,
         serial: &str,
-        _reverse_port: Option<u16>,
+        _reverse_ports: Vec<u16>,
         _ca_cert_path: Option<String>,
         _used_iptables: bool,
     ) {
@@ -2113,7 +2113,7 @@ impl DeviceBackend for IosBackend<'_> {
     async fn release_capture_route_on_shutdown(
         &self,
         serial: &str,
-        _reverse_port: Option<u16>,
+        _reverse_ports: Vec<u16>,
         _ca_cert_path: Option<String>,
         _used_iptables: bool,
     ) {
