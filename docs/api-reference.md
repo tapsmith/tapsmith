@@ -1167,7 +1167,7 @@ await row.scrollIntoView(); // a row below the screen
 await row.tap();
 
 const first = device.getByText("Item 1", { exact: true });
-await first.scrollIntoView({ direction: "down" }); // a row the list was scrolled past
+await first.scrollIntoView({ direction: "down" }); // a row the list was scrolled past (iOS finds the way without the direction; Android needs it)
 await first.tap();
 ```
 
@@ -1262,7 +1262,9 @@ The device agents don't apply `distance` yet: each call scrolls by a fixed step 
 
 Scroll the viewport until this element is visible on screen. Useful for reaching elements that are below the fold in a scrollable container.
 
-Swipes in the given direction, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Taps do not scroll for you (see [Off-screen elements](#elementhandletapoptions-promisevoid)), so call this first for an element that may be off-screen. It swipes up by default, which reveals what is below; pass `{ direction: "down" }` for an element above the screen, such as a row the list was scrolled past.
+Swipes, checking visibility between each attempt. Throws if the element is not visible after `maxScrolls` attempts. Taps do not scroll for you (see [Off-screen elements](#elementhandletapoptions-promisevoid)), so call this first for an element that may be off-screen.
+
+Without a `direction`, each swipe goes the way the element lies, when the device reports where it is: `"down"` for an element above the screen, `"right"` for one to its left, and `"up"` otherwise. The position is re-read before every swipe, so a swipe that carries the element past the screen is followed by one back. iOS lists off-screen elements with their positions, so there a plain `scrollIntoView()` reaches a row above the screen, such as one the list was scrolled past. Android lists only the elements on screen, so there the position of an off-screen element is not known. Then, and on iOS for a row a lazy list has not created yet, it keeps the direction it last used, starting with `"up"`, which reveals what is below. So on Android, pass `{ direction: "down" }` for an element above the screen. A below-the-screen element and one to its right look the same without the screen's size, so both get `"up"`: pass `{ direction: "left" }` for one to the right. Every swipe crosses the middle of the screen, so for an element in a horizontal list elsewhere on it, [`scroll()`](#elementhandlescrolldirection-swipedirection-options-promisevoid) that list.
 
 If the element is already visible, this is a no-op — it returns without scrolling, so calling `scrollIntoView()` before every `tap()` is safe even when the target is on screen (an unnecessary swipe could otherwise shift it under a pinned app bar). When the element isn't found on the first check, Tapsmith waits for the UI to settle and re-checks before the first swipe, so a briefly stale accessibility tree (e.g. right after navigation) doesn't trigger a spurious scroll. A handle from `all()` is a live `.nth(i)` locator, so on a virtualised list the scroll stops on whatever row is at index `i` in the scrolled window — see the [`all()`](#elementhandleall-promiseelementhandle) section.
 
@@ -1270,7 +1272,7 @@ The visibility check honours every modifier on the locator — `filter()`, `and(
 
 | Option | Default | Description |
 |---|---|---|
-| `direction` | `"up"` | Swipe direction. `"up"` scrolls down (reveals content below), `"down"` scrolls up (reveals content above). |
+| `direction` | from the element's position, else `"up"` | Swipe direction, the way the finger moves. `"up"` scrolls down (reveals content below), `"down"` scrolls up (reveals content above), `"left"` and `"right"` likewise. Given, it is used for every swipe, wherever the element is. |
 | `maxScrolls` | `5` | Maximum swipe attempts before throwing |
 | `speed` | `2000` | Swipe speed in pixels/second |
 
@@ -1279,7 +1281,7 @@ The visibility check honours every modifier on the locator — `filter()`, `and(
 await device.getByDescription("Settings").scrollIntoView();
 await device.getByDescription("Settings").tap();
 
-// Scroll up (reverse direction)
+// Back up to a row above the screen: iOS knows where it is; Android needs the direction
 await device.getByText("Top Section", { exact: true }).scrollIntoView({ direction: "down" });
 ```
 
