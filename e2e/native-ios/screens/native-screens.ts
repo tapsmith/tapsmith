@@ -173,7 +173,14 @@ export class UIKitControlsScreen {
 export class UIKitTableScreen {
   constructor(private device: Device) {}
 
+  /** A row by its text (PILOT-895: a row's text is its child static text). */
   row(n: number) { return this.device.getByRole("listitem").filter({ hasText: `Row ${n}` }).first() }
+  /** UIKit's disclosure indicator, a disabled button that taps through to its row. */
+  chevron(n: number) { return this.row(n).getByRole("button", { name: "chevron", exact: true }) }
+  checkmark(n: number) { return this.row(n).getByRole("button", { name: "checkmark", exact: true }) }
+  moreInfo(n: number) { return this.row(n).getByRole("button", { name: "More Info", exact: true }) }
+  /** Row 8's custom accessory: a UIButton that really is disabled. */
+  get buy() { return this.device.getByRole("button", { name: "Buy", exact: true }) }
   rowText(n: number) { return this.device.getByText(`Row ${n}`, { exact: true }) }
   get selection() { return this.device.getByTestId("uikit-table-selection") }
 }

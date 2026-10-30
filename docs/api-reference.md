@@ -893,7 +893,7 @@ const count = await premiumItems.count();
 
 | Option | Type | Description |
 |---|---|---|
-| `hasText` | `string \| RegExp` | Keep elements whose text contains this string or matches this RegExp |
+| `hasText` | `string \| RegExp` | Keep elements whose text contains this string or matches this RegExp. An element with no text of its own, such as a list row, has its descendants' text, as for `toContainText` |
 | `hasNotText` | `string \| RegExp` | Exclude elements whose text contains this string or matches this RegExp |
 | `has` | `ElementHandle` | Keep elements that have a descendant matching this locator |
 | `hasNot` | `ElementHandle` | Exclude elements that have a descendant matching this locator |
@@ -1610,6 +1610,8 @@ With `{ visible: false }` the assertion is `toBeHidden()` in every respect, as i
 
 Assert that the element is enabled (interactive).
 
+On iOS, a UIKit table row's built-in accessory indicator (its disclosure chevron or checkmark), which UIKit reports as a disabled button, is as enabled as its row: a tap on it selects the row. A button you put in a row yourself keeps its own state.
+
 ```typescript
 await expect(device.getByRole("button", { name: "Submit" })).toBeEnabled();
 await expect(device.getByRole("button", { name: "Submit" })).not.toBeEnabled();
@@ -1697,7 +1699,7 @@ With an array, the locator may match several elements: each item must match one 
 
 A RegExp is tested afresh on every poll, so a `g` flag can't make it skip a match. Any expected value other than a string, a RegExp or an array of them throws a `TypeError` at once. The string forms compare the text as it is (no whitespace normalization).
 
-When the matched element has no own text (e.g. a wrapping `View` around `<Text>` children, common in React Native), the agents aggregate descendant text/labels so the assertion sees the visible string.
+When the matched element has no own text (e.g. a wrapping `View` around `<Text>` children, common in React Native), the agents aggregate descendant text/labels so the assertion sees the visible string. On iOS that applies to generic containers and to list rows (a UIKit `UITableViewCell`, whose text is a child label); a row's built-in accessory indicator (its disclosure chevron or checkmark) is not part of its text.
 
 ```typescript
 await expect(device.getByTestId("status")).toContainText("Success");

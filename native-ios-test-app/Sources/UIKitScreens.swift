@@ -117,7 +117,21 @@ final class UIKitTableViewController: UITableViewController {
         var content = cell.defaultContentConfiguration()
         content.text = rows[indexPath.row]
         cell.contentConfiguration = content
-        cell.accessoryType = .disclosureIndicator
+        // Every row a disclosure chevron, except a few with UIKit's other
+        // accessories, keyed by text so a deleted row doesn't move them.
+        cell.accessoryView = nil
+        switch rows[indexPath.row] {
+        case "Row 6": cell.accessoryType = .detailDisclosureButton
+        case "Row 7": cell.accessoryType = .checkmark
+        case "Row 8":
+            // A custom accessory: a real button that is disabled.
+            let buy = UIButton(type: .system)
+            buy.setTitle("Buy", for: .normal)
+            buy.isEnabled = false
+            buy.sizeToFit()
+            cell.accessoryView = buy
+        default: cell.accessoryType = .disclosureIndicator
+        }
         return cell
     }
 

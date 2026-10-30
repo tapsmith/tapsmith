@@ -156,8 +156,9 @@ class SnapshotElementFinder {
     }
 
     /// The snapshot as the string-keyed dictionary the match walk reads,
-    /// with accessibility traits annotated and unloaded table rows' contents
-    /// placed at their rows (`CellFrames`).
+    /// with accessibility traits annotated, unloaded table rows' contents
+    /// placed at their rows (`CellFrames`) and rows' accessory indicators
+    /// normalised (`CellAccessories`).
     private func matchableDict(of snapshot: XCUIElementSnapshot) -> [String: Any] {
         var snapshotDict = convertKeys(snapshot.dictionaryRepresentation)
         Self.annotateTraits(dict: &snapshotDict, snapshot: snapshot)
@@ -165,6 +166,9 @@ class SnapshotElementFinder {
         // an unloaded table row's contents report a placeholder frame on
         // screen (PILOT-800).
         CellFrames.placeDetachedNodes(in: &snapshotDict)
+        // A table row's accessory indicator is enabled as its row, and no
+        // part of the row's text (PILOT-895).
+        CellAccessories.normalizeIndicators(in: &snapshotDict)
         return snapshotDict
     }
 
@@ -393,14 +397,12 @@ class SnapshotElementFinder {
                 displayText = title
             } else if !label.isEmpty {
                 displayText = label
-            } else if elType == .other {
+            } else if DescendantText.aggregates(elType) {
                 // Wrapping containers (e.g. RN `<View accessibilityRole="alert">`)
-                // carry their visible text in descendant nodes. Aggregate so
-                // assertions like toContainText see the visible string.
-                // Restricted to `.other` so we don't change behavior for typed
-                // elements that legitimately have no label (e.g. an empty
-                // ScrollView that wraps content).
-                let descendant = SnapshotElementFinder.collectDescendantText(nodeDict)
+                // and UIKit table rows carry their visible text in descendant
+                // nodes. Aggregate so assertions like toContainText and
+                // filter({ hasText }) see the visible string.
+                let descendant = DescendantText.collect(nodeDict)
                 displayText = descendant.isEmpty ? nil : descendant
             } else {
                 displayText = nil
@@ -1074,55 +1076,6 @@ class SnapshotElementFinder {
             children[i] = mutableChild
         }
         dict["children"] = children
-    }
-
-    /// Maximum recursion depth for `collectDescendantText`. Mirrors
-    /// Android's `MAX_DESCENDANT_TEXT_DEPTH` so both platforms bound
-    /// worst-case aggregation cost identically.
-    static let maxDescendantTextDepth = 6
-
-    /// Walk a snapshot subtree and concatenate descendant labels/values so a
-    /// wrapping container (e.g. RN `<View accessibilityRole="alert">`)
-    /// reports its visible text content. Mirrors Android's
-    /// `collectDescendantText`.
-    ///
-    /// Bounded by `maxDescendantTextDepth` so a misconfigured deeply
-    /// nested match doesn't drag the snapshot walk into pathological
-    /// behavior.
-    static func collectDescendantText(_ node: [String: Any], depth: Int = 0) -> String {
-        if depth >= maxDescendantTextDepth { return "" }
-        var parts: [String] = []
-        if let children = node["children"] as? [[String: Any]] {
-            for child in children {
-                // The hooks marker is no one's visible text (NonAppElements).
-                if NonAppElements.isHooksMarker(
-                    label: child["label"] as? String ?? "",
-                    title: child["title"] as? String ?? "",
-                    value: child["value"] as? String ?? ""
-                ) { continue }
-                let ownText: String?
-                if let v = child["value"] as? String, !v.isEmpty {
-                    ownText = v
-                } else if let t = child["title"] as? String, !t.isEmpty {
-                    ownText = t
-                } else if let l = child["label"] as? String, !l.isEmpty {
-                    ownText = l
-                } else {
-                    ownText = nil
-                }
-                if let own = ownText {
-                    // Child labels its own visible content; iOS accessibility
-                    // typically auto-concatenates descendant text into the
-                    // parent label already, so recursing further would
-                    // duplicate ("Hello Hello").
-                    parts.append(own)
-                } else {
-                    let nested = collectDescendantText(child, depth: depth + 1)
-                    if !nested.isEmpty { parts.append(nested) }
-                }
-            }
-        }
-        return parts.joined(separator: " ")
     }
 
     // MARK: - Key conversion

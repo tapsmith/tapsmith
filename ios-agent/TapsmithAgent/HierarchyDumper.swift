@@ -52,6 +52,8 @@ class HierarchyDumper {
         SnapshotElementFinder.annotateTraits(dict: &dict, snapshot: snapshot)
         // The same frames locators see (PILOT-800).
         CellFrames.placeDetachedNodes(in: &dict)
+        // The enabled state locators see (PILOT-895).
+        CellAccessories.normalizeIndicators(in: &dict)
         var keyboardTop: CGFloat?
         dumpNode(dict, depth: 1, inTabBar: false, insideNonApp: false, keyboardTop: &keyboardTop, into: &xml)
         xml += "</hierarchy>\n"

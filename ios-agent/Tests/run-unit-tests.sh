@@ -126,6 +126,15 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/cell-frames-tests"
 "$OUT/cell-frames-tests"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/CellAccessoriesTests/main.swift \
+  TapsmithAgent/CellAccessories.swift \
+  TapsmithAgent/DescendantText.swift \
+  TapsmithAgent/NonAppElements.swift \
+  -o "$OUT/cell-accessories-tests"
+"$OUT/cell-accessories-tests"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/DoubleTapRouteTests/main.swift \
   TapsmithAgent/DoubleTapRoute.swift \
