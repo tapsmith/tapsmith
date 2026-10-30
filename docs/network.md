@@ -498,7 +498,7 @@ expect(body.items).toHaveLength(2)
 
 ### `device.waitForResponse(urlOrPredicate, options?)`
 
-Wait for a response matching the pattern. Returns a `NetworkResponseEventData` with `method`, `url`, `status`, `headers`, `body`, and `routeAction`.
+Wait for a response matching the pattern. Returns a `NetworkResponseEventData` with `method`, `url`, `status`, `headers`, `body`, and `routeAction`. The `body` is decoded: chunked framing is removed and `gzip`, `deflate` or `br` compression is undone, while `headers` keep the values the server sent.
 
 ```typescript
 // Wait for a successful response

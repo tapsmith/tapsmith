@@ -13,6 +13,7 @@ import type * as grpc from '@grpc/grpc-js';
 import type { TapsmithGrpcClient } from './grpc-client.js';
 import { runOutsideAttempt } from './attempt-fence.js';
 import { getActiveTraceCollector, extractStack } from './trace/trace-collector.js';
+import { decodeHttpBodySync } from './http-body.js';
 import type { SourceLocation } from './trace/types.js';
 
 // ─── Public Types ───
@@ -26,7 +27,7 @@ export class TapsmithRequest {
   /** The request headers, with lowercased names. */
   readonly headers: Record<string, string>;
   /** The request body, or `null` when it has none. */
-  readonly postData: Buffer | null;
+  declare readonly postData: Buffer | null;
   /** Whether the request was made over HTTPS. */
   readonly isHttps: boolean;
 
@@ -37,6 +38,8 @@ export class TapsmithRequest {
     headers: Array<{ name: string; value: string }>
     body: Buffer | Uint8Array | null
     isHttps: boolean
+    /** The body is as it crossed the wire: undo its chunking and compression on first read. */
+    decodeBody?: boolean
   }) {
     this.method = data.method;
     this.url = data.url;
@@ -44,9 +47,29 @@ export class TapsmithRequest {
     for (const h of data.headers) {
       this.headers[h.name.toLowerCase()] = h.value;
     }
-    this.postData = data.body && data.body.length > 0 ? Buffer.from(data.body) : null;
+    const body = data.body && data.body.length > 0 ? Buffer.from(data.body) : null;
+    if (data.decodeBody) {
+      Object.defineProperty(this, 'postData', { get: lazyDecodedBody(body, this.headers), enumerable: true });
+    } else {
+      this.postData = body;
+    }
     this.isHttps = data.isHttps;
   }
+}
+
+/**
+ * A captured body decoded on its first read, then the same Buffer on every
+ * read. The proxy reports the wire bytes (chunk-framed, compressed); the
+ * caller gets them decoded, as the trace stores them and as Playwright's
+ * `response.body()` returns them. Decoding waits for a read because most
+ * listeners only look at the URL or status.
+ */
+function lazyDecodedBody(body: Buffer | null, headers: Record<string, string>): () => Buffer | null {
+  let decoded: Buffer | null | undefined;
+  return () => {
+    if (decoded === undefined) decoded = body && (decodeHttpBodySync(body, headers) ?? null);
+    return decoded;
+  };
 }
 
 /** Options for `route.continue()`. */
@@ -1201,6 +1224,7 @@ export class NetworkRouteManager {
       headers: msg.headers,
       body: msg.body,
       isHttps: msg.isHttps,
+      decodeBody: true,
     });
     for (const listener of this._requestListeners) {
       try {
@@ -1213,17 +1237,19 @@ export class NetworkRouteManager {
 
   /** Notify response event listeners. */
   private _handleResponseEvent(msg: ResponseEventMsg): void {
+    const headers: Record<string, string> = {};
+    for (const h of msg.headers ?? []) {
+      headers[h.name.toLowerCase()] = h.value;
+    }
+    const body = lazyDecodedBody(msg.body ? Buffer.from(msg.body) : null, headers);
     const data: NetworkResponseEventData = {
       method: msg.method,
       url: msg.url,
       status: msg.status,
-      headers: {},
-      body: msg.body ? Buffer.from(msg.body) : null,
+      headers,
+      get body() { return body(); },
       routeAction: msg.routeAction || undefined,
     };
-    for (const h of msg.headers ?? []) {
-      data.headers[h.name.toLowerCase()] = h.value;
-    }
     for (const listener of this._responseListeners) {
       try {
         listener(data);
@@ -1242,9 +1268,9 @@ export interface NetworkResponseEventData {
   url: string
   /** The response's HTTP status code. */
   status: number
-  /** The response headers. */
+  /** The response headers, as sent: `content-encoding` and `transfer-encoding` describe the wire bytes, not {@link body}. */
   headers: Record<string, string>
-  /** The response body, or `null` when it has none. */
+  /** The response body, de-chunked and decompressed (gzip, deflate, br), or `null` when it has none. A body in a coding Tapsmith cannot decode is left as received. */
   body: Buffer | null
   /** What a matching `device.route()` handler did: `continued`, `mocked` (fulfilled) or `aborted`; unset when none ran. */
   routeAction?: string

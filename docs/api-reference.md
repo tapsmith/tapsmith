@@ -736,7 +736,9 @@ Wait for a network request matching the pattern. Starts the network proxy on dem
 
 #### `device.waitForResponse(urlOrPredicate, options?): Promise<NetworkResponseEventData>`
 
-Wait for a network response matching the pattern. Starts the network proxy on demand and reports a failed start, or a timeout that capture likely caused,, as `device.waitForRequest()` does.
+Wait for a network response matching the pattern. Starts the network proxy on demand and reports a failed start, or a timeout that capture likely caused, as `device.waitForRequest()` does.
+
+Resolves with a `NetworkResponseEventData`: `method`, `url`, `status`, `headers`, `body` (`Buffer | null`) and `routeAction`. `body` is decoded, as Playwright's `response.body()` is: chunked framing is removed and a `gzip`, `deflate` or `br` `Content-Encoding` is decompressed, so `JSON.parse(resp.body!.toString())` works against a compressing server. `headers` stay as sent, so `content-encoding` and `transfer-encoding` describe the wire bytes, not `body`. A body in another coding (such as `zstd`) is left as received. The `postData` of a request from `device.waitForRequest()` or `device.on('request')` is decoded the same way.
 
 A waiter belongs to the test that creates it. If the test ends first (say, a step before `await` fails), the waiter ends with it and can't time out later in another test. A waiter that times out while its test is still running, without being awaited, fails that test. Waiters created in a `beforeAll` hook last until the file ends.
 

@@ -6,7 +6,7 @@
 //
 // The bodies the viewer receives are already decoded: the runner strips
 // chunked framing and undoes gzip/deflate/br before storing them
-// (`decodeHttpBody` in runner.ts), but leaves the headers as they were sent.
+// (`decodeHttpBody` in http-body.ts), but leaves the headers as they were sent.
 // So Content-Encoding and Transfer-Encoding describe the wire, not these
 // bytes, and the recorded sizes are wire sizes.
 
@@ -428,7 +428,7 @@ function jpegEndsEarly(body: Uint8Array): boolean {
   return true;
 }
 
-/** Codings `decodeHttpBody` in runner.ts undoes, as it compares them: the
+/** Codings `decodeHttpBody` (http-body.ts) undoes, as it compares them: the
  * whole header value, so a stacked coding like `gzip, br` is not one. */
 const RUNNER_DECODED_CODINGS = new Set(['gzip', 'x-gzip', 'deflate', 'br']);
 
