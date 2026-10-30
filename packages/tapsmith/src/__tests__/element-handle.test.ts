@@ -6225,6 +6225,22 @@ describe('scrollIntoView() checks the element is still on screen once the list h
     expect(swipes(swipe).map((s) => s[0])).toEqual(['up', 'down']);
   });
 
+  it('keeps scrolling back, gently, when the first swipe back does not reach the element', async () => {
+    for (const direction of [undefined, 'down'] as const) {
+      const findElements = scripted([null, null, at(400, 472), gone, gone, gone, ...afterSwipe(gone), at(300, 372)]);
+      const swipe = vi.fn(async () => successResponse());
+      const client = listClient(findElements, swipe);
+
+      await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView(direction ? { direction } : undefined);
+
+      expect(swipes(swipe)).toEqual([
+        ['up', 2000, 0.6],
+        ['down', 1000, 0.3],
+        ['down', 1000, 0.3],
+      ]);
+    }
+  });
+
   it('scrolls back even with an explicit direction: the element was seen, so where it is is known', async () => {
     const findElements = scripted([null, null, at(400, 472), gone, gone, gone, at(300, 372)]);
     const swipe = vi.fn(async () => successResponse());
@@ -6236,7 +6252,8 @@ describe('scrollIntoView() checks the element is still on screen once the list h
   });
 
   it('nudges a row left cut at the top edge of its list back into it', async () => {
-    const findElements = scripted([null, null, at(118, 140), at(118, 140), at(118, 140), at(250, 322)]);
+    // Seen whole mid-fling, then clipped to a 22 pt sliver at the top edge.
+    const findElements = scripted([null, null, at(150, 222), at(118, 140), at(118, 140), at(118, 140), at(250, 322)]);
     const swipe = vi.fn(async () => successResponse());
     const client = listClient(findElements, swipe);
 
@@ -6262,9 +6279,27 @@ describe('scrollIntoView() checks the element is still on screen once the list h
     ]);
   });
 
-  it('stops nudging once a nudge leaves the element where it was: the content is at its end', async () => {
-    // The last row of a list rests flush with the list's bottom edge.
-    const findElements = scripted([null, null, at(710, 782)]);
+  it('leaves a row resting whole against an edge alone: a swipe further would only pull past the end of the content', async () => {
+    // The first row, back at the top of the list (a pull past it could start
+    // a pull-to-refresh), and the last row at the bottom.
+    for (const [row, direction] of [
+      [at(118, 190), 'up'],
+      [at(710, 782), 'down'],
+    ] as const) {
+      const findElements = scripted([null, null, row]);
+      const swipe = vi.fn(async () => successResponse());
+      const client = listClient(findElements, swipe);
+
+      await new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction, maxScrolls: 15 });
+
+      expect(swipe).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('stops nudging once a nudge leaves the element where it was', async () => {
+    // The last row reaches past the list's bottom and the content is at its
+    // end: a nudge cannot move it.
+    const findElements = scripted([null, null, at(740, 812)]);
     const swipe = vi.fn(async () => successResponse());
     const client = listClient(findElements, swipe);
 

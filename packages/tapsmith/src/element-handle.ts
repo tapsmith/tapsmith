@@ -759,23 +759,31 @@ function usableFrame(el: ElementInfo | undefined): Rect | undefined {
   return b && b.right > b.left && b.bottom > b.top ? b : undefined;
 }
 
+/** How far past a container's edge a frame may reach and still count as inside it: rounding, and an iOS bounce settling. */
+const EDGE_SLACK = 4;
+
 /**
  * The way to scroll to bring an on-screen element fully inside the scroll
  * container `region`, when an edge of the container cuts it along the axis of
  * `direction` (the way the last swipe scrolled), else `undefined` (PILOT-935).
  * Momentum can leave a row cut at either edge: past the edge the view scrolled
- * toward, or short of the other. A frame within a pixel of an edge counts as
- * cut, since Flutter clips its frames to the viewport, so a row sliding out
- * keeps the edge's coordinate. A frame that reaches both edges spans the
- * container and cannot fit any better.
+ * toward, or short of the other. A frame is cut when it reaches past an edge,
+ * or when it touches one and is smaller than `fullSize`, the largest size seen
+ * for it along that axis: Flutter clips its frames to the viewport, so a row
+ * sliding out keeps the edge's coordinate and shrinks. A frame that touches an
+ * edge at its full size is not cut: it rests at the end of the content (the
+ * first row at the top of a list), where a swipe further would only pull past
+ * the end and could start a pull-to-refresh. A frame that reaches both edges
+ * spans the container and cannot fit any better.
  */
-function cutByEdge(frame: Rect, region: Rect, direction: SwipeDirection): SwipeDirection | undefined {
+function cutByEdge(frame: Rect, region: Rect, direction: SwipeDirection, fullSize: number): SwipeDirection | undefined {
   const vertical = direction === 'up' || direction === 'down';
   const [start, end, regionStart, regionEnd] = vertical
     ? [frame.top, frame.bottom, region.top, region.bottom]
     : [frame.left, frame.right, region.left, region.right];
-  const atStart = start <= regionStart + 1;
-  const atEnd = end >= regionEnd - 1;
+  const shrunk = end - start < fullSize - EDGE_SLACK;
+  const atStart = start < regionStart - EDGE_SLACK || (shrunk && start <= regionStart + 1);
+  const atEnd = end > regionEnd + EDGE_SLACK || (shrunk && end >= regionEnd - 1);
   if (atStart === atEnd) return undefined;
   if (atStart) return vertical ? 'up' : 'left';
   return vertical ? 'down' : 'right';
@@ -3712,6 +3720,16 @@ export class ElementHandle {
     // about where the element is, so swiping on it would be a blind gesture
     // that can displace an already-visible target — e.g. shift it under a
     // pinned app bar so the follow-up tap silently misses (PILOT-283).
+    // The largest size seen for the element in any read of this call
+    // (PILOT-935): a frame clipped to the edge of its list is smaller.
+    let fullWidth = 0;
+    let fullHeight = 0;
+    const noteSize = (el: ElementInfo): void => {
+      const b = el.bounds;
+      if (!b) return;
+      fullWidth = Math.max(fullWidth, b.right - b.left);
+      fullHeight = Math.max(fullHeight, b.bottom - b.top);
+    };
     type Probe =
       | { outcome: 'visible'; el: ElementInfo }
       | { outcome: 'miss'; el?: ElementInfo }
@@ -3744,6 +3762,7 @@ export class ElementHandle {
           return { outcome: 'miss' };
         case 'found':
           lastTransientErr = undefined;
+          noteSize(tick.element);
           return tick.element.visible
             ? { outcome: 'visible', el: tick.element }
             : { outcome: 'miss', el: tick.element };
@@ -3965,6 +3984,7 @@ export class ElementHandle {
                 continue;
               }
               settled = stabilityTick.element;
+              noteSize(settled);
               if (curFrame === lastFrame) {
                 if (++stableTicks >= 2) break;
               } else {
@@ -3982,7 +4002,7 @@ export class ElementHandle {
           const settledFrame = frameKey(settled);
           const nudge =
             swipes > 0 && last === 'visible' && region && settled.bounds && settledFrame !== nudgedFrom
-              ? cutByEdge(settled.bounds, region, direction)
+              ? cutByEdge(settled.bounds, region, direction, direction === 'up' || direction === 'down' ? fullHeight : fullWidth)
               : undefined;
           if (!lost && (!nudge || swipes >= maxScrolls)) {
             await this._traceQuery(
