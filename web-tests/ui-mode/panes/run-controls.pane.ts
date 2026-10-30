@@ -51,6 +51,11 @@ export class RunControlsPane {
     return this.workerChips.filter({ hasText: displayName })
   }
 
+  /** Stands in for the device chips while the session's test workers start. */
+  get workersStarting() {
+    return this.page.getByTestId("workers-starting")
+  }
+
   /** The short readiness word inside a chip ("ready", "preparing…", "stale"). */
   get readinessWords() {
     return this.page.getByTestId("worker-readiness")

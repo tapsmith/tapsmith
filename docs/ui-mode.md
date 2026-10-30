@@ -115,6 +115,8 @@ Every UI session runs tests in a persistent worker process per device. With a si
 
 When `workers > 1`, one worker per device is started, files are dispatched across them in parallel, and per-worker device screens are displayed in the UI.
 
+The page opens while the workers are still starting: the top bar shows **Starting devices…** with how many are up, and each device appears as soon as startup ends. A run you start before then waits for the workers (the page says so, and **Stop** cancels it) and begins once they are ready.
+
 ```bash
 npx tapsmith test --ui --workers 4
 ```
@@ -131,7 +133,7 @@ Teams can set the session default in the config — `ui: { prepareBetweenRuns: f
 
 ### Fresh code on every run
 
-Test files are re-imported on every run. Files they import — page objects, fixtures, helpers — live in the worker's module cache, so when one of those changes under your project root the UI recycles the worker (a ~1–2 s process restart against the same daemon; the device is untouched). A change during a run is applied as soon as the run ends. Use **Respawn worker** if a device session ever needs to be rebuilt from scratch.
+Test files are re-imported on every run. Files they import — page objects, fixtures, helpers — live in the worker's module cache, so when one of those changes under your project root the UI recycles the worker (a ~1–2 s process restart against the same daemon; the device is untouched). A change during a run is applied as soon as the run ends. Use **Respawn worker** (right-click the device in the top bar) if a device session ever needs to be rebuilt from scratch.
 
 ## Mutual exclusion
 
