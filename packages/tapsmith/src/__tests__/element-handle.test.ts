@@ -6201,7 +6201,9 @@ describe('scrollIntoView() checks the element is still on screen once the list h
   });
 
   it('scrolls back when the element dropped out of the tree while the list was settling (Android lists on-screen nodes only)', async () => {
-    const findElements = scripted([null, null, at(400, 472), null, null, null, null, null, null, null, null, null, null, at(300, 372)]);
+    // Seen at the first watch read, then out of the tree for every settle
+    // read: 10, plus the 4 the early sighting adds.
+    const findElements = scripted([null, null, at(400, 472), ...Array<null>(14).fill(null), at(300, 372)]);
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({ findElements, swipe });
 
@@ -6294,6 +6296,37 @@ describe('scrollIntoView() checks the element is still on screen once the list h
 
       expect(swipe).toHaveBeenCalledTimes(1);
     }
+  });
+
+  it('stops nudging when a nudge would undo the last one: the element is too long to fit wholly inside', async () => {
+    // A 640 pt card in the 664 pt list: cut at the top, nudged down 200 pt,
+    // now cut at the bottom; nudging back would swing it to and fro.
+    const findElements = scripted([null, null, at(100, 740), at(100, 740), at(100, 740), at(300, 940)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Card'), 5000).scrollIntoView({ maxScrolls: 15 });
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['down', 1000, 0.3],
+    ]);
+  });
+
+  it('settles at least as long after a swipe as before the watch, when the watch sees the element early', async () => {
+    // Seen at the first watch read (~100 ms after the swipe), then still
+    // moving for 12 more reads: the 10-read settle alone would stop while it
+    // moves; the 400 ms the watch saved buys 4 more reads.
+    const moving = Array.from({ length: 12 }, (_, i) => at(300 + 10 * i, 372 + 10 * i));
+    const findElements = scripted([null, null, at(290, 362), ...moving, at(420, 492)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    // Probe and confirmation, the watch read, then 12 moving reads and 2 still ones.
+    expect(findElements).toHaveBeenCalledTimes(2 + 1 + 12 + 2);
+    expect(swipe).toHaveBeenCalledTimes(1);
   });
 
   it('stops nudging once a nudge leaves the element where it was', async () => {
@@ -6706,8 +6739,9 @@ describe("scrollIntoView honours the handle's modifiers (PILOT-345)", () => {
     await handle.scrollIntoView();
 
     expect(swipe).toHaveBeenCalledTimes(1);
-    // 3 pre-visible reads + all 10 stabilization ticks (never a clean reading).
-    expect(findElements).toHaveBeenCalledTimes(13);
+    // 3 pre-visible reads + all stabilization ticks (never a clean reading):
+    // 10, plus 4 because the element was seen at the first read after the swipe.
+    expect(findElements).toHaveBeenCalledTimes(17);
   });
 
   it('a one-tick miss during post-swipe stabilization is waited out, not taken as "settled" (review follow-up)', async () => {

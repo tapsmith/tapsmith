@@ -3831,7 +3831,17 @@ export class ElementHandle {
       // nudge that leaves it there met the end of the content (the last row
       // of a list rests against the edge), so it is as far in as it goes.
       let nudgedFrom: string | undefined;
+      // The direction of the last nudge since the last search swipe: a nudge
+      // that would reverse it means the element cannot sit wholly inside its
+      // container at a nudge's step (a card nearly as long as its list), and
+      // nudging on would swing it back and forth.
+      let lastNudge: SwipeDirection | undefined;
+      // Settle ticks owed when the watch hands the element over before
+      // SCROLL_SETTLE_MS has passed, so the settle waits at least as long
+      // after a swipe as it did when a fixed sleep came first.
+      let settleExtraTicks = 0;
       const swipe = async (): Promise<void> => {
+        settleExtraTicks = 0;
         const opts = gentle
           ? { speed: Math.min(speed, SCROLL_GENTLE_MAX_SPEED), distance: SCROLL_GENTLE_DISTANCE }
           : { speed, distance: 0.6 };
@@ -3867,6 +3877,7 @@ export class ElementHandle {
           }
           if (seen.outcome === 'visible' || elapsed >= SCROLL_SETTLE_MS) {
             nextProbe = seen;
+            settleExtraTicks = Math.max(0, Math.ceil((SCROLL_SETTLE_MS - elapsed) / SCROLL_WATCH_INTERVAL_MS));
             return;
           }
         }
@@ -3915,7 +3926,8 @@ export class ElementHandle {
           if (swipes > 0) {
             // Settled = the frame has held for two consecutive ticks (three
             // equal reads, ~200ms of observed stillness on top of
-            // SCROLL_SETTLE_MS). The reads below are single live snapshots, so
+            // SCROLL_SETTLE_MS, which the watch's reads count toward: a
+            // hand-over before it adds the ticks it saved). The reads below are single live snapshots, so
             // one matching pair could be a momentary velocity null or a
             // stalled frame mid-deceleration; the `findElement` read this
             // replaced settled agent-side on Android (WaitEngine, three
@@ -3930,7 +3942,8 @@ export class ElementHandle {
             const trackable = el.bounds?.top !== undefined;
             let lastFrame = frameKey(el);
             let stableTicks = 0;
-            for (let s = 0; s < 10; s++) {
+            const maxTicks = 10 + settleExtraTicks;
+            for (let s = 0; s < maxTicks; s++) {
               await sleep(100, this._client._getAbortSignal?.());
               // The same modifier-aware, live read as the probe, so a filtered
               // or scoped handle tracks ITS element's position, not the raw
@@ -4000,10 +4013,11 @@ export class ElementHandle {
           // does not carry it past again, and within maxScrolls.
           const lost = swipes > 0 && (last === 'hidden' || last === 'gone');
           const settledFrame = frameKey(settled);
-          const nudge =
+          const cut =
             swipes > 0 && last === 'visible' && region && settled.bounds && settledFrame !== nudgedFrom
               ? cutByEdge(settled.bounds, region, direction, direction === 'up' || direction === 'down' ? fullHeight : fullWidth)
               : undefined;
+          const nudge = cut && lastNudge && cut === OPPOSITE_DIRECTION[lastNudge] ? undefined : cut;
           if (!lost && (!nudge || swipes >= maxScrolls)) {
             await this._traceQuery(
               'scrollIntoView',
@@ -4016,6 +4030,7 @@ export class ElementHandle {
           gentle = true;
           if (nudge) {
             nudgedFrom = settledFrame;
+            lastNudge = nudge;
             direction = nudge;
             if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
             // This swipe moves an element already found, so it is not judged
@@ -4084,6 +4099,7 @@ export class ElementHandle {
         // which container that is, and the last region stands in while the
         // element is still moving and its frame matches nothing in the dump.
         if (read) region = scrollRegion(read.xml, usableFrame(result.el), region);
+        lastNudge = undefined;
         await swipe();
       }
 
