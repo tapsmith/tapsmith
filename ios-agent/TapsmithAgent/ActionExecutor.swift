@@ -261,55 +261,29 @@ class ActionExecutor {
         guard frame.width > 0 && frame.height > 0 else {
             throw AgentError.actionFailed("Element has zero frame — cannot swipe")
         }
-        let center = CGPoint(x: frame.midX, y: frame.midY)
-        let swipeDistance = try axisDistance(
-            direction: direction,
-            width: frame.width,
-            height: frame.height,
-            ratio: distance
-        )
-        try swipeFromCenter(center, direction: direction, distance: swipeDistance, speed: speed)
+        try swipeRegion(frame, direction: direction, speed: speed, distance: distance)
     }
 
     /// Swipe on the full screen using event synthesis.
     func swipeScreen(direction: String, speed: Int = 5000, distance: Double = 0.5) throws {
         let screenSize = cachedScreenSize ?? app.windows.firstMatch.frame.size
-        let center = CGPoint(x: screenSize.width / 2, y: screenSize.height / 2)
-        let swipeDistance = try axisDistance(
-            direction: direction,
-            width: screenSize.width,
-            height: screenSize.height,
-            ratio: distance
-        )
-        try swipeFromCenter(center, direction: direction, distance: swipeDistance, speed: speed)
+        try swipeRegion(CGRect(origin: .zero, size: screenSize), direction: direction, speed: speed, distance: distance)
     }
 
-    private func axisDistance(direction: String, width: CGFloat, height: CGFloat, ratio: Double) throws -> CGFloat {
-        let clampedRatio = min(0.5, max(0, ratio))
-        switch direction.lowercased() {
-        case "up", "down":
-            return height * CGFloat(clampedRatio)
-        case "left", "right":
-            return width * CGFloat(clampedRatio)
-        default:
-            throw AgentError.actionFailed("Unknown swipe direction: \(direction). Use up/down/left/right.")
+    /// Swipe inside `region` (screen points) from its centre (SwipeGeometry).
+    /// scrollIntoView() sends the scroll container it picked (PILOT-934).
+    func swipeRegion(_ region: CGRect, direction: String, speed: Int = 5000, distance: Double = 0.5) throws {
+        guard region.width > 0 && region.height > 0 else {
+            throw AgentError.actionFailed(
+                "Cannot swipe in an empty region [\(Int(region.minX)),\(Int(region.minY))][\(Int(region.maxX)),\(Int(region.maxY))]"
+            )
         }
-    }
-
-    /// Perform a swipe gesture via EventSynthesizer from a center point.
-    private func swipeFromCenter(_ center: CGPoint, direction: String, distance: CGFloat, speed: Int) throws {
-        let end: CGPoint
-        switch direction.lowercased() {
-        case "up":    end = CGPoint(x: center.x, y: center.y - distance)
-        case "down":  end = CGPoint(x: center.x, y: center.y + distance)
-        case "left":  end = CGPoint(x: center.x - distance, y: center.y)
-        case "right": end = CGPoint(x: center.x + distance, y: center.y)
-        default:
+        guard let points = SwipeGeometry.endpoints(in: region, direction: direction, ratio: distance) else {
             throw AgentError.actionFailed("Unknown swipe direction: \(direction). Use up/down/left/right.")
         }
         // Map speed to duration: faster speed = shorter duration
         let duration = speed >= 10000 ? 0.1 : speed <= 1000 ? 0.8 : 0.3
-        if !EventSynthesizer.swipe(from: center, to: end, duration: duration) {
+        if !EventSynthesizer.swipe(from: points.start, to: points.end, duration: duration) {
             throw AgentError.actionFailed("Swipe event synthesis failed")
         }
     }

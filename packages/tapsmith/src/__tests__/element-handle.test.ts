@@ -5733,7 +5733,7 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
 
     await expect(
       new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction: 'up', maxScrolls: 1 }),
-    ).rejects.toThrow(/was not visible after 1 scroll\(s\) in direction "up"$/);
+    ).rejects.toThrow(/was not visible after 1 scroll\(s\) in direction "up"\. No scrollable container was found on screen/);
   });
 });
 
@@ -5801,8 +5801,8 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
         'on screen: the screen stopped changing after 3 scroll(s) in direction "down" ' +
         '(the default: the element was not on screen or in the tree, so its position was not known; ' +
         'pass { direction: "up" } for an element above the screen). ' +
-        'If the content can scroll further, the swipe, which crosses the middle of the screen, did not move it: ' +
-        'scroll() the list that holds the element.',
+        'No scrollable container was found on screen, so the swipe crossed the middle of the screen: if the content ' +
+        'can scroll further, scroll() the list that holds the element (for example getByRole("scrollview").scroll("down")).',
     );
     expect(swipe).toHaveBeenCalledTimes(3);
   });
@@ -5951,6 +5951,129 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
 
     await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(
       /reached the end of the scrollable content .* stopped changing after 2 scroll\(s\)/,
+    );
+  });
+});
+
+// PILOT-934: each swipe runs inside the scroll container that holds the
+// element (picked from the dump scrollIntoView() reads before each swipe), so
+// it cannot start outside a dialog or on a header above the list. The screen
+// is swiped only when nothing on screen scrolls, and the error then says so.
+describe('scrollIntoView() swipes inside the scroll container (PILOT-934)', () => {
+  const absent = () => vi.fn(async () => makeFindElementsResponse([]));
+  const regions = (swipe: ReturnType<typeof vi.fn>) =>
+    swipe.mock.calls.map((c) => (c as unknown[])[1] as { region?: unknown }).map((o) => o.region);
+  /** An Android screen: a header, then a list (PILOT-348), `n` making each dump differ. */
+  const listScreen = (n: number) =>
+    `<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+    `<node class="android.widget.TextView" text="30 items ${n}" bounds="[0,63][1080,563]"/>` +
+    `<node class="android.widget.ScrollView" scrollable="true" bounds="[0,563][1080,2400]"/></node></hierarchy>`;
+  const listRegion = { left: 0, top: 563, right: 1080, bottom: 2400 };
+
+  it('swipes inside the list below a fixed header, not across the middle of the screen', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1), listScreen(2)].concat(listScreen(3)))),
+    });
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow();
+
+    expect(regions(swipe)).toEqual([listRegion, listRegion]);
+    expect(swipe).toHaveBeenCalledWith('up', { speed: 2000, distance: 0.6, region: listRegion });
+  });
+
+  it("swipes inside the scroll view that holds an off-screen element whose frame the tree reports (iOS)", async () => {
+    const offScreenRow = makeElementInfo({ text: 'Max Calories', visible: false, bounds: { left: 20, top: 1200, right: 382, bottom: 1244 } });
+    const findElements = vi.fn(async () => makeFindElementsResponse([offScreenRow]));
+    const sheet = (n: number) =>
+      `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
+      `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,0][402,874]"/>` +
+      `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" label="${n}" bounds="[20,400][382,800]">` +
+      `<XCUIElementTypeStaticText type="XCUIElementTypeStaticText" label="Max Calories" bounds="[20,1200][382,1244]"/>` +
+      `</XCUIElementTypeScrollView></XCUIElementTypeApplication></hierarchy>`;
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([sheet(0), sheet(1)])) });
+
+    await expect(new ElementHandle(client, _text('Max Calories'), 5000).scrollIntoView({ maxScrolls: 1 })).rejects.toThrow();
+
+    expect(regions(swipe)).toEqual([{ left: 20, top: 400, right: 382, bottom: 800 }]);
+  });
+
+  it('keeps the last container while the element is still moving, so its frame matches nothing in the dump (iOS)', async () => {
+    // The probe reads Card 15 at x=2200, then at x=1800; each dump has it
+    // somewhere else, as momentum carries the carousel on.
+    const card = (left: number) =>
+      makeElementInfo({ text: 'Card 15', visible: false, bounds: { left, top: 200, right: left + 200, bottom: 400 } });
+    let probes = 0;
+    const findElements = vi.fn(async () => makeFindElementsResponse([card(probes++ < 2 ? 2200 : 1800)]));
+    const carousel = (cardLeft: number) =>
+      `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
+      `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,0][402,874]">` +
+      `<XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" value="${cardLeft}" bounds="[0,200][402,400]">` +
+      `<XCUIElementTypeCell type="XCUIElementTypeCell" label="Card 15" bounds="[${cardLeft},200][${cardLeft + 200},400]"/>` +
+      `</XCUIElementTypeCollectionView></XCUIElementTypeScrollView></XCUIElementTypeApplication></hierarchy>`;
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements,
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([carousel(2200), carousel(1650), carousel(1500)])),
+    });
+
+    await expect(
+      new ElementHandle(client, _text('Card 15'), 5000).scrollIntoView({ direction: 'right', maxScrolls: 2 }),
+    ).rejects.toThrow();
+
+    const carouselRegion = { left: 0, top: 200, right: 402, bottom: 400 };
+    expect(regions(swipe)).toEqual([carouselRegion, carouselRegion]);
+  });
+
+  it('keeps the last container when a screen read fails, rather than swiping the screen', async () => {
+    let reads = 0;
+    const getUiHierarchy = vi.fn(async (): Promise<UiHierarchyResponse> => {
+      reads++;
+      return reads === 1
+        ? { requestId: '1', hierarchyXml: listScreen(0), errorMessage: '' }
+        : { requestId: '1', hierarchyXml: '', errorMessage: 'dump failed' };
+    });
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: absent(), swipe, getUiHierarchy });
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 3 })).rejects.toThrow();
+
+    expect(regions(swipe)).toEqual([listRegion, listRegion, listRegion]);
+  });
+
+  it('swipes the screen when nothing on screen scrolls, and the failure says so', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: absent(), swipe });
+
+    await expect(
+      new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ direction: 'down', maxScrolls: 2 }),
+    ).rejects.toThrow(
+      'scrollIntoView: getByText("Item 99", { exact: true }) was not visible after 2 scroll(s) in direction "down". ' +
+        'No scrollable container was found on screen, so the swipe crossed the middle of the screen: if the element is ' +
+        'in a list, scroll() that list instead (for example getByRole("scrollview").scroll("down")).',
+    );
+    expect(regions(swipe)).toEqual([undefined, undefined]);
+  });
+
+  it('names the container it swiped in when the content stopped moving', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: absent(),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([listScreen(0)])),
+    });
+
+    await expect(
+      new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ direction: 'up' }),
+    ).rejects.toThrow(
+      'scrollIntoView: reached the end of the scrollable content without finding getByText("Item 99", { exact: true }) ' +
+        'on screen: the screen stopped changing after 1 scroll(s) in direction "up" (pass { direction: "down" } to scroll ' +
+        'the other way). If the content can scroll further, the swipe inside the scrollable at [0,563][1080,2400] did not ' +
+        'move it: scroll() the list that holds the element.',
     );
   });
 });

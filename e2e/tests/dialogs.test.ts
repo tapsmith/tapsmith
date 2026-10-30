@@ -100,3 +100,30 @@ describe("Dialogs screen", () => {
     await expect(device.getByTestId("modal").getByRole("button", { name: "Cancel" })).toHaveCount(1)
   })
 })
+
+// PILOT-934: scrollIntoView() swipes inside the scroll container that holds
+// the element. A swipe across the middle of the screen starts below this
+// sheet, on the backdrop, and closes it.
+//
+// Its own describe: the modal tests above leave their modal open, so this
+// one restarts the app first.
+describe("Dialogs screen — a scrolling sheet", () => {
+  test("scrollIntoView() scrolls a sheet's content without closing the sheet", async ({ device, dialogsScreen }) => {
+    // A process restart closes the modal the tests above left open.
+    await device.resetApp({ mode: "restart", fallback: false })
+    await openScreen(device, "/dialogs")
+    await expect(dialogsScreen.heading).toBeVisible()
+    await dialogsScreen.showSheetButton.scrollIntoView()
+    await dialogsScreen.showSheetButton.tap()
+    await expect(dialogsScreen.sheetTitle).toBeVisible()
+
+    await dialogsScreen.sheetItem(30).scrollIntoView({ maxScrolls: 15 })
+    await expect(dialogsScreen.sheetItem(30)).toBeVisible()
+    await expect(dialogsScreen.sheetTitle).toBeVisible()
+
+    // And back up: Android cannot see the row above, so it is told the way.
+    await dialogsScreen.sheetItem(1).scrollIntoView({ direction: "up", maxScrolls: 15 })
+    await expect(dialogsScreen.sheetItem(1)).toBeVisible()
+    await expect(dialogsScreen.sheetTitle).toBeVisible()
+  })
+})

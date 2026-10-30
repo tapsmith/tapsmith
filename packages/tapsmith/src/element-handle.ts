@@ -26,6 +26,7 @@ import {
 import { iosUnnamedRoleMissHint, unknownRoleMessage, type Role } from './roles.js';
 import type { SwipeDirection } from './input-names.js';
 import { onScreenSignature } from './screen-signature.js';
+import { scrollRegion, type Rect } from './scroll-container.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
@@ -738,6 +739,17 @@ function scrollToward(el: ElementInfo | undefined): SwipeDirection | undefined {
   if (b.bottom <= 0) return 'up';
   if (b.right <= 0) return 'left';
   return 'down';
+}
+
+/** An element's frame, when it has a usable one: what tells scrollRegion() which container holds it. */
+function usableFrame(el: ElementInfo | undefined): Rect | undefined {
+  const b = el?.bounds;
+  return b && b.right > b.left && b.bottom > b.top ? b : undefined;
+}
+
+/** Bounds as the hierarchy dump writes them: `[left,top][right,bottom]`. */
+function formatRect(r: Rect): string {
+  return `[${r.left},${r.top}][${r.right},${r.bottom}]`;
 }
 
 /**
@@ -3616,6 +3628,12 @@ export class ElementHandle {
    * soon as a swipe changes nothing on screen: the content reached its end,
    * or the swipe missed the list.
    *
+   * Each swipe runs inside the scroll container that holds the element: its
+   * nearest scrollable ancestor on screen when the device reports where the
+   * element is (iOS), else the largest scrollable on screen (on Android, in
+   * the topmost window: a dialog's or bottom sheet's, over the screen's).
+   * The screen is swiped only when nothing on it scrolls.
+   *
    * Without a `direction`, it scrolls the way the element lies, when the
    * device reports where it is (iOS lists off-screen elements with their
    * frames): `"up"` for one above the screen, `"left"` for one to its left,
@@ -3687,16 +3705,18 @@ export class ElementHandle {
       }
     };
 
-    // What is on screen, as the device describes it, to tell whether a swipe
-    // moved anything (PILOT-929): a swipe that leaves it unchanged reached the
-    // end of the content, or missed the list. Off-screen elements are left
-    // out (see onScreenSignature). `undefined` when it cannot be read, which
-    // leaves the swipe unjudged rather than failing the scroll; a user stop
-    // propagates (PILOT-222).
-    const readScreen = async (): Promise<string | undefined> => {
+    // What is on screen, as the device describes it: its signature, to tell
+    // whether a swipe moved anything (PILOT-929) — a swipe that leaves it
+    // unchanged reached the end of the content, or missed the list; off-screen
+    // elements are left out (see onScreenSignature) — and the dump, to pick
+    // the scroll container to swipe in (PILOT-934). `undefined` when it cannot
+    // be read, which leaves the swipe unjudged rather than failing the scroll;
+    // a user stop propagates (PILOT-222).
+    const readScreen = async (): Promise<{ signature: string; xml: string } | undefined> => {
       try {
         const res = await this._client.getUiHierarchy(SCROLL_SCREEN_READ_DEADLINE_MS);
-        return res.errorMessage || !res.hierarchyXml ? undefined : onScreenSignature(res.hierarchyXml);
+        if (res.errorMessage || !res.hierarchyXml) return undefined;
+        return { signature: onScreenSignature(res.hierarchyXml), xml: res.hierarchyXml };
       } catch (err) {
         if (isAbortError(err)) throw err;
         return undefined;
@@ -3727,6 +3747,10 @@ export class ElementHandle {
       // whether a swipe has since been seen to change nothing.
       let screenBeforeSwipe: string | undefined;
       let reachedEnd = false;
+      // The scroll container the last swipe ran in (PILOT-934), or undefined
+      // when it swiped the screen because nothing on screen scrolls. Kept for
+      // the next swipe when the screen cannot be read.
+      let region: Rect | undefined;
       for (;;) {
         let result = await probe();
 
@@ -3852,7 +3876,8 @@ export class ElementHandle {
         // swipe means that swipe moved nothing, so more of them will not
         // either (PILOT-929). Read only here, on a miss, so a scroll that
         // finds its element pays for no read after the last swipe.
-        let screen = await readScreen();
+        let read = await readScreen();
+        let screen = read?.signature;
         if (swipes > 0 && screen !== undefined && screen === screenBeforeSwipe) {
           // Confirm once: let a tree that lags the swipe catch up first.
           try {
@@ -3860,7 +3885,8 @@ export class ElementHandle {
           } catch (err) {
             if (isAbortError(err)) throw err;
           }
-          screen = await readScreen();
+          read = await readScreen();
+          screen = read?.signature;
           if (screen !== undefined && screen === screenBeforeSwipe) {
             reachedEnd = true;
             break;
@@ -3878,7 +3904,16 @@ export class ElementHandle {
           }
         }
         if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
-        const swipeRes = await this._client.swipe(OPPOSITE_DIRECTION[direction], { speed, distance: 0.6 });
+        // Inside the scroll container that holds the element, so the swipe
+        // cannot start outside a dialog or on a header above the list
+        // (PILOT-934); the element's frame, when the tree reports it, says
+        // which container that is, and the last region stands in while the
+        // element is still moving and its frame matches nothing in the dump.
+        if (read) region = scrollRegion(read.xml, usableFrame(result.el), region);
+        const swipeRes = await this._client.swipe(
+          OPPOSITE_DIRECTION[direction],
+          region ? { speed, distance: 0.6, region } : { speed, distance: 0.6 },
+        );
         if (!swipeRes.success) {
           throw new Error(swipeRes.errorMessage || 'Swipe failed during scrollIntoView');
         }
@@ -3897,15 +3932,23 @@ export class ElementHandle {
       } else if (reachedEnd && explicitDirection !== undefined) {
         how += ` (pass { direction: "${OPPOSITE_DIRECTION[explicitDirection]}" } to scroll the other way)`;
       }
+      const lastDirection = used[used.length - 1];
+      const screenSwiped = 'No scrollable container was found on screen, so the swipe crossed the middle of the screen: ';
+      const scrollExample = `(for example getByRole("scrollview").scroll("${lastDirection}"))`;
       if (reachedEnd) {
         throw new Error(
           `scrollIntoView: reached the end of the scrollable content without finding ${this._describe()} on screen: ` +
             `the screen stopped changing after ${swipes} scroll(s) ${how}. ` +
-            'If the content can scroll further, the swipe, which crosses the middle of the screen, did not move it: ' +
-            'scroll() the list that holds the element.',
+            (region
+              ? `If the content can scroll further, the swipe inside the scrollable at ${formatRect(region)} did not ` +
+                'move it: scroll() the list that holds the element.'
+              : `${screenSwiped}if the content can scroll further, scroll() the list that holds the element ${scrollExample}.`),
         );
       }
-      throw new Error(`scrollIntoView: ${this._describe()} was not visible after ${swipes} scroll(s) ${how}`);
+      throw new Error(
+        `scrollIntoView: ${this._describe()} was not visible after ${swipes} scroll(s) ${how}` +
+          (swipes > 0 && !region ? `. ${screenSwiped}if the element is in a list, scroll() that list instead ${scrollExample}.` : ''),
+      );
     } catch (err) {
       await this._traceQueryFailed('scrollIntoView', err, Date.now() - start);
       throw err;

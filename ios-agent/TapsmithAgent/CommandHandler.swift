@@ -1870,6 +1870,16 @@ class CommandHandler {
                 )
                 let xcElem = try getXCUIElement(startEl.elementId)
                 try actionExecutor.swipe(xcElem, direction: direction, speed: speed, distance: distance)
+            } else if let region = params["region"] as? [String: Any] {
+                // The scroll container scrollIntoView() picked (PILOT-934).
+                func coord(_ key: String) -> CGFloat { CGFloat((region[key] as? NSNumber)?.doubleValue ?? 0) }
+                let rect = CGRect(
+                    x: coord("left"),
+                    y: coord("top"),
+                    width: coord("right") - coord("left"),
+                    height: coord("bottom") - coord("top")
+                )
+                try actionExecutor.swipeRegion(rect, direction: direction, speed: speed, distance: distance)
             } else {
                 // Sync screen size to avoid quiescence-triggering
                 // app.windows.firstMatch.frame.size read inside swipeScreen().

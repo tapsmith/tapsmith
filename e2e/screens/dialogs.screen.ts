@@ -33,4 +33,9 @@ export class DialogsScreen {
   get cancelButton() { return this.device.getByRole("button", { name: "Cancel" }) }
   get confirmButton() { return this.device.getByRole("button", { name: "Confirm" }) }
   get confirmedToast() { return this.device.getByText("Action confirmed!", { exact: true }) }
+
+  // Sheet: a scrolling sheet over a backdrop that closes it (PILOT-934)
+  get showSheetButton() { return this.device.getByRole("button", { name: "Show sheet" }) }
+  get sheetTitle() { return this.device.getByText("Sheet Title", { exact: true }) }
+  sheetItem(n: number) { return this.device.getByText(`Sheet item ${n}`, { exact: true }) }
 }
