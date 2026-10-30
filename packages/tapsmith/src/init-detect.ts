@@ -12,6 +12,7 @@ import * as path from 'node:path';
 import { globSync, type IgnoreLike } from 'glob';
 import { androidSdkRoots } from './emulator.js';
 import { tryExec } from './env-scan.js';
+import { readIosBundleId } from './ios-app-bundle.js';
 import { decodeXmlEntities } from './xml-entities.js';
 
 // ─── Project layout (PILOT-832) ───
@@ -381,7 +382,7 @@ export function findDerivedDataApps(
 export function detectIosBundleId(appPath: string): string | undefined {
   const plistPath = path.join(appPath, 'Info.plist');
   if (!fs.existsSync(plistPath)) return undefined;
-  return tryExec('/usr/libexec/PlistBuddy', ['-c', 'Print :CFBundleIdentifier', plistPath]);
+  return readIosBundleId(appPath);
 }
 
 // ─── Build hints (PILOT-832) ───

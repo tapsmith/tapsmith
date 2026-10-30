@@ -1149,6 +1149,234 @@ describe('doctor android-emulator check (PILOT-417)', () => {
   });
 });
 
+// ─── iOS app under test (PILOT-918) ───
+
+describe('doctor ios-app check (PILOT-918)', () => {
+  const STOCK_SIMS = JSON.stringify({
+    devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-26-0': [{ name: 'iPhone 17', udid: 'SIM-1', state: 'Shutdown' }] },
+  });
+  const PHONE = '00008140-00096C9014F3001C';
+  const SIM_UDID = '1B2C3D4E-0000-4000-8000-123456789ABC';
+
+  function withMac(): void {
+    exec.table.set('xcodebuild -version', XCODE_VERSION);
+    exec.table.set('xcrun simctl list devices available -j', STOCK_SIMS);
+  }
+
+  /** A built .app at `rel` (under the project) whose Info.plist plutil reads as given. */
+  function appBundle(rel: string, info: { id?: string; platforms?: string[] } = {}): string {
+    const app = path.join(dir, rel);
+    fs.mkdirSync(app, { recursive: true });
+    const plist = path.join(app, 'Info.plist');
+    fs.writeFileSync(plist, '<plist/>');
+    if (info.id !== undefined) exec.table.set(`plutil -extract CFBundleIdentifier raw -o - ${plist}`, `${info.id}\n`);
+    if (info.platforms !== undefined) exec.table.set(`plutil -extract CFBundleSupportedPlatforms json -o - ${plist}`, `${JSON.stringify(info.platforms)}\n`);
+    return app;
+  }
+  const simApp = (rel = 'build/My.app', id = 'com.example.my') => appBundle(rel, { id, platforms: ['iPhoneSimulator'] });
+  const deviceApp = (rel = 'build/My-Device.app', id = 'com.example.my') => appBundle(rel, { id, platforms: ['iPhoneOS'] });
+  const iosConfig = (fields: string) => `export default { platform: 'ios', simulator: 'iPhone 17', ${fields} }\n`;
+  const rows = (json: DoctorJson) => json.checks.filter((c) => c.id === 'ios-app');
+
+  it('passes a simulator build whose bundle id is the package', async () => {
+    withMac();
+    simApp();
+    writeConfig(iosConfig("app: 'build/My.app', package: 'com.example.my'"));
+    const { code, json } = await doctorJson();
+    expect(rows(json)).toEqual([{ id: 'ios-app', status: 'pass', label: 'iOS app found', detail: 'My.app (com.example.my, simulator build)' }]);
+    expect(code).toBe(0);
+  });
+
+  it('fails an app path that does not exist (the ticket\'s second config)', async () => {
+    withMac();
+    writeConfig(iosConfig("app: './does/not/exist.app', package: 'com.example.my'"));
+    const { code, json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({
+      status: 'fail',
+      label: `iOS app not found at ${path.join(dir, 'does/not/exist.app')}`,
+      fix: expect.stringContaining('fix the app path'),
+    })]);
+    expect(code).toBe(1);
+
+    const { text } = await doctorText();
+    expect(text).toMatch(/✗ iOS app not found at [^\n]*exist\.app\n\s+↳ /);
+  });
+
+  it('resolves a relative app against the config\'s rootDir', async () => {
+    withMac();
+    simApp('sub/build/My.app');
+    writeConfig(iosConfig("rootDir: 'sub', app: 'build/My.app', package: 'com.example.my'"));
+    const { json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({ status: 'pass' })]);
+  });
+
+  it('fails a path that is not an .app bundle', async () => {
+    withMac();
+    fs.mkdirSync(path.join(dir, 'build'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'build/My.ipa'), 'zip');
+    writeConfig(iosConfig("app: 'build/My.ipa', package: 'com.example.my'"));
+    const { code, json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({
+      status: 'fail',
+      label: expect.stringContaining('is not an .app bundle'),
+    })]);
+    expect(code).toBe(1);
+  });
+
+  it('fails a directory without an Info.plist', async () => {
+    withMac();
+    fs.mkdirSync(path.join(dir, 'build/Empty.app'), { recursive: true });
+    writeConfig(iosConfig("app: 'build/Empty.app', package: 'com.example.my'"));
+    const { json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({ status: 'fail', label: expect.stringContaining('no Info.plist') })]);
+  });
+
+  it('warns, without failing, when the Info.plist cannot be read', async () => {
+    withMac();
+    appBundle('build/My.app');
+    writeConfig(iosConfig("app: 'build/My.app', package: 'com.example.my'"));
+    const { code, json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({ status: 'warn', label: expect.stringContaining('Could not read') })]);
+    expect(code).toBe(0);
+  });
+
+  it('fails a device (iphoneos) build on a simulator', async () => {
+    withMac();
+    deviceApp('build/My.app');
+    writeConfig(iosConfig("app: 'build/My.app', package: 'com.example.my'"));
+    const { code, json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({
+      status: 'fail',
+      label: expect.stringContaining('My.app is a device (iphoneos) build, but it runs on an iOS simulator'),
+      fix: expect.stringContaining('iphonesimulator'),
+    })]);
+    expect(code).toBe(1);
+  });
+
+  it('fails a simulator build on a physical device: pinned, or auto-detected when no simulator is set', async () => {
+    withMac();
+    simApp();
+    writeConfig(`export default { platform: 'ios', device: '${PHONE}', app: 'build/My.app', package: 'com.example.my' }\n`);
+    const pinned = await doctorJson();
+    expect(rows(pinned.json)).toEqual([expect.objectContaining({
+      status: 'fail',
+      label: expect.stringContaining('My.app is a simulator build, but it runs on a physical iOS device'),
+      fix: expect.stringContaining('iphoneos'),
+    })]);
+    expect(pinned.code).toBe(1);
+
+    writeConfig("export default { platform: 'ios', app: 'build/My.app', package: 'com.example.my' }\n");
+    expect(rows((await doctorJson()).json)).toEqual([expect.objectContaining({ status: 'fail' })]);
+  });
+
+  it('passes a device build on a physical device, and a simulator build pinned to a simulator UDID', async () => {
+    withMac();
+    deviceApp();
+    simApp();
+    writeConfig(`export default { projects: [
+      { name: 'phone', use: { platform: 'ios', device: '${PHONE}', app: 'build/My-Device.app', package: 'com.example.my' } },
+      { name: 'sim', use: { platform: 'ios', device: '${SIM_UDID}', app: 'build/My.app', package: 'com.example.my' } },
+    ] }\n`);
+    const { json } = await doctorJson();
+    expect(rows(json)).toEqual([{
+      id: 'ios-app',
+      status: 'pass',
+      label: 'iOS apps found',
+      detail: 'My-Device.app (com.example.my, device build), My.app (com.example.my, simulator build)',
+    }]);
+  });
+
+  it('does not judge the build\'s platform when its Info.plist does not list one', async () => {
+    withMac();
+    appBundle('build/My.app', { id: 'com.example.my' });
+    writeConfig(iosConfig("app: 'build/My.app', package: 'com.example.my'"));
+    const { json } = await doctorJson();
+    expect(rows(json)).toEqual([{ id: 'ios-app', status: 'pass', label: 'iOS app found', detail: 'My.app (com.example.my)' }]);
+  });
+
+  it('fails a bundle id that is not the package, naming both', async () => {
+    withMac();
+    simApp('build/My.app', 'com.example.other');
+    writeConfig(iosConfig("app: 'build/My.app', package: 'com.example.my'"));
+    const { code, json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({
+      status: 'fail',
+      label: 'My.app\'s bundle identifier is com.example.other, but package is com.example.my — Tapsmith would install one app and launch another',
+      fix: expect.stringContaining("package: 'com.example.other'"),
+    })]);
+    expect(code).toBe(1);
+  });
+
+  it('warns about an unset package, suggesting the id the build carries', async () => {
+    withMac();
+    simApp();
+    writeConfig(iosConfig("app: 'build/My.app'"));
+    const { code, json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({
+      status: 'warn',
+      label: expect.stringContaining('No package (bundle identifier) set — Tapsmith never launches the app'),
+      fix: expect.stringContaining("package: 'com.example.my'"),
+    })]);
+    expect(code).toBe(0);
+  });
+
+  it('warns about the init placeholders: no app and no package (the ticket\'s first config)', async () => {
+    withMac();
+    writeConfig(iosConfig(''));
+    const { code, json } = await doctorJson();
+    const row = rows(json)[0];
+    expect(rows(json)).toHaveLength(1);
+    expect(row).toMatchObject({ status: 'warn' });
+    expect(row?.label).toContain('No app set — Tapsmith does not install the app');
+    expect(row?.label).toContain('No package (bundle identifier) set');
+    expect(code).toBe(0);
+
+    const { text } = await doctorText();
+    expect(text).toMatch(/⚠ No app set[^\n]*\n\s+↳ /);
+  });
+
+  it('judges each iOS project once, naming the projects in one row', async () => {
+    withMac();
+    simApp('build/My.app', 'com.example.my');
+    writeConfig(`export default { projects: [
+      { name: 'a', use: { platform: 'ios', simulator: 'iPhone 17', app: 'build/My.app', package: 'com.example.my' } },
+      { name: 'b', use: { platform: 'ios', simulator: 'iPhone 17', app: 'build/My.app', package: 'com.example.b' } },
+      { name: 'c', use: { platform: 'ios', simulator: 'iPhone 17', app: 'build/Gone.app', package: 'com.example.my' } },
+    ] }\n`);
+    const { code, json } = await doctorJson();
+    const row = rows(json);
+    expect(row).toHaveLength(1);
+    expect(row[0]).toMatchObject({ status: 'fail' });
+    expect(row[0]!.label).toContain('(project b)');
+    expect(row[0]!.label).toContain('(project c)');
+    expect(row[0]!.label).not.toContain('(project a)');
+    expect(code).toBe(1);
+  });
+
+  it('only warns in a mixed config whose Android projects can run here when Xcode is missing', async () => {
+    withAdb();
+    writeConfig("export default { apk: 'a.apk', projects: [{ name: 'a' }, { name: 'i', use: { platform: 'ios', simulator: 'iPhone 17', app: 'gone.app', package: 'com.x' } }] }\n");
+    fs.writeFileSync(path.join(dir, 'a.apk'), '');
+    const { code, json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({ status: 'warn', label: expect.stringContaining('iOS app not found') })]);
+    expect(code).toBe(0);
+  });
+
+  it('still fails a missing app in an iOS-only config without Xcode', async () => {
+    writeConfig(iosConfig("app: 'gone.app', package: 'com.x'"));
+    const { json } = await doctorJson();
+    expect(rows(json)).toEqual([expect.objectContaining({ status: 'fail' })]);
+  });
+
+  it('has no row for an Android-only config or without a config file', async () => {
+    withAdb();
+    withMac();
+    expect(rows((await doctorJson()).json)).toEqual([]);
+    writeConfig("export default { apk: 'a.apk' }\n");
+    expect(rows((await doctorJson()).json)).toEqual([]);
+  });
+});
+
 // ─── Item 5: human output ───
 
 describe('doctor text output (PILOT-263 item 5)', () => {
