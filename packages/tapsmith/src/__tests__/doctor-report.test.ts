@@ -72,7 +72,9 @@ vi.mock('../host-arch.js', async (importOriginal) => {
 });
 
 import { stripAnsi } from '../cli-json.js';
-import { runDoctor, type DoctorJson } from '../doctor.js';
+import { configLoadFailure, runDoctor, type DoctorJson } from '../doctor.js';
+import { loadConfig } from '../config.js';
+import { resolveProjects } from '../project.js';
 import { findMitmRedirector } from '../setup-ios.js';
 
 // ─── Fake machine ───
@@ -762,12 +764,13 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
 
   it('judges the AVDs Android projects boot, not a root avd every project overrides', async () => {
     withAdb();
-    writeConfig("export default { avd: 'Old', projects: [{ name: 'a', use: { avd: 'New' } }, { name: 'i', use: { platform: 'ios', avd: 'Ios_Scoped' } }] }\n");
+    // `i` inherits the root's avd but runs on iOS, so it boots none.
+    writeConfig("export default { avd: 'Old', projects: [{ name: 'a', use: { avd: 'New' } }, { name: 'i', use: { platform: 'ios' } }] }\n");
     const { json } = await doctorJson();
+    expect(ids(json)).not.toContain('config-load');
     const avd = check(json, 'avd-images');
     expect(avd?.label).toContain('New');
     expect(avd?.label).not.toContain('Old');
-    expect(avd?.label).not.toContain('Ios_Scoped');
   });
 
   it('reports every broken project in one config-load row', async () => {
@@ -814,6 +817,69 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
     expect(check(json, 'config-load')).toMatchObject({ status: 'fail' });
     expect(ids(json)).toContain('adb');
     expect(ids(json)).toContain('xcode');
+  });
+});
+
+// ─── Project validation (PILOT-433) ───
+
+describe('doctor refuses what tapsmith test refuses (PILOT-433)', () => {
+  // Each config loads, and the runner's project resolution rejects it.
+  const rejected: Array<[string, string]> = [
+    ['a duplicate project name', "[{ name: 'a' }, { name: 'a' }]"],
+    ['an unknown dependency', "[{ name: 'a', dependencies: ['setup'] }]"],
+    ['a self-dependency', "[{ name: 'a', dependencies: ['a'] }]"],
+    ['a dependency cycle', "[{ name: 'a', dependencies: ['b'] }, { name: 'b', dependencies: ['a'] }]"],
+    ['a project use that mixes platforms', "[{ name: 'a', use: { platform: 'ios', apk: 'app.apk' } }]"],
+    ['several problems at once', "[{ name: 'a' }, { name: 'a', dependencies: ['x'] }, { name: 'b', use: { avd: 'P', simulator: 'S' } }]"],
+  ];
+
+  for (const [what, projects] of rejected) {
+    it(`fails config-load on ${what}, with the runner's message and fix`, async () => {
+      withAdb();
+      writeConfig(`export default { projects: ${projects} }\n`);
+      const config = await loadConfig(dir);
+      let runnerError: unknown;
+      try { resolveProjects(config); } catch (err) { runnerError = err; }
+      expect(runnerError, 'the runner must reject this config').toBeInstanceOf(Error);
+      const expected = configLoadFailure(runnerError);
+      expect(expected.message).toContain((runnerError as Error).message);
+
+      const { code, json } = await doctorJson();
+      expect(json.checks.filter((c) => c.id === 'config-load')).toEqual([
+        { id: 'config-load', status: 'fail', label: expected.message, fix: expected.hint },
+      ]);
+      expect(json.ok).toBe(false);
+      expect(code).toBe(1);
+    });
+  }
+
+  it('passes a config whose projects the runner accepts', async () => {
+    withAdb();
+    writeConfig("export default { projects: [{ name: 'setup' }, { name: 'a', dependencies: ['setup'] }] }\n");
+    const { json } = await doctorJson();
+    expect(ids(json)).not.toContain('config-load');
+  });
+
+  it('still judges the machine for the projects of a config it refuses', async () => {
+    withAdb();
+    writeConfig("export default { projects: [{ name: 'a', use: { apk: 'a.apk' } }, { name: 'a', dependencies: ['a'], use: { apk: 'b.apk' } }] }\n");
+    const { json } = await doctorJson();
+    expect(check(json, 'config-load')).toMatchObject({ status: 'fail' });
+    expect(check(json, 'adb')).toMatchObject({ status: 'pass' });
+    expect(check(json, 'app-apk')?.label).toMatch(/a\.apk.*b\.apk/);
+  });
+
+  // The guard against drift: doctor runs the runner's own resolveProjects,
+  // which validates through validateProjects alone. A check added straight
+  // into resolveProjects would reach the runner and not that function's tests.
+  it('resolveProjects has no validation of its own', () => {
+    const source = fs.readFileSync(path.join(import.meta.dirname, '..', 'project.ts'), 'utf8');
+    const start = source.indexOf('export function resolveProjects(');
+    const end = source.indexOf('\n}\n', start);
+    expect(start).toBeGreaterThan(-1);
+    const body = source.slice(start, end);
+    expect(body).toContain('validateProjects(config);');
+    expect(body).not.toMatch(/\bthrow\b/);
   });
 });
 

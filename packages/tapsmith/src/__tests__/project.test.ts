@@ -1,7 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { resolveProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers as allocateWithPins, bucketizeProjects, pinnedBucketSignatures, workerPlanNote, devicePinWorkersConflict, platformOfSerial, scopeDevicePinToPlatform, devicesPinnedByManyBuckets, shardProjects, targetSessionConfig, type ResolvedProject } from '../project.js';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { resolveProjects, validateProjects, topologicalSort, collectTransitiveDeps, findProjectsForFile, validateProjectNames, deviceSignature, allocateBucketWorkers as allocateWithPins, bucketizeProjects, pinnedBucketSignatures, workerPlanNote, devicePinWorkersConflict, platformOfSerial, scopeDevicePinToPlatform, devicesPinnedByManyBuckets, shardProjects, targetSessionConfig, type ResolvedProject } from '../project.js';
 import { serializeConfig } from '../worker-protocol.js';
-import { effectiveConfigForProject, type TapsmithConfig } from '../config.js';
+import { effectiveConfigForProject, isConfigValidationError, loadConfig, type TapsmithConfig } from '../config.js';
 
 function makeConfig(overrides: Partial<TapsmithConfig> = {}): TapsmithConfig {
   return {
@@ -103,6 +106,80 @@ describe('resolveProjects()', () => {
         { name: 'c', dependencies: ['b'] },
       ],
     }))).toThrow('Circular dependency');
+  });
+});
+
+// ─── validateProjects (PILOT-433) ───
+
+describe('validateProjects() (PILOT-433)', () => {
+  const issuesOf = (config: TapsmithConfig): readonly string[] => {
+    try {
+      validateProjects(config);
+    } catch (err) {
+      if (!isConfigValidationError(err)) throw err;
+      return err.issues;
+    }
+    return [];
+  };
+
+  it('accepts a config without projects, and a sound one with them', () => {
+    expect(issuesOf(makeConfig())).toEqual([]);
+    expect(issuesOf(makeConfig({ projects: [{ name: 'setup' }, { name: 'a', dependencies: ['setup'], use: { platform: 'ios', simulator: 'iPhone 16' } }] }))).toEqual([]);
+  });
+
+  it('reports every problem at once, as a config validation error', () => {
+    expect(issuesOf(makeConfig({
+      projects: [
+        { name: 'a' },
+        { name: 'a' },
+        { name: 'b', dependencies: ['nope'] },
+        { name: 'c', use: { platform: 'ios', avd: 'Pixel_6' } },
+      ],
+    }))).toEqual([
+      'Duplicate project name: "a"',
+      'Project "b" depends on "nope", which does not exist. Available projects: a, b, c',
+      'Project "c" sets platform: \'ios\' but also `avd` (Android-only). Remove `avd` or change platform.',
+    ]);
+  });
+
+  it('does not report a self-dependency a second time as a cycle', () => {
+    expect(issuesOf(makeConfig({ projects: [{ name: 'a', dependencies: ['a'] }] })))
+      .toEqual(['Project "a" cannot depend on itself']);
+  });
+
+  it('reports a cycle when every dependency exists', () => {
+    expect(issuesOf(makeConfig({ projects: [{ name: 'a', dependencies: ['b'] }, { name: 'b', dependencies: ['a'] }] })))
+      .toEqual(['Circular dependency detected: a → b → a']);
+  });
+
+  it('reports a project option the per-project merge rejects, naming the project', () => {
+    const config = makeConfig({ projects: [{ name: 'x', use: { emulatorLaunchOptions: {} } as never }] });
+    expect(issuesOf(config)).toEqual([expect.stringMatching(/^Project "x": .*emulatorLaunchOptions is a root-level option/)]);
+  });
+
+  it('is what resolveProjects throws', () => {
+    const config = makeConfig({ projects: [{ name: 'a' }, { name: 'a' }] });
+    let fromValidate: unknown;
+    let fromResolve: unknown;
+    try { validateProjects(config); } catch (err) { fromValidate = err; }
+    try { resolveProjects(config); } catch (err) { fromResolve = err; }
+    expect(isConfigValidationError(fromResolve)).toBe(true);
+    expect((fromResolve as Error).message).toBe((fromValidate as Error).message);
+  });
+
+  it('names the config file a loaded config came from', async () => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-validate-projects-')));
+    try {
+      const file = path.join(dir, 'tapsmith.config.mjs');
+      fs.writeFileSync(file, "export default { projects: [{ name: 'a' }, { name: 'a' }] }\n");
+      const config = await loadConfig(dir);
+      expect(() => validateProjects(config)).toThrow(`Invalid config file ${file}: Duplicate project name: "a"`);
+      let err: unknown;
+      try { resolveProjects(config); } catch (e) { err = e; }
+      expect(isConfigValidationError(err) && err.configPath).toBe(file);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

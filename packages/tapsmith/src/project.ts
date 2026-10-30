@@ -5,7 +5,7 @@
  * dependency constraints and shared `use` options.
  */
 
-import { deviceGroupSize, effectiveConfigForProject, pinnedDeviceSerials, resolveDeviceGroup, type DeviceGroupEntry, type TapsmithConfig, type ProjectConfig, type UseOptions } from './config.js';
+import { ConfigValidationError, configPathOf, deviceGroupSize, effectiveConfigForProject, isConfigValidationError, pinnedDeviceSerials, resolveDeviceGroup, type DeviceGroupEntry, type TapsmithConfig, type ProjectConfig, type UseOptions } from './config.js';
 import { matchesTestFile } from './test-file-discovery.js';
 
 // ─── Types ───
@@ -511,36 +511,37 @@ export function bucketizeProjects(
 
 // ─── Per-project use validation ───
 
-function validateProjectUse(name: string, use: UseOptions | undefined): void {
-  if (!use) return;
+function projectUseIssue(name: string, use: UseOptions | undefined): string | undefined {
+  if (!use) return undefined;
 
   const platform = use.platform;
   if (platform === 'ios') {
     if (use.avd != null) {
-      throw new Error(`Project "${name}" sets platform: 'ios' but also \`avd\` (Android-only). Remove \`avd\` or change platform.`);
+      return `Project "${name}" sets platform: 'ios' but also \`avd\` (Android-only). Remove \`avd\` or change platform.`;
     }
     if (use.apk != null) {
-      throw new Error(`Project "${name}" sets platform: 'ios' but also \`apk\` (Android-only). Use \`app\` for iOS.`);
+      return `Project "${name}" sets platform: 'ios' but also \`apk\` (Android-only). Use \`app\` for iOS.`;
     }
     if (use.agentApk != null || use.agentTestApk != null) {
-      throw new Error(`Project "${name}" sets platform: 'ios' but also \`agentApk\`/\`agentTestApk\` (Android-only).`);
+      return `Project "${name}" sets platform: 'ios' but also \`agentApk\`/\`agentTestApk\` (Android-only).`;
     }
   } else if (platform === 'android') {
     if (use.simulator != null) {
-      throw new Error(`Project "${name}" sets platform: 'android' but also \`simulator\` (iOS-only). Remove \`simulator\` or change platform.`);
+      return `Project "${name}" sets platform: 'android' but also \`simulator\` (iOS-only). Remove \`simulator\` or change platform.`;
     }
     if (use.app != null) {
-      throw new Error(`Project "${name}" sets platform: 'android' but also \`app\` (iOS-only). Use \`apk\` for Android.`);
+      return `Project "${name}" sets platform: 'android' but also \`app\` (iOS-only). Use \`apk\` for Android.`;
     }
     if (use.iosXctestrun != null) {
-      throw new Error(`Project "${name}" sets platform: 'android' but also \`iosXctestrun\` (iOS-only).`);
+      return `Project "${name}" sets platform: 'android' but also \`iosXctestrun\` (iOS-only).`;
     }
   } else {
     // Platform unset — fall back to detecting via mutually-exclusive fields
     if ((use.avd != null || use.apk != null) && (use.simulator != null || use.app != null || use.iosXctestrun != null)) {
-      throw new Error(`Project "${name}" mixes Android (\`avd\`/\`apk\`) and iOS (\`simulator\`/\`app\`) fields. Set \`platform\` and use only one set.`);
+      return `Project "${name}" mixes Android (\`avd\`/\`apk\`) and iOS (\`simulator\`/\`app\`) fields. Set \`platform\` and use only one set.`;
     }
   }
+  return undefined;
 }
 
 /**
@@ -557,11 +558,81 @@ export function projectLabel(project: Pick<ResolvedProject, 'name' | 'synthesize
   return project && !project.synthesized ? project.name : undefined;
 }
 
+// ─── Validation ───
+
+/**
+ * Every reason the config's `projects` cannot run: a missing or duplicate
+ * name, a dependency on a project that does not exist or on itself, a
+ * dependency cycle, and a project `use` that mixes platforms or that the
+ * per-project merge rejects. Throws one {@link ConfigValidationError} listing
+ * them all, naming the config file, so `tapsmith test` prints it as the config
+ * error it is (not a crash) and `tapsmith doctor` reports the same message.
+ *
+ * The only project validation there is: `resolveProjects` runs it before
+ * anything else and adds none of its own (a guard test keeps it that way).
+ */
+export function validateProjects(config: TapsmithConfig): void {
+  const projects = config.projects ?? [];
+  if (projects.length === 0) return;
+  const issues: string[] = [];
+  const names = new Set<string>();
+
+  for (const p of projects) {
+    if (!p.name) {
+      issues.push('Every project must have a name');
+    } else if (names.has(p.name)) {
+      issues.push(`Duplicate project name: "${p.name}"`);
+    } else {
+      names.add(p.name);
+    }
+  }
+
+  let referencesSound = true;
+  for (const p of projects) {
+    for (const dep of p.dependencies ?? []) {
+      if (dep === p.name) {
+        issues.push(`Project "${p.name}" cannot depend on itself`);
+        referencesSound = false;
+      } else if (!names.has(dep)) {
+        issues.push(
+          `Project "${p.name}" depends on "${dep}", which does not exist. ` +
+          `Available projects: ${[...names].join(', ')}`,
+        );
+        referencesSound = false;
+      }
+    }
+  }
+
+  // A self-dependency is a cycle too: report it once, as itself.
+  if (referencesSound) {
+    const cycle = findCycle(projects);
+    if (cycle) issues.push(`Circular dependency detected: ${cycle.join(' → ')}`);
+  }
+
+  for (const p of projects) {
+    const useIssue = projectUseIssue(p.name, p.use);
+    if (useIssue) {
+      issues.push(useIssue);
+      continue;
+    }
+    try {
+      effectiveConfigForProject(config, p);
+    } catch (err) {
+      const found = isConfigValidationError(err) ? err.issues : [err instanceof Error ? err.message : String(err)];
+      issues.push(...found.map((issue) => `Project "${p.name}": ${issue}`));
+    }
+  }
+
+  if (issues.length > 0) throw new ConfigValidationError(issues, { configPath: configPathOf(config) });
+}
+
 // ─── Resolution ───
 
 /**
  * Resolve the project configuration. When `config.projects` is defined,
- * validates names, dependencies, and cycles. When not defined, returns a
+ * validates it with {@link validateProjects} — and nothing else, so `tapsmith
+ * doctor`, which calls this too, refuses exactly what a run refuses.
+ * When not defined, returns a
  * single synthetic "default" project so the rest of the pipeline always
  * works with the project abstraction.
  */
@@ -580,42 +651,8 @@ export function resolveProjects(config: TapsmithConfig): ResolvedProject[] {
     }];
   }
 
+  validateProjects(config);
   const projects = config.projects;
-  const names = new Set<string>();
-
-  // Validate unique names
-  for (const p of projects) {
-    if (!p.name) {
-      throw new Error('Every project must have a name');
-    }
-    if (names.has(p.name)) {
-      throw new Error(`Duplicate project name: "${p.name}"`);
-    }
-    names.add(p.name);
-  }
-
-  // Validate dependency references
-  for (const p of projects) {
-    for (const dep of p.dependencies ?? []) {
-      if (!names.has(dep)) {
-        throw new Error(
-          `Project "${p.name}" depends on "${dep}", which does not exist. ` +
-          `Available projects: ${[...names].join(', ')}`,
-        );
-      }
-      if (dep === p.name) {
-        throw new Error(`Project "${p.name}" cannot depend on itself`);
-      }
-    }
-  }
-
-  // Validate no cycles
-  detectCycles(projects);
-
-  // Validate per-project device-shaping fields
-  for (const p of projects) {
-    validateProjectUse(p.name, p.use);
-  }
 
   return projects.map((p) => {
     const effective = effectiveConfigForProject(config, p);
@@ -667,7 +704,7 @@ export function topologicalSort(projects: ResolvedProject[]): ResolvedProject[][
     }
 
     if (wave.length === 0) {
-      // Should not happen if detectCycles passed, but guard anyway
+      // Should not happen if validateProjects passed, but guard anyway
       throw new Error(
         `Circular dependency detected among projects: ${[...remaining].join(', ')}`,
       );
@@ -810,34 +847,33 @@ export function findProjectsForFile(
 
 // ─── Cycle detection ───
 
-function detectCycles(projects: ProjectConfig[]): void {
+/** The first dependency cycle among the projects, as a path that ends where it starts. */
+function findCycle(projects: ProjectConfig[]): string[] | undefined {
   const visited = new Set<string>();
   const stack = new Set<string>();
   const depMap = new Map(projects.map((p) => [p.name, p.dependencies ?? []]));
 
-  function dfs(name: string, path: string[]): void {
-    if (stack.has(name)) {
-      const cycleStart = path.indexOf(name);
-      const cycle = [...path.slice(cycleStart), name].join(' → ');
-      throw new Error(`Circular dependency detected: ${cycle}`);
-    }
-    if (visited.has(name)) return;
+  function dfs(name: string, path: string[]): string[] | undefined {
+    if (stack.has(name)) return [...path.slice(path.indexOf(name)), name];
+    if (visited.has(name)) return undefined;
 
     stack.add(name);
     path.push(name);
-
     for (const dep of depMap.get(name) ?? []) {
-      dfs(dep, path);
+      const cycle = dfs(dep, path);
+      if (cycle) return cycle;
     }
-
     stack.delete(name);
     path.pop();
     visited.add(name);
+    return undefined;
   }
 
   for (const p of projects) {
-    dfs(p.name, []);
+    const cycle = dfs(p.name, []);
+    if (cycle) return cycle;
   }
+  return undefined;
 }
 
 // ─── `--device` platform scoping ───
