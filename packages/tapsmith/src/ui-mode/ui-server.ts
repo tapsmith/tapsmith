@@ -2039,7 +2039,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       // tests (its notice above says so); otherwise only a restart helps.
       const message = ctx.unavailableTargets.size > 0
         ? 'No test worker could be started — running a device target\'s tests tries it again.'
-        : NO_WORKER_STARTED_MESSAGE;
+        : 'No test worker could be started — see the errors above. Fix that, then restart UI mode.';
       if (launchProgress) launchProgress.fail('ui-workers', message);
       else console.error(`${YELLOW}${message}${RESET}`);
       workersInitialized = true;
