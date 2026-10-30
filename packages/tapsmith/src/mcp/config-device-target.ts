@@ -68,7 +68,9 @@ export async function configDeviceTarget(
     return {
       platform: 'ios',
       description: `simulator "${simulator}"`,
-      startHint: `Boot it (\`xcrun simctl boot "${simulator}"\`, or run \`tapsmith test\` once, which boots it)`,
+      // `tapsmith test` first: it also installs the app, which this server does
+      // not, and an agent cannot start on a simulator without it.
+      startHint: `Run \`tapsmith test\` once, which boots it and installs the app (or \`xcrun simctl boot "${simulator}"\` where the app is already installed)`,
       anotherHint: `Boot another simulator named "${simulator}" (a \`--workers 2\` run of \`tapsmith test\` boots one, "${simulator} (Tapsmith Worker 2)")`,
       accepts: (serial) => matching.has(serial),
     };

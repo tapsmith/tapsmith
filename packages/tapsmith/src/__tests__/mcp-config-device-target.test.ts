@@ -174,7 +174,7 @@ describe('a headless session\'s device, with `simulator` in the config', () => {
 
     await expect(ensurePlatformTarget(mcpConfig as TapsmithConfig)).rejects.toThrow(
       'No running ios device matches simulator "iPhone 17" from your config. Visible ios devices: SIM-PRO. '
-      + 'Boot it (`xcrun simctl boot "iPhone 17"`, or run `tapsmith test` once, which boots it), '
+      + 'Run `tapsmith test` once, which boots it and installs the app (or `xcrun simctl boot "iPhone 17"` where the app is already installed), '
       + 'change it in your config, or pass one of those as `device`.',
     );
     expect(calls).toEqual([]);
