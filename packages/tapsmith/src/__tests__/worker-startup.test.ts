@@ -70,4 +70,38 @@ describe('WorkerStartupGate', () => {
     await expect(pending).resolves.toEqual({ outcome: 'ready', waited: true });
     expect(changes).toEqual([true, false]);
   });
+
+  it('keeps a released run pending until it proceeds, and lets Stop end it then', async () => {
+    const { g } = gate(true);
+    const pending = g.wait();
+    g.finish();
+    await expect(pending).resolves.toEqual({ outcome: 'ready', waited: true });
+    // Released, but not started yet (the workers are still being prepared).
+    expect(g.waiting).toBe(false);
+    expect(g.pending).toBe(true);
+    expect(g.cancel()).toBe(true);
+    expect(g.pending).toBe(false);
+    expect(g.proceed()).toBe(false);
+    // Nothing left to stop or to proceed with.
+    expect(g.cancel()).toBe(false);
+    expect(g.proceed()).toBe(true);
+  });
+
+  it('lets a released run proceed when nobody stopped it', async () => {
+    const { g } = gate(true);
+    const pending = g.wait();
+    g.finish();
+    await pending;
+    expect(g.proceed()).toBe(true);
+    expect(g.pending).toBe(false);
+    // Once it has started, Stop is the running run's business.
+    expect(g.cancel()).toBe(false);
+  });
+
+  it('never holds a run that did not wait as pending', async () => {
+    const { g } = gate(false);
+    await g.wait();
+    expect(g.pending).toBe(false);
+    expect(g.cancel()).toBe(false);
+  });
 });

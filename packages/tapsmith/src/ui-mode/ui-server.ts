@@ -1214,7 +1214,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       stopRun();
     },
     waitForRunEnd(timeoutMs: number): Promise<TestRunResult | null> {
-      if (!isRunning && !workerStartup.waiting) return Promise.resolve(lastRunEnd);
+      if (!isRunning && !workerStartup.pending) return Promise.resolve(lastRunEnd);
       return new Promise((resolve) => {
         const waiter = (r: TestRunResult): void => {
           clearTimeout(timer);
@@ -3351,8 +3351,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
    * poll loops. Wedged workers are SIGKILLed after STOP_GRACE_MS.
    */
   function stopRun(): void {
-    // A run still waiting for the workers to start ends here, reported at
-    // once so an MCP stop_tests that waits for the run's end gets this one.
+    // A run asked for during startup that has not started yet (waiting for
+    // the workers, or preparing them) ends here, reported at once so an MCP
+    // stop_tests that waits for the run's end gets this one.
     if (workerStartup.cancel()) {
       const stopped: TestRunResult = { status: 'stopped', passed: 0, failed: 0, skipped: 0, duration: 0 };
       broadcast({ type: 'run-end', ...stopped });
@@ -3654,6 +3655,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
           } catch (err) {
             const errMsg = err instanceof Error ? err.message : String(err);
             console.error(`${YELLOW}Failed to respawn worker ${worker.id}: ${errMsg}${RESET}`);
+            // The respawn showed the chip initializing: it errored, and the
+            // chip's Respawn action (offered on an errored worker) applies again.
+            broadcastWorkerStatus(uiWorkers[i], 'error');
             broadcast({ type: 'error', message: `Worker ${worker.id} (${worker.deviceSerial}) failed to respawn: ${errMsg}` });
           }
         })());
@@ -3692,6 +3696,18 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // own run-start follows.
     broadcast({ type: 'run-state', isRunning: true, startedAt: startupWaitStartedAt });
     try {
+      // Respawning a worker that failed to start can take a while, and the
+      // run has not started (`isRunning`) until it is done: Stop meanwhile
+      // must still end it, not find nothing running. The run's own
+      // ensureWorkersReady then has nothing left to do.
+      let proceed = false;
+      try {
+        await ensureWorkersReady();
+      } finally {
+        proceed = workerStartup.proceed();
+      }
+      // Stopped while preparing: stopRun has already reported the run's end.
+      if (!proceed) return notRun({ status: 'stopped', passed: 0, failed: 0, skipped: 0, duration: 0 });
       return await run();
     } finally {
       // A run that never started (no worker came up, say) sent no run-end:
@@ -4600,7 +4616,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         return;
       }
       for (const r of runs) {
-        await runFile(file, r.testFilter, r.projectName);
+        // Stop ends the change's run, not just its first entry.
+        if ((await runFile(file, r.testFilter, r.projectName)).status === 'stopped') break;
       }
     } catch (err) {
       broadcastError(err);
@@ -5193,7 +5210,10 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
     // Sent before test results so the Running indicator appears immediately.
     ws.send(JSON.stringify(workerStartup.waiting
       ? { type: 'run-state', isRunning: true, startedAt: startupWaitStartedAt, waitingForWorkers: true }
-      : { type: 'run-state', isRunning, startedAt: runStartedAt } satisfies ServerMessage));
+      : !isRunning && workerStartup.pending
+        // Released from the wait, still preparing its workers.
+        ? { type: 'run-state', isRunning: true, startedAt: startupWaitStartedAt }
+        : { type: 'run-state', isRunning, startedAt: runStartedAt } satisfies ServerMessage));
 
     // Replay accumulated test results so a reconnecting client (e.g. after
     // the laptop wakes from sleep) sees the same passed/failed statuses it

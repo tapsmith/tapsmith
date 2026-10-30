@@ -345,8 +345,8 @@ export function RunControls({ connected, isRunning, deviceSerial, counts, theme,
                   <span class="rc-device" title="Starting the test workers — runs wait for them" data-testid="workers-starting">
                     <span class="rc-dot initializing" />
                     {workersStarting.total === 1
-                      ? 'Starting device…'
-                      : `Starting devices… ${workersStarting.ready}/${workersStarting.total}`}
+                      ? 'Starting worker…'
+                      : `Starting workers… ${workersStarting.ready}/${workersStarting.total}`}
                   </span>
                 )
                 : (

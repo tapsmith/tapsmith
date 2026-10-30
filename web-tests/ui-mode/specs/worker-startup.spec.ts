@@ -24,11 +24,11 @@ test.describe("Worker startup", () => {
     ui.seed([...idleSeed(singleFileTree()), { type: "workers-starting", ready: 0, total: 2 }])
     await ui.open()
 
-    await expect(runControls.workersStarting).toHaveText("Starting devices… 0/2")
+    await expect(runControls.workersStarting).toHaveText("Starting workers… 0/2")
     await expect(runControls.workerChips).toHaveCount(0)
 
     ui.send({ type: "workers-starting", ready: 1, total: 2 })
-    await expect(runControls.workersStarting).toHaveText("Starting devices… 1/2")
+    await expect(runControls.workersStarting).toHaveText("Starting workers… 1/2")
 
     // Startup ends: the page learns of every device without a reload.
     ui.send(WORKERS)
@@ -46,13 +46,13 @@ test.describe("Worker startup", () => {
 
     ui.send({ type: "workers-starting", ready: 0, total: 2 })
     await expect(runControls.workerChips).toHaveCount(0)
-    await expect(runControls.workersStarting).toHaveText("Starting devices… 0/2")
+    await expect(runControls.workersStarting).toHaveText("Starting workers… 0/2")
   })
 
   test("a single device says it is starting, with no count", async ({ ui, runControls }) => {
     ui.seed([...idleSeed(singleFileTree()), { type: "workers-starting", ready: 0, total: 1 }])
     await ui.open()
-    await expect(runControls.workersStarting).toHaveText("Starting device…")
+    await expect(runControls.workersStarting).toHaveText("Starting worker…")
   })
 
   test("a run requested while they start waits visibly, then runs", async ({ ui, explorer, runControls }) => {

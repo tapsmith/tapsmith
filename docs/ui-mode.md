@@ -115,7 +115,7 @@ Every UI session runs tests in a persistent worker process per device. With a si
 
 When `workers > 1`, one worker per device is started, files are dispatched across them in parallel, and per-worker device screens are displayed in the UI.
 
-If you open the page before the workers are ready (the URL is printed as soon as the server is up, and a tab left open from an earlier session reconnects on its own), the top bar shows **Starting devices…** with how many are up, and each device appears as soon as startup ends. A run started before then — from the page, an MCP agent or a watched file — waits for the workers (the page says so, and **Stop** cancels it) and begins once they are ready.
+If you open the page before the workers are ready (the URL is printed as soon as the server is up, and a tab left open from an earlier session reconnects on its own), the top bar shows **Starting workers…** with how many are up (a worker runs one device, or a whole device group), and each device appears as soon as startup ends. A run started before then — from the page, an MCP agent or a watched file — waits for the workers (the page says so, and **Stop** cancels it) and begins once they are ready.
 
 ```bash
 npx tapsmith test --ui --workers 4
