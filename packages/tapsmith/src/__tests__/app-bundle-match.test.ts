@@ -97,6 +97,12 @@ describe('appBundlesMatch', () => {
     expect(await appBundlesMatch(installed, candidate)).toBe(false);
   });
 
+  it('does not match when the candidate adds an empty file', async () => {
+    writeTree(installed, debugBuild('code'));
+    writeTree(candidate, { ...debugBuild('code'), 'empty.txt': '' });
+    expect(await appBundlesMatch(installed, candidate)).toBe(false);
+  });
+
   it('does not match when the candidate drops a file the installed bundle has', async () => {
     writeTree(installed, { ...debugBuild('code'), 'assets/logo.png': 'png' });
     writeTree(candidate, debugBuild('code'));
@@ -122,6 +128,14 @@ describe('appBundlesMatch', () => {
     fs.unlinkSync(path.join(candidate, 'Linked'));
     fs.symlinkSync('../../outside-b', path.join(candidate, 'Linked'));
     expect(await appBundlesMatch(installed, candidate)).toBe(false);
+  });
+
+  it('matches a bundle reached through a symlinked root', async () => {
+    writeTree(installed, debugBuild('code'));
+    writeTree(candidate, debugBuild('code'));
+    const linkedInstalled = path.join(root, 'linked-installed.app');
+    fs.symlinkSync(installed, linkedInstalled);
+    expect(await appBundlesMatch(linkedInstalled, candidate)).toBe(true);
   });
 
   it('does not match when either bundle is missing or not a directory', async () => {
