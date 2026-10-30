@@ -127,6 +127,10 @@ function App() {
 
   // Multi-worker state
   const [workers, setWorkers] = useState<WorkerInfo[]>([]);
+  /** While the session's workers start: how many are up. Cleared by `workers-info`. */
+  const [workersStarting, setWorkersStarting] = useState<{ ready: number; total: number } | null>(null);
+  /** A run is held until the workers have started (PILOT-936). */
+  const [waitingForWorkers, setWaitingForWorkers] = useState(false);
   // Live slow-device-action progress per worker during preflight resets
   // (e.g. "Clearing app data (com.foo)…") — enriches the Actions panel's
   // waiting state (PILOT-232).
@@ -746,6 +750,7 @@ function App() {
         break;
       case 'run-state':
         setIsRunning(msg.isRunning);
+        setWaitingForWorkers(msg.isRunning && msg.waitingForWorkers === true);
         if (msg.isRunning) {
           startRunTimer(msg.startedAt);
         } else {
@@ -754,6 +759,7 @@ function App() {
         break;
       case 'run-start':
         setIsRunning(true);
+        setWaitingForWorkers(false);
         setRunProgress(new Map());
         startRunTimer();
         // Scope trace clearing: single test > single file > all.
@@ -859,6 +865,7 @@ function App() {
         break;
       case 'run-end':
         setIsRunning(false);
+        setWaitingForWorkers(false);
         setIsStopping(false);
         setRunProgress(new Map());
         stopRunTimer();
@@ -1228,7 +1235,15 @@ function App() {
         if (msg.tapsmithVersion) setTapsmithVersion(msg.tapsmithVersion);
         break;
       }
+      case 'workers-starting':
+        // This session's workers are not up yet: any chips held from before a
+        // reconnect belong to an earlier session (a tab left open on a pinned
+        // --ui-port), and would claim devices are ready that are not.
+        setWorkers([]);
+        setWorkersStarting({ ready: msg.ready, total: msg.total });
+        break;
       case 'workers-info':
+        setWorkersStarting(null);
         setWorkers((prev) => msg.workers.map((w) => {
           const existing = prev.find((p) => p.workerId === w.workerId);
           return {
@@ -1898,6 +1913,13 @@ function App() {
           <span class="test-error-banner-icon" aria-hidden="true">!</span>
           <span class="test-error-banner-text" data-testid="run-notification">{errorMessage}</span>
         </div>
+      ) : waitingForWorkers ? (
+        <div class="test-error-banner info" role="status">
+          <span class="test-error-banner-icon" aria-hidden="true">…</span>
+          <span class="test-error-banner-text" data-testid="run-notification">
+            Waiting for the test workers to start — the run begins as soon as they are ready.
+          </span>
+        </div>
       ) : infoMessage ? (
         <div class="test-error-banner info" role="status" onClick={() => setInfoMessage(null)}>
           <span class="test-error-banner-icon" aria-hidden="true">■</span>
@@ -1914,6 +1936,7 @@ function App() {
           onThemeChange={handleThemeChange}
           onSend={handleSend}
           workers={workers}
+          workersStarting={workersStarting}
           runElapsed={runElapsed}
           mcpClientName={mcpClientName}
           mcpClients={mcpClients}

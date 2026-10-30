@@ -285,6 +285,7 @@ function TreeNode({ node, depth, parentProjectName, expandedNodes, selectedTestI
         aria-level={depth + 1}
         aria-selected={isSelected}
         aria-expanded={hasChildren ? isExpanded : undefined}
+        aria-busy={pending && node.status !== 'running' ? true : undefined}
         data-status={node.status}
         data-depth={depth}
         data-type={node.type}

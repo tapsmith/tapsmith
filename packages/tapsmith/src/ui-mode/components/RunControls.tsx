@@ -26,6 +26,8 @@ interface RunControlsProps {
   onSend: (msg: ClientMessage) => void
   /** Workers in multi-worker mode. Empty array for single-worker. */
   workers: WorkerInfo[]
+  /** The session's workers are still starting: how many are up (PILOT-936). */
+  workersStarting?: { ready: number; total: number } | null
   /** Elapsed run time in ms. */
   runElapsed: number
   mcpClientName?: string
@@ -278,7 +280,7 @@ function WorkerDevice({ w, view, onSend, prepareBetweenRuns, onTogglePrepareBetw
 
 // ─── RunControls ───
 
-export function RunControls({ connected, isRunning, deviceSerial, counts, theme, onThemeChange, onSend, workers, runElapsed, mcpClientName, mcpClients, mcpPanelOpen, onToggleMcpPanel, prepareBetweenRuns, onTogglePrepareBetweenRuns }: RunControlsProps) {
+export function RunControls({ connected, isRunning, deviceSerial, counts, theme, onThemeChange, onSend, workers, workersStarting, runElapsed, mcpClientName, mcpClients, mcpPanelOpen, onToggleMcpPanel, prepareBetweenRuns, onTogglePrepareBetweenRuns }: RunControlsProps) {
   // Prefer the full agent list; fall back to the single-name field for back-compat.
   const mcpAgents: McpAgent[] = mcpClients && mcpClients.length > 0
     ? mcpClients
@@ -338,12 +340,21 @@ export function RunControls({ connected, isRunning, deviceSerial, counts, theme,
               ? workers.flatMap((w) => deviceViewsOf([w]).map((view) => (
                 <WorkerDevice key={`${w.workerId}:${view.deviceIndex}`} w={w} view={view} onSend={onSend} prepareBetweenRuns={prepareBetweenRuns} onTogglePrepareBetweenRuns={onTogglePrepareBetweenRuns} />
               )))
-              : (
-                <span class="rc-device" title={deviceSerial}>
-                  <span class="rc-dot done" />
-                  {deviceSerial || 'Connected'}
-                </span>
-              )}
+              : workersStarting
+                ? (
+                  <span class="rc-device" title="Starting the test workers — runs wait for them" data-testid="workers-starting">
+                    <span class="rc-dot initializing" />
+                    {workersStarting.total === 1
+                      ? 'Starting worker…'
+                      : `Starting workers… ${workersStarting.ready}/${workersStarting.total}`}
+                  </span>
+                )
+                : (
+                  <span class="rc-device" title={deviceSerial}>
+                    <span class="rc-dot done" />
+                    {deviceSerial || 'Connected'}
+                  </span>
+                )}
         </div>
         <span class="rc-divider" />
         <button

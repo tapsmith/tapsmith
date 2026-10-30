@@ -500,6 +500,22 @@ export interface RunStateMessage {
   type: 'run-state'
   isRunning: boolean
   startedAt?: number
+  /**
+   * The run is held until the session's test workers finish starting.
+   * `isRunning` is true meanwhile, so Stop works and Run is off.
+   */
+  waitingForWorkers?: boolean
+}
+
+/**
+ * The session's test workers are still starting: `ready` of `total` are up.
+ * Sent on connect and as each comes up; the `workers-info` sent when startup
+ * ends supersedes it.
+ */
+export interface WorkersStartingMessage {
+  type: 'workers-starting'
+  ready: number
+  total: number
 }
 
 /**
@@ -521,6 +537,7 @@ export type ServerMessage =
   | RunStartMessage
   | RunEndMessage
   | RunStateMessage
+  | WorkersStartingMessage
   | TestStartMessage
   | TestStatusMessage
   | FileStatusMessage

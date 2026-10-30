@@ -120,6 +120,14 @@ export class TestExplorerPane {
     return this.nodes.and(this.page.locator(`[data-type="${type}"][data-status="${status}"]`))
   }
 
+  /**
+   * Rows waiting for a run the server has not reported started yet: the
+   * pending pulse, exposed as `aria-busy`.
+   */
+  get pendingNodes() {
+    return this.nodes.and(this.page.locator('[aria-busy="true"]'))
+  }
+
   // Each row holds exactly one run and one watch button, so a name prefix is
   // unambiguous once scoped to the row — and it keeps these from restating how
   // the label is derived.
