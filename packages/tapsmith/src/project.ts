@@ -631,8 +631,8 @@ export function validateProjects(config: TapsmithConfig): void {
 /**
  * Resolve the project configuration. When `config.projects` is defined,
  * validates it with {@link validateProjects} — and nothing else, so `tapsmith
- * doctor`, which calls this too, refuses exactly what a run refuses
- * (PILOT-433). When not defined, returns a
+ * doctor`, which calls this too, refuses exactly what a run refuses.
+ * When not defined, returns a
  * single synthetic "default" project so the rest of the pipeline always
  * works with the project abstraction.
  */

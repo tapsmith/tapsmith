@@ -1258,6 +1258,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
   // Load the config the way `tapsmith test` does; it decides which platforms
   // are judged and feeds the APK path and AVD image checks.
   const { loadConfig, findConfigFile, configPathOf, effectiveConfigForProject } = await import('./config.js');
+  const { resolveProjects, projectLabel } = await import('./project.js');
   let config: TapsmithConfig | undefined;
   try {
     config = await loadConfig(undefined, configFile);
@@ -1275,31 +1276,30 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
   const androidPlan = planPlatform('android', targets, process.platform, mixed && xcodeUsable());
   const iosPlan = planPlatform('ios', targets, process.platform, mixed && adbUsable());
 
-  // The AVDs each Android scope launches, with the runner's own merge of
-  // project `use` over the root (launchEmulators defaults on with an avd).
-  // loadConfig rejects a malformed project `use`; should this merge still
-  // throw, report that as the config error it is (as `tapsmith test` does),
-  // not as doctor crashing.
+  // The scopes tests run in, resolved by the runner's own `resolveProjects`
+  // (project `use` merged over the root), so doctor refuses exactly the
+  // project problems `tapsmith test` refuses, with its message (PILOT-433).
+  // A refused config still has its projects' platforms judged: each one the
+  // per-project merge accepts.
   const scopes: TapsmithConfig[] = [];
   const projectNames: Array<string | undefined> = [];
   if (config && configPathOf(config)) {
-    if (config.projects && config.projects.length > 0) {
-      const projectErrors: string[] = [];
-      for (const project of config.projects) {
+    try {
+      for (const project of resolveProjects(config)) {
+        scopes.push(project.effectiveConfig);
+        projectNames.push(projectLabel(project));
+      }
+    } catch (err) {
+      const failure = configLoadFailure(err);
+      fail(report, 'config-load', failure.message, failure.hint);
+      for (const project of config.projects ?? []) {
         try {
           scopes.push(effectiveConfigForProject(config, project));
           projectNames.push(project.name);
-        } catch (err) {
-          projectErrors.push(`project ${project.name}: ${err instanceof Error ? err.message : String(err)}`);
+        } catch {
+          // Already in the config-load row.
         }
       }
-      // One row, so a consumer matching on the id sees every broken project.
-      if (projectErrors.length > 0) {
-        fail(report, 'config-load', `Config file has errors: ${projectErrors.join('; ')}`, 'Fix the config error above; tapsmith test stops on it too');
-      }
-    } else {
-      scopes.push(config);
-      projectNames.push(undefined);
     }
   }
   const avdLaunches: AvdLaunch[] = scopes
