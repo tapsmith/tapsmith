@@ -65,8 +65,9 @@ function unframe(body: Buffer, headers: Record<string, string>): { body: Buffer;
 }
 
 /** Decode a captured HTTP body: strip chunked framing per Transfer-Encoding,
- * then decompress per Content-Encoding. Falls back to the de-chunked bytes
- * when they cannot be decompressed (a cut-off or corrupt stream). */
+ * then decompress per Content-Encoding. A step that fails keeps the bytes it
+ * was given: a cut-off chunk stream stays framed, and a body that cannot be
+ * decompressed stays compressed. */
 export async function decodeHttpBody(body: Buffer | undefined, headers: Record<string, string>): Promise<Buffer | undefined> {
   if (!body || body.length === 0) return body;
   const { body: unframed, coding } = unframe(body, headers);
