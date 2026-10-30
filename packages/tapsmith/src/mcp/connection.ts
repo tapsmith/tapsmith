@@ -2438,6 +2438,11 @@ async function setDeviceAndAgent(
  * agents opportunistically and must survive a failure — but a platform target
  * that cannot start its agent is not a working target, and reporting it as one
  * gives the session a device whose every run fails.
+ *
+ * With the device known, the config's app is installed first unless the
+ * device already holds that exact build, as every test run does: the iOS
+ * agent launches the app the moment it is up, and on a simulator without it
+ * never comes up at all.
  */
 async function startAgentFromConfig(
   client: TapsmithGrpcClient,
@@ -2449,6 +2454,11 @@ async function startAgentFromConfig(
     if (agentConnected) return;
   }
 
+  const fail = (what: string, msg: string): void => {
+    log(`Warning: ${what} (${msg}). Device tools may not work.`);
+    if (options?.required) throw new Error(`Failed to start the agent on ${options.serial ?? 'this device'}: ${msg}`);
+  };
+
   const rootDir = config?.rootDir ?? process.cwd();
   const agentApk = config?.agentApk ? path.resolve(rootDir, config.agentApk) : undefined;
   const agentTestApk = config?.agentTestApk ? path.resolve(rootDir, config.agentTestApk) : undefined;
@@ -2458,27 +2468,35 @@ async function startAgentFromConfig(
     try {
       iosXctestrun = await iosXctestrunForAgentStart(config, options?.serial);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log(`Warning: no iOS agent to start (${msg}). Device tools may not work.`);
-      if (options?.required) throw new Error(`Failed to start the agent on this device: ${msg}`);
-      return;
+      return fail('no iOS agent to start', err instanceof Error ? err.message : String(err));
     }
   }
 
+  if (config && options?.serial) {
+    try {
+      const { installConfiguredApp } = await import('../device-session.js');
+      await installConfiguredApp(config, client, options.serial, { onProgress: log });
+    } catch (err) {
+      return fail('the app could not be installed', err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  let failure: string | undefined;
   try {
     log('Starting agent on device...');
-    await client.startAgent(
+    const res = await client.startAgent(
       config?.package ?? '',
       agentApk,
       agentTestApk,
       iosXctestrun,
     );
-    log('Agent started');
+    // A refusal is an answer, not an error: the daemon's reason is in it.
+    if (res?.success === false) failure = res.errorMessage || 'the daemon refused to start the agent';
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log(`Warning: agent start failed (${msg}). Device tools may not work.`);
-    if (options?.required) throw new Error(`Failed to start the agent on this device: ${msg}`);
+    failure = err instanceof Error ? err.message : String(err);
   }
+  if (failure !== undefined) return fail('agent start failed', failure);
+  log('Agent started');
 }
 
 /**

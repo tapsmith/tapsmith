@@ -119,6 +119,14 @@ taken instead. The server does not boot a simulator or launch an emulator
 itself: when the configured one is not running, the first device tool or run
 says so, names the devices that are, and suggests how to start it.
 
+Before it starts the agent on that device, the server installs the app from
+your config (`app` on iOS, `apk` on Android) unless the device already holds
+that exact build, the same check `tapsmith test` makes. A simulator without
+the app, or with an older build of it, is brought up to date rather than left
+for the agent to fail on. When the agent still cannot start, the first device
+tool or run fails with the reason the daemon gave, for example that the app
+could not be launched.
+
 A headless server never takes a device, or a daemon, that another running
 Tapsmith session holds — a `tapsmith test` run, a UI session, or another MCP
 server (see [Several sessions on one machine](./parallel-and-sharding.md#several-sessions-on-one-machine)).
