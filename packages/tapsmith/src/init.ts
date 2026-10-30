@@ -19,6 +19,8 @@ import {
   findIosAppCandidates,
   findIosDeviceAppCandidates,
   hasAndroidProject,
+  apkSearchedIn,
+  FLUTTER_DEVICE_BUILD_HINT,
   hasIosProject,
   isReactNativeProject,
   nativeBuildHint,
@@ -411,13 +413,14 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
   }
 
   const cwd = process.cwd();
+  const layout = detectProjectLayout(cwd);
   const apkPath = await askBuildPath({
     kind: 'apk',
     message: 'Where is your Android APK?',
     candidates: orderApkCandidates(findApkCandidates(cwd)),
     noneFound: expo
-      ? `No APK found in the project's build outputs (**/build/outputs/apk/). ${expoBuildHint(['android'], expo, 'Or enter its path.')}`
-      : `No APK found in the project's build outputs (**/build/outputs/apk/). ${nativeBuildHint('android', detectProjectLayout(cwd), isReactNativeProject(cwd))}, or enter its path.`,
+      ? `No APK found in the project's build outputs (${apkSearchedIn(layout)}). ${expoBuildHint(['android'], expo, 'Or enter its path.')}`
+      : `No APK found in the project's build outputs (${apkSearchedIn(layout)}). ${nativeBuildHint('android', layout, isReactNativeProject(cwd))}, or enter its path.`,
     typeMessage: 'Path to your Android APK:',
   });
 
@@ -430,7 +433,7 @@ export async function configureAndroid(env: EnvScan, expo?: ExpoProject, cli = '
       : '  No APK yet. If the app is installed on the device already, give its package name: Tapsmith launches it by that.'));
     // The app config's id, else the Gradle module's (PILOT-778): either is
     // what a build of this project carries.
-    const gradleId = expo?.androidPackage ? undefined : detectGradleApplicationId(cwd);
+    const gradleId = expo?.androidPackage ? undefined : detectGradleApplicationId(cwd, layout);
     const suggested = expo?.androidPackage
       ? { id: expo.androidPackage, source: 'from the Expo app config' }
       : gradleId ? { id: gradleId, source: "the app module's applicationId" } : undefined;
@@ -603,6 +606,8 @@ export async function configureIos(env: EnvScan, expo?: ExpoProject, cli = 'npx 
       ...deviceBuilds,
       noneFound: expo && !expo.hasIosDir
         ? 'No device build (.app) found: this Expo project has no ios/ yet. Generate it with `npx expo prebuild --platform ios`, then build it for iphoneos (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.'
+        : detectProjectLayout(process.cwd()).flutter
+        ? `No device build (.app) found in the project or Xcode's DerivedData — ${FLUTTER_DEVICE_BUILD_HINT} (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.`
         : 'No device build (.app) found in the project or Xcode\'s DerivedData — build one for iphoneos first (see https://tapsmith.dev/platform/ios-physical-devices/), or enter its path.',
       typeMessage: 'Path to your device build (iphoneos .app):',
     });

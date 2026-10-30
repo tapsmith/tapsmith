@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { initArgsFromOptions, resolveInitPlan, executeInitPlan, assertConfigWritable, assertProjectWritable, InitError, type DetectFns } from '../init-noninteractive.js';
-import type { ExpoProject } from '../init-detect.js';
+import { findApkCandidates, findIosAppCandidates, type ExpoProject } from '../init-detect.js';
 import { generateConfig, needsSimulatorAgent } from '../init.js';
 import { simulatorChoices, type EnvScan } from '../env-scan.js';
 import type { InitCommandOptions } from '../cli-program.js';
@@ -1470,5 +1470,70 @@ describe('resolveInitPlan() on native projects (PILOT-832)', () => {
     const detect = { ...detectStubs, ...noExpo, findDerivedDataApps: () => { called = true; return ['/dd/x.app']; } };
     resolveInitPlan(initArgs({ yes: true }), baseEnv, detect, tmp);
     expect(called).toBe(false);
+  }));
+});
+
+// ─── Flutter projects (PILOT-868) ───
+
+describe('resolveInitPlan() on Flutter projects (PILOT-868)', () => {
+  /** `flutter create`'s layout, with whatever `builds` (project-relative files or .app folders) exist. */
+  function flutterProject(builds: string[], fn: (dir: string) => void): void {
+    const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-flutter-')));
+    try {
+      fs.writeFileSync(path.join(tmp, 'pubspec.yaml'), 'name: shoplist\ndependencies:\n  flutter:\n    sdk: flutter\nflutter:\n  uses-material-design: true\n');
+      fs.mkdirSync(path.join(tmp, 'android'), { recursive: true });
+      fs.writeFileSync(path.join(tmp, 'android', 'settings.gradle.kts'), '');
+      fs.mkdirSync(path.join(tmp, 'ios', 'Runner.xcworkspace'), { recursive: true });
+      fs.mkdirSync(path.join(tmp, 'ios', 'Runner.xcodeproj'), { recursive: true });
+      for (const build of builds) {
+        if (build.endsWith('.app')) {
+          fs.mkdirSync(path.join(tmp, build), { recursive: true });
+        } else {
+          fs.mkdirSync(path.dirname(path.join(tmp, build)), { recursive: true });
+          fs.writeFileSync(path.join(tmp, build), '');
+        }
+      }
+      fn(tmp);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  // The real build search; only reading ids out of the builds is stubbed.
+  const detect = {
+    findApkCandidates,
+    detectAndroidPackage: () => 'dev.persona.shoplist',
+    findIosAppCandidates,
+    detectIosBundleId: () => 'dev.persona.shoplist',
+    detectExpoProject: () => undefined,
+    findDerivedDataApps: () => [],
+  };
+
+  it('--yes takes the builds `flutter build` wrote, despite the copies Gradle and Xcode leave beside them', () => flutterProject([
+    'build/app/outputs/flutter-apk/app-debug.apk',
+    'build/app/outputs/apk/debug/app-debug.apk',
+    'build/ios/iphonesimulator/Runner.app',
+    'build/ios/Debug-iphonesimulator/Runner.app',
+  ], (tmp) => {
+    const plan = resolveInitPlan(initArgs({ yes: true }), baseEnv, detect, tmp);
+    expect(plan.platforms).toEqual(['android', 'ios']);
+    expect(plan.android?.apkPath).toBe('build/app/outputs/flutter-apk/app-debug.apk');
+    expect(plan.android?.packageName).toBe('dev.persona.shoplist');
+    expect(plan.ios?.appPath).toBe('build/ios/iphonesimulator/Runner.app');
+  }));
+
+  it('NO_APK names flutter-apk/ and `flutter build apk --debug`, not Gradle', () => flutterProject([], (tmp) => {
+    const err = expectInitError(() => resolveInitPlan(initArgs({ yes: true, platform: 'android' }), baseEnv, detect, tmp), 'NO_APK');
+    expect(err.message).toContain('build/app/outputs/flutter-apk/');
+    expect(err.fix).toContain('`flutter build apk --debug`');
+    expect(err.fix).not.toContain('gradlew');
+    expect(err.fix).toContain('--apk <path>');
+  }));
+
+  it('NO_IOS_APP names build/ios/iphonesimulator/ and `flutter build ios --simulator --debug`, not xcodebuild', () => flutterProject([], (tmp) => {
+    const err = expectInitError(() => resolveInitPlan(initArgs({ yes: true, platform: 'ios' }), baseEnv, detect, tmp), 'NO_IOS_APP');
+    expect(err.message).toContain('build/ios/iphonesimulator/');
+    expect(err.fix).toContain('`flutter build ios --simulator --debug`');
+    expect(err.fix).not.toContain('xcodebuild');
+    expect(err.fix).toContain('--app <path>');
   }));
 });
