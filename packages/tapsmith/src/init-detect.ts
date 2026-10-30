@@ -34,7 +34,7 @@ export interface ProjectLayout {
   /** An `ios/` directory exists (React Native), with or without an Xcode project in it yet. */
   hasIosDir: boolean;
   /**
-   * A Flutter app (PILOT-868): `flutter build` writes its builds to the
+   * A Flutter app: `flutter build` writes its builds to the
    * project's root `build/`, not under `android/` or `ios/`.
    */
   flutter: boolean;
@@ -193,8 +193,8 @@ function globApks(cwd: string, pattern: string): string[] {
  * one. Outside an Android project there is nothing to search, and
  * a walk of a home directory would stall init.
  *
- * A Flutter app's Gradle build writes to the project's root `build/`
- * (PILOT-868): `flutter build apk` leaves its APKs in
+ * A Flutter app's Gradle build writes to the project's root `build/`:
+ * `flutter build apk` leaves its APKs in
  * `build/app/outputs/flutter-apk/`, and the same file again in Gradle's
  * `build/app/outputs/apk/<variant>/`. Only the first folder that holds one
  * is offered, so that copy never makes the choice ambiguous: flutter-apk/,
@@ -490,7 +490,7 @@ export function nativeBuildHint(platform: 'android' | 'ios', layout: ProjectLayo
 }
 
 /**
- * A Flutter app's build (PILOT-868), with `flutter build`, which knows to run
+ * A Flutter app's build, with `flutter build`, which knows to run
  * the Dart build first: a bare Gradle or Xcode build of a fresh checkout
  * misses it. A simulator build can only be Debug (`--simulator` refuses
  * `--release`).
@@ -520,7 +520,7 @@ export function simulatorAppSearchedIn(layout: ProjectLayout): string {
 }
 
 /**
- * How to build a Flutter app for a physical iOS device (PILOT-868): a
+ * How to build a Flutter app for a physical iOS device: a
  * Release build, since a Debug one starts only from the flutter tool or
  * Xcode, signed with the team set in Xcode.
  */
