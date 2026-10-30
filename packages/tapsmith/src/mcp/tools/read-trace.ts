@@ -143,21 +143,27 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
     if (meta.error) result.push(`Error: ${clipText(String(meta.error), STEP_VALUE_CHARS)}`);
     if (meta.testStatus === 'failed' || meta.error) {
       const failed = events.flatMap((e, i) => (stepFailed(e) ? [{ e, label: stepLabel(e, i) }] : []));
-      // A failed step did not necessarily fail the test: user code can catch
-      // a step's error, and a soft assertion records a failure and carries
-      // on. So name a step as the failure only when the test's error is that
-      // step's error. The runner appends soft and unhandled errors after an
-      // "--- Additionally ---" line; the error the test stopped on comes first.
+      // A [FAIL] step did not necessarily fail the test: user code catches
+      // errors, soft assertions carry on, expect.poll() records each retry,
+      // and an API request records a non-2xx response without throwing. So
+      // name one step as the failure, the last whose error is the test's
+      // error, and list the rest without guessing why they failed. The
+      // runner appends soft and unhandled errors after an "--- Additionally
+      // ---" line; the error the test stopped on comes first.
       const primary = String(meta.error ?? '').split(ADDITIONALLY)[0];
-      const causing = failed.filter(({ e }) => e.error && primary.includes(String(e.error)));
-      const others = failed.filter((f) => !causing.includes(f));
-      if (causing.length > 0) {
-        result.push(`Failed ${causing.length === 1 ? 'step' : 'steps'}: ${listSteps(causing.map((f) => f.label))} (marked [FAIL] below)`);
-      } else if (events.length > 0) {
-        result.push(`No traced step failed${failed.length > 0 ? ' with this error' : ''}: the error was thrown outside a traced action or assertion (in the test code, a hook, or a timeout).`);
+      const causing = primary
+        ? [...failed].reverse().find(({ e }) => e.error && primary.includes(String(e.error)))
+        : undefined;
+      const others = failed.filter((f) => f !== causing);
+      if (causing) {
+        result.push(`Failed step: ${causing.label} (its error is the test's error; marked [FAIL] below)`);
+      } else if (failed.length === 0 && events.length > 0) {
+        result.push('No traced step failed: the error was thrown outside a traced action or assertion (in the test code, a hook, or a timeout).');
+      } else if (failed.length > 0 && primary) {
+        result.push('No failed step has this error, so it was likely thrown outside a traced action or assertion (in the test code, a hook, or a timeout).');
       }
       if (others.length > 0) {
-        result.push(`Other failed steps, which did not stop the test (caught by the test code, or soft assertions): ${listSteps(others.map((f) => f.label))}`);
+        result.push(`${causing ? 'Also marked' : 'Marked'} [FAIL] below: ${listSteps(others.map((f) => f.label))}`);
       }
     }
     if (result.length > 0) {
