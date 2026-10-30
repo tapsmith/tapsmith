@@ -319,11 +319,12 @@ function findIosBuilds(cwd: string, sdk: AppleSdk): string[] {
   // whole-tree walk would reach other projects' builds in ~/Library.
   const layout = detectProjectLayout(cwd);
   if (!hasIosProject(layout)) return [];
-  // Flutter (PILOT-868): `flutter build ios` copies the app Xcode builds in
-  // `build/ios/<Configuration>-<sdk>/` to `build/ios/<sdk>/`, and a build
-  // from the Xcode UI lands in the former (Flutter sets SYMROOT to
-  // build/ios). The first folder that holds an app is offered, so the copy
-  // never makes the choice ambiguous; then the search below.
+  // Flutter (PILOT-868): `flutter build ios` / `flutter run` build into
+  // `build/ios/<Configuration>-<sdk>/` and copy the app to `build/ios/<sdk>/`
+  // after every successful build, so the copy is never the older one; the
+  // configuration folder is the fallback when only it exists. The first folder
+  // that holds an app is offered, so the copy never makes the choice
+  // ambiguous; then the search below. (An Xcode UI build goes to DerivedData.)
   if (layout.flutter) {
     for (const pattern of [`build/ios/${sdk}/*.app`, `build/ios/*-${sdk}/*.app`]) {
       const found = globSync(pattern, { cwd, posix: true }).filter((app) => !isTestRunner(app) && isDir(path.join(cwd, app))).sort();
