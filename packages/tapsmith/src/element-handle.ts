@@ -3804,9 +3804,14 @@ export class ElementHandle {
       let overshot = false;
       let carriedOff = false;
       let gentle = false;
-      // The element, seen on screen while the list was still moving after the
-      // last swipe: the next probe, so the settle below follows it from there.
-      let seenMoving: Probe | undefined;
+      // A read taken after the last swipe that stands as the next probe: the
+      // element seen on screen while the list was still moving, so the settle
+      // below follows it from there, or a read that ended after the settle time.
+      let nextProbe: Probe | undefined;
+      // The element's frame before the last nudge into its container: a
+      // nudge that leaves it there met the end of the content (the last row
+      // of a list rests against the edge), so it is as far in as it goes.
+      let nudgedFrom: string | undefined;
       const swipe = async (): Promise<void> => {
         const opts = gentle
           ? { speed: Math.min(speed, SCROLL_GENTLE_MAX_SPEED), distance: SCROLL_GENTLE_DISTANCE }
@@ -3822,27 +3827,34 @@ export class ElementHandle {
         // to the end of the content without it. Seen once, the settle below
         // follows it, and scrolls back if the list carries it off. Reads that
         // tell nothing (a fault, a stale or ambiguous snapshot) are skipped.
-        // SCROLL_SETTLE_MS in all before the next probe, as the sleep this
-        // replaced; a read in between, at each interval but the last.
-        for (let waited = SCROLL_WATCH_INTERVAL_MS; ; waited += SCROLL_WATCH_INTERVAL_MS) {
+        // SCROLL_SETTLE_MS in all, as the sleep this replaced, counting the
+        // time the reads take: a read that ends after it stands as the next
+        // probe, so a device whose reads are slow (a large table) pays for no
+        // more reads per swipe than before.
+        let elapsed = 0;
+        for (;;) {
           await sleep(SCROLL_WATCH_INTERVAL_MS, this._client._getAbortSignal?.());
-          if (waited >= SCROLL_SETTLE_MS) return;
+          elapsed += SCROLL_WATCH_INTERVAL_MS;
+          if (elapsed >= SCROLL_SETTLE_MS) return;
+          const readStart = Date.now();
           let seen: Probe;
           try {
             seen = await probe();
           } catch (err) {
             if (!isStrictModeViolation(err)) throw err;
             continue;
+          } finally {
+            elapsed += Date.now() - readStart;
           }
-          if (seen.outcome === 'visible') {
-            seenMoving = seen;
+          if (seen.outcome === 'visible' || elapsed >= SCROLL_SETTLE_MS) {
+            nextProbe = seen;
             return;
           }
         }
       };
       for (;;) {
-        let result = seenMoving ?? (await probe());
-        seenMoving = undefined;
+        let result = nextProbe ?? (await probe());
+        nextProbe = undefined;
 
         // Right after navigation or app launch the accessibility tree can lag
         // the rendered screen — it may briefly describe the PREVIOUS screen
@@ -3967,8 +3979,9 @@ export class ElementHandle {
           // tap at its centre lands on it. Either way gently, so the momentum
           // does not carry it past again, and within maxScrolls.
           const lost = swipes > 0 && (last === 'hidden' || last === 'gone');
+          const settledFrame = frameKey(settled);
           const nudge =
-            swipes > 0 && last === 'visible' && region && settled.bounds
+            swipes > 0 && last === 'visible' && region && settled.bounds && settledFrame !== nudgedFrom
               ? cutByEdge(settled.bounds, region, direction)
               : undefined;
           if (!lost && (!nudge || swipes >= maxScrolls)) {
@@ -3982,6 +3995,7 @@ export class ElementHandle {
           }
           gentle = true;
           if (nudge) {
+            nudgedFrom = settledFrame;
             direction = nudge;
             if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
             // This swipe moves an element already found, so it is not judged

@@ -6154,6 +6154,24 @@ describe('scrollIntoView() checks the element is still on screen once the list h
     ]);
   });
 
+  it('counts the time its reads take toward the watch: a slow read that ends after it stands as the next probe', async () => {
+    // A large UIKit table, where one read takes ~450 ms: one read per swipe,
+    // as before the watch, not four more.
+    const findElements = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+      return makeFindElementsResponse([]);
+    });
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await expect(new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(
+      /not visible after 1 scroll\(s\)/,
+    );
+
+    // Probe and confirmation before the swipe, then one read after it.
+    expect(findElements).toHaveBeenCalledTimes(3);
+  });
+
   it('turns back gently when the frame the tree reports says a swipe went past the element (UIKit)', async () => {
     const below = at(1400, 1472, false);
     const above = at(-600, -528, false);
@@ -6237,6 +6255,20 @@ describe('scrollIntoView() checks the element is still on screen once the list h
     const client = listClient(findElements, swipe);
 
     await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['up', 1000, 0.3],
+    ]);
+  });
+
+  it('stops nudging once a nudge leaves the element where it was: the content is at its end', async () => {
+    // The last row of a list rests flush with the list's bottom edge.
+    const findElements = scripted([null, null, at(710, 782)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 50'), 5000).scrollIntoView({ maxScrolls: 15 });
 
     expect(swipes(swipe)).toEqual([
       ['up', 2000, 0.6],
