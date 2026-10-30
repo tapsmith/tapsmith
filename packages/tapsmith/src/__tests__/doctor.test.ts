@@ -14,6 +14,9 @@ import {
   configLoadFailure,
   parseNetworksetupProxy,
   summarizeAvdImages,
+  countSpringBoardTeardownCrashes,
+  summarizeSpringBoardCrashes,
+  SPRINGBOARD_CRASH_WINDOW_DAYS,
   type CheckEntry,
   type ServiceProxySetting,
 } from '../doctor.js';
@@ -513,5 +516,101 @@ describe('configAndroidApks() (PILOT-263)', () => {
       apk: 'root.apk',
       projects: [{ use: {} }, { use: { apk: 'b.apk' } }, { use: { apk: 'b.apk' } }, { use: { platform: 'ios' } }],
     })).toEqual(['root.apk', 'b.apk']);
+  });
+});
+
+describe('SpringBoard teardown crash reports (PILOT-947)', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.UTC(2026, 9, 30, 12);
+  const TEARDOWN = '__66-[XCTAutomationSession initWithAccessibilityFramework:dataSource:]_block_invoke';
+
+  /** An `.ips` report as macOS writes it: a JSON header line, then the JSON body. */
+  function ips(opts: { crashMs: number; faulting: string[]; other?: string[] }): string {
+    const stamp = new Date(opts.crashMs).toISOString().replace('T', ' ').replace(/\.(\d\d)\dZ$/, '.$1 +0000');
+    const header = { app_name: 'SpringBoard', timestamp: stamp, bug_type: '309' };
+    const thread = (symbols: string[]) => ({ frames: symbols.map((symbol) => ({ imageOffset: 1, symbol })) });
+    const body = {
+      faultingThread: 1,
+      threads: [thread(['mach_msg2_trap']), thread(opts.faulting), thread(opts.other ?? [])],
+    };
+    return `${JSON.stringify(header)}\n${JSON.stringify(body, null, 2)}`;
+  }
+
+  /** Files whose mtime is `ageDays` before `now`, and whose report says it crashed `crashAgeDays` before (default: the same). */
+  function reportsDir(files: Array<{ name: string; body?: string; ageDays: number; crashAgeDays?: number; faulting?: string[]; other?: string[] }>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-diag-'));
+    for (const f of files) {
+      const file = path.join(dir, f.name);
+      const crashMs = now - (f.crashAgeDays ?? f.ageDays) * DAY;
+      fs.writeFileSync(file, f.body ?? ips({ crashMs, faulting: f.faulting ?? ['objc_msgSend', TEARDOWN], other: f.other }));
+      const t = (now - f.ageDays * DAY) / 1000;
+      fs.utimesSync(file, t, t);
+    }
+    return dir;
+  }
+
+  function count(files: Parameters<typeof reportsDir>[0]): number {
+    const dir = reportsDir(files);
+    try {
+      return countSpringBoardTeardownCrashes(dir, now);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  it('counts recent SpringBoard reports with the XCTest teardown frame, and nothing else', () => {
+    expect(count([
+      { name: 'SpringBoard-2026-10-29-204543.ips', ageDays: 1 },
+      { name: 'SpringBoard-2026-10-30-070317.ips', ageDays: 0.2 },
+      // Another SpringBoard crash: not this bug.
+      { name: 'SpringBoard-2026-10-28-100000.ips', ageDays: 2, faulting: ['-[SBSomethingElse crash]'] },
+      // Older than the window.
+      { name: 'SpringBoard-2026-10-01-100000.ips', ageDays: SPRINGBOARD_CRASH_WINDOW_DAYS + 1 },
+      // Another process with the same frame.
+      { name: 'TapsmithAgentUITests-Runner-2026-10-29-100000.ips', ageDays: 1 },
+    ])).toBe(2);
+  });
+
+  it('counts only a crash on the teardown frame, not another crash while a second thread was tearing down', () => {
+    // Real reports often show the teardown frame on two threads; only the faulting one says what crashed.
+    expect(count([
+      { name: 'SpringBoard-a.ips', ageDays: 1, faulting: ['objc_msgSend', TEARDOWN], other: [TEARDOWN] },
+      { name: 'SpringBoard-b.ips', ageDays: 1, faulting: ['-[SBSomethingElse crash]'], other: [TEARDOWN] },
+    ])).toBe(1);
+  });
+
+  it('dates a report by the crash time it records, not by when the file was last written', () => {
+    expect(count([
+      // Copied or touched recently, but the crash is three weeks old.
+      { name: 'SpringBoard-copied.ips', ageDays: 0.1, crashAgeDays: 21 },
+      // Dated after now (a clock change): not a crash from the last 7 days.
+      { name: 'SpringBoard-future.ips', ageDays: 0.1, crashAgeDays: -2 },
+      { name: 'SpringBoard-recent.ips', ageDays: 0.1, crashAgeDays: 0.5 },
+    ])).toBe(1);
+  });
+
+  it('falls back to the file time and a plain text search for a report it cannot parse', () => {
+    expect(count([
+      { name: 'SpringBoard-legacy.ips', ageDays: 1, body: `Process: SpringBoard\nThread 7 Crashed:\n0 XCTAutomationSupport -[XCTAutomationSession initWithAccessibilityFramework:dataSource:]` },
+      { name: 'SpringBoard-legacy-old.ips', ageDays: SPRINGBOARD_CRASH_WINDOW_DAYS + 1, body: `-[XCTAutomationSession initWithAccessibilityFramework:dataSource:]` },
+      { name: 'SpringBoard-legacy-other.ips', ageDays: 1, body: 'Thread 7 Crashed:\n0 SpringBoard -[SBSomethingElse crash]' },
+    ])).toBe(1);
+  });
+
+  it('is 0 when the reports directory does not exist', () => {
+    expect(countSpringBoardTeardownCrashes(path.join(os.tmpdir(), 'tapsmith-no-such-dir-947'), now)).toBe(0);
+  });
+
+  it('reports nothing without crashes', () => {
+    expect(summarizeSpringBoardCrashes(0)).toBeUndefined();
+  });
+
+  it('warns with the count, says nothing needs fixing, and gives the notification setting without applying it', () => {
+    expect(summarizeSpringBoardCrashes(1)?.label).toContain('crashed in an iOS simulator once in the last 7 days');
+    const summary = summarizeSpringBoardCrashes(3);
+    expect(summary?.status).toBe('warn');
+    expect(summary?.label).toContain('3 times');
+    expect(summary?.fix).toContain('Nothing to fix in your setup');
+    expect(summary?.fix).toContain('defaults write com.apple.CrashReporter UseUNC 1');
   });
 });

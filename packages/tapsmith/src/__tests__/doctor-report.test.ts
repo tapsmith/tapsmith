@@ -357,6 +357,37 @@ describe('doctor platform gating (PILOT-263 item 6)', () => {
     expect(code).toBe(1);
   });
 
+  // PILOT-947: SpringBoard's XCTest-teardown crash reports surface as a warning, only where Xcode works.
+  function writeSpringBoardCrashReport(): void {
+    const reports = path.join(home, 'Library', 'Logs', 'DiagnosticReports');
+    fs.mkdirSync(reports, { recursive: true });
+    const stamp = new Date(Date.now() - 60 * 60 * 1000).toISOString().replace('T', ' ').replace(/\.(\d\d)\dZ$/, '.$1 +0000');
+    const body = { faultingThread: 0, threads: [{ frames: [{ symbol: '-[XCTAutomationSession initWithAccessibilityFramework:dataSource:]' }] }] };
+    fs.writeFileSync(path.join(reports, 'SpringBoard-2026-10-30-185019.ips'), `${JSON.stringify({ app_name: 'SpringBoard', timestamp: stamp })}\n${JSON.stringify(body)}`);
+  }
+
+  it('warns about recent SpringBoard teardown crashes on a Mac with Xcode, without failing', async () => {
+    withAdb();
+    withXcode();
+    writeSpringBoardCrashReport();
+    const { code, json } = await doctorJson();
+    expect(check(json, 'ios-springboard-crashes')).toMatchObject({
+      status: 'warn',
+      label: expect.stringContaining('SpringBoard crashed in an iOS simulator once'),
+      fix: expect.stringContaining('Nothing to fix in your setup'),
+    });
+    expect(code).toBe(0);
+  });
+
+  it('has no SpringBoard row without such crashes, or without Xcode', async () => {
+    withAdb();
+    withXcode();
+    expect(ids((await doctorJson()).json)).not.toContain('ios-springboard-crashes');
+    exec.table.delete('xcodebuild -version');
+    writeSpringBoardCrashReport();
+    expect(ids((await doctorJson()).json)).not.toContain('ios-springboard-crashes');
+  });
+
   // PILOT-777: simctl exiting 0 said "iOS simulators available" with none listed.
   describe('the simulator count', () => {
     const SIMCTL_KEY = 'xcrun simctl list devices available -j';

@@ -831,6 +831,113 @@ async function checkSimulatorXctestrun(report: Reporter): Promise<void> {
   }
 }
 
+// ─── SpringBoard teardown crashes (PILOT-947) ───
+
+/**
+ * The frame every crash report of Apple's XCTest teardown race carries: when
+ * the last XCTest session on a simulator ends, testmanagerd disables
+ * Automation Mode, and SpringBoard sometimes crashes in
+ * `-[XCTAutomationSession initWithAccessibilityFramework:dataSource:]`. Any
+ * XCTest-based tool triggers it; Tapsmith does each time an iOS agent stops.
+ */
+const SPRINGBOARD_TEARDOWN_FRAME = 'XCTAutomationSession initWithAccessibilityFramework';
+
+/** How far back doctor looks for those crash reports. */
+export const SPRINGBOARD_CRASH_WINDOW_DAYS = 7;
+
+/**
+ * How many SpringBoard crash reports in `dir` (macOS keeps them in
+ * `~/Library/Logs/DiagnosticReports`) from the last
+ * {@link SPRINGBOARD_CRASH_WINDOW_DAYS} days are the XCTest teardown crash.
+ * A report that cannot be read is not counted; a missing directory is 0.
+ */
+export function countSpringBoardTeardownCrashes(dir: string, nowMs: number = Date.now()): number {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  const since = nowMs - SPRINGBOARD_CRASH_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  let count = 0;
+  for (const name of names) {
+    if (!name.startsWith('SpringBoard-') || !name.endsWith('.ips')) continue;
+    try {
+      const file = path.join(dir, name);
+      // A file last written before the window cannot hold a crash inside it.
+      const mtimeMs = fs.statSync(file).mtimeMs;
+      if (mtimeMs < since) continue;
+      const crash = readSpringBoardCrash(fs.readFileSync(file, 'utf-8'));
+      const crashMs = crash.crashMs ?? mtimeMs;
+      if (crash.teardown && crashMs >= since && crashMs <= nowMs) count++;
+    } catch {
+      // Unreadable or gone since the listing: not evidence either way.
+    }
+  }
+  return count;
+}
+
+/**
+ * What a SpringBoard `.ips` report says: whether its faulting thread crashed
+ * in the XCTest teardown frame, and when it crashed. A report is a JSON header
+ * line followed by a JSON body. The teardown frame is often on a second,
+ * non-faulting thread too, so only the faulting thread counts. A report that
+ * does not parse (another format) falls back to a text search and no time.
+ */
+function readSpringBoardCrash(text: string): { teardown: boolean; crashMs?: number } {
+  const newline = text.indexOf('\n');
+  try {
+    const header = JSON.parse(text.slice(0, newline)) as { timestamp?: unknown };
+    const body = JSON.parse(text.slice(newline + 1)) as {
+      faultingThread?: unknown;
+      threads?: Array<{ frames?: Array<{ symbol?: unknown }> }>;
+    };
+    if (typeof body.faultingThread === 'number' && Array.isArray(body.threads)) {
+      const frames = body.threads[body.faultingThread]?.frames ?? [];
+      return {
+        teardown: frames.some((f) => typeof f.symbol === 'string' && f.symbol.includes(SPRINGBOARD_TEARDOWN_FRAME)),
+        crashMs: parseIpsTimestamp(header.timestamp),
+      };
+    }
+  } catch {
+    // Not the JSON format: fall through to the text search.
+  }
+  return { teardown: text.includes(SPRINGBOARD_TEARDOWN_FRAME) };
+}
+
+/** An `.ips` header timestamp (`2026-10-30 18:50:19.00 +0000`) in ms, or undefined. */
+function parseIpsTimestamp(value: unknown): number | undefined {
+  if (typeof value !== 'string') return undefined;
+  const m = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2}(?:\.\d+)?) ([+-]\d{2})(\d{2})$/.exec(value.trim());
+  if (!m) return undefined;
+  const ms = Date.parse(`${m[1]}T${m[2]}${m[3]}:${m[4]}`);
+  return Number.isNaN(ms) ? undefined : ms;
+}
+
+/** The doctor row for {@link countSpringBoardTeardownCrashes}; none when there were no such crashes. */
+export function summarizeSpringBoardCrashes(count: number): { status: 'warn'; label: string; fix: string } | undefined {
+  if (count === 0) return undefined;
+  const times = count === 1 ? 'once' : `${count} times`;
+  return {
+    status: 'warn',
+    label: `SpringBoard crashed in an iOS simulator ${times} in the last ${SPRINGBOARD_CRASH_WINDOW_DAYS} days as an XCTest session ended`,
+    fix: 'Nothing to fix in your setup: this is a bug in Apple\'s XCTest support, which the simulator recovers from by '
+      + 'restarting SpringBoard (https://tapsmith.dev/guides/debugging/#springboard-quit-unexpectedly-ios-simulator). '
+      + 'To get a notification instead of the macOS crash dialog, run: defaults write com.apple.CrashReporter UseUNC 1',
+  };
+}
+
+function checkSpringBoardCrashes(report: Reporter): void {
+  try {
+    const summary = summarizeSpringBoardCrashes(
+      countSpringBoardTeardownCrashes(path.join(os.homedir(), 'Library', 'Logs', 'DiagnosticReports')),
+    );
+    if (summary) warn(report, 'ios-springboard-crashes', summary.label, summary.fix);
+  } catch {
+    // Informational only: a check that cannot run says nothing.
+  }
+}
+
 // ─── Network Capture checks ───
 
 function checkMitmCa(report: Reporter): void {
@@ -1387,6 +1494,7 @@ async function doctorReport(opts: { json: boolean; config?: string }): Promise<D
     checkIosApp(report, scopes, projectNames, iosPlan.required || xcodeOk);
     if (xcodeOk) {
       await checkSimulatorXctestrun(report);
+      checkSpringBoardCrashes(report);
     } else {
       // A config that targets iOS still gets its capture guidance (mitmproxy,
       // Network Extension), as a targeted Android keeps its APK/AVD checks.
