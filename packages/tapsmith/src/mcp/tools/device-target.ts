@@ -86,7 +86,7 @@ export async function deviceTargetFor(
   try {
     return await resolveDeviceTarget({ device, project });
   } catch (err) {
-    throw withTargetFailures(withGroupNames(err, request.device, dispatcher), dispatcher);
+    throw withTargetFailures(withGroupNames(err, request.device, dispatcher), [request.device, device], dispatcher);
   }
 }
 
@@ -94,13 +94,22 @@ export async function deviceTargetFor(
  * A named device the pool does not know is usually one a target tried and
  * failed to set up — its agent would not start, say — and the daemon that
  * failed was discarded with it. The pool's "not found" says nothing of that;
- * the target's failure says why, so it leads.
+ * the target's failure says why, so it leads when it names the device asked
+ * for. A failure that names another device (or none) is not why this one is
+ * missing — a typo, say — so it follows the pool's answer instead.
  */
-function withTargetFailures(err: unknown, dispatcher?: TestDispatcher): unknown {
+function withTargetFailures(
+  err: unknown,
+  requested: Array<string | undefined>,
+  dispatcher?: TestDispatcher,
+): unknown {
   if (!(err instanceof Error) || !/\bnot found in any connected daemon\b/.test(err.message)) return err;
   const failures = sessionTargetsOf(dispatcher).filter((t) => t.error && !t.device);
   if (failures.length === 0) return err;
   const reasons = failures.map((t) => (t.platform ? `${t.platform}: ${t.error}` : t.error)).join('; ');
+  const names = requested.filter((n): n is string => !!n);
+  const forThisDevice = names.length === 0 || failures.some((t) => names.some((n) => t.error!.includes(n)));
+  if (!forThisDevice) return new Error(`${err.message}\nThis session also could not set up its device — ${reasons}`);
   return new Error(`This session could not set up its device — ${reasons}\n(${err.message})`);
 }
 

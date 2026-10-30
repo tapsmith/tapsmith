@@ -344,8 +344,10 @@ async function clientPointedAt(serial: string): Promise<TapsmithGrpcClient> {
     // fail with "Not connected to agent". Say why instead. Only a successful
     // `prepareTarget` clears this — the dispatcher's failed-target retry
     // (budgeted; a tool naming the project always gets one) — so the reason
-    // can outlive a fix made outside the session until that retry runs.
-    if (conn.agentFailed && conn.agentError) throw new Error(conn.agentError);
+    // can outlive a fix made outside the session until that retry runs. The
+    // reason is the prepared device's: another session may have moved the
+    // daemon to this one since and started its agent.
+    if (conn.agentFailed && conn.agentError && conn.preparedDevice === serial) throw new Error(conn.agentError);
     return client;
   }
 
@@ -2456,7 +2458,7 @@ async function setDeviceAndAgent(
  * gives the session a device whose every run fails.
  *
  * With the device known, the config's app is installed first unless the
- * device already holds that exact build, as every test run does: the iOS
+ * device already holds it, by the check every test run makes: the iOS
  * agent launches the app the moment it is up, and on a simulator without it
  * never comes up at all.
  */

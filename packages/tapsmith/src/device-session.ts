@@ -502,8 +502,10 @@ async function installAppUnderTest(
 }
 
 /**
- * Install the config's app on `serial` unless it already holds this exact
- * build — the check every test run makes — and wait for the install to end.
+ * Install the config's app on `serial` unless it already holds it — the
+ * check every test run makes: the exact build on a simulator or emulator,
+ * the bundle's presence on a physical iOS device — and wait for the install
+ * to end.
  * For a caller that starts the agent itself (the MCP server): the iOS agent
  * launches the app as soon as it is up, so it must be in place first.
  * `client`'s daemon must already be pointed at `serial`.

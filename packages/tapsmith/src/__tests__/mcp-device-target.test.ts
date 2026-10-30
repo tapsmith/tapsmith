@@ -304,6 +304,19 @@ describe('device tools naming a device no target could set up', () => {
     }
   });
 
+  // A typo, or a device no target was ever for: the failed target is worth
+  // knowing, but it is not why this device is missing.
+  it('lead with the pool\'s miss for a device the failed target was not for', async () => {
+    resolveOverride = () => Promise.reject(new Error('Device "SIM-9" not found in any connected daemon. Available devices: (none)'));
+    try {
+      const err = await deviceClientFor({ device: 'SIM-9' }, failedDispatcher).then(() => undefined, (e: unknown) => e as Error);
+      expect(err?.message).toMatch(/^Device "SIM-9" not found in any connected daemon/);
+      expect(err?.message).toContain('ios: Failed to start the agent on SIM-1');
+    } finally {
+      resolveOverride = undefined;
+    }
+  });
+
   it('leave any other failure as it is', async () => {
     resolveOverride = () => Promise.reject(new Error('Another session has pointed that daemon at SIM-2'));
     try {

@@ -267,17 +267,19 @@ async fn start_agent_impl(
         let runner_error = launch_failure.lock().unwrap().take();
         if let Some(runner_error) = runner_error {
             let _ = child.kill().await;
+            // `None`: not known — a physical device, or a simctl that could
+            // not be asked. Only a confirmed absence rules the relaunch out.
             let installed = if is_physical {
                 None
             } else {
-                Some(
-                    super::device::get_app_container(udid, target_bundle_id)
-                        .await
-                        .is_ok(),
-                )
+                super::device::is_app_installed(udid, target_bundle_id)
+                    .await
+                    .ok()
             };
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if installed == Some(true) && relaunches_left > 0 && remaining > Duration::from_secs(30)
+            if may_relaunch_after_launch_failure(is_physical, installed)
+                && relaunches_left > 0
+                && remaining > Duration::from_secs(30)
             {
                 relaunches_left -= 1;
                 warn!(
@@ -445,9 +447,18 @@ fn runner_launch_failure<'a>(line: &'a str, target_bundle_id: &str) -> Option<&'
     line.find(&needle).map(|at| line[at..].trim_end())
 }
 
+/// Whether a runner that could not launch the app under test gets the one
+/// in-place relaunch. A simulator app that is installed, or whose presence
+/// could not be checked, may have hit a transient refusal; one simctl says is
+/// missing never launches. Physical devices are not relaunched here: the
+/// relaunch clears the stuck app with simctl, which cannot reach them.
+fn may_relaunch_after_launch_failure(is_physical: bool, installed: Option<bool>) -> bool {
+    !is_physical && installed != Some(false)
+}
+
 /// The agent-start error for an app the runner could not launch. `installed`
-/// is whether the app is on the simulator (`None` where that was not checked,
-/// a physical device): a missing app is by far the commonest cause, and the
+/// is whether the app is on the simulator (`None` where that is not known: a
+/// physical device, or a simctl that could not be asked): a missing app is by far the commonest cause, and the
 /// one the runner's own wording ("returned nil for …") never names.
 fn app_launch_failure_message(
     target_kind: &str,
@@ -1170,6 +1181,15 @@ mod tests {
             Some(true),
         );
         assert!(!installed.contains("not installed"));
+    }
+
+    #[test]
+    fn a_launch_failure_is_relaunched_unless_the_app_is_known_to_be_missing() {
+        assert!(may_relaunch_after_launch_failure(false, Some(true)));
+        // simctl could not be asked (timed out): unknown, not missing.
+        assert!(may_relaunch_after_launch_failure(false, None));
+        assert!(!may_relaunch_after_launch_failure(false, Some(false)));
+        assert!(!may_relaunch_after_launch_failure(true, None));
     }
 
     #[test]

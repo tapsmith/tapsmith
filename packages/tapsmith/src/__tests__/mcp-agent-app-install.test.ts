@@ -244,6 +244,17 @@ describe('an agent the daemon refused to start', () => {
     await expect(resolveDeviceTarget({ device: 'SIM-1' })).resolves.toMatchObject({ device: 'SIM-1' });
   });
 
+  // The recorded reason is SIM-1's. Another session can move that daemon to
+  // SIM-2, whose agent it then starts; SIM-1's reason is not SIM-2's.
+  it('is not the reason given for another device the daemon was moved to', async () => {
+    devices = [sim, { serial: 'SIM-2', state: 'Discovered', platform: 'ios' }];
+    startAgentResponse = () => Promise.resolve({ success: false, errorMessage: LAUNCH_REFUSAL });
+    await target().catch(() => undefined);
+    devices = [{ ...sim, state: 'Discovered' }, { serial: 'SIM-2', state: 'Active', platform: 'ios' }];
+    const err = await resolveDeviceTarget({ device: 'SIM-2' }).then(() => undefined, (e: Error) => e);
+    expect(err?.message ?? '').not.toContain(LAUNCH_REFUSAL);
+  });
+
   it('is reported, not taken as started, by a UI session\'s discovery start', async () => {
     mcpConfig = iosConfig;
     configureMcpConnection({ uiMode: true });
