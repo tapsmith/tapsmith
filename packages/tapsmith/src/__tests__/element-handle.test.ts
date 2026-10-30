@@ -107,6 +107,15 @@ function makeMockClient(overrides: Partial<TapsmithGrpcClient> = {}): TapsmithGr
   } as unknown as TapsmithGrpcClient;
 }
 
+/**
+ * The reads scrollIntoView() takes of its element after each swipe while the
+ * list may still be moving (PILOT-935), before the next probe: one every
+ * 100 ms of its 500 ms settle but the last.
+ */
+const WATCH_READS = 4;
+/** One state of the element across a swipe's watch reads and the probe after them. */
+const afterSwipe = <T,>(el: T): T[] => Array<T>(WATCH_READS + 1).fill(el);
+
 /** getUiHierarchy answers: each call a new dump, or `script` in order, repeating its last entry. */
 function hierarchySequence(script?: string[]) {
   let i = 0;
@@ -5723,7 +5732,7 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
   });
 
   it('swipes "up", the old default, while the element is not in the tree (Android lists on-screen nodes only)', async () => {
-    const findElements = scripted([null, null, null, visible]);
+    const findElements = scripted([null, null, ...afterSwipe(null), visible]);
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({ findElements, swipe });
 
@@ -5744,7 +5753,7 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
   });
 
   it('keeps the last direction its position called for while the element drops out of the tree', async () => {
-    const findElements = scripted([offScreen(above), offScreen(above), null, visible]);
+    const findElements = scripted([offScreen(above), offScreen(above), ...afterSwipe(null), visible]);
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({ findElements, swipe });
 
@@ -5754,7 +5763,7 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
   });
 
   it('re-reads the position before every swipe, so an overshoot is scrolled back', async () => {
-    const findElements = scripted([offScreen(above), offScreen(above), offScreen(below), visible]);
+    const findElements = scripted([offScreen(above), offScreen(above), ...afterSwipe(offScreen(below)), visible]);
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({ findElements, swipe });
 
@@ -5764,7 +5773,7 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
   });
 
   it('an explicit direction overrides the position', async () => {
-    const findElements = scripted([offScreen(above), offScreen(above), offScreen(above), visible]);
+    const findElements = scripted([offScreen(above), offScreen(above), ...afterSwipe(offScreen(above)), visible]);
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({ findElements, swipe });
 
@@ -5941,7 +5950,10 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
 
   it('re-reads once after an idle wait before calling it the end, so a lagging tree is not mistaken for one', async () => {
     let probes = 0;
-    const findElements = vi.fn(async () => makeFindElementsResponse(++probes >= 4 ? [makeElementInfo({ visible: true })] : []));
+    // Two probes before swipe 1, its watch reads and probe, then seen in swipe 2's watch.
+    const findElements = vi.fn(async () =>
+      makeFindElementsResponse(++probes > 2 + WATCH_READS + 1 ? [makeElementInfo({ visible: true })] : []),
+    );
     const swipe = vi.fn(async () => successResponse());
     const waitForIdle = vi.fn(async () => successResponse());
     // Before swipe 1: <a/>. After it, still <a/> at first, then <b/> once idle.
@@ -5961,7 +5973,10 @@ describe('scrollIntoView() stops at the end of the scrollable content (PILOT-929
 
   it('reads the screen once per swipe, and not after the element comes into view', async () => {
     let probes = 0;
-    const findElements = vi.fn(async () => makeFindElementsResponse(++probes >= 4 ? [makeElementInfo({ visible: true })] : []));
+    // Two probes before swipe 1, its watch reads and probe, then seen in swipe 2's watch.
+    const findElements = vi.fn(async () =>
+      makeFindElementsResponse(++probes > 2 + WATCH_READS + 1 ? [makeElementInfo({ visible: true })] : []),
+    );
     const getUiHierarchy = vi.fn(hierarchySequence());
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({ findElements, getUiHierarchy, swipe });
@@ -6146,6 +6161,367 @@ describe('scrollIntoView() swipes inside the scroll container (PILOT-934)', () =
         'the other way). If the content can scroll further, the swipe inside the scrollable at [0,563][1080,2400] did not ' +
         'move it: scroll() the list that holds the element.',
     );
+  });
+});
+
+describe('scrollIntoView() checks the element is still on screen once the list has stopped (PILOT-935)', () => {
+  // A Flutter ListView on iOS: the scroll view under a 118 pt app bar. Its
+  // rows' frames are clipped to the viewport, so a row sliding off the top
+  // keeps top=118 while its bottom shrinks.
+  const listDump = (n: number) =>
+    `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
+    `<XCUIElementTypeOther type="XCUIElementTypeOther" label="Items ${n}" bounds="[0,0][402,118]"/>` +
+    `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,118][402,782]"/>` +
+    `</XCUIElementTypeApplication></hierarchy>`;
+  const at = (top: number, bottom: number, visible = true) =>
+    makeElementInfo({ text: 'Item 40', visible, bounds: { left: 0, top, right: 402, bottom } });
+  const gone = makeElementInfo({ text: 'Item 40', visible: false, bounds: { left: 0, top: 0, right: 0, bottom: 0 } });
+
+  /** findElements answers from `script` in order (null = not in the tree), repeating the last entry. */
+  function scripted(script: (ElementInfo | null)[]) {
+    let i = 0;
+    return vi.fn(async () => {
+      const el = script[Math.min(i++, script.length - 1)];
+      return makeFindElementsResponse(el ? [el] : []);
+    });
+  }
+  const swipes = (swipe: ReturnType<typeof vi.fn>) =>
+    swipe.mock.calls.map((c) => {
+      const o = (c as unknown[])[1] as { speed: number; distance: number };
+      return [c[0], o.speed, o.distance];
+    });
+  const listClient = (findElements: TapsmithGrpcClient['findElements'], swipe: TapsmithGrpcClient['swipe']) =>
+    makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([listDump(0), listDump(1), listDump(2), listDump(3)])) });
+
+  it('waits until the whole frame holds, not only its top: a clipped row sliding off the top keeps top=118', async () => {
+    // Probe + confirmation miss → swipe. Then the row slides under the top
+    // edge: top pinned at 118, bottom shrinking, and it ends gone. The old
+    // settle (top only) called it settled at [0,118][402,150].
+    const findElements = scripted([null, null, at(118, 190), at(118, 150), at(118, 150), at(118, 120), gone, gone, gone, at(300, 372)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 20 });
+
+    // The first swipe scrolls down; the second, gentle, scrolls back up.
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['down', 1000, 0.3],
+    ]);
+  });
+
+  it('watches for the element while the list is still moving, so a row the momentum carries past is not missed', async () => {
+    // On screen only at the second read after the swipe; gone by the time the
+    // list stops. Reading only after the settle never saw it, and swiped on.
+    const findElements = scripted([null, null, null, at(400, 472), gone, gone, gone, gone, at(300, 372)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['down', 1000, 0.3],
+    ]);
+  });
+
+  it('counts the time its reads take toward the watch: a slow read that ends after it stands as the next probe', async () => {
+    // A large UIKit table, where one read takes ~450 ms: one read per swipe,
+    // as before the watch, not four more.
+    const findElements = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 450));
+      return makeFindElementsResponse([]);
+    });
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await expect(new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(
+      /not visible after 1 scroll\(s\)/,
+    );
+
+    // Probe and confirmation before the swipe, then one read after it.
+    expect(findElements).toHaveBeenCalledTimes(3);
+  });
+
+  it('turns back gently when the frame the tree reports says a swipe went past the element (UIKit)', async () => {
+    const below = at(1400, 1472, false);
+    const above = at(-600, -528, false);
+    const findElements = scripted([below, below, ...afterSwipe(above), at(300, 372)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['down', 1000, 0.3],
+    ]);
+  });
+
+  it('scrolls back, gently, when momentum carried the element off screen after it was seen (Flutter: zero frame)', async () => {
+    const findElements = scripted([null, null, at(400, 472), gone, gone, gone, at(300, 372)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['down', 1000, 0.3],
+    ]);
+  });
+
+  it('scrolls back when the element dropped out of the tree while the list was settling (Android lists on-screen nodes only)', async () => {
+    // Seen at the first watch read, then out of the tree for every settle
+    // read: 10, plus the 4 the early sighting adds.
+    const findElements = scripted([null, null, at(400, 472), ...Array<null>(14).fill(null), at(300, 372)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe });
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['down', 1000, 0.3],
+    ]);
+  });
+
+  it('scrolls back toward the frame the tree reports for it, when it reports one (UIKit)', async () => {
+    // Carried past the top: the tree reports its real frame above the screen.
+    const above = at(-300, -228, false);
+    const findElements = scripted([null, null, at(400, 472), above, above, above, at(300, 372)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe).map((s) => s[0])).toEqual(['up', 'down']);
+  });
+
+  it('keeps scrolling back, gently, when the first swipe back does not reach the element', async () => {
+    for (const direction of [undefined, 'down'] as const) {
+      const findElements = scripted([null, null, at(400, 472), gone, gone, gone, ...afterSwipe(gone), at(300, 372)]);
+      const swipe = vi.fn(async () => successResponse());
+      const client = listClient(findElements, swipe);
+
+      await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView(direction ? { direction } : undefined);
+
+      expect(swipes(swipe)).toEqual([
+        ['up', 2000, 0.6],
+        ['down', 1000, 0.3],
+        ['down', 1000, 0.3],
+      ]);
+    }
+  });
+
+  it('scrolls back even with an explicit direction: the element was seen, so where it is is known', async () => {
+    const findElements = scripted([null, null, at(400, 472), gone, gone, gone, at(300, 372)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ direction: 'down' });
+
+    expect(swipes(swipe).map((s) => s[0])).toEqual(['up', 'down']);
+  });
+
+  it('nudges a row left cut at the top edge of its list back into it', async () => {
+    // Seen whole mid-fling, then clipped to a 22 pt sliver at the top edge.
+    const findElements = scripted([null, null, at(150, 222), at(118, 140), at(118, 140), at(118, 140), at(250, 322)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['down', 1000, 0.3],
+    ]);
+  });
+
+  it('nudges a row left cut at the bottom edge on, the same way', async () => {
+    // UIKit frames are not clipped: the row reaches past the list's bottom.
+    const findElements = scripted([null, null, at(740, 812), at(740, 812), at(740, 812), at(500, 572)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['up', 1000, 0.3],
+    ]);
+  });
+
+  it('leaves a row resting whole against an edge alone: a swipe further would only pull past the end of the content', async () => {
+    // The first row, back at the top of the list (a pull past it could start
+    // a pull-to-refresh), and the last row at the bottom.
+    for (const [row, direction] of [
+      [at(118, 190), 'up'],
+      [at(710, 782), 'down'],
+    ] as const) {
+      const findElements = scripted([null, null, row]);
+      const swipe = vi.fn(async () => successResponse());
+      const client = listClient(findElements, swipe);
+
+      await new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction, maxScrolls: 15 });
+
+      expect(swipe).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it('nudges in a sliver of a row the list stopped on as it entered, though it was never seen whole', async () => {
+    // Flutter clips the row to the list: 12 pt of it show at the bottom edge.
+    const findElements = scripted([null, null, at(770, 782), at(770, 782), at(770, 782), at(600, 672)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['up', 1000, 0.3],
+    ]);
+  });
+
+  it('stops nudging when a nudge would undo the last one: the element is too long to fit wholly inside', async () => {
+    // A 640 pt card in the 664 pt list: cut at the top, nudged down 200 pt,
+    // now cut at the bottom; nudging back would swing it to and fro.
+    const findElements = scripted([null, null, at(100, 740), at(100, 740), at(100, 740), at(300, 940)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Card'), 5000).scrollIntoView({ maxScrolls: 15 });
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['down', 1000, 0.3],
+    ]);
+  });
+
+  it('settles at least as long after a swipe as before the watch, when the watch sees the element early', async () => {
+    // Seen at the first watch read (~100 ms after the swipe), then still
+    // moving for 12 more reads: the 10-read settle alone would stop while it
+    // moves; the 400 ms the watch saved buys 4 more reads.
+    const moving = Array.from({ length: 12 }, (_, i) => at(300 + 10 * i, 372 + 10 * i));
+    const findElements = scripted([null, null, at(290, 362), ...moving, at(420, 492)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    // Probe and confirmation, the watch read, then 12 moving reads and 2 still ones.
+    expect(findElements).toHaveBeenCalledTimes(2 + 1 + 12 + 2);
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops nudging once a nudge leaves the element where it was', async () => {
+    // The last row reaches past the list's bottom and the content is at its
+    // end: a nudge cannot move it.
+    const findElements = scripted([null, null, at(740, 812)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 50'), 5000).scrollIntoView({ maxScrolls: 15 });
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['up', 1000, 0.3],
+    ]);
+  });
+
+  it('judges a horizontal list along its own axis', async () => {
+    const card = (left: number, right: number) =>
+      makeElementInfo({ text: 'Card 9', visible: true, bounds: { left, top: 200, right, bottom: 400 } });
+    const carousel = (n: number) =>
+      `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
+      `<XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" label="${n}" bounds="[0,200][402,400]"/>` +
+      `</XCUIElementTypeApplication></hierarchy>`;
+    // Scrolling right, momentum leaves Card 9 cut at the left edge.
+    const findElements = scripted([null, null, card(-150, 50), card(-150, 50), card(-150, 50), card(100, 300)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([carousel(0), carousel(1)])) });
+
+    await new ElementHandle(client, _text('Card 9'), 5000).scrollIntoView({ direction: 'right' });
+
+    expect(swipes(swipe)).toEqual([
+      ['left', 2000, 0.6],
+      ['right', 1000, 0.3],
+    ]);
+  });
+
+  it('leaves an element taller than its list alone: it cannot fit, and it is on screen', async () => {
+    const findElements = scripted([null, null, at(100, 900), at(100, 900), at(100, 900)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('a row resting inside its list is done: no extra swipe', async () => {
+    const findElements = scripted([null, null, at(300, 372)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+
+  it('without a known list (the screen was swiped) it does not judge edges, but still scrolls back for a vanished element', async () => {
+    const sliver = scripted([null, null, at(118, 120), at(118, 120), at(118, 120)]);
+    const swipe1 = vi.fn(async () => successResponse());
+    await new ElementHandle(makeMockClient({ findElements: sliver, swipe: swipe1 }), _text('Item 40'), 5000).scrollIntoView();
+    expect(swipe1).toHaveBeenCalledTimes(1);
+
+    const vanished = scripted([null, null, at(400, 472), gone, gone, gone, at(300, 372)]);
+    const swipe2 = vi.fn(async () => successResponse());
+    await new ElementHandle(makeMockClient({ findElements: vanished, swipe: swipe2 }), _text('Item 40'), 5000).scrollIntoView();
+    expect(swipes(swipe2).map((s) => s[0])).toEqual(['up', 'down']);
+  });
+
+  it('counts the swipes back toward maxScrolls, and says so when they run out', async () => {
+    const findElements = scripted([null, null, at(400, 472), gone]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await expect(new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(
+      'scrollIntoView: getByText("Item 40", { exact: true }) was not visible after 2 scroll(s) in direction "down", then "up" ' +
+        '(chosen from where the element was). It was on screen after a scroll, but the list kept moving and carried it off; ' +
+        'raise maxScrolls (2) to let it scroll back further.',
+    );
+    expect(swipe).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops the unknown-position hint once the element was seen and carried off', async () => {
+    const findElements = scripted([null, null, at(400, 472), gone]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await expect(new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(
+      'scrollIntoView: getByText("Item 40", { exact: true }) was not visible after 1 scroll(s) in direction "down". ' +
+        'It was on screen after a scroll, but the list kept moving and carried it off; raise maxScrolls (1) to let it scroll back further.',
+    );
+  });
+
+  it('mentions maxScrolls when the swipe budget runs out', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(vi.fn(async () => makeFindElementsResponse([])), swipe);
+
+    await expect(new ElementHandle(client, _text('Item 99'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(
+      /was not visible after 2 scroll\(s\) in direction "down" .*\. Raise maxScrolls \(2\) to scroll further\.$/,
+    );
+  });
+
+  it('returns once the budget is spent with the element still on screen, even if cut at the edge', async () => {
+    const findElements = scripted([null, null, at(118, 140)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView({ maxScrolls: 1 });
+
+    expect(swipe).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -6459,8 +6835,9 @@ describe("scrollIntoView honours the handle's modifiers (PILOT-345)", () => {
     await handle.scrollIntoView();
 
     expect(swipe).toHaveBeenCalledTimes(1);
-    // 3 pre-visible reads + all 10 stabilization ticks (never a clean reading).
-    expect(findElements).toHaveBeenCalledTimes(13);
+    // 3 pre-visible reads + all stabilization ticks (never a clean reading):
+    // 10, plus 4 because the element was seen at the first read after the swipe.
+    expect(findElements).toHaveBeenCalledTimes(17);
   });
 
   it('a one-tick miss during post-swipe stabilization is waited out, not taken as "settled" (review follow-up)', async () => {
