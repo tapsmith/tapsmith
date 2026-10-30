@@ -25,7 +25,7 @@ let typesByName: [String: XCUIElement.ElementType] = {
     let types: [XCUIElement.ElementType] = [
         .textField, .secureTextField, .textView, .searchField, .button, .staticText, .other, .link, .image,
         .slider, .switch, .toggle, .tab, .tabBar, .checkBox, .stepper, .progressIndicator, .activityIndicator,
-        .cell, .table,
+        .cell, .table, .alert,
     ]
     var map: [String: XCUIElement.ElementType] = [:]
     for type in types { map[RoleMapping.typeName(for: type)] = type }
@@ -64,6 +64,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
         let value = c["value"] as? String ?? ""
         let role = c["role"] as? String ?? ""
         let inTabBar = c["inTabBar"] as? Bool ?? false
+        let inAlert = c["inAlert"] as? Bool ?? false
         var traits: UInt64 = 0
         for name in c["traits"] as? [String] ?? [] {
             guard let bit = traitsByName[name] else {
@@ -78,7 +79,7 @@ if let data = FileManager.default.contents(atPath: fixturePath),
                reported == (c["reportedRole"] as? String ?? ""))
         let isRole = RoleMapping.matches(
             role: role, elementType: type, traits: traits, value: value,
-            hasNameFilter: c["name"] != nil, inTabBar: inTabBar
+            hasNameFilter: c["name"] != nil, inTabBar: inTabBar, inAlert: inAlert
         )
         if c["name"] == nil {
             expect("role \(role) \(why)", isRole == want)

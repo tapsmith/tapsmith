@@ -6,6 +6,27 @@ import { openScreen } from "../utils/app-reset.js"
 // getByRole("alert", { name }) never found the error text Android matches.
 // A named query now finds it on both platforms; an unnamed one can't on iOS,
 // and its failure says so.
+// PILOT-919: React Native's Alert.alert is a native alert. On iOS that is an
+// XCUIElementTypeAlert, the alert role — found without a name, and by its
+// title without also finding the title text inside it. Android's
+// AlertDialog has no alert role in its accessibility tree.
+describe("getByRole('alert') on React Native's Alert.alert", () => {
+  test.beforeEach(async ({ device, platform, dialogsScreen }) => {
+    test.skip(platform !== "ios", "an Android AlertDialog has no alert role: find it by its text or buttons")
+    await openScreen(device, "/dialogs")
+    await expect(dialogsScreen.heading).toBeVisible()
+    await dialogsScreen.showAlertButton.tap()
+  })
+
+  test("finds the alert, named by its title or not, and its buttons in it", async ({ dialogsScreen }) => {
+    await expect(dialogsScreen.infoAlert).toBeVisible()
+    await expect(dialogsScreen.infoAlert).toHaveRole("alert")
+    await expect(dialogsScreen.anyAlert).toHaveCount(1)
+    await dialogsScreen.infoAlertOk.tap()
+    await expect(dialogsScreen.anyAlert).toHaveCount(0)
+  })
+})
+
 describe("getByRole('alert') on a React Native alert Text", () => {
   test.use({ timeout: 20_000 })
 

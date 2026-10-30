@@ -80,7 +80,7 @@ device.getByRole("button", { name: "Details", expanded: true })
 | `selected` | `boolean` | Filter by selected state (tab, option) |
 | `expanded` | `boolean` | Filter by expanded state (accordion, dropdown) |
 
-`role` is one of the [supported roles](locators.md#getbyrolerole--name-) (case-insensitive; `header`, `slider`, `search` and `radio` are aliases for `heading`, `seekbar`, `searchfield` and `radiobutton`). Any other role throws when the locator is built, listing the supported roles:
+`role` is one of the [supported roles](locators.md#getbyrolerole--name-) (case-insensitive; `header`, `slider`, `search` and `radio` are aliases for `heading`, `seekbar`, `searchfield` and `radiobutton`). Any other role throws when the locator is built, listing the supported roles — and, for a Playwright ARIA role with a native counterpart, naming it (`textbox` → `textfield`, `alertdialog` and `dialog` → `alert`):
 
 ```
 Unknown role "row". Supported: alert, button, checkbox, combobox, heading, image, link, list, listitem, menu, menubar, menuitem, progressbar, radiobutton, radiogroup, scrollbar, scrollview, searchfield, seekbar, spinbutton, spinner, summary, switch, tab, tablist, text, textfield, timer, toolbar (aliases: header → heading, slider → seekbar, search → searchfield, radio → radiobutton). For an element with no supported role, use getByText(), getByTestId() or getByDescription().

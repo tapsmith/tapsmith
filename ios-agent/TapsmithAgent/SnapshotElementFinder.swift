@@ -1169,6 +1169,7 @@ class SnapshotElementFinder {
         if matchesSelector(
             nodeDict,
             inTabBar: false,
+            inAlert: false,
             containerLabel: containerLabel,
             selector: selector,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
@@ -1196,6 +1197,7 @@ class SnapshotElementFinder {
         in nodeDict: [String: Any],
         inTabBar: Bool,
         insideSwitch: Bool = false,
+        inAlert: Bool = false,
         containerLabel: String,
         selector: ElementSelector,
         results: inout [([String: Any], CGRect)],
@@ -1253,6 +1255,7 @@ class SnapshotElementFinder {
         if isAppNode, !isSwitchPart, matchesSelector(
             nodeDict,
             inTabBar: inTabBar,
+            inAlert: inAlert,
             containerLabel: containerLabel,
             selector: selector,
             keyboardVisibleInSnapshot: keyboardVisibleInSnapshot,
@@ -1342,6 +1345,9 @@ class SnapshotElementFinder {
                     in: child,
                     inTabBar: childrenInTabBar,
                     insideSwitch: insideSwitch || NonAppElements.isSwitch(nodeType),
+                    // Inside a native alert only the alert is an alert
+                    // (RoleMapping.matches, PILOT-919).
+                    inAlert: inAlert || nodeType == .alert,
                     containerLabel: childContainerLabel,
                     selector: selector,
                     results: &results,
@@ -1364,6 +1370,7 @@ class SnapshotElementFinder {
     private func matchesSelector(
         _ node: [String: Any],
         inTabBar: Bool,
+        inAlert: Bool,
         containerLabel: String,
         selector: ElementSelector,
         keyboardVisibleInSnapshot: Bool,
@@ -1433,7 +1440,8 @@ class SnapshotElementFinder {
                 traits: traits,
                 value: value,
                 hasNameFilter: selector.hasNameFilter,
-                inTabBar: inTabBar
+                inTabBar: inTabBar,
+                inAlert: inAlert
             ) {
                 return false
             }

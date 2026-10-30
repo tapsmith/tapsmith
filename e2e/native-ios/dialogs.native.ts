@@ -15,6 +15,18 @@ describe("Native: alerts, confirmation dialogs and sheets", () => {
     await expect(dialogs.result("Deleted")).toBeVisible()
   })
 
+  // The alert element itself, unnamed or by its title — not also the title
+  // text inside it (PILOT-919).
+  test("a native alert is the alert role, with or without a name", async ({ dialogs }) => {
+    await dialogs.showAlert.tap()
+    await expect(dialogs.anyAlert).toHaveCount(1)
+    await expect(dialogs.alert).toHaveCount(1)
+    await expect(dialogs.alert).toHaveRole("alert")
+    await expect(dialogs.alert).toHaveText("Delete file?")
+    await dialogs.alertCancel.tap()
+    await expect(dialogs.anyAlert).toHaveCount(0)
+  })
+
   test("alert cancel button", async ({ dialogs }) => {
     await dialogs.showAlert.tap()
     await dialogs.alertCancel.tap()

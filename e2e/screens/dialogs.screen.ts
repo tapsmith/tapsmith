@@ -8,6 +8,10 @@ export class DialogsScreen {
   // Alerts (React Native's Alert.alert: a native alert on both platforms)
   get showAlertButton() { return this.device.getByRole("button", { name: "Show alert" }) }
   get alertOk() { return this.device.getByRole("button", { name: "OK", exact: true }) }
+  /** The "Show alert" alert, by its title. On iOS a native alert is the alert role (PILOT-919). */
+  get infoAlert() { return this.device.getByRole("alert", { name: "Info" }) }
+  get anyAlert() { return this.device.getByRole("alert") }
+  get infoAlertOk() { return this.infoAlert.getByRole("button", { name: "OK", exact: true }) }
 
   // Toast
   get showToastButton() { return this.device.getByRole("button", { name: "Show toast" }) }

@@ -93,6 +93,12 @@ const ARIA_ROLE_HINTS: Readonly<Record<string, string>> = {
   // React Native's togglebutton is a button on both platforms, as an ARIA
   // toggle button is (PILOT-664).
   togglebutton: 'button',
+  // A native iOS alert is an `alert` (PILOT-919). Hints, not aliases: an
+  // alias would also make an RN <Text accessibilityRole="alert"> (an ARIA
+  // live-region alert) a dialog, and `dialog` would promise the sheets and
+  // confirmation dialogs no native role finds.
+  alertdialog: 'alert',
+  dialog: 'alert',
 };
 
 /**
@@ -227,6 +233,10 @@ export const ANDROID_TRAIT_ONLY_ROLES: ReadonlySet<string> = new Set([
  * from their tab-bar ancestor, which no type can say.
  */
 export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
+  // A SwiftUI .alert, a UIAlertController alert, React Native's Alert.alert
+  // (PILOT-919). Generic views and static text inside one are not alerts:
+  // the alert is (`iosInsideNativeAlert`).
+  alert: ['XCUIElementTypeAlert'],
   button: ['XCUIElementTypeButton'],
   textfield: ['XCUIElementTypeTextField', 'XCUIElementTypeSecureTextField'],
   checkbox: ['XCUIElementTypeCheckBox'],
@@ -344,6 +354,17 @@ export function iosGenericViewHasRole(
 }
 
 /**
+ * Whether an iOS element is a generic view or static text inside a native
+ * alert (an `XCUIElementTypeAlert` ancestor, `inAlert`), which never has the
+ * alert role (`role`, canonical) the way the agent's `RoleMapping.matches`
+ * decides it: the alert itself is the match, so a named query doesn't also
+ * find its title text.
+ */
+export function iosInsideNativeAlert(role: string, type: string, inAlert: boolean): boolean {
+  return inAlert && role === 'alert' && type !== 'XCUIElementTypeAlert';
+}
+
+/**
  * The role an iOS generic view's accessibility value describes (`checkbox`
  * for "checkbox, unchecked"), or '' — read as the agent reads it: only the
  * first comma-separated part counts, since the states and the app's own
@@ -361,6 +382,7 @@ export function iosDescribedRole(value: string | undefined): string {
  * SwiftUI or UIKit menu's items as buttons, never as menu items.
  */
 const IOS_NATIVE_WIDGET_NOTES: Readonly<Record<string, string>> = {
+  alert: ' (a native alert matches without one)',
   spinbutton: ' (a native Stepper matches without one)',
   menu: ' (an open native menu\'s items are buttons: getByRole("button", { name: "…" }))',
   menuitem: ' (an open native menu\'s items are buttons: getByRole("button", { name: "…" }))',

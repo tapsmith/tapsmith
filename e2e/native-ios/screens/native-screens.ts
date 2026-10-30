@@ -66,6 +66,8 @@ export class NativeDialogsScreen {
   result(text: string) { return this.device.getByText(`Result: ${text}`, { exact: true }) }
 
   get alert() { return this.device.getByRole("alert", { name: "Delete file?" }) }
+  /** A native alert is the alert role without a name too (PILOT-919). */
+  get anyAlert() { return this.device.getByRole("alert") }
   get alertMessage() { return this.device.getByText("This cannot be undone.", { exact: true }) }
   get alertDelete() { return this.alert.getByRole("button", { name: "Delete" }) }
   get alertCancel() { return this.alert.getByRole("button", { name: "Cancel" }) }
@@ -181,6 +183,7 @@ export class UIKitDialogsScreen {
   get showSheet() { return this.device.getByRole("button", { name: "UIKit Action Sheet" }) }
   result(text: string) { return this.device.getByText(`Result: ${text}`, { exact: true }) }
   get alert() { return this.device.getByRole("alert", { name: "Remove item?" }) }
+  get anyAlert() { return this.device.getByRole("alert") }
   get remove() { return this.device.getByRole("button", { name: "Remove" }) }
   get exportPdf() { return this.device.getByRole("button", { name: "Export PDF" }) }
 }

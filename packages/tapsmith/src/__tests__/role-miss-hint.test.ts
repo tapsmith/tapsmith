@@ -10,7 +10,7 @@ import { iosUnnamedRoleMissHint } from "../roles.js";
 import type { ElementInfo, TapsmithGrpcClient } from "../grpc-client.js";
 
 // Its own sentence: "…after waiting 50ms. On iOS, …".
-const HINT = /[^.]\. On iOS, React Native publishes no "alert" role that getByRole\("alert"\) can see without a name: pass the element's name — getByRole\("alert", \{ name: "…" \}\) — or use getByText\(\) or getByTestId\(\)\.$/;
+const HINT = /[^.]\. On iOS, React Native publishes no "alert" role that getByRole\("alert"\) can see without a name \(a native alert matches without one\): pass the element's name — getByRole\("alert", \{ name: "…" \}\) — or use getByText\(\) or getByTestId\(\)\.$/;
 // In a failure message, the pointer to the locator tools follows it (PILOT-849).
 const PICKER = /To find a locator that matches, pick the element in UI mode \(npx tapsmith test --ui\) or check one with the MCP tool tapsmith_test_locator\.$/;
 const HINT_IN_MESSAGE = new RegExp(HINT.source.replace(/\$$/, "") + " " + PICKER.source);
@@ -42,6 +42,10 @@ describe("iosUnnamedRoleMissHint()", () => {
     // An open SwiftUI / UIKit menu's items are buttons, not menu items.
     vitestExpect(iosUnnamedRoleMissHint(role("menuitem"), "ios"))
       .toContain('(an open native menu\'s items are buttons: getByRole("button", { name: "…" }))');
+    // A native alert (SwiftUI, UIKit, React Native's Alert.alert) is found
+    // without one; an RN <Text accessibilityRole="alert"> is not (PILOT-919).
+    vitestExpect(iosUnnamedRoleMissHint(role("alert"), "ios"))
+      .toContain('can see without a name (a native alert matches without one): pass the element\'s name');
     for (const r of ["timer", "radiogroup", "menubar"]) {
       vitestExpect(iosUnnamedRoleMissHint(role(r), "ios"), r).not.toContain("native");
     }
