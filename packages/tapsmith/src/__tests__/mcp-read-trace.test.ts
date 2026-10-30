@@ -9,6 +9,9 @@ import { createMcpServer } from '../mcp/index.js';
 import { TRACE_FORMAT_VERSION } from '../trace/trace-format.js';
 import { MCP_RESPONSE_MAX_BYTES } from '../mcp/response-limits.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { expect as tapsmithExpect } from '../expect.js';
+import { TraceCollector, setActiveTraceCollector } from '../trace/trace-collector.js';
+import type { TraceConfig } from '../trace/types.js';
 
 // `tapsmith_read_trace` is how an agent finds out why a test failed, and it is
 // the one tool that reads a file rather than a device. It had no coverage at
@@ -113,7 +116,7 @@ describe('tapsmith_read_trace format version', () => {
     });
     const res = await readTrace({ path: trace });
     expect(res.isError).toBeFalsy();
-    expect(text(res)).toContain('Test: /home/runner/work/app/e2e/login.test.ts');
+    expect(text(res)).toContain('File: /home/runner/work/app/e2e/login.test.ts');
     expect(text(res)).not.toContain('relative to');
   });
 
@@ -123,7 +126,7 @@ describe('tapsmith_read_trace format version', () => {
       events: [{ type: 'action', action: 'tap' }],
     });
     const out = text(await readTrace({ path: trace }));
-    expect(out).toContain("Test: tests/login.test.ts (relative to the project's rootDir)");
+    expect(out).toContain("File: tests/login.test.ts (relative to the project's rootDir)");
   });
 
   it('refuses an archive from a newer format instead of misreading it', async () => {
@@ -155,7 +158,7 @@ describe('tapsmith_read_trace step rendering', () => {
     });
     const out = text(await readTrace({ path: trace }));
     expect(out).toContain('Device: iPhone 16 (ios)');
-    expect(out).toContain('Test: login.test.ts');
+    expect(out).toContain('File: login.test.ts');
     expect(out).toContain('Duration: 4200ms');
   });
 
@@ -175,14 +178,30 @@ describe('tapsmith_read_trace step rendering', () => {
     expect(out).toContain('Error: Timed out');
   });
 
-  it('titles each test with its group marker', async () => {
+  it('titles each group with the name the collector records', async () => {
+    // The collector writes `name` (GroupTraceEvent); the reader once looked
+    // for `title`, so every group printed as "### Test".
     const trace = writeTrace({
       events: [
-        { type: 'group-start', title: 'signs in with a valid password' },
+        { type: 'group-start', name: 'signs in with a valid password' },
         { type: 'action', action: 'tap' },
       ],
     });
     expect(text(await readTrace({ path: trace }))).toContain('### signs in with a valid password');
+  });
+
+  it('marks a step the trace recorded as unsuccessful even with no error text', async () => {
+    const trace = writeTrace({
+      events: [
+        { type: 'action', action: 'tap', success: false },
+        { type: 'assertion', assertion: 'toBeVisible', passed: false },
+        { type: 'action', action: 'swipe', success: true },
+      ],
+    });
+    const out = text(await readTrace({ path: trace }));
+    expect(out).toContain('1. [FAIL] tap');
+    expect(out).toContain('2. [FAIL] expect toBeVisible');
+    expect(out).toContain('3. [OK] swipe');
   });
 
   it('skips a line the writer left unparseable instead of failing the read', async () => {
@@ -200,6 +219,272 @@ describe('tapsmith_read_trace step rendering', () => {
     expect(out).toContain('tap');
     expect(out).toContain('swipe');
     expect(out).toContain('## Steps (2 events)');
+  });
+});
+
+// PILOT-917: an agent reading a failed trace saw every step [OK] and never the
+// word "error" — the test's own status and error live in metadata.json.
+describe('tapsmith_read_trace test result', () => {
+  const failedMeta = {
+    version: 2,
+    testFile: 'tests/settings.test.ts',
+    testName: 'settings > toggles dark mode',
+    testStatus: 'failed',
+    error: 'TypeError: expect(...).toBeSelected is not a function',
+    device: { model: 'Pixel 9', platform: 'android' },
+  };
+
+  it('leads with the test name, its status and its error when no step failed', async () => {
+    const trace = writeTrace({
+      metadata: failedMeta,
+      events: [
+        { type: 'action', action: 'tap', success: true, duration: 80 },
+        { type: 'assertion', assertion: 'toBeVisible', passed: true, duration: 40 },
+        { type: 'console', source: 'device', level: 'error', message: 'unrelated device noise' },
+      ],
+    });
+    const out = text(await readTrace({ path: trace }));
+    const header = out.slice(0, out.indexOf('## Steps'));
+    expect(out.startsWith('## Result')).toBe(true);
+    expect(header).toContain('Test: settings > toggles dark mode');
+    expect(header).toContain('Status: failed');
+    expect(header).toContain('Error: TypeError: expect(...).toBeSelected is not a function');
+    // Every step passed, so say where the error did not come from.
+    expect(header).toContain('No traced step failed');
+    // The error comes before the steps and the device logs.
+    expect(out.indexOf('toBeSelected')).toBeLessThan(out.indexOf('1. [OK] tap'));
+    expect(out.indexOf('toBeSelected')).toBeLessThan(out.indexOf('unrelated device noise'));
+  });
+
+  it('names the failing step in the header', async () => {
+    const trace = writeTrace({
+      metadata: { ...failedMeta, error: 'Timed out waiting for text "Welcome"' },
+      events: [
+        { type: 'group-start', name: 'toggles dark mode' },
+        { type: 'action', action: 'tap', selector: 'getByText("Login")', success: true },
+        { type: 'assertion', assertion: 'toHaveText', passed: false, error: 'Timed out waiting for text "Welcome"' },
+      ],
+    });
+    const out = text(await readTrace({ path: trace }));
+    const header = out.slice(0, out.indexOf('## Steps'));
+    // Step numbers count events, so the group marker is event 1.
+    expect(header).toContain('Failed step: 3. expect toHaveText');
+    expect(header).not.toContain('No traced step failed');
+    expect(out).toContain('3. [FAIL] expect toHaveText');
+  });
+
+  // The trace writer records every assertion with `soft: false`, so the
+  // fixtures below do too: the reader must not lean on that field.
+  it('does not blame a step whose failure the test caught when the error came from elsewhere', async () => {
+    // try { await tap() } catch {} around an optional dialog, then a TypeError
+    // in the test body: the caught tap is [FAIL] but did not fail the test.
+    const trace = writeTrace({
+      metadata: failedMeta,
+      events: [
+        { type: 'action', action: 'tap', success: false, error: 'No element found for getByText("Allow")' },
+        { type: 'action', action: 'swipe', success: true },
+      ],
+    });
+    const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+    expect(header).not.toContain('Failed step:');
+    expect(header).toContain('No failed step has this error, so it was likely thrown outside a traced action or assertion');
+    expect(header).toContain('Marked [FAIL] below: 1. tap');
+  });
+
+  it('names the step the test stopped on and lists soft failures separately', async () => {
+    const trace = writeTrace({
+      metadata: {
+        ...failedMeta,
+        error: 'element not found\n\n--- Additionally ---\n1 soft assertion(s) failed:\nsoft miss',
+      },
+      events: [
+        { type: 'assertion', assertion: 'toBeVisible', passed: false, soft: false, error: 'soft miss' },
+        { type: 'action', action: 'tap', success: true },
+        { type: 'action', action: 'swipe', success: false, error: 'element not found', deviceId: 'bob' },
+      ],
+    });
+    const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+    expect(header).toContain("Failed step: 3. bob: swipe (its error is the test's error; marked [FAIL] below)");
+    expect(header).toContain('Also marked [FAIL] below: 1. expect toBeVisible');
+    expect(header).not.toContain('No traced step failed');
+  });
+
+  it('names the last of several steps that failed with the test\'s error', async () => {
+    // try { await tap() } catch {} then the same tap again, uncaught.
+    const trace = writeTrace({
+      metadata: { ...failedMeta, error: 'No element found for getByText("Allow")' },
+      events: [
+        { type: 'action', action: 'tap', success: false, error: 'No element found for getByText("Allow")' },
+        { type: 'action', action: 'swipe', success: true },
+        { type: 'action', action: 'tap', success: false, error: 'No element found for getByText("Allow")' },
+      ],
+    });
+    const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+    expect(header).toContain('Failed step: 3. tap');
+    expect(header).toContain('Also marked [FAIL] below: 1. tap');
+  });
+
+  it('names the last soft assertion when they alone failed the test, and lists the rest', async () => {
+    const trace = writeTrace({
+      metadata: { ...failedMeta, error: '2 soft assertion(s) failed:\nfirst miss\nsecond miss' },
+      events: [
+        { type: 'assertion', assertion: 'toBeVisible', passed: false, soft: false, error: 'first miss' },
+        { type: 'action', action: 'tap', success: true },
+        { type: 'assertion', assertion: 'toHaveText', passed: false, soft: false, error: 'second miss' },
+      ],
+    });
+    const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+    expect(header).toContain('Failed step: 3. expect toHaveText');
+    expect(header).toContain('Also marked [FAIL] below: 1. expect toBeVisible');
+  });
+
+  it('keeps a long failed-step list short and always names the last one', async () => {
+    const events = Array.from({ length: 25 }, (_, i) => ({
+      type: 'assertion', assertion: `check${i + 1}`, passed: false, soft: false, error: `miss ${i + 1};`,
+    }));
+    const error = `25 soft assertion(s) failed:\n${events.map((e) => e.error).join('\n')}`;
+    const header = text(await readTrace({ path: writeTrace({ metadata: { ...failedMeta, error }, events }) })).split('## Steps')[0];
+    expect(header).toContain('Failed step: 25. expect check25');
+    expect(header).toContain('Also marked [FAIL] below: 1. expect check1, ');
+    expect(header).toContain('9. expect check9, … 14 more …, 24. expect check24');
+    expect(header).not.toContain('check10,');
+  });
+
+  // The fixtures above hand-copy one string into the step and the test error.
+  // These record the steps through the real emitters, so the header is held
+  // to the text they write next to the error they throw.
+  describe('with steps recorded by the real expect()', () => {
+    const traceConfig: TraceConfig = {
+      mode: 'on', screenshots: false, snapshots: false, sources: false,
+      attachments: false, network: false, deviceLogs: false, daemonLogs: false,
+    };
+
+    async function failedTraceOf(assertion: () => void): Promise<string> {
+      const collector = new TraceCollector(traceConfig, tmpDir);
+      setActiveTraceCollector(collector);
+      let thrown: unknown;
+      try {
+        tapsmithExpect(2).toBe(2);
+        assertion();
+      } catch (err) {
+        thrown = err;
+      } finally {
+        setActiveTraceCollector(null);
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      const trace = writeTrace({
+        metadata: { ...failedMeta, error: (thrown as Error).message },
+        events: [...collector.events],
+      });
+      return text(await readTrace({ path: trace })).split('## Steps')[0];
+    }
+
+    it.each([
+      ['toBe', () => tapsmithExpect(3).toBe(4)],
+      ['not.toBe', () => tapsmithExpect(3).not.toBe(3)],
+      ['toHaveLength', () => tapsmithExpect([1, 2]).toHaveLength(3)],
+      ['toBeTruthy', () => tapsmithExpect(0).toBeTruthy()],
+      ['toThrow', () => tapsmithExpect(() => { throw new Error('nope'); }).toThrow('other')],
+      ['not.toThrow', () => tapsmithExpect(() => { throw new Error('nope'); }).not.toThrow()],
+    ])('names a failing expect(value).%s as the failed step', async (name, assertion) => {
+      const header = await failedTraceOf(assertion);
+      expect(header).toContain(`Failed step: 2. expect ${name} (its error is the test's error`);
+      expect(header).not.toContain('No failed step');
+      expect(header).not.toContain('marked [FAIL] below:');
+    });
+
+    it('lists the retries of a poll that passed without naming them the failure', async () => {
+      const collector = new TraceCollector(traceConfig, tmpDir);
+      setActiveTraceCollector(collector);
+      let n = 0;
+      let thrown: unknown;
+      try {
+        await tapsmithExpect.poll(() => ++n, { intervals: [1], timeout: 2_000 }).toBe(3);
+        tapsmithExpect('Home').toBe('Settings');
+      } catch (err) {
+        thrown = err;
+      } finally {
+        setActiveTraceCollector(null);
+      }
+      const trace = writeTrace({
+        metadata: { ...failedMeta, error: (thrown as Error).message },
+        events: [...collector.events],
+      });
+      const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+      expect(header).toContain('Failed step: 4. expect toBe');
+      expect(header).toContain('Also marked [FAIL] below: 1. expect toBe, 2. expect toBe');
+    });
+
+    it('names only the last attempt of a poll that timed out', async () => {
+      const collector = new TraceCollector(traceConfig, tmpDir);
+      setActiveTraceCollector(collector);
+      let thrown: unknown;
+      try {
+        await tapsmithExpect.poll(() => 1, { intervals: [1], timeout: 30 }).toBe(2);
+      } catch (err) {
+        thrown = err;
+      } finally {
+        setActiveTraceCollector(null);
+      }
+      const attempts = collector.events.filter((e) => e.type === 'assertion').length;
+      expect(attempts).toBeGreaterThan(1);
+      const trace = writeTrace({
+        metadata: { ...failedMeta, error: (thrown as Error).message },
+        events: [...collector.events],
+      });
+      const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+      expect(header).toContain(`Failed step: ${attempts}. expect toBe`);
+    });
+
+    it.each([
+      ['toThrow', () => tapsmithExpect(() => { throw new Error('nope'); }).toThrow('nope')],
+      ['not.toThrow', () => tapsmithExpect(() => 1).not.toThrow()],
+      ['not.toThrow with a non-matching error', () => tapsmithExpect(() => { throw new Error('nope'); }).not.toThrow('other')],
+    ])('traces a passing %s as passed', (_name, assertion) => {
+      const collector = new TraceCollector(traceConfig, tmpDir);
+      setActiveTraceCollector(collector);
+      try {
+        assertion();
+      } finally {
+        setActiveTraceCollector(null);
+      }
+      const [event] = collector.events.filter((e) => e.type === 'assertion');
+      expect(event).toMatchObject({ passed: true });
+      expect((event as { error?: string }).error).toBeUndefined();
+    });
+  });
+
+  it('reports a passing test as passed with no error line', async () => {
+    const trace = writeTrace({
+      metadata: { ...failedMeta, testStatus: 'passed', error: undefined, project: 'android' },
+      events: [{ type: 'action', action: 'tap', success: true }],
+    });
+    const header = text(await readTrace({ path: trace })).split('## Steps')[0];
+    expect(header).toContain('Status: passed');
+    expect(header).toContain('Project: android');
+    expect(header).not.toContain('Error');
+    expect(header).not.toContain('No traced step failed');
+  });
+
+  it('clips a huge test error like a step value', async () => {
+    const trace = writeTrace({
+      metadata: { ...failedMeta, error: `boom ${'x'.repeat(50_000)}` },
+      events: [],
+    });
+    const res = await readTrace({ path: trace });
+    expect(text(res)).toContain('more characters');
+    expect(Buffer.byteLength(JSON.stringify(res), 'utf8')).toBeLessThanOrEqual(MCP_RESPONSE_MAX_BYTES);
+  });
+
+  it('prints nothing for result fields an older archive does not have', async () => {
+    const trace = writeTrace({
+      metadata: { version: 1, testFile: 'login.test.ts' },
+      events: [{ type: 'action', action: 'tap' }],
+    });
+    const out = text(await readTrace({ path: trace }));
+    expect(out).not.toContain('undefined');
+    expect(out).not.toContain('Status:');
+    expect(out).toContain('File: login.test.ts');
   });
 });
 
