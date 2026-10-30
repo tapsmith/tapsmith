@@ -1194,7 +1194,7 @@ describe('doctor ios-app check (PILOT-918)', () => {
     expect(rows(json)).toEqual([expect.objectContaining({
       status: 'fail',
       label: `iOS app not found at ${path.join(dir, 'does/not/exist.app')}`,
-      fix: expect.stringContaining('fix the app path'),
+      fix: expect.stringContaining('Fix the app path'),
     })]);
     expect(code).toBe(1);
 
@@ -1351,6 +1351,19 @@ describe('doctor ios-app check (PILOT-918)', () => {
     expect(row[0]!.label).toContain('(project c)');
     expect(row[0]!.label).not.toContain('(project a)');
     expect(code).toBe(1);
+  });
+
+  it('prints a build hint two problems share once', async () => {
+    withMac();
+    deviceApp('build/My.app');
+    writeConfig(`export default { projects: [
+      { name: 'a', use: { platform: 'ios', simulator: 'iPhone 17', app: 'build/My.app', package: 'com.example.my' } },
+      { name: 'b', use: { platform: 'ios', simulator: 'iPhone 17', app: 'build/Gone.app', package: 'com.example.my' } },
+    ] }\n`);
+    const { json } = await doctorJson();
+    const fix = rows(json)[0]?.fix ?? '';
+    expect(fix.split('Build it for the iOS Simulator')).toHaveLength(2);
+    expect(fix).toContain('Fix the app path in your Tapsmith config');
   });
 
   it('only warns in a mixed config whose Android projects can run here when Xcode is missing', async () => {

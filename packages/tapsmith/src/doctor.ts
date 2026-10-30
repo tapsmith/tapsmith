@@ -700,11 +700,12 @@ function checkIosApp(report: Reporter, scopes: TapsmithConfig[], projects: Array
   try {
     const mark: 'fail' | 'warn' = required ? 'fail' : 'warn';
     // Keyed by label, so a problem several projects share is one entry naming them all.
-    const issues = new Map<string, { status: 'fail' | 'warn'; fix: string; owners: string[] }>();
+    // A fix is its sentences, so one two problems share (a build hint) is printed once.
+    const issues = new Map<string, { status: 'fail' | 'warn'; fix: string[]; owners: string[] }>();
     const found = new Map<string, string>();
     const infos = new Map<string, IosAppInfo>();
     for (const { scope, project } of ios) {
-      const add = (status: 'fail' | 'warn', label: string, fix: string): void => {
+      const add = (status: 'fail' | 'warn', label: string, ...fix: string[]): void => {
         const entry = issues.get(label) ?? { status, fix, owners: [] };
         if (project !== undefined && !entry.owners.includes(project)) entry.owners.push(project);
         issues.set(label, entry);
@@ -724,7 +725,7 @@ function checkIosApp(report: Reporter, scopes: TapsmithConfig[], projects: Array
           stat = fs.statSync(app);
         } catch { /* reported below */ }
         if (!stat) {
-          add(mark, `iOS app not found at ${app}`, `Build your app, or fix the app path in your Tapsmith config. ${buildFix}`);
+          add(mark, `iOS app not found at ${app}`, 'Fix the app path in your Tapsmith config, or build the app', buildFix);
         } else if (!stat.isDirectory()) {
           add(mark, `${app} is not an .app bundle — app must be the .app directory Xcode builds, not a file`, buildFix);
         } else if (!fs.existsSync(path.join(app, 'Info.plist'))) {
@@ -775,7 +776,7 @@ function checkIosApp(report: Reporter, scopes: TapsmithConfig[], projects: Array
     }
     const entries = [...issues];
     const label = entries.map(([text, { owners }]) => (owners.length === 0 ? text : `${text} (project${owners.length === 1 ? '' : 's'} ${owners.join(', ')})`)).join('; ');
-    const fix = [...new Set(entries.map(([, { fix: f }]) => f))].join('; ');
+    const fix = [...new Set(entries.flatMap(([, { fix: f }]) => f))].join('; ');
     if (entries.some(([, e]) => e.status === 'fail')) fail(report, 'ios-app', label, fix);
     else warn(report, 'ios-app', label, fix);
   } catch {
