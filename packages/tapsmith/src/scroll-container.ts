@@ -49,7 +49,14 @@ interface Entry {
   order: number;
 }
 
-export function scrollRegion(xml: string, target?: Rect): Rect | undefined {
+/**
+ * @param target - The element's frame, when the tree reports one.
+ * @param previous - The region the last swipe used. When `target` matches
+ *   nothing in the dump (the element was still moving between the read of its
+ *   frame and the dump), that region is kept while it is still a scrollable's
+ *   region on screen, rather than falling back to the largest scrollable.
+ */
+export function scrollRegion(xml: string, target?: Rect, previous?: Rect): Rect | undefined {
   const entries: Entry[] = [];
   const walk = (node: HierarchyNode, parent: Entry | undefined) => {
     const b = BOUNDS_RE.exec(node.attributes.get('bounds') ?? '');
@@ -86,10 +93,20 @@ export function scrollRegion(xml: string, target?: Rect): Rect | undefined {
     if (!e.bounds || e.nonApp || !isScrollable(e.node)) return undefined;
     let r = intersect(e.bounds, screen);
     if (r && e.window?.bounds) r = intersect(r, e.window.bounds);
+    // A scroll view clips its content, so a nested scrollable shows only
+    // where its scrolling ancestors do (iOS frames are not clipped).
+    for (let a = e.parent; r && a; a = a.parent) {
+      if (a.bounds && !a.nonApp && isScrollable(a.node)) r = intersect(r, a.bounds);
+    }
     if (!r) return undefined;
     for (const c of covers) r = trimEdge(r, c);
     return r.right - r.left >= MIN_REGION && r.bottom - r.top >= MIN_REGION ? r : undefined;
   };
+
+  const candidates = entries.flatMap((e) => {
+    const r = region(e);
+    return r ? [{ e, r }] : [];
+  });
 
   if (target) {
     const self = entries.filter((e) => !e.nonApp && e.bounds && sameFrame(e.bounds, target)).at(-1);
@@ -97,12 +114,9 @@ export function scrollRegion(xml: string, target?: Rect): Rect | undefined {
       const r = region(a);
       if (r) return r;
     }
+    if (!self && previous && candidates.some((c) => sameFrame(c.r, previous))) return previous;
   }
 
-  const candidates = entries.flatMap((e) => {
-    const r = region(e);
-    return r ? [{ e, r }] : [];
-  });
   if (candidates.length === 0) return undefined;
 
   // The topmost app window: the smallest that has a scrollable.

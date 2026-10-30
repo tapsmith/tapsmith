@@ -6001,6 +6001,34 @@ describe('scrollIntoView() swipes inside the scroll container (PILOT-934)', () =
     expect(regions(swipe)).toEqual([{ left: 20, top: 400, right: 382, bottom: 800 }]);
   });
 
+  it('keeps the last container while the element is still moving, so its frame matches nothing in the dump (iOS)', async () => {
+    // The probe reads Card 15 at x=2200, then at x=1800; each dump has it
+    // somewhere else, as momentum carries the carousel on.
+    const card = (left: number) =>
+      makeElementInfo({ text: 'Card 15', visible: false, bounds: { left, top: 200, right: left + 200, bottom: 400 } });
+    let probes = 0;
+    const findElements = vi.fn(async () => makeFindElementsResponse([card(probes++ < 2 ? 2200 : 1800)]));
+    const carousel = (cardLeft: number) =>
+      `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
+      `<XCUIElementTypeScrollView type="XCUIElementTypeScrollView" bounds="[0,0][402,874]">` +
+      `<XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" value="${cardLeft}" bounds="[0,200][402,400]">` +
+      `<XCUIElementTypeCell type="XCUIElementTypeCell" label="Card 15" bounds="[${cardLeft},200][${cardLeft + 200},400]"/>` +
+      `</XCUIElementTypeCollectionView></XCUIElementTypeScrollView></XCUIElementTypeApplication></hierarchy>`;
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements,
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([carousel(2200), carousel(1650), carousel(1500)])),
+    });
+
+    await expect(
+      new ElementHandle(client, _text('Card 15'), 5000).scrollIntoView({ direction: 'right', maxScrolls: 2 }),
+    ).rejects.toThrow();
+
+    const carouselRegion = { left: 0, top: 200, right: 402, bottom: 400 };
+    expect(regions(swipe)).toEqual([carouselRegion, carouselRegion]);
+  });
+
   it('keeps the last container when a screen read fails, rather than swiping the screen', async () => {
     let reads = 0;
     const getUiHierarchy = vi.fn(async (): Promise<UiHierarchyResponse> => {

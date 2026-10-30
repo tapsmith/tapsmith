@@ -3907,8 +3907,9 @@ export class ElementHandle {
         // Inside the scroll container that holds the element, so the swipe
         // cannot start outside a dialog or on a header above the list
         // (PILOT-934); the element's frame, when the tree reports it, says
-        // which container that is.
-        if (read) region = scrollRegion(read.xml, usableFrame(result.el));
+        // which container that is, and the last region stands in while the
+        // element is still moving and its frame matches nothing in the dump.
+        if (read) region = scrollRegion(read.xml, usableFrame(result.el), region);
         const swipeRes = await this._client.swipe(
           OPPOSITE_DIRECTION[direction],
           region ? { speed, distance: 0.6, region } : { speed, distance: 0.6 },

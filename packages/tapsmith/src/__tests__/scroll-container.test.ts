@@ -157,6 +157,37 @@ describe('scrollRegion — iOS (the element\'s frame is known)', () => {
     expect(scrollRegion(xml, { left: 0, top: 2000, right: 402, bottom: 2044 })).toEqual({ left: 0, top: 0, right: 402, bottom: 550 });
   });
 
+  it('keeps the previous region when the element is still moving, so its frame matches nothing in the dump', () => {
+    // The probe saw Card 15 at x=2200; by the dump the carousel's momentum
+    // had carried it to x=1798.
+    const xml = ios(
+      el('ScrollView', '[0,0][402,874]', '',
+        el('CollectionView', '[0,200][402,400]', '', el('Cell', '[1798,200][1998,400]', 'label="Card 15"'))),
+    );
+    const carousel = { left: 0, top: 200, right: 402, bottom: 400 };
+
+    expect(scrollRegion(xml, { left: 2200, top: 200, right: 2400, bottom: 400 }, carousel)).toEqual(carousel);
+  });
+
+  it('does not keep a previous region that is no longer a scrollable on screen', () => {
+    const xml = ios(el('Table', '[0,100][402,874]', ''));
+
+    expect(scrollRegion(xml, { left: 0, top: 3000, right: 402, bottom: 3044 }, { left: 0, top: 200, right: 402, bottom: 400 }))
+      .toEqual({ left: 0, top: 100, right: 402, bottom: 874 });
+  });
+
+  it('clips a nested scrollable to its scrolling ancestor, so the swipe never starts on a header the ancestor scrolled it under', () => {
+    // The outer list starts below a fixed header at y=155; carousel B has
+    // scrolled up under it, and only y 155-260 of it shows.
+    const xml = ios(
+      el('Other', '[0,0][402,155]', 'label="Header"'),
+      el('ScrollView', '[0,155][402,874]', '',
+        el('CollectionView', '[16,60][386,260]', '', el('Cell', '[500,60][700,260]', 'label="Tile 18"'))),
+    );
+
+    expect(scrollRegion(xml, { left: 500, top: 60, right: 700, bottom: 260 })).toEqual({ left: 16, top: 155, right: 386, bottom: 260 });
+  });
+
   it('falls back to the largest scrollable on screen when the element is not in the dump', () => {
     const xml = ios(
       el('ScrollView', '[0,0][402,120]', ''),
