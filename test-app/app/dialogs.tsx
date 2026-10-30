@@ -1,5 +1,14 @@
 import { useState } from "react"
-import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native"
+import {
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native"
 
 export default function DialogsScreen() {
   const [toastVisible, setToastVisible] = useState(false)
