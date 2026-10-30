@@ -341,9 +341,10 @@ async function clientPointedAt(serial: string): Promise<TapsmithGrpcClient> {
   // holds", where X was the device it had just been asked for.
   if (pointedAt === serial) {
     // Pointed here, but its agent would not start: acting through it can only
-    // fail with "Not connected to agent". Say why instead. A device tool
-    // retries the failed target before it gets here, which clears this once
-    // the agent starts.
+    // fail with "Not connected to agent". Say why instead. Only a successful
+    // `prepareTarget` clears this — the dispatcher's failed-target retry
+    // (budgeted; a tool naming the project always gets one) — so the reason
+    // can outlive a fix made outside the session until that retry runs.
     if (conn.agentFailed && conn.agentError) throw new Error(conn.agentError);
     return client;
   }
