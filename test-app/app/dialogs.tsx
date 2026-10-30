@@ -1,5 +1,5 @@
 import { useState } from "react"
-import { Alert, Modal, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native"
+import { Alert, Modal, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native"
 
 export default function DialogsScreen() {
   const [toastVisible, setToastVisible] = useState(false)
@@ -7,6 +7,7 @@ export default function DialogsScreen() {
   const [snackbarVisible, setSnackbarVisible] = useState(false)
   const [snackbarMessage, setSnackbarMessage] = useState("")
   const [modalVisible, setModalVisible] = useState(false)
+  const [sheetVisible, setSheetVisible] = useState(false)
   const [confirmResult, setConfirmResult] = useState("")
 
   const showToast = (message: string) => {
@@ -116,6 +117,16 @@ export default function DialogsScreen() {
         >
           <Text style={styles.buttonText}>Show Modal</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={styles.button}
+          onPress={() => setSheetVisible(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Show sheet"
+          testID="show-sheet-button"
+        >
+          <Text style={styles.buttonText}>Show Sheet</Text>
+        </TouchableOpacity>
       </ScrollView>
 
       {/* Toast overlay */}
@@ -173,6 +184,33 @@ export default function DialogsScreen() {
                 <Text style={styles.modalButtonText}>Confirm</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* A scrolling sheet over a backdrop that closes it, like a dialog or
+          bottom sheet whose content scrolls: a swipe that starts outside the
+          sheet taps the backdrop and closes it (PILOT-934). */}
+      <Modal
+        visible={sheetVisible}
+        transparent
+        animationType="none"
+        onRequestClose={() => setSheetVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => setSheetVisible(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close sheet"
+          />
+          <View style={styles.sheet} testID="sheet">
+            <Text style={styles.modalTitle}>Sheet Title</Text>
+            <ScrollView testID="sheet-scroll">
+              {Array.from({ length: 30 }, (_, i) => (
+                <Text key={i} style={styles.sheetItem}>{`Sheet item ${i + 1}`}</Text>
+              ))}
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -281,6 +319,19 @@ const styles = StyleSheet.create({
     padding: 24,
     width: "85%",
     maxWidth: 400,
+  },
+  sheet: {
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 24,
+    width: "85%",
+    maxWidth: 400,
+    height: "40%",
+  },
+  sheetItem: {
+    fontSize: 16,
+    paddingVertical: 12,
+    color: "#1a1a1a",
   },
   modalTitle: {
     fontSize: 20,
