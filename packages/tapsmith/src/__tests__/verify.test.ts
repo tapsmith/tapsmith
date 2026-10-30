@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import type { SpawnSyncOptions, SpawnSyncReturns } from 'node:child_process';
-import { pickVerifyTarget, cleanupVerifySmokeTest, scaffoldVerifySmokeTest, summarizeVerifyReport, noTestsRanError, grepRefusalError, runVerify, stderrTail, configLoadFix } from '../verify.js';
+import { pickVerifyTarget, formatVerifyFailure, cleanupVerifySmokeTest, scaffoldVerifySmokeTest, summarizeVerifyReport, noTestsRanError, grepRefusalError, runVerify, stderrTail, configLoadFix } from '../verify.js';
 import { TapsmithNotInstalledError } from '../config.js';
 
 // runVerify spawns the real `tapsmith test`; the tests below replace that
@@ -69,6 +69,27 @@ describe('summarizeVerifyReport()', () => {
     expect(Object.keys(JSON.parse(JSON.stringify(summary.failures[0])))).toEqual(['fullName', 'error', 'screenshotPath']);
   });
 
+  // PILOT-933: with two projects, a failure must say which one failed.
+  it('carries each failure\'s project, and the runner\'s whole message', () => {
+    const message = 'Element getByRole("button", { name: "Sign in" }) was not found after waiting 5000ms. ' +
+      'Nothing matches it, but on screen now this locator matches: getByDescription("Sign in") (1 element). ' +
+      'To find a locator that matches, pick the element in UI mode (npx tapsmith test --ui) or check one with the MCP tool tapsmith_test_locator.';
+    const twoProjects = {
+      ...report,
+      stats: { ...report.stats, passed: 1, failed: 1 },
+      suites: [{
+        ...report.suites[0],
+        tests: [
+          { name: 'launch', fullName: 'launch', status: 'passed' as const, duration: 1, project: 'ios' },
+          { name: 'launch', fullName: 'launch', status: 'failed' as const, duration: 1, project: 'android', error: { message } },
+        ],
+      }],
+    };
+    const summary = summarizeVerifyReport(twoProjects);
+    expect(summary.failures).toEqual([{ fullName: 'launch', project: 'android', error: message }]);
+    expect(Object.keys(JSON.parse(JSON.stringify(summary.failures[0])))).toEqual(['fullName', 'project', 'error']);
+  });
+
   it('reports ok on all-pass', () => {
     const allPass = { ...report, stats: { ...report.stats, failed: 0 }, suites: [{ ...report.suites[0], tests: [report.suites[0].tests[0]] }] };
     expect(summarizeVerifyReport(allPass).ok).toBe(true);
@@ -111,6 +132,18 @@ function reportOf(statuses: Status[]) {
     }],
   };
 }
+
+describe('formatVerifyFailure()', () => {
+  it('prefixes the line with the project when the run has projects (PILOT-933)', () => {
+    expect(formatVerifyFailure({ fullName: 'app launches successfully', project: 'android', error: 'boom' }))
+      .toBe('  - [android] app launches successfully: boom');
+  });
+
+  it('has no prefix without projects', () => {
+    expect(formatVerifyFailure({ fullName: 'app launches successfully', error: 'boom' }))
+      .toBe('  - app launches successfully: boom');
+  });
+});
 
 describe('noTestsRanError()', () => {
   it('names an empty file', () => {
@@ -227,6 +260,20 @@ describe('runVerify() outcome by what the run executed', () => {
     await runVerify({ json: true });
     expect(jsonOut()).toMatchObject({ ok: true, passed: 1, skipped: 1, failed: 0, testFile: path.join('tests', 'a.test.ts') });
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it('text: a failing test in a project is listed under its project name (PILOT-933)', async () => {
+    spawnSyncMock.impl = (opts) => {
+      const report = reportOf(['passed', 'failed']);
+      report.suites[0].tests = report.suites[0].tests.map((t, i) => ({ ...t, project: i === 0 ? 'ios' : 'android' }));
+      fs.writeFileSync((opts.env as NodeJS.ProcessEnv).TAPSMITH_JSON_OUTPUT_FILE!, JSON.stringify(report));
+      return 1;
+    };
+    await runVerify({ json: false });
+    const lines = log.mock.calls.map((c) => String(c[0]));
+    expect(lines).toContain('✗ Verification failed: 1 of 2 test(s) failed');
+    expect(lines).toContain('  - [android] t1: boom');
+    expect(process.exitCode).toBe(1);
   });
 
   it('--json: a failing run is still the ok:false result, not NO_TESTS_RAN', async () => {

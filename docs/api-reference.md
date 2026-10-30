@@ -3004,7 +3004,7 @@ npx tapsmith doctor --json -c tapsmith.config.ci.mjs   # machine-readable, again
 
 Prove the setup works end to end: runs one test file through the real `tapsmith test` path (daemon, device or emulator launch, app install) and reports whether it passed. It picks `example.tapsmith.ts` (or an older init's `example.test.ts`) if the project has one, otherwise the first test file; a project with no tests yet gets a throwaway smoke test, removed afterwards. Exits 1 when the run fails, when no test ran (the file has none, every one was skipped, or a `grep` / `grepInvert` filtered them all out — a pass with nothing run proves nothing), when there is no `tapsmith.config.*` (unless `-c` names one), or when the config cannot be loaded.
 
-`--json` prints `{ ok, passed, failed, skipped, duration, failures, testFile }`, or the [JSON error envelope](#json-output---json). `-c` / `--config` uses a specific config file.
+Each failed test is listed with the runner's whole error message, after the name of the project it ran in when the config has projects (`- [android] app launches successfully: …`), since the file runs once per project. `--json` prints `{ ok, passed, failed, skipped, duration, failures, testFile }`, each failure `{ fullName, project, error, screenshotPath }` (`project` only with projects, `screenshotPath` only when one was taken), or the [JSON error envelope](#json-output---json). `-c` / `--config` uses a specific config file.
 
 ```bash
 npx tapsmith verify
