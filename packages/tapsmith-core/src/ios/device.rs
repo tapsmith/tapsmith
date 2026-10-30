@@ -1104,9 +1104,10 @@ pub async fn shutdown_simulator(udid: &str) -> Result<()> {
     Ok(())
 }
 
-/// Whether `bundle_id` is installed on a simulator: `Ok(false)` only when
-/// simctl answered that it is not, an error when simctl could not be asked
-/// (it failed to start or timed out) — which says nothing either way.
+/// Whether `bundle_id` is installed on a simulator: `Ok(false)` when simctl
+/// answered with a failure (the app is absent, or the simulator could not
+/// look it up), an error when simctl could not be asked at all (it failed to
+/// start or timed out) — which says nothing either way.
 #[instrument]
 pub async fn is_app_installed(udid: &str, bundle_id: &str) -> Result<bool> {
     let output = bounded_output(
