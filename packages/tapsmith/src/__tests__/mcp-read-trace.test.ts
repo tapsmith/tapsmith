@@ -9,6 +9,9 @@ import { createMcpServer } from '../mcp/index.js';
 import { TRACE_FORMAT_VERSION } from '../trace/trace-format.js';
 import { MCP_RESPONSE_MAX_BYTES } from '../mcp/response-limits.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { expect as tapsmithExpect } from '../expect.js';
+import { TraceCollector, setActiveTraceCollector } from '../trace/trace-collector.js';
+import type { TraceConfig } from '../trace/types.js';
 
 // `tapsmith_read_trace` is how an agent finds out why a test failed, and it is
 // the one tool that reads a file rather than a device. It had no coverage at
@@ -329,6 +332,50 @@ describe('tapsmith_read_trace test result', () => {
     expect(header).toContain('Failed steps: 1. expect check1, ');
     expect(header).toContain('9. expect check9, … 15 more …, 25. expect check25');
     expect(header).not.toContain('check10,');
+  });
+
+  // The fixtures above hand-copy one string into the step and the test error.
+  // These record the steps through the real emitters, so the header is held
+  // to the text they write next to the error they throw.
+  describe('with steps recorded by the real expect()', () => {
+    const traceConfig: TraceConfig = {
+      mode: 'on', screenshots: false, snapshots: false, sources: false,
+      attachments: false, network: false, deviceLogs: false, daemonLogs: false,
+    };
+
+    async function failedTraceOf(assertion: () => void): Promise<string> {
+      const collector = new TraceCollector(traceConfig, tmpDir);
+      setActiveTraceCollector(collector);
+      let thrown: unknown;
+      try {
+        tapsmithExpect(2).toBe(2);
+        assertion();
+      } catch (err) {
+        thrown = err;
+      } finally {
+        setActiveTraceCollector(null);
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      const trace = writeTrace({
+        metadata: { ...failedMeta, error: (thrown as Error).message },
+        events: [...collector.events],
+      });
+      return text(await readTrace({ path: trace })).split('## Steps')[0];
+    }
+
+    it.each([
+      ['toBe', () => tapsmithExpect(3).toBe(4)],
+      ['not.toBe', () => tapsmithExpect(3).not.toBe(3)],
+      ['toHaveLength', () => tapsmithExpect([1, 2]).toHaveLength(3)],
+      ['toBeTruthy', () => tapsmithExpect(0).toBeTruthy()],
+      ['toThrow', () => tapsmithExpect(() => { throw new Error('nope'); }).toThrow('other')],
+      ['not.toThrow', () => tapsmithExpect(() => { throw new Error('nope'); }).not.toThrow()],
+    ])('names a failing expect(value).%s as the failed step', async (name, assertion) => {
+      const header = await failedTraceOf(assertion);
+      expect(header).toContain(`Failed step: 2. expect ${name} (marked [FAIL] below)`);
+      expect(header).not.toContain('No traced step failed');
+      expect(header).not.toContain('Other failed steps');
+    });
   });
 
   it('reports a passing test as passed with no error line', async () => {
