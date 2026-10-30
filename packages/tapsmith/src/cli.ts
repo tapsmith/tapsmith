@@ -64,7 +64,7 @@ import {
 import { isRecoverableInfrastructureError, serializeConfig } from './worker-protocol.js';
 import { DEFAULT_AGENT_PORT, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, pickFreePort } from './port-utils.js';
 import { findDaemonBin } from './daemon-bin.js';
-import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary } from './daemon-start.js';
+import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, planDaemonPort, spawnDaemonBinary } from './daemon-start.js';
 import { splitHeadline } from './error-detail.js';
 import { attachedDeviceAdvice, moreDevicesAdvice, noOnlineDeviceMessage } from './device-advice.js';
 import { checkPinnedDeviceHealth } from './adb-recovery.js';
@@ -351,8 +351,10 @@ async function ensureDaemonRunning(
   // Killing it would break that session — and worse, its workers would then
   // silently reconnect to *our* daemon and drive the wrong device. Start on a
   // free port instead; the resolved address is threaded to every consumer via
-  // the config. A listener that does not answer is a stale daemon: kill it and
-  // reuse the port so the --platform flag is always the current one.
+  // the config. So too for a listener that does not answer the short probe:
+  // it may be another session's daemon still starting, or no daemon at all,
+  // and neither is ours to stop (PILOT-914). Only this process's own earlier
+  // daemons, still exiting, are stopped so their port can be reused.
   let sharingWithLiveSession = false;
   // The agent port the daemon forwards to (iOS: the port its runner listens
   // on). The default 18700 is the live session's too when we share the
@@ -363,34 +365,42 @@ async function ensureDaemonRunning(
   // Set when the default agent port belongs to another live session.
   let agentPortInUse = false;
   // Daemons that may still be exiting and are not another session's: this
-  // process's earlier targets' daemons, and those on our port that did not
-  // answer, sent SIGTERM below.
+  // process's earlier targets' daemons, sent SIGTERM below.
   const stoppedStaleDaemons = new Set<number>(stoppedOwnDaemons);
+  const requestedPort = requestedAddress.split(':').pop() ?? port;
+  /** Leave the requested port (and the default agent port) to whoever holds them. */
+  const moveToFreePorts = async (why: string): Promise<void> => {
+    sharingWithLiveSession = true;
+    const freePort = await pickFreePort();
+    address = `localhost:${freePort}`;
+    port = String(freePort);
+    let freeAgentPort = await pickFreePort();
+    while (freeAgentPort === freePort) freeAgentPort = await pickFreePort();
+    agentPort = freeAgentPort;
+    if (progress) progress.note(`${why}; starting on ${address}`);
+    else console.log(dim(`Daemon ${why}; starting on ${address}`));
+  };
+  let answered = false;
   try {
     const probe = new TapsmithGrpcClient(address);
-    const alive = await probe.waitForReady(1_000);
+    answered = await probe.waitForReady(1_000);
     probe.close();
-    if (alive) {
-      sharingWithLiveSession = true;
-      const freePort = await pickFreePort();
-      const requestedPort = requestedAddress.split(':').pop() ?? port;
-      address = `localhost:${freePort}`;
-      port = String(freePort);
-      let freeAgentPort = await pickFreePort();
-      while (freeAgentPort === freePort) freeAgentPort = await pickFreePort();
-      agentPort = freeAgentPort;
-      if (progress) progress.note(`port ${requestedPort} is in use by another Tapsmith session; starting on ${address}`);
-      else console.log(dim(`Daemon port ${requestedPort} is in use by another Tapsmith session; starting on ${address}`));
-    } else {
-      const pids = findPidsOnPort(port);
-      for (const pid of pids) {
-        stoppedStaleDaemons.add(pid);
-        try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
-      }
-      if (pids.length > 0) await new Promise((r) => setTimeout(r, 500));
-    }
   } catch {
-    // No daemon running, nothing to kill
+    // Nothing answers
+  }
+  const portPlan = planDaemonPort({
+    port: requestedPort,
+    answered,
+    listeners: answered ? [] : findPidsOnPort(port),
+    ownDaemons: stoppedOwnDaemons,
+  });
+  if (portPlan.kind === 'move') {
+    await moveToFreePorts(portPlan.reason);
+  } else if (portPlan.stopOwn.length > 0) {
+    for (const pid of portPlan.stopOwn) {
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already gone */ }
+    }
+    await new Promise((r) => setTimeout(r, 500));
   }
 
   // A live daemon of another session can use the default agent port without
@@ -454,6 +464,44 @@ async function ensureDaemonRunning(
 
   // Start a fresh daemon
   const resolvedBin = process.env.TAPSMITH_DAEMON_BIN ?? daemonBin ?? findDaemonBin();
+  // A daemon of another session can take the port between the check above
+  // and ours binding it. Ours then exits, and what answers is theirs:
+  // `awaitDaemonStart` refuses it, and we start once more on a free port.
+  let newClient: TapsmithGrpcClient;
+  for (let attempt = 1; ; attempt++) {
+    const started = await spawnDaemonAndWait(resolvedBin, address, port, agentPort, platform, progress);
+    if (started.ok) {
+      newClient = started.client;
+      break;
+    }
+    if (started.portTaken && attempt === 1) {
+      await moveToFreePorts(started.cause.replace(/, so the one this session started could not take that port$/, ''));
+      continue;
+    }
+    progress?.fail('daemon', started.cause);
+    // Thrown, not exited: a multi-target run goes on without this target.
+    throw new Error(started.message);
+  }
+
+  const version = (await newClient.ping()).version;
+  if (progress) progress.complete('daemon', `connected to tapsmith-core v${version}`);
+  else console.log(dim(`Connected to Tapsmith daemon v${version}`));
+  return { client: newClient, address };
+}
+
+/**
+ * Spawn a daemon on `port` and wait for it — and only it — to answer. A
+ * failure comes back with its message; `portTaken` when another daemon
+ * answered there instead, and the one spawned has been stopped.
+ */
+async function spawnDaemonAndWait(
+  resolvedBin: string,
+  address: string,
+  port: string,
+  agentPort: number | undefined,
+  platform: string | undefined,
+  progress: LaunchProgressSink | undefined,
+): Promise<{ ok: true; client: TapsmithGrpcClient } | { ok: false; cause: string; message: string; portTaken: boolean }> {
   const daemonArgs = ['--port', port];
   if (agentPort !== undefined) daemonArgs.push('--agent-port', String(agentPort));
   if (platform) daemonArgs.push('--platform', platform);
@@ -482,32 +530,30 @@ async function ensureDaemonRunning(
   // attempt so a single 10s window can skip right past the moment the server
   // comes up. Retry in bounded windows up to 60s total, bailing early if the
   // daemon process exited (crash — no point waiting out the budget).
-  const newClient = new TapsmithGrpcClient(address);
+  const client = new TapsmithGrpcClient(address);
   const outcome = spawned.ok
-    ? await awaitDaemonStart(spawned.child, (ms) => newClient.waitForReady(ms), {
+    ? await awaitDaemonStart(spawned, client, {
       budgetMs: 60_000,
       windowMs: 10_000,
       address,
     })
     : spawned;
-  if (!outcome.ok) {
-    progress?.fail('daemon', outcome.cause);
-    // Thrown, not exited: a multi-target run goes on without this target.
-    newClient.close();
-    const message = daemonStartFailure('Failed to start Tapsmith daemon', {
-      ...outcome,
-      recentOutput: output.recentOutput(),
-      logPath: output.logPath,
-    });
+  if (outcome.ok) {
     output.dispose();
-    throw new Error(message);
+    return { ok: true, client };
   }
+  client.close();
+  if (outcome.portTaken && spawned.ok) {
+    // Ours lost the port; it is on its way out, or would serve nobody.
+    stopSpawnedDaemon();
+  }
+  const message = daemonStartFailure('Failed to start Tapsmith daemon', {
+    ...outcome,
+    recentOutput: output.recentOutput(),
+    logPath: output.logPath,
+  });
   output.dispose();
-
-  const version = (await newClient.ping()).version;
-  if (progress) progress.complete('daemon', `connected to tapsmith-core v${version}`);
-  else console.log(dim(`Connected to Tapsmith daemon v${version}`));
-  return { client: newClient, address };
+  return { ok: false, cause: outcome.cause, message, portTaken: outcome.portTaken === true };
 }
 
 // ─── Sequential per-project device setup ───

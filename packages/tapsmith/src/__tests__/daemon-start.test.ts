@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, spawnDaemonBinary } from '../daemon-start.js';
+import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, planDaemonPort, spawnDaemonBinary, DAEMON_INSTANCE_ENV, type DaemonProbe } from '../daemon-start.js';
 
 // spawn is real unless a test makes it throw, the way it does for a binary of
 // another architecture (PILOT-490).
@@ -54,11 +54,29 @@ function start(bin: string, logPath?: string): { child: ChildProcess; capture: R
 
 const never = (): Promise<boolean> => new Promise(() => {});
 
+/** What answers on the address: `ready` decides when, `instanceId` whose daemon it is. */
+function probe(
+  ready: (ms: number) => Promise<boolean>,
+  answer: { instanceId?: string; pid?: number } | (() => Promise<{ instanceId?: string; pid?: number }>) = { instanceId: MINE },
+): DaemonProbe {
+  return {
+    waitForReady: ready,
+    ping: typeof answer === 'function' ? answer : () => Promise.resolve({ version: 'test', agentConnected: false, ...answer }),
+  };
+}
+const MINE = 'instance-mine';
+const ours = (child: ChildProcess): { child: ChildProcess; instanceId: string } => ({ child, instanceId: MINE });
+function idleChild(): ChildProcess {
+  const child = new EventEmitter() as ChildProcess;
+  Object.assign(child, { exitCode: null, signalCode: null });
+  return child;
+}
+
 describe('awaitDaemonStart()', () => {
   it('reports an exit at once, with the code, instead of waiting out the budget', async () => {
     const { child, capture } = start(fakeDaemon('echo "Error: Address already in use (os error 48)" >&2\nexit 1'));
     const began = Date.now();
-    const outcome = await awaitDaemonStart(child, never, { budgetMs: 30_000, address: 'localhost:50051' });
+    const outcome = await awaitDaemonStart(ours(child), probe(never), { budgetMs: 30_000, address: 'localhost:50051' });
     expect(Date.now() - began).toBeLessThan(5_000);
     expect(outcome).toEqual({ ok: false, cause: 'tapsmith-core exited with code 1 before it answered', spawnFailed: false });
     expect(capture.recentOutput()).toBe('Error: Address already in use (os error 48)');
@@ -67,14 +85,14 @@ describe('awaitDaemonStart()', () => {
 
   it('names the signal that stopped it', async () => {
     const { child, capture } = start(fakeDaemon('kill -9 $$'));
-    const outcome = await awaitDaemonStart(child, never, { budgetMs: 30_000, address: 'localhost:50051' });
+    const outcome = await awaitDaemonStart(ours(child), probe(never), { budgetMs: 30_000, address: 'localhost:50051' });
     expect(outcome).toMatchObject({ ok: false, cause: 'tapsmith-core was stopped by SIGKILL before it answered' });
     capture.dispose();
   });
 
   it('says it could not run a binary that does not exist', async () => {
     const { child, capture } = start(path.join(tmpDir, 'missing', 'tapsmith-core'));
-    const outcome = await awaitDaemonStart(child, never, { budgetMs: 30_000, address: 'localhost:50051' });
+    const outcome = await awaitDaemonStart(ours(child), probe(never), { budgetMs: 30_000, address: 'localhost:50051' });
     expect(outcome.ok).toBe(false);
     if (outcome.ok) return;
     expect(outcome.spawnFailed).toBe(true);
@@ -87,7 +105,7 @@ describe('awaitDaemonStart()', () => {
   it('gives up at the budget when it neither answers nor exits', async () => {
     const { child, capture } = start(fakeDaemon('sleep 30'));
     try {
-      const outcome = await awaitDaemonStart(child, () => Promise.resolve(false), { budgetMs: 300, windowMs: 100, address: 'localhost:50999' });
+      const outcome = await awaitDaemonStart(ours(child), probe(() => Promise.resolve(false)), { budgetMs: 300, windowMs: 100, address: 'localhost:50999' });
       expect(outcome).toEqual({ ok: false, cause: 'tapsmith-core did not answer on localhost:50999 within 0.3s', spawnFailed: false });
     } finally {
       child.kill('SIGKILL');
@@ -96,16 +114,59 @@ describe('awaitDaemonStart()', () => {
   });
 
   it('is ready as soon as it answers', async () => {
-    const child = new EventEmitter() as ChildProcess;
-    Object.assign(child, { exitCode: null, signalCode: null });
-    expect(await awaitDaemonStart(child, () => Promise.resolve(true), { budgetMs: 1_000, address: 'x' })).toEqual({ ok: true });
+    expect(await awaitDaemonStart(ours(idleChild()), probe(() => Promise.resolve(true)), { budgetMs: 1_000, address: 'x' })).toEqual({ ok: true });
+  });
+
+  // PILOT-914: a daemon of another session that took the port first answers
+  // there too. Ours then fails to bind, and the session used to drive theirs.
+  it('refuses another daemon that answers on the address, naming its pid, instead of adopting it', async () => {
+    const outcome = await awaitDaemonStart(
+      ours(idleChild()),
+      probe(() => Promise.resolve(true), { instanceId: 'instance-theirs', pid: 4242 }),
+      { budgetMs: 1_000, address: 'localhost:50051' },
+    );
+    expect(outcome).toEqual({
+      ok: false,
+      cause: 'another tapsmith-core (pid 4242) answered on localhost:50051, so the one this session started could not take that port',
+      spawnFailed: false,
+      portTaken: true,
+    });
+  });
+
+  it('refuses one that a Tapsmith session did not start (no instance id) only when ours has one: a hand-started daemon is not ours either', async () => {
+    const outcome = await awaitDaemonStart(
+      ours(idleChild()),
+      probe(() => Promise.resolve(true), { instanceId: '', pid: 77 }),
+      { budgetMs: 1_000, address: 'localhost:50051' },
+    );
+    expect(outcome).toMatchObject({ ok: false, portTaken: true, cause: expect.stringContaining('(pid 77)') });
+  });
+
+  it('accepts a daemon too old to report who it is (no pid either): there is nothing to compare', async () => {
+    const outcome = await awaitDaemonStart(
+      ours(idleChild()),
+      probe(() => Promise.resolve(true), { instanceId: '', pid: 0 }),
+      { budgetMs: 1_000, address: 'x' },
+    );
+    expect(outcome).toEqual({ ok: true });
+  });
+
+  it('keeps waiting while what answers cannot be asked who it is, and reports our daemon\'s exit', async () => {
+    const { child, capture } = start(fakeDaemon('sleep 0.3\necho "Error: Address already in use (os error 48)" >&2\nexit 1'));
+    const outcome = await awaitDaemonStart(
+      ours(child),
+      probe(() => Promise.resolve(true), () => Promise.reject(new Error('14 UNAVAILABLE'))),
+      { budgetMs: 30_000, windowMs: 50, address: 'localhost:50051' },
+    );
+    expect(outcome).toEqual({ ok: false, cause: 'tapsmith-core exited with code 1 before it answered', spawnFailed: false });
+    capture.dispose();
   });
 });
 
 describe('captureDaemonOutput()', () => {
   it('without a log, catches stderr in a temp file it removes afterwards', async () => {
     const { child, capture } = start(fakeDaemon('echo out\necho err >&2\nexit 2'));
-    await awaitDaemonStart(child, never, { budgetMs: 30_000, address: 'x' });
+    await awaitDaemonStart(ours(child), probe(never), { budgetMs: 30_000, address: 'x' });
     // stdout is the daemon's tracing; only stderr is kept.
     expect(capture.recentOutput()).toBe('err');
     expect(capture.logPath).toBeUndefined();
@@ -118,7 +179,7 @@ describe('captureDaemonOutput()', () => {
     fs.mkdirSync(path.dirname(logPath));
     fs.writeFileSync(logPath, 'an earlier run\n');
     const { child, capture } = start(fakeDaemon('echo starting\necho "Error: bad" >&2\nexit 1'), logPath);
-    await awaitDaemonStart(child, never, { budgetMs: 30_000, address: 'x' });
+    await awaitDaemonStart(ours(child), probe(never), { budgetMs: 30_000, address: 'x' });
     expect(capture.logPath).toBe(logPath);
     expect(capture.recentOutput()).toBe('starting\nError: bad');
     capture.dispose();
@@ -199,6 +260,28 @@ describe('spawnDaemonBinary()', () => {
     expect(code).toBe(3);
   });
 
+  // PILOT-914: the daemon echoes it from Ping, so the session knows its own.
+  it('starts each daemon with a fresh instance id in its environment, keeping the rest of the environment', async () => {
+    const out = path.join(tmpDir, 'env');
+    const bin = fakeDaemon(`echo "$${DAEMON_INSTANCE_ENV} $TAPSMITH_TEST_KEEP" >> ${out}`);
+    const first = spawnDaemonBinary(bin, [], { stdio: 'ignore', env: { ...process.env, TAPSMITH_TEST_KEEP: 'kept' } });
+    const second = spawnDaemonBinary(bin, [], { stdio: 'ignore', env: { ...process.env, TAPSMITH_TEST_KEEP: 'kept' } });
+    if (!first.ok || !second.ok) throw new Error('expected both to spawn');
+    await Promise.all([first, second].map((s) => new Promise((resolve) => s.child.once('exit', resolve))));
+    expect(first.instanceId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second.instanceId).not.toBe(first.instanceId);
+    expect(fs.readFileSync(out, 'utf-8').trim().split('\n').sort())
+      .toEqual([`${first.instanceId} kept`, `${second.instanceId} kept`].sort());
+  });
+
+  it('replaces an instance id inherited from its own environment', async () => {
+    const out = path.join(tmpDir, 'env');
+    const spawned = spawnDaemonBinary(fakeDaemon(`echo "$${DAEMON_INSTANCE_ENV}" > ${out}`), [], { stdio: 'ignore', env: { ...process.env, [DAEMON_INSTANCE_ENV]: 'inherited' } });
+    if (!spawned.ok) throw new Error('expected a spawn');
+    await new Promise((resolve) => spawned.child.once('exit', resolve));
+    expect(fs.readFileSync(out, 'utf-8').trim()).toBe(spawned.instanceId);
+  });
+
   it('turns ENOEXEC into a failed start naming the binary and this machine\'s architecture', () => {
     spawnThrows.error = spawnError('ENOEXEC', -8);
     const target = `${process.platform}-${process.arch}`;
@@ -255,5 +338,38 @@ describe('spawnDaemonBinary()', () => {
       'Failed to start Tapsmith daemon: could not run tapsmith-core: /x/tapsmith-core is not an executable for this machine (ENOEXEC)',
       `  ${spawned.spawnHint}`,
     ]);
+  });
+});
+
+// PILOT-914: what `tapsmith test` does with the port it was asked to start
+// its daemon on. A listener that misses the 1 s probe used to be SIGTERMed as
+// stale — another session's daemon that was still starting, or slow on a
+// loaded machine, or a process that is no daemon at all.
+describe('planDaemonPort()', () => {
+  const own = new Set([111]);
+
+  it('takes a free port', () => {
+    expect(planDaemonPort({ port: '50051', answered: false, listeners: [], ownDaemons: own })).toEqual({ kind: 'take', stopOwn: [] });
+  });
+
+  it('moves off a port where another live session answers', () => {
+    expect(planDaemonPort({ port: '50051', answered: true, listeners: [222], ownDaemons: own }))
+      .toEqual({ kind: 'move', reason: 'port 50051 is in use by another Tapsmith session' });
+  });
+
+  it('moves off, and never stops, a listener that is not this process\'s own daemon even when it does not answer', () => {
+    expect(planDaemonPort({ port: '50051', answered: false, listeners: [222, 333], ownDaemons: own })).toEqual({
+      kind: 'move',
+      reason: 'port 50051 is held by pid 222, 333, which did not answer as a Tapsmith daemon in time (it may be another session\'s daemon still starting)',
+    });
+  });
+
+  it('moves off when its own stopping daemon shares the port with another listener', () => {
+    expect(planDaemonPort({ port: '50051', answered: false, listeners: [111, 222], ownDaemons: own }))
+      .toMatchObject({ kind: 'move', reason: expect.stringContaining('pid 222,') });
+  });
+
+  it('stops only this process\'s own earlier daemons still exiting, and reuses the port', () => {
+    expect(planDaemonPort({ port: '50051', answered: false, listeners: [111], ownDaemons: own })).toEqual({ kind: 'take', stopOwn: [111] });
   });
 });
