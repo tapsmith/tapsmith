@@ -59,6 +59,21 @@ data class Box(
  *   and Android has no accessibility hit test to tell them apart. A plain view
  *   that does swallow touches is a known gap (PILOT-364 on iOS).
  *
+ *   One exception (PILOT-932): a Flutter route's modal barrier, the
+ *   full-window "Dismiss" node behind a dialog, bottom sheet or menu, is not
+ *   a cover of the route's own content. Flutter reports drawing order 0 for
+ *   every node and sorts the barrier after the route's content in traversal
+ *   order, though it is painted under it, so child order would make it cover
+ *   every control in every Flutter dialog. It is recognised as a later
+ *   sibling with no children that offers the dismiss action (Flutter's
+ *   barrier always does: one that cannot be dismissed is left out of the
+ *   tree), with no drawing order to tell the two apart (both 0). A SnackBar
+ *   or sheet offers dismiss too, but it is drawn on top, and its controls
+ *   are its children. Other siblings without drawing
+ *   order still fall back to child order: Compose before 1.9, and every app
+ *   below API 24, report 0 for all nodes, and there child order is paint
+ *   order.
+ *
  * No Android dependencies — the tree and the windows come in through
  * [HitNode] and [WindowSpec] so the JVM unit tests can build them by hand.
  */
@@ -128,6 +143,9 @@ object OcclusionAnalyzer {
 
         /** Clickable or long-clickable: a node that intercepts a touch. */
         val takesTouches: Boolean
+
+        /** Offers the dismiss action (a Flutter modal barrier does). */
+        val offersDismiss: Boolean get() = false
 
         fun parent(): HitNode?
 
@@ -305,7 +323,7 @@ object OcclusionAnalyzer {
                 (0 until node.childCount())
                     .filter { it != branchIndex }
                     .mapNotNull { i -> reader.child(node, i)?.let { it to drawKey(it, i) } }
-                    .filter { (_, key) -> compareKeys(key, branchKey) > 0 }
+                    .filter { (sibling, key) -> compareKeys(key, branchKey) > 0 && !isModalBarrierBehind(sibling, key, branchKey) }
                     .sortedWith { a, b -> compareKeys(b.second, a.second) }
             for ((sibling, _) in later) {
                 searchSubtree(sibling, x, y, reader)?.let { return it }
@@ -362,6 +380,15 @@ object OcclusionAnalyzer {
         node: HitNode,
         index: Int,
     ) = node.drawingOrder to index
+
+    /** Whether [sibling] is a Flutter modal barrier beside the target's
+     *  branch: painted under the route content it is listed after (see the
+     *  class doc). */
+    private fun isModalBarrierBehind(
+        sibling: HitNode,
+        key: Pair<Int, Int>,
+        branchKey: Pair<Int, Int>,
+    ): Boolean = key.first == 0 && branchKey.first == 0 && sibling.offersDismiss && sibling.childCount() == 0
 
     private fun compareKeys(
         a: Pair<Int, Int>,

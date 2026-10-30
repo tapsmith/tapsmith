@@ -24,6 +24,7 @@ class OcclusionAnalyzerTest {
         override val drawingOrder: Int = 0,
         override val isVisible: Boolean = true,
         override val takesTouches: Boolean = false,
+        override val offersDismiss: Boolean = false,
         private val name: String = "node",
         val children: MutableList<FakeNode> = mutableListOf(),
     ) : OcclusionAnalyzer.HitNode {
@@ -382,11 +383,59 @@ class OcclusionAnalyzerTest {
 
     @Test
     fun `equal drawing orders fall back to child order`() {
+        // Below API 24, and in Compose before 1.9, every node reports 0, and
+        // child order is paint order.
         val first = FakeNode(Box(40, 780, 1040, 930), takesTouches = true, name = "first")
         val second = FakeNode(Box(40, 780, 1040, 930), takesTouches = true, name = "second")
         root(FakeNode(screen).add(first, second))
         assertCoveredBy(analyze(first), "second")
         assertClearAt(analyze(second), 540, 855)
+    }
+
+    @Test
+    fun `a Flutter modal barrier listed after its dialog does not cover the dialog`() {
+        // PILOT-932: every Flutter node reports drawing order 0, and the
+        // route sorts its dismissible barrier after the dialog, though it is
+        // painted under it.
+        val cancel = FakeNode(Box(457, 1258, 634, 1384), takesTouches = true, name = "button \"Cancel\"")
+        val logOut = FakeNode(Box(655, 1258, 845, 1384), takesTouches = true, name = "button \"Log out\"")
+        val title = FakeNode(Box(236, 1016, 845, 1100))
+        val dialog = FakeNode(Box(173, 953, 908, 1447)).add(title, cancel, logOut)
+        val content = FakeNode(Box(0, 63, 1080, 2337)).add(dialog)
+        val barrier = FakeNode(screen, takesTouches = true, offersDismiss = true, name = "element \"Dismiss\"")
+        root(FakeNode(screen).add(content), barrier)
+        assertClearAt(analyze(cancel), 545, 1321)
+        assertClearAt(analyze(logOut), 750, 1321)
+    }
+
+    @Test
+    fun `a dismissible sibling with content of its own still covers at drawing order 0`() {
+        // A Flutter SnackBar or sheet offers dismiss too, but it is drawn
+        // over the body, and its controls are its children.
+        val button = FakeNode(Box(40, 2100, 1040, 2250), takesTouches = true)
+        val undo = FakeNode(Box(400, 2120, 700, 2230), takesTouches = true, name = "button \"Undo\"")
+        val snackBar = FakeNode(Box(0, 2080, 1080, 2270), offersDismiss = true).add(undo)
+        root(FakeNode(screen).add(button), snackBar)
+        assertCoveredBy(analyze(button), "button \"Undo\"")
+    }
+
+    @Test
+    fun `a dismissible sibling drawn after the target still covers it`() {
+        // Real drawing orders say the dismissible scrim is on top.
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val scrim = FakeNode(screen, drawingOrder = 2, takesTouches = true, offersDismiss = true, name = "scrim")
+        root(FakeNode(screen, drawingOrder = 1).add(button), scrim)
+        assertCoveredBy(analyze(button), "scrim")
+    }
+
+    @Test
+    fun `a first child reporting drawing order 0 is still covered by a later-drawn sibling`() {
+        // Compose 1.9+ numbers its children's drawing order from 0, so a 0
+        // beside a 1 is a real order.
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 0, takesTouches = true)
+        val overlay = FakeNode(screen, drawingOrder = 1, takesTouches = true, offersDismiss = true, name = "scrim")
+        root(FakeNode(screen, drawingOrder = 0).add(button), overlay)
+        assertCoveredBy(analyze(button), "scrim")
     }
 
     @Test
