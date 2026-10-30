@@ -238,7 +238,8 @@ export const IOS_ROLE_TYPES: Readonly<Record<string, readonly string[]>> = {
   // the alert is (`iosInsideNativeAlert`).
   alert: ['XCUIElementTypeAlert'],
   button: ['XCUIElementTypeButton'],
-  textfield: ['XCUIElementTypeTextField', 'XCUIElementTypeSecureTextField'],
+  // A multi-line text view too, as Android's multi-line EditText (PILOT-697).
+  textfield: ['XCUIElementTypeTextField', 'XCUIElementTypeSecureTextField', 'XCUIElementTypeTextView'],
   checkbox: ['XCUIElementTypeCheckBox'],
   switch: ['XCUIElementTypeSwitch', 'XCUIElementTypeToggle'],
   image: ['XCUIElementTypeImage'],

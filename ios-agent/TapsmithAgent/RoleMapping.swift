@@ -21,7 +21,9 @@ enum RoleMapping {
     /// pins the two together (PILOT-556).
     static let roleToElementTypes: [String: [XCUIElement.ElementType]] = [
         "button": [.button],
-        "textfield": [.textField, .secureTextField],
+        // A multi-line text view (RN `<TextInput multiline />`, UITextView,
+        // SwiftUI TextEditor) too, as Android's multi-line EditText (PILOT-697).
+        "textfield": [.textField, .secureTextField, .textView],
         "checkbox": [.checkBox, .other],
         "switch": [.switch, .toggle],
         "image": [.image],

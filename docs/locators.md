@@ -116,7 +116,7 @@ Supported roles map to platform-native element types. On iOS, many React Native 
 | Role | Android classes | iOS types |
 |---|---|---|
 | `button` | `Button`, `ImageButton`, `ToggleButton` (also RN `accessibilityRole="togglebutton"`), Material/AppCompat variants | `XCUIElementTypeButton`, `.other` with button trait (RN `togglebutton` too) |
-| `textfield` | `EditText` | `XCUIElementTypeTextField`, `XCUIElementTypeSecureTextField` |
+| `textfield` | `EditText`, single- or multi-line | `XCUIElementTypeTextField`, `XCUIElementTypeSecureTextField`, `XCUIElementTypeTextView` (a multi-line input: React Native's `<TextInput multiline />`, a `UITextView`, a SwiftUI `TextEditor`) |
 | `checkbox` | `CheckBox` | `XCUIElementTypeCheckBox`, `.other` described as a checkbox (RN), or a named `.other` |
 | `switch` | `Switch`, `SwitchCompat`, `SwitchMaterial`, or the "Switch" role description (Compose `Switch`) | `XCUIElementTypeSwitch`, `XCUIElementTypeToggle` |
 | `radiobutton` / `radio` | `RadioButton` | `XCUIElementTypeRadioButton`, `.other` described as a radio button (RN), or a named `.other` |

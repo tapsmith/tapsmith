@@ -44,6 +44,15 @@ check(".other with the button trait is \"button\"",
 check(".other with the image trait is \"image\"",
       RoleMapping.resolveRole(for: .other, traits: imageTrait, inTabBar: false), "image")
 
+// ─── Multi-line text views (PILOT-697) ───
+
+check("a text view is a \"textfield\"", RoleMapping.resolveRole(for: .textView, traits: 0, inTabBar: false), "textfield")
+check("getByRole(\"textfield\") queries text fields, secure fields and text views",
+      (try? RoleMapping.queryTypes(for: "textfield")) ?? [], [.textField, .secureTextField, .textView])
+check("an unnamed textfield query matches a text view",
+      RoleMapping.matches(role: "textfield", elementType: .textView, traits: 0, value: "",
+                          hasNameFilter: false, inTabBar: false, inAlert: false), true)
+
 // ─── Native alert (PILOT-919) ───
 
 check("a native alert is \"alert\"", RoleMapping.resolveRole(for: .alert, traits: 0, inTabBar: false), "alert")

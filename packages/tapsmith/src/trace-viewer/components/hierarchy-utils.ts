@@ -126,14 +126,17 @@ export const ANDROID_CLASS_TO_ROLE: Record<string, string> = {
   'android.widget.Chronometer': 'timer',
 };
 
-// No XCUIElementTypeTextView: the iOS agent's getByRole("textfield") does not
-// find a multi-line text view, so the playground must not offer it (PILOT-666).
+// The role the iOS agent reports for an element type when the dump carries
+// no `tapsmith-role` (an older dump). A multi-line text view is a textfield,
+// as Android's multi-line EditText is (PILOT-697).
 export const IOS_TYPE_TO_ROLE: Record<string, string> = {
   'XCUIElementTypeAlert': 'alert',
   'XCUIElementTypeButton': 'button',
   'XCUIElementTypeTextField': 'textfield',
   'XCUIElementTypeSecureTextField': 'textfield',
+  'XCUIElementTypeTextView': 'textfield',
   'XCUIElementTypeSwitch': 'switch',
+  'XCUIElementTypeToggle': 'switch',
   'XCUIElementTypeCheckBox': 'checkbox',
   'XCUIElementTypeImage': 'image',
   'XCUIElementTypeStaticText': 'text',
@@ -211,6 +214,7 @@ export const IOS_LABEL_FIELD_TYPES: ReadonlySet<string> = new Set([
   'XCUIElementTypeSecureTextField',
   'XCUIElementTypeTextView',
   'XCUIElementTypeSwitch',
+  'XCUIElementTypeToggle',
   'XCUIElementTypeSlider',
   'XCUIElementTypeStepper',
   'XCUIElementTypePicker',

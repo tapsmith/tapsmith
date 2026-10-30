@@ -477,6 +477,54 @@
       "matches": true
     },
     {
+      "why": "a multi-line text view is a textfield",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "reportedRole": "textfield",
+      "role": "textfield",
+      "matches": true
+    },
+    {
+      "why": "a text view by its label",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "reportedRole": "textfield",
+      "label": "Notes",
+      "role": "textfield",
+      "name": "Notes",
+      "matches": true
+    },
+    {
+      "why": "a text view by another name",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "reportedRole": "textfield",
+      "label": "Notes",
+      "role": "textfield",
+      "name": "Email",
+      "matches": false
+    },
+    {
+      "why": "a label-less text view is named by its placeholder",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "reportedRole": "textfield",
+      "label": "",
+      "placeholder": "Notes",
+      "role": "textfield",
+      "name": "Notes",
+      "matches": true
+    },
+    {
+      "why": "a text view is not text",
+      "platform": "ios",
+      "type": "XCUIElementTypeTextView",
+      "reportedRole": "textfield",
+      "label": "Notes",
+      "role": "text",
+      "matches": false
+    },
+    {
       "why": "a switch by its type",
       "platform": "ios",
       "type": "XCUIElementTypeSwitch",
