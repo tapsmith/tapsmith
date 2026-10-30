@@ -761,6 +761,8 @@ function usableFrame(el: ElementInfo | undefined): Rect | undefined {
 
 /** How far past a container's edge a frame may reach and still count as inside it: rounding, and an iOS bounce settling. */
 const EDGE_SLACK = 4;
+/** A frame touching a container's edge that is thinner than this share of the container is a sliver of a row clipped there. */
+const SLIVER_SHARE = 0.05;
 
 /**
  * The way to scroll to bring an on-screen element fully inside the scroll
@@ -773,15 +775,19 @@ const EDGE_SLACK = 4;
  * sliding out keeps the edge's coordinate and shrinks. A frame that touches an
  * edge at its full size is not cut: it rests at the end of the content (the
  * first row at the top of a list), where a swipe further would only pull past
- * the end and could start a pull-to-refresh. A frame that reaches both edges
- * spans the container and cannot fit any better.
+ * the end and could start a pull-to-refresh. A frame thinner than
+ * {@link SLIVER_SHARE} of the container is cut when it touches an edge even if
+ * it was never seen larger (a row entering at the edge when the list stopped):
+ * a tap, aimed at its centre, would land on a sliver; a whole row is rarely
+ * that thin. A frame that reaches both edges spans the container and cannot
+ * fit any better.
  */
 function cutByEdge(frame: Rect, region: Rect, direction: SwipeDirection, fullSize: number): SwipeDirection | undefined {
   const vertical = direction === 'up' || direction === 'down';
   const [start, end, regionStart, regionEnd] = vertical
     ? [frame.top, frame.bottom, region.top, region.bottom]
     : [frame.left, frame.right, region.left, region.right];
-  const shrunk = end - start < fullSize - EDGE_SLACK;
+  const shrunk = end - start < fullSize - EDGE_SLACK || end - start < (regionEnd - regionStart) * SLIVER_SHARE;
   const atStart = start < regionStart - EDGE_SLACK || (shrunk && start <= regionStart + 1);
   const atEnd = end > regionEnd + EDGE_SLACK || (shrunk && end >= regionEnd - 1);
   if (atStart === atEnd) return undefined;

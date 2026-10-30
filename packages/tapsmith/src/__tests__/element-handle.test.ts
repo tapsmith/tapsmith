@@ -6298,6 +6298,20 @@ describe('scrollIntoView() checks the element is still on screen once the list h
     }
   });
 
+  it('nudges in a sliver of a row the list stopped on as it entered, though it was never seen whole', async () => {
+    // Flutter clips the row to the list: 12 pt of it show at the bottom edge.
+    const findElements = scripted([null, null, at(770, 782), at(770, 782), at(770, 782), at(600, 672)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = listClient(findElements, swipe);
+
+    await new ElementHandle(client, _text('Item 40'), 5000).scrollIntoView();
+
+    expect(swipes(swipe)).toEqual([
+      ['up', 2000, 0.6],
+      ['up', 1000, 0.3],
+    ]);
+  });
+
   it('stops nudging when a nudge would undo the last one: the element is too long to fit wholly inside', async () => {
     // A 640 pt card in the 664 pt list: cut at the top, nudged down 200 pt,
     // now cut at the bottom; nudging back would swing it to and fro.
