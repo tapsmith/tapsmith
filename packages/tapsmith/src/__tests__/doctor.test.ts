@@ -14,6 +14,9 @@ import {
   configLoadFailure,
   parseNetworksetupProxy,
   summarizeAvdImages,
+  countSpringBoardTeardownCrashes,
+  summarizeSpringBoardCrashes,
+  SPRINGBOARD_CRASH_WINDOW_DAYS,
   type CheckEntry,
   type ServiceProxySetting,
 } from '../doctor.js';
@@ -513,5 +516,57 @@ describe('configAndroidApks() (PILOT-263)', () => {
       apk: 'root.apk',
       projects: [{ use: {} }, { use: { apk: 'b.apk' } }, { use: { apk: 'b.apk' } }, { use: { platform: 'ios' } }],
     })).toEqual(['root.apk', 'b.apk']);
+  });
+});
+
+describe('SpringBoard teardown crash reports (PILOT-947)', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = Date.UTC(2026, 9, 30, 12);
+  const teardownStack = '{"symbol" : "__66-[XCTAutomationSession initWithAccessibilityFramework:dataSource:]_block_invoke"}';
+
+  function reportsDir(files: Array<{ name: string; body: string; ageDays: number }>): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-diag-'));
+    for (const f of files) {
+      const file = path.join(dir, f.name);
+      fs.writeFileSync(file, f.body);
+      const t = (now - f.ageDays * DAY) / 1000;
+      fs.utimesSync(file, t, t);
+    }
+    return dir;
+  }
+
+  it('counts recent SpringBoard reports with the XCTest teardown frame, and nothing else', () => {
+    const dir = reportsDir([
+      { name: 'SpringBoard-2026-10-29-204543.ips', body: teardownStack, ageDays: 1 },
+      { name: 'SpringBoard-2026-10-30-070317.ips', body: teardownStack, ageDays: 0.2 },
+      // Another SpringBoard crash: not this bug.
+      { name: 'SpringBoard-2026-10-28-100000.ips', body: '{"symbol" : "-[SBSomethingElse crash]"}', ageDays: 2 },
+      // Older than the window.
+      { name: 'SpringBoard-2026-10-01-100000.ips', body: teardownStack, ageDays: SPRINGBOARD_CRASH_WINDOW_DAYS + 1 },
+      // Another process with the same frame.
+      { name: 'TapsmithAgentUITests-Runner-2026-10-29-100000.ips', body: teardownStack, ageDays: 1 },
+    ]);
+    try {
+      expect(countSpringBoardTeardownCrashes(dir, now)).toBe(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('is 0 when the reports directory does not exist', () => {
+    expect(countSpringBoardTeardownCrashes(path.join(os.tmpdir(), 'tapsmith-no-such-dir-947'), now)).toBe(0);
+  });
+
+  it('reports nothing without crashes', () => {
+    expect(summarizeSpringBoardCrashes(0)).toBeUndefined();
+  });
+
+  it('warns with the count, says nothing needs fixing, and gives the notification setting without applying it', () => {
+    expect(summarizeSpringBoardCrashes(1)?.label).toContain('crashed in an iOS simulator once in the last 7 days');
+    const summary = summarizeSpringBoardCrashes(3);
+    expect(summary?.status).toBe('warn');
+    expect(summary?.label).toContain('3 times');
+    expect(summary?.fix).toContain('Nothing to fix in your setup');
+    expect(summary?.fix).toContain('defaults write com.apple.CrashReporter UseUNC 1');
   });
 });

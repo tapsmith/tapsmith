@@ -389,6 +389,17 @@ The affected test's result carries a warning, even when the test then passes. In
 
 The warning is in the result's `warnings` (the JSON reporter, `merge-reports` and MCP `run_tests`/`list_results` show it too) and in the test's trace as a `systemDialog` step. Another package's dialog is not a warning on the test. It appears only as a `systemDialog` step in the trace, beside the `Dismissing system dialog …` log line.
 
+### "SpringBoard quit unexpectedly" (iOS simulator)
+
+Now and then, as an iOS simulator run or session ends, macOS shows a crash dialog: **SpringBoard quit unexpectedly**. The crash report (in `~/Library/Logs/DiagnosticReports/SpringBoard-*.ips`) is an `EXC_BAD_ACCESS` in `XCTAutomationSupport`, in `-[XCTAutomationSession initWithAccessibilityFramework:dataSource:]`.
+
+**What happened:** This is a bug in Apple's XCTest support inside the simulator, not in your app or your tests. When the last XCTest session on a simulator ends, the simulator turns off its UI-automation mode, and SpringBoard (the simulator's home screen) sometimes crashes while it does. Tapsmith's iOS agent is an XCTest session, so it can happen whenever one stops: at the end of a run, and when Tapsmith restarts the agent during one. Other XCTest-based tools hit the same crash. It has been seen on Xcode 27.1 with iOS 26.4 simulators, after roughly 1 in 20 to 1 in 100 agent sessions on a simulator that had been running for hours. The simulator restarts SpringBoard by itself.
+
+**What to do:**
+
+- Nothing, usually: dismiss the dialog (or choose **Ignore**). `tapsmith doctor` reports these crashes from the last 7 days as `ios-springboard-crashes`, so you can tell them apart from a crash of your own.
+- To get a notification instead of the dialog for every crash report on your Mac, run `defaults write com.apple.CrashReporter UseUNC 1` (`defaults delete com.apple.CrashReporter UseUNC` undoes it). This is a macOS-wide setting, so Tapsmith never changes it for you.
+
 ### Tapsmith was loaded without `import.meta.dirname`
 
 ```
