@@ -923,6 +923,36 @@ describe('Device.getAppState()', () => {
     const state = await device.getAppState('com.example.app');
     expect(state).toBe('foreground');
   });
+
+  it('asks about the config’s app when no package is given', async () => {
+    const getAppState = vi.fn(async () => ({ requestId: '1', state: 'background' }));
+    const device = new Device(makeMockClient({ getAppState }), { package: 'com.example.configured' });
+    expect(await device.getAppState()).toBe('background');
+    expect(getAppState).toHaveBeenCalledWith('com.example.configured', undefined);
+  });
+
+  it('takes the options first when using the config’s app', async () => {
+    const getAppState = vi.fn(async () => ({ requestId: '1', state: 'foreground' }));
+    const device = new Device(makeMockClient({ getAppState }), { package: 'com.example.configured' });
+    await device.getAppState({ timeout: 3000 });
+    expect(getAppState).toHaveBeenCalledWith('com.example.configured', 3000);
+  });
+
+  it('passes an explicit package and timeout through', async () => {
+    const getAppState = vi.fn(async () => ({ requestId: '1', state: 'stopped' }));
+    const device = new Device(makeMockClient({ getAppState }), { package: 'com.example.configured' });
+    expect(await device.getAppState('com.other.app', { timeout: 2000 })).toBe('stopped');
+    expect(getAppState).toHaveBeenCalledWith('com.other.app', 2000);
+  });
+
+  it('throws a helpful error when no package is available', async () => {
+    const getAppState = vi.fn(async () => ({ requestId: '1', state: 'foreground' }));
+    const device = new Device(makeMockClient({ getAppState }));
+    await expect(device.getAppState()).rejects.toThrow(
+      'Package name is required. Pass one explicitly or set `package` in your Tapsmith config.',
+    );
+    expect(getAppState).not.toHaveBeenCalled();
+  });
 });
 
 // ─── sendToBackground() / bringToForeground() ───

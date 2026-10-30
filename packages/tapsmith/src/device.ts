@@ -855,12 +855,24 @@ export class Device {
   }
 
   /**
-   * Whether an app is `not_installed`, `stopped`, in the `background` or the
-   * `foreground`. A snapshot: it does not wait for a state. `timeout` bounds the
-   * query.
+   * Whether the config's app is `not_installed`, `stopped`, in the
+   * `background` or the `foreground`. A snapshot: it does not wait for a
+   * state. `timeout` bounds the query.
    */
-  async getAppState(packageName: string, options?: { timeout?: number }): Promise<AppState> {
-    const res = await this._client.getAppState(packageName, options?.timeout);
+  async getAppState(options?: { timeout?: number }): Promise<AppState>;
+  /**
+   * Whether the app `packageName` is `not_installed`, `stopped`, in the
+   * `background` or the `foreground`. A snapshot: it does not wait for a
+   * state. `timeout` bounds the query.
+   */
+  async getAppState(packageName: string, options?: { timeout?: number }): Promise<AppState>;
+  async getAppState(
+    packageOrOptions?: string | { timeout?: number },
+    maybeOptions?: { timeout?: number },
+  ): Promise<AppState> {
+    const packageName = typeof packageOrOptions === 'string' ? packageOrOptions : undefined;
+    const options = typeof packageOrOptions === 'string' ? maybeOptions : packageOrOptions;
+    const res = await this._client.getAppState(this.requirePackageName(packageName), options?.timeout);
     return res.state as AppState;
   }
 

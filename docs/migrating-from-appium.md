@@ -81,7 +81,7 @@ Appium has clients in many languages. The examples here use [WebdriverIO](https:
 | `mobile: terminateApp` | [`device.terminateApp(pkg)`](api-reference.md#deviceterminateapppackagename-string-promisevoid) |
 | `mobile: clearApp` | [`device.clearAppData(pkg)`](api-reference.md#deviceclearappdatapackagename-string-promisevoid), or [`device.resetApp({ mode: "clear" })`](api-reference.md#deviceresetappoptions-promiseappresetresult) |
 | `mobile: installApp` | Automatic from `apk` / `app` in the config |
-| `mobile: queryAppState` | [`device.getAppState(pkg)`](api-reference.md#devicegetappstatepackagename-string-promiseappstate) |
+| `mobile: queryAppState` | [`device.getAppState(pkg)`](api-reference.md#devicegetappstatepackagename-string-options-promiseappstate) |
 | `mobile: backgroundApp` | [`device.sendToBackground()`](api-reference.md#devicesendtobackground-promisevoid) |
 | `mobile: deepLink` / `driver.url()` | [`device.openDeepLink(url)`](api-reference.md#deviceopendeeplinkuri-string-options-opendeeplinkoptions-promisevoid) |
 | `driver.setOrientation()` | [`device.setOrientation()`](api-reference.md#devicesetorientationorientation-orientation-promisevoid) |
