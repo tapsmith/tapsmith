@@ -85,6 +85,12 @@ interface DaemonConnection {
    * act on, so it must not be counted as one.
    */
   agentFailed?: boolean
+  /**
+   * Why that agent would not start, while `agentFailed` holds — what a device
+   * tool naming the device answers with, instead of acting through a daemon
+   * with no agent and reporting only "Not connected to agent".
+   */
+  agentError?: string
 }
 
 let _connections: DaemonConnection[] = [];
@@ -333,7 +339,14 @@ async function clientPointedAt(serial: string): Promise<TapsmithGrpcClient> {
   // which `sessionDevicesFrom` counts and `resolveDeviceTarget` may select.
   // The tool then failed with "which is driving X … use the device it already
   // holds", where X was the device it had just been asked for.
-  if (pointedAt === serial) return client;
+  if (pointedAt === serial) {
+    // Pointed here, but its agent would not start: acting through it can only
+    // fail with "Not connected to agent". Say why instead. A device tool
+    // retries the failed target before it gets here, which clears this once
+    // the agent starts.
+    if (conn.agentFailed && conn.agentError) throw new Error(conn.agentError);
+    return client;
+  }
 
   if (conn.preparedDevice === serial) {
     throw new Error(
@@ -1845,6 +1858,7 @@ async function prepareTarget(
   try {
     await startAgentFromConfig(conn.client, config, { force: repointed, required: true, serial });
     conn.agentFailed = false;
+    conn.agentError = undefined;
   } catch (err) {
     // Deliberately *not* rolling `preparedDevice` back: `set_device` already
     // happened, and a later claim that assumed the daemon never moved would
@@ -1852,6 +1866,7 @@ async function prepareTarget(
     // keeps both facts, so a broken target is not counted as a device the
     // session drives.
     conn.agentFailed = true;
+    conn.agentError = err instanceof Error ? err.message : String(err);
     releaseOnFailure();
     throw err;
   }
@@ -2496,7 +2511,44 @@ async function startAgentFromConfig(
     failure = err instanceof Error ? err.message : String(err);
   }
   if (failure !== undefined) return fail('agent start failed', failure);
+  // Android: StartAgent can answer while the agent it replaced is still being
+  // torn down — measured after a fresh app install, where the first device
+  // tool then failed "Agent connection dropped" and one a second later
+  // worked. A test run's launch rides that out with its readiness retries; a
+  // device tool has none, so confirm the agent answers before handing it out.
+  if (config?.platform !== 'ios') {
+    try {
+      await confirmAgentAnswers(client);
+    } catch (err) {
+      return fail('agent does not answer', err instanceof Error ? err.message : String(err));
+    }
+  }
   log('Agent started');
+}
+
+/**
+ * Resolve once the agent answers a real request (a hierarchy dump), retrying
+ * a dropped or refused one; throw with its last answer when it never does.
+ * @internal — exported for unit testing.
+ */
+export async function confirmAgentAnswers(
+  client: TapsmithGrpcClient,
+  opts: { attempts?: number; delayMs?: number } = {},
+): Promise<void> {
+  const attempts = opts.attempts ?? 10;
+  const delayMs = opts.delayMs ?? 1_000;
+  let last = '';
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await client.getUiHierarchy(10_000);
+      if (!res.errorMessage) return;
+      last = res.errorMessage;
+    } catch (err) {
+      last = err instanceof Error ? err.message : String(err);
+    }
+    if (attempt < attempts) await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  throw new Error(`The agent started but does not answer: ${last}`);
 }
 
 /**

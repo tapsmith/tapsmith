@@ -26,6 +26,8 @@ let calls: string[];
 let agentConnected: boolean;
 let startAgentResponse: () => Promise<{ success?: boolean; errorMessage?: string }>;
 let installApkResponse: () => Promise<{ success: boolean; errorMessage?: string }>;
+/** What each agent round trip after a start answers, in turn (then the last one forever). */
+let hierarchyAnswers: Array<() => Promise<{ hierarchyXml: string; errorMessage: string }>>;
 vi.mock('../grpc-client.js', () => ({
   TapsmithGrpcClient: class {
     constructor(readonly address: string) {}
@@ -36,6 +38,11 @@ vi.mock('../grpc-client.js', () => ({
     startAgent(): Promise<unknown> {
       calls.push('startAgent');
       return startAgentResponse();
+    }
+    getUiHierarchy(): Promise<unknown> {
+      calls.push('getUiHierarchy');
+      const answer = hierarchyAnswers.length > 1 ? hierarchyAnswers.shift()! : hierarchyAnswers[0];
+      return answer();
     }
     installApk(apkPath: string): Promise<unknown> {
       calls.push(`installApk ${path.basename(apkPath)}`);
@@ -90,7 +97,8 @@ vi.mock('../mcp/config-loader.js', async (importOriginal) => ({
     : Promise.reject(new Error('no config'))),
 }));
 
-const { closeAllClients, configureMcpConnection, ensureConnected, ensurePlatformTarget } = await import('../mcp/connection.js');
+const { closeAllClients, configureMcpConnection, ensureConnected, ensurePlatformTarget, resolveDeviceTarget, confirmAgentAnswers } = await import('../mcp/connection.js');
+const { TapsmithGrpcClient } = await import('../grpc-client.js');
 
 class FakeDaemon extends EventEmitter {
   pid = 99996;
@@ -132,6 +140,7 @@ beforeEach(() => {
   agentConnected = false;
   startAgentResponse = () => Promise.resolve({ success: true });
   installApkResponse = () => Promise.resolve({ success: true });
+  hierarchyAnswers = [() => Promise.resolve({ hierarchyXml: '<hierarchy/>', errorMessage: '' })];
   simApp = 'absent';
   installAppError = undefined;
   apkInstalled = false;
@@ -188,7 +197,7 @@ describe('the app under test, on a headless session\'s device', () => {
   it('is installed from `apk` on Android too', async () => {
     devices = [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }];
     await target({ ...iosConfig, platform: 'android', app: undefined, apk: 'build/app.apk', package: 'com.x' });
-    expect(calls).toEqual(['installApk app.apk', 'startAgent']);
+    expect(calls).toEqual(['installApk app.apk', 'startAgent', 'getUiHierarchy']);
   });
 
   it('that fails to install fails the target with the reason, and no agent is started', async () => {
@@ -218,6 +227,23 @@ describe('an agent the daemon refused to start', () => {
     expect(stderr).toContain(LAUNCH_REFUSAL);
   });
 
+  // QA on a simulator: the target failed with the reason, but a device tool
+  // naming the device went on to the daemon pointed at it — whose agent never
+  // started — and answered "Not connected to agent".
+  it('is the reason a device tool naming that device fails with', async () => {
+    startAgentResponse = () => Promise.resolve({ success: false, errorMessage: LAUNCH_REFUSAL });
+    await target().catch(() => undefined);
+    await expect(resolveDeviceTarget({ device: 'SIM-1' })).rejects.toThrow(`Failed to start the agent on SIM-1: ${LAUNCH_REFUSAL}`);
+  });
+
+  it('no longer stops a device tool once a later start succeeds', async () => {
+    startAgentResponse = () => Promise.resolve({ success: false, errorMessage: LAUNCH_REFUSAL });
+    await target().catch(() => undefined);
+    startAgentResponse = () => Promise.resolve({ success: true });
+    await target();
+    await expect(resolveDeviceTarget({ device: 'SIM-1' })).resolves.toMatchObject({ device: 'SIM-1' });
+  });
+
   it('is reported, not taken as started, by a UI session\'s discovery start', async () => {
     mcpConfig = iosConfig;
     configureMcpConnection({ uiMode: true });
@@ -225,5 +251,58 @@ describe('an agent the daemon refused to start', () => {
     await ensureConnected();
     expect(stderr).not.toContain('Agent started');
     expect(stderr).toContain(LAUNCH_REFUSAL);
+  });
+});
+
+// Measured on an emulator: StartAgent on Android answered while the agent it
+// replaced was still being torn down, so the first device tool after a fresh
+// app install failed "Agent connection dropped (empty response) and agent is
+// unreachable", and one a second later worked.
+describe('an Android agent, once started in a headless session', () => {
+  const androidConfig = { ...iosConfig, platform: 'android', app: undefined, apk: 'build/app.apk', package: 'com.x' } as Partial<TapsmithConfig>;
+  const dropped = () => Promise.reject(new Error('Agent connection dropped (empty response) and agent is unreachable'));
+
+  beforeEach(() => {
+    devices = [{ serial: 'emulator-5554', state: 'Active', platform: 'android' }];
+  });
+
+  it('is confirmed to answer before the target is ready, riding out a first dropped request', async () => {
+    hierarchyAnswers = [dropped, () => Promise.resolve({ hierarchyXml: '<hierarchy/>', errorMessage: '' })];
+    const t = await target(androidConfig);
+    expect(t.deviceSerial).toBe('emulator-5554');
+    expect(calls.filter((c) => c === 'getUiHierarchy')).toHaveLength(2);
+  });
+
+  it('is not probed on iOS, whose agent start waits for the runner itself', async () => {
+    devices = [sim];
+    await target();
+    expect(calls).not.toContain('getUiHierarchy');
+  });
+
+  it('serves a device tool straight after the start', async () => {
+    hierarchyAnswers = [dropped, () => Promise.resolve({ hierarchyXml: '<hierarchy/>', errorMessage: '' })];
+    mcpConfig = androidConfig;
+    await target(androidConfig);
+    await expect(resolveDeviceTarget({ device: 'emulator-5554' })).resolves.toMatchObject({ device: 'emulator-5554' });
+  });
+});
+
+describe('confirmAgentAnswers', () => {
+  const client = () => new TapsmithGrpcClient('fake') as unknown as InstanceType<typeof TapsmithGrpcClient>;
+
+  it('gives up after its attempts with the agent\'s last answer', async () => {
+    hierarchyAnswers = [() => Promise.reject(new Error('Agent connection dropped (empty response) and agent is unreachable'))];
+    await expect(confirmAgentAnswers(client(), { attempts: 3, delayMs: 1 }))
+      .rejects.toThrow('The agent started but does not answer: Agent connection dropped (empty response) and agent is unreachable');
+    expect(calls.filter((c) => c === 'getUiHierarchy')).toHaveLength(3);
+  });
+
+  it('counts an answer carrying an error as no answer', async () => {
+    hierarchyAnswers = [
+      () => Promise.resolve({ hierarchyXml: '', errorMessage: 'Not connected to agent' }),
+      () => Promise.resolve({ hierarchyXml: '<hierarchy/>', errorMessage: '' }),
+    ];
+    await confirmAgentAnswers(client(), { attempts: 3, delayMs: 1 });
+    expect(calls.filter((c) => c === 'getUiHierarchy')).toHaveLength(2);
   });
 });
