@@ -59,6 +59,14 @@ data class Box(
  *   and Android has no accessibility hit test to tell them apart. A plain view
  *   that does swallow touches is a known gap (PILOT-364 on iOS).
  *
+ *   Two siblings that both report drawing order 0 have no known paint order,
+ *   so neither counts as drawn after the other (PILOT-932). 0 is the unset
+ *   value: views number their drawing order from 1 and Compose numbers its
+ *   children from 0, but Flutter sets none, and its children come in
+ *   traversal order — a dialog route's full-window ModalBarrier comes after
+ *   the dialog though it is painted under it. Child order would make that
+ *   barrier cover every control in every Flutter dialog, sheet and menu.
+ *
  * No Android dependencies — the tree and the windows come in through
  * [HitNode] and [WindowSpec] so the JVM unit tests can build them by hand.
  */
@@ -305,7 +313,7 @@ object OcclusionAnalyzer {
                 (0 until node.childCount())
                     .filter { it != branchIndex }
                     .mapNotNull { i -> reader.child(node, i)?.let { it to drawKey(it, i) } }
-                    .filter { (_, key) -> compareKeys(key, branchKey) > 0 }
+                    .filter { (_, key) -> paintOrderKnown(key, branchKey) && compareKeys(key, branchKey) > 0 }
                     .sortedWith { a, b -> compareKeys(b.second, a.second) }
             for ((sibling, _) in later) {
                 searchSubtree(sibling, x, y, reader)?.let { return it }
@@ -362,6 +370,14 @@ object OcclusionAnalyzer {
         node: HitNode,
         index: Int,
     ) = node.drawingOrder to index
+
+    /** Whether two siblings' paint order can be told apart: not when both
+     *  report drawing order 0, the unset value (Flutter's virtual nodes, whose
+     *  child order is traversal order, not paint order). */
+    private fun paintOrderKnown(
+        a: Pair<Int, Int>,
+        b: Pair<Int, Int>,
+    ): Boolean = a.first != 0 || b.first != 0
 
     private fun compareKeys(
         a: Pair<Int, Int>,
