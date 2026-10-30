@@ -3630,9 +3630,9 @@ export class ElementHandle {
    *
    * Each swipe runs inside the scroll container that holds the element: its
    * nearest scrollable ancestor on screen when the device reports where the
-   * element is (iOS), else the largest scrollable on screen in the topmost
-   * window (a dialog or sheet over the screen). The screen is swiped only
-   * when nothing on it scrolls.
+   * element is (iOS), else the largest scrollable on screen (on Android, in
+   * the topmost window: a dialog's or bottom sheet's, over the screen's).
+   * The screen is swiped only when nothing on it scrolls.
    *
    * Without a `direction`, it scrolls the way the element lies, when the
    * device reports where it is (iOS lists off-screen elements with their

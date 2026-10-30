@@ -2178,7 +2178,6 @@ fn text_regex_to_json(re: &proto::TextRegex) -> Value {
     })
 }
 
-/// Convert a protobuf Selector into a JSON value for the agent protocol.
 /// A swipe region as the agents take it, or `None` for an empty one (no
 /// width or height), which leaves the swipe screen-wide.
 fn swipe_region_to_json(b: &proto::Bounds) -> Option<Value> {
@@ -2188,6 +2187,7 @@ fn swipe_region_to_json(b: &proto::Bounds) -> Option<Value> {
     Some(json!({"left": b.left, "top": b.top, "right": b.right, "bottom": b.bottom}))
 }
 
+/// Convert a protobuf Selector into a JSON value for the agent protocol.
 pub(crate) fn selector_to_json(selector: &proto::Selector) -> Value {
     let mut obj = json!({});
 
