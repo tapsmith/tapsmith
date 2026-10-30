@@ -253,7 +253,7 @@ function readTraceArchive(tracePath: string, includeScreenshots: boolean, device
     // end (where the failure is) however long the log section is.
     const logsText = truncateMiddle(logLines.join('\n'), LOGS_BUDGET_BYTES, 'Pass device_logs "none" to leave them out.');
     const stepsBudget = MCP_TEXT_BUDGET_BYTES - NOTES_RESERVE_BYTES - serializedTextBytes(logsText);
-    const stepsText = truncateMiddle(lines.join('\n'), stepsBudget, 'The trace\'s first and last steps are kept; the failure is at the end.');
+    const stepsText = truncateMiddle(lines.join('\n'), stepsBudget, 'The trace\'s first and last steps are kept, with the Result section at the top; a failed step it names may be in the part left out.');
     lines.length = 0;
     lines.push(stepsText);
     if (logsText) lines.push(logsText);
