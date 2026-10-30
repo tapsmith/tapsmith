@@ -34,6 +34,27 @@
       "matches": true
     },
     {
+      "why": "toggle",
+      "platform": "ios",
+      "type": "XCUIElementTypeToggle",
+      "label": "Wi-Fi",
+      "query": "Wi-Fi",
+      "matches": true
+    },
+    {
+      "why": "RegExp on a toggle",
+      "platform": "ios",
+      "type": "XCUIElementTypeToggle",
+      "label": "Wi-Fi",
+      "query": {
+        "source": "^wi-?fi$",
+        "flags": "i",
+        "pattern": "\\Awi\\-?fi\\z",
+        "ignoreCase": true
+      },
+      "matches": true
+    },
+    {
       "why": "slider",
       "platform": "ios",
       "type": "XCUIElementTypeSlider",

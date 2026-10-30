@@ -18,7 +18,7 @@ func expect(_ name: String, _ ok: Bool) {
 /// The element types the fixture names, by the type name the hierarchy dump writes.
 let typesByName: [String: XCUIElement.ElementType] = {
     let types: [XCUIElement.ElementType] = [
-        .textField, .secureTextField, .textView, .switch, .slider, .stepper, .picker,
+        .textField, .secureTextField, .textView, .switch, .toggle, .slider, .stepper, .picker,
         .checkBox, .radioButton, .searchField, .button, .staticText, .other,
     ]
     var map: [String: XCUIElement.ElementType] = [:]

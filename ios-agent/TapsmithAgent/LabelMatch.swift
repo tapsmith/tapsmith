@@ -7,10 +7,11 @@ import XCTest
 /// a string compared whole and whitespace-normalized, a RegExp tested
 /// against the raw text.
 enum LabelMatch {
-    /// The input types getByLabel finds.
+    /// The input types getByLabel finds: a `switch` role's toggle too, as
+    /// Android's getByLabel walks every switch class (PILOT-697).
     static let inputTypes: Set<XCUIElement.ElementType> = [
         .textField, .secureTextField, .textView,
-        .switch, .slider, .stepper, .picker,
+        .switch, .toggle, .slider, .stepper, .picker,
         .checkBox, .radioButton,
     ]
 
