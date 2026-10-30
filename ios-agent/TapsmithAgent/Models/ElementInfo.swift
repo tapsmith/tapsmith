@@ -71,6 +71,14 @@ struct ElementSelector {
         guard let role, !hasNameFilter else { return false }
         return RoleMapping.normalize(role) == "switch"
     }
+
+    /// Whether this is `getByRole("textfield")` with no name: a live
+    /// textfield query also returns read-only text views, which the match set
+    /// leaves out (RoleMapping.isReadOnlyTextView, PILOT-697).
+    var roleOnlyTextField: Bool {
+        guard let role, !hasNameFilter else { return false }
+        return RoleMapping.normalize(role) == "textfield"
+    }
 }
 
 /// Bounding rectangle for an element.

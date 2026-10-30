@@ -876,6 +876,9 @@ function nodeHasRole(node: HierarchyNode, role: string, named: boolean): boolean
     return ANDROID_ROLE_CLASSES[role]?.includes(className) ?? false;
   }
   const type = node.attributes.get('type') ?? node.tagName;
+  // A text view is a textfield only while it can be edited, which the dump
+  // reports as its role (PILOT-697): a read-only one reports "text".
+  if (type === 'XCUIElementTypeTextView' && role === 'textfield') return false;
   if (type === 'XCUIElementTypeOther') {
     // RN's checkbox, alert, menuitem, …: a description or a name decides,
     // like the agent (PILOT-608, PILOT-664).

@@ -145,6 +145,22 @@ describe("UIKit: keyboard", () => {
     await uikitKeyboard.notes.type("hello")
     await expect(uikitKeyboard.notes).toHaveValue("hello")
   })
+
+  // PILOT-697: an editable text view is a textfield; a read-only one is text.
+  test("an editable UITextView is a textfield, a read-only one is text", async ({ uikitKeyboard }) => {
+    await expect(uikitKeyboard.notes).toHaveRole("textfield")
+    await expect(uikitKeyboard.notes).toBeEditable()
+    await expect(uikitKeyboard.terms).toHaveRole("text")
+    await expect(uikitKeyboard.terms).not.toBeEditable()
+    await expect(uikitKeyboard.textFields).toHaveCount(2)
+  })
+
+  test("a role-only textfield finds each input past the read-only text view", async ({ uikitKeyboard }) => {
+    await uikitKeyboard.textFields.first().type("Leeds")
+    await expect(uikitKeyboard.city).toHaveValue("Leeds")
+    await uikitKeyboard.textFields.nth(1).type("hello")
+    await expect(uikitKeyboard.notes).toHaveValue("hello")
+  })
 })
 
 describe("UIKit: gestures", () => {

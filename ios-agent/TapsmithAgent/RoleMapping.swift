@@ -9,6 +9,11 @@ enum AccessibilityTrait {
     static let header: UInt64 = 1 << 16       // UIAccessibilityTraitHeader
     static let adjustable: UInt64 = 1 << 17   // UIAccessibilityTraitAdjustable (slider/picker)
     static let searchField: UInt64 = 1 << 20  // UIAccessibilityTraitSearchField
+    /// UIAccessibilityTraitTextEntry (private): UIKit gives it to a text view
+    /// only while it can be edited — a UIKit UITextView, a SwiftUI
+    /// TextEditor, React Native's multi-line TextInput — and not to a
+    /// read-only one, which carries the static-text trait instead (PILOT-697).
+    static let textEntry: UInt64 = 1 << 18
 }
 
 /// Maps Tapsmith role names to XCUIElement.ElementType values.
@@ -150,6 +155,11 @@ enum RoleMapping {
 
         if isTabBarItem(elementType, inTabBar: inTabBar) { return "tab" }
 
+        // A text view that can't be edited is text on screen, not an input.
+        if isReadOnlyTextView(elementType, traits: traits) {
+            return traits & Trait.staticText != 0 ? "text" : ""
+        }
+
         let typeRole = elementTypeToRole[elementType] ?? ""
         if !typeRole.isEmpty { return typeRole }
 
@@ -158,6 +168,17 @@ enum RoleMapping {
         if traits & Trait.image != 0 { return "image" }
 
         return ""
+    }
+
+    /// Whether `elementType` is a text view that can't be edited: no
+    /// text-entry trait (`AccessibilityTrait.textEntry`). A multi-line input
+    /// is a textfield, as Android's multi-line EditText is; a read-only text
+    /// view (terms text, React Native's `<TextInput multiline
+    /// editable={false} />`) is not one (PILOT-697). Traits of 0 mean they
+    /// couldn't be read (SnapshotElementFinder.annotateTraits): the text view
+    /// is then taken for the input it usually is.
+    static func isReadOnlyTextView(_ elementType: XCUIElement.ElementType, traits: UInt64) -> Bool {
+        elementType == .textView && traits != 0 && traits & AccessibilityTrait.textEntry == 0
     }
 
     /// Get the XCUIElement.ElementType values for a role name.
@@ -283,6 +304,8 @@ enum RoleMapping {
     /// - RN's other generic-view roles (menuitem, tablist, timer, …): their
     ///   native type, if any, or — having no description — a named query
     ///   on a generic view, on the same terms (`undescribedOtherRoles`).
+    /// - textfield: a text view only while it can be edited
+    ///   (`isReadOnlyTextView`, PILOT-697).
     /// - tab: a `.tab` element or a tab bar's item (`isTabBarItem`; `inTabBar`
     ///   is whether the element has a `.tabBar` ancestor). The bar itself is a
     ///   tablist (PILOT-514).
@@ -308,6 +331,9 @@ enum RoleMapping {
         }
         if canonical == "tab" {
             return elementType == .tab || isTabBarItem(elementType, inTabBar: inTabBar)
+        }
+        if canonical == "textfield" && isReadOnlyTextView(elementType, traits: traits) {
+            return false
         }
         guard let types = roleToElementTypes[canonical] else { return false }
         if isGenericViewRole(canonical) {

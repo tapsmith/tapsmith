@@ -198,6 +198,10 @@ export class UIKitKeyboardScreen {
   get city() { return this.device.getByPlaceholder("City") }
   entered(text: string) { return this.device.getByText(`Entered: ${text}`, { exact: true }) }
   get notes() { return this.device.getByTestId("uikit-notes") }
+  /** A UITextView that can't be edited: display text (PILOT-697). */
+  get terms() { return this.device.getByTestId("uikit-terms") }
+  /** The screen's inputs: the City field and the notes text view, not the terms. */
+  get textFields() { return this.device.getByRole("textfield") }
 }
 
 export class UIKitGesturesScreen {

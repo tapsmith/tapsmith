@@ -193,9 +193,13 @@ class SnapshotElementFinder {
         // query returns out of tree order (cacheQueryElement).
         let treeHasSwitchPart = register && selector.roleOnlySwitch
             && SnapshotElementFinder.containsSwitchPart(snapshotDict, insideSwitch: false)
+        // Whether the tree holds a read-only text view, which a live
+        // textfield query returns and the match set leaves out (PILOT-697).
+        let treeHasReadOnlyTextView = register && selector.roleOnlyTextField
+            && SnapshotElementFinder.containsReadOnlyTextView(snapshotDict)
         var queryNodes: [QueryNode] = []
         if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel
-            || selector.roleOnlySwitch) {
+            || selector.roleOnlySwitch || treeHasReadOnlyTextView) {
             SnapshotElementFinder.numberDescendants(of: &snapshotDict, into: &queryNodes)
         }
         var liveFocusedTextInputFetched = false
@@ -342,7 +346,7 @@ class SnapshotElementFinder {
                 // query can use element type + identifier for more precise matching.
                 cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, idIndex: idIndices[matchIndex],
                     labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict,
-                    treeHasSwitchPart: treeHasSwitchPart
+                    treeHasSwitchPart: treeHasSwitchPart, treeHasReadOnlyTextView: treeHasReadOnlyTextView
                 )
             }
             // The snapshot's hasFocus is unreliable on Xcode 26 — it can
@@ -910,6 +914,15 @@ class SnapshotElementFinder {
         return (node["children"] as? [[String: Any]] ?? []).contains {
             containsSwitchPart($0, insideSwitch: childInsideSwitch)
         }
+    }
+
+    /// Whether `node` or a descendant is a read-only text view
+    /// (RoleMapping.isReadOnlyTextView). Reads the traits annotateTraits put
+    /// on each node.
+    static func containsReadOnlyTextView(_ node: [String: Any]) -> Bool {
+        let type = XCUIElement.ElementType(rawValue: parseUInt(node["elementType"]) ?? 0) ?? .other
+        if RoleMapping.isReadOnlyTextView(type, traits: extractTraits(from: node)) { return true }
+        return (node["children"] as? [[String: Any]] ?? []).contains { containsReadOnlyTextView($0) }
     }
 
     /// Whether a descendant of `node` is a switch: the knob of a SwiftUI
@@ -1635,7 +1648,8 @@ class SnapshotElementFinder {
         idIndex: Int,
         labelIndex: Int?,
         snapshotNode: [String: Any]? = nil,
-        treeHasSwitchPart: Bool = false
+        treeHasSwitchPart: Bool = false,
+        treeHasReadOnlyTextView: Bool = false
     ) {
         // Build a query that matches this element
         let element: XCUIElement?
@@ -1828,6 +1842,17 @@ class SnapshotElementFinder {
                 // so no index into it can be trusted: find a named switch by
                 // its own label, which a knob doesn't have (PILOT-790).
                 element = byOwnLabel(nodeLabel, at: labelIndex)
+            } else if selector.roleOnlyTextField, treeHasReadOnlyTextView, nodeIdentifier.isEmpty {
+                // A live textfield query also returns read-only text views,
+                // which the match set leaves out, so its index would land on
+                // the wrong element: find the field by its own label, or
+                // cache nothing for an unlabelled one, as for a switch below
+                // (PILOT-697). A field with an identifier is found by it.
+                if !nodeLabel.isEmpty, let labelIndex {
+                    element = byOwnLabel(nodeLabel, at: labelIndex)
+                } else {
+                    element = nil
+                }
             } else if selector.roleOnlySwitch, treeHasSwitchPart {
                 // An unnamed switch beside SwiftUI Toggles: nothing but a
                 // position in that query could find it again, so cache

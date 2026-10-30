@@ -41,6 +41,7 @@ let traitsByName: [String: UInt64] = [
     "header": AccessibilityTrait.header,
     "adjustable": AccessibilityTrait.adjustable,
     "searchField": AccessibilityTrait.searchField,
+    "textEntry": AccessibilityTrait.textEntry,
 ]
 
 let fixturePath = CommandLine.arguments.count > 1
