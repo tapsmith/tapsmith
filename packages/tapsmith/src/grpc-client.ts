@@ -320,6 +320,8 @@ export interface SwipeOptions {
   speed?: number;
   distance?: number;
   timeoutMs?: number;
+  /** Swipe inside these screen bounds instead of across the whole screen. */
+  region?: { left: number; top: number; right: number; bottom: number };
 }
 
 export interface ScrollOptions {
@@ -631,6 +633,7 @@ export class TapsmithGrpcClient {
       distance: options?.distance ?? 0.6,
     };
     if (options?.timeoutMs != null) request.timeoutMs = options.timeoutMs;
+    if (options?.region) request.region = options.region;
     return this.call<ActionResponse>('swipe', request);
   }
 
