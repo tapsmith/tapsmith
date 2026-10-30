@@ -158,6 +158,9 @@ describe("UIKit: keyboard", () => {
   test("a role-only textfield finds each input past the read-only text view", async ({ uikitKeyboard }) => {
     await uikitKeyboard.textFields.first().type("Leeds")
     await expect(uikitKeyboard.city).toHaveValue("Leeds")
+    // City has no label or identifier: clearing needs its live element too.
+    await uikitKeyboard.textFields.first().clearAndType("York")
+    await expect(uikitKeyboard.city).toHaveValue("York")
     await uikitKeyboard.textFields.nth(1).type("hello")
     await expect(uikitKeyboard.notes).toHaveValue("hello")
   })

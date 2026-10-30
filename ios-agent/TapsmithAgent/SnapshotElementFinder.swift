@@ -1845,10 +1845,13 @@ class SnapshotElementFinder {
             } else if selector.roleOnlyTextField, treeHasReadOnlyTextView, nodeIdentifier.isEmpty {
                 // A live textfield query also returns read-only text views,
                 // which the match set leaves out, so its index would land on
-                // the wrong element: find the field by its own label, or
-                // cache nothing for an unlabelled one, as for a switch below
-                // (PILOT-697). A field with an identifier is found by it.
-                if !nodeLabel.isEmpty, let labelIndex {
+                // the wrong element: find the field by its own label, at its
+                // index among every node of its own type with that label —
+                // an empty label too, since a text input's type is never
+                // `.other` and the query is scoped to it (labelQuery), so a
+                // placeholder-only field is still found (PILOT-697). A field
+                // with an identifier is found by it.
+                if let labelIndex {
                     element = byOwnLabel(nodeLabel, at: labelIndex)
                 } else {
                     element = nil
