@@ -427,7 +427,7 @@ await device.terminateApp("com.example.myapp");
 
 ### `device.getAppState(packageName?: string, options?): Promise<AppState>`
 
-Check the state of an app: the config's `package` unless you name another. Returns `"not_installed"`, `"stopped"`, `"background"`, or `"foreground"`. It reads the state once and does not wait for one; wrap it in [`expect.poll()`](#expectpollfn---unknown--promiseunknown-options-polloptions-genericassertions) to wait. `timeout` bounds the query, and with no package it is the first argument (`getAppState({ timeout: 5000 })`). With no package named and none configured, it throws.
+Check the state of an app: the config's `package` unless you name another. Returns `"not_installed"`, `"stopped"`, `"background"`, or `"foreground"`. It reads the state once and does not wait for one; wrap it in [`expect.poll()`](api-reference.md#expectpollfn---unknown--promiseunknown-options-polloptions-genericassertions) to wait. `timeout` bounds the query, and with no package it is the first argument (`getAppState({ timeout: 5000 })`). With no package named and none configured, it throws.
 
 ```typescript
 const state = await device.getAppState();                    // the config's app
