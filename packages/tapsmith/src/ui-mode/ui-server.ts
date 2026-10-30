@@ -1214,7 +1214,7 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
       stopRun();
     },
     waitForRunEnd(timeoutMs: number): Promise<TestRunResult | null> {
-      if (!isRunning) return Promise.resolve(lastRunEnd);
+      if (!isRunning && !workerStartup.waiting) return Promise.resolve(lastRunEnd);
       return new Promise((resolve) => {
         const waiter = (r: TestRunResult): void => {
           clearTimeout(timer);
@@ -1230,7 +1230,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         runEndWaiters.push(waiter);
       });
     },
-    isRunning: () => isRunning,
+    // A run waiting for the workers to start is a run in progress: MCP can see and stop it.
+    isRunning: () => isRunning || workerStartup.waiting,
     getResults: () => [...testResults.values()].map(classifyEntryStatus),
     getTestFiles: () => ctx.testFiles,
     resolveRequestedFiles: (files) => resolveRequested(files),
@@ -3350,8 +3351,15 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
    * poll loops. Wedged workers are SIGKILLed after STOP_GRACE_MS.
    */
   function stopRun(): void {
-    // A run still waiting for the workers to start ends here (`afterWorkerStartup` reports it).
-    if (workerStartup.cancel()) return;
+    // A run still waiting for the workers to start ends here, reported at
+    // once so an MCP stop_tests that waits for the run's end gets this one.
+    if (workerStartup.cancel()) {
+      const stopped: TestRunResult = { status: 'stopped', passed: 0, failed: 0, skipped: 0, duration: 0 };
+      broadcast({ type: 'run-end', ...stopped });
+      lastRunEnd = stopped;
+      for (const w of runEndWaiters.splice(0)) w(stopped);
+      return;
+    }
     if (!isRunning) return;
     stopRequested = true;
     stopParallelRun();
@@ -3677,12 +3685,8 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
   async function afterWorkerStartup<T>(run: () => Promise<T>, notRun: (result: TestRunResult) => T): Promise<T> {
     const { outcome, waited } = await workerStartup.wait();
     if (outcome === 'busy') return notRun(runInProgressResult());
-    if (outcome === 'stopped') {
-      const stopped: TestRunResult = { status: 'stopped', passed: 0, failed: 0, skipped: 0, duration: 0 };
-      broadcast({ type: 'run-end', ...stopped });
-      lastRunEnd = stopped;
-      return notRun(stopped);
-    }
+    // Stopped while waiting: stopRun has already reported the run's end.
+    if (outcome === 'stopped') return notRun({ status: 'stopped', passed: 0, failed: 0, skipped: 0, duration: 0 });
     if (!waited) return run();
     // Still running as far as the page knows, no longer waiting; the run's
     // own run-start follows.
@@ -4998,21 +5002,27 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         break;
       case 'respawn-worker': {
         const worker = uiWorkers.find((w) => w.id === msg.workerId);
-        if (worker && !worker.retired) {
+        if (!worker) break;
+        if (!worker.retired) {
           worker.retired = true;
-      // Its id may be reused for another device: its captures must not resolve a pick.
-      liveHierarchies.forgetWorker(worker.id);
+          // Its id may be reused for another device: its captures must not resolve a pick.
+          liveHierarchies.forgetWorker(worker.id);
           worker.busy = false;
           try { if (worker.process.connected) worker.process.send({ type: 'shutdown' }); } catch { /* dead */ }
           console.log(`${DIM}Worker ${worker.id} marked for respawn by user${RESET}`);
           broadcastWorkerStatus(worker, 'error');
-          ensureWorkersReady().then(() => {
-            const respawned = uiWorkers.find((w) => w.id === msg.workerId);
-            if (respawned && !respawned.retired) {
-              broadcastWorkerStatus(respawned, 'idle');
-            }
-          }).catch(() => {});
+        } else {
+          // A worker that already died: the "no worker" errors send the user
+          // here, so respawning it must work too, not only a live one.
+          console.log(`${DIM}Respawning worker ${worker.id} (${worker.deviceSerial}) at the user's request${RESET}`);
         }
+        // A failed respawn is reported by ensureWorkersReady itself.
+        ensureWorkersReady().then(() => {
+          const respawned = uiWorkers.find((w) => w.id === msg.workerId);
+          if (respawned && !respawned.retired) {
+            broadcastWorkerStatus(respawned, 'idle');
+          }
+        }).catch(() => {});
         break;
       }
       case 'set-preferences': {
