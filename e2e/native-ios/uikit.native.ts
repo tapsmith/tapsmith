@@ -88,14 +88,21 @@ describe("UIKit: table view", () => {
   })
 
   // Last: it leaves the table scrolled.
-  test("scrollIntoView reaches a reused cell far down, and back up", async ({ uikitTable }) => {
-    await uikitTable.rowText(80).scrollIntoView({ maxScrolls: 30 })
-    await uikitTable.rowText(80).tap()
-    // Row 1 is now unloaded, above the screen; the selection label is the
-    // table's header, scrolled away with it.
-    await expect(uikitTable.rowText(1)).not.toBeVisible()
-    await uikitTable.rowText(1).scrollIntoView({ direction: "up", maxScrolls: 30 })
-    await expect(uikitTable.selection).toHaveText("Selected: Row 80")
+  describe("far down a long table", () => {
+    // Each swipe reads this 100-row table, at ~0.5 s a read on a simulator,
+    // so the test takes ~37 s: more than the default 30 s (3x the 10 s
+    // action timeout).
+    test.use({ timeout: 60_000 })
+
+    test("scrollIntoView reaches a reused cell far down, and back up", async ({ uikitTable }) => {
+      await uikitTable.rowText(80).scrollIntoView({ maxScrolls: 30 })
+      await uikitTable.rowText(80).tap()
+      // Row 1 is now unloaded, above the screen; the selection label is the
+      // table's header, scrolled away with it.
+      await expect(uikitTable.rowText(1)).not.toBeVisible()
+      await uikitTable.rowText(1).scrollIntoView({ direction: "up", maxScrolls: 30 })
+      await expect(uikitTable.selection).toHaveText("Selected: Row 80")
+    })
   })
 })
 
