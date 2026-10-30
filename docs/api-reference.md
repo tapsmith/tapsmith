@@ -1278,7 +1278,7 @@ The visibility check honours every modifier on the locator — `filter()`, `and(
 
 | Option | Default | Description |
 |---|---|---|
-| `direction` | from the element's position, else `"down"` | The way the view scrolls, as `scroll()` takes it: `"down"` reveals content below, `"up"` content above, `"left"` and `"right"` likewise. Case-insensitive; any other value throws. Given, it is used for every swipe, wherever the element is. |
+| `direction` | from the element's position, else `"down"` | The way the view scrolls, as `scroll()` takes it: `"down"` reveals content below, `"up"` content above, `"left"` and `"right"` likewise. Case-insensitive; any other value throws. Given, it is used for every swipe that searches for the element, wherever the element is; a swipe back for an element the list carried past, or one that moves it inside its container, goes the way the element is. |
 | `maxScrolls` | `5` | Maximum swipe attempts before throwing (fewer if the content reaches its end first), counting any swipe back for an element the list carried past |
 | `speed` | `2000` | Swipe speed in pixels/second |
 
