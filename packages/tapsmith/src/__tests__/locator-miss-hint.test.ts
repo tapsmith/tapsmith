@@ -98,7 +98,7 @@ describe("a not-found error lists the near misses the agent finds", () => {
       'Element getByRole("button", { name: "Sign in" }) was not found after waiting 50ms. ' +
         'Nothing matches it, but on screen now this locator matches: getByText("Sign in") (1 element). ' +
         'It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with ' +
-        'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen), then tap() it. ' +
+        'await locator.scrollIntoView() (scrollIntoView({ direction: "up" }) for one above the screen), then tap() it. ' +
         LOCATOR_PICKER_HINT,
     );
   });

@@ -267,7 +267,7 @@ The message goes on to list the locators that do match the same words on screen,
   await device.getByText("Submit", { exact: true }).tap()
   ```
 - **The locator is wrong** -- the text does not match exactly, or the element uses a different role. Start with the near misses the message lists. Then pick the element in UI mode, or check a locator with the `tapsmith_test_locator` MCP tool ([Finding locators](locators.md#finding-locators)). The trace viewer's Hierarchy tab shows what was on screen when the test failed.
-- **The element is off-screen** -- taps do not scroll, unlike a Playwright click, by design so both platforms behave the same. On Android an off-screen row is not in the accessibility tree at all, so a tap reports it not found and says it may be off-screen. Scroll to it first with `scrollIntoView()` (pass `{ direction: "down" }` for a row above the screen), then tap:
+- **The element is off-screen** -- taps do not scroll, unlike a Playwright click, by design so both platforms behave the same. On Android an off-screen row is not in the accessibility tree at all, so a tap reports it not found and says it may be off-screen. Scroll to it first with `scrollIntoView()` (pass `{ direction: "up" }` for a row above the screen), then tap:
   ```typescript
   await device.getByText("Submit", { exact: true }).scrollIntoView()
   await device.getByText("Submit", { exact: true }).tap()
@@ -276,7 +276,7 @@ The message goes on to list the locators that do match the same words on screen,
 ### Element is off-screen
 
 ```
-Element getByText("Item 1", { exact: true }) is off-screen: it was found, but no part of it was on screen after waiting 30000ms. tap() does not scroll, so scroll it into view first with await locator.scrollIntoView({ direction: "down" }), then tap() it.
+Element getByText("Item 1", { exact: true }) is off-screen: it was found, but no part of it was on screen after waiting 30000ms. tap() does not scroll, so scroll it into view first with await locator.scrollIntoView({ direction: "up" }), then tap() it.
 ```
 
 **What happened:** the element is in the hierarchy (iOS lists off-screen elements) but no part of it was on screen for the whole action timeout. Taps do not scroll for you, so the tap waited for it to come into view and then gave up.

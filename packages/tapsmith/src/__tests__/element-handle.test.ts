@@ -5683,7 +5683,8 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
     const swipe = vi.fn(async () => successResponse());
     const client = makeMockClient({ findElements, swipe });
 
-    await new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction: 'up' });
+    // "down" scrolls toward what is below: a finger swipe "up", every time.
+    await new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction: 'down' });
 
     expect(directions(swipe)).toEqual(['up', 'up']);
   });
@@ -5694,7 +5695,7 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
     const client = makeMockClient({ findElements, swipe });
 
     await expect(new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(
-      'scrollIntoView: getByText("Item 1", { exact: true }) was not visible after 2 scroll(s) in direction "down", then "up" ' +
+      'scrollIntoView: getByText("Item 1", { exact: true }) was not visible after 2 scroll(s) in direction "up", then "down" ' +
         '(chosen from where the element was)',
     );
   });
@@ -5705,9 +5706,9 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
     const client = makeMockClient({ findElements, swipe });
 
     await expect(new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(
-      'scrollIntoView: getByText("Item 1", { exact: true }) was not visible after 1 scroll(s) in direction "up" ' +
+      'scrollIntoView: getByText("Item 1", { exact: true }) was not visible after 1 scroll(s) in direction "down" ' +
         '(the default: the element was not on screen or in the tree, so its position was not known; ' +
-        'pass { direction: "down" } for an element above the screen)',
+        'pass { direction: "up" } for an element above the screen)',
     );
   });
 
@@ -5717,8 +5718,52 @@ describe('scrollIntoView() picks the swipe direction from where the element is (
     const client = makeMockClient({ findElements, swipe });
 
     await expect(
-      new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction: 'down', maxScrolls: 1 }),
-    ).rejects.toThrow(/was not visible after 1 scroll\(s\) in direction "down"$/);
+      new ElementHandle(client, _text('Item 1'), 5000).scrollIntoView({ direction: 'up', maxScrolls: 1 }),
+    ).rejects.toThrow(/was not visible after 1 scroll\(s\) in direction "up"$/);
+  });
+});
+
+// PILOT-929: scrollIntoView() takes `direction` the way scroll() does — the
+// way the view scrolls, so "down" reveals what is below. The swipe it sends is
+// the opposite way (the finger moves up to scroll down).
+describe('scrollIntoView() direction is the way the view scrolls, as scroll() takes it (PILOT-929)', () => {
+  const visible = makeElementInfo({ visible: true });
+  /** Absent for two probes (miss + confirmation), then visible after one swipe. */
+  function afterOneSwipe() {
+    let i = 0;
+    return vi.fn(async () => makeFindElementsResponse(i++ < 2 ? [] : [visible]));
+  }
+  const directions = (swipe: ReturnType<typeof vi.fn>) => swipe.mock.calls.map((c) => c[0]);
+
+  it.each([
+    ['down', 'up'],
+    ['up', 'down'],
+    ['right', 'left'],
+    ['left', 'right'],
+    ['UP', 'down'],
+    ['Down', 'up'],
+  ])('direction "%s" swipes the finger "%s"', async (direction, finger) => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: afterOneSwipe(), swipe });
+
+    await new ElementHandle(client, _text('Item 9'), 5000).scrollIntoView({ direction });
+
+    expect(directions(swipe)).toEqual([finger]);
+  });
+
+  it('refuses an unknown direction before reading or swiping anything', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const findElements = vi.fn(async () => makeFindElementsResponse([]));
+    const client = makeMockClient({ findElements, swipe });
+
+    await expect(
+      new ElementHandle(client, _text('Item 9'), 5000).scrollIntoView({ direction: 'sideways' }),
+    ).rejects.toThrow(
+      'scrollIntoView(): direction must be "up", "down", "left" or "right" (the way the view scrolls, so "down" ' +
+        'reveals what is below), got "sideways"',
+    );
+    expect(swipe).not.toHaveBeenCalled();
+    expect(findElements).not.toHaveBeenCalled();
   });
 });
 

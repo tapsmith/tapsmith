@@ -15,7 +15,7 @@ describe("Native: ScrollView + LazyVStack", () => {
 
   test("scrolling back down to the top row", async ({ scroll }) => {
     await scroll.row(40).scrollIntoView({ maxScrolls: 20 })
-    await scroll.row(1).scrollIntoView({ direction: "down", maxScrolls: 20 })
+    await scroll.row(1).scrollIntoView({ direction: "up", maxScrolls: 20 })
     await expect(scroll.row(1)).toBeInViewport()
   })
 })

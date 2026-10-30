@@ -34,9 +34,10 @@ describe("Scroll screen", () => {
 
 // PILOT-891: with no direction, scrollIntoView() swipes the way the element
 // lies. iOS lists the ScrollView's off-screen rows with their frames, so a row
-// the screen was scrolled past is reached without `direction: "down"`. Android
+// the screen was scrolled past is reached without `direction: "up"`. Android
 // lists only on-screen rows, so it cannot know a row is above and keeps the
-// documented "up" default there (the explicit direction is the way back).
+// documented "down" default there (the explicit direction is the way back:
+// "up", the way the view scrolls, as scroll() takes it — PILOT-929).
 //
 // Last in the file: it leaves the screen scrolled. The per-file app reset
 // restores it for the next file.
@@ -49,7 +50,7 @@ describe("Scroll screen — scrollIntoView() picks its direction (PILOT-891)", (
     await device.openDeepLink("tapsmithtest:///scroll")
     await expect(scrollScreen.firstItem).toBeVisible()
 
-    // Down to the last section: below the screen, so "up" either way.
+    // Down to the last section: below the screen, so "down" either way.
     const far = scrollScreen.item("D-5")
     await far.scrollIntoView({ maxScrolls: 15 })
     await expect(far).toBeVisible()
@@ -58,7 +59,7 @@ describe("Scroll screen — scrollIntoView() picks its direction (PILOT-891)", (
     if (platform === "ios") {
       await scrollScreen.firstItem.scrollIntoView({ maxScrolls: 15 })
     } else {
-      await scrollScreen.firstItem.scrollIntoView({ direction: "down", maxScrolls: 15 })
+      await scrollScreen.firstItem.scrollIntoView({ direction: "up", maxScrolls: 15 })
     }
     await expect(scrollScreen.firstItem).toBeVisible()
   })
