@@ -672,12 +672,10 @@ describe('generateExampleTest()', () => {
   // The first `tapsmith verify` runs this file, so it must pass on any app,
   // whatever it is built with. An element assertion can't: Flutter publishes
   // Text as a content description on Android, where getByRole('text') finds
-  // nothing (PILOT-933). The app's own run state works everywhere. It accepts
-  // 'background' too: on Android a permission prompt the app opens at launch
-  // is another app's activity, and the app reads as in the background.
-  it('asserts the config’s app is running, in front or behind a system dialog, with no element locator', () => {
+  // nothing (PILOT-933). The app's own run state works everywhere.
+  it('asserts the config’s app is in the foreground, with no element locator', () => {
     const test = generateExampleTest();
-    expect(test).toContain("expect(['foreground', 'background']).toContain(await device.getAppState())");
+    expect(test).toContain("await expect.poll(() => device.getAppState()).toBe('foreground')");
     const code = test.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
     expect(code).not.toMatch(/device\.(getBy\w+|locator)\(/);
   });
