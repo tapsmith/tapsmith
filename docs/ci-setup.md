@@ -14,7 +14,7 @@ To run Tapsmith tests in CI, you need:
 ## GitHub Actions (Android)
 
 Here is a complete GitHub Actions workflow that builds a React Native app, starts an emulator, and
-runs Tapsmith tests (for an Android Studio project, see [Native Android project](#native-android-project)). It works as pasted in a React Native CLI project and in an Expo project, whether
+runs Tapsmith tests (for an Android Studio project, see [Native Android project](#native-android-project), and for a Flutter app, [Flutter app on Android](#flutter-app-on-android)). It works as pasted in a React Native CLI project and in an Expo project, whether
 or not the project commits its `android/` directory: when `android/` is missing (Expo's
 [Continuous Native Generation](https://docs.expo.dev/workflow/continuous-native-generation/)), the
 workflow generates it with `npx expo prebuild`.
@@ -160,6 +160,43 @@ Build the debug variant rather than `assembleRelease`: Android Studio's project 
 release build unsigned, and an unsigned APK does not install. An app module not named `app` (often
 `composeApp` in a Kotlin Multiplatform project) writes to `<module>/build/outputs/apk/debug/`.
 
+### Flutter app on Android
+
+In a Flutter project, with `pubspec.yaml` and Tapsmith's `package.json` both at the root of the
+repository, install Flutter and build the debug APK with it. Replace the
+`Generate the native project (Expo)` and `Build the release APK` steps with these two, keeping
+`Set up JDK` before them, since the Gradle build that `flutter build` runs needs it:
+
+```yaml
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # A Flutter debug APK holds the app's Dart code and runs on its own.
+      # --target-platform builds only the emulator's ABI, which cuts the build time.
+      - name: Build the debug APK
+        run: flutter build apk --debug --target-platform android-x64
+```
+
+and point `apk` at it:
+
+```typescript
+// tapsmith.config.ts
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  apk: "./build/app/outputs/flutter-apk/app-debug.apk",
+  package: "com.example.my_app", // applicationId in android/app/build.gradle.kts
+  timeout: 60_000,
+});
+```
+
+Keep the emulator on a rootable image: the `android-emulator-runner` default (`target: default`) or
+`google_apis`, not `google_apis_playstore`. On a Google Play image Tapsmith cannot capture the
+traffic of `package:http` or `dio` ([Flutter apps](network.md#flutter-apps)).
+
 ### Letting Tapsmith launch the emulator
 
 Instead of starting the emulator in the workflow, you can give Tapsmith an AVD and let it launch
@@ -216,7 +253,7 @@ through `tapsmith create-avd --install-tools`.
 
 iOS tests require a macOS runner with Xcode installed. Tapsmith manages the simulator lifecycle
 automatically. Like the Android workflow, this one works as pasted in a React Native CLI project and
-in an Expo project (for an Xcode project, see [Native iOS project](#native-ios-project)), generating `ios/` with `npx expo prebuild` when the project does not commit it.
+in an Expo project (for an Xcode project, see [Native iOS project](#native-ios-project), and for a Flutter app, [Flutter app on iOS](#flutter-app-on-ios)), generating `ios/` with `npx expo prebuild` when the project does not commit it.
 Replace `MyApp` with your app's name — the name of the `.xcworkspace` in `ios/`, which is also its
 scheme and the name of the built `.app`. In an Expo project that doesn't commit `ios/`, `expo prebuild`
 derives that name from `name` in `app.json` and drops characters Xcode can't use, so run
@@ -367,6 +404,46 @@ If the project has an `.xcworkspace` (CocoaPods, or Swift packages added through
 it with `-workspace MyApp.xcworkspace`, after `pod install` when it uses CocoaPods. With XcodeGen and
 no committed `.xcodeproj`, generate it first in a step that runs `brew install xcodegen` and then
 `xcodegen generate`.
+
+### Flutter app on iOS
+
+In a Flutter project, with `pubspec.yaml` and Tapsmith's `package.json` both at the root of the
+repository, install Flutter and build the app for the simulator with it. Replace the
+`Generate the native project (Expo)`, `Install CocoaPods` and `Build the app for the simulator`
+steps with these two (`flutter build` runs `pod install` itself when the app has plugins):
+
+```yaml
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      # A Flutter debug build holds the app's Dart code and runs on its own.
+      - name: Build the app for the simulator
+        run: flutter build ios --simulator --debug
+```
+
+and point `app` at the build:
+
+```typescript
+// tapsmith.config.ts
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  platform: "ios",
+  app: "./build/ios/iphonesimulator/Runner.app",
+  package: "com.example.myApp", // PRODUCT_BUNDLE_IDENTIFIER in ios/Runner.xcodeproj
+  simulator: "iPhone 17",
+  timeout: 60_000,
+});
+```
+
+On a GitHub-hosted runner, Tapsmith captures iOS traffic through the macOS system proxy
+([iOS network capture on CI](#ios-network-capture-on-ci)), and Dart's own HTTP client, which
+`package:http` and `dio` use, does not go through it: their requests work but are not captured,
+so `device.route()` and `waitForResponse()` do not see them there. `cupertino_http` requests are
+captured ([Flutter apps](network.md#flutter-apps)).
 
 ### iOS network capture on CI
 

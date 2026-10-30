@@ -997,6 +997,14 @@ To check an existing AVD, look at `tag.id` in `~/.android/avd/<name>.avd/config.
 
 Manually installing `~/.tapsmith/ca.pem` as a *user* CA does not help on a Play-image emulator: Tapsmith cannot see a user-installed CA, so it passes HTTPS through uncaptured there either way. Use a Google APIs image instead. (On a physical Android device, where there is no `adb root` either, Tapsmith keeps decrypting HTTPS, so a user-installed CA that your test build opts into via `network_security_config.xml` does work.)
 
+### Flutter apps
+
+On an **iOS simulator** and a **rootable Android emulator** (a Google APIs or AOSP image), Tapsmith captures a Flutter app's traffic from `package:http`, `dio`, `cupertino_http` and `cronet_http`: the trace records it with decrypted bodies, and `device.route()`, `waitForRequest()` and `waitForResponse()` see it. Dart trusts Tapsmith's CA there without any change to the app.
+
+Elsewhere, Tapsmith captures through a proxy setting: on a Google Play emulator image, a physical iOS device, and the iOS simulator's [macOS system-proxy fallback](ci-setup.md#ios-network-capture-on-ci), which GitHub-hosted runners use. Dart's own HTTP client (`dart:io`'s `HttpClient`, which `package:http` and `dio` use by default) ignores the device's proxy setting, so there their requests are not captured and routes and waiters do not see them. The app keeps working. A client built on the platform's networking stack, `cupertino_http` on iOS or `cronet_http` on Android, does go through the proxy and is captured.
+
+Plain-HTTP requests from a Flutter app on Android need `android:usesCleartextTraffic="true"` in the app's manifest (or a network security config that allows the host), as for any Android app.
+
 ### When the app rejects Tapsmith's certificate
 
 Tapsmith decrypts HTTPS with its own CA, `~/.tapsmith/ca.pem`, created the first time a session selects an Android device or captures traffic. On rootable Android emulators it switches `adbd` to root and installs that CA into the device's system trust store when a test session selects the device, before the agent starts and the app launches. It does this whether or not the trace records network, since any test can start the proxy on demand. If the emulator already trusts a different Tapsmith CA, for example one from an earlier `~/.tapsmith` that is still in a quick-boot snapshot or a shared AVD, Tapsmith replaces it.

@@ -35,6 +35,17 @@ WebView.setWebContentsDebuggingEnabled(true);
 />
 ```
 
+**Flutter apps using `webview_flutter`** -- enable debugging on the platform controller, through the `webview_flutter_android` package:
+
+```dart
+import 'package:flutter/foundation.dart';
+import 'package:webview_flutter_android/webview_flutter_android.dart';
+
+if (kDebugMode) {
+  AndroidWebViewController.enableDebugging(true);
+}
+```
+
 This flag is typically enabled in debug builds and disabled in production. No other Android-side configuration is needed -- Tapsmith discovers debuggable WebViews automatically via ADB.
 
 ### iOS
@@ -57,6 +68,19 @@ webView.isInspectable = true
   source={{ uri: "https://example.com" }}
   webviewDebuggingEnabled={true}
 />
+```
+
+**Flutter apps using `webview_flutter`** -- make the controller's web view inspectable, through the `webview_flutter_wkwebview` package:
+
+```dart
+import 'package:flutter/foundation.dart';
+import 'package:webview_flutter_wkwebview/webview_flutter_wkwebview.dart';
+
+final controller = WebViewController();
+final platform = controller.platform;
+if (kDebugMode && platform is WebKitWebViewController) {
+  platform.setInspectable(true);
+}
 ```
 
 On iOS, Tapsmith connects via the simulator's WebKit Inspector protocol directly. No additional tooling or browser setup is required.

@@ -143,6 +143,35 @@ When a debug APK is also lying around, the wizard lists it first and `tapsmith i
 
 If the app mounts [`@tapsmith/react-native`](warm-reset.md), its reset hooks are on in Debug builds but switched off in Release builds unless you turn them on for your test build. In an Expo project, mount it with `enabled={__DEV__ || process.env.EXPO_PUBLIC_TAPSMITH_HOOKS === "1"}` and set `EXPO_PUBLIC_TAPSMITH_HOOKS=1` at build time. The check has to be in your app's code, because Expo inlines `EXPO_PUBLIC_*` variables only there, never inside `node_modules`. A bare React Native app does not inline that variable, so pass the hooks' `enabled` prop from a build-time flag of your own instead.
 
+### Flutter
+
+A Flutter app is tested like a native one: build it with `flutter build`, and Tapsmith drives the build through the platform's accessibility tree, as a user's screen reader would. Your Dart code needs no test package and no driver. A debug build runs on its own (it holds the Dart code, so no `flutter run` session is needed):
+
+```bash
+# Android: writes build/app/outputs/flutter-apk/app-debug.apk
+flutter build apk --debug
+
+# iOS Simulator: writes build/ios/iphonesimulator/Runner.app
+flutter build ios --simulator --debug
+```
+
+Add Tapsmith at the root of the Flutter project, beside `pubspec.yaml`, and run the setup wizard. It recognises a Flutter project and offers the builds above:
+
+```bash
+npm init -y && npm install -D tapsmith
+npx tapsmith init
+```
+
+`package` is the Android `applicationId` (in `android/app/build.gradle.kts`) or the iOS bundle identifier (`PRODUCT_BUNDLE_IDENTIFIER` in `ios/Runner.xcodeproj`). `flutter create` derives both from `--org` and the project name, but not identically: a project `my_app` gets `com.example.my_app` on Android and `com.example.myApp` on iOS, so check each.
+
+What to know before writing tests:
+
+- **Locators.** A widget's `Key` is not visible outside the Flutter engine, so `getByTestId()` cannot find it. Give a widget a test id with `Semantics(identifier: …)` instead, and prefer roles and accessible names where you can. On Android, Flutter publishes text as a content description rather than as text, which changes which locators find it. [Flutter in the locators guide](locators.md#flutter) covers both.
+- **App reset.** Tapsmith resets the app once per test file by default, so the tests in a file share the app. If you are used to `integration_test` restarting the app for every test, add `test.use({ appResetScope: "test" })` to the file. Each of those resets clears and relaunches the app, which takes a few seconds.
+- **Network capture** works for the common Dart HTTP clients on an iOS simulator and a Google APIs Android emulator, with limits elsewhere: see [Flutter apps](network.md#flutter-apps).
+- **WebViews** from `webview_flutter` need debugging turned on in the app: see [WebView testing](webview.md#prerequisites).
+- **CI.** [Flutter app on Android](ci-setup.md#flutter-app-on-android) and [Flutter app on iOS](ci-setup.md#flutter-app-on-ios) give the workflow steps.
+
 ## Quick Setup (Recommended)
 
 The interactive setup wizard detects your environment, walks you through platform configuration, and generates your config file:

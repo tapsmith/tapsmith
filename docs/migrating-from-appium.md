@@ -247,7 +247,7 @@ For CI, the [CI setup guide](ci-setup.md) has complete GitHub Actions workflows 
 
 Appium covers more platforms and device features than Tapsmith does today:
 
-- **Other platforms and drivers:** Tapsmith tests Android and iOS apps only. Appium's Espresso, Flutter, Windows, Mac and other drivers have no counterpart, and neither do Appium plugins.
+- **Other platforms and drivers:** Tapsmith tests Android and iOS apps only. Appium's Espresso, Windows, Mac and other drivers have no counterpart, and neither do Appium plugins. Flutter apps are supported, through the accessibility tree like any other app ([Flutter](getting-started.md#flutter)), but Tapsmith has no counterpart to the Appium Flutter driver's access to widget keys and the Dart VM.
 - **Other languages:** Tapsmith tests are written in TypeScript. A suite in Java, Python, Ruby or C# has to be rewritten, not just re-pointed.
 - **Remote and cloud devices:** Tapsmith drives emulators, simulators and devices attached to the machine it runs on. It has no WebDriver endpoint, so it can't run on Selenium Grid or a cloud device provider through Appium's protocol.
 - **Device simulation:** setting the GPS location, network conditions (airplane mode, Wi-Fi), biometrics, and pushing or pulling files have no Tapsmith methods.

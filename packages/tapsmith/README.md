@@ -4,7 +4,8 @@
 
 **Mobile tests that feel like web tests.**
 
-Tapsmith is a test framework for native iOS and Android apps. It takes the parts of
+Tapsmith is a test framework for iOS and Android apps, whether they are built natively or
+with React Native, Expo or Flutter. It takes the parts of
 [Playwright](https://playwright.dev) that engineers love (the locators, the auto-waiting,
 the trace viewer) and rebuilds them for real devices, emulators and simulators.
 
