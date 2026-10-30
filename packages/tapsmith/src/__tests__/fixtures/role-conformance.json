@@ -640,6 +640,68 @@
       "matches": false
     },
     {
+      "why": "a native alert",
+      "platform": "ios",
+      "type": "XCUIElementTypeAlert",
+      "reportedRole": "alert",
+      "label": "Delete file?",
+      "role": "alert",
+      "matches": true
+    },
+    {
+      "why": "a native alert by its title",
+      "platform": "ios",
+      "type": "XCUIElementTypeAlert",
+      "reportedRole": "alert",
+      "label": "Delete file?",
+      "role": "alert",
+      "name": "Delete file?",
+      "exact": true,
+      "matches": true
+    },
+    {
+      "why": "a native alert by another name",
+      "platform": "ios",
+      "type": "XCUIElementTypeAlert",
+      "reportedRole": "alert",
+      "label": "Delete file?",
+      "role": "alert",
+      "name": "Rename",
+      "matches": false
+    },
+    {
+      "why": "a native alert's title text is not an alert: the alert is",
+      "platform": "ios",
+      "type": "XCUIElementTypeStaticText",
+      "inAlert": true,
+      "reportedRole": "text",
+      "label": "Delete file?",
+      "role": "alert",
+      "name": "Delete file?",
+      "matches": false
+    },
+    {
+      "why": "nor is a generic view inside it",
+      "platform": "ios",
+      "type": "XCUIElementTypeOther",
+      "inAlert": true,
+      "label": "Vertical scroll bar, 2 pages",
+      "role": "alert",
+      "name": "scroll bar",
+      "matches": false
+    },
+    {
+      "why": "a native alert's button is still a button",
+      "platform": "ios",
+      "type": "XCUIElementTypeButton",
+      "inAlert": true,
+      "reportedRole": "button",
+      "label": "Delete",
+      "role": "button",
+      "name": "Delete",
+      "matches": true
+    },
+    {
       "why": "a stepper is a spinbutton",
       "platform": "ios",
       "type": "XCUIElementTypeStepper",

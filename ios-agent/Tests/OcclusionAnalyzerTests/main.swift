@@ -364,7 +364,8 @@ check("an interactive control over an unhittable target covers it",
 let alertOver: [Row] = screenRows(extra: [(4, .alert, "Delete?", "", R(40, 250, 322, 200))])
 check("an alert over an unhittable target covers it",
       alertOver.isEmpty ? .offScreen : analyzer(alertOver).analyze(button("Covered action", covered), isHittable: false),
-      .covered(by: "element \"Delete?\""))
+      // A native alert is named as one (PILOT-919).
+      .covered(by: "alert \"Delete?\""))
 
 // ─── Keyboard first (PILOT-622) ───
 

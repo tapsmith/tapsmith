@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { HierarchyNode } from '../trace-viewer/components/hierarchy-utils.js';
 import { getNodeRole, isLabelField } from '../trace-viewer/components/hierarchy-utils.js';
 import { generateSelectors, generateBestSelector, findBetterDescendant, hasGoodSelectors } from '../trace-viewer/components/selector-generation.js';
+import { disambiguateSelectors } from '../trace-viewer/components/selector-uniqueness.js';
 import { parseSelectorString, findMatchingNodes, hitTest, applyPositionalIndex, parsedSelectorError } from '../trace-viewer/components/selector-matching.js';
 
 function makeNode(tagName: string, attrs: Record<string, string>, children: HierarchyNode[] = []): HierarchyNode {
@@ -355,6 +356,58 @@ describe('generateBestSelector', () => {
   it('returns fallback comment when no attributes at all', () => {
     const node = makeNode('node', {});
     expect(generateBestSelector(node)).toBe('// No locator available');
+  });
+});
+
+// ─── A native iOS alert (PILOT-919) ───
+
+describe('a native iOS alert is the alert role, named by its title (PILOT-919)', () => {
+  const ios = (type: string, attrs: Record<string, string>, children: HierarchyNode[] = []) =>
+    makeNode(type, { type, identifier: '', value: '', placeholderValue: '', ...attrs }, children);
+  // The shape the agent dumps for a SwiftUI .alert("Delete file?", …).
+  function alertTree(reportsRole: boolean) {
+    const title = ios('XCUIElementTypeStaticText', { label: 'Delete file?', 'tapsmith-role': 'text' });
+    const scrollBar = ios('XCUIElementTypeOther', { label: 'Vertical scroll bar, 2 pages', value: '0%' });
+    const button = ios('XCUIElementTypeButton', { label: 'Delete', 'tapsmith-role': 'button' });
+    const alert = ios(
+      'XCUIElementTypeAlert',
+      { label: 'Delete file?', ...(reportsRole ? { 'tapsmith-role': 'alert' } : {}) },
+      [ios('XCUIElementTypeOther', { label: '' }, [title, scrollBar, button])],
+    );
+    const window = ios('XCUIElementTypeWindow', { label: '' }, [alert]);
+    return { window, alert, title, button };
+  }
+
+  it.each([true, false])('suggests getByRole("alert", { name }) for it (dump reports its role: %s)', (reportsRole) => {
+    const { window, alert } = alertTree(reportsRole);
+    expect(getNodeRole(alert)).toBe('alert');
+    const best = disambiguateSelectors([window], alert, generateSelectors(alert))[0]!;
+    expect(best.code).toBe('device.getByRole("alert", { name: "Delete file?" })');
+    expect(best.priority).toBe(1);
+  });
+
+  it('a named or unnamed alert query finds the alert alone, not the text or views inside it', () => {
+    const { window, alert } = alertTree(true);
+    for (const code of [
+      'device.getByRole("alert")',
+      'device.getByRole("alert", { name: "Delete file?" })',
+      'device.getByRole("alert", { name: "Delete file?", exact: true })',
+    ]) {
+      expect(findMatchingNodes([window], parseSelectorString(code)!), code).toEqual([alert]);
+    }
+    expect(findMatchingNodes([window], parseSelectorString('device.getByRole("alert", { name: "scroll bar" })')!)).toEqual([]);
+  });
+
+  it('its buttons are still buttons, and its title still text', () => {
+    const { window, title, button } = alertTree(true);
+    expect(findMatchingNodes([window], parseSelectorString('device.getByRole("button", { name: "Delete" })')!)).toEqual([button]);
+    expect(findMatchingNodes([window], parseSelectorString('device.getByText("Delete file?")')!)).toEqual([title]);
+  });
+
+  it('a named static text outside an alert is still an alert (an RN Text, PILOT-718)', () => {
+    const text = ios('XCUIElementTypeStaticText', { label: 'Failed to fetch posts', 'tapsmith-role': 'text' });
+    const window = ios('XCUIElementTypeWindow', { label: '' }, [text]);
+    expect(findMatchingNodes([window], parseSelectorString('device.getByRole("alert", { name: "Failed" })')!)).toEqual([text]);
   });
 });
 

@@ -54,7 +54,13 @@ describe('unknownRoleMessage()', () => {
     expect(unknownRoleMessage('textbox')).toContain('Did you mean "textfield"?');
     expect(unknownRoleMessage('img')).toContain('Did you mean "image"?');
     expect(unknownRoleMessage('searchbox')).toContain('Did you mean "searchfield"?');
-    expect(unknownRoleMessage('dialog')).not.toContain('Did you mean');
+    expect(unknownRoleMessage('row')).not.toContain('Did you mean');
+  });
+
+  it('points Playwright\'s alertdialog and dialog at alert, the role a native alert has (PILOT-919)', () => {
+    for (const role of ['alertdialog', 'dialog', 'AlertDialog']) {
+      expect(unknownRoleMessage(role), role).toMatch(new RegExp(`^Unknown role "${role}"\\. Did you mean "alert"\\? Supported: `));
+    }
   });
 
   it('points React Native\'s togglebutton at button, the role it reports (PILOT-664)', () => {

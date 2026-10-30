@@ -44,6 +44,30 @@ check(".other with the button trait is \"button\"",
 check(".other with the image trait is \"image\"",
       RoleMapping.resolveRole(for: .other, traits: imageTrait, inTabBar: false), "image")
 
+// ─── Native alert (PILOT-919) ───
+
+check("a native alert is \"alert\"", RoleMapping.resolveRole(for: .alert, traits: 0, inTabBar: false), "alert")
+check("getByRole(\"alert\") queries native alerts",
+      ((try? RoleMapping.queryTypes(for: "alert")) ?? []).contains(.alert), true)
+check("an unnamed alert query matches a native alert",
+      RoleMapping.matches(role: "alert", elementType: .alert, traits: 0, value: "",
+                          hasNameFilter: false, inTabBar: false, inAlert: false), true)
+check("an alert inside an alert is still one",
+      RoleMapping.matches(role: "alert", elementType: .alert, traits: 0, value: "",
+                          hasNameFilter: true, inTabBar: false, inAlert: true), true)
+check("a native alert's title text is not an alert",
+      RoleMapping.matches(role: "alert", elementType: .staticText, traits: 0, value: "",
+                          hasNameFilter: true, inTabBar: false, inAlert: true), false)
+check("nor is a generic view inside it",
+      RoleMapping.matches(role: "alert", elementType: .other, traits: 0, value: "",
+                          hasNameFilter: true, inTabBar: false, inAlert: true), false)
+check("a named static text outside an alert still is (an RN Text)",
+      RoleMapping.matches(role: "alert", elementType: .staticText, traits: 0, value: "",
+                          hasNameFilter: true, inTabBar: false, inAlert: false), true)
+check("a native alert's button is still a button",
+      RoleMapping.matches(role: "button", elementType: .button, traits: 0, value: "",
+                          hasNameFilter: true, inTabBar: false, inAlert: true), true)
+
 // ─── Round trip ───
 
 // Every type the reverse map names must be queryable by the role it reports,
@@ -109,9 +133,13 @@ check(".other is never reverse-mapped, even when only one role lists it",
 let linkTrait: UInt64 = 1 << 1
 
 func matches(
-    _ role: String, _ type: ElementType, traits: UInt64 = 0, value: String? = nil, named: Bool = false, inTabBar: Bool = false
+    _ role: String, _ type: ElementType, traits: UInt64 = 0, value: String? = nil, named: Bool = false,
+    inTabBar: Bool = false, inAlert: Bool = false
 ) -> Bool {
-    RoleMapping.matches(role: role, elementType: type, traits: traits, value: value, hasNameFilter: named, inTabBar: inTabBar)
+    RoleMapping.matches(
+        role: role, elementType: type, traits: traits, value: value, hasNameFilter: named, inTabBar: inTabBar,
+        inAlert: inAlert
+    )
 }
 
 // heading: the header trait, whatever the element type.
@@ -191,9 +219,10 @@ check("static text is still not a combobox, even by name", matches("combobox", .
 check("static text is still not a menu item, even by name", matches("menuitem", .staticText, named: true), false)
 check("static text still reports \"text\"",
       RoleMapping.resolveRole(for: .staticText, traits: staticTextTrait, inTabBar: false), "text")
-check("an alert query covers generic views and static text",
-      (try? RoleMapping.queryTypes(for: "alert")) ?? [], [.other, .staticText])
-check("getByRole(\"alert\") still lists generic views only", (try? RoleMapping.elementTypes(for: "alert")) ?? [], [.other])
+check("an alert query covers native alerts, generic views and static text",
+      (try? RoleMapping.queryTypes(for: "alert")) ?? [], [.alert, .other, .staticText])
+check("getByRole(\"alert\") lists native alerts and generic views (PILOT-919)",
+      (try? RoleMapping.elementTypes(for: "alert")) ?? [], [.alert, .other])
 
 // ─── React Native's other generic-view roles (PILOT-664) ───
 

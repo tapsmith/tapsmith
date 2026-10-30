@@ -6,7 +6,7 @@ import { toJsRegExp } from '../../text-regex.js';
 import { ANDROID_EDIT_TEXT_CLASSES, IOS_PLACEHOLDER_NAMED_TYPES } from '../../accessible-name.js';
 import { unescapeJsString } from '../../js-string-escape.js';
 import { idOfAttributeSelector, isCssIdentifier } from '../../css-selector.js';
-import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, IOS_STATIC_TEXT_ROLES, iosGenericViewHasRole, normalizeRole, unknownRoleMessage } from '../../roles.js';
+import { ANDROID_DUAL_PATH_ROLES, ANDROID_ROLE_CLASSES, IOS_ROLE_TYPES, IOS_STATIC_TEXT_ROLES, iosGenericViewHasRole, iosInsideNativeAlert, normalizeRole, unknownRoleMessage } from '../../roles.js';
 
 // ─── Selector Parsing ───
 
@@ -910,14 +910,19 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
   const suppressed = new Set<number>();
   const matchedAncestors: number[] = [];
 
-  function walk(node: HierarchyNode, containerLabel: string) {
+  // A role query inside a native iOS alert: only the alert itself is an
+  // alert, like the agent (PILOT-919).
+  const role = selector.type === 'role' ? normalizeRole(selector.value) : '';
+
+  function walk(node: HierarchyNode, containerLabel: string, inAlert: boolean) {
     // What isn't the app's never matches (PILOT-756, non-app-nodes.ts).
     if (isNonAppSubtree(node)) return;
     const isIos = !node.attributes.has('class') && !isWebViewNode(node);
     const appNode = !isNonAppNode(node);
+    const type = node.attributes.get('type') ?? node.tagName;
     const matches = appNode && (iosText && isIos
       ? iosNodeMatchesText(node, selector, containerLabel)
-      : nodeMatchesSelector(node, selector));
+      : !(isIos && iosInsideNativeAlert(role, type, inAlert)) && nodeMatchesSelector(node, selector));
     let pushed = false;
     if (matches) {
       if (iosText && isIos) {
@@ -934,14 +939,15 @@ export function findMatchingNodes(roots: HierarchyNode[], selector: ParsedSelect
     }
     const label = node.attributes.get('label') ?? '';
     const childContainer = isIos && appNode && label !== '' ? label : containerLabel;
+    const childInAlert = inAlert || (isIos && type === 'XCUIElementTypeAlert');
     for (const child of node.children) {
-      walk(child, childContainer);
+      walk(child, childContainer, childInAlert);
     }
     if (pushed) matchedAncestors.pop();
   }
 
   for (const root of roots) {
-    walk(root, '');
+    walk(root, '', false);
   }
 
   const kept = suppressed.size === 0 ? raw : raw.filter((_, i) => !suppressed.has(i));

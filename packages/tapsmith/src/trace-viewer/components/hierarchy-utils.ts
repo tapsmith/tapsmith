@@ -129,6 +129,7 @@ export const ANDROID_CLASS_TO_ROLE: Record<string, string> = {
 // No XCUIElementTypeTextView: the iOS agent's getByRole("textfield") does not
 // find a multi-line text view, so the playground must not offer it (PILOT-666).
 export const IOS_TYPE_TO_ROLE: Record<string, string> = {
+  'XCUIElementTypeAlert': 'alert',
   'XCUIElementTypeButton': 'button',
   'XCUIElementTypeTextField': 'textfield',
   'XCUIElementTypeSecureTextField': 'textfield',

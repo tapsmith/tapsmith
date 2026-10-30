@@ -48,6 +48,8 @@ interface Case {
   traits?: string[]
   /** iOS: whether the element is inside a tab bar. */
   inTabBar?: boolean
+  /** iOS: whether the element is inside a native alert (an XCUIElementTypeAlert). */
+  inAlert?: boolean
   placeholder?: string
   contentDesc?: string
   /** Android: the node's text (an empty EditText reports its hint here). */
@@ -83,6 +85,7 @@ const I = {
   activity: 'XCUIElementTypeActivityIndicator',
   cell: 'XCUIElementTypeCell',
   table: 'XCUIElementTypeTable',
+  alert: 'XCUIElementTypeAlert',
 } as const;
 
 const A = {
@@ -184,6 +187,14 @@ const CASES: Case[] = [
   { why: 'an unnamed one is not found', platform: 'ios', type: I.other, label: 'Copy', role: 'menuitem', matches: false },
   { why: 'a named alert on static text (an RN Text)', platform: 'ios', type: I.text, reportedRole: 'text', label: 'Saved', role: 'alert', name: 'Saved', matches: true },
   { why: 'an unnamed one is not found', platform: 'ios', type: I.text, reportedRole: 'text', label: 'Saved', role: 'alert', matches: false },
+  // A native alert (SwiftUI .alert, UIAlertController, React Native's
+  // Alert.alert) is an alert by its type, named by its title (PILOT-919).
+  { why: 'a native alert', platform: 'ios', type: I.alert, reportedRole: 'alert', label: 'Delete file?', role: 'alert', matches: true },
+  { why: 'a native alert by its title', platform: 'ios', type: I.alert, reportedRole: 'alert', label: 'Delete file?', role: 'alert', name: 'Delete file?', exact: true, matches: true },
+  { why: 'a native alert by another name', platform: 'ios', type: I.alert, reportedRole: 'alert', label: 'Delete file?', role: 'alert', name: 'Rename', matches: false },
+  { why: 'a native alert\'s title text is not an alert: the alert is', platform: 'ios', type: I.text, inAlert: true, reportedRole: 'text', label: 'Delete file?', role: 'alert', name: 'Delete file?', matches: false },
+  { why: 'nor is a generic view inside it', platform: 'ios', type: I.other, inAlert: true, label: 'Vertical scroll bar, 2 pages', role: 'alert', name: 'scroll bar', matches: false },
+  { why: 'a native alert\'s button is still a button', platform: 'ios', type: I.button, inAlert: true, reportedRole: 'button', label: 'Delete', role: 'button', name: 'Delete', matches: true },
   { why: 'a stepper is a spinbutton', platform: 'ios', type: I.stepper, reportedRole: 'spinbutton', role: 'spinbutton', matches: true },
   { why: 'a progress indicator is a progressbar', platform: 'ios', type: I.progress, reportedRole: 'progressbar', role: 'progressbar', matches: true },
   { why: 'an activity indicator is a progressbar', platform: 'ios', type: I.activity, reportedRole: 'progressbar', role: 'progressbar', matches: true },
@@ -290,7 +301,17 @@ function nodeFor(c: Case): HierarchyNode {
     children: [],
     depth: 1,
   }));
-  return { tagName: c.platform === 'ios' ? c.type : 'node', attributes: new Map(Object.entries(attrs)), children, depth: 0 };
+  const node: HierarchyNode = { tagName: c.platform === 'ios' ? c.type : 'node', attributes: new Map(Object.entries(attrs)), children, depth: 0 };
+  if (!c.inAlert) return node;
+  // The alert the element sits in, untitled so no name query matches it.
+  const alert: HierarchyNode = {
+    tagName: I.alert,
+    attributes: new Map(Object.entries({ type: I.alert, label: '', identifier: '', value: '', placeholderValue: '', 'tapsmith-role': 'alert' })),
+    children: [node],
+    depth: 0,
+  };
+  node.depth = 1;
+  return alert;
 }
 
 function codeFor(c: Case): string {
@@ -322,7 +343,8 @@ describe('getByRole conformance (PILOT-834, PILOT-707)', () => {
     const parsed = parseSelectorString(codeFor(c));
     expect(parsed).not.toBeNull();
     const root = nodeFor(c);
-    expect(findMatchingNodes([root], parsed!).includes(root)).toBe(c.matches);
+    const element = c.inAlert ? root.children[0]! : root;
+    expect(findMatchingNodes([root], parsed!).includes(element)).toBe(c.matches);
   });
 
   it('every case says what the element\'s dump reports', () => {

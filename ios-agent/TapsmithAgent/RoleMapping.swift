@@ -52,8 +52,12 @@ enum RoleMapping {
         // RN renders these (and its checkbox and radio) as .other with no
         // distinguishing trait: `matches` looks for RN's role description in
         // the value, or takes a named query's word for it. resolveRole
-        // won't report these roles back, so toHaveRole won't match.
-        "alert": [.other],
+        // won't report these roles back for a generic view, so toHaveRole
+        // won't match one. A native alert — SwiftUI's .alert, a
+        // UIAlertController alert, RN's Alert.alert — is `.alert`, which is
+        // reported (PILOT-919); the views and text inside it are not alerts
+        // (`matches`, `inAlert`).
+        "alert": [.alert, .other],
         "combobox": [.other],
         // React Native's other description-only roles (PILOT-664): the
         // Android agent reads them from the role description; here they are
@@ -280,6 +284,9 @@ enum RoleMapping {
     /// - tab: a `.tab` element or a tab bar's item (`isTabBarItem`; `inTabBar`
     ///   is whether the element has a `.tabBar` ancestor). The bar itself is a
     ///   tablist (PILOT-514).
+    /// - alert: also a native `.alert`; and nothing inside one but another
+    ///   `.alert` (`inAlert`: the element has an `.alert` ancestor), so a
+    ///   named query finds the alert, not also its title text (PILOT-919).
     /// - every other role: its element types, or its trait.
     static func matches(
         role: String,
@@ -287,9 +294,13 @@ enum RoleMapping {
         traits: UInt64,
         value: String?,
         hasNameFilter: Bool,
-        inTabBar: Bool
+        inTabBar: Bool,
+        inAlert: Bool
     ) -> Bool {
         let canonical = normalize(role)
+        if canonical == "alert" && inAlert && elementType != .alert {
+            return false
+        }
         if canonical == "heading" {
             return traits & AccessibilityTrait.header != 0
         }
