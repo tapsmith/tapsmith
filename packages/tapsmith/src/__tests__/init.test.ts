@@ -667,11 +667,21 @@ describe('generateExampleTest()', () => {
     expect(test).toContain("import { test, expect } from 'tapsmith'");
     expect(test).toContain('test(');
     expect(test).toContain('async ({ device })');
-    expect(test).toContain('toBeVisible');
-    // Must use a real role — 'any' is not a known role and throws at runtime,
-    // which would make every scaffolded project / `tapsmith verify` fail.
-    expect(test).not.toContain("getByRole('any')");
-    expect(test).toContain("getByRole('text')");
+  });
+
+  // The first `tapsmith verify` runs this file, so it must pass on any app,
+  // whatever it is built with. An element assertion can't: Flutter publishes
+  // Text as a content description on Android, where getByRole('text') finds
+  // nothing (PILOT-933). The app's own run state works everywhere.
+  it('asserts the config’s app is in the foreground, with no element locator', () => {
+    const test = generateExampleTest();
+    expect(test).toContain("await expect.poll(() => device.getAppState()).toBe('foreground')");
+    const code = test.split('\n').filter((line) => !line.trim().startsWith('//')).join('\n');
+    expect(code).not.toMatch(/device\.(getBy\w+|locator)\(/);
+  });
+
+  it('points at where to find a locator for the first screen', () => {
+    expect(generateExampleTest()).toContain('UI mode (tapsmith test --ui)');
   });
 });
 

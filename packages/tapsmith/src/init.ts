@@ -1116,9 +1116,12 @@ export function generateExampleTest(): string {
   return `import { test, expect } from 'tapsmith'
 
 test('app launches successfully', async ({ device }) => {
-  // Smoke check: the app rendered at least one text element after launch.
-  // Replace this with assertions specific to your app's first screen.
-  await expect(device.getByRole('text').first()).toBeVisible()
+  // Smoke check: the app from your config is running in the foreground.
+  await expect.poll(() => device.getAppState()).toBe('foreground')
+
+  // Next, assert on your app's first screen. Pick an element in
+  // UI mode (tapsmith test --ui) to get a locator for it, for example:
+  // await expect(device.getByRole('button', { name: 'Sign in' })).toBeVisible()
 })
 `;
 }
