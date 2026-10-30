@@ -79,6 +79,8 @@ describe('WorkerStartupGate', () => {
     // Released, but not started yet (the workers are still being prepared).
     expect(g.waiting).toBe(false);
     expect(g.pending).toBe(true);
+    // Another run asked for meanwhile is turned away, as while it waited.
+    await expect(g.wait()).resolves.toEqual({ outcome: 'busy', waited: false });
     expect(g.cancel()).toBe(true);
     expect(g.pending).toBe(false);
     expect(g.proceed()).toBe(false);
@@ -94,6 +96,7 @@ describe('WorkerStartupGate', () => {
     await pending;
     expect(g.proceed()).toBe(true);
     expect(g.pending).toBe(false);
+    await expect(g.wait()).resolves.toEqual({ outcome: 'ready', waited: false });
     // Once it has started, Stop is the running run's business.
     expect(g.cancel()).toBe(false);
   });

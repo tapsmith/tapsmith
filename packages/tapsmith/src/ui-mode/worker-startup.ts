@@ -7,8 +7,8 @@
  * here for startup to end, and the page shows it waiting.
  *
  * One run waits at a time, as one run runs at a time: a second request while
- * one waits is turned away as busy, the same answer a request gets while a run
- * is under way.
+ * one waits (or, released, still prepares its workers) is turned away as
+ * busy, the same answer a request gets while a run is under way.
  */
 
 export type StartupWaitOutcome = 'ready' | 'busy' | 'stopped'
@@ -59,8 +59,10 @@ export class WorkerStartupGate {
    * it ends (`ready`), or when the waiting run is stopped (`stopped`).
    */
   wait(): Promise<StartupWait> {
+    // A run asked for during startup that has not started yet holds the
+    // slot, released or not: one such run at a time.
+    if (this.pending) return Promise.resolve({ outcome: 'busy', waited: false });
     if (!this._starting) return Promise.resolve({ outcome: 'ready', waited: false });
-    if (this._waiter) return Promise.resolve({ outcome: 'busy', waited: false });
     return new Promise<StartupWait>((resolve) => {
       this._waiter = (outcome) => resolve({ outcome, waited: true });
       this._onWaitingChange(true);

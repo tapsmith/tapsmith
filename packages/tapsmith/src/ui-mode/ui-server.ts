@@ -1230,8 +1230,9 @@ function wireStatus(status: TestResultEntry['status']): TestNodeStatus {
         runEndWaiters.push(waiter);
       });
     },
-    // A run waiting for the workers to start is a run in progress: MCP can see and stop it.
-    isRunning: () => isRunning || workerStartup.waiting,
+    // A run asked for during startup that has not started yet (waiting for
+    // the workers, or preparing them) is a run in progress: MCP can see and stop it.
+    isRunning: () => isRunning || workerStartup.pending,
     getResults: () => [...testResults.values()].map(classifyEntryStatus),
     getTestFiles: () => ctx.testFiles,
     resolveRequestedFiles: (files) => resolveRequested(files),
