@@ -186,6 +186,45 @@ setContent {
 }
 ```
 
+#### Flutter
+
+Flutter draws its own widgets and publishes them to each platform's accessibility tree through its semantics, so Tapsmith finds the same elements TalkBack and VoiceOver read. Two things differ from a native app.
+
+**A `Key` is not a test id.** `Key('login_button')` exists only inside the Flutter engine, and neither `getByTestId()` nor `locator({ id })` can find it. Wrap the widget in `Semantics(identifier: …)` instead: Flutter publishes the identifier as the Android resource id and the iOS `accessibilityIdentifier`, so `getByTestId()` finds it on both platforms:
+
+```dart
+Semantics(
+  identifier: 'login_button',
+  child: ElevatedButton(onPressed: _submit, child: const Text('Sign In')),
+)
+```
+
+```typescript
+await device.getByTestId("email_field").type("sam@example.com")
+await device.getByTestId("login_button").tap()
+```
+
+**Text on Android is a description.** Flutter publishes a `Text` widget's text to Android as its content description, not as text. So on Android `getByText()` does not find it, and `getText()` and `toHaveText()` read `""`. `getByDescription()` finds it on both platforms (on iOS it reads the same label `getByText()` does):
+
+```typescript
+await expect(device.getByDescription("Welcome to ShopList")).toBeVisible()
+await expect(device.getByDescription("Invalid credentials")).toBeVisible() // a SnackBar's text
+```
+
+Roles and names work on both platforms for most Material widgets, and are the first thing to reach for:
+
+| Widget | Locator that works on both platforms | Notes |
+|---|---|---|
+| `ElevatedButton`, `TextButton`, `FilledButton`, … | `getByRole("button", { name: "Sign In" })` | |
+| `TextField` / `TextFormField` with `labelText` | `getByRole("textfield", { name: "Email" })` | The label is found by `getByLabel()` on iOS and by `getByPlaceholder()` on Android, so neither works on both |
+| `CheckboxListTile` | `getByLabel("Remember me")` | A `checkbox` on Android and a `switch` on iOS, so `getByRole()` needs the role per platform. `setChecked()` and `toBeChecked()` work on both |
+| `SwitchListTile` | `getByRole("switch", { name: "Notifications" })` | |
+| `ListTile` with `onTap` | `getByRole("button", { name: /Item 1(?!\d)/ })` | Named by all of its text together (leading, title and subtitle), so match part of the name: `{ name: "Price: $3.00" }` finds the row too, and the `RegExp` keeps `"Item 1"` from also matching `"Item 10"` |
+| `BottomNavigationBar` item | `getByRole("button", { name: "Settings" })` | A button, not a `tab`, on both platforms |
+| `AlertDialog` | its buttons by role, its title with `getByDescription()` | Flutter draws the dialog itself, so it is not a native alert and `getByRole("alert")` does not find it. Its buttons tap as usual |
+
+An `AppBar` title is not a `heading` on either platform: find it with `getByDescription()`. When no role or name fits a widget, give it a `Semantics(identifier:)`.
+
 > **React Native note:** RN components that set `accessibilityRole` (e.g. `accessibilityRole="button"`) expose the corresponding iOS accessibility trait, and `getByRole` will find them. Components that don't set `accessibilityRole` (common in many RN apps) render as generic `XCUIElementTypeOther` with no role — use `getByText`, `getByPlaceholder`, or `getByDescription` instead.
 
 #### Making React Native apps testable (and accessible)
@@ -289,7 +328,7 @@ Find an element by a dedicated test identifier.
 await device.getByTestId("submit-button").tap()
 ```
 
-On Android, `getByTestId` matches React Native's `testID` prop, which becomes the element's whole resource ID; a native view's package-qualified ID (`com.myapp:id/submit`) is found with `locator({ id })` instead. A Jetpack Compose `Modifier.testTag()` is a test id only where the app turns on `testTagsAsResourceId` ([Jetpack Compose](#jetpack-compose)). On iOS, it matches the `accessibilityIdentifier`.
+On Android, `getByTestId` matches React Native's `testID` prop, which becomes the element's whole resource ID; a native view's package-qualified ID (`com.myapp:id/submit`) is found with `locator({ id })` instead. A Jetpack Compose `Modifier.testTag()` is a test id only where the app turns on `testTagsAsResourceId` ([Jetpack Compose](#jetpack-compose)). In a Flutter app it matches a `Semantics(identifier:)`, on both platforms, and never a widget's `Key` ([Flutter](#flutter)). On iOS, it matches the `accessibilityIdentifier`.
 
 ### `locator({ id })`
 
