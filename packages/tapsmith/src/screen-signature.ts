@@ -1,6 +1,6 @@
 /**
  * What a UI hierarchy dump shows on screen, as a string to compare: two dumps
- * with equal signatures show the same thing (PILOT-929).
+ * with equal signatures show the same thing.
  *
  * `scrollIntoView()` compares the screen before and after a swipe to see
  * whether the swipe moved anything. A whole dump will not do: iOS also lists
