@@ -14,12 +14,8 @@ import * as fs from 'node:fs';
 import * as fsPromises from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import * as zlib from 'node:zlib';
-import { promisify } from 'node:util';
 import { NetworkSnapshots } from './trace/network-snapshots.js';
-const gunzip = promisify(zlib.gunzip);
-const inflate = promisify(zlib.inflate);
-const brotliDecompress = promisify(zlib.brotliDecompress);
+import { decodeHttpBody, headerValue } from './http-body.js';
 import type { TapsmithConfig, Platform, UseOptions } from './config.js';
 import { pendingWaiterMark, type Device } from './device.js';
 import type { TapsmithReporter } from './reporter.js';
@@ -205,61 +201,6 @@ function resettableDevices(opts: RunOptions): Array<RunDevice & { sessionContext
 const _printedCaptureWarnings = new Set<string>();
 /** Rejected-certificate hosts already reported on the terminal this run (PILOT-712). */
 const _tlsRejectWarnings = new TlsRejectWarnings();
-
-/** Strip HTTP/1.1 chunked transfer encoding framing from a body.
- * Returns the original buffer if parsing fails. */
-function dechunkHttpBody(body: Buffer): Buffer {
-  const parts: Buffer[] = [];
-  let pos = 0;
-  while (pos < body.length) {
-    const lineEnd = body.indexOf('\r\n', pos);
-    if (lineEnd === -1) return body;
-    const sizeHex = body.subarray(pos, lineEnd).toString('ascii').split(';')[0].trim();
-    const size = parseInt(sizeHex, 16);
-    if (!Number.isFinite(size) || size < 0) return body;
-    pos = lineEnd + 2;
-    if (size === 0) break;
-    if (pos + size > body.length) return body;
-    parts.push(body.subarray(pos, pos + size));
-    pos += size;
-    if (body[pos] === 0x0d && body[pos + 1] === 0x0a) pos += 2;
-  }
-  return Buffer.concat(parts);
-}
-
-/** Case-insensitive header lookup. HTTP header names are case-insensitive
- * per RFC 7230 §3.2, and the on-device collectors have historically mixed
- * casing (`Transfer-Encoding`, `transfer-encoding`, `Transfer-encoding`). */
-function headerValue(headers: Record<string, string>, name: string): string | undefined {
-  const target = name.toLowerCase();
-  for (const k of Object.keys(headers)) {
-    if (k.toLowerCase() === target) return headers[k];
-  }
-  return undefined;
-}
-
-/** Decode a captured HTTP body: strip chunked framing per Transfer-Encoding,
- * then decompress per Content-Encoding. Device-level network interception
- * captures raw wire bytes, so we have to reverse any hop-by-hop framing
- * before display. Falls back to the raw buffer on any parse/decode failure. */
-async function decodeHttpBody(body: Buffer | undefined, headers: Record<string, string>): Promise<Buffer | undefined> {
-  if (!body || body.length === 0) return body;
-  let decoded = body;
-  const te = (headerValue(headers, 'transfer-encoding') ?? '').toLowerCase();
-  if (te.split(',').map((s) => s.trim()).includes('chunked')) {
-    decoded = dechunkHttpBody(decoded);
-  }
-  const ce = (headerValue(headers, 'content-encoding') ?? '').toLowerCase().trim();
-  if (!ce || ce === 'identity') return decoded;
-  try {
-    if (ce === 'gzip' || ce === 'x-gzip') return await gunzip(decoded);
-    if (ce === 'deflate') return await inflate(decoded);
-    if (ce === 'br') return await brotliDecompress(decoded);
-  } catch {
-    // Fall through on decompression failure
-  }
-  return decoded;
-}
 
 type RawNetworkEntries = Awaited<ReturnType<Device['_stopNetworkCapture']>>['entries'];
 type DeviceNetworkEntries = Array<{ deviceId?: string; entries: RawNetworkEntries }>;
