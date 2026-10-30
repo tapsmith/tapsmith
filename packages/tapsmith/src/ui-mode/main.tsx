@@ -1,4 +1,5 @@
 import { traceKey, parseTraceKey, TraceIdentityRegistry } from './trace-identity.js';
+import { inheritedStepBounds } from './step-bounds.js';
 import { mergeNetworkBodies } from './network-bodies.js';
 import './fonts.css';
 import { render } from 'preact';
@@ -49,8 +50,6 @@ import type { HierarchyNode, Bounds } from '../trace-viewer/components/hierarchy
 import { uiModeStyles } from './styles/ui-mode.css.js';
 import type { ContainerSummary } from '../trace-viewer/types.js';
 
-type ElementBounds = { left: number; top: number; right: number; bottom: number }
-
 // Stable empty array — selector match highlights for the surface the current
 // selector source does NOT belong to (avoids re-render churn).
 const EMPTY_BOUNDS: Bounds[] = [];
@@ -63,12 +62,6 @@ function getResolvedTheme(theme: Theme): 'light' | 'dark' {
 function applyTheme(theme: Theme): void {
   document.documentElement.setAttribute('data-theme', getResolvedTheme(theme));
   document.body?.removeAttribute('data-theme');
-}
-
-function lastBoundsFrom(actionEvents: readonly (ActionTraceEvent | AssertionTraceEvent)[]): ElementBounds | undefined {
-  for (let i = actionEvents.length - 1; i >= 0; i--) {
-    if (actionEvents[i].bounds) return actionEvents[i].bounds;
-  }
 }
 
 function buildContainerSummary(node: TestTreeNode): ContainerSummary {
@@ -1096,7 +1089,7 @@ function App() {
           // Started: set the in-flight slot, do NOT append to events/actionEvents.
           // The matching 'completed' event will land at the same actionIndex.
           if (isStarted && !isInternal && (ev.type === 'action' || ev.type === 'assertion')) {
-            const inheritedBounds = ev.bounds ?? lastBoundsFrom(data.actionEvents);
+            const inheritedBounds = inheritedStepBounds(ev, data.actionEvents.at(-1));
             // ev is narrowed to ActionTraceEvent | AssertionTraceEvent here;
             // both have these flags (assertion's are optional, hence the ??).
             const hasShotBefore = !!ev.hasScreenshotBefore;
@@ -1137,11 +1130,11 @@ function App() {
           }
 
           // Completed (or no lifecycle = legacy completed). Append event.
-          // Inherit bounds from the most recent action when missing (e.g.
-          // find() → toBe() chain where the assertion has no bounds of its own).
+          // Borrow the previous step's box only where it is provably the same
+          // element (inheritedStepBounds) — never for a failed step (PILOT-920).
           let eventToStore = ev;
           if ((ev.type === 'assertion' || ev.type === 'action') && !ev.bounds) {
-            const inherited = lastBoundsFrom(data.actionEvents);
+            const inherited = inheritedStepBounds(ev, data.actionEvents.at(-1));
             if (inherited) eventToStore = { ...ev, bounds: inherited };
           }
           const events = isInternal ? data.events : [...data.events, eventToStore];
