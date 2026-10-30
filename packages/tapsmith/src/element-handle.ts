@@ -25,6 +25,7 @@ import {
 } from './selectors.js';
 import { iosUnnamedRoleMissHint, unknownRoleMessage, type Role } from './roles.js';
 import type { SwipeDirection } from './input-names.js';
+import { onScreenSignature } from './screen-signature.js';
 import type { Platform } from './config.js';
 import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
@@ -79,6 +80,16 @@ const SCROLL_SETTLE_MS = 500;
  *  element — e.g. under a pinned app bar (PILOT-283). Bounded so screens with
  *  continuous animation can't stall a genuine scroll for long. */
 const SCROLL_FIRST_SWIPE_IDLE_TIMEOUT_MS = 1500;
+/** Deadline for one screen read (a hierarchy dump) that scrollIntoView() takes
+ *  around each swipe to see whether it moved anything (PILOT-929). A read that
+ *  misses it just leaves that swipe unjudged. */
+const SCROLL_SCREEN_READ_DEADLINE_MS = 5000;
+/** Idle wait before re-reading a screen that a swipe seems not to have
+ *  changed, so a tree that lags the swipe is not taken for the end of the
+ *  content (PILOT-929). On both platforms this wait is the only catch-up: the
+ *  Android agent sets uiautomator's idle timeout to 0, so its hierarchy dump
+ *  does not wait for idle. Bounded for a screen that never goes idle. */
+const SCROLL_END_CONFIRM_IDLE_MS = 1000;
 /** Cap for the best-effort screenshot/hierarchy capture taken when an action's
  *  element resolution has *already* failed. Tighter than the normal 5s
  *  TRACE_CAPTURE_TIMEOUT_MS so a slow/unresponsive device can't add seconds of
@@ -708,24 +719,52 @@ function isOffScreen(el: ElementInfo): boolean {
 }
 
 /**
- * The swipe that moves `el` toward the screen, judged from its frame
+ * The way to scroll to bring `el` toward the screen, judged from its frame
  * (PILOT-891), for a `scrollIntoView()` given no direction. Directions are the
- * way the finger moves, as `scrollIntoView({ direction })` takes them: an
- * element above the screen needs `"down"`, one to its left `"right"`.
+ * way the view scrolls, as `scroll()` and `scrollIntoView({ direction })` take
+ * them (PILOT-929): an element above the screen needs `"up"`, one to its left
+ * `"left"`.
  *
  * Below the screen and to its right look alike without the screen's size,
- * which the SDK does not know, so any other off-screen frame gets `"up"`
+ * which the SDK does not know, so any other off-screen frame gets `"down"`
  * (reveal what is below), the documented default. An element with no usable
  * frame — not in the tree (Android lists on-screen nodes only), without
  * bounds, or zero-size (a row Android clipped out of view) — has no known
  * position: `undefined`.
  */
-function swipeToward(el: ElementInfo | undefined): SwipeDirection | undefined {
+function scrollToward(el: ElementInfo | undefined): SwipeDirection | undefined {
   if (!el || !isOffScreen(el)) return undefined;
   const b = el.bounds!;
-  if (b.bottom <= 0) return 'down';
-  if (b.right <= 0) return 'right';
-  return 'up';
+  if (b.bottom <= 0) return 'up';
+  if (b.right <= 0) return 'left';
+  return 'down';
+}
+
+/**
+ * The opposite of each direction. It is also the finger swipe that scrolls
+ * the view in a direction (PILOT-929): the finger moves the opposite way, so
+ * scrolling `"down"` (revealing what is below) is a swipe `"up"`.
+ */
+const OPPOSITE_DIRECTION: Record<SwipeDirection, SwipeDirection> = {
+  up: 'down',
+  down: 'up',
+  left: 'right',
+  right: 'left',
+};
+
+/**
+ * `scrollIntoView()`'s `direction`, lowercased, or an error naming the valid
+ * ones. It is mapped to a finger swipe, so unlike the names passed straight
+ * through to an agent, an unknown one cannot be left for the device to refuse.
+ */
+function scrollDirectionOption(direction: string | undefined): SwipeDirection | undefined {
+  if (direction === undefined) return undefined;
+  const d = typeof direction === 'string' ? direction.toLowerCase() : direction;
+  if (typeof d === 'string' && Object.hasOwn(OPPOSITE_DIRECTION, d)) return d as SwipeDirection;
+  throw new Error(
+    'scrollIntoView(): direction must be "up", "down", "left" or "right" (the way the view scrolls, so "down" ' +
+      `reveals what is below), got ${JSON.stringify(direction)}`,
+  );
 }
 
 /**
@@ -741,7 +780,7 @@ function scrollFirstAdvice(action: TapFamilyAction, how: string): string {
 /** The not-found hint: the element may be off-screen in a scrollable list (Android never lists such rows). */
 function offScreenHint(action: TapFamilyAction): string {
   return 'It may be off-screen in a scrollable list: ' +
-    scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen)');
+    scrollFirstAdvice(action, 'await locator.scrollIntoView() (scrollIntoView({ direction: "up" }) for one above the screen)');
 }
 
 /**
@@ -783,7 +822,7 @@ function offScreenError(desc: string, timeoutMs: number, action: TapFamilyAction
   // Above or left of the screen is certain from the frame; below and right of
   // it look alike without the screen's width, so that advice covers both.
   const how = bounds && bounds.bottom <= 0
-    ? 'await locator.scrollIntoView({ direction: "down" })'
+    ? 'await locator.scrollIntoView({ direction: "up" })'
     : bounds && bounds.right <= 0
       ? 'scroll("left") on the horizontal list that holds it'
       : 'await locator.scrollIntoView() (or scroll("right") on the horizontal list that holds it, if it is off to the side)';
@@ -2795,7 +2834,9 @@ export class ElementHandle {
 
   /**
    * Scroll inside this element in `direction`: the way the view scrolls, so
-   * `"down"` reveals what is below (the opposite of `device.swipe()`).
+   * `"down"` reveals what is below. `scrollIntoView({ direction })` takes it
+   * the same way; `device.swipe()` takes the way the finger moves, the
+   * opposite.
    *
    * @param options.distance - Fraction of the element to scroll across.
    * @param options.timeout - Maximum time in milliseconds for the whole call,
@@ -3571,16 +3612,18 @@ export class ElementHandle {
    *
    * Repeatedly swipes, checking visibility between each attempt. Useful for
    * reaching elements that are off-screen in a scrollable container (e.g. a
-   * long list of navigation cards).
+   * long list of navigation cards). Throws after `maxScrolls` swipes, or as
+   * soon as a swipe changes nothing on screen: the content reached its end,
+   * or the swipe missed the list.
    *
-   * Without a `direction`, each swipe goes the way the element lies, when the
+   * Without a `direction`, it scrolls the way the element lies, when the
    * device reports where it is (iOS lists off-screen elements with their
-   * frames): `"down"` for one above the screen, `"right"` for one to its left,
-   * `"up"` otherwise. While its position is unknown (Android lists only
+   * frames): `"up"` for one above the screen, `"left"` for one to its left,
+   * `"down"` otherwise. While its position is unknown (Android lists only
    * on-screen elements), it keeps the last direction used, starting with
-   * `"up"`, which reveals what is below.
+   * `"down"`, which reveals what is below.
    *
-   * @param options.direction - Swipe direction, the way the finger moves: `"up"` (scroll down), `"down"` (scroll up), `"left"`, `"right"`. Default: chosen from the element's position, else `"up"`.
+   * @param options.direction - The way the view scrolls, as {@link scroll} takes it: `"down"` reveals what is below, `"up"` what is above, `"left"` and `"right"` likewise (the finger swipes the opposite way). Default: chosen from the element's position, else `"down"`.
    * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`.
    * @param options.speed - Swipe speed in pixels/second. Default `2000`.
    */
@@ -3590,7 +3633,7 @@ export class ElementHandle {
     speed?: number;
   }): Promise<void> {
     checkOptions('scrollIntoView()', options, ['direction', 'maxScrolls', 'speed']);
-    const explicitDirection = options?.direction;
+    const explicitDirection = scrollDirectionOption(options?.direction);
     const maxScrolls = options?.maxScrolls ?? 5;
     const speed = options?.speed ?? 2000;
 
@@ -3644,6 +3687,22 @@ export class ElementHandle {
       }
     };
 
+    // What is on screen, as the device describes it, to tell whether a swipe
+    // moved anything (PILOT-929): a swipe that leaves it unchanged reached the
+    // end of the content, or missed the list. Off-screen elements are left
+    // out (see onScreenSignature). `undefined` when it cannot be read, which
+    // leaves the swipe unjudged rather than failing the scroll; a user stop
+    // propagates (PILOT-222).
+    const readScreen = async (): Promise<string | undefined> => {
+      try {
+        const res = await this._client.getUiHierarchy(SCROLL_SCREEN_READ_DEADLINE_MS);
+        return res.errorMessage || !res.hierarchyXml ? undefined : onScreenSignature(res.hierarchyXml);
+      } catch (err) {
+        if (isAbortError(err)) throw err;
+        return undefined;
+      }
+    };
+
     try {
       let swipes = 0;
       // Unreliable ticks perform no swipe, so they must not consume the
@@ -3657,12 +3716,17 @@ export class ElementHandle {
       // redundant multi-second delays.
       let confirmedFirstMiss = false;
       // With no explicit direction (PILOT-891): the direction of the last
-      // swipe, kept while the element's position is unknown; the directions
+      // scroll, kept while the element's position is unknown; the directions
       // used, in order, for the failure message; and whether any of them came
-      // from the element's frame rather than the default.
-      let direction: string = explicitDirection ?? 'up';
+      // from the element's frame rather than the default. Directions are the
+      // way the view scrolls (PILOT-929); the swipe goes the opposite way.
+      let direction: SwipeDirection = explicitDirection ?? 'down';
       const directionsUsed: string[] = [];
       let positioned = false;
+      // The screen as read just before the last swipe (PILOT-929), and
+      // whether a swipe has since been seen to change nothing.
+      let screenBeforeSwipe: string | undefined;
+      let reachedEnd = false;
       for (;;) {
         let result = await probe();
 
@@ -3784,18 +3848,37 @@ export class ElementHandle {
           await sleep(SCROLL_SETTLE_MS, this._client._getAbortSignal?.());
           continue;
         }
+        // Affirmative miss. Read the screen: unchanged since before the last
+        // swipe means that swipe moved nothing, so more of them will not
+        // either (PILOT-929). Read only here, on a miss, so a scroll that
+        // finds its element pays for no read after the last swipe.
+        let screen = await readScreen();
+        if (swipes > 0 && screen !== undefined && screen === screenBeforeSwipe) {
+          // Confirm once: let a tree that lags the swipe catch up first.
+          try {
+            await this._client.waitForIdle(SCROLL_END_CONFIRM_IDLE_MS);
+          } catch (err) {
+            if (isAbortError(err)) throw err;
+          }
+          screen = await readScreen();
+          if (screen !== undefined && screen === screenBeforeSwipe) {
+            reachedEnd = true;
+            break;
+          }
+        }
         // Affirmative miss with the swipe budget spent — give up.
         if (swipes >= maxScrolls) break;
+        screenBeforeSwipe = screen;
         if (explicitDirection === undefined) {
           // Re-judged before every swipe, so an overshoot is scrolled back.
-          const toward = swipeToward(result.el);
+          const toward = scrollToward(result.el);
           if (toward) {
             direction = toward;
             positioned = true;
           }
         }
         if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
-        const swipeRes = await this._client.swipe(direction, { speed, distance: 0.6 });
+        const swipeRes = await this._client.swipe(OPPOSITE_DIRECTION[direction], { speed, distance: 0.6 });
         if (!swipeRes.success) {
           throw new Error(swipeRes.errorMessage || 'Swipe failed during scrollIntoView');
         }
@@ -3810,7 +3893,17 @@ export class ElementHandle {
         how += positioned
           ? ' (chosen from where the element was)'
           : ' (the default: the element was not on screen or in the tree, so its position was not known; ' +
-            'pass { direction: "down" } for an element above the screen)';
+            'pass { direction: "up" } for an element above the screen)';
+      } else if (reachedEnd && explicitDirection !== undefined) {
+        how += ` (pass { direction: "${OPPOSITE_DIRECTION[explicitDirection]}" } to scroll the other way)`;
+      }
+      if (reachedEnd) {
+        throw new Error(
+          `scrollIntoView: reached the end of the scrollable content without finding ${this._describe()} on screen: ` +
+            `the screen stopped changing after ${swipes} scroll(s) ${how}. ` +
+            'If the content can scroll further, the swipe, which crosses the middle of the screen, did not move it: ' +
+            'scroll() the list that holds the element.',
+        );
       }
       throw new Error(`scrollIntoView: ${this._describe()} was not visible after ${swipes} scroll(s) ${how}`);
     } catch (err) {

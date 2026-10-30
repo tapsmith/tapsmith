@@ -184,7 +184,7 @@ describe("List screen — all() returns live locators", () => {
 // apply — not against the raw selector's first match.
 //
 // Last in the file on purpose: it leaves the list scrolled, and scrolling back
-// with `scrollIntoView({ direction: "down" })` is not reliable here (a
+// with `scrollIntoView({ direction: "up" })` is not reliable here (a
 // screen-wide "down" swipe at the default distance starts above this FlatList,
 // on the item-count text — PILOT-348). The per-file app reset restores the
 // screen for the next file.
@@ -259,7 +259,7 @@ describe("List screen — tap() on a row scrolled off-screen (PILOT-716)", () =>
     expect(error).toBeInstanceOf(Error)
     expect((error as Error).message).toMatch(
       platform === "ios"
-        ? /is off-screen: it was found, but no part of it was on screen after waiting \d+ms\. tap\(\) does not scroll, so scroll it into view first with await locator\.scrollIntoView\(\{ direction: "down" \}\), then tap\(\) it\./
+        ? /is off-screen: it was found, but no part of it was on screen after waiting \d+ms\. tap\(\) does not scroll, so scroll it into view first with await locator\.scrollIntoView\(\{ direction: "up" \}\), then tap\(\) it\./
         : /was not found after waiting \d+ms\. It may be off-screen in a scrollable list: tap\(\) does not scroll, so scroll it into view first with await locator\.scrollIntoView\(\)/,
     )
     await expect(listScreen.selectedCount).toContainText("0 selected")

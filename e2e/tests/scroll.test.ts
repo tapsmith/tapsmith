@@ -34,9 +34,10 @@ describe("Scroll screen", () => {
 
 // PILOT-891: with no direction, scrollIntoView() swipes the way the element
 // lies. iOS lists the ScrollView's off-screen rows with their frames, so a row
-// the screen was scrolled past is reached without `direction: "down"`. Android
+// the screen was scrolled past is reached without `direction: "up"`. Android
 // lists only on-screen rows, so it cannot know a row is above and keeps the
-// documented "up" default there (the explicit direction is the way back).
+// documented "down" default there (the explicit direction is the way back:
+// "up", the way the view scrolls, as scroll() takes it — PILOT-929).
 //
 // Last in the file: it leaves the screen scrolled. The per-file app reset
 // restores it for the next file.
@@ -49,7 +50,7 @@ describe("Scroll screen — scrollIntoView() picks its direction (PILOT-891)", (
     await device.openDeepLink("tapsmithtest:///scroll")
     await expect(scrollScreen.firstItem).toBeVisible()
 
-    // Down to the last section: below the screen, so "up" either way.
+    // Down to the last section: below the screen, so "down" either way.
     const far = scrollScreen.item("D-5")
     await far.scrollIntoView({ maxScrolls: 15 })
     await expect(far).toBeVisible()
@@ -58,8 +59,33 @@ describe("Scroll screen — scrollIntoView() picks its direction (PILOT-891)", (
     if (platform === "ios") {
       await scrollScreen.firstItem.scrollIntoView({ maxScrolls: 15 })
     } else {
-      await scrollScreen.firstItem.scrollIntoView({ direction: "down", maxScrolls: 15 })
+      await scrollScreen.firstItem.scrollIntoView({ direction: "up", maxScrolls: 15 })
     }
     await expect(scrollScreen.firstItem).toBeVisible()
+  })
+
+  // PILOT-929: a swipe that changes nothing on screen means the content is at
+  // its end, so scrollIntoView() stops there instead of swiping out maxScrolls.
+  test("scrollIntoView() stops at the end of the content and says so", async ({ device, scrollScreen }) => {
+    await device.openDeepLink("tapsmithtest:///scroll")
+    await expect(scrollScreen.firstItem).toBeVisible()
+    const missing = scrollScreen.item("Z-9")
+
+    // At (or near) the top already: a swipe or two toward the top and the
+    // screen stops changing.
+    const atTop = await missing.scrollIntoView({ direction: "up", maxScrolls: 30 }).then(() => null, (e: unknown) => e)
+    expect(atTop).toBeInstanceOf(Error)
+    const topMessage = /^scrollIntoView: reached the end of the scrollable content without finding getByDescription\("Item Z-9"\) on screen: the screen stopped changing after (\d+) scroll\(s\) in direction "up" \(pass \{ direction: "down" \} to scroll the other way\)\./
+    expect((atTop as Error).message).toMatch(topMessage)
+    expect(Number(topMessage.exec((atTop as Error).message)?.[1])).toBeLessThanOrEqual(3)
+    await expect(scrollScreen.firstItem).toBeVisible()
+
+    // Down to the bottom: well short of the 30 allowed swipes.
+    const atBottom = await missing.scrollIntoView({ maxScrolls: 30 }).then(() => null, (e: unknown) => e)
+    expect(atBottom).toBeInstanceOf(Error)
+    const swipes = Number(/the screen stopped changing after (\d+) scroll\(s\) in direction "down"/.exec((atBottom as Error).message)?.[1])
+    expect(swipes).toBeGreaterThan(1)
+    expect(swipes).toBeLessThan(30)
+    await expect(scrollScreen.item("D-10")).toBeVisible()
   })
 })

@@ -94,7 +94,7 @@ describe("UIKit: table view", () => {
     // Row 1 is now unloaded, above the screen; the selection label is the
     // table's header, scrolled away with it.
     await expect(uikitTable.rowText(1)).not.toBeVisible()
-    await uikitTable.rowText(1).scrollIntoView({ direction: "down", maxScrolls: 30 })
+    await uikitTable.rowText(1).scrollIntoView({ direction: "up", maxScrolls: 30 })
     await expect(uikitTable.selection).toHaveText("Selected: Row 80")
   })
 })

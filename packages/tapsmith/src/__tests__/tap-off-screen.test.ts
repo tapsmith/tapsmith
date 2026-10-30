@@ -90,7 +90,7 @@ describe('tap() on an element found but off-screen (iOS) (PILOT-716)', () => {
   });
 
   it.each([
-    ['above the screen', above, 'await locator.scrollIntoView({ direction: "down" })'],
+    ['above the screen', above, 'await locator.scrollIntoView({ direction: "up" })'],
     ['left of the screen', leftOf, 'scroll("left") on the horizontal list that holds it'],
     ['right of the screen (below and right look alike without the screen width)', rightOf,
       'await locator.scrollIntoView() (or scroll("right") on the horizontal list that holds it, if it is off to the side)'],
@@ -286,7 +286,7 @@ describe('tap() on an element the iOS agent refuses as not hittable (clipped by 
   it('fails as not found, or off-screen, when that is what the element became during the retries', async () => {
     for (const [later, message] of [
       [[], /was not found after waiting 3000ms/],
-      [[row({ visible: false, viewportRatio: 0, bounds: above })], /is off-screen: it was found.*scrollIntoView\(\{ direction: "down" \}\)/],
+      [[row({ visible: false, viewportRatio: 0, bounds: above })], /is off-screen: it was found.*scrollIntoView\(\{ direction: "up" \}\)/],
     ] as const) {
       let reads = 0;
       const m = client(() => [row({ bounds: onScreen })]);
@@ -376,7 +376,7 @@ describe('tap() on an element never found (Android lists on-screen rows only) (P
     expect(err.message).toBe(
       'Element getByText("Item 1", { exact: true }) was not found after waiting 2000ms. ' +
         'It may be off-screen in a scrollable list: tap() does not scroll, so scroll it into view first with ' +
-        'await locator.scrollIntoView() (scrollIntoView({ direction: "down" }) for one above the screen), then tap() it. ' +
+        'await locator.scrollIntoView() (scrollIntoView({ direction: "up" }) for one above the screen), then tap() it. ' +
         LOCATOR_PICKER_HINT,
     );
   });

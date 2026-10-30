@@ -14,10 +14,10 @@
 // ─── Swipe directions ───
 
 /**
- * A swipe or scroll direction, case-insensitive. `device.swipe()` and
- * `scrollIntoView()` take the way the finger moves (`"up"` reveals what is
- * below); `locator.scroll()` takes the way the view scrolls (`"down"` reveals
- * what is below).
+ * A swipe or scroll direction, case-insensitive. `locator.scroll()` and
+ * `scrollIntoView()` take the way the view scrolls (`"down"` reveals what is
+ * below); `device.swipe()` takes the way the finger moves (`"up"` reveals what
+ * is below).
  */
 export type SwipeDirection = 'up' | 'down' | 'left' | 'right';
 
