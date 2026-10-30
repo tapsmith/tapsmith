@@ -1458,8 +1458,10 @@ const LAST_APPLICATION_UID: u32 = 19_999;
 
 /// The UIDs of the device's OS services, as inclusive ranges: every UID below
 /// [`FIRST_APPLICATION_UID`], plus the UIDs of system packages (Google Play
-/// services, the Play Store, Chrome on a Google APIs image…). The app under
-/// test and any other installed app are never among them. Best-effort: when
+/// services, the Play Store, Chrome on a Google APIs image…). An app
+/// installed as a user app, the app under test included, is never among them;
+/// a system app (Chrome serving a Custom Tab, the downloads provider) is, even
+/// when it works on an app's behalf. Best-effort: when
 /// the package list cannot be read, only the system-UID range is returned.
 pub async fn os_service_uid_ranges(serial: &str) -> Vec<(u32, u32)> {
     let listing = match shell_lenient(serial, "pm list packages -s -U").await {

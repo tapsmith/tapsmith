@@ -6280,7 +6280,6 @@ fn join_capture_warnings(warnings: &[String]) -> String {
         .join("\n")
 }
 
-/// An applied port set is meaningful only while its redirect still exists.
 /// The device ports of a capture's `adb reverse` rules, for cleanup: the
 /// main one and the OS-service one (PILOT-782).
 fn capture_reverse_ports(
@@ -6293,6 +6292,7 @@ fn capture_reverse_ports(
         .collect()
 }
 
+/// An applied port set is meaningful only while its redirect still exists.
 fn capture_port_update(
     applied: &[u16],
     requested: &[u16],
