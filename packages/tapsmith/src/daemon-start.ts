@@ -121,7 +121,7 @@ export type DaemonStartOutcome = { ok: true } | DaemonStartFailed;
  * The environment variable each daemon a session spawns is started with, set
  * to a fresh value: the daemon reports it back from `Ping`, which is how the
  * session tells the daemon it started from another one answering on the same
- * address (PILOT-914).
+ * address.
  */
 export const DAEMON_INSTANCE_ENV = 'TAPSMITH_DAEMON_INSTANCE';
 
@@ -189,7 +189,7 @@ export type DaemonPortPlan =
   | { kind: 'move'; reason: string };
 
 /**
- * Whether `tapsmith test` may start its daemon on `port` (PILOT-914).
+ * Whether `tapsmith test` may start its daemon on `port`.
  *
  * A daemon answering there belongs to another live session. So may one that
  * holds the port without answering a short probe: still starting, or slow on
@@ -257,7 +257,7 @@ export interface DaemonProbe {
  * backs off between connection attempts, so one long wait can sleep through
  * the moment the daemon comes up).
  *
- * Something answering is not enough: it must be *this* daemon (PILOT-914).
+ * Something answering is not enough: it must be *this* daemon.
  * Another daemon that took the port first answers there too, while ours
  * fails to bind it — and a session that took the answer as its own drove
  * another session's daemon and device. So whatever answers is asked its

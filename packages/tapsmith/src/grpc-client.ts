@@ -121,7 +121,7 @@ export interface PingResponse {
   agentConnected: boolean;
   /**
    * The instance id the daemon was started with (`TAPSMITH_DAEMON_INSTANCE`),
-   * empty for one started by hand (PILOT-914). Absent from a daemon that
+   * empty for one started by hand. Absent from a daemon that
    * predates the field, along with `pid`.
    */
   instanceId?: string;
