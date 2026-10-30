@@ -3682,6 +3682,11 @@ export class ElementHandle {
    * `"down"`, which reveals what is below.
    *
    * @param options.direction - The way the view scrolls, as {@link scroll} takes it: `"down"` reveals what is below, `"up"` what is above, `"left"` and `"right"` likewise (the finger swipes the opposite way). Default: chosen from the element's position, else `"down"`.
+   * After the last swipe it waits for the list to stop. If the momentum
+   * carried the element off screen, it scrolls back for it, and if an edge of
+   * the scroll container cuts it, it moves it inside, with shorter, slower
+   * swipes that count toward `maxScrolls`.
+   *
    * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`.
    * @param options.speed - Swipe speed in pixels/second. Default `2000`.
    */
