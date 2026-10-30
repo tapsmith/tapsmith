@@ -61,6 +61,16 @@ products() {
   touch "$dd/Build/Products/${XCTESTRUN}"
 }
 case "$FAKE_XCB_MODE" in
+  ok-icon)
+    # What actool and the XCTRunner template leave: the icon in the .xctest only.
+    products
+    app="$dd/Build/Products/Debug-iphonesimulator/TapsmithAgentUITests-Runner.app"
+    xctest="$app/PlugIns/TapsmithAgentUITests.xctest"
+    plutil -create xml1 "$app/Info.plist"
+    plutil -create xml1 "$xctest/Info.plist"
+    plutil -insert CFBundleIcons -json '{"CFBundlePrimaryIcon":{"CFBundleIconName":"AppIcon"}}' "$xctest/Info.plist"
+    touch "$xctest/Assets.car" "$xctest/AppIcon60x60@2x.png"
+    exit 0;;
   slow-ok)
     sleep 1
     products
@@ -294,6 +304,24 @@ describe('buildSimulatorAgent() xcodebuild output handling', () => {
     expect(message).toContain(`Full build log: ${logPath()}`);
     expect(fs.readFileSync(logPath(), 'utf8')).toContain('built nothing');
   });
+
+  it.runIf(process.platform === 'darwin')('gives the cached runner app the icon the .xctest was built with', async () => {
+    const script = path.join(process.env.FAKE_AGENT_DIR!, 'install-runner-icon.sh');
+    fs.copyFileSync(path.resolve(import.meta.dirname, '../../../../ios-agent/install-runner-icon.sh'), script);
+    onTestFinished(() => fs.rmSync(script));
+    await build('ok-icon');
+    const app = path.join(cacheDir(), 'Debug-iphonesimulator', 'TapsmithAgentUITests-Runner.app');
+    expect(fs.existsSync(path.join(app, 'Assets.car'))).toBe(true);
+    expect(fs.existsSync(path.join(app, 'AppIcon60x60@2x.png'))).toBe(true);
+    expect(fs.readFileSync(path.join(app, 'Info.plist'), 'utf8')).toContain('<string>AppIcon</string>');
+  }, 30_000);
+
+  it('keeps a build whose runner icon could not be installed', async () => {
+    const script = path.join(process.env.FAKE_AGENT_DIR!, 'install-runner-icon.sh');
+    fs.writeFileSync(script, 'exit 1\n');
+    onTestFinished(() => fs.rmSync(script));
+    expect(await build('slow-ok')).toBe(path.join(cacheDir(), XCTESTRUN));
+  }, 30_000);
 
   it('says xcodebuild could not start when it is not installed', async () => {
     process.env.PATH = path.join(root, 'empty-bin');

@@ -9,7 +9,7 @@
  * agent source, builds afresh instead of running the old agent.
  */
 
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -225,6 +225,19 @@ async function runXcodebuild(args: string[], logPath: string, timeoutMs: number 
 }
 
 /**
+ * Give the built runner app the Tapsmith icon (`ios-agent/install-runner-icon.sh`
+ * says why Xcode cannot). Cosmetic: when it fails the runner keeps Xcode's
+ * blank icon and works the same, so the build goes on.
+ */
+function installRunnerIcon(agentDir: string, productsDir: string): void {
+  const script = path.join(agentDir, 'install-runner-icon.sh');
+  if (!fs.existsSync(script)) return;
+  try {
+    execFileSync('/bin/bash', [script, productsDir], { stdio: 'ignore', timeout: 30_000 });
+  } catch { /* cosmetic */ }
+}
+
+/**
  * Build the iOS simulator agent via `xcodebuild build-for-testing` and
  * cache the products under `~/.tapsmith/ios-simulator-agent/`.
  *
@@ -278,6 +291,7 @@ export async function buildSimulatorAgent(
     if (!fs.existsSync(simDir)) {
       throw new Error(`Build succeeded but products directory not found at ${simDir}${logHint()}`);
     }
+    installRunnerIcon(agentDir, simDir);
     const cachedSimDir = path.join(CACHE_DIR, 'Debug-iphonesimulator');
     if (fs.existsSync(cachedSimDir)) {
       fs.rmSync(cachedSimDir, { recursive: true, force: true });

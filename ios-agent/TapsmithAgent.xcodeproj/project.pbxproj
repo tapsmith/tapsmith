@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A1C0FFEE0000000000000002 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1C0FFEE0000000000000001 /* Assets.xcassets */; };
 		00939514784AEE11CC64485E /* CommandHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1D4606C81DC5E17A14939D8D /* CommandHandler.swift */; };
 		09E2E27C7BCBF01AE2648172 /* SnapshotElementFinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95F1D55A943C25C2F98CC102 /* SnapshotElementFinder.swift */; };
 		0E010C836E22158D44530C5D /* SystemDialogPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FBB72A2A362837309906E13 /* SystemDialogPolicy.swift */; };
@@ -41,6 +42,7 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		A1C0FFEE0000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		03BBAA69CD44B39C3AD6DA0F /* TouchSynthesizer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TouchSynthesizer.m; sourceTree = "<group>"; };
 		09C5E3AFD1299FFFF4B31AB6 /* HierarchyDumper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HierarchyDumper.swift; sourceTree = "<group>"; };
 		120AEFF331CC195D7A1592FC /* ElementFinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElementFinder.swift; sourceTree = "<group>"; };
@@ -113,6 +115,7 @@
 				C511FD447184FAEDC3739DB9 /* TouchSynthesizer.h */,
 				03BBAA69CD44B39C3AD6DA0F /* TouchSynthesizer.m */,
 				45B43D837B50F6CE9F2973A3 /* WaitEngine.swift */,
+				A1C0FFEE0000000000000001 /* Assets.xcassets */,
 				842E5124C674BF673EBF46E5 /* Models */,
 			);
 			path = TapsmithAgent;
@@ -152,6 +155,7 @@
 			buildConfigurationList = 08A30720D5458EF014F15BF4 /* Build configuration list for PBXNativeTarget "TapsmithAgentUITests" */;
 			buildPhases = (
 				E5E7FC72215BC1A645108A16 /* Sources */,
+				A1C0FFEE0000000000000003 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -193,6 +197,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A1C0FFEE0000000000000003 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A1C0FFEE0000000000000002 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		E5E7FC72215BC1A645108A16 /* Sources */ = {
@@ -306,6 +321,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -387,6 +403,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGNING_REQUIRED = NO;
 				CODE_SIGN_IDENTITY = "";
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "";
 				LD_RUNPATH_SEARCH_PATHS = (

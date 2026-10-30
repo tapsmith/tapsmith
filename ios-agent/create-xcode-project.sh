@@ -47,6 +47,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.tapsmith.agent
         INFOPLIST_FILE: ""
         GENERATE_INFOPLIST_FILE: YES
+        # Reaches the runner app via install-runner-icon.sh (simulator builds).
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         TEST_TARGET_NAME: ""
         TEST_HOST: ""
         SUPPORTS_MACCATALYST: NO
