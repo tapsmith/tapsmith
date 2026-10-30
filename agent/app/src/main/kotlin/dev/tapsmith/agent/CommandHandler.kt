@@ -369,6 +369,16 @@ class CommandHandler(
                         val startSel = parseSelectorParams(params.getJSONObject("startElement"))
                         val startEl = waitEngine.waitForElement(startSel, 10000L, elementFinder)
                         actionExecutor.swipe(elementFinder.getElement(startEl.elementId), direction, speed, distance)
+                    } else if (params.has("region")) {
+                        val r = params.getJSONObject("region")
+                        val region =
+                            HierarchyAttributes.Box(
+                                r.getInt("left"),
+                                r.getInt("top"),
+                                r.getInt("right"),
+                                r.getInt("bottom"),
+                            )
+                        actionExecutor.swipeRegion(region, direction, speed, distance)
                     } else {
                         actionExecutor.swipeScreen(direction, speed, distance)
                     }

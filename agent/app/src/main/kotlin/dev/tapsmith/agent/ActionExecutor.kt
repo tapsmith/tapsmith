@@ -628,35 +628,23 @@ class ActionExecutor(
         direction: String,
         speed: Int = 5000,
         distance: Double = 0.5,
+    ) = swipeRegion(HierarchyAttributes.Box(0, 0, device.displayWidth, device.displayHeight), direction, speed, distance)
+
+    /**
+     * Swipe inside [region] (screen pixels) in a given direction, through its
+     * centre ([SwipeGeometry]). `scrollIntoView()` sends the scroll container
+     * it picked (PILOT-934).
+     */
+    internal fun swipeRegion(
+        region: HierarchyAttributes.Box,
+        direction: String,
+        speed: Int = 5000,
+        distance: Double = 0.5,
     ) {
-        val w = device.displayWidth
-        val h = device.displayHeight
-        val cx = w / 2
-        val cy = h / 2
-        val swipeLength: Int
-
+        val p = SwipeGeometry.points(region, direction, distance)
         val steps = (speed / 100).coerceIn(5, 100)
-
-        when (direction.lowercase()) {
-            "up" -> {
-                swipeLength = (h * distance).toInt()
-                input.swipe(cx, cy + swipeLength / 2, cx, cy - swipeLength / 2, steps)
-            }
-            "down" -> {
-                swipeLength = (h * distance).toInt()
-                input.swipe(cx, cy - swipeLength / 2, cx, cy + swipeLength / 2, steps)
-            }
-            "left" -> {
-                swipeLength = (w * distance).toInt()
-                input.swipe(cx + swipeLength / 2, cy, cx - swipeLength / 2, cy, steps)
-            }
-            "right" -> {
-                swipeLength = (w * distance).toInt()
-                input.swipe(cx - swipeLength / 2, cy, cx + swipeLength / 2, cy, steps)
-            }
-            else -> throw ActionFailedException("Unknown swipe direction: $direction. Use up/down/left/right.")
-        }
-        settleAfterSwipe(vertical = direction.lowercase() == "up" || direction.lowercase() == "down")
+        input.swipe(p.fromX, p.fromY, p.toX, p.toY, steps)
+        settleAfterSwipe(vertical = p.fromX == p.toX)
     }
 
     /**

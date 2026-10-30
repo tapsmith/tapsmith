@@ -137,3 +137,9 @@ xcrun swiftc -sdk "$SDK" \
   TapsmithAgent/PinchPlan.swift \
   -o "$OUT/pinch-plan-tests"
 "$OUT/pinch-plan-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/SwipeGeometryTests/main.swift \
+  TapsmithAgent/SwipeGeometry.swift \
+  -o "$OUT/swipe-geometry-tests"
+"$OUT/swipe-geometry-tests"

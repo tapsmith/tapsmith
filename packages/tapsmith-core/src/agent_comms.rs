@@ -455,6 +455,9 @@ pub enum AgentCommand {
         speed: Option<f32>,
         distance: Option<f32>,
         timeout_ms: Option<u64>,
+        /// Screen bounds to swipe inside instead of the whole screen:
+        /// `{"left","top","right","bottom"}`.
+        region: Option<Value>,
     },
     TapCoordinates {
         x: f32,
@@ -774,10 +777,14 @@ impl AgentCommand {
                 speed,
                 distance,
                 timeout_ms,
+                region,
             } => {
                 let mut p = json!({"direction": direction});
                 if let Some(se) = start_element {
                     p["startElement"] = se.clone();
+                }
+                if let Some(r) = region {
+                    p["region"] = r.clone();
                 }
                 if let Some(s) = speed {
                     p["speed"] = json!(s);
@@ -1878,6 +1885,7 @@ mod tests {
             speed: Some(1.5),
             distance: Some(0.8),
             timeout_ms: Some(5000),
+            region: None,
         };
         let j = cmd.to_json("sw1");
         assert_eq!(j["method"], "swipe");
@@ -1896,11 +1904,31 @@ mod tests {
             speed: None,
             distance: None,
             timeout_ms: None,
+            region: None,
         };
         let j = cmd.to_json("sw2");
         assert_eq!(j["params"]["direction"], "down");
         assert!(j["params"].get("startElement").is_none());
         assert!(j["params"].get("speed").is_none());
+        assert!(j["params"].get("region").is_none());
+    }
+
+    #[test]
+    fn to_json_swipe_region() {
+        let cmd = AgentCommand::Swipe {
+            direction: "up".into(),
+            start_element: None,
+            speed: None,
+            distance: Some(0.6),
+            timeout_ms: None,
+            region: Some(json!({"left": 10, "top": 200, "right": 1070, "bottom": 1800})),
+        };
+        let j = cmd.to_json("sw3");
+        assert_eq!(j["method"], "swipe");
+        assert_eq!(
+            j["params"]["region"],
+            json!({"left": 10, "top": 200, "right": 1070, "bottom": 1800})
+        );
     }
 
     #[test]

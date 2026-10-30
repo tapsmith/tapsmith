@@ -314,6 +314,12 @@ message SwipeRequest {
   float speed = 4;
   float distance = 5;
   uint64 timeout_ms = 6;
+  // Swipe inside these screen bounds instead of across the whole screen:
+  // from the region's centre, `distance` a fraction of the region's size.
+  // Ignored when `start_element` is set. scrollIntoView() sends the scroll
+  // container it picked, so the swipe cannot land outside a dialog or on a
+  // header above the list.
+  Bounds region = 7;
 }
 
 // Coordinate-based gestures. Coordinates are logical points (Android: pixels,

@@ -2179,6 +2179,15 @@ fn text_regex_to_json(re: &proto::TextRegex) -> Value {
 }
 
 /// Convert a protobuf Selector into a JSON value for the agent protocol.
+/// A swipe region as the agents take it, or `None` for an empty one (no
+/// width or height), which leaves the swipe screen-wide.
+fn swipe_region_to_json(b: &proto::Bounds) -> Option<Value> {
+    if b.right <= b.left || b.bottom <= b.top {
+        return None;
+    }
+    Some(json!({"left": b.left, "top": b.top, "right": b.right, "bottom": b.bottom}))
+}
+
 pub(crate) fn selector_to_json(selector: &proto::Selector) -> Value {
     let mut obj = json!({});
 
@@ -2762,6 +2771,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 None
             },
             timeout_ms: opt_timeout(req.timeout_ms),
+            region: req.region.as_ref().and_then(swipe_region_to_json),
         };
 
         let result = self
@@ -6509,6 +6519,33 @@ mod tests {
     }
 
     // ─── selector_to_json ───
+
+    #[test]
+    fn swipe_region_to_json_passes_bounds() {
+        let b = proto::Bounds {
+            left: 0,
+            top: 300,
+            right: 1080,
+            bottom: 2000,
+        };
+        assert_eq!(
+            swipe_region_to_json(&b),
+            Some(json!({"left": 0, "top": 300, "right": 1080, "bottom": 2000}))
+        );
+    }
+
+    #[test]
+    fn swipe_region_to_json_drops_empty_bounds() {
+        // An unset proto message decodes as all zeros.
+        assert_eq!(swipe_region_to_json(&proto::Bounds::default()), None);
+        let flat = proto::Bounds {
+            left: 0,
+            top: 300,
+            right: 1080,
+            bottom: 300,
+        };
+        assert_eq!(swipe_region_to_json(&flat), None);
+    }
 
     #[test]
     fn selector_to_json_text() {
