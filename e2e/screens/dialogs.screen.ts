@@ -12,6 +12,12 @@ export class DialogsScreen {
   get infoAlert() { return this.device.getByRole("alert", { name: "Info" }) }
   get anyAlert() { return this.device.getByRole("alert") }
   get infoAlertOk() { return this.infoAlert.getByRole("button", { name: "OK", exact: true }) }
+  get showConfirmButton() { return this.device.getByRole("button", { name: "Show confirm dialog" }) }
+  get confirmAlert() { return this.device.getByRole("alert", { name: "Confirm" }) }
+  /** Every button in the "Confirm" alert — not the app's buttons behind it (PILOT-862). */
+  get confirmAlertButtons() { return this.confirmAlert.getByRole("button") }
+  get confirmAlertCancel() { return this.confirmAlert.getByRole("button", { name: "Cancel", exact: true }) }
+  get confirmResult() { return this.device.getByTestId("confirm-result") }
 
   // Toast
   get showToastButton() { return this.device.getByRole("button", { name: "Show toast" }) }

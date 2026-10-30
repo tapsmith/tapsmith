@@ -46,9 +46,7 @@ describe("Native: getByText matches text content", () => {
     await expect(dialogs.alert).toBeVisible()
     await expect(device.getByText("Delete file?", { exact: true })).toHaveCount(1)
     await expect(device.getByText("Delete file?", { exact: true })).toHaveRole("text")
-    // Not dialogs.alertCancel: the alert-scoped buttons are not found on
-    // main either (see dialogs.native.ts).
-    await device.getByRole("button", { name: "Cancel", exact: true }).tap()
+    await dialogs.alertCancel.tap()
     await expect(dialogs.result("Cancelled")).toBeVisible()
   })
 })

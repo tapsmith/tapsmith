@@ -23,6 +23,8 @@ describe("Native: alerts, confirmation dialogs and sheets", () => {
     await expect(dialogs.alert).toHaveCount(1)
     await expect(dialogs.alert).toHaveRole("alert")
     await expect(dialogs.alert).toHaveText("Delete file?")
+    // Its own two buttons, scoped without a name (PILOT-862).
+    await expect(dialogs.alertButtons).toHaveCount(2)
     await dialogs.alertCancel.tap()
     await expect(dialogs.anyAlert).toHaveCount(0)
   })

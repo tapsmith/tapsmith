@@ -27,6 +27,22 @@ describe("getByRole('alert') on React Native's Alert.alert", () => {
   })
 })
 
+// PILOT-862: the app's views stay in the tree behind a React Native alert,
+// some of them centred under it, so scoping by bounds alone also returned
+// the app's buttons behind it.
+describe("an unnamed query scoped to React Native's Alert.alert", () => {
+  test("finds only the alert's own buttons", async ({ device, platform, dialogsScreen }) => {
+    test.skip(platform !== "ios", "an Android AlertDialog has no alert role: find it by its text or buttons")
+    await openScreen(device, "/dialogs")
+    await expect(dialogsScreen.heading).toBeVisible()
+    await dialogsScreen.showConfirmButton.tap()
+    await expect(dialogsScreen.confirmAlert).toBeVisible()
+    await expect(dialogsScreen.confirmAlertButtons).toHaveCount(2)
+    await dialogsScreen.confirmAlertCancel.tap()
+    await expect(dialogsScreen.confirmResult).toHaveText("Result: Cancelled")
+  })
+})
+
 describe("getByRole('alert') on a React Native alert Text", () => {
   test.use({ timeout: 20_000 })
 
