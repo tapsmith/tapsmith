@@ -260,11 +260,21 @@ class TouchPlannerTest {
     }
 
     @Test
-    fun `a drag that does not move the target is not repeated`() {
+    fun `drags that do not move the target stop at the limit and the cover is reported`() {
         val row = listUnderFooter(rowTop = 2250, maxScroll = 0)
         val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 3_000), LABELLED) }
-        assertEquals(1, scroller.drags.size)
+        assertEquals(TouchPlanner.MAX_CLEAR_DRAGS, scroller.drags.size)
         assertTrue(e.message, e.message!!.contains("button \"Checkout\""))
+    }
+
+    @Test
+    fun `a dropped first drag leaves the second to clear the target`() {
+        val row = listUnderFooter(rowTop = 2250)
+        val scrolls = scroller.onDrag
+        scroller.onDrag = { d -> if (scroller.drags.size > 1) scrolls(d) }
+        val plan = planner.plan(target, row.bounds, budget(), LABELLED)
+        assertEquals(2, scroller.drags.size)
+        assertEquals(TouchPlan.Point(540, 2105), plan)
     }
 
     @Test

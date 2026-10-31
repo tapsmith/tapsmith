@@ -216,10 +216,10 @@ class TouchPlanner(
                         log("element is covered by ${verdict.by}; dragging it clear ($drag)")
                         CommandCancellation.checkpoint()
                         scroller!!.drag(drag)
-                        // Read afresh next pass: did the drag move the target?
-                        val before = bounds
-                        val moved = target.read()?.bounds
-                        if (moved == null || moved == before) clearDrags = MAX_CLEAR_DRAGS
+                        // The next pass reads the target where the drag left
+                        // it. A drag that did not move it (the list's end, or
+                        // a gesture the system dropped) still uses only one of
+                        // the attempts.
                         continue
                     }
                     val sleep =

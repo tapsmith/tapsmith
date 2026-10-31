@@ -788,12 +788,10 @@ class CommandHandler {
                     clearDrags += 1
                     NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
                     actionExecutor.scrollDrag(drag)
-                    // A drag that did not move the target will not the next time.
-                    let moved = (try? getXCUIElement(element.elementId))
-                        .flatMap { try? $0.snapshot().frame }
-                    if moved == nil || moved.map({ OcclusionAnalyzer.framesMatch($0, target.frame) }) == true {
-                        clearDrags = CoverClearance.maxDrags
-                    }
+                    // The next pass reads the target where the drag left it. A
+                    // drag that did not move it (the list's end, or a record
+                    // the runtime dropped — iOS 26 drops some) still uses only
+                    // one of the attempts.
                     continue
                 }
                 verdict = .covered(by: cover)
