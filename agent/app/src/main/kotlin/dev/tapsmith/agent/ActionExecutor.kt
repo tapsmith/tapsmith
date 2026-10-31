@@ -53,8 +53,9 @@ class ActionExecutor(
         private const val SWIPE_SETTLE_QUIET_MS = 300L
 
         /**
-         * The shortest coordinate swipe (the old 5-step floor), so even a
-         * near-zero duration sends a move between the press and the release.
+         * The shortest coordinate swipe (the old 5-step floor): a few ticks,
+         * so a near-zero duration still moves between the press and the
+         * release (unless the device stalls for the whole swipe).
          */
         private const val MIN_COORDINATE_SWIPE_MS = 25L
 
