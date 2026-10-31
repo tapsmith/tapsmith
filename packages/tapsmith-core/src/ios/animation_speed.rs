@@ -63,6 +63,17 @@ pub const SELECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// the same simulator.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long a session that wants the speed-up waits for the daemon named in
+/// a record to exit. Each Tapsmith session claims its simulator, so a record
+/// whose owner is still alive almost always belongs to the previous
+/// session's daemon, still restoring after its SIGTERM (a drain of up to
+/// 3.5 s, then a read and the writes). Without the wait, the new session
+/// would leave the setting to it, and that daemon would then undo it.
+pub const OWNER_EXIT_WAIT: Duration = Duration::from_secs(25);
+
+/// How often that wait checks the owner.
+const OWNER_EXIT_POLL: Duration = Duration::from_millis(250);
+
 // ─── Reading the simulator ───
 
 /// The two values, as the simulator reports them; `None` = unset.
@@ -393,6 +404,27 @@ async fn is_ours(h: &dyn Host, record: &OwnerRecord) -> bool {
     record.pid == h.self_pid() && record.started == h.self_started().await
 }
 
+/// Wait (bounded by [`OWNER_EXIT_WAIT`]) for another daemon that holds the
+/// record at `path` to exit: the previous session's daemon restoring the
+/// simulator after its SIGTERM. Returns at once when there is no such record.
+async fn wait_for_exiting_owner(h: &dyn Host, path: &Path) {
+    let deadline = tokio::time::Instant::now() + OWNER_EXIT_WAIT;
+    let mut logged = false;
+    while let Some(record) = read_record(path) {
+        if is_ours(h, &record).await || !h.owner_alive(&record).await {
+            return;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return;
+        }
+        if !logged {
+            info!(owner = record.pid, "Waiting for the previous Tapsmith daemon to finish restoring this simulator's animation speed");
+            logged = true;
+        }
+        tokio::time::sleep(OWNER_EXIT_POLL).await;
+    }
+}
+
 /// Bring simulator `udid` in line with what the session asked for, when the
 /// SDK selects it. `want`: `Some(true)` speed animations up, `Some(false)`
 /// undo what this daemon did, `None` (an SDK that does not say) leave this
@@ -413,6 +445,9 @@ pub async fn on_select(
     }
     if want.is_none() && ours_here.is_some() {
         return ours_here;
+    }
+    if want == Some(true) {
+        wait_for_exiting_owner(h, &path).await;
     }
 
     let Some(reading) = read_sim(h, udid, SELECT_TIMEOUT).await else {
@@ -562,7 +597,8 @@ mod tests {
         calls: Mutex<Vec<String>>,
         pid: u32,
         started: Option<String>,
-        live_owner: bool,
+        /// How many more `owner_alive` checks report the owner alive.
+        live_polls: Mutex<u32>,
         /// Writes run but report a timeout (the outcome is unknown).
         fail_writes: bool,
         /// Reads fail (simulator not answering).
@@ -579,7 +615,7 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 pid: 100,
                 started: Some("Mon Oct 27 10:00:00 2026".into()),
-                live_owner: false,
+                live_polls: Mutex::new(0),
                 fail_writes: false,
                 fail_reads: false,
                 per_call: Duration::from_millis(400),
@@ -671,7 +707,12 @@ mod tests {
         }
 
         async fn owner_alive(&self, _record: &OwnerRecord) -> bool {
-            self.live_owner
+            let mut polls = self.live_polls.lock().unwrap();
+            if *polls == 0 {
+                return false;
+            }
+            *polls = polls.saturating_sub(1);
+            true
         }
 
         fn self_pid(&self) -> u32 {
@@ -876,10 +917,49 @@ mod tests {
                 coefficient: None,
             },
         );
-        let mut h = FakeHost::new(Some(FLAG_VALUE), Some(COEFFICIENT));
-        h.live_owner = true;
+        let h = FakeHost::new(Some(FLAG_VALUE), Some(COEFFICIENT));
+        *h.live_polls.lock().unwrap() = u32::MAX;
         assert_eq!(on_select(&h, dir.path(), U, Some(false), None).await, None);
         assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
+        assert!(path.exists());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_session_with_the_option_waits_for_the_previous_daemon_to_exit() {
+        // The previous session's daemon is still restoring after its SIGTERM.
+        let dir = tempfile::tempdir().unwrap();
+        stale_record(
+            dir.path(),
+            Originals {
+                flag: None,
+                coefficient: None,
+            },
+        );
+        let h = FakeHost::new(Some(FLAG_VALUE), Some(COEFFICIENT));
+        *h.live_polls.lock().unwrap() = 8;
+        let applied = on_select(&h, dir.path(), U, Some(true), None)
+            .await
+            .expect("applied once the previous owner exited");
+        let record = read_record(&applied.record_path).unwrap();
+        assert_eq!(record.pid, 100, "now owned by this daemon");
+        assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
+        restore(&h, &applied, SHUTDOWN_TIMEOUT).await;
+        assert_eq!(h.state(), (None, None), "the true originals come back");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_owner_that_never_exits_is_left_alone_after_the_wait() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = stale_record(
+            dir.path(),
+            Originals {
+                flag: None,
+                coefficient: None,
+            },
+        );
+        let h = FakeHost::new(Some(FLAG_VALUE), Some(COEFFICIENT));
+        *h.live_polls.lock().unwrap() = u32::MAX;
+        assert_eq!(on_select(&h, dir.path(), U, Some(true), None).await, None);
         assert!(path.exists());
     }
 
