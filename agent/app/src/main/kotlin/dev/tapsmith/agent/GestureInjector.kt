@@ -285,7 +285,9 @@ class GestureInjector(
         val downTime = clock.now()
         val downOk = single(TouchAction.DOWN, downTime, x, y, sync = true)
         try {
-            hold(downTime, pressMs)
+            // From when the press was delivered: a sync DOWN can block (window
+            // animations on API 30, a busy app), and that wait is not hold time.
+            hold(clock.now(), pressMs)
         } catch (e: CommandCancelledException) {
             single(TouchAction.CANCEL, downTime, x, y, sync = true)
             throw e
@@ -368,8 +370,10 @@ class GestureInjector(
      * Events are injected without waiting for the app (as there), so a long
      * gesture keeps its speed on a busy device.
      *
-     * A pointer that travels is moved at least once before it is released, so a short path
-     * whose first tick overran its duration is still a drag, not a tap. Each
+     * A pointer is moved to its end point before it is released if its last
+     * MOVE left it elsewhere, so a tick that overran the rest of a path (a
+     * short drag, a stall on a loaded device) still ends in a drag to the end,
+     * not a tap or a jump. Each
      * tick checks whether the command was cancelled: if it was, the pointers
      * still down are cancelled (not released, which could fling or click) and
      * [CommandCancelledException] is thrown.
@@ -390,7 +394,7 @@ class GestureInjector(
             index: Int = 0,
         ) = sink.touch(TouchEvent(action, startTime, pointers(), index, sync = false))
 
-        val moved = mutableSetOf<PointerPath>()
+        val sent = mutableMapOf<PointerPath, ScreenPoint>() // where each pointer's last MOVE put it
         var elapsed = 0L
         while (pending.isNotEmpty() || down.isNotEmpty()) {
             try {
@@ -404,9 +408,9 @@ class GestureInjector(
                 if (elapsed <= done.delayMs + done.durationMs) break
                 position[done] = done.end
                 for (other in down) if (other !== done) position[other] = other.pointAt(elapsed)
-                if (done !in moved && done.end != done.start) {
+                if ((sent[done] ?: done.start) != done.end) {
                     inject(TouchAction.MOVE)
-                    moved += down
+                    for (p in down) sent[p] = position.getValue(p)
                 }
                 val index = down.indexOf(done)
                 inject(if (down.size > 1) TouchAction.POINTER_UP else TouchAction.UP, index)
@@ -415,7 +419,7 @@ class GestureInjector(
             for (p in down) position[p] = p.pointAt(elapsed)
             if (down.isNotEmpty()) {
                 inject(TouchAction.MOVE)
-                moved += down
+                for (p in down) sent[p] = position.getValue(p)
             }
             while (pending.isNotEmpty() && elapsed >= pending.first().delayMs) {
                 val p = pending.removeAt(0)

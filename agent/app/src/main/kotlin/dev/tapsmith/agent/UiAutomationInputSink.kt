@@ -166,8 +166,9 @@ class UiAutomationInputSink(
 
 /**
  * The real clock: uptime, sleeps and display frames. The sleeps are not cut
- * short when the daemon cancels a command (PILOT-605): a gesture always runs
- * to its release, as UiAutomator's do, so no pointer is left down.
+ * short when the daemon cancels a command (PILOT-605): [GestureInjector]
+ * checks between them and cancels the pointers still down, so none is left
+ * down.
  */
 class AndroidGestureClock : GestureClock {
     override fun now(): Long = SystemClock.uptimeMillis()

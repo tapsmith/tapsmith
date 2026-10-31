@@ -105,6 +105,26 @@ class GestureInjectorTest {
     }
 
     @Test
+    fun `a long press is held for its duration after a slow press is delivered`() {
+        // A sync DOWN can block (window animations on API 30, a busy app):
+        // the hold starts once the app has the press, not before it was sent.
+        val sink =
+            object : InputSink {
+                val times = mutableListOf<Long>()
+
+                override fun touch(event: TouchEvent): Boolean {
+                    if (event.action == TouchAction.DOWN) clock.nowMs += 400
+                    times += clock.nowMs
+                    return true
+                }
+
+                override fun key(event: KeyPress) = true
+            }
+        assertTrue(GestureInjector(sink, clock) { 8L }.longPress(5, 5, holdMs = 800))
+        assertTrue("held ${sink.times[1] - sink.times[0]} ms", sink.times[1] - sink.times[0] >= 800)
+    }
+
+    @Test
     fun `a refused long press release is cancelled so no pointer stays down`() {
         val sink = FakeSink(clock, refuse = { it.action == TouchAction.UP })
         assertFalse(injector(sink).longPress(5, 5, holdMs = 500))
@@ -199,6 +219,35 @@ class GestureInjectorTest {
                 .second.pointers
                 .single(),
         )
+    }
+
+    @Test
+    fun `a stall that carries a moving pointer past its end still moves it to the end before the release`() {
+        // The pointer has moved (here, held in place) but a stall skips the
+        // whole move: the last MOVE must reach the end point before the UP.
+        val sink = FakeSink(clock)
+        var sleeps = 0
+        val stalling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    sleeps++
+                    clock.nowMs += if (sleeps == 13) ms + 200 else ms
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        GestureInjector(sink, stalling) { 8L }.perform(
+            PointerPath(ScreenPoint(0, 0)).pause(100).travelTo(ScreenPoint(300, 0), 100),
+        )
+        val events = sink.touches.map { it.second }
+        assertEquals(TouchAction.UP, events.last().action)
+        val beforeUp = events[events.size - 2]
+        assertEquals(TouchAction.MOVE, beforeUp.action)
+        assertEquals(PointerState(0, 300, 0), beforeUp.pointers.single())
     }
 
     @Test
