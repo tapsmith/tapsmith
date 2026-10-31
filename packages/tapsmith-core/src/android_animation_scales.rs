@@ -43,8 +43,16 @@ pub const SCALE_KEYS: [&str; 3] = [
 /// The value written while the option is on.
 const OFF: &str = "0";
 
-/// Bound for each adb call. Restores run inside the daemon's shutdown window.
-const ADB_TIMEOUT: Duration = Duration::from_secs(3);
+/// Bound for each adb call while a device is being selected: generous, like
+/// the daemon's other setup `settings` calls, because a just-booted emulator
+/// on a starved runner can take seconds per binder call, and a timeout there
+/// silently leaves the session's animations on.
+pub const SELECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Bound for each adb call of the restore at daemon shutdown, which must fit
+/// the few seconds a caller gives a daemon between SIGTERM and SIGKILL. A
+/// restore cut short keeps its record, for the next session to finish.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 // ─── Reading the device ───
 
@@ -244,7 +252,8 @@ pub fn records_dir() -> Option<PathBuf> {
 /// What the logic needs from the outside world, injectable for tests.
 #[async_trait::async_trait]
 pub trait Host: Send + Sync {
-    async fn shell(&self, serial: &str, command: &str) -> anyhow::Result<String>;
+    async fn shell(&self, serial: &str, command: &str, timeout: Duration)
+        -> anyhow::Result<String>;
     /// Whether the daemon that wrote `record` is still running.
     async fn owner_alive(&self, record: &OwnerRecord) -> bool;
     fn self_pid(&self) -> u32;
@@ -255,8 +264,13 @@ pub struct RealHost;
 
 #[async_trait::async_trait]
 impl Host for RealHost {
-    async fn shell(&self, serial: &str, command: &str) -> anyhow::Result<String> {
-        crate::adb::shell_with_timeout(serial, command, ADB_TIMEOUT).await
+    async fn shell(
+        &self,
+        serial: &str,
+        command: &str,
+        timeout: Duration,
+    ) -> anyhow::Result<String> {
+        crate::adb::shell_with_timeout(serial, command, timeout).await
     }
 
     async fn owner_alive(&self, record: &OwnerRecord) -> bool {
@@ -296,8 +310,8 @@ async fn is_ours(h: &dyn Host, record: &OwnerRecord) -> bool {
     record.pid == h.self_pid() && record.started == h.self_started().await
 }
 
-async fn read_device(h: &dyn Host, serial: &str) -> Option<DeviceReading> {
-    match h.shell(serial, &read_command()).await {
+async fn read_device(h: &dyn Host, serial: &str, timeout: Duration) -> Option<DeviceReading> {
+    match h.shell(serial, &read_command(), timeout).await {
         Ok(out) => {
             let reading = parse_reading(&out);
             if reading.is_none() {
@@ -313,7 +327,7 @@ async fn read_device(h: &dyn Host, serial: &str) -> Option<DeviceReading> {
 }
 
 async fn turn_off(h: &dyn Host, serial: &str) -> bool {
-    match h.shell(serial, &apply_command()).await {
+    match h.shell(serial, &apply_command(), SELECT_TIMEOUT).await {
         Ok(_) => true,
         Err(e) => {
             warn!(%serial, "Could not turn the animation scales off: {e:#}");
@@ -329,11 +343,12 @@ async fn put_back(
     serial: &str,
     current: &[Option<String>; 3],
     originals: &BTreeMap<String, Option<String>>,
+    timeout: Duration,
 ) -> bool {
     let Some(command) = restore_command(current, originals) else {
         return true;
     };
-    match h.shell(serial, &command).await {
+    match h.shell(serial, &command, timeout).await {
         Ok(_) => {
             info!(%serial, "Restored the device's animation scales");
             true
@@ -366,7 +381,11 @@ pub async fn on_select(
         return ours_here;
     }
 
-    let reading = read_device(h, serial).await?;
+    let Some(reading) = read_device(h, serial, SELECT_TIMEOUT).await else {
+        // Unknown, not "nothing applied": keep what this daemon already holds,
+        // so a failed re-read never drops the restore owed at shutdown.
+        return ours_here;
+    };
     let path = record_path(dir, serial, reading.avd.as_deref());
     let existing = read_record(&path);
 
@@ -380,7 +399,15 @@ pub async fn on_select(
                     record_path: path,
                 });
             }
-            if put_back(h, serial, &reading.scales, &record.originals).await {
+            if put_back(
+                h,
+                serial,
+                &reading.scales,
+                &record.originals,
+                SELECT_TIMEOUT,
+            )
+            .await
+            {
                 remove_record(&path);
             }
             return None;
@@ -396,7 +423,15 @@ pub async fn on_select(
         Some(record) => {
             info!(%serial, owner = record.pid, "Recovering animation scales left off by an exited daemon");
             if want != Some(true) {
-                if put_back(h, serial, &reading.scales, &record.originals).await {
+                if put_back(
+                    h,
+                    serial,
+                    &reading.scales,
+                    &record.originals,
+                    SELECT_TIMEOUT,
+                )
+                .await
+                {
                     remove_record(&path);
                 }
                 return None;
@@ -448,17 +483,25 @@ pub async fn on_select(
 /// Undo `applied`: at daemon shutdown, or when the daemon moves to another
 /// device. A device that cannot be read keeps its record, for the next
 /// daemon that selects it.
-pub async fn restore(h: &dyn Host, applied: &Applied) {
+pub async fn restore(h: &dyn Host, applied: &Applied, timeout: Duration) {
     let Some(record) = read_record(&applied.record_path) else {
         return;
     };
     if !is_ours(h, &record).await {
         return;
     }
-    let Some(reading) = read_device(h, &applied.serial).await else {
+    let Some(reading) = read_device(h, &applied.serial, timeout).await else {
         return;
     };
-    if put_back(h, &applied.serial, &reading.scales, &record.originals).await {
+    if put_back(
+        h,
+        &applied.serial,
+        &reading.scales,
+        &record.originals,
+        timeout,
+    )
+    .await
+    {
         remove_record(&applied.record_path);
     }
 }
@@ -477,6 +520,8 @@ mod tests {
         started: Option<String>,
         live_owner: bool,
         fail_writes: bool,
+        /// How long each adb call takes on this device.
+        per_call: Duration,
     }
 
     impl FakeHost {
@@ -495,6 +540,7 @@ mod tests {
                 started: Some("Mon Oct 27 10:00:00 2026".into()),
                 live_owner: false,
                 fail_writes: false,
+                per_call: Duration::from_millis(300),
             }
         }
 
@@ -517,8 +563,16 @@ mod tests {
 
     #[async_trait::async_trait]
     impl Host for FakeHost {
-        async fn shell(&self, _serial: &str, command: &str) -> anyhow::Result<String> {
+        async fn shell(
+            &self,
+            _serial: &str,
+            command: &str,
+            timeout: Duration,
+        ) -> anyhow::Result<String> {
             self.commands.lock().unwrap().push(command.to_string());
+            if self.per_call > timeout {
+                anyhow::bail!("adb command timed out after {timeout:?}");
+            }
             let mut out = String::new();
             let mut settings = self.settings.lock().unwrap();
             for part in command.split("; ") {
@@ -633,7 +687,7 @@ mod tests {
         assert_eq!(record.pid, 100);
         assert_eq!(record.originals["transition_animation_scale"], None);
 
-        restore(&h, &applied).await;
+        restore(&h, &applied, SHUTDOWN_TIMEOUT).await;
         assert_eq!(h.scales(), [some("1.0"), None, some("0.5")]);
         assert!(!applied.record_path.exists());
     }
@@ -646,7 +700,7 @@ mod tests {
             .await
             .unwrap();
         h.set("window_animation_scale", "0.5");
-        restore(&h, &applied).await;
+        restore(&h, &applied, SHUTDOWN_TIMEOUT).await;
         assert_eq!(h.scales(), [some("0.5"), some("1"), some("1")]);
     }
 
@@ -733,7 +787,7 @@ mod tests {
         let record = read_record(&applied.record_path).unwrap();
         assert_eq!(record.pid, 100, "now owned by this daemon");
         assert_eq!(record.originals["window_animation_scale"], some("1"));
-        restore(&h, &applied).await;
+        restore(&h, &applied, SHUTDOWN_TIMEOUT).await;
         assert_eq!(h.scales(), [some("1"), some("1"), some("1")]);
     }
 
@@ -791,7 +845,7 @@ mod tests {
         struct Offline;
         #[async_trait::async_trait]
         impl Host for Offline {
-            async fn shell(&self, _: &str, _: &str) -> anyhow::Result<String> {
+            async fn shell(&self, _: &str, _: &str, _: Duration) -> anyhow::Result<String> {
                 anyhow::bail!("device offline")
             }
             async fn owner_alive(&self, _: &OwnerRecord) -> bool {
@@ -804,7 +858,7 @@ mod tests {
                 Some("Mon Oct 27 10:00:00 2026".into())
             }
         }
-        restore(&Offline, &applied).await;
+        restore(&Offline, &applied, SHUTDOWN_TIMEOUT).await;
         assert!(applied.record_path.exists());
     }
 
@@ -822,8 +876,31 @@ mod tests {
         assert_eq!(h.scales(), [some("0"), some("0"), some("0")]);
         assert!(applied.record_path.exists());
         h.fail_writes = false;
-        restore(&h, &applied).await;
+        restore(&h, &applied, SHUTDOWN_TIMEOUT).await;
         assert_eq!(h.scales(), [some("1"), some("1"), some("1")]);
         assert!(!applied.record_path.exists());
+    }
+
+    /// A just-booted emulator on a starved runner can take seconds per adb
+    /// call; selection must still turn its animations off.
+    #[tokio::test]
+    async fn a_slow_device_still_gets_its_animations_turned_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut h = FakeHost::new(None, [Some("1"), Some("1"), Some("1")]);
+        h.per_call = Duration::from_secs(5);
+        let applied = on_select(&h, dir.path(), "R58M", Some(true), None).await;
+        assert!(applied.is_some());
+        assert_eq!(h.scales(), [some("0"), some("0"), some("0")]);
+    }
+
+    #[tokio::test]
+    async fn a_failed_re_read_keeps_the_restore_this_daemon_owes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut h = FakeHost::new(None, [Some("1"), Some("1"), Some("1")]);
+        let first = on_select(&h, dir.path(), "R58M", Some(true), None).await;
+        assert!(first.is_some());
+        h.per_call = Duration::from_secs(60); // the re-read times out
+        let second = on_select(&h, dir.path(), "R58M", Some(true), first.as_ref()).await;
+        assert_eq!(second, first);
     }
 }

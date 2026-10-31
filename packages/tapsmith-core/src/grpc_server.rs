@@ -1524,7 +1524,12 @@ impl TapsmithServiceImpl {
         let mut applied = self.animation_scales.lock().await;
         let host = crate::android_animation_scales::RealHost;
         if let Some(previous) = applied.as_ref().filter(|a| a.serial != serial) {
-            crate::android_animation_scales::restore(&host, previous).await;
+            crate::android_animation_scales::restore(
+                &host,
+                previous,
+                crate::android_animation_scales::SELECT_TIMEOUT,
+            )
+            .await;
             *applied = None;
         }
         if self.active_platform().await != Some(Platform::Android) {
@@ -1545,6 +1550,7 @@ impl TapsmithServiceImpl {
             crate::android_animation_scales::restore(
                 &crate::android_animation_scales::RealHost,
                 &applied,
+                crate::android_animation_scales::SHUTDOWN_TIMEOUT,
             )
             .await;
         }
