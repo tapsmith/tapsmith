@@ -530,7 +530,9 @@ cold deep-link resets). It puts the simulator back the same way when the session
 not see this as the Reduce Motion setting, and the keyboard's and the Home screen's animations are
 not affected, so the gain is smaller than on Android: on a test-app screen push and back, about
 10%. An app that is already running keeps its speed until it is next launched, which Tapsmith does
-when it starts. It is not applied on physical iOS devices.
+when it starts. If the simulator's launchd environment already has a `FEATUREFLAGS_ENABLED` value
+of its own, Tapsmith leaves it alone and does not speed animations up (the daemon log says so). It
+is not applied on physical iOS devices.
 
 ### ADB Setup
 

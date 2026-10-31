@@ -26,7 +26,9 @@
 //! A `FEATUREFLAGS_ENABLED` that already holds another value is someone
 //! else's, so the setting is not applied at all rather than overwrite it.
 //! launchd forgets its environment when the simulator shuts down, so a
-//! reboot the daemon makes mid-session is followed by [`reapply`].
+//! reboot the daemon makes mid-session is followed by [`reapply`], and every
+//! later fresh agent start checks for one it did not make
+//! ([`reapply_if_lost`]).
 //!
 //! Every failure here is logged and otherwise ignored: faster animations are
 //! a convenience, and must never fail a session.
@@ -50,10 +52,14 @@ pub const COEFFICIENT: &str = "0.1";
 /// because a just-booted simulator under load can take seconds per call.
 pub const SELECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Bound for each `simctl spawn` of the restore at daemon shutdown, kept
-/// short because a caller may SIGKILL a daemon a few seconds after SIGTERM.
-/// A restore cut short keeps its record, for the next session to finish.
-pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
+/// Bound for each `simctl spawn` of the restore at daemon shutdown (a read,
+/// then the writes). Every daemon of a `--workers` run shuts down at once,
+/// alongside its agent teardown, and CoreSimulator then takes more than 3 s
+/// per spawn; an idle spawn already takes about 1 s. Nothing in Tapsmith
+/// SIGKILLs a daemon after SIGTERM, so the bound only has to stop a wedged
+/// CoreSimulator from holding the daemon forever. A restore cut short keeps
+/// its record, for the next session to finish.
+pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ─── Reading the simulator ───
 
@@ -316,46 +322,56 @@ async fn put_back(
     originals: &Originals,
     timeout: Duration,
 ) -> bool {
-    let mut done = true;
     // A flag that was set before is never Tapsmith's to remove: on_select
     // only applies over an unset flag or one already holding FLAG_VALUE.
-    if originals.flag.is_none() && is_our_flag(current.flag.as_deref()) {
-        done &= run(
-            h,
-            udid,
-            &["launchctl", "unsetenv", FLAG_ENV],
-            timeout,
-            "unset the UIKit feature flag",
-        )
-        .await;
-    }
-    if is_our_coefficient(current.coefficient.as_deref()) {
+    let flag = async {
+        if originals.flag.is_none() && is_our_flag(current.flag.as_deref()) {
+            run(
+                h,
+                udid,
+                &["launchctl", "unsetenv", FLAG_ENV],
+                timeout,
+                "unset the UIKit feature flag",
+            )
+            .await
+        } else {
+            true
+        }
+    };
+    let coefficient = async {
+        if !is_our_coefficient(current.coefficient.as_deref()) {
+            return true;
+        }
         match originals.coefficient.as_deref() {
             None => {
-                done &= run(
+                run(
                     h,
                     udid,
                     &["defaults", "delete", "-g", COEFFICIENT_KEY],
                     timeout,
                     "remove the animation coefficient",
                 )
-                .await;
+                .await
             }
             Some(v) if is_plain_number(v) => {
-                done &= run(
+                run(
                     h,
                     udid,
                     &["defaults", "write", "-g", COEFFICIENT_KEY, "-float", v],
                     timeout,
                     "restore the animation coefficient",
                 )
-                .await;
+                .await
             }
             Some(v) => {
                 warn!(%udid, original = %v, "Not restoring an animation coefficient that is not a plain number");
+                true
             }
         }
-    }
+    };
+    // Independent values, so the two writes run side by side.
+    let (flag, coefficient) = tokio::join!(flag, coefficient);
+    let done = flag && coefficient;
     if done {
         info!(%udid, "Restored the simulator's animation speed");
     }
@@ -491,6 +507,27 @@ pub async fn reapply(h: &dyn Host, applied: &Applied) {
     }
 }
 
+/// Set the flag again if the simulator lost it since `applied` was set up:
+/// a reboot that this daemon did not make (the SDK's session recovery)
+/// clears launchd's environment. One read when nothing was lost.
+pub async fn reapply_if_lost(h: &dyn Host, applied: &Applied) {
+    let lost = match h
+        .spawn(
+            &applied.udid,
+            &["launchctl", "getenv", FLAG_ENV],
+            SELECT_TIMEOUT,
+        )
+        .await
+    {
+        Ok(out) if out.success => !is_our_flag(Some(out.stdout.trim())),
+        _ => false,
+    };
+    if lost {
+        info!(udid = %applied.udid, "The simulator lost the UIKit feature flag (restarted?); setting it again");
+        reapply(h, applied).await;
+    }
+}
+
 /// Undo `applied`: at daemon shutdown, or when the daemon moves to another
 /// device. A simulator that cannot be read keeps its record, for the next
 /// daemon that selects it.
@@ -528,6 +565,8 @@ mod tests {
         fail_writes: bool,
         /// Reads fail (simulator not answering).
         fail_reads: bool,
+        /// How long each spawn takes on this simulator.
+        per_call: Duration,
     }
 
     impl FakeHost {
@@ -541,6 +580,7 @@ mod tests {
                 live_owner: false,
                 fail_writes: false,
                 fail_reads: false,
+                per_call: Duration::from_millis(400),
             };
             if let Some(f) = flag {
                 h.env.lock().unwrap().insert(FLAG_ENV.into(), f.into());
@@ -580,9 +620,12 @@ mod tests {
             &self,
             _udid: &str,
             args: &[&str],
-            _timeout: Duration,
+            timeout: Duration,
         ) -> anyhow::Result<SpawnOutput> {
             self.calls.lock().unwrap().push(args.join(" "));
+            if self.per_call > timeout {
+                anyhow::bail!("simctl spawn timed out after {timeout:?}");
+            }
             let mut env = self.env.lock().unwrap();
             let mut defaults = self.defaults.lock().unwrap();
             let is_read = matches!(args, ["launchctl", "getenv", ..] | ["defaults", "read", ..]);
@@ -878,6 +921,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_shutdown_restore_survives_a_busy_core_simulator() {
+        // Every daemon of a --workers run shuts down at once, and each spawn
+        // then takes several seconds.
+        let dir = tempfile::tempdir().unwrap();
+        let mut h = FakeHost::new(None, None);
+        let applied = on_select(&h, dir.path(), U, Some(true), None)
+            .await
+            .unwrap();
+        h.per_call = Duration::from_secs(4);
+        restore(&h, &applied, SHUTDOWN_TIMEOUT).await;
+        assert_eq!(h.state(), (None, None));
+        assert!(!applied.record_path.exists());
+    }
+
+    #[tokio::test]
     async fn reapply_sets_the_flag_again_after_a_reboot() {
         let dir = tempfile::tempdir().unwrap();
         let h = FakeHost::new(None, None);
@@ -887,6 +945,21 @@ mod tests {
         // A reboot clears launchd's environment; the default survives.
         h.env.lock().unwrap().clear();
         reapply(&h, &applied).await;
+        assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
+    }
+
+    #[tokio::test]
+    async fn a_flag_lost_to_a_reboot_is_set_again_and_a_kept_one_is_only_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let h = FakeHost::new(None, None);
+        let applied = on_select(&h, dir.path(), U, Some(true), None)
+            .await
+            .unwrap();
+        let before = h.call_count();
+        reapply_if_lost(&h, &applied).await;
+        assert_eq!(h.call_count(), before + 1, "one read, no writes");
+        h.env.lock().unwrap().clear();
+        reapply_if_lost(&h, &applied).await;
         assert_eq!(h.state(), (some(FLAG_VALUE), some(COEFFICIENT)));
     }
 
