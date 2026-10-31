@@ -80,7 +80,7 @@ const ANSWERED_DIALOGS_DEADLINE_MS = 3_000;
 
 /**
  * Take the system ANR / crash dialogs the Android agent answered on its own
- * during the test (PILOT-977) and add them to {@link SessionPreflightContext.notices},
+ * (during a test, or a lookup or tap outside one) and add them to {@link SessionPreflightContext.notices},
  * so the runner reports them like the preflight's: a trace row for each, and a
  * warning on the test for the app under test's own ANR (a finding, not noise).
  * Best effort: an agent that cannot say (an older one, a dead session) adds
@@ -103,7 +103,7 @@ export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext)
         kind: 'app-dialog',
         title,
         owner,
-        message: `The app under test (${owner ?? ctx.config.package}) stopped responding during the test and showed "${title}"; `
+        message: `The app under test (${owner ?? ctx.config.package}) stopped responding and showed "${title}"; `
           + `Tapsmith pressed ${event.button}. Check the app's logs (adb logcat) for what blocked its main thread.`,
         timestamp,
       }
@@ -111,7 +111,7 @@ export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext)
         kind: 'foreign-dialog',
         title,
         owner,
-        message: `A system dialog from another app came up during the test: ${formatBlockingDialog(title, owner)}. `
+        message: `A system dialog from another app came up: ${formatBlockingDialog(title, owner)}. `
           + `Tapsmith pressed ${event.button}.`,
         timestamp,
       });

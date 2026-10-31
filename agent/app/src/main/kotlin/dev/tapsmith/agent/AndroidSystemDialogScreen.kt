@@ -34,6 +34,10 @@ class AndroidSystemDialogScreen(
 
     override fun windowDump(): String? = device.executeShellCommand("dumpsys window windows")
 
+    @Suppress("DEPRECATION")
+    override fun appWindowShown(): Boolean =
+        instrumentation.uiAutomation.windows.any { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+
     private fun errorDialogIn(window: AccessibilityWindowInfo): SystemErrorDialog? {
         val root = window.root ?: return null
         if (root.packageName?.toString() != "android") return null

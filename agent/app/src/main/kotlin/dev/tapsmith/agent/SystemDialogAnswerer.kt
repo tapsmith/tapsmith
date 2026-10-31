@@ -33,6 +33,11 @@ interface SystemDialogScreen {
 
     /** `dumpsys window windows`, or null when it cannot be read. */
     fun windowDump(): String?
+
+    /** Whether an application window is in the accessibility window list.
+     *  While an error dialog is up the app's window is not, and it comes
+     *  back a moment after the dialog leaves. */
+    fun appWindowShown(): Boolean = true
 }
 
 /** One dialog [SystemDialogAnswerer] answered. */
@@ -90,6 +95,10 @@ class SystemDialogAnswerer(
 
         /** How long an answered dialog gets to leave the screen. */
         const val GONE_TIMEOUT_MS = 2_000L
+
+        /** How long, after answering, the app's window gets to come back
+         *  before the command goes on to look for its elements. */
+        const val APP_WINDOW_TIMEOUT_MS = 1_000L
         private const val GONE_POLL_MS = 100L
 
         /** system_server's process name in a dialog window's title. */
@@ -137,6 +146,9 @@ class SystemDialogAnswerer(
             answeredThisCommand++
             waitUntilGone(dialog)
         }
+        // A lookup made the moment the dialog leaves finds nothing: the app's
+        // window is not back in the accessibility tree yet.
+        if (answered) waitForAppWindow()
         return answered
     }
 
@@ -198,6 +210,21 @@ class SystemDialogAnswerer(
         if (events.size >= MAX_EVENTS) events.removeFirst()
         events.addLast(SystemDialogEvent(dialog.title, owner, ownedByTarget, dialog.kind, button, wallClock()))
         return true
+    }
+
+    /** Bounded poll for an application window to be readable again; best effort. */
+    private fun waitForAppWindow() {
+        val deadline = clock.now() + APP_WINDOW_TIMEOUT_MS
+        while (true) {
+            val shown =
+                try {
+                    screen.appWindowShown()
+                } catch (e: Exception) {
+                    true
+                }
+            if (shown || clock.now() >= deadline) return
+            clock.sleep(GONE_POLL_MS)
+        }
     }
 
     /** Bounded poll for [dialog] to leave the screen; best effort. */

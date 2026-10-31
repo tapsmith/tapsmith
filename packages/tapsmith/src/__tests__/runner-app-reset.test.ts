@@ -1890,7 +1890,7 @@ describe('runner app reset (declared isolation)', () => {
         const [one, two, three] = collectResults(result);
         expect(one.warnings).toBeUndefined();
         expect(two.warnings).toEqual([
-          'The app under test (com.example.app) stopped responding during the test and showed "Example isn\'t responding"; '
+          'The app under test (com.example.app) stopped responding and showed "Example isn\'t responding"; '
           + 'Tapsmith pressed Wait. Check the app\'s logs (adb logcat) for what blocked its main thread.',
         ]);
         expect(three.warnings).toBeUndefined();
@@ -1920,7 +1920,7 @@ describe('runner app reset (declared isolation)', () => {
           const rows = new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
             .filter((e) => e.type === 'action' && e.action === 'systemDialog');
           expect(rows.map((r) => r.detail)).toEqual([
-            'A system dialog from another app came up during the test: '
+            'A system dialog from another app came up: '
             + '"Pixel Launcher isn\'t responding" (com.google.android.apps.nexuslauncher). Tapsmith pressed Close app.',
           ]);
           expect(rows[0].log).toEqual([`handled at ${new Date(1_793_463_831_403).toISOString()}`]);

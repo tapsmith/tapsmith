@@ -167,7 +167,7 @@ export interface IsKeyboardShownResponse {
   shown: boolean;
 }
 
-/** A system ANR / crash dialog the Android agent answered on its own (PILOT-977). */
+/** A system ANR / crash dialog the Android agent answered on its own. */
 export interface SystemDialogEvent {
   /** The dialog's title, e.g. `Pixel Launcher isn't responding`; empty when unknown. */
   title: string;
@@ -1074,7 +1074,7 @@ export class TapsmithGrpcClient {
     });
   }
 
-  /** The system dialogs the agent answered since the last call, oldest first (PILOT-977). */
+  /** The system dialogs the agent answered since the last call, oldest first. */
   async takeSystemDialogEvents(deadlineMs?: number): Promise<TakeSystemDialogEventsResponse> {
     return this.call<TakeSystemDialogEventsResponse>('takeSystemDialogEvents', {
       requestId: requestId(),

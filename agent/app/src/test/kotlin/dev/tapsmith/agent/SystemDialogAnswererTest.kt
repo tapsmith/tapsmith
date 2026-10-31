@@ -47,6 +47,10 @@ class SystemDialogAnswererTest {
     private var dumps = 0
     private val clock = FakeClock()
 
+    /** Reads of whether an app window is back, and how many say no first. */
+    private var appWindowReads = 0
+    private var appWindowMissingReads = 0
+
     private val screen =
         object : SystemDialogScreen {
             override fun errorDialogs() = dialogs.map { it.asSeen() }
@@ -55,6 +59,8 @@ class SystemDialogAnswererTest {
                 dumps++
                 return windowDump
             }
+
+            override fun appWindowShown(): Boolean = ++appWindowReads > appWindowMissingReads
         }
 
     private fun answerer(target: String? = APP) = SystemDialogAnswerer(screen, target, clock, wallClock = { 1_000 })
@@ -87,6 +93,34 @@ class SystemDialogAnswererTest {
         assertEquals(1_000, event.timestampMs)
         // Taken once.
         assertTrue(a.takeEvents().isEmpty())
+    }
+
+    @Test
+    fun `after answering, it waits for the app's window to be readable again`() {
+        // On a device the app's window comes back to the accessibility tree a
+        // moment after the dialog leaves; a lookup right then found nothing.
+        Dialog("Pixel Launcher isn't responding", anr = true).also(dialogs::add)
+        windowDump = anrWindow(LAUNCHER)
+        appWindowMissingReads = 3
+        val a = answerer()
+        assertTrue(a.answer())
+        assertEquals(4, appWindowReads)
+    }
+
+    @Test
+    fun `the wait for the app's window is bounded`() {
+        Dialog("Pixel Launcher isn't responding", anr = true).also(dialogs::add)
+        windowDump = anrWindow(LAUNCHER)
+        appWindowMissingReads = Int.MAX_VALUE
+        val before = clock.nowMs
+        assertTrue(answerer().answer())
+        assertTrue(clock.nowMs - before <= SystemDialogAnswerer.GONE_TIMEOUT_MS + SystemDialogAnswerer.APP_WINDOW_TIMEOUT_MS + 200)
+    }
+
+    @Test
+    fun `nothing answered, nothing waited for`() {
+        assertFalse(answerer().answer())
+        assertEquals(0, appWindowReads)
     }
 
     @Test

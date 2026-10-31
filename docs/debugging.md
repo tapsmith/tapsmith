@@ -401,11 +401,11 @@ A dialog can also come up while a test runs, for example a launcher that stops r
 | The system's own ("Process system isn't responding") | Presses **Wait**. **Close app** would restart the whole runtime | A `systemDialog` step |
 | One whose owner Tapsmith cannot read | Nothing, since it may be the app's own | The action fails (usually because its element is not found while the dialog is up); the failure screenshot and the trace show the dialog |
 
-The owner comes from the dialog's window title in `dumpsys window`, as in the preflight. Tapsmith answers at most three dialogs per action, so one that keeps coming back does not hold the test. Screenshots, hierarchy dumps and locator suggestions (the trace's captures, MCP and UI-mode snapshots, the element picker) never answer a dialog, so they show it. A dialog answered outside a test, for example by a tap in UI mode or MCP, shows up on the next test that runs.
+The owner comes from the dialog's window title in `dumpsys window`, as in the preflight. Tapsmith answers at most three dialogs per action, so one that keeps coming back does not hold the test. Screenshots, hierarchy dumps and locator suggestions (the trace's captures, MCP and UI-mode snapshots, the element picker) never answer a dialog, so they show it. A dialog answered outside a test (by a tap or a locator check in UI mode or MCP, in an `afterAll` hook, or in a run you stopped) shows up on the next test that runs; its trace step's log says when it was answered.
 
 ```
   ✓ [2] › tests/login.test.ts › signs in (8.1s)
-        ⚠ The app under test (com.example.app) stopped responding during the test and showed "Example isn't responding"; Tapsmith pressed Wait. Check the app's logs (adb logcat) for what blocked its main thread.
+        ⚠ The app under test (com.example.app) stopped responding and showed "Example isn't responding"; Tapsmith pressed Wait. Check the app's logs (adb logcat) for what blocked its main thread.
 ```
 
 ### "SpringBoard quit unexpectedly" (iOS simulator)

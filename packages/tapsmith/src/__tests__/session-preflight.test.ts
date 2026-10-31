@@ -1862,7 +1862,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
       kind: 'foreign-dialog',
       title: 'Pixel Launcher isn\'t responding',
       owner: 'com.google.android.apps.nexuslauncher',
-      message: 'A system dialog from another app came up during the test: '
+      message: 'A system dialog from another app came up: '
         + '"Pixel Launcher isn\'t responding" (com.google.android.apps.nexuslauncher). Tapsmith pressed Close app.',
       timestamp: 1_793_463_831_403,
     }]);
@@ -1878,7 +1878,7 @@ describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
     expect(ctx.notices).toHaveLength(1);
     expect(ctx.notices[0]).toMatchObject({ kind: 'app-dialog', owner: 'com.example.app', title: 'Example isn\'t responding' });
     expect(ctx.notices[0].message).toBe(
-      'The app under test (com.example.app) stopped responding during the test and showed "Example isn\'t responding"; '
+      'The app under test (com.example.app) stopped responding and showed "Example isn\'t responding"; '
       + 'Tapsmith pressed Wait. Check the app\'s logs (adb logcat) for what blocked its main thread.',
     );
   });
