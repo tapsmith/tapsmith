@@ -348,7 +348,7 @@ Error: 14 UNAVAILABLE: failed to connect to all addresses
 
 ```
 Failed to connect to agent socket: the agent refused this daemon's token (wrong token)
-The Tapsmith agent on device emulator-5554 is from an older Tapsmith build: it never sent the authentication challenge this Tapsmith version requires (PILOT-969), so it cannot be used. Set agentApk and agentTestApk …
+The Tapsmith agent on device emulator-5554 is from an older Tapsmith build: it never sent the authentication challenge this Tapsmith version requires, so it cannot be used. Set agentApk and agentTestApk …
 ```
 
 **What happened:** The on-device agent only listens on the device's loopback interface, and every connection starts with a challenge that only a holder of your agent token can answer. Tapsmith keeps that token in `~/.tapsmith/agent-token` (readable only by you) and hands it to the agent when it starts it. The token itself is never sent over the connection, so other apps on the device and other machines on the network can neither drive your device nor learn the token. The first message means the agent was started with a different token, by another user on this machine or before the token file was replaced. The second means the agent on the device, or the iOS agent build Tapsmith found, is from a Tapsmith version that predates the token (or the agent is hung).

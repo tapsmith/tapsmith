@@ -172,7 +172,7 @@ pub(crate) fn predates_auth(err: &str) -> bool {
 pub(crate) fn stale_agent_message(agent: &str, fix: &str) -> String {
     format!(
         "{agent} is from an older Tapsmith build: it never sent the authentication challenge \
-         this Tapsmith version requires (PILOT-969), so it cannot be used. {fix}"
+         this Tapsmith version requires, so it cannot be used. {fix}"
     )
 }
 
