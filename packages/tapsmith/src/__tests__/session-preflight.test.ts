@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { androidHierarchyHasRenderedContent, androidHierarchyHasText, describeHierarchyForDiagnostics, ensureSessionReady, executeAppReset, launchConfiguredApp, probeResetCapabilities } from '../session-preflight.js';
+import { androidHierarchyHasRenderedContent, androidHierarchyHasText, collectAnsweredSystemDialogs, describeHierarchyForDiagnostics, ensureSessionReady, executeAppReset, launchConfiguredApp, probeResetCapabilities } from '../session-preflight.js';
 import type { AppResetPolicy } from '../app-reset.js';
 import { onActionProgress, type ActionProgressEvent } from '../action-progress.js';
 import { isRecoverableInfrastructureError } from '../worker-protocol.js';
@@ -47,6 +47,7 @@ function makeContext(overrides: Partial<Parameters<typeof ensureSessionReady>[0]
       hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>',
       errorMessage: '',
     })),
+    takeSystemDialogEvents: vi.fn(async (): Promise<import('../grpc-client.js').TakeSystemDialogEventsResponse> => ({ requestId: '1', events: [] })),
   };
 
   return {
@@ -1839,5 +1840,88 @@ describe('session-preflight', () => {
       vi.mocked(ctx.client.getUiHierarchy).mockRejectedValueOnce(new Error('agent busy'));
       expect(await probeResetCapabilities(ctx)).toEqual({ hooksDetected: true });
     });
+  });
+});
+
+describe('collectAnsweredSystemDialogs (PILOT-977)', () => {
+  const event = (overrides: Partial<import('../grpc-client.js').SystemDialogEvent> = {}): import('../grpc-client.js').SystemDialogEvent => ({
+    title: 'Pixel Launcher isn\'t responding',
+    owner: 'com.google.android.apps.nexuslauncher',
+    ownedByTarget: false,
+    kind: 'anr',
+    button: 'Close app',
+    timestampMs: 1_793_463_831_403,
+    ...overrides,
+  });
+
+  it('turns another app\'s answered dialog into a foreign-dialog notice', async () => {
+    const ctx = makeContext();
+    vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({ requestId: '1', events: [event()] });
+    await collectAnsweredSystemDialogs(ctx);
+    expect(ctx.notices).toEqual([{
+      kind: 'foreign-dialog',
+      title: 'Pixel Launcher isn\'t responding',
+      owner: 'com.google.android.apps.nexuslauncher',
+      message: 'A system dialog from another app came up during the test: '
+        + '"Pixel Launcher isn\'t responding" (com.google.android.apps.nexuslauncher). Tapsmith pressed Close app.',
+      timestamp: 1_793_463_831_403,
+    }]);
+  });
+
+  it('reports the app under test\'s own ANR as an app-dialog notice, so the test gets a warning', async () => {
+    const ctx = makeContext();
+    vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({
+      requestId: '1',
+      events: [event({ title: 'Example isn\'t responding', owner: 'com.example.app', ownedByTarget: true, button: 'Wait' })],
+    });
+    await collectAnsweredSystemDialogs(ctx);
+    expect(ctx.notices).toHaveLength(1);
+    expect(ctx.notices[0]).toMatchObject({ kind: 'app-dialog', owner: 'com.example.app', title: 'Example isn\'t responding' });
+    expect(ctx.notices[0].message).toBe(
+      'The app under test (com.example.app) stopped responding during the test and showed "Example isn\'t responding"; '
+      + 'Tapsmith pressed Wait. Check the app\'s logs (adb logcat) for what blocked its main thread.',
+    );
+  });
+
+  it('names no owner when the window list did not, and keeps the events in order', async () => {
+    const ctx = makeContext();
+    vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({
+      requestId: '1',
+      events: [event({ owner: '', title: 'A isn\'t responding' }), event({ title: 'B keeps stopping', kind: 'crash' })],
+    });
+    await collectAnsweredSystemDialogs(ctx);
+    expect(ctx.notices.map((n) => n.title)).toEqual(['A isn\'t responding', 'B keeps stopping']);
+    expect(ctx.notices[0].owner).toBeUndefined();
+    expect(ctx.notices[0].message).toContain('"A isn\'t responding". Tapsmith pressed Close app.');
+  });
+
+  it('falls back to a generic title and to now when the agent sent none', async () => {
+    const ctx = makeContext();
+    vi.mocked(ctx.client.takeSystemDialogEvents).mockResolvedValueOnce({ requestId: '1', events: [event({ title: '', timestampMs: 0 })] });
+    const before = Date.now();
+    await collectAnsweredSystemDialogs(ctx);
+    expect(ctx.notices[0].title).toBe('an app isn\'t responding or keeps stopping');
+    expect(ctx.notices[0].timestamp).toBeGreaterThanOrEqual(before);
+  });
+
+  it('is best effort: a failed call (an older agent, a dead daemon) adds nothing and does not throw', async () => {
+    const ctx = makeContext();
+    vi.mocked(ctx.client.takeSystemDialogEvents).mockRejectedValueOnce(new Error('12 UNIMPLEMENTED'));
+    await expect(collectAnsweredSystemDialogs(ctx)).resolves.toBeUndefined();
+    expect(ctx.notices).toEqual([]);
+  });
+
+  it('does not ask an iOS device, which has no such dialogs', async () => {
+    const ctx = makeContext({ config: { package: 'com.example.app', platform: 'ios' } });
+    await collectAnsweredSystemDialogs(ctx);
+    expect(ctx.client.takeSystemDialogEvents).not.toHaveBeenCalled();
+  });
+
+  it('asks with a short deadline, so a wedged agent cannot hold the end of the test', async () => {
+    const ctx = makeContext();
+    await collectAnsweredSystemDialogs(ctx);
+    const [deadline] = vi.mocked(ctx.client.takeSystemDialogEvents).mock.calls[0] as unknown as [number];
+    expect(deadline).toBeGreaterThan(0);
+    expect(deadline).toBeLessThanOrEqual(5_000);
   });
 });

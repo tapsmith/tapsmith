@@ -1275,7 +1275,8 @@ export function detectBlockingSystemDialog(rawHierarchy: string): string | undef
   return blockingDialogTitle(rawHierarchy, strongPatterns) ?? GENERIC_BLOCKING_DIALOG;
 }
 
-const GENERIC_BLOCKING_DIALOG = 'an app isn\'t responding or keeps stopping';
+/** What a blocking dialog is called when its title cannot be read. */
+export const GENERIC_BLOCKING_DIALOG = 'an app isn\'t responding or keeps stopping';
 
 /**
  * The dialog's own title ("Pixel Launcher isn't responding"), entity-decoded:
