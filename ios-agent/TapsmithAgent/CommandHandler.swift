@@ -745,6 +745,12 @@ class CommandHandler {
     /// cover, when it is still there at the deadline — never plans a touch
     /// that would land on the cover.
     ///
+    /// A target under in-window chrome that its list can scroll it away from
+    /// (`.coveredInList`: a sticky header or footer, a tab bar) is first
+    /// dragged clear — up to `CoverClearance.maxDrags` times, while the drags
+    /// move it — as a user would, and as Playwright scrolls a target whose
+    /// click another element intercepts (PILOT-980).
+    ///
     /// `preferElementTap` short-circuits to `.hittableElement` when XCUITest
     /// calls the element hittable, skipping the snapshot: `XCUIElement.tap()`
     /// picks its own hit point, which already avoids the keyboard (it taps
@@ -766,6 +772,7 @@ class CommandHandler {
             readDeadline: commandReadDeadline,
             reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
+        var clearDrags = 0
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
             let hittable = xcElem?.isHittable ?? false
@@ -773,7 +780,24 @@ class CommandHandler {
                 try refuseIfLate(clock)
                 return .hittableElement(xcElem)
             }
-            let verdict = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable)
+            let target = occlusionTarget(for: element, xcElem: xcElem)
+            var verdict = occlusionVerdict(for: target, isHittable: hittable)
+            if case .coveredInList(let cover, let coverFrame, let list)? = verdict {
+                if clearDrags < CoverClearance.maxDrags,
+                   let drag = clearingDrag(target: target.frame, cover: coverFrame, list: list, clock: clock) {
+                    clearDrags += 1
+                    NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
+                    actionExecutor.scrollDrag(drag)
+                    // A drag that did not move the target will not the next time.
+                    let moved = (try? getXCUIElement(element.elementId))
+                        .flatMap { try? $0.snapshot().frame }
+                    if moved == nil || moved.map({ OcclusionAnalyzer.framesMatch($0, target.frame) }) == true {
+                        clearDrags = CoverClearance.maxDrags
+                    }
+                    continue
+                }
+                verdict = .covered(by: cover)
+            }
             // Checked after the pass: a slow pass that ends past the deadline
             // fails now instead of paying for another one.
             try refuseIfLate(clock)
@@ -796,7 +820,7 @@ class CommandHandler {
                 throw AgentError.elementNotFound(
                     "Element not found any more — it went away before it could be touched (it may have gone stale)"
                 )
-            case .covered(let cover)?:
+            case .covered(let cover)?, .coveredInList(let cover, _, _)?:
                 guard sleep != nil else {
                     throw AgentError.elementCovered(coveredMessage(cover, timeoutMs: timeoutMs))
                 }
@@ -873,13 +897,24 @@ class CommandHandler {
         )
     }
 
+    /// The drag that scrolls a target at `target` clear of `cover` in `list`,
+    /// or nil when there is none to make or no time for it and the touch
+    /// after (within the action's timeout and the daemon's read deadline).
+    private func clearingDrag(target: CGRect, cover: CGRect, list: CGRect, clock: TouchPlanClock) -> CoverClearance.Drag? {
+        let after = Date().addingTimeInterval(CoverClearance.dragSeconds)
+        guard clock.sleepBeforeNextPass(at: after) != nil, !clock.isTooLateToAct(at: after) else { return nil }
+        let screen = CGRect(origin: .zero, size: snapshotFinder.screenSize)
+        return CoverClearance.drag(
+            target: target, cover: cover, list: list, screen: screen,
+            margin: CoverClearance.margin, slop: CoverClearance.touchSlop
+        )
+    }
+
     /// nil when no tree could be read.
     private func occlusionVerdict(
-        for element: ElementInfo,
-        xcElem: XCUIElement?,
+        for target: OcclusionAnalyzer.Target,
         isHittable: Bool
     ) -> OcclusionAnalyzer.Verdict? {
-        let target = occlusionTarget(for: element, xcElem: xcElem)
         let screenSize = snapshotFinder.screenSize
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }

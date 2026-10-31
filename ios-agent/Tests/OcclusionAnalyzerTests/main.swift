@@ -367,6 +367,130 @@ check("an alert over an unhittable target covers it",
       // A native alert is named as one (PILOT-919).
       .covered(by: "alert \"Delete?\""))
 
+// ─── Loading overlays (PILOT-979) ───
+
+// A React Native loading overlay: a plain view (it may be see-through) over
+// the screen, with an ActivityIndicator in it. XCUITest's hit test lands on it,
+// so the target reads unhittable; the overlay is no interactive control.
+let loadingOverlay: [Row] = [
+    (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),
+    (4, .activityIndicator, "In progress", "", R(181, 475, 40, 40)),
+]
+var loadingRows = screenRows()
+loadingRows.insert(contentsOf: loadingOverlay, at: loadingRows.count - 2)
+check("a plain overlay holding a spinner covers an unhittable target",
+      analyzer(loadingRows).analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (element \"loading-overlay\")"))
+checkPoint("…but XCUITest's hit test still wins when it says hittable",
+           analyzer(loadingRows).analyze(button("Covered action", covered), isHittable: true),
+           CGPoint(x: 201, y: 291.33))
+check("a spinner right over the touch point covers it",
+      analyzer(screenRows(extra: [(4, .activityIndicator, "In progress", "", R(181, 271, 40, 40))]))
+          .analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (progressbar \"In progress\")"))
+check("a progress bar counts as well",
+      analyzer(screenRows(extra: [(4, .other, "", "", R(0, 200, 402, 200)),
+                                  (5, .progressIndicator, "Uploading", "", R(16, 380, 370, 4))]))
+          .analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+checkPoint("a spinner painted after the target that misses the point is not a cover",
+           analyzer(screenRows(extra: [(4, .activityIndicator, "", "", R(181, 600, 40, 40))]))
+               .analyze(button("Covered action", covered), isHittable: false),
+           CGPoint(x: 201, y: 291.33))
+checkPoint("a spinner inside the target is not a cover",
+           analyzer(screenRows(extra: []).enumerated().flatMap { i, row -> [Row] in
+               row.label == "Covered action" && row.type == .staticText
+                   ? [row, (5, .activityIndicator, "", "", R(340, 271, 40, 40))] : [row]
+           }).analyze(button("Covered action", covered), isHittable: false),
+           CGPoint(x: 201, y: 291.33))
+// The trailing full-screen RN wrappers are painted after everything; one that
+// holds no spinner is still no cover (pass-through overlays look the same).
+checkPoint("a plain overlay with no spinner is still not a cover",
+           analyzer(screenRows(passThrough: true)).analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: false),
+           CGPoint(x: 201, y: 359.33))
+
+// ─── Sticky list rows and scrolling clear of chrome (PILOT-979, PILOT-980) ───
+
+/// A screen with a vertical list (116..874) under a nav bar; rows 44 tall.
+func listRows(_ rows: [Row], after: [Row] = []) -> [Row] {
+    [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .navigationBar, "List", "", R(0, 62, 402, 54)),
+        (3, .table, "", "", R(0, 116, 402, 758)),
+    ] + rows + after
+}
+let list = R(0, 116, 402, 758)
+
+// UIKit floats a section header over the rows scrolled under it.
+let stickyHeader: [Row] = listRows([
+    (4, .other, "Section A", "", R(0, 116, 402, 28)),
+    (4, .cell, "", "", R(0, 120, 402, 44)),
+    (5, .staticText, "Row 5", "", R(16, 130, 200, 20)),
+    (4, .cell, "", "", R(0, 164, 402, 44)),
+])
+check("a section header floating over an unhittable row covers it, and can be scrolled away from",
+      analyzer(stickyHeader).analyze(.init(frame: R(0, 120, 402, 44), elementType: .cell, label: "", identifier: ""), isHittable: false),
+      .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 28), list: list))
+checkPoint("rows that only touch do not cover each other",
+           analyzer(stickyHeader).analyze(.init(frame: R(0, 164, 402, 44), elementType: .cell, label: "", identifier: ""), isHittable: false),
+           CGPoint(x: 201, y: 186))
+// A React Native ScrollView's content view holds its rows.
+let rnSticky: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", list),
+    (3, .other, "", "", R(0, 0, 402, 3000)),
+    (4, .other, "Sticky header", "", R(0, 116, 402, 50)),
+    (4, .button, "Row 5", "", R(0, 130, 402, 60)),
+]
+check("a sticky header in a React Native ScrollView's content covers a row under it",
+      analyzer(rnSticky).analyze(button("Row 5", R(0, 130, 402, 60)), isHittable: false),
+      .coveredInList(by: "element \"Sticky header\"", cover: R(0, 116, 402, 50), list: list))
+let grid: [Row] = listRows([
+    (4, .cell, "Left", "", R(0, 200, 201, 100)),
+    (4, .other, "badge", "", R(150, 220, 80, 30)),
+])
+checkPoint("a narrower sibling (a badge) is not a sticky row",
+           analyzer(grid).analyze(.init(frame: R(0, 200, 201, 100), elementType: .cell, label: "Left", identifier: ""), isHittable: false),
+           CGPoint(x: 100.5, y: 250))
+
+// A sticky footer's button over a row of the list, outside the list.
+let footer: [Row] = listRows([
+    (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
+], after: [(3, .button, "Checkout", "", R(0, 774, 402, 100))])
+check("a control outside the list over an unhittable row can be scrolled away from",
+      analyzer(footer).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .coveredInList(by: "button \"Checkout\"", cover: R(0, 774, 402, 100), list: list))
+// The same control inside the list moves with the row: no scrolling away.
+let inListButton: [Row] = listRows([
+    (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
+    (4, .button, "Checkout", "", R(0, 774, 402, 100)),
+])
+check("a control inside the same list is a plain cover",
+      analyzer(inListButton).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "button \"Checkout\""))
+// A presented alert is never scrolled away from.
+let alertOverList: [Row] = listRows([
+    (4, .cell, "Row 5", "", R(0, 300, 402, 44)),
+], after: [(3, .alert, "Delete?", "", R(40, 250, 322, 200))])
+check("an alert over a row is a plain cover",
+      analyzer(alertOverList).analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
+      .covered(by: "alert \"Delete?\""))
+// A tab bar over a row: bars are checked whatever XCUITest says.
+let tabBarOverList: [Row] = listRows([
+    (4, .cell, "Row 20", "", R(0, 800, 402, 44)),
+], after: [(3, .tabBar, "Tab Bar", "", R(0, 791, 402, 83))])
+check("a row entirely under a tab bar can be scrolled away from",
+      analyzer(tabBarOverList).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: true),
+      .coveredInList(by: "tab bar \"Tab Bar\"", cover: R(0, 791, 402, 83), list: list))
+check("a loading overlay over a row is waited out, not scrolled away from",
+      analyzer(listRows([(4, .cell, "Row 5", "", R(0, 300, 402, 44))],
+                        after: [(3, .other, "", "", list), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]))
+          .analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+
 // ─── Keyboard first (PILOT-622) ───
 
 func checkKF(_ name: String, _ got: OcclusionAnalyzer.KeyboardFirst, _ want: OcclusionAnalyzer.KeyboardFirst) {

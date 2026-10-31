@@ -288,6 +288,16 @@ class ActionExecutor {
         }
     }
 
+    /// Drag a list to move a target clear of a cover (PILOT-980): a steady
+    /// move, then a hold before letting go, so the list stops with the finger
+    /// rather than flinging on. Then a moment for the tree to catch up.
+    func scrollDrag(_ drag: CoverClearance.Drag) {
+        if !EventSynthesizer.swipePath(CoverClearance.path(of: drag)) {
+            NSLog("[ActionExecutor] clearing drag could not be synthesized")
+        }
+        Thread.sleep(forTimeInterval: 0.15)
+    }
+
     // MARK: - Scroll
 
     /// Scroll a container in a direction, optionally until a target element becomes visible.
