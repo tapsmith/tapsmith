@@ -10,8 +10,15 @@ import Network
 /// Commands are processed on the main thread via RunLoop to ensure XCUITest's
 /// accessibility operations (which require main RunLoop XPC callbacks) work
 /// correctly on Xcode 26.
+///
+/// The listener is bound to loopback only, and the first line on every
+/// connection must authenticate it (`AgentAuth`, PILOT-969): it is answered
+/// on the socket queue, never logged and never reaches the command handler.
+/// A wrong first line is answered with the refusal and the connection
+/// closed; so is a connection that sends nothing for `AgentAuth.deadline`.
 class SocketServer {
     private let port: UInt16
+    private let auth: AgentAuth
     private let commandHandler: CommandHandler
     private var listener: NWListener?
     private let queue = DispatchQueue(label: "dev.tapsmith.agent.socket", qos: .userInitiated)
@@ -22,8 +29,14 @@ class SocketServer {
 
     @Volatile private var running = false
 
-    init(port: UInt16, commandHandler: CommandHandler) {
+    /// Whether a connection has authenticated. Read and written only on `queue`.
+    private final class ConnectionState {
+        var authenticated = false
+    }
+
+    init(port: UInt16, auth: AgentAuth, commandHandler: CommandHandler) {
         self.port = port
+        self.auth = auth
         self.commandHandler = commandHandler
     }
 
@@ -40,8 +53,16 @@ class SocketServer {
             tcpOptions.noDelay = true
         }
 
+        // Loopback only: the simulator shares the Mac's network stack, and
+        // iproxy (usbmux) reaches a physical device's loopback, so nothing
+        // that drives the agent needs another interface (PILOT-969).
+        params.requiredLocalEndpoint = NWEndpoint.hostPort(
+            host: .ipv4(.loopback),
+            port: NWEndpoint.Port(rawValue: port)!
+        )
+
         do {
-            listener = try NWListener(using: params, on: NWEndpoint.Port(rawValue: port)!)
+            listener = try NWListener(using: params)
         } catch {
             NSLog("[TapsmithSocket] Failed to create listener: \(error)")
             return
@@ -59,7 +80,7 @@ class SocketServer {
         listener?.stateUpdateHandler = { state in
             switch state {
             case .ready:
-                NSLog("[TapsmithSocket] Listening on port \(self.port)")
+                NSLog("[TapsmithSocket] Listening on 127.0.0.1:\(self.port)")
             case .failed(let error):
                 NSLog("[TapsmithSocket] Listener failed: \(error)")
             case .cancelled:
@@ -107,12 +128,38 @@ class SocketServer {
     }
 
     private func handleConnection(_ connection: NWConnection) {
+        let state = ConnectionState()
         connection.start(queue: queue)
-        receiveLines(connection: connection, buffer: Data())
+        queue.asyncAfter(deadline: .now() + AgentAuth.deadline) {
+            if !state.authenticated {
+                NSLog("[TapsmithSocket] Client did not authenticate in time; closing")
+                connection.cancel()
+            }
+        }
+        receiveLines(connection: connection, buffer: Data(), state: state)
+    }
+
+    /// Judge a connection's first line. True when the connection may go on.
+    private func authenticate(_ line: String, connection: NWConnection, state: ConnectionState) -> Bool {
+        if let refusal = auth.refusal(line: line) {
+            NSLog("[TapsmithSocket] Refused a connection: \(refusal)")
+            let data = (AgentAuth.refusalLine(refusal) + "\n").data(using: .utf8)!
+            connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
+            return false
+        }
+        state.authenticated = true
+        let data = (AgentAuth.ackLine() + "\n").data(using: .utf8)!
+        connection.send(content: data, completion: .contentProcessed { error in
+            if let error = error {
+                NSLog("[TapsmithSocket] Write error: \(error)")
+                connection.cancel()
+            }
+        })
+        return true
     }
 
     /// Recursively receive data and enqueue complete commands for main-thread processing.
-    private func receiveLines(connection: NWConnection, buffer: Data) {
+    private func receiveLines(connection: NWConnection, buffer: Data, state: ConnectionState) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self = self, self.running else {
                 connection.cancel()
@@ -139,6 +186,14 @@ class SocketServer {
                     continue
                 }
 
+                if !state.authenticated {
+                    // The first line authenticates the connection, or ends it.
+                    if !self.authenticate(line, connection: connection, state: state) {
+                        return
+                    }
+                    continue
+                }
+
                 NSLog("[TapsmithSocket] Received: \(line.prefix(200))")
 
                 // Enqueue for main-thread processing
@@ -154,7 +209,7 @@ class SocketServer {
             }
 
             // Continue reading
-            self.receiveLines(connection: connection, buffer: currentBuffer)
+            self.receiveLines(connection: connection, buffer: currentBuffer, state: state)
         }
     }
 }

@@ -15,6 +15,8 @@ class TapsmithAgentRunner: XCTestCase {
     private static let envTargetBundleId = "TAPSMITH_TARGET_BUNDLE_ID"
     private static let envPort = "TAPSMITH_AGENT_PORT"
     private static let envAttachToRunningApp = "TAPSMITH_ATTACH_TO_RUNNING_APP"
+    /// The daemon's agent token (PILOT-969), from the patched xctestrun.
+    private static let envToken = "TAPSMITH_AGENT_TOKEN"
 
     private var socketServer: SocketServer?
 
@@ -126,7 +128,11 @@ class TapsmithAgentRunner: XCTestCase {
             hierarchyDumper: hierarchyDumper
         )
 
-        socketServer = SocketServer(port: port, commandHandler: commandHandler)
+        let token = ProcessInfo.processInfo.environment[Self.envToken]
+        if (token ?? "").isEmpty {
+            NSLog("[TapsmithAgent] Started without a token: every connection will be refused")
+        }
+        socketServer = SocketServer(port: port, auth: AgentAuth(token: token), commandHandler: commandHandler)
 
         NSLog("[TapsmithAgent] Agent started on port \(port)")
 
