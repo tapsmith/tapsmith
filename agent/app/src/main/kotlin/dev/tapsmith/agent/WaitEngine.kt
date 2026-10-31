@@ -21,6 +21,10 @@ import androidx.test.uiautomator.UiDevice
  */
 class WaitEngine(
     private val device: UiDevice,
+    /** Answers a system ANR / crash dialog on screen ([SystemDialogAnswerer]);
+     *  true when one was. While one is up the app's elements cannot be found
+     *  (PILOT-977). */
+    private val answerSystemDialogs: () -> Boolean = { false },
 ) {
     companion object {
         private const val TAG = "TapsmithWait"
@@ -215,6 +219,9 @@ class WaitEngine(
                             "Selector: ${selector.describe()}",
                     )
                 }
+                // A system dialog that came up during the wait hides the
+                // app's elements: answer it and look again at once.
+                if (answerSystemDialogs()) continue
                 CommandCancellation.sleep(FIND_POLL_INTERVAL_MS.coerceAtMost(remaining))
             }
         }

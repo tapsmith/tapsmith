@@ -391,7 +391,7 @@ The warning is in the result's `warnings` (the JSON reporter, `merge-reports` an
 
 #### When the dialog comes up during a test
 
-A dialog can also come up while a test runs, for example a launcher that stops responding on a freshly booted CI emulator. It takes focus and covers the app, so taps would wait for it until they time out and typed keys would go to the dialog. Before each action that touches the screen or sends a key (taps, typing, swipes, scrolls, key presses), and while an action waits for something covering its element, the Android agent checks for such a dialog and answers it:
+A dialog can also come up while a test runs, for example a launcher that stops responding on a freshly booted CI emulator. It takes focus and covers the app: while it is up, locators cannot find the app's elements, and typed keys would go to the dialog. So before each action that touches the screen or sends a key (taps, typing, swipes, scrolls, key presses) and each locator lookup, and while either waits for its element, the Android agent checks for such a dialog and answers it:
 
 | Whose dialog | What Tapsmith does | Reported as |
 |---|---|---|
@@ -401,7 +401,7 @@ A dialog can also come up while a test runs, for example a launcher that stops r
 | The system's own ("Process system isn't responding") | Presses **Wait**. **Close app** would restart the whole runtime | A `systemDialog` step |
 | One whose owner Tapsmith cannot read | Nothing, since it may be the app's own | The action's failure, if it covers the element |
 
-The owner comes from the dialog's window title in `dumpsys window`, as in the preflight. Tapsmith answers at most three dialogs per action, so one that keeps coming back does not hold the test. Reading the screen (`expect`, snapshots, the trace's hierarchy captures) never answers a dialog. A dialog answered outside a test, for example by a tap in UI mode or MCP, shows up on the next test that runs.
+The owner comes from the dialog's window title in `dumpsys window`, as in the preflight. Tapsmith answers at most three dialogs per action, so one that keeps coming back does not hold the test. Screenshots and hierarchy dumps (the trace's captures, MCP and UI-mode snapshots) never answer a dialog, so they show it. A dialog answered outside a test, for example by a tap in UI mode or MCP, shows up on the next test that runs.
 
 ```
   ✓ [2] › tests/login.test.ts › signs in (8.1s)

@@ -38,14 +38,22 @@ class CommandHandler(
         private const val TAG = "TapsmithCommand"
 
         /**
-         * Commands that deliver input to the screen. A system ANR / crash
-         * dialog up when one arrives would take the input (a key, a tap) or
-         * cover its target, so these answer it first (PILOT-977). Reads stay
-         * free of side effects; a gesture already under way (touchMove/Up)
-         * is not interrupted.
+         * Commands that answer a system ANR / crash dialog on screen before
+         * they run (PILOT-977). One that comes up mid-test takes focus and
+         * covers the app: input (a key, a tap) would go to it, and the app's
+         * elements cannot even be found while it is up. Hierarchy dumps and
+         * screenshots stay free of side effects, so a trace still shows the
+         * dialog; a gesture already under way (touchMove/Up) is not
+         * interrupted.
          */
-        val INPUT_METHODS =
+        val DIALOG_ANSWERING_METHODS =
             setOf(
+                // Finding elements.
+                "findElement",
+                "findElements",
+                "evaluateSelectors",
+                "waitForElement",
+                // Input.
                 "tap",
                 "longPress",
                 "doubleTap",
@@ -85,7 +93,7 @@ class CommandHandler(
         val start = SystemClock.uptimeMillis()
         return try {
             systemDialogs.startCommand()
-            if (method in INPUT_METHODS) systemDialogs.answer()
+            if (method in DIALOG_ANSWERING_METHODS) systemDialogs.answer()
             val result = dispatch(method, params, actionBudget(params, start))
             successResponse(id, result)
         } catch (e: ElementCoveredException) {

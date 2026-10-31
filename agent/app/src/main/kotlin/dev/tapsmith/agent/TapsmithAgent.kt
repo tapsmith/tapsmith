@@ -76,8 +76,8 @@ class TapsmithAgent : Instrumentation() {
                 log = { Log.i("TapsmithSystemDialog", it) },
             )
         val occlusionGuard = OcclusionGuard(device, this, elementFinder::nodeInfoFor, input, systemDialogs)
+        val waitEngine = WaitEngine(device, systemDialogs::answer)
         val actionExecutor = ActionExecutor(device, this, occlusionGuard, input)
-        val waitEngine = WaitEngine(device)
         val hierarchyDumper = HierarchyDumper(device, this, elementFinder::composeShapeOf)
         val commandHandler =
             CommandHandler(
