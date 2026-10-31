@@ -90,6 +90,15 @@ describe("UIKit: table view", () => {
     await expect(uikitTable.selection).toHaveText("Selected: Row 2")
   })
 
+  // An indicator is touched where it was found, with no live element; the
+  // other element reads still work on it (PILOT-895).
+  test("a row's chevron can be screenshotted and highlighted", async ({ uikitTable }) => {
+    const shot = await uikitTable.chevron(3).screenshot()
+    expect(shot.length).toBeGreaterThan(100)
+    await uikitTable.checkmark(7).screenshot()
+    await uikitTable.chevron(3).highlight()
+  })
+
   // Once the table has scrolled, every chevron is still found by its own
   // row, not by its position among the others (PILOT-895).
   test("a chevron tap on a scrolled-in row selects that row", async ({ uikitTable }) => {
