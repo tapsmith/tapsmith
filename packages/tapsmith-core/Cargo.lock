@@ -1484,6 +1484,7 @@ dependencies = [
  "crc32fast",
  "dirs",
  "futures-util",
+ "getrandom 0.4.2",
  "h2",
  "http",
  "http-body-util",

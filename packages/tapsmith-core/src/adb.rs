@@ -57,7 +57,11 @@ async fn run_adb(serial: Option<&str>, args: &[&str], timeout: Duration) -> Resu
 
     cmd.args(args);
 
-    debug!(serial = serial, args = ?args, "Running adb command");
+    debug!(
+        serial = serial,
+        args = ?args.iter().map(|a| crate::agent_auth::redact(a)).collect::<Vec<_>>(),
+        "Running adb command"
+    );
 
     let output = tokio::time::timeout(timeout, cmd.output())
         .await
@@ -343,6 +347,16 @@ pub async fn remove_reverse_with_timeout(
     let device_arg = format!("tcp:{device_port}");
     run_adb(Some(serial), &["reverse", "--remove", &device_arg], timeout).await?;
     Ok(())
+}
+
+/// [`shell`] for a command that carries the agent token: its span leaves
+/// the command out, and `run_adb` redacts it from its own log line.
+#[instrument(skip(command))]
+pub async fn shell_with_secret(serial: &str, command: &str) -> Result<String> {
+    let stdout =
+        run_adb_with_transport_recovery(serial, &["shell", command], DEFAULT_TIMEOUT, "adb shell")
+            .await?;
+    Ok(String::from_utf8_lossy(&stdout).to_string())
 }
 
 /// Execute a shell command on the device, returning stdout as a String.

@@ -1058,19 +1058,26 @@ impl DeviceBackend for AndroidBackend<'_> {
 
         // Launch the agent instrumentation
         agent_comms::clear_stream_cache(&self.svc.agent_stream).await;
-        let instrument_cmd = if req.target_package.is_empty() {
-            "am instrument -w dev.tapsmith.agent/.TapsmithAgent".to_string()
-        } else {
-            format!(
-                "am instrument -w -e targetPackage {} dev.tapsmith.agent/.TapsmithAgent",
-                req.target_package
-            )
+        // The agent refuses every connection that does not open with this
+        // token (PILOT-969).
+        let token = match crate::agent_auth::agent_token() {
+            Ok(token) => token,
+            Err(e) => {
+                return Err(proto::ActionResponse {
+                    request_id,
+                    success: false,
+                    error_type: "AGENT_START_FAILED".to_string(),
+                    error_message: format!("{e:#}"),
+                    screenshot: Vec::new(),
+                });
+            }
         };
+        let instrument_cmd = android_instrument_command(&req.target_package, token);
 
         // Launch in background on device, keeping the runner's output
         // on the device for the failure diagnostics below.
         let bg_cmd = format!("nohup {instrument_cmd} > {ANDROID_AGENT_LOG_PATH} 2>&1 &");
-        if let Err(e) = adb::shell(&serial, &bg_cmd).await {
+        if let Err(e) = adb::shell_with_secret(&serial, &bg_cmd).await {
             error!(error = %e, "Failed to start agent instrumentation");
             return Err(proto::ActionResponse {
                 request_id,
@@ -1391,4 +1398,35 @@ async fn os_service_redirect(serial: &str, proxy: &NetworkProxy) -> Option<adb::
         device_port,
         uid_ranges,
     })
+}
+
+/// The `am instrument` command that starts the agent: with the agent token
+/// (PILOT-969) and, when there is one, the package under test.
+fn android_instrument_command(target_package: &str, token: &str) -> String {
+    let mut args = format!(
+        "am instrument -w -e {} {token}",
+        crate::agent_auth::ANDROID_TOKEN_ARG
+    );
+    if !target_package.is_empty() {
+        args.push_str(&format!(" -e targetPackage {target_package}"));
+    }
+    format!("{args} dev.tapsmith.agent/.TapsmithAgent")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::android_instrument_command;
+
+    #[test]
+    fn instrument_command_hands_the_agent_its_token() {
+        assert_eq!(
+            android_instrument_command("", "abc123"),
+            "am instrument -w -e token abc123 dev.tapsmith.agent/.TapsmithAgent"
+        );
+        assert_eq!(
+            android_instrument_command("com.example.app", "abc123"),
+            "am instrument -w -e token abc123 -e targetPackage com.example.app \
+             dev.tapsmith.agent/.TapsmithAgent"
+        );
+    }
 }

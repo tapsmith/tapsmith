@@ -153,20 +153,13 @@ pub(crate) async fn ping_agent_port(host_port: u16) -> Result<()> {
 /// a still-starting or dead Android agent "connected" and made the reuse
 /// check in StartAgent keep a dead agent forever.
 pub(crate) async fn ping_agent_port_with_timeout(host_port: u16, timeout: Duration) -> Result<()> {
-    let addr = format!("127.0.0.1:{host_port}");
-    let mut stream = tokio::time::timeout(timeout, TcpStream::connect(&addr))
-        .await
-        .map_err(|_| anyhow!("Timed out connecting to agent"))?
-        .context("Agent socket not reachable")?;
+    let (mut reader, mut writer) = connect_authenticated(host_port, timeout).await?;
 
     let ping = r#"{"id":"ping","method":"ping","params":{}}"#;
-    stream.write_all(ping.as_bytes()).await?;
-    stream.write_all(b"\n").await?;
-    stream.flush().await?;
+    writer.write_all(format!("{ping}\n").as_bytes()).await?;
+    writer.flush().await?;
 
-    let mut reader = BufReader::new(&mut stream);
     let mut line = String::new();
-
     tokio::time::timeout(timeout, reader.read_line(&mut line))
         .await
         .map_err(|_| anyhow!("Agent did not respond to ping"))??;
@@ -177,9 +170,43 @@ pub(crate) async fn ping_agent_port_with_timeout(host_port: u16, timeout: Durati
              (not listening yet, or its process is gone)"
         );
     }
+    let reply: Value = serde_json::from_str(line.trim())
+        .map_err(|_| anyhow!("Unexpected answer to ping: {}", line.trim()))?;
+    if reply.get("id").and_then(Value::as_str) != Some("ping")
+        || reply.pointer("/result/pong").and_then(Value::as_bool) != Some(true)
+    {
+        bail!("Unexpected answer to ping: {}", line.trim());
+    }
 
     debug!(response = %line.trim(), "Agent ping successful");
     Ok(())
+}
+
+/// Open a connection to the agent behind `host_port` and authenticate it
+/// with this user's agent token (PILOT-969): an agent closes any connection
+/// whose first line is not the auth line. `timeout` bounds the connect and
+/// the handshake separately.
+///
+/// Every failure reads "…agent socket…", the wording the SDK already treats
+/// as a recoverable infrastructure failure: restarting the agent is also what
+/// cures an agent started with another token or from an older build.
+async fn connect_authenticated(
+    host_port: u16,
+    timeout: Duration,
+) -> Result<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
+    let token = crate::agent_auth::agent_token().context("Failed to connect to agent socket")?;
+    let addr = format!("127.0.0.1:{host_port}");
+    let stream = tokio::time::timeout(timeout, TcpStream::connect(&addr))
+        .await
+        .map_err(|_| anyhow!("Timed out connecting to agent socket"))?
+        .context("Failed to connect to agent socket")?;
+    stream.set_nodelay(true).ok();
+    let (read_half, mut writer) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    crate::agent_auth::authenticate(&mut reader, &mut writer, token, timeout)
+        .await
+        .map_err(|e| anyhow!("Failed to connect to agent socket: {e:#}"))?;
+    Ok((reader, writer))
 }
 
 /// Categorizes a `try_send_command` failure so the caller can decide whether
@@ -220,16 +247,12 @@ pub(crate) async fn clear_stream_cache(cache: &AgentStreamCache) {
 }
 
 async fn connect_persistent(host_port: u16) -> Result<PersistentStream, SendError> {
-    let addr = format!("127.0.0.1:{}", host_port);
-    let stream = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr))
+    let (reader, writer) = connect_authenticated(host_port, Duration::from_secs(5))
         .await
-        .map_err(|_| SendError::Connect(anyhow!("Timed out connecting to agent socket")))?
-        .map_err(|e| SendError::Connect(anyhow!(e).context("Failed to connect to agent socket")))?;
-    stream.set_nodelay(true).ok();
-    let (read_half, write_half) = stream.into_split();
+        .map_err(SendError::Connect)?;
     Ok(PersistentStream {
-        reader: BufReader::new(read_half),
-        writer: write_half,
+        reader,
+        writer,
         host_port,
     })
 }
@@ -1378,13 +1401,10 @@ impl AgentConnection {
         command: &AgentCommand,
         timeout: Duration,
     ) -> std::result::Result<AgentResponse, SendError> {
-        let addr = format!("127.0.0.1:{}", self.host_port);
-        let mut stream = tokio::time::timeout(Duration::from_secs(5), async {
-            TcpStream::connect(&addr).await
-        })
-        .await
-        .map_err(|_| SendError::Connect(anyhow!("Timed out connecting to agent socket")))?
-        .map_err(|e| SendError::Connect(anyhow!(e).context("Failed to connect to agent socket")))?;
+        let (mut reader, mut writer) =
+            connect_authenticated(self.host_port, Duration::from_secs(5))
+                .await
+                .map_err(SendError::Connect)?;
 
         // Everything past the successful TCP connect normally counts as a
         // "post-send" failure: even if the write hasn't happened yet, we
@@ -1403,25 +1423,23 @@ impl AgentConnection {
             debug!(payload = %payload, "Sending command to agent");
 
             // Write the command as a newline-delimited JSON message
-            stream
+            writer
                 .write_all(payload.as_bytes())
                 .await
                 .context("Failed to write to agent socket")?;
-            stream
+            writer
                 .write_all(b"\n")
                 .await
                 .context("Failed to write newline to agent socket")?;
-            stream.flush().await?;
+            writer.flush().await?;
 
             // Read the response (newline-delimited JSON). Use the caller-
             // supplied timeout plus headroom so the agent's own work clock
             // always finishes first — see DEFAULT_READ_TIMEOUT_HEADROOM for the
             // rationale.
-            let reader = BufReader::new(&mut stream);
             let mut line = String::new();
 
             tokio::time::timeout(read_timeout, async {
-                let mut reader = reader;
                 reader
                     .read_line(&mut line)
                     .await
@@ -1523,6 +1541,35 @@ impl AgentConnection {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The agent's side of the auth handshake, as both real agents do it:
+    /// the first line must be the auth line with this user's token. Answers
+    /// the ack and hands back the connection, or answers the refusal and
+    /// closes it.
+    async fn agent_handshake(
+        stream: TcpStream,
+    ) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.ok()?;
+        let first: Value = serde_json::from_str(line.trim()).ok()?;
+        let token = crate::agent_auth::agent_token().unwrap();
+        if first["method"] == "auth" && first["params"]["token"] == token {
+            write_half
+                .write_all(b"{\"id\":\"auth\",\"result\":{\"authenticated\":true}}\n")
+                .await
+                .ok()?;
+            Some((reader, write_half))
+        } else {
+            let _ = write_half
+                .write_all(
+                    b"{\"id\":\"auth\",\"error\":{\"type\":\"UNAUTHORIZED\",\"message\":\"wrong token\"}}\n",
+                )
+                .await;
+            None
+        }
+    }
 
     // ─── Agent forward record (PILOT-550) ───
 
@@ -2463,32 +2510,23 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            while let Ok((mut stream, _)) = listener.accept().await {
-                // Read the command bytes so the client's write_all
-                // completes successfully, then close the half-open
-                // stream without writing a response. The client's
-                // read_line will observe EOF → empty response.
-                let mut buf = Vec::new();
-                let mut chunk = [0u8; 1024];
-                while let Ok(n) = stream.read(&mut chunk).await {
-                    if n == 0 {
-                        break;
-                    }
-                    buf.extend_from_slice(&chunk[..n]);
-                    if buf.contains(&b'\n') {
-                        break;
-                    }
-                }
+            while let Ok((stream, _)) = listener.accept().await {
+                let Some((mut reader, mut writer)) = agent_handshake(stream).await else {
+                    continue;
+                };
+                // Read the command so the client's write completes, then
+                // close without a response: the client's read_line sees
+                // EOF → empty response.
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line).await;
                 // The liveness probe is a real ping: answer it so the
                 // mock reads as "alive", and drop every other command
                 // unanswered so it reads as an empty response.
-                if String::from_utf8_lossy(&buf).contains("\"method\":\"ping\"") {
-                    let _ = stream
+                if line.contains("\"method\":\"ping\"") {
+                    let _ = writer
                         .write_all(b"{\"id\":\"ping\",\"result\":{\"pong\":true}}\n")
                         .await;
                 }
-                drop(stream);
             }
         });
 
@@ -2527,7 +2565,13 @@ mod tests {
         let (done_tx, done_rx) = tokio::sync::oneshot::channel::<()>();
         tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
-                drop(stream); // close the client connection
+                // Authenticate and take the command, then close the
+                // connection unanswered: the agent died mid-command.
+                if let Some((mut reader, writer)) = agent_handshake(stream).await {
+                    let mut line = String::new();
+                    let _ = reader.read_line(&mut line).await;
+                    drop(writer);
+                }
             }
             drop(listener); // stop listening so the probe fails
             let _ = done_tx.send(());
@@ -2571,8 +2615,9 @@ mod tests {
     fn spawn_ping_answering_agent(listener: tokio::net::TcpListener) {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (read_half, mut write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
+                let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                    continue;
+                };
                 let mut line = String::new();
                 if reader.read_line(&mut line).await.is_ok() && !line.is_empty() {
                     let _ = write_half
@@ -2653,9 +2698,158 @@ mod tests {
             .await
             .expect_err("EOF must not count as a pong");
         assert!(
-            err.to_string().contains("without answering the ping"),
+            err.to_string()
+                .contains("closed the connection without answering"),
             "unexpected error: {err}"
         );
+        // Worded so the SDK's recoverable-infrastructure check restarts the agent.
+        assert!(
+            err.to_string()
+                .contains("Failed to connect to agent socket"),
+            "{err}"
+        );
+    }
+
+    // ─── Agent authentication (PILOT-969) ───
+
+    /// Mock agent that answers the first line on every connection with
+    /// `reply` and then whatever `then` says to the next line.
+    fn spawn_scripted_agent(
+        listener: tokio::net::TcpListener,
+        reply: &'static str,
+        then: Option<&'static str>,
+    ) {
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let mut line = String::new();
+                let _ = reader.read_line(&mut line).await;
+                let _ = write_half.write_all(format!("{reply}\n").as_bytes()).await;
+                if let Some(then) = then {
+                    line.clear();
+                    let _ = reader.read_line(&mut line).await;
+                    let _ = write_half.write_all(format!("{then}\n").as_bytes()).await;
+                }
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn ping_says_when_the_agent_refuses_the_token() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_scripted_agent(
+            listener,
+            r#"{"id":"auth","error":{"type":"UNAUTHORIZED","message":"wrong token"}}"#,
+            None,
+        );
+        let err = ping_agent_port(port).await.unwrap_err().to_string();
+        assert!(err.contains("refused this daemon's token"), "{err}");
+        assert!(err.contains("Failed to connect to agent socket"), "{err}");
+        assert!(!probe_agent_alive(port).await);
+    }
+
+    #[tokio::test]
+    async fn ping_says_when_the_agent_predates_authentication() {
+        // An agent from before PILOT-969 answers the auth line as an unknown
+        // command, then answers the ping: it must not count as reachable,
+        // or the daemon would drive it with every answer one line late.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_scripted_agent(
+            listener,
+            r#"{"id":"auth","error":{"type":"ACTION_FAILED","message":"Unknown method: auth"}}"#,
+            Some(r#"{"id":"ping","result":{"pong":true}}"#),
+        );
+        let err = ping_agent_port(port).await.unwrap_err().to_string();
+        assert!(err.contains("older Tapsmith build"), "{err}");
+        assert!(!probe_agent_alive(port).await);
+    }
+
+    #[tokio::test]
+    async fn ping_requires_a_pong() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_scripted_agent(
+            listener,
+            r#"{"id":"auth","result":{"authenticated":true}}"#,
+            Some(r#"{"id":"ping","error":{"type":"INTERNAL_ERROR","message":"boom"}}"#),
+        );
+        let err = ping_agent_port(port).await.unwrap_err().to_string();
+        assert!(err.contains("Unexpected answer to ping"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn persistent_stream_authenticates_once_per_connection_before_any_command() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (lines_tx, mut lines_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let lines_tx = lines_tx.clone();
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                tokio::spawn(async move {
+                    loop {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {
+                                let v: Value = serde_json::from_str(line.trim()).unwrap();
+                                lines_tx
+                                    .send(v["method"].as_str().unwrap().to_string())
+                                    .unwrap();
+                                let resp = if v["method"] == "auth" {
+                                    json!({"id": "auth", "result": {"authenticated": true}})
+                                } else {
+                                    json!({"id": v["id"], "result": {"ok": true}})
+                                };
+                                let _ = write_half.write_all(format!("{resp}\n").as_bytes()).await;
+                            }
+                        }
+                    }
+                });
+            }
+        });
+
+        let cache = new_agent_stream_cache();
+        let params = ConnectionParams { host_port: port };
+        let cmd = AgentCommand::Screenshot {};
+        for _ in 0..2 {
+            send_with_persistent_cache(&cache, &params, &cmd, Duration::from_secs(2))
+                .await
+                .unwrap();
+        }
+        let mut seen = Vec::new();
+        while let Ok(m) = lines_rx.try_recv() {
+            seen.push(m);
+        }
+        assert_eq!(seen, vec!["auth", "screenshot", "screenshot"]);
+    }
+
+    #[tokio::test]
+    async fn persistent_stream_refused_token_is_a_connect_error_naming_the_cause() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        spawn_scripted_agent(
+            listener,
+            r#"{"id":"auth","error":{"type":"UNAUTHORIZED","message":"wrong token"}}"#,
+            None,
+        );
+        let cache = new_agent_stream_cache();
+        let params = ConnectionParams { host_port: port };
+        let err = send_with_persistent_cache(
+            &cache,
+            &params,
+            &AgentCommand::Screenshot {},
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("Failed to connect to agent socket"), "{err}");
+        assert!(err.contains("refused this daemon's token"), "{err}");
     }
 
     #[test]
@@ -2770,8 +2964,9 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 accept_count_clone.fetch_add(1, Ordering::SeqCst);
-                let (read_half, mut write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
+                let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                    continue;
+                };
                 tokio::spawn(async move {
                     loop {
                         let mut line = String::new();
@@ -2821,14 +3016,20 @@ mod tests {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 accept_count_clone.fetch_add(1, Ordering::SeqCst);
-                let (read_half, mut write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
+                let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                    continue;
+                };
                 let mut line = String::new();
                 if reader.read_line(&mut line).await.is_ok() && !line.is_empty() {
                     let parsed: Value = serde_json::from_str(line.trim()).unwrap();
-                    let id = parsed["id"].as_str().unwrap_or("null");
-                    let resp = format!(r#"{{"id":"{}","result":{{"ok":true}}}}"#, id);
-                    let _ = write_half.write_all(format!("{}\n", resp).as_bytes()).await;
+                    // The liveness probe is a real ping, answered as the agents do.
+                    let result = if parsed["method"] == "ping" {
+                        json!({"pong": true})
+                    } else {
+                        json!({"ok": true})
+                    };
+                    let resp = json!({"id": parsed["id"], "result": result});
+                    let _ = write_half.write_all(format!("{resp}\n").as_bytes()).await;
                     let _ = write_half.flush().await;
                 }
                 drop(write_half);
@@ -2864,8 +3065,9 @@ mod tests {
         fn spawn_echo_agent(listener: tokio::net::TcpListener) {
             tokio::spawn(async move {
                 while let Ok((stream, _)) = listener.accept().await {
-                    let (read_half, mut write_half) = stream.into_split();
-                    let mut reader = BufReader::new(read_half);
+                    let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                        continue;
+                    };
                     tokio::spawn(async move {
                         loop {
                             let mut line = String::new();
