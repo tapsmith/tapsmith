@@ -471,6 +471,45 @@ let inListButton: [Row] = listRows([
 check("a control inside the same list is a plain cover",
       analyzer(inListButton).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
       .covered(by: "button \"Checkout\""))
+// A presented alert is never scrolled away from, even when one of its
+// buttons is what covers the point.
+let alertWithButtons: [Row] = listRows([
+    (4, .cell, "Row 5", "", R(0, 300, 402, 44)),
+], after: [(3, .alert, "Delete?", "", R(40, 250, 322, 200)),
+           (4, .button, "Delete", "", R(40, 290, 322, 44)),
+           (4, .button, "Cancel", "", R(40, 334, 322, 44))])
+check("an alert's button over a row is a plain cover",
+      analyzer(alertWithButtons).analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
+      .covered(by: "button \"Delete\""))
+// A control in another window (an overlay window) is not scrolled away from.
+let otherWindowButton: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))])
+    + [(1, .window, "", "", screen), (2, .button, "Toast action", "", R(0, 774, 402, 100))]
+check("a control in another window is a plain cover",
+      analyzer(otherWindowButton).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "button \"Toast action\""))
+// A checkout bar: a "Total" label above its button. Clearing only the button
+// would leave the row under the label.
+let checkoutBar: [Row] = listRows([
+    (4, .cell, "Row 20", "", R(0, 800, 402, 44)),
+], after: [(3, .other, "", "checkout-bar", R(0, 700, 402, 174)),
+           (4, .staticText, "Total $42", "", R(16, 710, 200, 30)),
+           (4, .button, "Checkout", "", R(0, 774, 402, 100))])
+check("a control in a bar over a list is cleared as the whole bar",
+      analyzer(checkoutBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .coveredInList(by: "button \"Checkout\"", cover: R(0, 700, 402, 174), list: list))
+// A React Native ScrollView whose content has a background view behind its
+// rows: not a sticky row.
+let rnBackground: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", list),
+    (3, .other, "", "", R(0, 0, 402, 3000)),
+    (4, .other, "", "content-background", R(0, 0, 402, 3000)),
+    (4, .button, "Row 5", "", R(0, 130, 402, 60)),
+]
+checkPoint("a background behind a scroll view's rows is not a sticky row",
+           analyzer(rnBackground).analyze(button("Row 5", R(0, 130, 402, 60)), isHittable: false),
+           CGPoint(x: 201, y: 160))
 // A presented alert is never scrolled away from.
 let alertOverList: [Row] = listRows([
     (4, .cell, "Row 5", "", R(0, 300, 402, 44)),

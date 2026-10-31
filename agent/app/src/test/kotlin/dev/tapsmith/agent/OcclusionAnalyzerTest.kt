@@ -495,6 +495,66 @@ class OcclusionAnalyzerTest {
         assertClearAt(analyze(b), 300, 375)
     }
 
+    @Test
+    fun `a background drawn behind the target in scroll content is not a sticky row`() {
+        // NestedScrollView > ConstraintLayout > [card background declared
+        // first, button on top of it]: the background is painted under it.
+        val background = FakeNode(Box(0, 300, 1080, 700), drawingOrder = 1, name = "background")
+        val button = FakeNode(Box(40, 400, 1040, 550), drawingOrder = 2, takesTouches = true)
+        root(list(background, button))
+        assertClearAt(analyze(button), 540, 475)
+    }
+
+    @Test
+    fun `a sticky header drawn on top by z-order covers the row though listed first`() {
+        // React Native's stickyHeaderIndices: the header is the first cell,
+        // raised above the rows by its zIndex.
+        val header = FakeNode(Box(0, 300, 1080, 450), drawingOrder = 3, name = "header")
+        val row = FakeNode(Box(0, 320, 1080, 470), drawingOrder = 2, takesTouches = true)
+        root(list(header, row))
+        assertCoveredBy(analyze(row), "header")
+    }
+
+    @Test
+    fun `a wide later branch without a spinner does not use up the search for nearer covers`() {
+        // A full-screen host over the point holds a long list elsewhere; the
+        // loading-overlay check walks all of it, and must not stop the search
+        // from reaching the control drawn over the target lower down.
+        val far = FakeNode(Box(0, 0, 1080, 100))
+        repeat(OcclusionAnalyzer.MAX_NODES_VISITED + 500) { far.add(FakeNode(Box(0, 0, 1080, 100))) }
+        val host = FakeNode(screen, drawingOrder = 2).add(far)
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val undo = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 2, takesTouches = true, name = "button \"Undo\"")
+        root(FakeNode(screen, drawingOrder = 1).add(button, undo), host)
+        assertCoveredBy(analyze(button), "button \"Undo\"")
+    }
+
+    @Test
+    fun `a control in a bar over a list is cleared as the whole bar`() {
+        // A checkout bar: a "Total" label above its button. Clearing only the
+        // button would leave the row under the label.
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val content = FakeNode(Box(0, 200, 1080, 2400)).add(row)
+        val list = FakeNode(Box(0, 200, 1080, 2400), scrollsVertically = true).add(content)
+        val checkout = FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true, name = "button \"Checkout\"")
+        val bar = FakeNode(Box(0, 2000, 1080, 2400), drawingOrder = 1).add(FakeNode(Box(0, 2000, 1080, 2200), name = "total"), checkout)
+        root(list, bar)
+        val verdict = analyze(row)
+        assertCoveredBy(verdict, "button \"Checkout\"")
+        assertEquals(Box(0, 2000, 1080, 2400), coverBounds(verdict))
+        assertEquals(Box(0, 200, 1080, 2400), (verdict as Verdict.Covered).scroller)
+    }
+
+    @Test
+    fun `a full-screen host around a bar is not taken for the bar`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val list = FakeNode(Box(0, 200, 1080, 2400), scrollsVertically = true).add(FakeNode(Box(0, 200, 1080, 2400)).add(row))
+        val checkout = FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true, name = "checkout")
+        val host = FakeNode(screen, drawingOrder = 1).add(FakeNode(Box(0, 2200, 1080, 2400)).add(checkout))
+        root(list, host)
+        assertEquals(Box(0, 2200, 1080, 2400), coverBounds(analyze(row)))
+    }
+
     // ─── Covers in the target's own window ───
 
     @Test

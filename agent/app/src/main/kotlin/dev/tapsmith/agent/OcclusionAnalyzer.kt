@@ -340,6 +340,9 @@ object OcclusionAnalyzer {
     ): Verdict.Covered? {
         val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
         val reader = BudgetedReader(MAX_NODES_VISITED)
+        // The loading-overlay and sticky-row checks walk more widely; their
+        // own allowance keeps them from starving the touchable-cover search.
+        val extraReader = BudgetedReader(MAX_NODES_VISITED)
         // (parent, the target's branch, its index among the parent's
         // children), from the target's parent up to the root.
         val levels = mutableListOf<Triple<HitNode, HitNode, Int>>()
@@ -370,14 +373,18 @@ object OcclusionAnalyzer {
                     .sortedWith { a, b -> compareKeys(b.second, a.second) }
             for ((sibling, _) in later) {
                 searchSubtree(sibling, x, y, reader)?.let {
-                    return Verdict.Covered(it.describe(), CoverKind.CONTROL, it.bounds, scrollerBelow(depth))
+                    val list = scrollerBelow(depth)
+                    // Clear the chrome the control sits in, not just the
+                    // control: a bar's label above its button covers too.
+                    val bounds = if (list != null) chromeBounds(it, node, list) else it.bounds
+                    return Verdict.Covered(it.describe(), CoverKind.CONTROL, bounds, list)
                 }
-                if (isLoadingOverlay(sibling, x, y, reader)) {
+                if (isLoadingOverlay(sibling, x, y, extraReader)) {
                     return Verdict.Covered("a loading overlay (${sibling.describe()})", CoverKind.LOADING, sibling.bounds)
                 }
             }
             if (isListContent(node)) {
-                stickyRow(node, branchIndex, targetBounds, x, y, reader)?.let { row ->
+                stickyRow(node, branch, branchIndex, targetBounds, x, y, extraReader)?.let { row ->
                     val list = if (node.scrollsVertically) node else node.parent()
                     return Verdict.Covered(row.describe(), CoverKind.CONTROL, row.bounds, list?.bounds)
                 }
@@ -395,11 +402,34 @@ object OcclusionAnalyzer {
         return parent.scrollsVertically && parent.childCount() == 1
     }
 
-    /** Another row of [content] than the target's ([branchIndex]) stuck over
-     *  ([x], [y]): visible, containing the point, and at least as wide as the
-     *  target's visible part (a grid's neighbouring cell is not). */
+    /** The bounds of the fixed chrome [cover] sits in: its outermost ancestor
+     *  below [level] (where its branch splits from the target's) no taller
+     *  than half of [list] — a bar, not a full-screen host it is placed in. */
+    private fun chromeBounds(
+        cover: HitNode,
+        level: HitNode,
+        list: Box,
+    ): Box {
+        var node = cover
+        while (true) {
+            val parent = node.parent() ?: break
+            if (parent.sameAs(level) || parent.bounds.height * 2 > list.height) break
+            node = parent
+        }
+        return node.bounds
+    }
+
+    /** Another row of [content] than the target's ([branch] at [branchIndex])
+     *  stuck over ([x], [y]): visible, containing the point, at least as wide
+     *  as the target's visible part (a grid's neighbouring cell is not), and
+     *  painted over the target's row — or, with no drawing order to tell (a
+     *  list reporting 0 for every child, which orders a sticky header before
+     *  the rows it is drawn over), anywhere in the list. A background drawn
+     *  behind the row (a decor view declared first in a ScrollView's content)
+     *  is not a cover. */
     private fun stickyRow(
         content: HitNode,
+        branch: HitNode,
         branchIndex: Int,
         targetBounds: Box,
         x: Int,
@@ -410,7 +440,9 @@ object OcclusionAnalyzer {
             .filter { it != branchIndex }
             .firstNotNullOfOrNull { i ->
                 reader.child(content, i)?.takeIf {
-                    it.isVisible &&
+                    val unordered = it.drawingOrder == 0 && branch.drawingOrder == 0
+                    (unordered || compareKeys(drawKey(it, i), drawKey(branch, branchIndex)) > 0) &&
+                        it.isVisible &&
                         it.bounds.contains(x, y) &&
                         it.bounds.left <= targetBounds.left &&
                         it.bounds.right >= targetBounds.right

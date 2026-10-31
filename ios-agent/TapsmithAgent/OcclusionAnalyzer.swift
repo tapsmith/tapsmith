@@ -309,7 +309,9 @@ struct OcclusionAnalyzer {
     }
 
     /// Another row of the list the target's row is in, stuck over `point`:
-    /// containing it and at least as wide as the target. A list's rows are
+    /// containing it, at least as wide as the target, and no taller than half
+    /// the list. (The tree's order says nothing here: iOS lists a floating
+    /// header before the rows it is drawn over.) A list's rows are
     /// the children of a table or collection view, or of a scroll view's
     /// content view (React Native).
     private func stickyRow(over t: Int, at point: CGPoint, targetFrame: CGRect) -> (row: Int, list: Int)? {
@@ -320,7 +322,10 @@ struct OcclusionAnalyzer {
                     let node = nodes[i]
                     if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
                     let f = clippedFrame(of: i)
-                    if f.contains(point), f.minX <= targetFrame.minX + 1, f.maxX >= targetFrame.maxX - 1 {
+                    // A bar-sized row: a background laid behind the rows (a
+                    // view filling the content) is not a header stuck over one.
+                    if f.contains(point), f.minX <= targetFrame.minX + 1, f.maxX >= targetFrame.maxX - 1,
+                       f.height * 2 <= nodes[list].frame.height {
                         return (i, list)
                     }
                 }
@@ -359,9 +364,29 @@ struct OcclusionAnalyzer {
 
     /// `.coveredInList` when a vertical list can scroll target `t` clear of
     /// node `cover` (`list` when already known), else `.covered`.
+    /// A cover in a presented container (an alert's button, a popover's
+    /// row) or in another window is never scrolled away from: it is waited
+    /// out, and a drag under it would touch it.
     private func chromeCover(_ name: String, at cover: Int, over t: Int, list known: Int? = nil) -> Verdict {
-        guard let list = known ?? verticalList(holding: t, notHolding: cover) else { return .covered(by: name) }
-        return .coveredInList(by: name, cover: clippedFrame(of: cover), list: nodes[list].frame)
+        let presented = ([cover] + ancestors(of: cover)).contains { Self.presentedTypes.contains(nodes[$0].elementType) }
+        guard !presented, nodes[cover].window == nodes[t].window,
+              let list = known ?? verticalList(holding: t, notHolding: cover) else { return .covered(by: name) }
+        // A sticky row is cleared as itself; a control as the bar it sits in.
+        let bounds = known != nil ? clippedFrame(of: cover) : chromeFrame(of: cover, over: t, list: list)
+        return .coveredInList(by: name, cover: bounds, list: nodes[list].frame)
+    }
+
+    /// The frame of the fixed chrome control `cover` sits in: its outermost
+    /// ancestor that does not hold the target and is no taller than half of
+    /// `list` — a bar, with its labels, not a full-screen host it is placed in.
+    private func chromeFrame(of cover: Int, over t: Int, list: Int) -> CGRect {
+        var node = cover
+        while let p = nodes[node].parent,
+              !(p <= t && nodes[p].subtreeEnd > t),
+              nodes[p].frame.height * 2 <= nodes[list].frame.height {
+            node = p
+        }
+        return clippedFrame(of: node)
     }
 
     // MARK: - Target lookup
