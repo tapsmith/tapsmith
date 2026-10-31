@@ -41,17 +41,17 @@ class CommandHandler(
          * Commands that answer a system ANR / crash dialog on screen before
          * they run (PILOT-977). One that comes up mid-test takes focus and
          * covers the app: input (a key, a tap) would go to it, and the app's
-         * elements cannot even be found while it is up. Hierarchy dumps and
-         * screenshots stay free of side effects, so a trace still shows the
-         * dialog; a gesture already under way (touchMove/Up) is not
-         * interrupted.
+         * elements cannot even be found while it is up. Hierarchy dumps,
+         * screenshots and `evaluateSelectors` (only ever asked for locator
+         * suggestions: MCP and UI-mode snapshots, the near-miss hint) stay free
+         * of side effects, so a trace or snapshot still shows the dialog; a
+         * gesture already under way (touchMove/Up) is not interrupted.
          */
         val DIALOG_ANSWERING_METHODS =
             setOf(
                 // Finding elements.
                 "findElement",
                 "findElements",
-                "evaluateSelectors",
                 "waitForElement",
                 // Input.
                 "tap",

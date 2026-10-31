@@ -397,11 +397,11 @@ A dialog can also come up while a test runs, for example a launcher that stops r
 |---|---|---|
 | Another app's | Presses **Close app**. The system restarts that app clean, where **Wait** would leave it hung | A `systemDialog` step in the trace |
 | The app under test's "isn't responding" | Presses **Wait**, since the app may only be slow | A warning on the test, and a `systemDialog` step |
-| The app under test's "keeps stopping" | Nothing: the app has crashed. The action fails naming the dialog, and the next test's preflight relaunches the app | The test's failure |
+| The app under test's "keeps stopping" | Nothing: the app has crashed. The action fails because its element is not found, and the next test's preflight relaunches the app | The test's failure; the failure screenshot and the trace show the dialog |
 | The system's own ("Process system isn't responding") | Presses **Wait**. **Close app** would restart the whole runtime | A `systemDialog` step |
-| One whose owner Tapsmith cannot read | Nothing, since it may be the app's own | The action's failure, if it covers the element |
+| One whose owner Tapsmith cannot read | Nothing, since it may be the app's own | The action fails (usually because its element is not found while the dialog is up); the failure screenshot and the trace show the dialog |
 
-The owner comes from the dialog's window title in `dumpsys window`, as in the preflight. Tapsmith answers at most three dialogs per action, so one that keeps coming back does not hold the test. Screenshots and hierarchy dumps (the trace's captures, MCP and UI-mode snapshots) never answer a dialog, so they show it. A dialog answered outside a test, for example by a tap in UI mode or MCP, shows up on the next test that runs.
+The owner comes from the dialog's window title in `dumpsys window`, as in the preflight. Tapsmith answers at most three dialogs per action, so one that keeps coming back does not hold the test. Screenshots, hierarchy dumps and locator suggestions (the trace's captures, MCP and UI-mode snapshots, the element picker) never answer a dialog, so they show it. A dialog answered outside a test, for example by a tap in UI mode or MCP, shows up on the next test that runs.
 
 ```
   ✓ [2] › tests/login.test.ts › signs in (8.1s)

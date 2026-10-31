@@ -63,8 +63,9 @@ data class SystemDialogEvent(
  *    restarts it clean, where Wait leaves it hung to come back in seconds);
  *  - the app under test's ANR: **Wait** — it may only be slow — reported, so
  *    the test result shows it (a real ANR in the app is a finding);
- *  - the app under test's crash dialog: left up. The app is gone; the action
- *    fails naming the dialog, and the next preflight recovers the session;
+ *  - the app under test's crash dialog: left up. The app is gone, so the
+ *    action fails (its element is not found), the failure screenshot and
+ *    trace show the dialog, and the next preflight recovers the session;
  *  - system_server's ANR: Wait, never Close (that restarts the runtime);
  *  - an owner the window list does not name: left up, as it may be the app's.
  *
