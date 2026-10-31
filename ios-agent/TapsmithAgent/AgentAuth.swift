@@ -65,3 +65,57 @@ struct AgentAuth {
         return String(data: data, encoding: .utf8) ?? "{}"
     }
 }
+
+/// One connection's incoming bytes, turned into what the server does with
+/// them (PILOT-969): split into lines, blank lines skipped, the first line
+/// judged by `AgentAuth`. It is answered (the ack) or refused (the refusal,
+/// then close), and never becomes a command. Every later line is a command.
+/// Nothing comes out after a refusal.
+///
+/// Kept out of SocketServer so the host unit tests can drive it. Not thread
+/// safe: SocketServer uses it only on its socket queue.
+final class ConnectionGate {
+    enum Action: Equatable {
+        /// Write this line and carry on.
+        case send(String)
+        /// Write this line, then close the connection.
+        case sendAndClose(String)
+        /// A command for the handler.
+        case command(String)
+    }
+
+    private let auth: AgentAuth
+    private var buffer = Data()
+    private(set) var authenticated = false
+    private var closed = false
+
+    init(auth: AgentAuth) {
+        self.auth = auth
+    }
+
+    /// Feed bytes as they arrive; returns what to do, in order.
+    func receive(_ data: Data) -> [Action] {
+        guard !closed else { return [] }
+        buffer.append(data)
+        var actions: [Action] = []
+        while let newline = buffer.firstIndex(of: UInt8(ascii: "\n")) {
+            let lineData = buffer[buffer.startIndex..<newline]
+            buffer = Data(buffer[buffer.index(after: newline)...])
+            guard let line = String(data: lineData, encoding: .utf8),
+                  !line.trimmingCharacters(in: .whitespaces).isEmpty
+            else { continue }
+            if authenticated {
+                actions.append(.command(line))
+            } else if let refusal = auth.refusal(line: line) {
+                closed = true
+                buffer = Data()
+                actions.append(.sendAndClose(AgentAuth.refusalLine(refusal)))
+                return actions
+            } else {
+                authenticated = true
+                actions.append(.send(AgentAuth.ackLine()))
+            }
+        }
+        return actions
+    }
+}

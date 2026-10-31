@@ -29,11 +29,6 @@ class SocketServer {
 
     @Volatile private var running = false
 
-    /// Whether a connection has authenticated. Read and written only on `queue`.
-    private final class ConnectionState {
-        var authenticated = false
-    }
-
     init(port: UInt16, auth: AgentAuth, commandHandler: CommandHandler) {
         self.port = port
         self.auth = auth
@@ -128,38 +123,33 @@ class SocketServer {
     }
 
     private func handleConnection(_ connection: NWConnection) {
-        let state = ConnectionState()
+        let gate = ConnectionGate(auth: auth)
         connection.start(queue: queue)
         queue.asyncAfter(deadline: .now() + AgentAuth.deadline) {
-            if !state.authenticated {
+            if !gate.authenticated {
                 NSLog("[TapsmithSocket] Client did not authenticate in time; closing")
                 connection.cancel()
             }
         }
-        receiveLines(connection: connection, buffer: Data(), state: state)
+        receiveLines(connection: connection, gate: gate)
     }
 
-    /// Judge a connection's first line. True when the connection may go on.
-    private func authenticate(_ line: String, connection: NWConnection, state: ConnectionState) -> Bool {
-        if let refusal = auth.refusal(line: line) {
-            NSLog("[TapsmithSocket] Refused a connection: \(refusal)")
-            let data = (AgentAuth.refusalLine(refusal) + "\n").data(using: .utf8)!
-            connection.send(content: data, completion: .contentProcessed { _ in connection.cancel() })
-            return false
-        }
-        state.authenticated = true
-        let data = (AgentAuth.ackLine() + "\n").data(using: .utf8)!
+    private func send(_ line: String, on connection: NWConnection, thenClose: Bool) {
+        let data = (line + "\n").data(using: .utf8)!
         connection.send(content: data, completion: .contentProcessed { error in
             if let error = error {
                 NSLog("[TapsmithSocket] Write error: \(error)")
+            }
+            if thenClose || error != nil {
                 connection.cancel()
             }
         })
-        return true
     }
 
-    /// Recursively receive data and enqueue complete commands for main-thread processing.
-    private func receiveLines(connection: NWConnection, buffer: Data, state: ConnectionState) {
+    /// Recursively receive data and enqueue complete commands for main-thread
+    /// processing. The gate answers the auth line on this queue; only lines
+    /// after it become commands.
+    private func receiveLines(connection: NWConnection, gate: ConnectionGate) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
             guard let self = self, self.running else {
                 connection.cancel()
@@ -172,34 +162,21 @@ class SocketServer {
                 return
             }
 
-            var currentBuffer = buffer
-            if let data = data {
-                currentBuffer.append(data)
-            }
-
-            // Process all complete lines in the buffer
-            while let newlineIndex = currentBuffer.firstIndex(of: UInt8(ascii: "\n")) {
-                let lineData = currentBuffer[currentBuffer.startIndex..<newlineIndex]
-                currentBuffer = Data(currentBuffer[currentBuffer.index(after: newlineIndex)...])
-
-                guard let line = String(data: lineData, encoding: .utf8), !line.trimmingCharacters(in: .whitespaces).isEmpty else {
-                    continue
+            for action in gate.receive(data ?? Data()) {
+                switch action {
+                case .send(let line):
+                    self.send(line, on: connection, thenClose: false)
+                case .sendAndClose(let line):
+                    NSLog("[TapsmithSocket] Refused a connection: \(line)")
+                    self.send(line, on: connection, thenClose: true)
+                    return
+                case .command(let line):
+                    NSLog("[TapsmithSocket] Received: \(line.prefix(200))")
+                    // Enqueue for main-thread processing
+                    self.commandLock.lock()
+                    self.pendingCommands.append((line, connection))
+                    self.commandLock.unlock()
                 }
-
-                if !state.authenticated {
-                    // The first line authenticates the connection, or ends it.
-                    if !self.authenticate(line, connection: connection, state: state) {
-                        return
-                    }
-                    continue
-                }
-
-                NSLog("[TapsmithSocket] Received: \(line.prefix(200))")
-
-                // Enqueue for main-thread processing
-                self.commandLock.lock()
-                self.pendingCommands.append((line, connection))
-                self.commandLock.unlock()
             }
 
             if isComplete {
@@ -209,7 +186,7 @@ class SocketServer {
             }
 
             // Continue reading
-            self.receiveLines(connection: connection, buffer: currentBuffer, state: state)
+            self.receiveLines(connection: connection, gate: gate)
         }
     }
 }

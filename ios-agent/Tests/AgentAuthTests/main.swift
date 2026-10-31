@@ -60,6 +60,55 @@ expect("the refusal is what the daemon reads",
            && error?["message"] as? String == "wrong token")
 expect("the ack is one line", !AgentAuth.ackLine().contains("\n"))
 
+// ConnectionGate: what SocketServer does with one connection's bytes.
+func bytes(_ s: String) -> Data { s.data(using: .utf8)! }
+typealias Action = ConnectionGate.Action
+
+do {
+    let gate = ConnectionGate(auth: auth)
+    let first = gate.receive(bytes(authLine(token) + "\n" + #"{"id":"1","method":"ping"}"# + "\n"))
+    expect("the auth line is answered with the ack, never passed on as a command",
+           first == [.send(AgentAuth.ackLine()), .command(#"{"id":"1","method":"ping"}"#)])
+    expect("the connection counts as authenticated", gate.authenticated)
+    let later = gate.receive(bytes(#"{"id":"2","method":"tap"}"# + "\n"))
+    expect("later lines are commands", later == [.command(#"{"id":"2","method":"tap"}"#)])
+}
+
+do {
+    let gate = ConnectionGate(auth: auth)
+    let actions = gate.receive(bytes(authLine(String(repeating: "cd", count: 32)) + "\n"
+        + #"{"id":"1","method":"getClipboard"}"# + "\n"))
+    expect("a wrong token is refused and the connection closed, with nothing run",
+           actions == [.sendAndClose(AgentAuth.refusalLine("wrong token"))])
+    expect("a refused connection is not authenticated", !gate.authenticated)
+    expect("nothing comes out after a refusal",
+           gate.receive(bytes(authLine(token) + "\n" + #"{"id":"2","method":"tap"}"# + "\n")).isEmpty)
+}
+
+do {
+    let gate = ConnectionGate(auth: auth)
+    let actions = gate.receive(bytes(#"{"id":"1","method":"getClipboard","params":{}}"# + "\n"))
+    expect("a command sent before authenticating is refused, not run",
+           actions == [.sendAndClose(AgentAuth.refusalLine("the first line must authenticate the connection"))])
+}
+
+do {
+    let gate = ConnectionGate(auth: auth)
+    expect("blank lines before the auth line are skipped", gate.receive(bytes("\n  \n")).isEmpty)
+    let line = authLine(token) + "\n"
+    let half = line.index(line.startIndex, offsetBy: 20)
+    expect("a partial line waits for its newline", gate.receive(bytes(String(line[..<half]))).isEmpty)
+    expect("then the auth line is answered",
+           gate.receive(bytes(String(line[half...]))) == [.send(AgentAuth.ackLine())])
+}
+
+do {
+    let gate = ConnectionGate(auth: AgentAuth(token: nil))
+    let actions = gate.receive(bytes(authLine("") + "\n"))
+    expect("an agent started without a token refuses the connection",
+           actions.count == 1 && { if case .sendAndClose = actions[0] { return true } else { return false } }())
+}
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)
