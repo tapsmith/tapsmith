@@ -18,6 +18,12 @@ describe("Native: toggles and controls", () => {
     await expect(toggles.darkMode).not.toBeChecked()
   })
 
+  test("a Toggle row's text is its label, whatever the switch's state", async ({ toggles }) => {
+    await expect(toggles.row("Dark Mode")).toHaveText("Dark Mode")
+    await toggles.darkMode.setChecked(true)
+    await expect(toggles.row("Dark Mode")).toHaveText("Dark Mode")
+  })
+
   test("tapping a Toggle flips it", async ({ toggles }) => {
     await toggles.notifications.tap()
     await expect(toggles.notifications).not.toBeChecked()

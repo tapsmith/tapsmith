@@ -45,6 +45,8 @@ export class NativeTogglesScreen {
   /** A Stepper is a spin button, as ARIA has it (PILOT-702). */
   get stepper() { return this.device.getByRole("spinbutton", { name: "Quantity" }) }
   get slider() { return this.device.getByRole("slider", { name: "Volume" }) }
+  /** A Form row by its text: a Toggle row reads its label, not its "0"/"1" (PILOT-895). */
+  row(text: string) { return this.device.getByRole("listitem").filter({ hasText: text }) }
 }
 
 export class NativeListScreen {
@@ -173,7 +175,16 @@ export class UIKitControlsScreen {
 export class UIKitTableScreen {
   constructor(private device: Device) {}
 
+  /** A row by its text (PILOT-895: a row's text is its child static text). */
   row(n: number) { return this.device.getByRole("listitem").filter({ hasText: `Row ${n}` }).first() }
+  /** UIKit's disclosure indicator, a disabled button that taps through to its row. */
+  chevron(n: number) { return this.row(n).getByRole("button", { name: "chevron", exact: true }) }
+  checkmark(n: number) { return this.row(n).getByRole("button", { name: "checkmark", exact: true }) }
+  moreInfo(n: number) { return this.row(n).getByRole("button", { name: "More Info", exact: true }) }
+  /** Row 8's custom accessory: a UIButton that really is disabled. */
+  get buy() { return this.device.getByRole("button", { name: "Buy", exact: true }) }
+  /** Row 9's custom accessory: a disabled image-only button showing a checkmark. */
+  get done() { return this.row(9).getByRole("button") }
   rowText(n: number) { return this.device.getByText(`Row ${n}`, { exact: true }) }
   get selection() { return this.device.getByTestId("uikit-table-selection") }
 }

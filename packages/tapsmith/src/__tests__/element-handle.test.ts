@@ -1083,6 +1083,47 @@ describe('tap()', () => {
     expect(tap).not.toHaveBeenCalled();
   });
 
+  it("never suggests a role name from an iOS table row's joined text (PILOT-895)", () => {
+    // A UIKit row's text is its child label's, but the agent names a cell by
+    // its own (empty) label only: getByRole("listitem", { name }) would miss.
+    const row = (text: string) => makeElementInfo({
+      className: 'XCUIElementTypeCell', role: 'listitem', text, contentDescription: '',
+    });
+    const err = buildStrictModeViolationError('getByRole("listitem")', [row('Row 1'), row('Row 10')]);
+    expect(err.message).not.toContain('getByRole("listitem", { name');
+    // It is filtered by its whole text instead, so "Row 1" isn't also "Row 10".
+    expect(err.message).toContain('aka device.getByRole("listitem").filter({ hasText: /^Row 1$/ })');
+    expect(err.message).toContain('aka device.getByRole("listitem").filter({ hasText: /^Row 10$/ })');
+  });
+
+  it.each([
+    ['metacharacters', 'Total (USD): $4.50 + tax? [a/b] {x} ^|\\*'],
+    ['a line break', 'Title\nSubtitle'],
+    ['a private-use icon glyph', '\uE865 Library'],
+    ['a supplementary private-use glyph', '\u{F0000} Files'],
+  ])("suggests an iOS row filter whose RegExp matches the row's text literally, with %s", (_why, text) => {
+    const other = text + ' 2';
+    const err = buildStrictModeViolationError('getByRole("listitem")', [
+      makeElementInfo({ className: 'XCUIElementTypeCell', role: 'listitem', text, contentDescription: '' }),
+      makeElementInfo({ className: 'XCUIElementTypeCell', role: 'listitem', text: other, contentDescription: '' }),
+    ]);
+    const literal = /aka device\.getByRole\("listitem"\)\.filter\(\{ hasText: (\/.*\/) \}\)/.exec(err.message)?.[1];
+    expect(literal).toBeDefined();
+    expect(literal).not.toMatch(/[\n\p{Co}]/u);
+    const re = new Function(`return ${literal}`)() as RegExp;
+    expect(re.test(text)).toBe(true);
+    expect(re.test(other)).toBe(false);
+  });
+
+  it('suggests a long iOS row text as an anchored prefix', () => {
+    const long = 'A very long row title that goes on well past sixty characters of text';
+    const err = buildStrictModeViolationError('getByRole("listitem")', [
+      makeElementInfo({ className: 'XCUIElementTypeCell', role: 'listitem', text: long, contentDescription: '' }),
+      makeElementInfo({ className: 'XCUIElementTypeCell', role: 'listitem', text: 'Other', contentDescription: '' }),
+    ]);
+    expect(err.message).toContain(`aka device.getByRole("listitem").filter({ hasText: /^${long.slice(0, 60)}/ })`);
+  });
+
   it('suggests a long role name as a matching prefix, not an ellipsis (PILOT-549)', () => {
     const long = 'Login Form, Text inputs, buttons, focus and blur, keyboard handling';
     const err = buildStrictModeViolationError('getByRole("button")', [

@@ -257,8 +257,8 @@ struct ElementInfo {
     /// other element types fall back to value, then label.
     ///
     /// **Live-vs-snapshot divergence:** the snapshot path's
-    /// `SnapshotElementFinder.collectDescendantText` aggregates the
-    /// labels of an `.other` wrapper's descendants when the wrapper has
+    /// `DescendantText.collect` aggregates the
+    /// labels of an `.other` wrapper's (or a `.cell`'s) descendants when the wrapper has
     /// no value/label of its own — so a `Pressable` with an inner
     /// `<Text>Submit</Text>` reads as `"Submit"` via the snapshot path.
     /// The live `XCUIElement` path here does NOT walk descendants

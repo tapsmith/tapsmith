@@ -695,6 +695,21 @@ class CommandHandler {
         }
     }
 
+    /// A screenshot of the part of the screen at `frame` (points), as PNG;
+    /// nil when no part of `frame` is on screen.
+    private static func screenshotPNG(of frame: CGRect) -> Data? {
+        let image = XCUIScreen.main.screenshot().image
+        guard let cgImage = image.cgImage else { return nil }
+        let scale = image.scale
+        let pixels = CGRect(
+            x: frame.minX * scale, y: frame.minY * scale,
+            width: frame.width * scale, height: frame.height * scale
+        ).integral.intersection(CGRect(x: 0, y: 0, width: cgImage.width, height: cgImage.height))
+        guard !pixels.isNull, pixels.width > 0, pixels.height > 0,
+              let cropped = cgImage.cropping(to: pixels) else { return nil }
+        return UIImage(cgImage: cropped, scale: scale, orientation: image.imageOrientation).pngData()
+    }
+
     /// Get the XCUIElement for an element ID, checking both caches.
     ///
     /// **Cost:** O(1) cache lookup, no IPC. The IPC happens later when
@@ -972,7 +987,12 @@ class CommandHandler {
             NSLog("[TapsmithCommand] \(element.elementId) is not hittable; tapping the uncovered point \(point)")
             actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
         case .offScreen:
-            throw staleError ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
+            // An id with the bounds it was found at but no live element is
+            // one found that way by design (a row's accessory indicator,
+            // PILOT-895, or a getByLabel match): off screen, not stale.
+            let foundWithoutLiveElement = snapshotFinder.getBounds(element.elementId) != nil
+            throw (foundWithoutLiveElement ? nil : staleError)
+                ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
     }
 
@@ -2009,9 +2029,17 @@ class CommandHandler {
 
         case "highlight":
             let element = try resolveElement(params)
-            let xcElem = try getXCUIElement(element.elementId)
             let duration = params["duration"] as? Int64 ?? 1000
-            try actionExecutor.highlight(xcElem, durationMs: duration)
+            if let xcElem = try? getXCUIElement(element.elementId) {
+                try actionExecutor.highlight(xcElem, durationMs: duration)
+            } else if snapshotFinder.getBounds(element.elementId) == nil {
+                // Neither a live element nor the bounds it was found at:
+                // surface the stale error, so the SDK re-resolves.
+                _ = try getXCUIElement(element.elementId)
+            }
+            // Found with no live element by design (a row's accessory
+            // indicator, PILOT-895, or a getByLabel match): it has the
+            // bounds it was found at, which is all a highlight checks.
             return ["success": true]
 
         // ─── Screenshots ───
@@ -2024,11 +2052,23 @@ class CommandHandler {
 
         case "elementScreenshot":
             let element = try resolveElement(params)
-            let xcElem = try getXCUIElement(element.elementId)
-            let screenshot = xcElem.screenshot()
-            let pngData = screenshot.pngRepresentation
-            let base64 = pngData.base64EncodedString()
-            return ["data": base64, "format": "png"]
+            let pngData: Data
+            if let xcElem = try? getXCUIElement(element.elementId) {
+                pngData = xcElem.screenshot().pngRepresentation
+            } else if let frame = snapshotFinder.getBounds(element.elementId) {
+                // Found with no live element by design (a row's accessory
+                // indicator, PILOT-895, or a getByLabel match): the screen
+                // at the bounds it was found at.
+                guard let cropped = Self.screenshotPNG(of: frame) else {
+                    throw AgentError.actionFailed("Element is not on screen, so it has nothing to screenshot (it may be off-screen)")
+                }
+                pngData = cropped
+            } else {
+                // Neither: surface the stale error, so the SDK re-resolves.
+                _ = try getXCUIElement(element.elementId)
+                throw AgentError.elementNotFound("Element '\(element.elementId)' not found. It may have gone stale.")
+            }
+            return ["data": pngData.base64EncodedString(), "format": "png"]
 
         // ─── UI Hierarchy ───
 

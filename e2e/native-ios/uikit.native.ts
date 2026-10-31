@@ -70,6 +70,50 @@ describe("UIKit: table view", () => {
     await expect(uikitTable.rowText(3)).toBeVisible()
   })
 
+  // A UIKit row's label is empty; its text is a child static text (PILOT-895).
+  test("a row is found by its text, which leaves out the chevron", async ({ uikitTable }) => {
+    await expect(uikitTable.row(12)).toHaveCount(1)
+    await expect(uikitTable.row(12)).toHaveText("Row 12")
+    await expect(uikitTable.row(7)).toHaveText("Row 7")
+    await uikitTable.row(3).tap()
+    await expect(uikitTable.selection).toHaveText("Selected: Row 3")
+  })
+
+  // UIKit reports its accessory indicators as disabled buttons; a tap on one
+  // selects the row (PILOT-895).
+  test("a row's chevron is enabled, and a tap on it selects the row", async ({ uikitTable }) => {
+    await expect(uikitTable.chevron(2)).toBeEnabled()
+    await expect(uikitTable.checkmark(7)).toBeEnabled()
+    await expect(uikitTable.chevron(6)).toBeEnabled()
+    await expect(uikitTable.moreInfo(6)).toBeEnabled()
+    await uikitTable.chevron(2).tap()
+    await expect(uikitTable.selection).toHaveText("Selected: Row 2")
+  })
+
+  // An indicator is touched where it was found, with no live element; the
+  // other element reads still work on it (PILOT-895).
+  test("a row's chevron can be screenshotted and highlighted", async ({ uikitTable }) => {
+    const shot = await uikitTable.chevron(3).screenshot()
+    expect(shot.length).toBeGreaterThan(100)
+    await uikitTable.checkmark(7).screenshot()
+    await uikitTable.chevron(3).highlight()
+  })
+
+  // Once the table has scrolled, every chevron is still found by its own
+  // row, not by its position among the others (PILOT-895).
+  test("a chevron tap on a scrolled-in row selects that row", async ({ uikitTable }) => {
+    await uikitTable.row(40).scrollIntoView({ maxScrolls: 30 })
+    await uikitTable.chevron(40).tap()
+    await expect(uikitTable.selection).toHaveText("Selected: Row 40")
+    await uikitTable.chevron(38).tap()
+    await expect(uikitTable.selection).toHaveText("Selected: Row 38")
+  })
+
+  test("a custom accessory button that is disabled stays disabled", async ({ uikitTable }) => {
+    await expect(uikitTable.buy).toBeDisabled()
+    await expect(uikitTable.done).toBeDisabled()
+  })
+
   // UITableView exposes every row; one with no loaded cell reports its
   // contents at a placeholder frame on screen (PILOT-800).
   test("an off-screen row is not visible, and is placed below the screen", async ({ uikitTable }) => {

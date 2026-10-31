@@ -30,6 +30,8 @@
 		E0DE662FCB6D79C8C8970C91 /* TouchPlanClock.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB260507663C49D261F50588 /* TouchPlanClock.swift */; };
 		7910000000000000000000A1 /* TouchSettle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7910000000000000000000A2 /* TouchSettle.swift */; };
 		8000000000000000000000A1 /* CellFrames.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8000000000000000000000A2 /* CellFrames.swift */; };
+		8950000000000000000000B1 /* CellAccessories.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8950000000000000000000B2 /* CellAccessories.swift */; };
+		8950000000000000000000B3 /* DescendantText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8950000000000000000000B4 /* DescendantText.swift */; };
 		5C29D8A1B7E44F0A9D3E6B21 /* TypingFocus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */; };
 		3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */; };
 		8C25A0F1D3E44B6A9F7E2C01 /* PinchPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */; };
@@ -60,6 +62,8 @@
 		AB260507663C49D261F50588 /* TouchPlanClock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchPlanClock.swift; sourceTree = "<group>"; };
 		7910000000000000000000A2 /* TouchSettle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchSettle.swift; sourceTree = "<group>"; };
 		8000000000000000000000A2 /* CellFrames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CellFrames.swift; sourceTree = "<group>"; };
+		8950000000000000000000B2 /* CellAccessories.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CellAccessories.swift; sourceTree = "<group>"; };
+		8950000000000000000000B4 /* DescendantText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DescendantText.swift; sourceTree = "<group>"; };
 		7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingFocus.swift; sourceTree = "<group>"; };
 		9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoubleTapRoute.swift; sourceTree = "<group>"; };
 		8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinchPlan.swift; sourceTree = "<group>"; };
@@ -105,6 +109,8 @@
 				AB260507663C49D261F50588 /* TouchPlanClock.swift */,
 				7910000000000000000000A2 /* TouchSettle.swift */,
 				8000000000000000000000A2 /* CellFrames.swift */,
+				8950000000000000000000B2 /* CellAccessories.swift */,
+				8950000000000000000000B4 /* DescendantText.swift */,
 				7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */,
 				9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */,
 				8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */,
@@ -237,6 +243,8 @@
 				E0DE662FCB6D79C8C8970C91 /* TouchPlanClock.swift in Sources */,
 				7910000000000000000000A1 /* TouchSettle.swift in Sources */,
 				8000000000000000000000A1 /* CellFrames.swift in Sources */,
+				8950000000000000000000B1 /* CellAccessories.swift in Sources */,
+				8950000000000000000000B3 /* DescendantText.swift in Sources */,
 				5C29D8A1B7E44F0A9D3E6B21 /* TypingFocus.swift in Sources */,
 				3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */,
 				8C25A0F1D3E44B6A9F7E2C01 /* PinchPlan.swift in Sources */,

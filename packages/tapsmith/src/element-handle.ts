@@ -553,6 +553,19 @@ export function truncateText(s: string, max: number): string {
   return s.length <= max ? s : s.slice(0, max - 1) + '…';
 }
 
+/**
+ * `text` as the source of a RegExp literal that matches it literally: RegExp
+ * metacharacters and `/` escaped, and characters a literal can't hold
+ * (line breaks, other controls, private-use glyphs) as `\uXXXX`.
+ */
+function escapeRegExpLiteral(text: string): string {
+  return text
+    .replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+    // Each UTF-16 unit, so a supplementary-plane glyph becomes its surrogate pair.
+    .replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029\p{Co}]/gu, (c) =>
+      Array.from({ length: c.length }, (_, i) => `\\u${c.charCodeAt(i).toString(16).padStart(4, '0')}`).join(''));
+}
+
 /** Best-effort unambiguous locator suggestion for one resolved element. */
 function suggestSelectorFor(el: ElementInfo): string | undefined {
   // getByTestId matches the whole resource-id — an RN testID. A native
@@ -575,6 +588,14 @@ function suggestSelectorFor(el: ElementInfo): string | undefined {
     const exact = name.length <= 60;
     const shown = exact ? name : name.slice(0, 60);
     return `device.getByRole("${el.role}", { name: "${escapeJsString(shown)}"${exact ? ', exact: true' : ''} })`;
+  }
+  // iOS: a table row with no name of its own has the text it contains
+  // (PILOT-895), which getByRole's name doesn't read: filter by that text,
+  // anchored so "Row 1" doesn't also match "Row 10".
+  if (el.className === 'XCUIElementTypeCell' && el.role && el.text && unknownRoleMessage(el.role) === null) {
+    const whole = el.text.length <= 60;
+    const pattern = escapeRegExpLiteral(whole ? el.text : el.text.slice(0, 60));
+    return `device.getByRole("${el.role}").filter({ hasText: /^${pattern}${whole ? '$' : ''}/ })`;
   }
   // iOS: a control's name is a getByLabel field's name, never getByText's
   // text; the value of anything but text is not text either (PILOT-794).
