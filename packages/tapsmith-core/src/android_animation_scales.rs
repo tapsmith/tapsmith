@@ -430,16 +430,15 @@ pub async fn on_select(
         warn!(%serial, path = %path.display(), "Not turning animations off: could not record the device's own values ({e:#})");
         return None;
     }
-    if !turn_off(h, serial).await {
-        // Nothing (or not everything) changed; restore whatever did.
-        if let Some(after) = read_device(h, serial).await {
-            if put_back(h, serial, &after.scales, &record.originals).await {
-                remove_record(&path);
-            }
-        }
-        return None;
+    if turn_off(h, serial).await {
+        info!(%serial, "Turned the device's animation scales off for this session");
+    } else {
+        // The outcome is unknown, not "nothing changed": a timed-out adb
+        // call's remote shell keeps running and can still land. Keep the
+        // record and treat the scales as applied; the restore puts back only
+        // what reads 0, so a put that never landed is simply left alone.
+        warn!(%serial, "Keeping the animation-scale record to restore at session end");
     }
-    info!(%serial, "Turned the device's animation scales off for this session");
     Some(Applied {
         serial: serial.to_string(),
         record_path: path,
@@ -535,9 +534,6 @@ mod tests {
                         out.push('\n');
                     }
                     ["settings", "put", "global", k, v] => {
-                        if self.fail_writes {
-                            anyhow::bail!("adb: device offline");
-                        }
                         settings.insert(k.to_string(), v.to_string());
                     }
                     ["settings", "delete", "global", k] => {
@@ -545,6 +541,9 @@ mod tests {
                     }
                     other => panic!("unexpected command {other:?}"),
                 }
+            }
+            if self.fail_writes && command.contains("settings put") {
+                anyhow::bail!("adb command timed out after 3s");
             }
             Ok(out)
         }
@@ -809,16 +808,22 @@ mod tests {
         assert!(applied.record_path.exists());
     }
 
+    /// An apply whose adb call errors (a timeout) may still land: the remote
+    /// shell keeps running. So the session keeps its record and treats the
+    /// scales as applied; the restore puts back only what reads 0.
     #[tokio::test]
-    async fn a_failed_write_leaves_no_record_behind() {
+    async fn an_apply_that_errors_but_lands_later_is_still_restored() {
         let dir = tempfile::tempdir().unwrap();
         let mut h = FakeHost::new(None, [Some("1"), Some("1"), Some("1")]);
-        h.fail_writes = true;
-        assert_eq!(
-            on_select(&h, dir.path(), "R58M", Some(true), None).await,
-            None
-        );
-        assert!(!record_path(dir.path(), "R58M", None).exists());
+        h.fail_writes = true; // the puts land, then adb reports a timeout
+        let applied = on_select(&h, dir.path(), "R58M", Some(true), None)
+            .await
+            .expect("an unknown outcome is kept as applied");
+        assert_eq!(h.scales(), [some("0"), some("0"), some("0")]);
+        assert!(applied.record_path.exists());
+        h.fail_writes = false;
+        restore(&h, &applied).await;
         assert_eq!(h.scales(), [some("1"), some("1"), some("1")]);
+        assert!(!applied.record_path.exists());
     }
 }
