@@ -555,6 +555,51 @@ class OcclusionAnalyzerTest {
         assertEquals(Box(0, 2200, 1080, 2400), coverBounds(analyze(row)))
     }
 
+    @Test
+    fun `with no drawing order, an image laid under a button is not a sticky row`() {
+        // Compose before 1.9: Box { Image; Button } in a scrolling column,
+        // every drawing order 0. The image is listed first but is a backdrop.
+        val image = FakeNode(Box(0, 300, 1080, 900), name = "image \"Hero\"")
+        val button = FakeNode(Box(40, 700, 1040, 850), takesTouches = true)
+        root(list(image, button))
+        assertClearAt(analyze(button), 540, 775)
+    }
+
+    @Test
+    fun `with no drawing order, a sticky header is not covered by the row scrolled under it`() {
+        val header = FakeNode(Box(0, 300, 1080, 450), takesTouches = true, name = "header")
+        val row = FakeNode(Box(0, 320, 1080, 470), name = "row 5")
+        root(list(header, row))
+        assertClearAt(analyze(header), 540, 375)
+    }
+
+    @Test
+    fun `a wide later branch does not use up the sticky-row check either`() {
+        val far = FakeNode(Box(0, 0, 1080, 100))
+        repeat(OcclusionAnalyzer.MAX_NODES_VISITED + 500) { far.add(FakeNode(Box(0, 0, 1080, 100))) }
+        val host = FakeNode(screen, drawingOrder = 2).add(far)
+        val header = FakeNode(Box(0, 300, 1080, 450), name = "header")
+        val row = FakeNode(Box(0, 320, 1080, 470), takesTouches = true)
+        root(FakeNode(screen, drawingOrder = 1).add(list(header, row)), host)
+        assertCoveredBy(analyze(row), "header")
+    }
+
+    @Test
+    fun `a control inside a loading overlay over a list row is never scrolled away from`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val rows = FakeNode(Box(0, 200, 1080, 2400), scrollsVertically = true).add(FakeNode(Box(0, 200, 1080, 2400)).add(row))
+        val cancel = FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true, name = "button \"Cancel\"")
+        val overlay =
+            FakeNode(
+                Box(0, 1800, 1080, 2400),
+                drawingOrder = 1,
+            ).add(FakeNode(Box(490, 1850, 590, 1950), isProgressIndicator = true), cancel)
+        root(rows, overlay)
+        val verdict = analyze(row)
+        assertCoveredBy(verdict, "button \"Cancel\"")
+        assertEquals(null, (verdict as Verdict.Covered).scroller)
+    }
+
     // ─── Covers in the target's own window ───
 
     @Test

@@ -530,6 +530,27 @@ check("a loading overlay over a row is waited out, not scrolled away from",
           .analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
       .covered(by: "a loading overlay (element)"))
 
+// A loading overlay drawn over a footer button is what is in the way first:
+// wait it out (a drag under it would be wasted), whatever chrome is beneath.
+let overlayOverFooter: [Row] = footer + [(3, .other, "", "", screen), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]
+check("a loading overlay over a footer button is waited out, not scrolled away from",
+      analyzer(overlayOverFooter).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+let cancelInOverlay: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
+    after: [(3, .other, "", "", R(0, 600, 402, 274)),
+            (4, .activityIndicator, "", "", R(181, 620, 40, 40)),
+            (4, .button, "Cancel", "", R(0, 774, 402, 100))])
+check("a control inside a loading overlay is named but never scrolled away from",
+      analyzer(cancelInOverlay).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "button \"Cancel\""))
+let overlayOverTabBar: [Row] = tabBarOverList + [(3, .other, "", "", screen), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]
+check("a loading overlay over a tab bar is waited out before the bar is scrolled away from",
+      analyzer(overlayOverTabBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+check("…while a hittable target under the tab bar is still scrolled clear",
+      analyzer(overlayOverTabBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: true),
+      .coveredInList(by: "tab bar \"Tab Bar\"", cover: R(0, 791, 402, 83), list: list))
+
 // ─── Keyboard first (PILOT-622) ───
 
 func checkKF(_ name: String, _ got: OcclusionAnalyzer.KeyboardFirst, _ want: OcclusionAnalyzer.KeyboardFirst) {

@@ -211,11 +211,20 @@ struct OcclusionAnalyzer {
             clips.append((node.frame, describe(node), i))
         }
         for clip in clips {
+            let before = visible
             visible = Self.subtract(clip.rect, from: visible)
             if visible.isNull
                 || visible.width < Self.minVisibleExtent
                 || visible.height < Self.minVisibleExtent {
                 if let bar = clip.node, let t = targetIndex {
+                    // A loading overlay drawn over the bar is what is in the
+                    // way first: wait it out, and keep the drags for after.
+                    if !isHittable, let loading = paintedOver(
+                        t, at: CGPoint(x: before.midX, y: before.midY),
+                        keyboardWindows: keyboardWindows, targetInKeyboard: targetInKeyboard
+                    ).loading {
+                        return .covered(by: loadingName(loading))
+                    }
                     return chromeCover(clip.name, at: bar, over: t)
                 }
                 return .covered(by: clip.name)
@@ -234,6 +243,31 @@ struct OcclusionAnalyzer {
                 ? .clear(point: point, visible: visible)
                 : .unlocated(point: point, visible: visible)
         }
+        let (cover, loading) = paintedOver(t, at: point, keyboardWindows: keyboardWindows, targetInKeyboard: targetInKeyboard)
+        if let loading {
+            // The overlay is on top of any control under it: wait it out. A
+            // control in the overlay (its Cancel button) is named, but is
+            // never scrolled away from either.
+            guard let cover, cover > loading else { return .covered(by: loadingName(loading)) }
+            if cover < nodes[loading].subtreeEnd { return .covered(by: describe(nodes[cover])) }
+        }
+        if let cover {
+            return chromeCover(describe(nodes[cover]), at: cover, over: t)
+        }
+        if let row = stickyRow(over: t, at: point, targetFrame: visible) {
+            return chromeCover(describe(nodes[row.row]), at: row.row, over: t, list: row.list)
+        }
+        return .clear(point: point, visible: visible)
+    }
+
+    private func loadingName(_ i: Int) -> String { "a loading overlay (\(describe(nodes[i])))" }
+
+    /// What is painted after target `t` over `point`: the topmost
+    /// interactive control, and the outermost view that is or holds a
+    /// progress indicator (a loading overlay).
+    private func paintedOver(
+        _ t: Int, at point: CGPoint, keyboardWindows: Set<Int>, targetInKeyboard: Bool
+    ) -> (cover: Int?, loading: Int?) {
         // Runs of the same text as the target (a link inside a paragraph).
         let paragraph = nodes[t].parent.flatMap { nodes[$0].elementType == .staticText ? $0 : nil }
 
@@ -256,15 +290,7 @@ struct OcclusionAnalyzer {
                 loading = i
             }
         }
-        if let cover {
-            if Self.presentedTypes.contains(nodes[cover].elementType) { return .covered(by: describe(nodes[cover])) }
-            return chromeCover(describe(nodes[cover]), at: cover, over: t)
-        }
-        if let loading { return .covered(by: "a loading overlay (\(describe(nodes[loading])))") }
-        if let row = stickyRow(over: t, at: point, targetFrame: visible) {
-            return chromeCover(describe(nodes[row.row]), at: row.row, over: t, list: row.list)
-        }
-        return .clear(point: point, visible: visible)
+        return (cover, loading)
     }
 
     /// The interactive control painted after the target that contains any of

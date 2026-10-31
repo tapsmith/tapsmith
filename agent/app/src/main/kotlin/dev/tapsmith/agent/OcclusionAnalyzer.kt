@@ -343,6 +343,7 @@ object OcclusionAnalyzer {
         // The loading-overlay and sticky-row checks walk more widely; their
         // own allowance keeps them from starving the touchable-cover search.
         val extraReader = BudgetedReader(MAX_NODES_VISITED)
+        val rowReader = BudgetedReader(MAX_NODES_VISITED)
         // (parent, the target's branch, its index among the parent's
         // children), from the target's parent up to the root.
         val levels = mutableListOf<Triple<HitNode, HitNode, Int>>()
@@ -373,7 +374,9 @@ object OcclusionAnalyzer {
                     .sortedWith { a, b -> compareKeys(b.second, a.second) }
             for ((sibling, _) in later) {
                 searchSubtree(sibling, x, y, reader)?.let {
-                    val list = scrollerBelow(depth)
+                    // A control in a loading overlay (its Cancel button) is
+                    // waited out with the overlay, never scrolled away from.
+                    val list = scrollerBelow(depth)?.takeUnless { isLoadingOverlay(sibling, x, y, extraReader) }
                     // Clear the chrome the control sits in, not just the
                     // control: a bar's label above its button covers too.
                     val bounds = if (list != null) chromeBounds(it, node, list) else it.bounds
@@ -384,7 +387,7 @@ object OcclusionAnalyzer {
                 }
             }
             if (isListContent(node)) {
-                stickyRow(node, branch, branchIndex, targetBounds, x, y, extraReader)?.let { row ->
+                stickyRow(node, branch, branchIndex, targetBounds, x, y, rowReader)?.let { row ->
                     val list = if (node.scrollsVertically) node else node.parent()
                     return Verdict.Covered(row.describe(), CoverKind.CONTROL, row.bounds, list?.bounds)
                 }
@@ -424,9 +427,11 @@ object OcclusionAnalyzer {
      *  as the target's visible part (a grid's neighbouring cell is not), and
      *  painted over the target's row — or, with no drawing order to tell (a
      *  list reporting 0 for every child, which orders a sticky header before
-     *  the rows it is drawn over), anywhere in the list. A background drawn
-     *  behind the row (a decor view declared first in a ScrollView's content)
-     *  is not a cover. */
+     *  the rows it is drawn over), listed before it and row-sized (no taller
+     *  than twice the target's row). A background drawn behind the row (a
+     *  decor view declared first in a ScrollView's content, an image under a
+     *  button) is not a cover, and nor is a row scrolled under a target that
+     *  is itself the sticky header. */
     private fun stickyRow(
         content: HitNode,
         branch: HitNode,
@@ -440,8 +445,13 @@ object OcclusionAnalyzer {
             .filter { it != branchIndex }
             .firstNotNullOfOrNull { i ->
                 reader.child(content, i)?.takeIf {
-                    val unordered = it.drawingOrder == 0 && branch.drawingOrder == 0
-                    (unordered || compareKeys(drawKey(it, i), drawKey(branch, branchIndex)) > 0) &&
+                    val drawnOver =
+                        if (it.drawingOrder == 0 && branch.drawingOrder == 0) {
+                            i < branchIndex && it.bounds.height <= 2 * branch.bounds.height
+                        } else {
+                            compareKeys(drawKey(it, i), drawKey(branch, branchIndex)) > 0
+                        }
+                    drawnOver &&
                         it.isVisible &&
                         it.bounds.contains(x, y) &&
                         it.bounds.left <= targetBounds.left &&
