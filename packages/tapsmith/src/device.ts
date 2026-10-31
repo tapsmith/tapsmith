@@ -35,7 +35,7 @@ import { ElementHandle, locatorOptionsToSelector, type LocatorOptions } from './
 import type { DeviceKey, SwipeDirection } from './input-names.js';
 import type { Role } from './roles.js';
 import { withActionProgress } from './action-progress.js';
-import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
+import { DEFAULT_APP_RESET_COLD_EVERY, reduceMotionFlag, type TapsmithConfig } from './config.js';
 import { Tracing } from './trace/tracing.js';
 import { type TraceCollector, getActiveTraceCollector, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory, ConsoleLevel, NetworkCaptureRoute } from './trace/types.js';
@@ -244,9 +244,12 @@ export class Device {
 
   private _typingDelayMs: number;
   private _doubleTapIntervalMs: number;
+  /** The config's `reducedMotion`, sent with every device selection (PILOT-971). */
+  private _reducedMotion: TapsmithConfig['reducedMotion'];
 
-  constructor(client: TapsmithGrpcClient, config?: Partial<Pick<TapsmithConfig, 'timeout' | 'package' | 'platform' | 'simulator' | 'typingDelay' | 'doubleTapInterval' | 'appResetColdEvery'>>) {
+  constructor(client: TapsmithGrpcClient, config?: Partial<Pick<TapsmithConfig, 'timeout' | 'package' | 'platform' | 'simulator' | 'typingDelay' | 'doubleTapInterval' | 'appResetColdEvery' | 'reducedMotion'>>) {
     this._client = client;
+    this._reducedMotion = config?.reducedMotion;
     this._defaultTimeoutMs = config?.timeout ?? 30_000;
     this._appResetColdEvery = config?.appResetColdEvery ?? DEFAULT_APP_RESET_COLD_EVERY;
     this._typingDelayMs = config?.typingDelay ?? 0;
@@ -654,6 +657,7 @@ export class Device {
       networkTracingEnabled,
       networkHosts,
       passthroughHosts,
+      reduceMotionFlag(this._reducedMotion),
     );
     if (!res.success) {
       throw new Error(res.errorMessage || 'Set device failed');

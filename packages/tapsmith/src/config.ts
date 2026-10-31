@@ -30,6 +30,17 @@ export const APP_RESET_SCOPES: readonly AppResetScope[] = ['auto', 'file', 'test
 /** Default for {@link TapsmithConfig.appResetColdEvery}. */
 export const DEFAULT_APP_RESET_COLD_EVERY = 10;
 export type Platform = 'android' | 'ios';
+/** `reducedMotion` values, as in Playwright. */
+export type ReducedMotion = 'reduce' | 'no-preference';
+
+/**
+ * `reducedMotion` as the daemon's SetDevice flag (PILOT-971): `true` turns the
+ * device's animations off for the session, `false` undoes that, and unset
+ * (the option left out) changes nothing.
+ */
+export function reduceMotionFlag(value: ReducedMotion | undefined): boolean | undefined {
+  return value === undefined ? undefined : value === 'reduce';
+}
 
 export type { TraceMode, TraceConfig, VideoMode, VideoConfig };
 
@@ -220,6 +231,19 @@ export interface TapsmithConfig {
    * config change. See `docs/telemetry.md`.
    */
   telemetry?: boolean;
+
+  /**
+   * `'reduce'` turns the device's animations off for the session, the mobile
+   * counterpart of Playwright's `reducedMotion`. On Android it sets the
+   * window, transition and animator duration scales to 0 when the device is
+   * selected, and puts the device's own values back when the session ends
+   * (after a crash, the next session on that device does). Apps see this as
+   * the system "remove animations" setting, so one that reads it may behave
+   * differently. `'no-preference'` (the default) leaves the device's settings
+   * alone. Not yet applied on iOS. Root config only: every project on a
+   * device shares it.
+   */
+  reducedMotion?: ReducedMotion;
 
   /**
    * Delay in milliseconds between keystrokes when typing text.
@@ -1075,6 +1099,7 @@ const ROOT_CHECKS: { readonly [K in keyof TapsmithConfig]-?: KeyCheck } = {
   appResetColdEvery: delegated('appResetColdEvery', (o) => validateAppResetOptions(o)),
   ui: optionObject(UI_KEYS, delegated('ui', (o) => validateUiOptions(o))),
   telemetry: aBoolean,
+  reducedMotion: oneOf(['reduce', 'no-preference']),
   typingDelay: nonNegativeMs,
   doubleTapInterval: positiveMs,
   simulator: optionalString,

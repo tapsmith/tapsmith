@@ -785,6 +785,7 @@ export class TapsmithGrpcClient {
     networkTracingEnabled = false,
     networkHosts: string[] = [],
     passthroughHosts: string[] = [],
+    reduceMotion?: boolean,
   ): Promise<ActionResponse> {
     return this.call<ActionResponse>('setDevice', {
       requestId: requestId(),
@@ -792,6 +793,8 @@ export class TapsmithGrpcClient {
       networkTracingEnabled,
       networkHosts,
       passthroughHosts,
+      // Optional on the wire: unset tells the daemon to change nothing.
+      ...(reduceMotion !== undefined ? { reduceMotion } : {}),
     }, 120_000);
   }
 

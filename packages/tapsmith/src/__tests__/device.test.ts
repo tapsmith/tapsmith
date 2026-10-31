@@ -682,7 +682,24 @@ describe('Device.setDevice()', () => {
       true,
       ['example.test'],
       ['pinned.example.test'],
+      undefined,
     );
+  });
+
+  // PILOT-971: the daemon turns the Android animation scales off for the
+  // session (and restores them after) when the config says `reduce`; with
+  // the option unset it is told nothing, so it changes nothing.
+  it.each([
+    ['reduce', true],
+    ['no-preference', false],
+    [undefined, undefined],
+  ] as const)('sends reducedMotion %s to the daemon as %s', async (reducedMotion, expected) => {
+    const setDevice = vi.fn(async () => successResponse());
+    const device = new Device(makeMockClient({ setDevice }), { reducedMotion });
+
+    await device.setDevice('emulator-5554');
+
+    expect(setDevice).toHaveBeenCalledWith('emulator-5554', false, [], [], expected);
   });
 });
 
