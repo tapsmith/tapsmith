@@ -58,6 +58,7 @@ export default function RootLayout() {
           <Stack.Screen name="api-calls" options={{ title: "API Calls" }} />
           <Stack.Screen name="chat" options={{ title: "Chat" }} />
           <Stack.Screen name="occlusion" options={{ title: "Occlusion" }} />
+          <Stack.Screen name="covers" options={{ title: "Covers" }} />
           <Stack.Screen name="keyboard" options={{ title: "Keyboard" }} />
           <Stack.Screen name="text-matching" options={{ title: "Text Matching" }} />
           <Stack.Screen name="webview" options={{ title: "WebView" }} />

@@ -89,7 +89,7 @@ Tapsmith's API is Playwright-shaped, but these differ:
 - \`.fill(text)\` → \`.clearAndType(text)\` to replace a field's text, or \`.type(text)\` to add to it.
 - \`.check()\` / \`.uncheck()\` → \`.setChecked(true)\` / \`.setChecked(false)\`.
 - \`page\` → the \`device\` fixture: \`device.getByRole(...)\`.
-- Taps do not scroll: call \`await locator.scrollIntoView()\` before tapping an element further down a list.
+- Taps do not scroll an off-screen element into view: call \`await locator.scrollIntoView()\` before tapping an element further down a list.
 
 ### Anti-patterns
 
