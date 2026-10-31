@@ -154,6 +154,28 @@ fn is_valid_token(s: &str) -> bool {
     s.len() == TOKEN_BYTES * 2 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
+/// In the error for an agent that never sends a challenge: what every agent
+/// built before PILOT-969 does.
+const PREDATES_AUTH: &str = "predates authentication";
+
+/// Whether `err` (an error's text) says the agent never sent its challenge,
+/// so it is most likely from an older Tapsmith build.
+pub(crate) fn predates_auth(err: &str) -> bool {
+    err.contains(PREDATES_AUTH)
+}
+
+/// The start failure for an agent build that predates authentication. A
+/// restart relaunches the same build, so it deliberately avoids the wording
+/// the SDK retries an agent start on ("Agent is not responding", "Timed out
+/// waiting for iOS agent", "Failed to connect to agent socket"). `fix` says
+/// how to replace the build.
+pub(crate) fn stale_agent_message(agent: &str, fix: &str) -> String {
+    format!(
+        "{agent} is from an older Tapsmith build: it never sent the authentication challenge \
+         this Tapsmith version requires (PILOT-969), so it cannot be used. {fix}"
+    )
+}
+
 /// A fresh nonce: 32 random bytes as lowercase hex.
 fn new_nonce() -> Result<String> {
     generate_token()
@@ -272,7 +294,7 @@ where
         .map_err(|_| {
             anyhow!(
                 "the agent did not send its authentication challenge within {timeout:?} \
-                 (it is from an older Tapsmith build that predates authentication, or it is \
+                 (it is from an older Tapsmith build that {PREDATES_AUTH}, or it is \
                  not answering)"
             )
         })?
@@ -379,6 +401,32 @@ mod tests {
 
     const TOKEN: &str = "abababababababababababababababababababababababababababababababab";
     const NONCE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn a_stale_agent_is_reported_without_the_wording_the_sdk_retries_on() {
+        let msg = stale_agent_message("The agent on emulator-5554", "Reinstall it.");
+        for retried in [
+            "Agent is not responding",
+            "Timed out waiting for iOS agent",
+            "Failed to connect to agent socket",
+            "xcodebuild exited",
+        ] {
+            assert!(!msg.contains(retried), "{msg}");
+        }
+        assert!(msg.ends_with("Reinstall it."), "{msg}");
+    }
+
+    #[tokio::test]
+    async fn a_silent_agent_is_recognised_as_predating_authentication() {
+        let (client, _server) = tokio::io::duplex(1024);
+        let (r, mut w) = tokio::io::split(client);
+        let mut r = BufReader::new(r);
+        let err = authenticate(&mut r, &mut w, TOKEN, Duration::from_millis(20))
+            .await
+            .unwrap_err();
+        assert!(predates_auth(&format!("{err:#}")));
+        assert!(!predates_auth("the agent refused this daemon's token"));
+    }
 
     #[test]
     fn proofs_match_the_shared_test_vector() {

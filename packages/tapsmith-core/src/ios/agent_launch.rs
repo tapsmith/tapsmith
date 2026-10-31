@@ -251,6 +251,9 @@ async fn start_agent_impl(
             let out_lines = stdout_tail.lock().unwrap().join("\n");
             let err_lines = stderr_tail.lock().unwrap().join("\n");
             let target_kind = if is_physical { "device" } else { "simulator" };
+            if crate::agent_auth::predates_auth(&last_ping_error) {
+                bail!("{}", stale_ios_agent_message(udid, xctestrun_path));
+            }
             bail!(
                 "Timed out waiting for iOS agent to start on {target_kind} {udid} after 150s. \
                  Killed xcodebuild. Check that the XCUITest bundle is built correctly.\n\
@@ -1136,6 +1139,18 @@ async fn agent_port_listeners(port: u16) -> AgentPortListeners {
     AgentPortListeners(commands)
 }
 
+/// The start failure for an iOS agent build from before agent authentication,
+/// naming the build and how to replace it: a same-version auto-build cache
+/// is not rebuilt on its own.
+fn stale_ios_agent_message(udid: &str, xctestrun_path: &str) -> String {
+    crate::agent_auth::stale_agent_message(
+        &format!("The iOS agent for {udid} ({xctestrun_path})"),
+        "Rebuild it for this Tapsmith version: if it is under ~/.tapsmith/ios-simulator-agent, \
+         delete that version's directory and Tapsmith rebuilds it on the next run; otherwise \
+         rebuild the build your iosXctestrun or TAPSMITH_IOS_XCTESTRUN names.",
+    )
+}
+
 /// Ping the iOS agent to check if it's running: an authenticated ping that
 /// must come back as a pong (PILOT-969).
 async fn ping_agent(port: u16) -> Result<()> {
@@ -1338,6 +1353,14 @@ mod tests {
         assert!(contents.contains("UITargetAppBundleIdentifier"));
         // Launch mode must NOT inject the attach flag.
         assert!(!contents.contains("TAPSMITH_ATTACH_TO_RUNNING_APP"));
+    }
+
+    #[test]
+    fn a_stale_ios_agent_names_its_build_and_the_fix() {
+        let msg = stale_ios_agent_message("SIM-1", "/c/0.7.0/x.xctestrun");
+        assert!(msg.contains("/c/0.7.0/x.xctestrun"), "{msg}");
+        assert!(msg.contains("~/.tapsmith/ios-simulator-agent"), "{msg}");
+        assert!(!msg.contains("Timed out waiting for iOS agent"), "{msg}");
     }
 
     #[tokio::test]

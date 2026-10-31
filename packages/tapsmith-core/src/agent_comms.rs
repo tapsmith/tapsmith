@@ -1322,6 +1322,21 @@ impl AgentConnection {
             let _ = adb::remove_forward(serial, self.host_port).await;
             self.forward.forget(serial, self.host_port);
         }
+        if crate::agent_auth::predates_auth(&format!("{last_err:#}")) {
+            let fix = if ios {
+                "Rebuild the iOS agent for this Tapsmith version, then run again."
+            } else {
+                "Set agentApk and agentTestApk in your Tapsmith config so Tapsmith installs the \
+                 current agent (or reinstall it yourself), then run again."
+            };
+            bail!(
+                "{}",
+                crate::agent_auth::stale_agent_message(
+                    &format!("The Tapsmith agent on device {serial}"),
+                    fix
+                )
+            );
+        }
         bail!(
             "Agent is not responding on device {serial} after {}s: {last_err}. Is the agent app running?",
             readiness.as_secs()
