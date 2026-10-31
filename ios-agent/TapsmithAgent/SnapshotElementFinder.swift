@@ -558,6 +558,17 @@ class SnapshotElementFinder {
         throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
     }
 
+    /// Bind `elementId` to `element` from now on, in place of the query it
+    /// was cached with — for a target about to be scrolled, whose cached
+    /// query may bind it by position (PILOT-980). No-op for an id not cached.
+    func rebind(_ elementId: String, to element: XCUIElement) {
+        lock.lock()
+        if elementCache[elementId] != nil || identityCache[elementId] != nil {
+            elementCache[elementId] = element
+        }
+        lock.unlock()
+    }
+
     /// Get cached snapshot bounds for an element (for coordinate-based actions).
     ///
     /// **Cost:** O(1) dictionary lookup, no IPC. Bounds were captured

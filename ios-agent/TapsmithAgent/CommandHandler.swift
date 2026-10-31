@@ -773,17 +773,15 @@ class CommandHandler {
             reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
         var clearDrags = 0
-        // The target found by what identifies it alone, once a drag is to be
-        // made (looked up once; nil when nothing identifies it uniquely). The
-        // cached query may bind it by position, which a scroll can make bind
-        // another element, so after a drag the target is read through this.
-        var identified: XCUIElement??
-        func identifiedTarget() -> XCUIElement? {
-            if identified == nil { identified = .some(uniquelyIdentified(element)) }
-            return identified ?? nil
+        // The query that finds the target by what identifies it alone, once a
+        // drag is to be made (looked up once; nil when nothing does).
+        var identifying: XCUIElementQuery??
+        func identifyingQuery() -> XCUIElementQuery? {
+            if identifying == nil { identifying = .some(uniquelyIdentifying(element)) }
+            return identifying ?? nil
         }
         while true {
-            let xcElem = clearDrags > 0 ? identifiedTarget() : try? getXCUIElement(element.elementId)
+            let xcElem = try? getXCUIElement(element.elementId)
             let hittable = xcElem?.isHittable ?? false
             if preferElementTap, hittable, let xcElem {
                 try refuseIfLate(clock)
@@ -794,16 +792,26 @@ class CommandHandler {
             if case .coveredInList(let cover, let coverFrame, let list)? = verdict {
                 // Only a target that something identifies uniquely (its
                 // identifier, or its label among its type) is dragged, and
-                // read through that afterwards: the query it was cached with
-                // may bind it by position, and once the list has scrolled — a
-                // table unloads its top cells — that binds another element.
+                // its id is bound to that from then on — for this pass, any
+                // re-plan, and the touch itself: the query it was cached with
+                // may bind it by position, and once the list has scrolled (a
+                // table unloads its top cells) that binds another element.
                 // Anything else is waited out as before.
                 if clearDrags < CoverClearance.maxDrags,
                    let drag = clearingDrag(target: target.frame, cover: coverFrame, list: list, clock: clock),
-                   identifiedTarget() != nil {
+                   let identifying = identifyingQuery() {
                     clearDrags += 1
+                    snapshotFinder.rebind(element.elementId, to: identifying.firstMatch)
                     NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
                     actionExecutor.scrollDrag(drag)
+                    // Rows the drag brought in may share the name: then the
+                    // target can no longer be told apart. Say so rather than
+                    // touch whichever one the query finds first.
+                    if identifying.count != 1 {
+                        throw AgentError.actionFailed(
+                            "Scrolled the list to move the element out from under \(cover), but another element with the same name scrolled into view, so it can no longer be told apart. Give it a unique testID."
+                        )
+                    }
                     // The next pass reads the target where the drag left it. A
                     // drag that did not move it (the list's end, or a record
                     // the runtime dropped — iOS 26 drops some) still uses only
@@ -911,23 +919,27 @@ class CommandHandler {
         )
     }
 
-    /// `element` found by what identifies it alone — its identifier, or
-    /// failing that its label among elements of its type — when exactly one
-    /// element matches; nil otherwise. Unlike the query it was cached with,
-    /// which may bind it by position, this keeps binding it after a scroll
-    /// (PILOT-980).
-    private func uniquelyIdentified(_ element: ElementInfo) -> XCUIElement? {
+    /// A query that finds `element` by what identifies it alone — its
+    /// identifier, or failing that its label among elements of its type —
+    /// when exactly one element matches; nil otherwise. Unlike the query it
+    /// was cached with, which may bind it by position, this keeps binding it
+    /// after a scroll (PILOT-980).
+    private func uniquelyIdentifying(_ element: ElementInfo) -> XCUIElementQuery? {
         guard let identity = snapshotFinder.getIdentity(element.elementId) else { return nil }
-        let query: XCUIElementQuery
         if !identity.identifier.isEmpty {
-            query = app.descendants(matching: .any).matching(identifier: identity.identifier)
-        } else if !identity.label.isEmpty {
-            query = app.descendants(matching: identity.elementType)
-                .matching(NSPredicate(format: "label == %@", identity.label))
-        } else {
-            return nil
+            let byId = app.descendants(matching: .any).matching(identifier: identity.identifier)
+            if byId.count == 1 { return byId }
         }
-        return query.count == 1 ? query.firstMatch : nil
+        guard !identity.label.isEmpty else { return nil }
+        // A label within its type (and identifier, when it has one shared
+        // with others, as list rows often do).
+        var predicates = [NSPredicate(format: "label == %@", identity.label)]
+        if !identity.identifier.isEmpty {
+            predicates.append(NSPredicate(format: "identifier == %@", identity.identifier))
+        }
+        let byLabel = app.descendants(matching: identity.elementType)
+            .matching(NSCompoundPredicate(andPredicateWithSubpredicates: predicates))
+        return byLabel.count == 1 ? byLabel : nil
     }
 
     /// The drag that scrolls a target at `target` clear of `cover` in `list`,

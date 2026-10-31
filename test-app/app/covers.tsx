@@ -17,6 +17,8 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - Every row also has an "Add" button, all with the same name: a locator
 //   picks one by position (nth), which the iOS agent cannot follow through a
 //   scroll, so there it is waited out instead of scrolled clear.
+// - Every row shares the testID "covers-row", as list rows often do, so a
+//   row is told apart by its name alone.
 
 const ROW_HEIGHT = 60
 const ROWS = Array.from({ length: 30 }, (_, i) => `Row ${i + 1}`)
@@ -147,6 +149,7 @@ export default function CoversScreen() {
                   }}
                   accessibilityRole="button"
                   accessibilityLabel={item.key}
+                  testID="covers-row"
                 >
                   <Text style={styles.rowText}>{item.key}</Text>
                 </TouchableOpacity>

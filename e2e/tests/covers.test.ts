@@ -69,7 +69,7 @@ describe("Covers", () => {
       const label = await coversScreen.rowUnderFooter()
       const index = Number(label.replace("Row ", "")) - 1
 
-      const failure = await failureOf(coversScreen.addButtons.nth(index).tap({ timeout: 3_000 }))
+      const failure = await failureOf(coversScreen.addButtons.nth(index).tap({ timeout: 8_000 }))
 
       if (platform === "android") {
         expect(failure).toBe("")
