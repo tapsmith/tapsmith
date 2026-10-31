@@ -695,14 +695,6 @@ class CommandHandler {
         }
     }
 
-    /// Get the XCUIElement for an element ID, checking both caches.
-    ///
-    /// **Cost:** O(1) cache lookup, no IPC. The IPC happens later when
-    /// the caller reads a property off the returned element — each
-    /// `.value`, `.label`, `.frame`, `.isHittable` access crosses
-    /// the test runner ↔ app boundary. Batch property reads or
-    /// prefer `resolveElement` (which dumps everything in one
-    /// snapshot pass) when you need more than one attribute.
     /// A screenshot of the part of the screen at `frame` (points), as PNG;
     /// nil when no part of `frame` is on screen.
     private static func screenshotPNG(of frame: CGRect) -> Data? {
@@ -718,6 +710,14 @@ class CommandHandler {
         return UIImage(cgImage: cropped, scale: scale, orientation: image.imageOrientation).pngData()
     }
 
+    /// Get the XCUIElement for an element ID, checking both caches.
+    ///
+    /// **Cost:** O(1) cache lookup, no IPC. The IPC happens later when
+    /// the caller reads a property off the returned element — each
+    /// `.value`, `.label`, `.frame`, `.isHittable` access crosses
+    /// the test runner ↔ app boundary. Batch property reads or
+    /// prefer `resolveElement` (which dumps everything in one
+    /// snapshot pass) when you need more than one attribute.
     private func getXCUIElement(_ elementId: String) throws -> XCUIElement {
         if let elem = try? snapshotFinder.getElement(elementId) {
             return elem
