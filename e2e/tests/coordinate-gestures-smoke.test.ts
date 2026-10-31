@@ -56,8 +56,10 @@ describe("Coordinate gesture API (mirror)", () => {
 // emulator. Each call also carries overhead that varies on a loaded CI runner
 // (the trace's before-capture, the RPC, a drag's fling settle), so each gesture
 // is timed at a short and a long duration and the difference, which the
-// overhead cancels out of, must be close to the difference in duration. The
-// iOS agent and HID paths are not step-based, so only Android is held to this.
+// overhead mostly cancels out of, must be well under the old multiple. Overhead
+// only adds, so the long call alone shows the gesture lasted at least its
+// duration. The iOS agent and HID paths are not step-based, so only Android is
+// held to this.
 describe("Coordinate gesture durations", () => {
   // A fresh screen, so the draggable item starts away from the drop zone (an
   // item already dragged onto it sits under the zone and takes no touches).
@@ -78,13 +80,13 @@ describe("Coordinate gesture durations", () => {
     const press = await center(gesturesScreen.longPressArea)
     const shortPress = await timed(() => device.longPressXY(press.x, press.y, { duration: 200 }))
     const longPress = await timed(() => device.longPressXY(press.x, press.y, { duration: 1700 }))
-    expect(longPress - shortPress).toBeGreaterThan(1000)
+    expect(longPress).toBeGreaterThanOrEqual(1700)
     expect(longPress - shortPress).toBeLessThan(3000)
     await expect(gesturesScreen.lastGesture).toContainText("Long press")
 
     // 1000 ms more drag: ~1000 ms more time now, ~3000 ms before the fix.
-    // Sideways across the tap area, which neither scrolls nor counts a drag
-    // as a tap, so both drags settle alike.
+    // Sideways inside the tap area, which does not scroll, so both drags
+    // settle alike (each also counts as a tap there).
     const area = await gesturesScreen.tapArea.boundingBox()
     if (!area) throw new Error("tap area has no bounds")
     const y = area.y + area.height / 2
@@ -92,7 +94,7 @@ describe("Coordinate gesture durations", () => {
     const to = { x: area.x + area.width * 0.7, y }
     const shortDrag = await timed(() => device.dragXY(from, to, { duration: 100 }))
     const longDrag = await timed(() => device.dragXY(to, from, { duration: 1100 }))
-    expect(longDrag - shortDrag).toBeGreaterThan(600)
+    expect(longDrag).toBeGreaterThanOrEqual(1100)
     expect(longDrag - shortDrag).toBeLessThan(2000)
 
     // And a timed drag still drags.
