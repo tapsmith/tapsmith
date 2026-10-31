@@ -773,14 +773,17 @@ class CommandHandler {
             reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
         var clearDrags = 0
-        // Whether the target can be followed through a drag (asked once).
-        var canTrack: Bool?
-        func trackable() -> Bool {
-            if canTrack == nil { canTrack = isUniquelyBound(element) }
-            return canTrack ?? false
+        // The target found by what identifies it alone, once a drag is to be
+        // made (looked up once; nil when nothing identifies it uniquely). The
+        // cached query may bind it by position, which a scroll can make bind
+        // another element, so after a drag the target is read through this.
+        var identified: XCUIElement??
+        func identifiedTarget() -> XCUIElement? {
+            if identified == nil { identified = .some(uniquelyIdentified(element)) }
+            return identified ?? nil
         }
         while true {
-            let xcElem = try? getXCUIElement(element.elementId)
+            let xcElem = clearDrags > 0 ? identifiedTarget() : try? getXCUIElement(element.elementId)
             let hittable = xcElem?.isHittable ?? false
             if preferElementTap, hittable, let xcElem {
                 try refuseIfLate(clock)
@@ -789,14 +792,15 @@ class CommandHandler {
             let target = occlusionTarget(for: element, xcElem: xcElem)
             var verdict = occlusionVerdict(for: target, isHittable: hittable)
             if case .coveredInList(let cover, let coverFrame, let list)? = verdict {
-                // Only a target its live query binds uniquely (a unique
-                // identifier or label) is dragged: one bound by position may
-                // bind another element once the list has scrolled — a table
-                // unloads its top cells — and one with no live query keeps
-                // the frame it was found at. Those are waited out as before.
+                // Only a target that something identifies uniquely (its
+                // identifier, or its label among its type) is dragged, and
+                // read through that afterwards: the query it was cached with
+                // may bind it by position, and once the list has scrolled — a
+                // table unloads its top cells — that binds another element.
+                // Anything else is waited out as before.
                 if clearDrags < CoverClearance.maxDrags,
                    let drag = clearingDrag(target: target.frame, cover: coverFrame, list: list, clock: clock),
-                   trackable() {
+                   identifiedTarget() != nil {
                     clearDrags += 1
                     NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
                     actionExecutor.scrollDrag(drag)
@@ -907,12 +911,13 @@ class CommandHandler {
         )
     }
 
-    /// Whether the live query for `element` can only bind the element itself:
-    /// its identifier, or failing that its label among elements of its type,
-    /// matches exactly one element. A query bound by index into several
-    /// matches can bind another one after a scroll (PILOT-980).
-    private func isUniquelyBound(_ element: ElementInfo) -> Bool {
-        guard let identity = snapshotFinder.getIdentity(element.elementId) else { return false }
+    /// `element` found by what identifies it alone — its identifier, or
+    /// failing that its label among elements of its type — when exactly one
+    /// element matches; nil otherwise. Unlike the query it was cached with,
+    /// which may bind it by position, this keeps binding it after a scroll
+    /// (PILOT-980).
+    private func uniquelyIdentified(_ element: ElementInfo) -> XCUIElement? {
+        guard let identity = snapshotFinder.getIdentity(element.elementId) else { return nil }
         let query: XCUIElementQuery
         if !identity.identifier.isEmpty {
             query = app.descendants(matching: .any).matching(identifier: identity.identifier)
@@ -920,9 +925,9 @@ class CommandHandler {
             query = app.descendants(matching: identity.elementType)
                 .matching(NSPredicate(format: "label == %@", identity.label))
         } else {
-            return false
+            return nil
         }
-        return query.count == 1
+        return query.count == 1 ? query.firstMatch : nil
     }
 
     /// The drag that scrolls a target at `target` clear of `cover` in `list`,
