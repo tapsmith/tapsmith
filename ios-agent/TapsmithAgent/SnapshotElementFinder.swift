@@ -1674,7 +1674,15 @@ class SnapshotElementFinder {
                 .element(boundBy: labelIndex)
         }
 
-        if let testId = selector.testId {
+        if snapshotNode.map(CellAccessories.isMarkedIndicator) == true {
+            // A table row's accessory indicator (PILOT-895) is one of many
+            // with the same label and no identifier, and once a UITableView
+            // has scrolled, the live query's order no longer follows the
+            // tree's: an index into it bound the chevron two rows down.
+            // Cache nothing, so a touch goes to the frame it was found at,
+            // which selects its own row.
+            element = nil
+        } else if let testId = selector.testId {
             element = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", testId))
                 .excludingHooksMarker()

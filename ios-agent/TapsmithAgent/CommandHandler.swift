@@ -972,7 +972,12 @@ class CommandHandler {
             NSLog("[TapsmithCommand] \(element.elementId) is not hittable; tapping the uncovered point \(point)")
             actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
         case .offScreen:
-            throw staleError ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
+            // An id with the bounds it was found at but no live element is
+            // one found that way by design (a row's accessory indicator,
+            // PILOT-895, or a getByLabel match): off screen, not stale.
+            let foundWithoutLiveElement = snapshotFinder.getBounds(element.elementId) != nil
+            throw (foundWithoutLiveElement ? nil : staleError)
+                ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
     }
 

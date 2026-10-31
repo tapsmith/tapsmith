@@ -90,6 +90,16 @@ describe("UIKit: table view", () => {
     await expect(uikitTable.selection).toHaveText("Selected: Row 2")
   })
 
+  // Once the table has scrolled, every chevron is still found by its own
+  // row, not by its position among the others (PILOT-895).
+  test("a chevron tap on a scrolled-in row selects that row", async ({ uikitTable }) => {
+    await uikitTable.row(40).scrollIntoView({ maxScrolls: 30 })
+    await uikitTable.chevron(40).tap()
+    await expect(uikitTable.selection).toHaveText("Selected: Row 40")
+    await uikitTable.chevron(38).tap()
+    await expect(uikitTable.selection).toHaveText("Selected: Row 38")
+  })
+
   test("a custom accessory button that is disabled stays disabled", async ({ uikitTable }) => {
     await expect(uikitTable.buy).toBeDisabled()
     await expect(uikitTable.done).toBeDisabled()
