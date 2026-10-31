@@ -86,6 +86,7 @@ For emulator-managed runs, the recommended path is `launchEmulators + avd`.
 | `appResetColdEvery` | `number` | `10` | With `appReset: 'warm'`, deliver every Nth reset cold (terminate + relaunch) so long all-warm iOS simulator sessions can't drift from a fresh launch. `0` disables. |
 | `ui.prepareBetweenRuns` | `boolean` | `true` | [UI mode](ui-mode.md): prepare the device (run the declared app reset) in the background between runs. Set `false` when resets have side effects the team must control (backend calls in `onReset`, rate limits) or on personal physical devices. A person's explicit toggle in the device chip menu still wins for them. |
 | `ui.prepareDelayMs` | `number` | `0` | [UI mode](ui-mode.md): quiet time in milliseconds after a run before background preparation starts. |
+| `reducedMotion` | `'reduce' \| 'no-preference'` | `'no-preference'` | `'reduce'` turns the device's animations off for the run, like Playwright's `reducedMotion`. On Android, Tapsmith sets the window, transition and animator duration scales to 0 when it selects the device, so screen transitions finish at once, and puts the device's own values back when the session ends. If a run is killed before it can, the next Tapsmith session on that device restores them. A scale you change during the run is left as you set it. Apps see this as the system's "Remove animations" setting, so an app that reads it (or relies on animator callbacks) can behave differently; that is why it is opt-in. `'no-preference'` leaves the device's settings alone. Not applied on iOS yet. Root config only. See [Turning animations off](ci-setup.md#turning-animations-off). |
 | `telemetry` | `boolean` | `true` | Anonymous usage telemetry — one event per test-file run with the run mode, platform, pass/fail counts, and SDK/Node/OS versions, under a random per-machine id. Never test names, locators, app identifiers, or paths. Set `false` to opt out; `TAPSMITH_TELEMETRY=0` does the same per shell. See [Telemetry](telemetry.md). |
 | `resetAppDeepLink` | `string` | `undefined` | Deep link the app handles by clearing its own state and navigating to the start screen. Setting it makes `appReset: 'auto'` resolve to `warm`. Do not expose this route in production builds. |
 | `resetAppWaitMs` | `number` | `750` | Time in milliseconds to wait after navigating the `resetAppDeepLink` before continuing. Gives the app time to finish resetting. |
@@ -353,6 +354,7 @@ export default defineConfig({
   apk: "./app/build/outputs/apk/debug/app-debug.apk",
   timeout: 60_000, // Longer timeout for slower CI emulators
   retries: 2, // Retry failed tests up to 2 times
+  reducedMotion: "reduce", // Turn the emulator's animations off for the run
   screenshot: "always", // Capture screenshots for every test
   outputDir: "test-artifacts", // CI-friendly output directory
   reporter: ["junit", { outputFile: "tapsmith-junit.xml" }],

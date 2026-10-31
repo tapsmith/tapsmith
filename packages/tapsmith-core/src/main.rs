@@ -1,5 +1,6 @@
 mod adb;
 mod agent_comms;
+mod android_animation_scales;
 mod android_keystore;
 mod android_permissions;
 mod app_reset;
@@ -16,6 +17,7 @@ mod mitm_ca;
 mod network_proxy;
 mod pac;
 mod platform;
+mod process_identity;
 mod route_handler;
 mod screenshot;
 mod signal;
@@ -298,7 +300,9 @@ async fn main() -> Result<()> {
         service_handle.cleanup_network_proxy().await;
         service_handle.cleanup_webview_state().await;
     };
-    let _ = tokio::join!(agent_teardown, cleanup);
+    // Independent of both, and bounded per adb call, so it runs alongside.
+    let restore_scales = service_handle.restore_animation_scales();
+    let _ = tokio::join!(agent_teardown, cleanup, restore_scales);
 
     info!("Tapsmith daemon shut down cleanly");
     Ok(())

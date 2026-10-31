@@ -32,6 +32,8 @@ use serde::{Deserialize, Serialize};
 use tokio::process::{Child, Command};
 use tracing::{info, warn};
 
+use crate::process_identity::{own_start_time, process_started};
+
 /// How long an agent gets to exit after SIGTERM before it is SIGKILLed.
 /// xcodebuild exits in ~250 ms on SIGTERM (and its in-simulator runner with
 /// it); the UI server gives a daemon 5 s between SIGTERM and SIGKILL, so the
@@ -420,34 +422,6 @@ async fn write_record(path: &Path, pid: u32, udid: &str, is_physical: bool) {
         warn!(path = %path.display(), "Could not write the iOS agent owner record ({e:#}); \
                if this daemon is killed, the agent will not be cleaned up automatically");
     }
-}
-
-/// This daemon's start time. Only a successful read is cached, so one slow
-/// `ps` under load does not leave every later record unprovable.
-async fn own_start_time() -> Option<String> {
-    static STARTED: tokio::sync::OnceCell<String> = tokio::sync::OnceCell::const_new();
-    STARTED
-        .get_or_try_init(|| async { process_started(std::process::id()).await.ok_or(()) })
-        .await
-        .ok()
-        .cloned()
-}
-
-/// A process's start time from `ps -o lstart=`, in a fixed zone and locale
-/// so daemons launched from different environments compare equal.
-async fn process_started(pid: u32) -> Option<String> {
-    let out = super::device::bounded_output(
-        "ps lstart",
-        Command::new("/bin/ps")
-            .args(["-p", &pid.to_string(), "-o", "lstart="])
-            .env("TZ", "UTC")
-            .env("LC_ALL", "C"),
-        Duration::from_secs(5),
-    )
-    .await
-    .ok()?;
-    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!s.is_empty()).then_some(s)
 }
 
 // ─── Startup reaper ───

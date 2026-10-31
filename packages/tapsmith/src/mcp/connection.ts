@@ -6,7 +6,7 @@ import { withFileLockSync } from '../file-lock.js';
 import { TapsmithGrpcClient, type DeviceInfoProto } from '../grpc-client.js';
 import { findDaemonBin } from '../daemon-bin.js';
 import { pickFreePort } from '../port-utils.js';
-import { resolveDeviceGroup, primaryDevicePin, type TapsmithConfig } from '../config.js';
+import { resolveDeviceGroup, primaryDevicePin, reduceMotionFlag, type TapsmithConfig } from '../config.js';
 import { loadMcpConfig } from './config-loader.js';
 import { configDeviceTarget, configTargetMissMessage, type ConfigDeviceTarget } from './config-device-target.js';
 import { describeUnusableAndroidDevices, pinnedDeviceUnusableMessage, type AdbStateEntry } from '../device-advice.js';
@@ -1861,7 +1861,7 @@ async function prepareTarget(
     if (!alreadyServed) giveBack(serial, conn);
   };
   try {
-    await setDeviceExplained(conn.client, serial);
+    await setDeviceExplained(conn.client, serial, reduceMotionFlag(config?.reducedMotion));
   } catch (err) {
     releaseOnFailure();
     throw err;
@@ -2457,7 +2457,7 @@ async function setDeviceAndAgent(
 
   claimDeviceOrThrow(serial, currentSession(), { daemonAddress: address });
   try {
-    await setDeviceExplained(client, serial);
+    await setDeviceExplained(client, serial, reduceMotionFlag(config?.reducedMotion));
     log(`Using device: ${serial}`);
     await startAgentFromConfig(client, config, { serial });
   } catch (err) {
@@ -2669,8 +2669,12 @@ export function closeAllClients(): void {
  * refusal (`success: false`) is left as before: not thrown here.
  * Exported for tests.
  */
-export async function setDeviceExplained(client: TapsmithGrpcClient, serial: string): Promise<void> {
-  const res = await client.setDevice(serial);
+export async function setDeviceExplained(
+  client: TapsmithGrpcClient,
+  serial: string,
+  reduceMotion?: boolean,
+): Promise<void> {
+  const res = await client.setDevice(serial, false, [], [], reduceMotion);
   if (res?.success !== false) return;
   const { explainDeviceNotFound } = await import('../ios-devicectl.js');
   const refusal = new Error(res.errorMessage);

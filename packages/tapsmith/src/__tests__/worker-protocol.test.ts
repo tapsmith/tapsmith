@@ -259,6 +259,7 @@ describe('worker-protocol serialization', () => {
         grep: [/smoke/i],
         grepInvert: /slow/,
         telemetry: false,
+        reducedMotion: 'reduce',
       };
 
       const back = configFromSerialized(serializeConfig(config), 'localhost:2');
@@ -278,6 +279,9 @@ describe('worker-protocol serialization', () => {
       expect(back.video).toBe('on-first-retry');
       // Children report their own runs, so the opt-out must survive the hop.
       expect(back.telemetry).toBe(false);
+      // A child that lost it would send "no change" on setDevice, and its
+      // own session would run with the device's animations (PILOT-971).
+      expect(back.reducedMotion).toBe('reduce');
     });
   });
 });

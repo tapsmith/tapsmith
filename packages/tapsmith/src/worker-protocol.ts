@@ -361,6 +361,11 @@ export interface SerializedConfig {
   grepInvert?: SerializedRegExp[]
   /** Opt-out flag — children report their own runs, so they must see it. */
   telemetry?: boolean
+  /**
+   * Children select the device again: without it their setDevice would not
+   * ask for reduced motion, and the session would run with animations.
+   */
+  reducedMotion?: TapsmithConfig['reducedMotion']
 }
 
 /** Convert a TapsmithConfig into the IPC-safe subset needed by worker child processes. */
@@ -397,6 +402,7 @@ export function serializeConfig(config: TapsmithConfig): SerializedConfig {
     grep: serializeRegExpArray(normalizeGrep(config.grep)),
     grepInvert: serializeRegExpArray(normalizeGrep(config.grepInvert)),
     telemetry: config.telemetry,
+    reducedMotion: config.reducedMotion,
   };
 }
 
@@ -439,6 +445,7 @@ export function configFromSerialized(s: SerializedConfig, daemonAddress: string)
     grep: deserializeRegExpArray(s.grep),
     grepInvert: deserializeRegExpArray(s.grepInvert),
     telemetry: s.telemetry,
+    reducedMotion: s.reducedMotion,
   };
 }
 

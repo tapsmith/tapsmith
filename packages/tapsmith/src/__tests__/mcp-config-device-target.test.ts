@@ -31,8 +31,9 @@ vi.mock('../grpc-client.js', () => ({
     waitForReady(): Promise<boolean> { return Promise.resolve(upFront.has(this.address) || spawnMock.mock.calls.length > 0); }
     ping(): Promise<{ version: string; agentConnected: boolean }> { return Promise.resolve({ version: 'test', agentConnected: false }); }
     listDevices(): Promise<{ devices: Device[] }> { return Promise.resolve({ devices: devicesAt[this.address] ?? devices }); }
-    setDevice(serial: string): Promise<{ success: boolean }> {
-      calls.push(upFront.has(this.address) ? `setDevice ${this.address} ${serial}` : `setDevice ${serial}`);
+    setDevice(serial: string, _tracing?: boolean, _hosts?: string[], _passthrough?: string[], reduceMotion?: boolean): Promise<{ success: boolean }> {
+      const reduce = reduceMotion === undefined ? '' : ` reduceMotion=${reduceMotion}`;
+      calls.push((upFront.has(this.address) ? `setDevice ${this.address} ${serial}` : `setDevice ${serial}`) + reduce);
       return Promise.resolve({ success: true });
     }
     startAgent(): Promise<unknown> { return Promise.resolve({}); }
@@ -273,6 +274,21 @@ describe('a headless session\'s device, with `avd` in the config', () => {
     avds = { 'emulator-5554': 'Medium_Phone_API_36', 'emulator-5556': 'Tapsmith_Phone_API_36' };
 
     expect((await ensurePlatformTarget(mcpConfig as TapsmithConfig)).deviceSerial).toBe('emulator-5556');
+  });
+
+  // PILOT-971: MCP's own device tools select the device too, and must ask for
+  // the same animation setting the test runs do.
+  it.each([
+    ['reduce', ' reduceMotion=true'],
+    ['no-preference', ' reduceMotion=false'],
+    [undefined, ''],
+  ] as const)('is selected with reducedMotion %s from the config', async (reducedMotion, sent) => {
+    mcpConfig = { ...baseConfig, platform: 'android', avd: 'Tapsmith_Phone_API_36', reducedMotion };
+    devices = twoEmulators;
+    avds = { 'emulator-5554': 'Medium_Phone_API_36', 'emulator-5556': 'Tapsmith_Phone_API_36' };
+
+    await ensurePlatformTarget(mcpConfig as TapsmithConfig);
+    expect(calls).toContain(`setDevice emulator-5556${sent}`);
   });
 
   it('is any device under an explicit prefer-connected', async () => {
