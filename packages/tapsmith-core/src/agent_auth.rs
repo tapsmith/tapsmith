@@ -1,16 +1,26 @@
-//! The secret every connection to an on-device agent must present first.
+//! How the daemon and an on-device agent prove to each other that they share
+//! this user's agent token, before any command (PILOT-969).
 //!
 //! Both agents listen on loopback only, but loopback is not private: any app
-//! on an Android device can connect to the agent port, and a simulator's
-//! agent listens on the Mac's own loopback. So each connection opens with an
-//! auth line carrying a per-user token, and the agent closes any connection
-//! that does not (PILOT-969):
+//! on an Android device can connect to (or squat) the agent port, and a
+//! simulator's agent listens on the Mac's own loopback. So every connection
+//! opens with a mutual challenge-response, and the token itself never crosses
+//! the wire: whoever answers on the port learns nothing it could reuse, and a
+//! listener that cannot prove it holds the token never receives a command
+//! (which can carry typed text).
 //!
 //! ```text
-//! daemon → {"id":"auth","method":"auth","params":{"token":"<64 hex>"}}
-//! agent  ← {"id":"auth","result":{"authenticated":true}}
+//! agent  → {"id":"auth","challenge":"<agent nonce>"}
+//! daemon → {"id":"auth","method":"auth","params":{"nonce":"<daemon nonce>",
+//!           "proof":HMAC(token, "daemon:" + agent nonce)}}
+//! agent  → {"id":"auth","result":{"authenticated":true,
+//!           "proof":HMAC(token, "agent:" + daemon nonce)}}
 //!       or {"id":"auth","error":{"type":"UNAUTHORIZED","message":"…"}} and close
 //! ```
+//!
+//! Nonces are 32 random bytes as 64 lowercase hex; HMAC is HMAC-SHA256 keyed
+//! with the token's UTF-8 bytes, as lowercase hex. The `daemon:`/`agent:`
+//! prefixes keep one side's proof from being replayed as the other's.
 //!
 //! The token is per user, not per daemon: a running iOS runner is adopted by
 //! the next daemon on its port, which must be able to talk to it. It lives in
@@ -148,23 +158,65 @@ fn is_valid_token(s: &str) -> bool {
     s.len() == TOKEN_BYTES * 2 && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-/// The auth line, newline included.
-pub(crate) fn auth_request_line(token: &str) -> String {
-    let mut line =
-        json!({"id": AUTH_ID, "method": AUTH_ID, "params": {"token": token}}).to_string();
-    line.push('\n');
-    line
+/// A fresh nonce: 32 random bytes as lowercase hex.
+fn new_nonce() -> Result<String> {
+    generate_token()
 }
 
-/// Judge the agent's answer to the auth line. `line` is what `read_line`
-/// returned: empty at EOF.
-pub(crate) fn check_auth_reply(line: &str) -> Result<()> {
+/// HMAC-SHA256 of `"<role>:<nonce>"` keyed with `token`, as lowercase hex.
+pub(crate) fn proof(token: &str, role: &str, nonce: &str) -> String {
+    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, token.as_bytes());
+    let tag = ring::hmac::sign(&key, format!("{role}:{nonce}").as_bytes());
+    tag.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Compare without revealing, through timing, how much matched.
+fn constant_time_eq(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0u8, |d, (x, y)| d | (x ^ y)) == 0
+}
+
+/// The agent's challenge, from the first line it sends. `line` is what
+/// `read_line` returned: empty at EOF.
+pub(crate) fn parse_challenge(line: &str) -> Result<String> {
     let line = line.trim();
     if line.is_empty() {
         bail!(
             "the agent closed the connection without answering \
              (not listening yet, or its process is gone)"
         );
+    }
+    let challenge = serde_json::from_str::<Value>(line)
+        .ok()
+        .filter(|v| v.get("id").and_then(Value::as_str) == Some(AUTH_ID))
+        .and_then(|v| {
+            v.get("challenge")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+    match challenge {
+        Some(nonce) if is_valid_token(&nonce) => Ok(nonce),
+        _ => bail!("the listener on the agent port did not open with a Tapsmith agent challenge"),
+    }
+}
+
+/// The daemon's answer to `challenge`, newline included.
+pub(crate) fn auth_request_line(token: &str, challenge: &str, daemon_nonce: &str) -> String {
+    let mut line = json!({
+        "id": AUTH_ID,
+        "method": AUTH_ID,
+        "params": {"nonce": daemon_nonce, "proof": proof(token, "daemon", challenge)},
+    })
+    .to_string();
+    line.push('\n');
+    line
+}
+
+/// Judge the agent's answer to the auth line: it must accept the daemon and
+/// prove it holds the token too. `line` is what `read_line` returned.
+pub(crate) fn check_auth_reply(line: &str, token: &str, daemon_nonce: &str) -> Result<()> {
+    let line = line.trim();
+    if line.is_empty() {
+        bail!("the agent closed the connection without answering authentication");
     }
     let reply: Value = serde_json::from_str(line).map_err(|_| {
         anyhow!("the agent answered authentication with something that is not JSON")
@@ -177,29 +229,35 @@ pub(crate) fn check_auth_reply(line: &str) -> Result<()> {
         .and_then(Value::as_bool)
         == Some(true)
     {
+        let offered = reply
+            .pointer("/result/proof")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if !constant_time_eq(offered, &proof(token, "agent", daemon_nonce)) {
+            bail!(
+                "the listener on the agent port did not prove it holds this user's agent \
+                 token, so it is not a Tapsmith agent this user started"
+            );
+        }
         return Ok(());
     }
-    let error_type = reply.pointer("/error/type").and_then(Value::as_str);
     let message = reply
         .pointer("/error/message")
         .and_then(Value::as_str)
         .unwrap_or("no message");
-    match error_type {
+    match reply.pointer("/error/type").and_then(Value::as_str) {
         Some("UNAUTHORIZED") => bail!(
             "the agent refused this daemon's token ({message}). It was started with a \
              different agent token than ~/.tapsmith/agent-token holds now, by another user \
              or before the file was replaced"
         ),
-        Some(_) => bail!(
-            "the agent does not support authentication ({message}), so it is from an older \
-             Tapsmith build. Reinstall or rebuild the Tapsmith agent"
-        ),
-        None => bail!("unexpected answer to authentication: {line}"),
+        _ => bail!("unexpected answer to authentication: {line}"),
     }
 }
 
-/// Authenticate a fresh connection: send the auth line, read the agent's
-/// answer. `timeout` bounds the exchange.
+/// Authenticate a fresh connection both ways: read the agent's challenge,
+/// answer it with this daemon's proof and nonce, check the agent's proof.
+/// `timeout` bounds the exchange.
 pub(crate) async fn authenticate<R, W>(
     reader: &mut R,
     writer: &mut W,
@@ -210,19 +268,35 @@ where
     R: AsyncBufRead + Unpin,
     W: AsyncWrite + Unpin,
 {
-    tokio::time::timeout(timeout, async {
+    let daemon_nonce = new_nonce()?;
+    let deadline = tokio::time::Instant::now() + timeout;
+    let mut line = String::new();
+    tokio::time::timeout_at(deadline, reader.read_line(&mut line))
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "the agent did not send its authentication challenge within {timeout:?} \
+                 (it is from an older Tapsmith build that predates authentication, or it is \
+                 not answering)"
+            )
+        })?
+        .context("authentication failed")?;
+    let challenge = parse_challenge(&line)?;
+
+    let exchange = async {
         writer
-            .write_all(auth_request_line(token).as_bytes())
+            .write_all(auth_request_line(token, &challenge, &daemon_nonce).as_bytes())
             .await?;
         writer.flush().await?;
-        let mut line = String::new();
+        line.clear();
         reader.read_line(&mut line).await?;
-        Ok::<_, std::io::Error>(line)
-    })
-    .await
-    .map_err(|_| anyhow!("the agent did not answer authentication within {timeout:?}"))?
-    .map_err(|e| anyhow!(e).context("authentication failed"))
-    .and_then(|line| check_auth_reply(&line))
+        Ok::<_, std::io::Error>(())
+    };
+    tokio::time::timeout_at(deadline, exchange)
+        .await
+        .map_err(|_| anyhow!("the agent did not answer authentication within {timeout:?}"))?
+        .context("authentication failed")?;
+    check_auth_reply(&line, token, &daemon_nonce)
 }
 
 /// `text` with this process's agent token replaced, for logs. Only redacts
@@ -324,92 +398,155 @@ mod tests {
         assert!(tokens.windows(2).all(|w| w[0] == w[1]), "{tokens:?}");
     }
 
+    const TOKEN: &str = "abababababababababababababababababababababababababababababababab";
+    const NONCE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
     #[test]
-    fn auth_line_is_one_json_line() {
-        let line = auth_request_line("t0k");
-        assert!(line.ends_with('\n'));
-        assert_eq!(line.matches('\n').count(), 1);
-        let v: Value = serde_json::from_str(line.trim()).unwrap();
+    fn proofs_match_the_shared_test_vector() {
+        // The same vector is in the Android (AgentAuthTest.kt) and iOS
+        // (AgentAuthTests/main.swift) agents' tests: all three must agree.
         assert_eq!(
-            v,
-            json!({"id": "auth", "method": "auth", "params": {"token": "t0k"}})
+            proof(TOKEN, "daemon", NONCE),
+            "9a11a9da9d0f2172d5801943fbf6124fa424af0de00767c54b12a04791e64f3a"
+        );
+        assert_eq!(
+            proof(TOKEN, "agent", NONCE),
+            "9e9de4b1c2ee0bdfa527a9a8194aab687a211461a9461da1fd5fc353b2a91493"
         );
     }
 
     #[test]
-    fn accepts_the_ack() {
-        check_auth_reply("{\"id\":\"auth\",\"result\":{\"authenticated\":true}}\n").unwrap();
+    fn the_auth_line_carries_a_proof_never_the_token() {
+        let line = auth_request_line(TOKEN, NONCE, "d".repeat(64).as_str());
+        assert!(line.ends_with('\n'));
+        assert_eq!(line.matches('\n').count(), 1);
+        assert!(!line.contains(TOKEN), "{line}");
+        let v: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["method"], "auth");
+        assert_eq!(v["params"]["nonce"], "d".repeat(64));
+        assert_eq!(v["params"]["proof"], proof(TOKEN, "daemon", NONCE));
     }
 
     #[test]
-    fn explains_each_refusal() {
-        let eof = check_auth_reply("").unwrap_err().to_string();
+    fn reads_the_agent_challenge() {
+        let line = format!("{{\"id\":\"auth\",\"challenge\":\"{NONCE}\"}}\n");
+        assert_eq!(parse_challenge(&line).unwrap(), NONCE);
+        let eof = parse_challenge("").unwrap_err().to_string();
         assert!(
             eof.contains("closed the connection without answering"),
             "{eof}"
         );
+        for bad in [
+            "hello",
+            r#"{"id":"ping","challenge":"0123"}"#,
+            r#"{"id":"auth","challenge":"short"}"#,
+            r#"{"id":"auth"}"#,
+        ] {
+            let err = parse_challenge(bad).unwrap_err().to_string();
+            assert!(
+                err.contains("did not open with a Tapsmith agent challenge"),
+                "{bad}: {err}"
+            );
+        }
+    }
 
+    fn ack(proof: &str) -> String {
+        json!({"id": "auth", "result": {"authenticated": true, "proof": proof}}).to_string()
+    }
+
+    #[test]
+    fn accepts_an_ack_that_proves_the_agent_holds_the_token() {
+        check_auth_reply(&ack(&proof(TOKEN, "agent", NONCE)), TOKEN, NONCE).unwrap();
+    }
+
+    #[test]
+    fn refuses_an_ack_without_the_agents_proof() {
+        // A squatter on the port cannot compute it, so it never gets a command.
+        for bad in [
+            ack(""),
+            ack(&proof(TOKEN, "daemon", NONCE)), // our own proof reflected back
+            ack(&proof(&"cd".repeat(32), "agent", NONCE)),
+            r#"{"id":"auth","result":{"authenticated":true}}"#.to_string(),
+        ] {
+            let err = check_auth_reply(&bad, TOKEN, NONCE)
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("did not prove it holds"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn explains_each_refusal() {
         let wrong = check_auth_reply(
             r#"{"id":"auth","error":{"type":"UNAUTHORIZED","message":"wrong token"}}"#,
+            TOKEN,
+            NONCE,
         )
         .unwrap_err()
         .to_string();
         assert!(wrong.contains("refused this daemon's token"), "{wrong}");
         assert!(wrong.contains("wrong token"), "{wrong}");
 
-        // What an agent that predates authentication answers.
-        let old = check_auth_reply(
-            r#"{"id":"auth","error":{"type":"ACTION_FAILED","message":"Unknown method: auth"}}"#,
-        )
-        .unwrap_err()
-        .to_string();
-        assert!(old.contains("older Tapsmith build"), "{old}");
+        let eof = check_auth_reply("", TOKEN, NONCE).unwrap_err().to_string();
+        assert!(eof.contains("closed the connection"), "{eof}");
 
-        let turn = check_auth_reply(r#"{"id":"ping","result":{"pong":true}}"#)
+        let turn = check_auth_reply(r#"{"id":"ping","result":{"pong":true}}"#, TOKEN, NONCE)
             .unwrap_err()
             .to_string();
         assert!(turn.contains("out of turn"), "{turn}");
 
-        let garbage = check_auth_reply("hello").unwrap_err().to_string();
-        assert!(garbage.contains("not JSON"), "{garbage}");
-
-        let not_ok = check_auth_reply(r#"{"id":"auth","result":{"authenticated":false}}"#)
+        let garbage = check_auth_reply("hello", TOKEN, NONCE)
             .unwrap_err()
             .to_string();
-        assert!(not_ok.contains("unexpected answer"), "{not_ok}");
+        assert!(garbage.contains("not JSON"), "{garbage}");
     }
 
-    #[tokio::test]
-    async fn authenticate_sends_the_line_and_reads_the_ack() {
-        let (client, server) = tokio::io::duplex(1024);
-        let agent = tokio::spawn(async move {
-            let (r, mut w) = tokio::io::split(server);
-            let mut r = BufReader::new(r);
-            let mut line = String::new();
-            r.read_line(&mut line).await.unwrap();
-            w.write_all(b"{\"id\":\"auth\",\"result\":{\"authenticated\":true}}\n")
-                .await
-                .unwrap();
-            line
-        });
-        let (r, mut w) = tokio::io::split(client);
+    /// A well-behaved agent's side of the exchange, over an in-memory pipe.
+    async fn run_agent(server: tokio::io::DuplexStream, token: &'static str) -> String {
+        let (r, mut w) = tokio::io::split(server);
         let mut r = BufReader::new(r);
-        authenticate(&mut r, &mut w, "secret", Duration::from_secs(2))
+        w.write_all(format!("{{\"id\":\"auth\",\"challenge\":\"{NONCE}\"}}\n").as_bytes())
             .await
             .unwrap();
-        assert_eq!(agent.await.unwrap(), auth_request_line("secret"));
+        let mut line = String::new();
+        r.read_line(&mut line).await.unwrap();
+        let v: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["params"]["proof"], proof(token, "daemon", NONCE));
+        let daemon_nonce = v["params"]["nonce"].as_str().unwrap().to_string();
+        w.write_all(format!("{}\n", ack(&proof(token, "agent", &daemon_nonce))).as_bytes())
+            .await
+            .unwrap();
+        line
     }
 
     #[tokio::test]
-    async fn authenticate_gives_up_on_a_silent_agent() {
+    async fn authenticate_completes_the_exchange_without_sending_the_token() {
+        let (client, server) = tokio::io::duplex(4096);
+        let agent = tokio::spawn(run_agent(server, TOKEN));
+        let (r, mut w) = tokio::io::split(client);
+        let mut r = BufReader::new(r);
+        authenticate(&mut r, &mut w, TOKEN, Duration::from_secs(2))
+            .await
+            .unwrap();
+        let sent = agent.await.unwrap();
+        assert!(!sent.contains(TOKEN), "{sent}");
+    }
+
+    #[tokio::test]
+    async fn authenticate_gives_up_on_a_silent_listener() {
+        // An agent from before authentication waits for the client to speak.
         let (client, _server) = tokio::io::duplex(1024);
         let (r, mut w) = tokio::io::split(client);
         let mut r = BufReader::new(r);
-        let err = authenticate(&mut r, &mut w, "secret", Duration::from_millis(50))
+        let err = authenticate(&mut r, &mut w, TOKEN, Duration::from_millis(50))
             .await
             .unwrap_err()
             .to_string();
-        assert!(err.contains("did not answer authentication"), "{err}");
+        assert!(
+            err.contains("did not send its authentication challenge"),
+            "{err}"
+        );
+        assert!(err.contains("older Tapsmith build"), "{err}");
     }
 
     #[test]

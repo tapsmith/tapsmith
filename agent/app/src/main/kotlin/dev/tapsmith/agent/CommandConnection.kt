@@ -26,9 +26,10 @@ import java.util.concurrent.Future
  * on (and touching the screen) after nobody waits for them. A request that
  * does arrive early waits for the one before it.
  *
- * The first non-blank line must authenticate the connection ([AgentAuth],
- * PILOT-969): it is answered with the ack and never reaches [handle] or the
- * log; anything else is answered with the refusal and the connection ends.
+ * The connection opens with [AgentAuth]'s challenge, and the first non-blank
+ * line must answer it (PILOT-969): that line is answered with the ack and
+ * never reaches [handle] or the log; anything else is answered with the
+ * refusal and the connection ends.
  * [onAuthenticated] runs once it has (the server lifts its handshake read
  * deadline there).
  *
@@ -82,8 +83,10 @@ internal class CommandConnection(
         }
     }
 
-    /** Read the first line and judge it: true when the connection may go on. */
+    /** Challenge, then read the first line and judge it: true when the connection may go on. */
     private fun authenticate(): Boolean {
+        val challenge = AgentAuth.newNonce()
+        send(AgentAuth.challengeLine(challenge))
         var line: String?
         do {
             line =
@@ -99,15 +102,18 @@ internal class CommandConnection(
             log("Client disconnected before authenticating")
             return false
         }
-        val refusal = auth.refusal(line)
-        if (refusal != null) {
-            log("Refused a connection: $refusal")
-            send(AgentAuth.refusalLine(refusal))
-            return false
+        return when (val verdict = auth.judge(line, challenge)) {
+            is AgentAuth.Verdict.Refused -> {
+                log("Refused a connection: ${verdict.reason}")
+                send(AgentAuth.refusalLine(verdict.reason))
+                false
+            }
+            is AgentAuth.Verdict.Accepted -> {
+                onAuthenticated()
+                send(verdict.ack)
+                true
+            }
         }
-        onAuthenticated()
-        send(AgentAuth.ackLine())
-        return true
     }
 
     private fun send(line: String) {

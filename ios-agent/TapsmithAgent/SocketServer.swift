@@ -11,9 +11,10 @@ import Network
 /// accessibility operations (which require main RunLoop XPC callbacks) work
 /// correctly on Xcode 26.
 ///
-/// The listener is bound to loopback only, and the first line on every
-/// connection must authenticate it (`AgentAuth`, PILOT-969): it is answered
-/// on the socket queue, never logged and never reaches the command handler.
+/// The listener is bound to loopback only, and every connection opens with
+/// `AgentAuth`'s challenge-response (PILOT-969): the first line must answer
+/// the challenge; it is answered on the socket queue, never logged and never
+/// reaches the command handler.
 /// A wrong first line is answered with the refusal and the connection
 /// closed; so is a connection that sends nothing for `AgentAuth.deadline`.
 class SocketServer {
@@ -125,6 +126,9 @@ class SocketServer {
     private func handleConnection(_ connection: NWConnection) {
         let gate = ConnectionGate(auth: auth)
         connection.start(queue: queue)
+        if case .send(let challenge) = gate.start() {
+            send(challenge, on: connection, thenClose: false)
+        }
         queue.asyncAfter(deadline: .now() + AgentAuth.deadline) {
             if !gate.authenticated {
                 NSLog("[TapsmithSocket] Client did not authenticate in time; closing")

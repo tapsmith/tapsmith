@@ -1542,33 +1542,52 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// The nonce the mock agents challenge with.
+    const MOCK_CHALLENGE: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn challenge_line() -> String {
+        format!("{{\"id\":\"auth\",\"challenge\":\"{MOCK_CHALLENGE}\"}}\n")
+    }
+
+    /// The agent's answer to the daemon's auth line, as both real agents
+    /// give it: the ack with the agent's own proof when the daemon proved it
+    /// holds this user's token, else the refusal.
+    fn agent_answer(auth_line: &str) -> (bool, String) {
+        let token = crate::agent_auth::agent_token().unwrap();
+        let v: Value = serde_json::from_str(auth_line.trim()).unwrap_or(Value::Null);
+        let expected = crate::agent_auth::proof(token, "daemon", MOCK_CHALLENGE);
+        if v["method"] == "auth" && v["params"]["proof"] == expected.as_str() {
+            let nonce = v["params"]["nonce"].as_str().unwrap_or_default();
+            let proof = crate::agent_auth::proof(token, "agent", nonce);
+            let ack = json!({"id": "auth", "result": {"authenticated": true, "proof": proof}});
+            (true, format!("{ack}\n"))
+        } else {
+            (
+                false,
+                "{\"id\":\"auth\",\"error\":{\"type\":\"UNAUTHORIZED\",\"message\":\"wrong token\"}}\n"
+                    .to_string(),
+            )
+        }
+    }
+
     /// The agent's side of the auth handshake, as both real agents do it:
-    /// the first line must be the auth line with this user's token. Answers
-    /// the ack and hands back the connection, or answers the refusal and
-    /// closes it.
+    /// challenge first, then the daemon must prove it holds this user's
+    /// token. Hands back the connection after the ack, or closes it after
+    /// the refusal.
     async fn agent_handshake(
         stream: TcpStream,
     ) -> Option<(BufReader<OwnedReadHalf>, OwnedWriteHalf)> {
         let (read_half, mut write_half) = stream.into_split();
         let mut reader = BufReader::new(read_half);
+        write_half
+            .write_all(challenge_line().as_bytes())
+            .await
+            .ok()?;
         let mut line = String::new();
         reader.read_line(&mut line).await.ok()?;
-        let first: Value = serde_json::from_str(line.trim()).ok()?;
-        let token = crate::agent_auth::agent_token().unwrap();
-        if first["method"] == "auth" && first["params"]["token"] == token {
-            write_half
-                .write_all(b"{\"id\":\"auth\",\"result\":{\"authenticated\":true}}\n")
-                .await
-                .ok()?;
-            Some((reader, write_half))
-        } else {
-            let _ = write_half
-                .write_all(
-                    b"{\"id\":\"auth\",\"error\":{\"type\":\"UNAUTHORIZED\",\"message\":\"wrong token\"}}\n",
-                )
-                .await;
-            None
-        }
+        let (accepted, answer) = agent_answer(&line);
+        write_half.write_all(answer.as_bytes()).await.ok()?;
+        accepted.then_some((reader, write_half))
     }
 
     // ─── Agent forward record (PILOT-550) ───
@@ -2629,16 +2648,12 @@ mod tests {
     }
 
     /// Mock of `adb forward` with no agent on the device side: the connect
-    /// succeeds (the adb server accepts it), the request is consumed, then
-    /// the socket closes without a byte in reply — the reader sees EOF.
+    /// succeeds (the adb server accepts it), then the socket closes without
+    /// a byte in reply — the reader sees EOF.
     fn spawn_accept_then_close(listener: tokio::net::TcpListener) {
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
-                let (read_half, write_half) = stream.into_split();
-                let mut reader = BufReader::new(read_half);
-                let mut line = String::new();
-                let _ = reader.read_line(&mut line).await;
-                drop(write_half);
+                drop(stream);
             }
         });
     }
@@ -2712,8 +2727,8 @@ mod tests {
 
     // ─── Agent authentication (PILOT-969) ───
 
-    /// Mock agent that answers the first line on every connection with
-    /// `reply` and then whatever `then` says to the next line.
+    /// Mock agent that challenges like the real ones, answers the daemon's
+    /// first line with `reply` and then whatever `then` says to the next line.
     fn spawn_scripted_agent(
         listener: tokio::net::TcpListener,
         reply: &'static str,
@@ -2723,6 +2738,7 @@ mod tests {
             while let Ok((stream, _)) = listener.accept().await {
                 let (read_half, mut write_half) = stream.into_split();
                 let mut reader = BufReader::new(read_half);
+                let _ = write_half.write_all(challenge_line().as_bytes()).await;
                 let mut line = String::new();
                 let _ = reader.read_line(&mut line).await;
                 let _ = write_half.write_all(format!("{reply}\n").as_bytes()).await;
@@ -2752,30 +2768,89 @@ mod tests {
 
     #[tokio::test]
     async fn ping_says_when_the_agent_predates_authentication() {
-        // An agent from before PILOT-969 answers the auth line as an unknown
-        // command, then answers the ping: it must not count as reachable,
-        // or the daemon would drive it with every answer one line late.
+        // An agent from before PILOT-969 sends no challenge and waits for a
+        // command: it must not count as reachable, and the error says why.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        spawn_scripted_agent(
-            listener,
-            r#"{"id":"auth","error":{"type":"ACTION_FAILED","message":"Unknown method: auth"}}"#,
-            Some(r#"{"id":"ping","result":{"pong":true}}"#),
-        );
-        let err = ping_agent_port(port).await.unwrap_err().to_string();
+        spawn_ping_answering_legacy_agent(listener);
+        let err = ping_agent_port_with_timeout(port, Duration::from_millis(300))
+            .await
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("older Tapsmith build"), "{err}");
-        assert!(!probe_agent_alive(port).await);
+        assert!(err.contains("Failed to connect to agent socket"), "{err}");
+    }
+
+    /// An agent from before authentication: it answers every line with a pong.
+    fn spawn_ping_answering_legacy_agent(listener: tokio::net::TcpListener) {
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let mut line = String::new();
+                while reader.read_line(&mut line).await.is_ok_and(|n| n > 0) {
+                    let _ = write_half
+                        .write_all(b"{\"id\":\"ping\",\"result\":{\"pong\":true}}\n")
+                        .await;
+                    line.clear();
+                }
+            }
+        });
+    }
+
+    #[tokio::test]
+    async fn ping_refuses_a_listener_that_cannot_prove_it_holds_the_token() {
+        // A squatter on the agent port acks anything; it must neither be
+        // taken for the agent nor ever learn the token.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (seen_tx, mut seen_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let _ = write_half.write_all(challenge_line().as_bytes()).await;
+                let mut line = String::new();
+                while reader.read_line(&mut line).await.is_ok_and(|n| n > 0) {
+                    seen_tx.send(line.clone()).unwrap();
+                    let _ = write_half
+                        .write_all(b"{\"id\":\"auth\",\"result\":{\"authenticated\":true}}\n")
+                        .await;
+                    line.clear();
+                }
+            }
+        });
+        let err = ping_agent_port(port).await.unwrap_err().to_string();
+        assert!(err.contains("did not prove it holds"), "{err}");
+        let token = crate::agent_auth::agent_token().unwrap();
+        let mut seen = Vec::new();
+        while let Ok(line) = seen_rx.try_recv() {
+            seen.push(line);
+        }
+        assert_eq!(seen.len(), 1, "only the auth line, no ping: {seen:?}");
+        assert!(
+            !seen[0].contains(token),
+            "the token crossed the wire: {seen:?}"
+        );
     }
 
     #[tokio::test]
     async fn ping_requires_a_pong() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        spawn_scripted_agent(
-            listener,
-            r#"{"id":"auth","result":{"authenticated":true}}"#,
-            Some(r#"{"id":"ping","error":{"type":"INTERNAL_ERROR","message":"boom"}}"#),
-        );
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                if let Some((mut reader, mut writer)) = agent_handshake(stream).await {
+                    let mut line = String::new();
+                    let _ = reader.read_line(&mut line).await;
+                    let _ = writer
+                        .write_all(
+                            b"{\"id\":\"ping\",\"error\":{\"type\":\"INTERNAL_ERROR\",\"message\":\"boom\"}}\n",
+                        )
+                        .await;
+                }
+            }
+        });
         let err = ping_agent_port(port).await.unwrap_err().to_string();
         assert!(err.contains("Unexpected answer to ping"), "{err}");
     }
@@ -2790,6 +2865,7 @@ mod tests {
                 let lines_tx = lines_tx.clone();
                 let (read_half, mut write_half) = stream.into_split();
                 let mut reader = BufReader::new(read_half);
+                let _ = write_half.write_all(challenge_line().as_bytes()).await;
                 tokio::spawn(async move {
                     loop {
                         let mut line = String::new();
@@ -2801,11 +2877,11 @@ mod tests {
                                     .send(v["method"].as_str().unwrap().to_string())
                                     .unwrap();
                                 let resp = if v["method"] == "auth" {
-                                    json!({"id": "auth", "result": {"authenticated": true}})
+                                    agent_answer(&line).1
                                 } else {
-                                    json!({"id": v["id"], "result": {"ok": true}})
+                                    format!("{}\n", json!({"id": v["id"], "result": {"ok": true}}))
                                 };
-                                let _ = write_half.write_all(format!("{resp}\n").as_bytes()).await;
+                                let _ = write_half.write_all(resp.as_bytes()).await;
                             }
                         }
                     }
