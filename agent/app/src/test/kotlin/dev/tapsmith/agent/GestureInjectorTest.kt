@@ -121,6 +121,7 @@ class GestureInjectorTest {
             assertEquals(TouchAction.DOWN, events.first().action)
             assertEquals(PointerState(0, 0, 0), events.first().pointers.single())
             assertEquals(TouchAction.UP, events.last().action)
+            assertTrue(events.any { it.action == TouchAction.MOVE })
             assertEquals(PointerState(0, distance, 0), events.last().pointers.single())
             // Released on the first tick past the duration.
             val took = sink.touches.last().first - sink.touches.first().first
@@ -165,6 +166,106 @@ class GestureInjectorTest {
         val took = times.last() - times.first()
         assertTrue("took $took ms", took in 300L..312L)
         assertEquals(PointerState(0, 300, 0), events.last().pointers.single())
+    }
+
+    @Test
+    fun `a short swipe whose first sleep overruns its duration still moves before it releases`() {
+        // A drag is recognised from MOVE events: an UP at the end point with
+        // no MOVE before it would read as a tap where the press went down.
+        val sink = FakeSink(clock)
+        val overrun =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms + 50
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        GestureInjector(sink, overrun) { 8L }.timedSwipe(0, 0, 100, 0, durationMs = 25)
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.MOVE, TouchAction.UP), sink.actions())
+        assertEquals(
+            PointerState(0, 100, 0),
+            sink.touches[1]
+                .second.pointers
+                .single(),
+        )
+        assertEquals(
+            PointerState(0, 100, 0),
+            sink.touches[2]
+                .second.pointers
+                .single(),
+        )
+    }
+
+    @Test
+    fun `a timed gesture stops when its command is cancelled, cancelling the pointers it holds`() {
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    if (clock.nowMs >= 1_500L) token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        val start = clock.nowMs
+        try {
+            CommandCancellation.runWith(token) {
+                GestureInjector(sink, cancelling) { 8L }.perform(
+                    PointerPath(ScreenPoint(0, 0)).travelTo(ScreenPoint(1000, 0), durationMs = 10_000),
+                    PointerPath(ScreenPoint(0, 50)).travelTo(ScreenPoint(1000, 50), durationMs = 10_000),
+                )
+            }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertEquals(
+            2,
+            sink.touches
+                .last()
+                .second.pointers.size,
+        )
+        assertTrue(sink.touches.last().first - start < 1_000)
+    }
+
+    @Test
+    fun `a long press stops when its command is cancelled, cancelling its pointer`() {
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    if (clock.nowMs >= 1_500L) token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        val start = clock.nowMs
+        try {
+            CommandCancellation.runWith(token) { GestureInjector(sink, cancelling) { 8L }.longPress(5, 5, holdMs = 10_000) }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.CANCEL), sink.actions())
+        assertTrue(sink.touches.last().first - start < 1_000)
     }
 
     @Test

@@ -239,6 +239,9 @@ class GestureInjector(
         /** A timed gesture's event interval when the display's refresh rate is unknown. */
         const val DEFAULT_TICK_MS = 8L
 
+        /** How often a long hold checks whether its command was cancelled. */
+        const val HOLD_CHECK_MS = 50L
+
         /** Key codes that set modifier meta state while they are held, as UiAutomator sends them. */
         private val KEY_MODIFIERS =
             mapOf(
@@ -269,6 +272,10 @@ class GestureInjector(
      * release is sent even when the press was refused (the input system may
      * have delivered it anyway), and a refused release is followed by a cancel,
      * so no pointer is left down. True only when both went through.
+     *
+     * A hold longer than [HOLD_CHECK_MS] (a long press) stops when its command
+     * is cancelled: the pointer is cancelled, not released, so the abandoned
+     * press does not land as a click, and [CommandCancelledException] is thrown.
      */
     fun click(
         x: Int,
@@ -277,10 +284,28 @@ class GestureInjector(
     ): Boolean {
         val downTime = clock.now()
         val downOk = single(TouchAction.DOWN, downTime, x, y, sync = true)
-        clock.sleep(pressMs)
+        try {
+            hold(downTime, pressMs)
+        } catch (e: CommandCancelledException) {
+            single(TouchAction.CANCEL, downTime, x, y, sync = true)
+            throw e
+        }
         val upOk = single(TouchAction.UP, downTime, x, y, sync = true)
         if (!upOk) single(TouchAction.CANCEL, downTime, x, y, sync = true)
         return downOk && upOk
+    }
+
+    /** Sleep until [ms] after [since], checking for cancellation every [HOLD_CHECK_MS]. */
+    private fun hold(
+        since: Long,
+        ms: Long,
+    ) {
+        while (true) {
+            val left = since + ms - clock.now()
+            if (left <= 0) return
+            clock.sleep(minOf(left, HOLD_CHECK_MS))
+            CommandCancellation.checkpoint()
+        }
     }
 
     /**
@@ -342,6 +367,12 @@ class GestureInjector(
      * has ended, move the rest, and press the ones whose delay has come.
      * Events are injected without waiting for the app (as there), so a long
      * gesture keeps its speed on a busy device.
+     *
+     * A pointer that travels is moved at least once before it is released, so a short path
+     * whose first tick overran its duration is still a drag, not a tap. Each
+     * tick checks whether the command was cancelled: if it was, the pointers
+     * still down are cancelled (not released, which could fling or click) and
+     * [CommandCancelledException] is thrown.
      */
     fun perform(vararg paths: PointerPath) {
         require(paths.isNotEmpty()) { "a gesture needs at least one pointer" }
@@ -359,19 +390,33 @@ class GestureInjector(
             index: Int = 0,
         ) = sink.touch(TouchEvent(action, startTime, pointers(), index, sync = false))
 
+        val moved = mutableSetOf<PointerPath>()
         var elapsed = 0L
         while (pending.isNotEmpty() || down.isNotEmpty()) {
+            try {
+                CommandCancellation.checkpoint()
+            } catch (e: CommandCancelledException) {
+                if (down.isNotEmpty()) inject(TouchAction.CANCEL)
+                throw e
+            }
             while (true) {
                 val done = down.minByOrNull { it.delayMs + it.durationMs } ?: break
                 if (elapsed <= done.delayMs + done.durationMs) break
                 position[done] = done.end
                 for (other in down) if (other !== done) position[other] = other.pointAt(elapsed)
+                if (done !in moved && done.end != done.start) {
+                    inject(TouchAction.MOVE)
+                    moved += down
+                }
                 val index = down.indexOf(done)
                 inject(if (down.size > 1) TouchAction.POINTER_UP else TouchAction.UP, index)
                 down.removeAt(index)
             }
             for (p in down) position[p] = p.pointAt(elapsed)
-            if (down.isNotEmpty()) inject(TouchAction.MOVE)
+            if (down.isNotEmpty()) {
+                inject(TouchAction.MOVE)
+                moved += down
+            }
             while (pending.isNotEmpty() && elapsed >= pending.first().delayMs) {
                 val p = pending.removeAt(0)
                 down += p
