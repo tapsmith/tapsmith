@@ -2708,11 +2708,17 @@ mod tests {
 
     /// Mock agent that is still starting for `starting_for` — the
     /// adb-forward shape, every connect accepted then closed — and answers
-    /// pings after that.
-    fn spawn_agent_ready_after(listener: tokio::net::TcpListener, starting_for: Duration) {
+    /// pings after that. Returns the time of every handshake attempt.
+    fn spawn_agent_ready_after(
+        listener: tokio::net::TcpListener,
+        starting_for: Duration,
+    ) -> Arc<std::sync::Mutex<Vec<tokio::time::Instant>>> {
         let ready_at = tokio::time::Instant::now() + starting_for;
+        let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&attempts);
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
+                recorded.lock().unwrap().push(tokio::time::Instant::now());
                 let (read_half, mut write_half) = stream.into_split();
                 let mut reader = BufReader::new(read_half);
                 let mut line = String::new();
@@ -2724,23 +2730,34 @@ mod tests {
                 }
             }
         });
+        attempts
     }
 
     #[tokio::test]
     async fn connect_notices_an_agent_soon_after_it_starts_answering() {
         // The handshake used to retry on a 1 s grid, so an agent that came
-        // up 300 ms in was only seen at the 1 s ping.
+        // up 300 ms in was only seen at the 1 s ping. Judge the retry
+        // spacing rather than the total time: a stalled runner stretches
+        // some gaps, but not every one of them past the old 1 s grid.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-        let started = tokio::time::Instant::now();
-        spawn_agent_ready_after(listener, Duration::from_millis(300));
+        let attempts = spawn_agent_ready_after(listener, Duration::from_millis(300));
 
         let mut conn = AgentConnection::with_port(port);
         conn.connect_ios("sim").await.expect("agent comes up");
-        let took = started.elapsed();
+        let attempts = attempts.lock().unwrap().clone();
         assert!(
-            took < Duration::from_millis(800),
-            "connected {took:?} after start; the agent answered from 300 ms"
+            attempts.len() >= 2,
+            "the agent was not ready at the first ping: {attempts:?}"
+        );
+        let shortest_gap = attempts
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .min()
+            .unwrap();
+        assert!(
+            shortest_gap < Duration::from_millis(500),
+            "retries {shortest_gap:?} apart at best; expected the fast backoff"
         );
     }
 
