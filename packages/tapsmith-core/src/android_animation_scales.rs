@@ -49,9 +49,10 @@ const OFF: &str = "0";
 /// silently leaves the session's animations on.
 pub const SELECT_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// Bound for each adb call of the restore at daemon shutdown, which must fit
-/// the few seconds a caller gives a daemon between SIGTERM and SIGKILL. A
-/// restore cut short keeps its record, for the next session to finish.
+/// Bound for each adb call of the restore at daemon shutdown (a read, then a
+/// put), kept short because a caller may SIGKILL a daemon a few seconds after
+/// SIGTERM. A restore cut short keeps its record, for the next session on the
+/// device to finish.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(3);
 
 // ─── Reading the device ───
