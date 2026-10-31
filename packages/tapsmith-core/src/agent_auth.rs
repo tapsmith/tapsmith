@@ -28,7 +28,6 @@
 //! Android instrumentation's `-e token` argument, the iOS runner's
 //! `TAPSMITH_AGENT_TOKEN` environment variable.
 
-use std::borrow::Cow;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -49,9 +48,6 @@ pub(crate) const IOS_TOKEN_ENV: &str = "TAPSMITH_AGENT_TOKEN";
 
 const TOKEN_FILE: &str = "agent-token";
 const TOKEN_BYTES: usize = 32;
-
-/// What the logs show in place of the token.
-const REDACTED: &str = "<agent-token>";
 
 static TOKEN: OnceLock<std::result::Result<String, String>> = OnceLock::new();
 
@@ -299,23 +295,6 @@ where
     check_auth_reply(&line, token, &daemon_nonce)
 }
 
-/// `text` with this process's agent token replaced, for logs. Only redacts
-/// once the token is loaded; nothing can carry it before that.
-pub(crate) fn redact(text: &str) -> Cow<'_, str> {
-    match TOKEN.get() {
-        Some(Ok(token)) => redact_token(text, token),
-        _ => Cow::Borrowed(text),
-    }
-}
-
-fn redact_token<'a>(text: &'a str, token: &str) -> Cow<'a, str> {
-    if text.contains(token) {
-        Cow::Owned(text.replace(token, REDACTED))
-    } else {
-        Cow::Borrowed(text)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -547,18 +526,5 @@ mod tests {
             "{err}"
         );
         assert!(err.contains("older Tapsmith build"), "{err}");
-    }
-
-    #[test]
-    fn redacts_the_token() {
-        let token = "ab".repeat(TOKEN_BYTES);
-        let cmd = format!("am instrument -w -e token {token} dev.tapsmith.agent/.TapsmithAgent");
-        let out = redact_token(&cmd, &token);
-        assert!(!out.contains(&token));
-        assert!(out.contains("-e token <agent-token> dev.tapsmith.agent"));
-        assert!(matches!(
-            redact_token("adb devices", &token),
-            Cow::Borrowed(_)
-        ));
     }
 }

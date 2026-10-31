@@ -43,9 +43,12 @@ internal class SocketServer(
             try {
                 // Loopback only: `adb forward` reaches it, the network does
                 // not (PILOT-969). Apps on the device still can, which is
-                // what the auth line is for.
-                serverSocket = ServerSocket(port, BACKLOG, InetAddress.getLoopbackAddress())
-                Log.i(TAG, "Listening on ${InetAddress.getLoopbackAddress().hostAddress}:$port")
+                // what the challenge-response is for. IPv4 127.0.0.1, not
+                // getLoopbackAddress(): on Android that is ::1, which the
+                // adbd of API 24–26 never tries (it connects to 127.0.0.1).
+                val loopback = InetAddress.getByAddress("localhost", byteArrayOf(127, 0, 0, 1))
+                serverSocket = ServerSocket(port, BACKLOG, loopback)
+                Log.i(TAG, "Listening on 127.0.0.1:$port")
 
                 while (running) {
                     val client =

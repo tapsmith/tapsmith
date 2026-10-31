@@ -49,28 +49,72 @@ impl AdbDevice {
 
 /// Run an adb command targeting a specific device, returning stdout bytes.
 async fn run_adb(serial: Option<&str>, args: &[&str], timeout: Duration) -> Result<Vec<u8>> {
-    let mut cmd = Command::new("adb");
+    run_adb_with_input(serial, args, None, timeout).await
+}
 
+/// [`run_adb`], writing `input` to adb's stdin first (and then closing it).
+async fn run_adb_with_input(
+    serial: Option<&str>,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    let mut all: Vec<&str> = Vec::with_capacity(args.len() + 2);
     if let Some(s) = serial {
-        cmd.arg("-s").arg(s);
+        all.extend(["-s", s]);
     }
+    all.extend_from_slice(args);
+    debug!(serial = serial, args = ?args, "Running adb command");
+    run_with_input("adb", &all, input, timeout).await
+}
 
-    cmd.args(args);
+/// Run `program`, feeding it `input` on stdin (none: stdin is closed, as
+/// `Command::output` does), and return its stdout; a non-zero exit is an
+/// error carrying its stderr.
+async fn run_with_input(
+    program: &str,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
+    use std::process::Stdio;
+    use tokio::io::AsyncWriteExt;
 
-    debug!(
-        serial = serial,
-        args = ?args.iter().map(|a| crate::agent_auth::redact(a)).collect::<Vec<_>>(),
-        "Running adb command"
-    );
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .stdin(if input.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    let output = tokio::time::timeout(timeout, cmd.output())
+    let run = async {
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("Failed to execute {program}"))?;
+        if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+            stdin
+                .write_all(input)
+                .await
+                .with_context(|| format!("Failed to write {program}'s stdin"))?;
+        }
+        child
+            .wait_with_output()
+            .await
+            .with_context(|| format!("Failed to execute {program}"))
+    };
+    let output = tokio::time::timeout(timeout, run)
         .await
-        .map_err(|_| anyhow!("adb command timed out after {timeout:?}"))?
-        .context("Failed to execute adb")?;
+        .map_err(|_| anyhow!("{program} command timed out after {timeout:?}"))??;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("adb command failed (exit {}): {stderr}", output.status);
+        bail!(
+            "{program} command failed (exit {}): {stderr}",
+            output.status
+        );
     }
 
     Ok(output.stdout)
@@ -349,14 +393,33 @@ pub async fn remove_reverse_with_timeout(
     Ok(())
 }
 
-/// [`shell`] for a command that carries the agent token: its span leaves
-/// the command out, and `run_adb` redacts it from its own log line.
-#[instrument(skip(command))]
-pub async fn shell_with_secret(serial: &str, command: &str) -> Result<String> {
-    let stdout =
-        run_adb_with_transport_recovery(serial, &["shell", command], DEFAULT_TIMEOUT, "adb shell")
-            .await?;
+/// Run `command` in a device shell with `secret` in the shell variable `var`,
+/// read from adb's stdin rather than passed on its command line, where any
+/// local user could see it with `ps` (PILOT-969). `command` refers to it as
+/// `"$<var>"`.
+#[instrument(skip(secret))]
+pub async fn shell_with_secret(
+    serial: &str,
+    var: &str,
+    secret: &str,
+    command: &str,
+) -> Result<String> {
+    let script = secret_shell_script(var, command);
+    let stdout = run_adb_with_transport_recovery_input(
+        serial,
+        &["shell", &script],
+        Some(format!("{secret}\n").as_bytes()),
+        DEFAULT_TIMEOUT,
+        "adb shell",
+    )
+    .await?;
     Ok(String::from_utf8_lossy(&stdout).to_string())
+}
+
+/// The device-side script for [`shell_with_secret`]: read the secret from
+/// stdin into `var`, then run `command`.
+fn secret_shell_script(var: &str, command: &str) -> String {
+    format!("IFS= read -r {var}; {command}")
 }
 
 /// Execute a shell command on the device, returning stdout as a String.
@@ -615,8 +678,18 @@ async fn run_adb_with_transport_recovery(
     timeout: Duration,
     operation: &str,
 ) -> Result<Vec<u8>> {
+    run_adb_with_transport_recovery_input(serial, args, None, timeout, operation).await
+}
+
+async fn run_adb_with_transport_recovery_input(
+    serial: &str,
+    args: &[&str],
+    input: Option<&[u8]>,
+    timeout: Duration,
+    operation: &str,
+) -> Result<Vec<u8>> {
     for attempt in 1..=ADB_TRANSPORT_RETRY_ATTEMPTS {
-        match run_adb(Some(serial), args, timeout).await {
+        match run_adb_with_input(Some(serial), args, input, timeout).await {
             Ok(stdout) => return Ok(stdout),
             Err(e) => {
                 let message = e.to_string();
@@ -1742,6 +1815,57 @@ pub async fn cleanup_iptables_redirect(serial: &str) {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    #[test]
+    fn secret_shell_script_reads_the_secret_from_stdin() {
+        assert_eq!(
+            super::secret_shell_script("T", r#"echo "$T""#),
+            r#"IFS= read -r T; echo "$T""#
+        );
+    }
+
+    #[tokio::test]
+    async fn run_with_input_feeds_stdin_and_reports_failures() {
+        let out = super::run_with_input("cat", &[], Some(b"s3cret\n"), Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert_eq!(out, b"s3cret\n");
+        // Without input, stdin is closed rather than inherited.
+        let out = super::run_with_input("cat", &[], None, Duration::from_secs(5))
+            .await
+            .unwrap();
+        assert!(out.is_empty());
+        let err = super::run_with_input(
+            "sh",
+            &["-c", "echo nope >&2; exit 3"],
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            err.contains("sh command failed") && err.contains("nope"),
+            "{err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_secret_shell_script_hands_the_secret_to_the_command() {
+        // The same script a device shell runs, run by the host's sh.
+        let script = super::secret_shell_script("T", r#"echo "got:$T""#);
+        let out = super::run_with_input(
+            "sh",
+            &["-c", &script],
+            Some(b"s3cret\n"),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(out, b"got:s3cret\n");
+    }
+
     #[test]
     fn capture_ports_keep_defaults_and_loopback_exclusion() {
         let commands = super::iptables_redirect_commands(45678, &[8080, 9099, 8080, 80], None);
