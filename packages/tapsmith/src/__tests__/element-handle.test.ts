@@ -763,7 +763,9 @@ describe('exists()', () => {
       }
     })).toBe(true);
     expect(calls).toBe(13);
-    expect(elapsed).toBe(3000); // 12 retry gaps of 250ms — well past the 2s fault window
+    // 12 retry gaps of the action backoff (0, 20, 100, 100, then 500 ms) —
+    // well past the 2s fault window.
+    expect(elapsed).toBe(4220);
   });
 
   it('a persistent agent command timeout surfaces unchanged at the handle deadline, so session recovery still matches', async () => {
@@ -1653,7 +1655,9 @@ describe('isVisible()', () => {
       }
     })).rejects.toThrow(/findElements failed/);
     expect(elapsed).toBeLessThan(1000);
-    expect(findElements.mock.calls.length).toBeLessThanOrEqual(3);
+    // Reads at 0, 0, 20 and 120 ms (the action backoff); then less than one
+    // read budget is left.
+    expect(findElements.mock.calls.length).toBeLessThanOrEqual(4);
   });
 
   it('re-probes an agent command timeout until the handle deadline (slow agent), each read still tick-bounded, then surfaces it unchanged', async () => {
@@ -1678,7 +1682,8 @@ describe('isVisible()', () => {
         elapsed = Date.now() - start;
       }
     })).rejects.toThrow(/Agent command timed out/);
-    expect(findElements.mock.calls.length).toBeGreaterThan(100);
+    // Re-read the whole 30 s: the action backoff settles at one read per 500 ms.
+    expect(findElements.mock.calls.length).toBeGreaterThan(55);
     for (const b of budgets) expect(b).toBeLessThanOrEqual(250);
     expect(budgets.slice(0, -1).every((b) => b === 250)).toBe(true);
     expect(elapsed).toBeGreaterThanOrEqual(29_500);
@@ -1704,8 +1709,9 @@ describe('isVisible()', () => {
       return result;
     })).toBe(true);
     expect(calls).toBe(12);
-    // 11 retry gaps of 250ms: well past the 2s fault window, well short of the timeout.
-    expect(elapsed).toBe(2750);
+    // 11 retry gaps of the action backoff (0, 20, 100, 100, then 500 ms):
+    // well past the 2s fault window, well short of the timeout.
+    expect(elapsed).toBe(3720);
   });
 
   it('throws a descriptive error — never a silent answer — when the hierarchy never settles (review follow-up)', async () => {
@@ -1720,11 +1726,12 @@ describe('isVisible()', () => {
     const err = await withFakeClock(10_000, () => handle.isHidden()).catch((e) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toMatch(/Could not read the state of .*Spinner/);
-    // Reports what happened (reads + elapsed), not a budget: reads every
-    // 250ms from 0 to 5000ms; after the read at 5000ms no poll gap fits.
-    expect(err.message).toMatch(/kept changing \(stale snapshot\) across 21 reads over 5000ms/);
+    // Reports what happened (reads + elapsed), not a budget: reads on the
+    // action backoff (0, 0, 20, 120, 220, then every 500ms to 4720, and the
+    // last capped at the deadline, 5000ms); after that no read fits.
+    expect(err.message).toMatch(/kept changing \(stale snapshot\) across 15 reads over 5000ms/);
     expect(err.message).toMatch(/not\.toBeVisible\(\) or waitFor\(\)/);
-    expect(findElements).toHaveBeenCalledTimes(21);
+    expect(findElements).toHaveBeenCalledTimes(15);
   });
 
   it('gives a short handle timeout its second tick, like find() (review follow-up)', async () => {
@@ -1743,7 +1750,9 @@ describe('isVisible()', () => {
     });
     const client = makeMockClient({ findElements });
     expect(await withFakeClock(5000, () => new ElementHandle(client, _text('X'), 400).isVisible())).toBe(true);
-    expect(budgets).toEqual([250, 150]);
+    // The re-read comes at once (the action backoff starts at 0 ms), so it
+    // still has a whole read budget.
+    expect(budgets).toEqual([250, 250]);
   });
 
   it('a momentary agent command timeout between a stale tick and a good read is ridden out (review follow-up)', async () => {
@@ -1806,10 +1815,12 @@ describe('isVisible()', () => {
         elapsed = Date.now() - start;
       }
     })).rejects.toThrow(/Not connected to agent/);
-    // Fault at 1500ms opens a window to 3500ms; reads at 1750 (fails 3250) and
-    // 3500 (fails 5000; 250ms was left when it was issued); then thrown.
+    // Fault at 1500ms opens a window to 3500ms; re-reads at once (fails at
+    // 3000) and 20ms later (fails at ~4520; 480ms was left when it was
+    // issued); then less than a read's budget is left, so it is thrown.
     expect(budgets).toEqual([250, 250, 250]);
-    expect(elapsed).toBe(5000);
+    expect(elapsed).toBeGreaterThanOrEqual(4520);
+    expect(elapsed).toBeLessThan(4600);
   });
 
   it('bounds the reads a filter({ has }) chain issues by the same budget (review follow-up)', async () => {
@@ -1869,8 +1880,9 @@ describe('isVisible()', () => {
     for (const handle of [base.first(), base.nth(2), base.filter({ hasText: 'Y' })]) {
       budgets.length = 0;
       await expect(withFakeClock(5000, () => handle.isVisible())).rejects.toThrow(/Could not read the state of/);
-      // One poll interval per read (the last gets what is left: 1ms floor).
-      expect(budgets.length).toBe(13);
+      // One read budget per read (the last gets what is left: 1ms floor);
+      // reads on the action backoff: 0, 0, 20, 120, 220, 720 … 2720, 3000 ms.
+      expect(budgets.length).toBe(11);
       for (const b of budgets.slice(0, -1)) expect(b).toBe(250);
       expect(budgets.at(-1)!).toBeGreaterThanOrEqual(1);
     }
@@ -1923,7 +1935,7 @@ describe('isVisible()', () => {
     const client = makeMockClient({ findElements });
     await expect(withFakeClock(5000, () => new ElementHandle(client, _text('X'), 3000).isVisible()))
       .rejects.toThrow(/kept changing/);
-    expect(budgets.length).toBe(13);
+    expect(budgets.length).toBe(11);
     for (const b of budgets) expect(b).toBeLessThanOrEqual(250);
   });
 
@@ -1942,8 +1954,8 @@ describe('isVisible()', () => {
     expect(err.message).toMatch(/Could not read the state of/);
     expect(err.message).not.toMatch(/Not connected to agent/);
     // The diagnostic counts stale reads as stale reads, and says a fault occurred.
-    expect(err.message).toMatch(/across 20 reads over 5000ms \(plus 1 momentary agent fault that cleared\)/);
-    expect(calls).toBe(21);
+    expect(err.message).toMatch(/across 14 reads over 5000ms \(plus 1 momentary agent fault that cleared\)/);
+    expect(calls).toBe(15);
   });
 
   it('a handle from all() is a live nth(i) locator, so a check and the tap it guards describe the same element — whatever is at that index NOW (PILOT-346)', async () => {
@@ -2944,7 +2956,7 @@ describe('count()/all()/allTextContents() re-read a stale snapshot until it sett
     const neverSettles = makeMockClient({ findElements: vi.fn(async () => stale()) });
     await expect(withFakeClock(5000, () => new ElementHandle(neverSettles, _role('listitem'), 1000).count()))
       .rejects.toThrow(/is stale \(UI changed\)/);
-    expect(neverSettles.findElements).toHaveBeenCalledTimes(5); // 0, 250, 500, 750, 1000 ms
+    expect(neverSettles.findElements).toHaveBeenCalledTimes(7); // 0, 0, 20, 120, 220, 720, 1000 ms
     const singleShot = makeMockClient({ findElements: vi.fn(async () => stale()) });
     await expect(new ElementHandle(singleShot, _role('listitem'), 0).allTextContents()).rejects.toThrow(/is stale/);
     expect(singleShot.findElements).toHaveBeenCalledTimes(1);

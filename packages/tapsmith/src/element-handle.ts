@@ -39,6 +39,7 @@ import { checkNoArguments, checkOptions, checkSelectOption, checkTimeout, type T
 import { IOS_NAME_ONLY_TYPES, IOS_VALUE_TEXT_TYPES } from './ios-text-content.js';
 import { LOCATOR_PICKER_HINT, NEAR_MISS_BUDGET_MS, nearMissHint } from './locator-miss-hint.js';
 import { elementAccessibleName } from './accessible-name.js';
+import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 
 // ─── Public types ───
 
@@ -55,17 +56,14 @@ export interface BoundingBox {
 }
 
 /**
- * Cadence of every host-side poll loop in the SDK — action auto-wait,
- * `waitFor`, the presence probes (`isVisible`/`isHidden`/`exists`),
- * `scrollIntoView`'s probe and stabilisation, the WebView locator loops, the MCP selector
- * resolver and the assertion poller in expect.ts (which import it). It is
- * also the budget of each read the action and probe loops issue (see
+ * Budget of one read issued by the action and probe loops (see
  * {@link tickBudget}); `waitFor` and the assertion poller keep their own,
- * deliberately longer, 500 ms read budget. One constant, so the cadences
- * cannot drift apart again (it was once hand-copied in seven places).
+ * deliberately longer, 500 ms read budget. Not a cadence: how long the loops
+ * wait BETWEEN reads is Playwright's backoff, in retry-schedule.ts
+ * (PILOT-972). It was once also the flat sleep between every read.
  * @internal
  */
-export const POLL_INTERVAL_MS = 250;
+export const TICK_READ_BUDGET_MS = 250;
 
 const WAIT_FOR_STATES: readonly string[] = ['visible', 'hidden', 'attached', 'detached'];
 /** Settle time after swipe-based scrolling.  On iOS, ScrollView momentum
@@ -370,7 +368,7 @@ function positionalMissDetail(err: Error | undefined): string {
  * final tick for 30s (see the note above on why 1ms is not a real bound).
  */
 function tickBudget(deadline: number): number {
-  return Math.min(POLL_INTERVAL_MS, Math.max(1, deadline - Date.now()));
+  return Math.min(TICK_READ_BUDGET_MS, Math.max(1, deadline - Date.now()));
 }
 
 function isPollableNotFoundError(err: unknown): boolean {
@@ -1722,6 +1720,7 @@ export class ElementHandle {
     // The most recent positional miss (`nth(i): expected at least …`), kept so
     // the deadline error still says WHICH index was short and by how much.
     let lastPositionalMiss: Error | undefined;
+    const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
     while (true) {
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind === 'fault') {
@@ -1757,7 +1756,7 @@ export class ElementHandle {
           `Element ${this._describe()} was not found after waiting ${timeoutMs}ms${detail}${await this._locatorMissHelp({ waitedMs: timeoutMs, positionalDetail: detail })}`,
         );
       }
-      const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+      const sleepMs = nextDelay(deadline);
       if (sleepMs > 0) await sleep(sleepMs, this._client._getAbortSignal?.());
     }
   }
@@ -1772,7 +1771,7 @@ export class ElementHandle {
    * tree to the tick budget first, exactly as `_resolveForWaitTick` does; a
    * scope parent or `filter({ has })` child query inherits it too. The budget
    * does not bound a healthy dump — the daemon's headroom does (see the note
-   * by {@link POLL_INTERVAL_MS}) — so the usual 250ms tick costs nothing.
+   * by {@link TICK_READ_BUDGET_MS}) — so the usual 250ms tick costs nothing.
    */
   private _resolveOneWithin(budgetMs: number): Promise<ElementInfo> {
     return ElementHandle._cloneWithTimeout(this, budgetMs)._resolveOne();
@@ -1994,6 +1993,7 @@ export class ElementHandle {
     // off-screen at the deadline, instead of being handed to the agent, which
     // refused it at once as "not hittable" (PILOT-716).
     let lastSeenOffScreen: ElementInfo['bounds'];
+    const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
     while (true) {
       const tick = await this._resolveTick(tickBudget(deadline));
       if (tick.kind === 'fault') {
@@ -2059,7 +2059,7 @@ export class ElementHandle {
                 })),
         );
       }
-      const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+      const sleepMs = nextDelay(deadline);
       if (sleepMs > 0) await sleep(sleepMs, this._client._getAbortSignal?.());
     }
   }
@@ -2280,6 +2280,7 @@ export class ElementHandle {
     if (this._timeoutMs === 0) return read(this);
     const deadline = Date.now() + this._timeoutMs;
     let faultDeadline: number | undefined;
+    const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
     while (true) {
       try {
         return await read(ElementHandle._cloneWithTimeout(this, tickBudget(deadline)));
@@ -2299,7 +2300,7 @@ export class ElementHandle {
           throw err;
         }
       }
-      await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())), this._client._getAbortSignal?.());
+      await sleep(nextDelay(deadline), this._client._getAbortSignal?.());
     }
   }
 
@@ -2516,6 +2517,7 @@ export class ElementHandle {
 
     try {
       let lastTransientErr: Error | undefined;
+      const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
       while (true) {
         try {
           if (await checkState()) {
@@ -2546,7 +2548,7 @@ export class ElementHandle {
             `Element ${this._describe()} did not reach state "${state}" after ${timeoutMs}ms${hint}`,
           );
         }
-        const sleepMs = Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()));
+        const sleepMs = nextDelay(deadline);
         if (sleepMs > 0) await sleep(sleepMs, this._client._getAbortSignal?.());
       }
     } catch (err) {
@@ -3133,8 +3135,10 @@ export class ElementHandle {
       // not hittable until then) still gets the action floor to see its change
       // land, so a toggle that worked is not reported as unchanged.
       const verifyUntil = Math.max(deadline, lastTapAt + MIN_ACTION_BUDGET_MS);
+      // Each tap's change is looked for quickly at first, then less often.
+      let nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
       while (Date.now() < verifyUntil) {
-        await sleep(POLL_INTERVAL_MS, this._client._getAbortSignal?.());
+        await sleep(nextDelay(verifyUntil), this._client._getAbortSignal?.());
         try {
           const after = await this._resolveOne();
           // The agent answered → responsive; drop any earlier transient timeout
@@ -3148,6 +3152,7 @@ export class ElementHandle {
           ) {
             retaps++;
             lastTapAt = Date.now();
+            nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
             try {
               const retapRes = await tapByTarget(await this._actionTarget(after));
               if (retapRes.success) tapRes = retapRes;
@@ -3531,7 +3536,7 @@ export class ElementHandle {
    * are re-timed through {@link _resolveOneWithin}, so a filter/scope chain's
    * sequential reads carry it too). The budget does not bound a healthy dump;
    * the daemon's fixed headroom does (see the note by
-   * {@link POLL_INTERVAL_MS}), so on a healthy device a call costs one
+   * {@link TICK_READ_BUDGET_MS}), so on a healthy device a call costs one
    * read, and on a wedged agent no single read can hold the call for the
    * whole timeout plus headroom. An agent command timeout means the agent is
    * alive but slow — a CPU-starved CI emulator's hierarchy dump — so, as the
@@ -3598,6 +3603,7 @@ export class ElementHandle {
     // Set once the first empty read has been idle-waited: stale re-reads past
     // it fall back to that answer instead of churning to the handle timeout.
     let confirmDeadline: number | undefined;
+    const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
     while (true) {
       // A 0 budget is right only for the explicit timeout-0 opt-out (the
       // daemon maps it to its default deadline).
@@ -3659,9 +3665,10 @@ export class ElementHandle {
       if (lastFault && faultDeadline !== undefined) nearestDeadline = Math.min(nearestDeadline, faultDeadline);
       else if (confirmDeadline !== undefined && !lastFault) nearestDeadline = Math.min(nearestDeadline, confirmDeadline);
       const remaining = nearestDeadline - now;
-      // Stop once another poll gap no longer fits before the nearest deadline
-      // (so a short handle timeout still gets its second tick, as find() does).
-      if (remaining < POLL_INTERVAL_MS) {
+      // Stop once another read's budget no longer fits before the nearest
+      // deadline (so a short handle timeout still gets its second tick, as
+      // find() does).
+      if (remaining < TICK_READ_BUDGET_MS) {
         if (lastFault) throw lastFault;
         // The confirming re-read never produced a usable snapshot; the first
         // empty read is still the answer.
@@ -3679,7 +3686,7 @@ export class ElementHandle {
           const why = this._timeoutMs === 0
             ? 'timeout is 0 (single-shot), so it was not retried'
             : `it took ${now - start}ms, and the ${left}ms left of the ${this._timeoutMs}ms timeout ` +
-              `is not enough for another read (a re-read needs at least ${POLL_INTERVAL_MS}ms)`;
+              `is not enough for another read (a re-read needs at least ${TICK_READ_BUDGET_MS}ms)`;
           detail = `a single read returned a stale snapshot (the UI changed mid-read); ${why}`;
         } else {
           detail =
@@ -3691,7 +3698,7 @@ export class ElementHandle {
             `Use ${waitingForms}, which poll until the screen settles.`,
         );
       }
-      await sleep(POLL_INTERVAL_MS, this._client._getAbortSignal?.());
+      await sleep(nextDelay(nearestDeadline), this._client._getAbortSignal?.());
     }
   }
 
@@ -3784,7 +3791,7 @@ export class ElementHandle {
       // selector is an error — which match should end up on screen? — and
       // propagates, as does any other fatal error (gRPC transport failure,
       // user stop).
-      const tick = await this._resolveTick(POLL_INTERVAL_MS);
+      const tick = await this._resolveTick(TICK_READ_BUDGET_MS);
       switch (tick.kind) {
         case 'fault':
           // A momentary agent fault or agent command timeout is retried by
@@ -4004,7 +4011,7 @@ export class ElementHandle {
               //   next tap. Bounded by the tick cap above.
               let stabilityTick: ResolveTick;
               try {
-                stabilityTick = await this._resolveTick(POLL_INTERVAL_MS);
+                stabilityTick = await this._resolveTick(TICK_READ_BUDGET_MS);
               } catch (err) {
                 if (!isStrictModeViolation(err)) throw err;
                 // An ambiguous read is an unreadable tick like any other.

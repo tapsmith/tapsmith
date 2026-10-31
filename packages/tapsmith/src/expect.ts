@@ -17,7 +17,8 @@
  *   await expect.poll(async () => fetchCount()).toBe(5);
  */
 
-import { ElementHandle, ELEMENT_HANDLE_BRAND, isStrictModeViolation, isRetryableResolutionError, isStaleSnapshotError, POLL_INTERVAL_MS } from "./element-handle.js";
+import { ElementHandle, ELEMENT_HANDLE_BRAND, isStrictModeViolation, isRetryableResolutionError, isStaleSnapshotError } from "./element-handle.js";
+import { EXPECT_RETRY_DELAYS_MS, backoff, estimateAttempts } from "./retry-schedule.js";
 import type { ElementInfo } from "./grpc-client.js";
 import { formatSelector } from "./selectors.js";
 import { ANDROID_ROLE_CLASSES, normalizeRole, type Role } from "./roles.js";
@@ -55,10 +56,13 @@ async function poll(
   // only state where "the assertion could not be evaluated" is true; once a
   // tick has completed, the assertion result is backed by a real observation.
   let anyTickCompleted = false;
+  // Playwright's expect schedule: an immediate first read, then 100, 250,
+  // 500 and every 1000 ms (PILOT-972).
+  const nextDelay = backoff(EXPECT_RETRY_DELAYS_MS);
   while (Date.now() < deadline) {
     // On user stop (PILOT-222) each tick's RPC rejects with TestAbortedError,
     // which propagates out of the loop (see resolveTick); the only residual
-    // latency is one POLL_INTERVAL_MS sleep.
+    // latency is the sleep between two reads.
     try {
       const value = await check();
       anyTickCompleted = true;
@@ -78,7 +82,7 @@ async function poll(
       if (!isRetryableResolutionError(err) && !isStaleSnapshotError(err)) throw err;
       lastTransientErr = err as Error;
     }
-    await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    await new Promise((r) => setTimeout(r, nextDelay(deadline)));
   }
   // If the most recent tick was a transient timeout, surface it now (→ session
   // recovery) rather than running one more full agent read (~5s+) — whether the
@@ -459,7 +463,7 @@ function wrapAssertionWithTrace(
         soft: false,
         negated,
         duration: Date.now() - start,
-        attempts: Math.max(1, Math.round((Date.now() - start) / POLL_INTERVAL_MS)),
+        attempts: estimateAttempts(Date.now() - start, EXPECT_RETRY_DELAYS_MS),
         error: timeoutError,
         sourceLocation,
         stack,
@@ -490,7 +494,7 @@ function wrapAssertionWithTrace(
     // Snapshot duration before async capture so it reflects the actual
     // assertion time, not assertion + screenshot overhead.
     const duration = Date.now() - start;
-    const attempts = Math.max(1, Math.round(duration / POLL_INTERVAL_MS));
+    const attempts = estimateAttempts(duration, EXPECT_RETRY_DELAYS_MS);
 
     // Re-lookup bounds after assertion — element may have moved during polling.
     // The recorded bounds must describe an element that is visible in the
@@ -1612,7 +1616,7 @@ function createSoftGenericAssertions(actual: unknown, negated: boolean): Generic
 export interface PollOptions {
   /** How long to keep retrying, in milliseconds. Default 5000. */
   timeout?: number;
-  /** Milliseconds to wait between tries, in order; the last one repeats. Default `[250]`. */
+  /** Milliseconds to wait between tries, in order; the last one repeats. Default `[100, 250, 500, 1000]`, as in Playwright. */
   intervals?: number[];
 }
 
@@ -1621,7 +1625,7 @@ function createPollAssertions(
   options: PollOptions,
 ): GenericAssertions {
   const timeout = options.timeout ?? DEFAULT_ASSERTION_TIMEOUT_MS;
-  const intervals = options.intervals ?? [POLL_INTERVAL_MS];
+  const intervals = options.intervals ?? EXPECT_RETRY_DELAYS_MS;
 
   // Return a GenericAssertions where each method polls until passing
   function wrapAssertion(
@@ -1802,7 +1806,7 @@ function createWebViewAssertions(
         soft: false,
         negated,
         duration: Date.now() - start,
-        attempts: Math.max(1, Math.round((Date.now() - start) / POLL_INTERVAL_MS)),
+        attempts: estimateAttempts(Date.now() - start, EXPECT_RETRY_DELAYS_MS),
         expected: expected(),
         error: timeoutError,
         sourceLocation,
@@ -1830,7 +1834,7 @@ function createWebViewAssertions(
     }
 
     const duration = Date.now() - start;
-    const attempts = Math.max(1, Math.round(duration / POLL_INTERVAL_MS));
+    const attempts = estimateAttempts(duration, EXPECT_RETRY_DELAYS_MS);
 
     let bounds: { left: number; top: number; right: number; bottom: number } | undefined;
     if (passed) {
