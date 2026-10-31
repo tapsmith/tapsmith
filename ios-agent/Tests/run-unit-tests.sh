@@ -154,3 +154,9 @@ xcrun swiftc -sdk "$SDK" \
   TapsmithAgent/SwipeGeometry.swift \
   -o "$OUT/swipe-geometry-tests"
 "$OUT/swipe-geometry-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/AgentAuthTests/main.swift \
+  TapsmithAgent/AgentAuth.swift \
+  -o "$OUT/agent-auth-tests"
+"$OUT/agent-auth-tests"

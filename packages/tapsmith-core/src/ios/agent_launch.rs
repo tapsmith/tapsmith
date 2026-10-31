@@ -2,7 +2,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use tokio::net::TcpStream;
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
@@ -227,6 +226,9 @@ async fn start_agent_impl(
     // One in-place relaunch (budget permitting) recovers that case without a
     // full RPC round trip; the first attempt has usually warmed the simulator.
     let mut relaunches_left: u32 = 1;
+    // Why the last ping failed: an agent that answers but refuses this
+    // daemon (another token, an older build) says so here.
+    let mut last_ping_error = String::from("none answered");
     loop {
         // The daemon is shutting down (and is stopping this agent): stop here
         // rather than reading its exit as a crash and running the relaunch
@@ -252,6 +254,7 @@ async fn start_agent_impl(
             bail!(
                 "Timed out waiting for iOS agent to start on {target_kind} {udid} after 150s. \
                  Killed xcodebuild. Check that the XCUITest bundle is built correctly.\n\
+                 Last ping: {last_ping_error}\n\
                  xcodebuild output (last lines):\n{out_lines}\n\
                  xcodebuild stderr (last lines):\n{err_lines}"
             );
@@ -427,8 +430,9 @@ async fn start_agent_impl(
                 });
                 return Ok(iproxy_handle);
             }
-            Err(_) => {
-                debug!("Agent not ready yet, retrying...");
+            Err(e) => {
+                debug!(error = %e, "Agent not ready yet, retrying...");
+                last_ping_error = format!("{e:#}");
                 tokio::time::sleep(Duration::from_millis(500)).await;
             }
         }
@@ -731,8 +735,78 @@ async fn patch_xctestrun(
         anyhow::bail!("PlistBuddy failed to patch xctestrun: {stderr}");
     }
 
+    // The agent token goes in last, through the plist crate rather than a
+    // PlistBuddy argument that `ps` would show, into a file only this user
+    // can read (PILOT-969).
+    let token = crate::agent_auth::agent_token()?;
+    write_agent_token(Path::new(&patched_path), token).await?;
+
     info!("Patched xctestrun at {patched_path}");
     Ok(patched_path)
+}
+
+/// Put the agent token in the runner's environment (both
+/// `EnvironmentVariables` and `TestingEnvironmentVariables` of the first test
+/// target, like `TAPSMITH_AGENT_PORT`) and make the file private to this user
+/// first, so the token is never in a file others can read.
+async fn write_agent_token(patched_path: &Path, token: &str) -> Result<()> {
+    restrict_to_owner(patched_path).await?;
+    let bytes = tokio::fs::read(patched_path)
+        .await
+        .context("Failed to read patched xctestrun")?;
+    let mut value: plist::Value =
+        plist::from_bytes(&bytes).context("Failed to parse xctestrun plist")?;
+    set_agent_token(&mut value, token)?;
+    let mut buf = Vec::new();
+    plist::to_writer_xml(&mut buf, &value).context("Failed to serialize plist")?;
+    tokio::fs::write(patched_path, buf)
+        .await
+        .context("Failed to write the agent token to the xctestrun")?;
+    Ok(())
+}
+
+async fn restrict_to_owner(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .await
+            .with_context(|| format!("Failed to restrict {}", path.display()))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+fn set_agent_token(xctestrun: &mut plist::Value, token: &str) -> Result<()> {
+    let target = xctestrun
+        .as_dictionary_mut()
+        .and_then(|d| d.get_mut("TestConfigurations"))
+        .and_then(plist::Value::as_array_mut)
+        .and_then(|a| a.get_mut(0))
+        .and_then(plist::Value::as_dictionary_mut)
+        .and_then(|d| d.get_mut("TestTargets"))
+        .and_then(plist::Value::as_array_mut)
+        .and_then(|a| a.get_mut(0))
+        .and_then(plist::Value::as_dictionary_mut)
+        .context("The xctestrun has no TestConfigurations[0].TestTargets[0]")?;
+    for env_key in ["EnvironmentVariables", "TestingEnvironmentVariables"] {
+        if !target.contains_key(env_key) {
+            target.insert(
+                env_key.to_string(),
+                plist::Value::Dictionary(plist::Dictionary::new()),
+            );
+        }
+        let env = target
+            .get_mut(env_key)
+            .and_then(plist::Value::as_dictionary_mut)
+            .with_context(|| format!("The xctestrun's {env_key} is not a dictionary"))?;
+        env.insert(
+            crate::agent_auth::IOS_TOKEN_ENV.to_string(),
+            plist::Value::String(token.to_string()),
+        );
+    }
+    Ok(())
 }
 
 /// Replace `__TAPSMITH_PKG__` placeholders in a patched xctestrun plist with the
@@ -1062,33 +1136,10 @@ async fn agent_port_listeners(port: u16) -> AgentPortListeners {
     AgentPortListeners(commands)
 }
 
-/// Ping the iOS agent to check if it's running.
+/// Ping the iOS agent to check if it's running: an authenticated ping that
+/// must come back as a pong (PILOT-969).
 async fn ping_agent(port: u16) -> Result<()> {
-    let addr = format!("127.0.0.1:{port}");
-    let stream = tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(&addr))
-        .await
-        .map_err(|_| anyhow::anyhow!("Connection timeout"))?
-        .context("Failed to connect")?;
-
-    // Send a ping command
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    let (reader, mut writer) = stream.into_split();
-    let mut buf_reader = BufReader::new(reader);
-
-    let ping_msg = r#"{"id":"ping","method":"ping","params":{}}"#;
-    writer.write_all(format!("{ping_msg}\n").as_bytes()).await?;
-
-    let mut response = String::new();
-    tokio::time::timeout(Duration::from_secs(5), buf_reader.read_line(&mut response))
-        .await
-        .map_err(|_| anyhow::anyhow!("Ping response timeout"))??;
-
-    if response.contains("pong") {
-        Ok(())
-    } else {
-        bail!("Unexpected ping response: {response}")
-    }
+    crate::agent_comms::ping_agent_port(port).await
 }
 
 #[cfg(test)]
@@ -1287,6 +1338,53 @@ mod tests {
         assert!(contents.contains("UITargetAppBundleIdentifier"));
         // Launch mode must NOT inject the attach flag.
         assert!(!contents.contains("TAPSMITH_ATTACH_TO_RUNNING_APP"));
+    }
+
+    #[tokio::test]
+    async fn patch_xctestrun_gives_the_runner_the_agent_token_in_a_private_file() {
+        let (_dir, path) = write_fixture(FIXTURE_EMPTY).await;
+        let patched_path = patch_xctestrun(path.to_str().unwrap(), "com.example.app", false, 18800)
+            .await
+            .expect("patch should succeed");
+        let token = crate::agent_auth::agent_token().unwrap();
+
+        let value: plist::Value = plist::from_file(&patched_path).unwrap();
+        let target = value
+            .as_dictionary()
+            .and_then(|d| d.get("TestConfigurations"))
+            .and_then(plist::Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(plist::Value::as_dictionary)
+            .and_then(|d| d.get("TestTargets"))
+            .and_then(plist::Value::as_array)
+            .and_then(|a| a.first())
+            .and_then(plist::Value::as_dictionary)
+            .unwrap();
+        for env_key in ["EnvironmentVariables", "TestingEnvironmentVariables"] {
+            let env = target
+                .get(env_key)
+                .and_then(plist::Value::as_dictionary)
+                .unwrap();
+            assert_eq!(
+                env.get("TAPSMITH_AGENT_TOKEN")
+                    .and_then(plist::Value::as_string),
+                Some(token),
+                "{env_key}"
+            );
+            // The rest of the patch survives the rewrite.
+            assert_eq!(
+                env.get("TAPSMITH_AGENT_PORT")
+                    .and_then(plist::Value::as_string),
+                Some("18800"),
+                "{env_key}"
+            );
+        }
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&patched_path)
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[tokio::test]
