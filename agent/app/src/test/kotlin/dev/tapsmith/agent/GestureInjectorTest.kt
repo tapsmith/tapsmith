@@ -242,6 +242,7 @@ class GestureInjectorTest {
             }
         GestureInjector(sink, stalling) { 8L }.perform(
             PointerPath(ScreenPoint(0, 0)).pause(100).travelTo(ScreenPoint(300, 0), 100),
+            pacedByClock = true,
         )
         val events = sink.touches.map { it.second }
         assertEquals(TouchAction.UP, events.last().action)
@@ -315,6 +316,44 @@ class GestureInjectorTest {
         }
         assertEquals(listOf(TouchAction.DOWN, TouchAction.CANCEL), sink.actions())
         assertTrue(sink.touches.last().first - start < 1_000)
+    }
+
+    @Test
+    fun `a speed-based gesture visits every tick's position however long the sleeps take`() {
+        // Element swipe/drag/pinch are paced by counting ticks, as before
+        // PILOT-970: a pinch whose first two-finger move is already near its
+        // end is not recognised as a pinch, so no part of the path is skipped.
+        val sink = FakeSink(clock)
+        val overrun =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms + 50
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        GestureInjector(sink, overrun) { 8L }.perform(
+            PointerPath(ScreenPoint(0, 0)).moveTo(ScreenPoint(1000, 0), speedPxPerSec = 10_000),
+            PointerPath(ScreenPoint(0, 50)).moveTo(ScreenPoint(1000, 50), speedPxPerSec = 10_000),
+        )
+        val moves = sink.touches.map { it.second }.filter { it.action == TouchAction.MOVE }
+        // One move per 8 ms tick of the 100 ms path, then one to the end point.
+        val xs = moves.map { it.pointers.first().x }
+        assertEquals((1..12).map { it * 80 } + 1000, xs)
+    }
+
+    @Test
+    fun `an injected press is stamped with its own down time`() {
+        // React Native keys a gesture on the DOWN's event time and drops a
+        // CANCEL whose down time does not match it.
+        val down = TouchEvent(TouchAction.DOWN, 1_000, listOf(PointerState(0, 1, 1)), sync = true)
+        assertEquals(1_000L, motionEventTime(down, now = 1_003))
+        assertEquals(1_003L, motionEventTime(down.copy(action = TouchAction.MOVE), now = 1_003))
+        assertEquals(1_003L, motionEventTime(down.copy(action = TouchAction.CANCEL), now = 1_003))
     }
 
     @Test

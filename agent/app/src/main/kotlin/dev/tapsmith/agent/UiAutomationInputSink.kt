@@ -96,7 +96,7 @@ class UiAutomationInputSink(
         val motion =
             MotionEvent.obtain(
                 event.downTime,
-                SystemClock.uptimeMillis(),
+                motionEventTime(event, SystemClock.uptimeMillis()),
                 action,
                 properties.size,
                 properties,

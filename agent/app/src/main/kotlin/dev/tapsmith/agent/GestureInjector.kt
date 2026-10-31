@@ -56,6 +56,16 @@ data class KeyPress(
     val time: Long,
 )
 
+/**
+ * The event time to inject [event] with at [now]: a press carries its own
+ * down time, as UiAutomator's do. React Native keys a gesture on the DOWN's
+ * event time and drops a later CANCEL whose down time differs from it.
+ */
+fun motionEventTime(
+    event: TouchEvent,
+    now: Long,
+): Long = if (event.action == TouchAction.DOWN) event.downTime else now
+
 /** Where the agent's input events go. True when the input system accepted the event. */
 interface InputSink {
     fun touch(event: TouchEvent): Boolean
@@ -335,7 +345,7 @@ class GestureInjector(
         x2: Int,
         y2: Int,
         durationMs: Long,
-    ) = perform(PointerPath(ScreenPoint(x1, y1)).travelTo(ScreenPoint(x2, y2), durationMs))
+    ) = perform(PointerPath(ScreenPoint(x1, y1)).travelTo(ScreenPoint(x2, y2), durationMs), pacedByClock = true)
 
     /**
      * UiDevice.swipe: press at the start, [steps] - 1 moves along the line one
@@ -371,6 +381,13 @@ class GestureInjector(
      * Events are injected without waiting for the app (as there), so a long
      * gesture keeps its speed on a busy device.
      *
+     * With [pacedByClock] (a gesture whose duration is the caller's contract,
+     * like [timedSwipe]) time is read from the clock, as UiAutomator's
+     * GestureController does, so sleeps that overrun do not stretch it
+     * (PILOT-970). Otherwise each tick advances the path by one tick, so no
+     * part of it is skipped however slow the device: an element pinch whose
+     * first two-finger move is already near its end is not seen as a pinch.
+     *
      * A pointer is moved to its end point before it is released if its last
      * MOVE left it elsewhere, so a tick that overran the rest of a path (a
      * short drag, a stall on a loaded device) still ends in a drag to the end,
@@ -379,7 +396,10 @@ class GestureInjector(
      * still down are cancelled (not released, which could fling or click) and
      * [CommandCancelledException] is thrown.
      */
-    fun perform(vararg paths: PointerPath) {
+    fun perform(
+        vararg paths: PointerPath,
+        pacedByClock: Boolean = false,
+    ) {
         require(paths.isNotEmpty()) { "a gesture needs at least one pointer" }
         val ids = paths.withIndex().associate { (i, p) -> p to i }
         val position = paths.associateWith { it.start }.toMutableMap()
@@ -428,10 +448,7 @@ class GestureInjector(
                 inject(if (down.size > 1) TouchAction.POINTER_DOWN else TouchAction.DOWN, down.size - 1)
             }
             clock.sleep(tick)
-            // Paced by the clock, as UiAutomator's GestureController is: a
-            // sleep that overruns, or a slow injection, does not stretch the
-            // gesture past its duration (PILOT-970).
-            elapsed = clock.now() - startTime
+            elapsed = if (pacedByClock) clock.now() - startTime else elapsed + tick
         }
     }
 
