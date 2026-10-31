@@ -25,9 +25,9 @@
 //!
 //! A `FEATUREFLAGS_ENABLED` that already holds another value is someone
 //! else's, so the setting is not applied at all rather than overwrite it.
-//! launchd forgets its environment when the simulator shuts down, so a
-//! reboot the daemon makes mid-session is followed by [`reapply`], and every
-//! later fresh agent start checks for one it did not make
+//! launchd forgets its environment when the simulator shuts down, so every
+//! fresh agent start (including the one after the daemon's own reboot of a
+//! simulator) checks the flag and sets it again if it was lost
 //! ([`reapply_if_lost`]).
 //!
 //! Every failure here is logged and otherwise ignored: faster animations are
@@ -55,10 +55,12 @@ pub const SELECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// Bound for each `simctl spawn` of the restore at daemon shutdown (a read,
 /// then the writes). Every daemon of a `--workers` run shuts down at once,
 /// alongside its agent teardown, and CoreSimulator then takes more than 3 s
-/// per spawn; an idle spawn already takes about 1 s. Nothing in Tapsmith
-/// SIGKILLs a daemon after SIGTERM, so the bound only has to stop a wedged
-/// CoreSimulator from holding the daemon forever. A restore cut short keeps
-/// its record, for the next session to finish.
+/// per spawn; an idle spawn already takes about 1 s. The CLI and watch mode
+/// never SIGKILL their daemons, so there the bound only stops a wedged
+/// CoreSimulator from holding the daemon forever. The UI server does SIGKILL
+/// a daemon 5 s after SIGTERM when it respawns a worker; a restore cut short
+/// keeps its record, and the replacement daemon recovers it as it selects
+/// the same simulator.
 pub const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 // ─── Reading the simulator ───
@@ -322,8 +324,8 @@ async fn put_back(
     originals: &Originals,
     timeout: Duration,
 ) -> bool {
-    // A flag that was set before is never Tapsmith's to remove: on_select
-    // only applies over an unset flag or one already holding FLAG_VALUE.
+    // A flag that was set before the first daemon applied the setting is
+    // never Tapsmith's to remove.
     let flag = async {
         if originals.flag.is_none() && is_our_flag(current.flag.as_deref()) {
             run(
@@ -499,7 +501,7 @@ pub async fn on_select(
 
 /// Set the values again for a session that holds `applied`, after the
 /// simulator restarted (launchd forgets its environment on shutdown).
-pub async fn reapply(h: &dyn Host, applied: &Applied) {
+async fn reapply(h: &dyn Host, applied: &Applied) {
     if let Some(record) = read_record(&applied.record_path) {
         if is_ours(h, &record).await {
             apply(h, &applied.udid, SELECT_TIMEOUT).await;

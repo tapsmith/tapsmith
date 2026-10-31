@@ -575,9 +575,6 @@ impl DeviceBackend for IosBackend<'_> {
                 if let Err(e) = ios::device::boot_simulator(&serial).await {
                     warn!(%serial, error = %e, "simulator reboot failed; continuing with re-delivery");
                 } else {
-                    // launchd forgot the sped-up animations' flag on shutdown;
-                    // set it before the app is launched again.
-                    self.svc.reapply_ios_animation_speed(&serial).await;
                     // Give SpringBoard a moment past `Booted` before
                     // asking xcodebuild to install/launch the runner.
                     tokio::time::sleep(Duration::from_secs(5)).await;

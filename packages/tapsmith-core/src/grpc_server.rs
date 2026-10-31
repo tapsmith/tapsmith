@@ -276,10 +276,6 @@ pub struct TapsmithServiceImpl {
     /// The iOS simulator whose UIKit animations this daemon sped up for
     /// `reducedMotion: 'reduce'`, restored like `animation_scales`.
     ios_animation_speed: Arc<tokio::sync::Mutex<Option<ios::animation_speed::Applied>>>,
-    /// Set when SetDevice has just applied `ios_animation_speed`, so the
-    /// StartAgent that follows skips re-checking it; any later fresh agent
-    /// start checks that a reboot did not clear it.
-    ios_animation_speed_fresh: Arc<std::sync::atomic::AtomicBool>,
     /// Active route interception handler, if a `NetworkRoute` stream is open.
     /// Stored here so that `start_network_capture` can install it on newly
     /// created proxies (the stream may open before or after capture starts).
@@ -433,7 +429,6 @@ impl TapsmithServiceImpl {
             passthrough_hosts: Arc::new(RwLock::new(Vec::new())),
             animation_scales: Arc::new(tokio::sync::Mutex::new(None)),
             ios_animation_speed: Arc::new(tokio::sync::Mutex::new(None)),
-            ios_animation_speed_fresh: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             active_route_handler: Arc::new(RwLock::new(None)),
             webview_forwards: Arc::new(RwLock::new(std::collections::HashMap::new())),
             #[cfg(target_os = "macos")]
@@ -1051,6 +1046,11 @@ impl TapsmithServiceImpl {
 
         agent_comms::clear_stream_cache(&self.agent_stream).await;
         ios::agent_launch::kill_existing_agents_on(serial).await;
+        // The SDK's session recovery reboots an unhealthy simulator and then
+        // lands here; launchd lost the sped-up animations' flag with it.
+        if !is_physical {
+            self.ensure_ios_animation_speed(serial).await;
+        }
 
         // Physical iOS: re-prime the Wi-Fi MITM proxy before xcodebuild so
         // iOS's OCSP query for the relaunched runner reaches our passthrough
@@ -1609,33 +1609,16 @@ impl TapsmithServiceImpl {
         };
         *applied =
             ios::animation_speed::on_select(&host, &dir, serial, want, applied.as_ref()).await;
-        self.ios_animation_speed_fresh
-            .store(applied.is_some(), std::sync::atomic::Ordering::SeqCst);
     }
 
-    /// Before a fresh iOS agent start: set the sped-up animations' flag again
-    /// if the simulator lost it, as a reboot by the SDK's session recovery
-    /// does. Skipped right after SetDevice set it up.
+    /// Before a fresh iOS agent start (StartAgent, or the daemon's own agent
+    /// restart): set the sped-up animations' flag again if the simulator lost
+    /// it, as a reboot by the SDK's session recovery does. One `simctl spawn`
+    /// read when nothing was lost; nothing at all without the option.
     async fn ensure_ios_animation_speed(&self, serial: &str) {
         let applied = self.ios_animation_speed.lock().await;
-        let Some(applied) = applied.as_ref().filter(|a| a.udid == serial) else {
-            return;
-        };
-        if self
-            .ios_animation_speed_fresh
-            .swap(false, std::sync::atomic::Ordering::SeqCst)
-        {
-            return;
-        }
-        ios::animation_speed::reapply_if_lost(&ios::animation_speed::RealHost, applied).await;
-    }
-
-    /// Set the sped-up animations again after the daemon rebooted `serial`
-    /// (launchd forgets its environment on shutdown).
-    pub(crate) async fn reapply_ios_animation_speed(&self, serial: &str) {
-        let applied = self.ios_animation_speed.lock().await;
         if let Some(applied) = applied.as_ref().filter(|a| a.udid == serial) {
-            ios::animation_speed::reapply(&ios::animation_speed::RealHost, applied).await;
+            ios::animation_speed::reapply_if_lost(&ios::animation_speed::RealHost, applied).await;
         }
     }
 
