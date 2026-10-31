@@ -273,9 +273,10 @@ class GestureInjector(
      * have delivered it anyway), and a refused release is followed by a cancel,
      * so no pointer is left down. True only when both went through.
      *
-     * A hold longer than [HOLD_CHECK_MS] (a long press) stops when its command
-     * is cancelled: the pointer is cancelled, not released, so the abandoned
-     * press does not land as a click, and [CommandCancelledException] is thrown.
+     * The hold stops when its command is cancelled (checked every
+     * [HOLD_CHECK_MS], and once at the end of a shorter press): the pointer is
+     * cancelled, not released, so the abandoned press does not land as a
+     * click, and [CommandCancelledException] is thrown.
      */
     fun click(
         x: Int,
