@@ -3996,6 +3996,21 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     }
 
     #[instrument(skip_all, fields(request_id))]
+    async fn take_system_dialog_events(
+        &self,
+        request: Request<proto::TakeSystemDialogEventsRequest>,
+    ) -> Result<Response<proto::TakeSystemDialogEventsResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+
+        let events = self.backend().await?.take_system_dialog_events().await?;
+        Ok(Response::new(proto::TakeSystemDialogEventsResponse {
+            request_id,
+            events,
+        }))
+    }
+
+    #[instrument(skip_all, fields(request_id))]
     async fn hide_keyboard(
         &self,
         request: Request<proto::HideKeyboardRequest>,
