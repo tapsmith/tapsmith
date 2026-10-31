@@ -273,6 +273,9 @@ pub struct TapsmithServiceImpl {
     /// to another device or shuts down. A mutex, not an RwLock: selecting and
     /// restoring must not interleave.
     animation_scales: Arc<tokio::sync::Mutex<Option<crate::android_animation_scales::Applied>>>,
+    /// The iOS simulator whose UIKit animations this daemon sped up for
+    /// `reducedMotion: 'reduce'`, restored like `animation_scales`.
+    ios_animation_speed: Arc<tokio::sync::Mutex<Option<ios::animation_speed::Applied>>>,
     /// Active route interception handler, if a `NetworkRoute` stream is open.
     /// Stored here so that `start_network_capture` can install it on newly
     /// created proxies (the stream may open before or after capture starts).
@@ -425,6 +428,7 @@ impl TapsmithServiceImpl {
             network_tracing_enabled: Arc::new(RwLock::new(false)),
             passthrough_hosts: Arc::new(RwLock::new(Vec::new())),
             animation_scales: Arc::new(tokio::sync::Mutex::new(None)),
+            ios_animation_speed: Arc::new(tokio::sync::Mutex::new(None)),
             active_route_handler: Arc::new(RwLock::new(None)),
             webview_forwards: Arc::new(RwLock::new(std::collections::HashMap::new())),
             #[cfg(target_os = "macos")]
@@ -1519,8 +1523,10 @@ impl TapsmithServiceImpl {
     /// Apply `reducedMotion` to the device just selected (PILOT-971): restore
     /// the previous device's scales if this daemon moved off one it had
     /// turned off, then turn this one's off, or undo or recover them, as
-    /// `want` and any owner record say. Android only; never fails selection.
+    /// `want` and any owner record say. Never fails selection. The iOS
+    /// simulator half is `select_ios_animation_speed`.
     async fn select_animation_scales(&self, serial: &str, want: Option<bool>) {
+        self.select_ios_animation_speed(serial, want).await;
         let mut applied = self.animation_scales.lock().await;
         let host = crate::android_animation_scales::RealHost;
         if let Some(previous) = applied.as_ref().filter(|a| a.serial != serial) {
@@ -1543,16 +1549,69 @@ impl TapsmithServiceImpl {
                 .await;
     }
 
-    /// Put back the animation scales this daemon turned off. Called at
-    /// graceful shutdown.
+    /// Put back the Android animation scales and the iOS simulator animation
+    /// speed this daemon changed. Called at graceful shutdown.
     pub async fn restore_animation_scales(&self) {
-        if let Some(applied) = self.animation_scales.lock().await.take() {
-            crate::android_animation_scales::restore(
-                &crate::android_animation_scales::RealHost,
-                &applied,
-                crate::android_animation_scales::SHUTDOWN_TIMEOUT,
-            )
-            .await;
+        let android = async {
+            if let Some(applied) = self.animation_scales.lock().await.take() {
+                crate::android_animation_scales::restore(
+                    &crate::android_animation_scales::RealHost,
+                    &applied,
+                    crate::android_animation_scales::SHUTDOWN_TIMEOUT,
+                )
+                .await;
+            }
+        };
+        let ios = async {
+            if let Some(applied) = self.ios_animation_speed.lock().await.take() {
+                ios::animation_speed::restore(
+                    &ios::animation_speed::RealHost,
+                    &applied,
+                    ios::animation_speed::SHUTDOWN_TIMEOUT,
+                )
+                .await;
+            }
+        };
+        tokio::join!(android, ios);
+    }
+
+    /// The iOS half of `reducedMotion` on device selection: restore the
+    /// previous simulator if this daemon moved off one it had sped up, then
+    /// speed this one up, or undo or recover it, as `want` and any owner
+    /// record say. Simulators only; never fails selection.
+    async fn select_ios_animation_speed(&self, serial: &str, want: Option<bool>) {
+        let mut applied = self.ios_animation_speed.lock().await;
+        let host = ios::animation_speed::RealHost;
+        if let Some(previous) = applied.as_ref().filter(|a| a.udid != serial) {
+            ios::animation_speed::restore(&host, previous, ios::animation_speed::SELECT_TIMEOUT)
+                .await;
+            *applied = None;
+        }
+        if self.active_platform().await != Some(Platform::Ios) {
+            return;
+        }
+        if self.is_active_ios_physical().await {
+            if want == Some(true) {
+                info!(
+                    %serial,
+                    "reducedMotion is not applied on physical iOS devices; animations run at normal speed"
+                );
+            }
+            return;
+        }
+        let Some(dir) = ios::animation_speed::records_dir() else {
+            return;
+        };
+        *applied =
+            ios::animation_speed::on_select(&host, &dir, serial, want, applied.as_ref()).await;
+    }
+
+    /// Set the sped-up animations again after the daemon rebooted `serial`
+    /// (launchd forgets its environment on shutdown).
+    pub(crate) async fn reapply_ios_animation_speed(&self, serial: &str) {
+        let applied = self.ios_animation_speed.lock().await;
+        if let Some(applied) = applied.as_ref().filter(|a| a.udid == serial) {
+            ios::animation_speed::reapply(&ios::animation_speed::RealHost, applied).await;
         }
     }
 

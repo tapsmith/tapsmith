@@ -1,5 +1,6 @@
 pub mod agent_launch;
 pub mod agent_registry;
+pub mod animation_speed;
 pub mod device;
 pub mod iproxy;
 #[cfg(target_os = "macos")]
