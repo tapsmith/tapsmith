@@ -2291,6 +2291,13 @@ emulators it boots for `avd`. Mirrors Playwright's `launchOptions`.
 
 See [How Tapsmith launches emulators](configuration.md#how-tapsmith-launches-emulators).
 
+### `ReducedMotion`
+
+The type of the root config's `reducedMotion`: `'reduce' | 'no-preference'`, as in Playwright.
+`'reduce'` turns the Android animation scales off for the session and restores the device's own
+values when it ends; `'no-preference'` (the default) leaves them alone. Not applied on iOS yet. See
+[`reducedMotion`](configuration.md#all-options).
+
 ### Projects
 
 Projects group test files with shared options and dependency ordering, mirroring Playwright's project concept. Each project can target its own device by overriding device-shaping fields under `use:`. Setup projects run first; dependent projects run after their dependencies complete.
