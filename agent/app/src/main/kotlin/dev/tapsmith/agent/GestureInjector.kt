@@ -121,6 +121,19 @@ class PointerPath(
         return this
     }
 
+    /**
+     * Move in a straight line to [dest] over [durationMs], whatever the
+     * distance (a coordinate swipe's `duration`; PILOT-970).
+     */
+    fun travelTo(
+        dest: ScreenPoint,
+        durationMs: Long,
+    ): PointerPath {
+        require(durationMs >= 0) { "duration cannot be negative" }
+        add(Segment(end, dest, durationMs))
+        return this
+    }
+
     private fun add(segment: Segment) {
         segments += segment
         durationMs += segment.durationMs
@@ -271,6 +284,32 @@ class GestureInjector(
     }
 
     /**
+     * A long press: press at ([x], [y]), hold for [holdMs] of real time, and
+     * release (PILOT-970). Not a step swipe from the point to itself: each
+     * step waits for a display frame, so `holdMs / 5` steps held ~3x as long
+     * as asked at 60 Hz, and longer still on a slow emulator. Refusals are
+     * handled as [click] handles them, so no pointer is left down.
+     */
+    fun longPress(
+        x: Int,
+        y: Int,
+        holdMs: Long,
+    ): Boolean = click(x, y, holdMs)
+
+    /**
+     * A swipe from ([x1], [y1]) to ([x2], [y2]) that lasts [durationMs] of real
+     * time (PILOT-970): a timed gesture ([perform]), with moves every tick,
+     * rather than [stepSwipe]'s one move per display frame.
+     */
+    fun timedSwipe(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        durationMs: Long,
+    ) = perform(PointerPath(ScreenPoint(x1, y1)).travelTo(ScreenPoint(x2, y2), durationMs))
+
+    /**
      * UiDevice.swipe: press at the start, [steps] - 1 moves along the line one
      * frame apart, release at the end. A refused event stops the moves, but the
      * pointer is still released. A swipe from a point to itself is a long press.
@@ -339,7 +378,10 @@ class GestureInjector(
                 inject(if (down.size > 1) TouchAction.POINTER_DOWN else TouchAction.DOWN, down.size - 1)
             }
             clock.sleep(tick)
-            elapsed += tick
+            // Paced by the clock, as UiAutomator's GestureController is: a
+            // sleep that overruns, or a slow injection, does not stretch the
+            // gesture past its duration (PILOT-970).
+            elapsed = clock.now() - startTime
         }
     }
 
