@@ -1326,8 +1326,9 @@ impl AgentConnection {
             let fix = if ios {
                 "Rebuild the iOS agent for this Tapsmith version, then run again."
             } else {
-                "Set agentApk and agentTestApk in your Tapsmith config so Tapsmith installs the \
-                 current agent (or reinstall it yourself), then run again."
+                "Update @tapsmith/agent-android to this Tapsmith version, or point agentApk \
+                 and agentTestApk in your Tapsmith config at a current agent build, then run \
+                 again."
             };
             bail!(
                 "{}",
