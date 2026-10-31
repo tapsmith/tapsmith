@@ -67,6 +67,7 @@ class CommandHandler(
                 "selectOption",
                 "pinchZoom",
                 "focus",
+                "blur",
             )
     }
 

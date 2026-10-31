@@ -15,7 +15,7 @@ class DialogAnsweringMethodsTest {
 
     @Test
     fun `element lookups and input answer dialogs`() {
-        listOf("findElement", "findElements", "waitForElement", "tap", "typeText", "swipe", "pressKey").forEach {
+        listOf("findElement", "findElements", "waitForElement", "tap", "typeText", "swipe", "pressKey", "focus", "blur").forEach {
             assertTrue("$it should answer", it in answering)
         }
     }
