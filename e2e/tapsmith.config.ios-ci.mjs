@@ -6,6 +6,9 @@ export default defineConfig({
   app: "./fixtures/TapsmithTestApp.app",
   package: "dev.tapsmith.testapp",
   timeout: 30_000,
+  // Speeds UIKit animations up on the simulator, and exercises Tapsmith's
+  // setting and restore on every run (reduced-motion.ios.test.ts checks it).
+  reducedMotion: "reduce",
   typingDelay: 10,
   // Two retries (Playwright's CI convention): runner-scoped outages
   // (compositor stalls, input-injection drops) can outlast a single retry

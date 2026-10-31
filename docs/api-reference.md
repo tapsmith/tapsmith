@@ -2294,8 +2294,9 @@ See [How Tapsmith launches emulators](configuration.md#how-tapsmith-launches-emu
 ### `ReducedMotion`
 
 The type of the root config's `reducedMotion`: `'reduce' | 'no-preference'`, as in Playwright.
-`'reduce'` turns the Android animation scales off for the session and restores the device's own
-values when it ends; `'no-preference'` (the default) leaves them alone. Not applied on iOS yet. See
+`'reduce'` turns the Android animation scales off for the session, or makes UIKit animations ten
+times faster on an iOS simulator, and restores the device's own values when it ends;
+`'no-preference'` (the default) leaves them alone. Not applied on physical iOS devices. See
 [`reducedMotion`](configuration.md#all-options).
 
 ### Projects
