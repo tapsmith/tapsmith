@@ -8,6 +8,7 @@ import { ElementHandle } from '../element-handle.js';
 import { expect as tapsmithExpect } from '../expect.js';
 import { WebViewHandle, type WebViewLocatorProbe } from '../webview-handle.js';
 import { _text } from '../selectors.js';
+import { TestAbortedError, isAbortError } from '../abort.js';
 import type { TapsmithGrpcClient, ElementInfo, FindElementsResponse, ActionResponse } from '../grpc-client.js';
 
 const ACTION_GAPS = [0, 20, 100, 100, 500, 500, 500];
@@ -143,6 +144,27 @@ describe('assertions back off like Playwright (PILOT-972)', () => {
     const { client, reads } = recordingClient(none);
     await runFaked(6000, () => tapsmithExpect(new ElementHandle(client, _text('X'), 5000)).toBeVisible({ timeout: 5000 }));
     expect(gaps(reads).slice(0, EXPECT_GAPS.length)).toEqual(EXPECT_GAPS);
+  });
+
+  it('a user stop wakes the assertion poller out of a long gap at once', async () => {
+    const { client, reads } = recordingClient(none);
+    const controller = new AbortController();
+    (client as unknown as { _getAbortSignal: () => AbortSignal })._getAbortSignal = () => controller.signal;
+    vi.useFakeTimers();
+    let settledAt = -1;
+    let error: unknown;
+    const start = Date.now();
+    const done = tapsmithExpect(new ElementHandle(client, _text('X'), 10_000)).toBeVisible({ timeout: 10_000 })
+      .catch((err: unknown) => { error = err; })
+      .finally(() => { settledAt = Date.now(); });
+    // Reads at 0, 100, 350, 850, 1850; stop 100 ms into the 1000 ms gap.
+    await vi.advanceTimersByTimeAsync(1950);
+    expect(reads.map((t) => t - start)).toEqual([0, 100, 350, 850, 1850]);
+    controller.abort(new TestAbortedError());
+    await vi.advanceTimersByTimeAsync(12_000);
+    await done;
+    expect(isAbortError(error)).toBe(true);
+    expect(settledAt - start).toBe(1950);
   });
 
   it('expect.poll() defaults to the same intervals', async () => {

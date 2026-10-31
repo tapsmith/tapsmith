@@ -572,6 +572,11 @@ export class WebViewHandle {
     return result.result?.value;
   }
 
+  /** @internal — The run's abort signal (a user stop), from the device client. */
+  _getAbortSignal(): AbortSignal | undefined {
+    return this._client._getAbortSignal?.();
+  }
+
   /** @internal — Wait for a CSS selector to match an element in the DOM. */
   async _waitForSelector(selector: string, timeoutMs?: number): Promise<void> {
     const timeout = timeoutMs ?? this._timeoutMs;
