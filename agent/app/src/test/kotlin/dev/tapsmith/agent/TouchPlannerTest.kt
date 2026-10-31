@@ -280,6 +280,23 @@ class TouchPlannerTest {
     }
 
     @Test
+    fun `a dialog over a row is never dragged from, so its backdrop is not pressed`() {
+        // An in-window dialog (a Paper Portal): its OK button is over the row,
+        // and its full-screen dismissing backdrop lies where a drag clear of
+        // the dialog would start.
+        val row = Node(Box(0, 1150, 1080, 1300), takesTouches = true, name = "row")
+        val list = Node(Box(0, 200, 1080, 2400), scrollsVertically = true).add(Node(Box(0, 200, 1080, 2400)).add(row))
+        val ok = Node(Box(100, 1150, 980, 1300), takesTouches = true, name = "button \"OK\"")
+        val dialog = Node(Box(100, 1000, 980, 1400), drawingOrder = 2).add(ok)
+        val backdrop = Node(SCREEN, drawingOrder = 1, takesTouches = true, name = "backdrop")
+        Node(SCREEN).add(list, Node(SCREEN, drawingOrder = 1).add(backdrop, dialog))
+        target.readAt = { snapshot(row.bounds, node = row) }
+        val e = assertThrows<ElementCoveredException> { planner.plan(target, row.bounds, budget(timeoutMs = 3_000), LABELLED) }
+        assertTrue(e.message, e.message!!.contains("button \"OK\""))
+        assertTrue("never dragged", scroller.drags.isEmpty())
+    }
+
+    @Test
     fun `a dropped first drag leaves the second to clear the target`() {
         val row = listUnderFooter(rowTop = 2250)
         val scrolls = scroller.onDrag

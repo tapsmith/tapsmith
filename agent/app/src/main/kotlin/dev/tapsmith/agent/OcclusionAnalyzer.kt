@@ -338,26 +338,12 @@ object OcclusionAnalyzer {
         x: Int,
         y: Int,
     ): Verdict.Covered? {
-        val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
         val reader = BudgetedReader(MAX_NODES_VISITED)
         // The loading-overlay and sticky-row checks walk more widely; their
         // own allowance keeps them from starving the touchable-cover search.
         val extraReader = BudgetedReader(MAX_NODES_VISITED)
         val rowReader = BudgetedReader(MAX_NODES_VISITED)
-        // (parent, the target's branch, its index among the parent's
-        // children), from the target's parent up to the root.
-        val levels = mutableListOf<Triple<HitNode, HitNode, Int>>()
-        var child = target
-        var parent = child.parent()
-        while (parent != null) {
-            val level = parent
-            val index =
-                (0 until level.childCount()).firstOrNull { i -> pathReader.child(level, i)?.sameAs(child) == true }
-                    ?: break
-            levels.add(Triple(level, child, index))
-            child = level
-            parent = child.parent()
-        }
+        val levels = levelsOf(target)
 
         // The nearest vertical list holding the target below level [depth]
         // (an index into levels): a cover found at that level is outside it.
@@ -395,6 +381,62 @@ object OcclusionAnalyzer {
             if (reader.exhausted) return null
         }
         return null
+    }
+
+    /** (parent, the target's branch, its index among the parent's children),
+     *  from the target's parent up to the root. */
+    private fun levelsOf(target: HitNode): List<Triple<HitNode, HitNode, Int>> {
+        val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
+        val levels = mutableListOf<Triple<HitNode, HitNode, Int>>()
+        var child = target
+        var parent = child.parent()
+        while (parent != null) {
+            val level = parent
+            val index =
+                (0 until level.childCount()).firstOrNull { i -> pathReader.child(level, i)?.sameAs(child) == true }
+                    ?: break
+            levels.add(Triple(level, child, index))
+            child = level
+            parent = child.parent()
+        }
+        return levels
+    }
+
+    /**
+     * Whether a drag that starts at ([x], [y]) would press the vertical list
+     * at [list] that holds [target] (PILOT-980), and nothing else: no window
+     * above the target's lies over the point, and no touchable node painted
+     * over the list from outside it does — a dialog's backdrop, a second bar
+     * stacked on the cover. A drag that started there would press that
+     * instead (a backdrop dismisses its dialog on release). False too when
+     * the list is not among the target's ancestors any more.
+     */
+    fun isDragStartOnList(
+        target: HitNode,
+        targetWindowId: Int?,
+        list: Box,
+        x: Int,
+        y: Int,
+        windows: List<WindowSpec>,
+    ): Boolean {
+        if (coveringWindows(windows, targetWindowId).any { it.bounds.contains(x, y) }) return false
+        val levels = levelsOf(target)
+        val listDepth = levels.indexOfFirst { it.first.scrollsVertically && it.first.bounds == list }
+        if (listDepth < 0) return false
+        val reader = BudgetedReader(MAX_NODES_VISITED)
+        for (depth in levels.indices.reversed()) {
+            if (depth <= listDepth) break
+            val (node, branch, branchIndex) = levels[depth]
+            val branchKey = drawKey(branch, branchIndex)
+            for (i in 0 until node.childCount()) {
+                if (i == branchIndex) continue
+                val sibling = reader.child(node, i) ?: continue
+                if (compareKeys(drawKey(sibling, i), branchKey) <= 0) continue
+                if (searchSubtree(sibling, x, y, reader) != null) return false
+            }
+            if (reader.exhausted) return false
+        }
+        return true
     }
 
     /** Whether [node] holds a vertical list's rows: the list itself (a

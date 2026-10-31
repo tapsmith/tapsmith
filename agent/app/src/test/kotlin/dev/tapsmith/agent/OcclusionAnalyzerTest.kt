@@ -600,6 +600,32 @@ class OcclusionAnalyzerTest {
         assertEquals(null, (verdict as Verdict.Covered).scroller)
     }
 
+    @Test
+    fun `a drag start on the list itself is on the list`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val list = list(FakeNode(Box(0, 2100, 1080, 2250), takesTouches = true), row)
+        val footer = FakeNode(Box(0, 2200, 1080, 2400), drawingOrder = 1, takesTouches = true)
+        root(list, footer)
+        assertTrue(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2180, listOf(appWindow)))
+    }
+
+    @Test
+    fun `a drag start on a control laid over the list is not on the list`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val list = list(row)
+        val miniPlayer = FakeNode(Box(0, 2050, 1080, 2200), drawingOrder = 1, takesTouches = true)
+        root(list, miniPlayer)
+        assertFalse(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2180, listOf(appWindow)))
+    }
+
+    @Test
+    fun `a drag start under another window is not on the list`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        root(list(row))
+        val dialog = WindowSpec(id = 4, kind = WindowKind.APPLICATION, layer = 2, bounds = screen, title = "Dialog")
+        assertFalse(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2180, listOf(appWindow, dialog)))
+    }
+
     // ─── Covers in the target's own window ───
 
     @Test

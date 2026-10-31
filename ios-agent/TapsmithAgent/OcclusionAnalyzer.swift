@@ -293,6 +293,30 @@ struct OcclusionAnalyzer {
         return (cover, loading)
     }
 
+    /// Whether a drag that starts at `point` would press the vertical list at
+    /// `list` that holds `target` (PILOT-980), and nothing else: no control
+    /// painted after the list lies over the point — a dialog's backdrop, a
+    /// second bar stacked on the cover — and the keyboard does not. A drag
+    /// that started there would press that instead. False too when the list
+    /// is not among the target's ancestors.
+    func isDragStartOnList(_ target: Target, list: CGRect, at point: CGPoint) -> Bool {
+        guard let t = locate(target),
+              let l = ancestors(of: t).first(where: {
+                  Self.listTypes.contains(nodes[$0].elementType) && Self.framesMatch(nodes[$0].frame, list)
+              }) else { return false }
+        let keyboardWindows = self.keyboardWindows()
+        if let region = keyboardRegion(keyboardWindows: keyboardWindows), region.contains(point) { return false }
+        for i in nodes[l].subtreeEnd..<nodes.count {
+            let node = nodes[i]
+            if let w = node.window, keyboardWindows.contains(w) { continue }
+            if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
+            if (isInteractive(node) || Self.barTypes.contains(node.elementType)), clippedFrame(of: i).contains(point) {
+                return false
+            }
+        }
+        return true
+    }
+
     /// The interactive control painted after the target that contains any of
     /// `points`, described — or nil. `analyze` checks covers only at the
     /// visible area's centre, which is where a tap lands; a gesture that

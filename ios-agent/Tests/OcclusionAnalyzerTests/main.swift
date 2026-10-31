@@ -551,6 +551,26 @@ check("…while a hittable target under the tab bar is still scrolled clear",
       analyzer(overlayOverTabBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: true),
       .coveredInList(by: "tab bar \"Tab Bar\"", cover: R(0, 791, 402, 83), list: list))
 
+// ─── Where a clearing drag may start (PILOT-980) ───
+
+func expectBool(_ name: String, _ got: Bool, _ want: Bool) {
+    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got), want \(want)") }
+}
+let row20 = OcclusionAnalyzer.Target(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: "")
+expectBool("a drag starting on the list itself is on the list",
+           analyzer(footer).isDragStartOnList(row20, list: list, at: CGPoint(x: 201, y: 766)), true)
+// An in-window dialog (a JS modal): its full-screen dismissing backdrop lies
+// where the drag would start.
+let dialogOverList: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
+    after: [(3, .other, "", "", screen),
+            (4, .button, "Close modal", "", screen),
+            (4, .other, "", "", R(20, 700, 362, 174)),
+            (5, .button, "OK", "", R(20, 774, 362, 100))])
+expectBool("a drag starting on a dialog's backdrop is not on the list",
+           analyzer(dialogOverList).isDragStartOnList(row20, list: list, at: CGPoint(x: 201, y: 692)), false)
+expectBool("a target whose list is not found never gets a drag",
+           analyzer(footer).isDragStartOnList(row20, list: R(0, 0, 10, 10), at: CGPoint(x: 201, y: 766)), false)
+
 // ─── Keyboard first (PILOT-622) ───
 
 func checkKF(_ name: String, _ got: OcclusionAnalyzer.KeyboardFirst, _ want: OcclusionAnalyzer.KeyboardFirst) {

@@ -210,7 +210,7 @@ class TouchPlanner(
                     clock.sleep(sleep)
                 }
                 is OcclusionAnalyzer.Verdict.Covered -> {
-                    val drag = clearingDrag(verdict, bounds, clearDrags, deadlines, now)
+                    val drag = clearingDrag(verdict, snapshot, bounds, clearDrags, deadlines, now)
                     if (drag != null) {
                         clearDrags++
                         // A view the list rebinds meanwhile must still show
@@ -244,10 +244,12 @@ class TouchPlanner(
      * The drag that moves the target out from under [verdict]'s cover, or
      * null when there is none to make: no list to scroll (or the cover is not
      * one to scroll away from — the analyzer gives no scroller then), the
-     * drags are used up, or there is no time left for one and the touch after.
+     * drags are used up, there is no time left for one and the touch after,
+     * or something other than the list lies under where it would start.
      */
     private fun clearingDrag(
         verdict: OcclusionAnalyzer.Verdict.Covered,
+        snapshot: TargetSnapshot?,
         bounds: Box,
         dragsSoFar: Int,
         deadlines: TouchPlanClock,
@@ -260,7 +262,11 @@ class TouchPlanner(
         // answers the daemon in time.
         val after = now + scroller.dragMs
         if (deadlines.sleepBeforeNextPass(after) == null || deadlines.isTooLateToAct(after)) return null
-        return CoverClearance.drag(bounds, verdict.bounds, list, screen.bounds, scroller.margin, scroller.touchSlop)
+        val drag = CoverClearance.drag(bounds, verdict.bounds, list, screen.bounds, scroller.margin, scroller.touchSlop) ?: return null
+        // The drag must press the list, not something laid over it.
+        val node = snapshot?.node ?: return null
+        val onList = OcclusionAnalyzer.isDragStartOnList(node, snapshot.windowId, list, drag.fromX, drag.fromY, screen.windows())
+        return drag.takeIf { onList }
     }
 
     /**

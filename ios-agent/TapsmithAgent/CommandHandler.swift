@@ -798,7 +798,7 @@ class CommandHandler {
                 // table unloads its top cells) that binds another element.
                 // Anything else is waited out as before.
                 if clearDrags < CoverClearance.maxDrags,
-                   let drag = clearingDrag(target: target.frame, cover: coverFrame, list: list, clock: clock),
+                   let drag = clearingDrag(target: target, cover: coverFrame, list: list, clock: clock),
                    let identifying = identifyingQuery() {
                     clearDrags += 1
                     snapshotFinder.rebind(element.elementId, to: identifying.firstMatch)
@@ -945,14 +945,22 @@ class CommandHandler {
     /// The drag that scrolls a target at `target` clear of `cover` in `list`,
     /// or nil when there is none to make or no time for it and the touch
     /// after (within the action's timeout and the daemon's read deadline).
-    private func clearingDrag(target: CGRect, cover: CGRect, list: CGRect, clock: TouchPlanClock) -> CoverClearance.Drag? {
+    private func clearingDrag(
+        target: OcclusionAnalyzer.Target, cover: CGRect, list: CGRect, clock: TouchPlanClock
+    ) -> CoverClearance.Drag? {
         let after = Date().addingTimeInterval(CoverClearance.dragSeconds)
         guard clock.sleepBeforeNextPass(at: after) != nil, !clock.isTooLateToAct(at: after) else { return nil }
-        let screen = CGRect(origin: .zero, size: snapshotFinder.screenSize)
-        return CoverClearance.drag(
-            target: target, cover: cover, list: list, screen: screen,
+        let screenSize = snapshotFinder.screenSize
+        guard let drag = CoverClearance.drag(
+            target: target.frame, cover: cover, list: list, screen: CGRect(origin: .zero, size: screenSize),
             margin: CoverClearance.margin, slop: CoverClearance.touchSlop
-        )
+        ) else { return nil }
+        // The drag must press the list, not something laid over it (a
+        // dialog's backdrop, a second bar stacked on the cover).
+        guard let appSnapshot = try? snapshotFinder.takeSnapshot(),
+              OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+                  .isDragStartOnList(target, list: list, at: drag.from) else { return nil }
+        return drag
     }
 
     /// nil when no tree could be read.
