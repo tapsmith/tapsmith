@@ -2600,7 +2600,7 @@ interface TestResult {
   workerIndex?: number; // set in parallel mode — index of the worker that ran this test
   retry?: number; // zero-based attempt number this result was recorded on (omitted for a first-attempt pass)
   filePath?: string; // path to the test file this result belongs to
-  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed
+  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed, or one Tapsmith waited out during the test
   fileLevelFailure?: boolean; // the result stands for a whole file that failed to load, not a test in it
 }
 ```
