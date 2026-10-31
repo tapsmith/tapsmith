@@ -32,9 +32,34 @@ class CommandHandler(
     private val actionExecutor: ActionExecutor,
     private val waitEngine: WaitEngine,
     private val hierarchyDumper: HierarchyDumper,
+    private val systemDialogs: SystemDialogAnswerer,
 ) {
     companion object {
         private const val TAG = "TapsmithCommand"
+
+        /**
+         * Commands that deliver input to the screen. A system ANR / crash
+         * dialog up when one arrives would take the input (a key, a tap) or
+         * cover its target, so these answer it first (PILOT-977). Reads stay
+         * free of side effects; a gesture already under way (touchMove/Up)
+         * is not interrupted.
+         */
+        val INPUT_METHODS =
+            setOf(
+                "tap",
+                "longPress",
+                "doubleTap",
+                "typeText",
+                "clearText",
+                "swipe",
+                "scroll",
+                "touchDown",
+                "pressKey",
+                "dragAndDrop",
+                "selectOption",
+                "pinchZoom",
+                "focus",
+            )
     }
 
     /** Cache of last clipboard text set via setClipboard, used as fallback on Android 13+. */
@@ -59,6 +84,8 @@ class CommandHandler(
 
         val start = SystemClock.uptimeMillis()
         return try {
+            systemDialogs.startCommand()
+            if (method in INPUT_METHODS) systemDialogs.answer()
             val result = dispatch(method, params, actionBudget(params, start))
             successResponse(id, result)
         } catch (e: ElementCoveredException) {
@@ -571,6 +598,20 @@ class CommandHandler(
             "clearElementCache" -> {
                 elementFinder.clearElementCache()
                 JSONObject().put("success", true)
+            }
+
+            "takeSystemDialogEvents" -> {
+                val events =
+                    systemDialogs.takeEvents().map { e ->
+                        JSONObject()
+                            .put("title", e.title ?: "")
+                            .put("owner", e.owner ?: "")
+                            .put("ownedByTarget", e.ownedByTarget)
+                            .put("kind", e.kind.name.lowercase())
+                            .put("button", e.button.label)
+                            .put("timestampMs", e.timestampMs)
+                    }
+                JSONObject().put("events", org.json.JSONArray(events))
             }
 
             "ping" -> {
