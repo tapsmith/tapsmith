@@ -6,8 +6,8 @@ use super::device_backend::{
 use super::*;
 
 use crate::android_agent_install::{
-    force_install_requested, host_md5, installed_md5_command, needs_install, parse_installed_md5s,
-    AGENT_PACKAGE, AGENT_TEST_PACKAGE, FORCE_INSTALL_ENV,
+    agent_launch_command, force_install_requested, host_md5, installed_md5_command, needs_install,
+    parse_installed_md5s, AGENT_PACKAGE, AGENT_TEST_PACKAGE, FORCE_INSTALL_ENV,
 };
 
 /// The packages among `apks` (`(package, host path, label)`) whose APK must
@@ -1100,18 +1100,9 @@ impl DeviceBackend for AndroidBackend<'_> {
 
         // Launch the agent instrumentation
         agent_comms::clear_stream_cache(&self.svc.agent_stream).await;
-        let instrument_cmd = if req.target_package.is_empty() {
-            "am instrument -w dev.tapsmith.agent/.TapsmithAgent".to_string()
-        } else {
-            format!(
-                "am instrument -w -e targetPackage {} dev.tapsmith.agent/.TapsmithAgent",
-                req.target_package
-            )
-        };
-
         // Launch in background on device, keeping the runner's output
         // on the device for the failure diagnostics below.
-        let bg_cmd = format!("nohup {instrument_cmd} > {ANDROID_AGENT_LOG_PATH} 2>&1 &");
+        let bg_cmd = agent_launch_command(&req.target_package, ANDROID_AGENT_LOG_PATH);
         if let Err(e) = adb::shell(&serial, &bg_cmd).await {
             error!(error = %e, "Failed to start agent instrumentation");
             return Err(proto::ActionResponse {

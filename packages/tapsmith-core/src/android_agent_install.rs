@@ -97,6 +97,29 @@ pub fn needs_install(
     }
 }
 
+/// The `adb shell` command that (re)starts the agent: stop any agent still
+/// running, then launch the instrumentation in the background with its
+/// output in `log_path`.
+///
+/// The stop must come first and be synchronous. `am force-stop` returns
+/// once the process is gone, whereas the force-stop that `am instrument`
+/// does itself happens only after its own JVM has started, hundreds of
+/// milliseconds after this command returns. An agent left from an earlier
+/// session (no install killed it, now that unchanged APKs are not
+/// reinstalled) would answer the first handshake ping in that window, and
+/// StartAgent would report an agent that is about to die.
+pub fn agent_launch_command(target_package: &str, log_path: &str) -> String {
+    let target = if target_package.is_empty() {
+        String::new()
+    } else {
+        format!("-e targetPackage {target_package} ")
+    };
+    format!(
+        "am force-stop {AGENT_PACKAGE}; \
+         nohup am instrument -w {target}{AGENT_PACKAGE}/.TapsmithAgent > {log_path} 2>&1 &"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,6 +244,20 @@ mod tests {
         assert_eq!(
             parse_installed_md5s(&stdout),
             installed(&[(AGENT_PACKAGE, HASH_A)])
+        );
+    }
+
+    #[test]
+    fn launch_command_stops_a_running_agent_before_instrumenting() {
+        assert_eq!(
+            agent_launch_command("com.example.app", "/data/local/tmp/agent.log"),
+            "am force-stop dev.tapsmith.agent; nohup am instrument -w -e targetPackage \
+             com.example.app dev.tapsmith.agent/.TapsmithAgent > /data/local/tmp/agent.log 2>&1 &"
+        );
+        assert_eq!(
+            agent_launch_command("", "/l"),
+            "am force-stop dev.tapsmith.agent; nohup am instrument -w \
+             dev.tapsmith.agent/.TapsmithAgent > /l 2>&1 &"
         );
     }
 
