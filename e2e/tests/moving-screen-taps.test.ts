@@ -3,13 +3,15 @@ import { openScreen } from "../utils/app-reset.js"
 import type { ElementHandle } from "tapsmith"
 
 /**
- * PILOT-974: a tap must land on a screen that keeps moving. React Native
- * gives a touch to the scroll view around it when a scroll event comes while
- * the touch is down (even from a nested carousel paging itself), cancelling
- * the press. The test app's carousel turns a page 50 ms after a touch lands
- * on "Add to basket", so a tap held past that is lost every time (iOS taps
- * held 100 ms lost 30 of 30). Android taps are not held at all, and iOS taps
- * at a point (which React Native buttons get too) are held 20 ms.
+ * PILOT-974: a tap must land on a screen that keeps moving. On iOS, React
+ * Native gives a touch to the scroll view around it when a scroll event comes
+ * while the touch is down (even from a nested carousel paging itself),
+ * cancelling the press. The test app's carousel turns a page 50 ms after a
+ * touch lands on "Add to basket", so on iOS a tap held past that is lost
+ * every time (taps held 100 ms lost 30 of 30); iOS taps at a point (which
+ * React Native buttons get too) are now held 20 ms. React Native on Android
+ * keeps the press whatever the hold, so there the test only checks that
+ * taps with no hold land.
  */
 async function addedCount(added: ElementHandle): Promise<number> {
   const match = /In basket: (\d+)/.exec(await added.getText())

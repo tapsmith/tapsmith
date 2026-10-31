@@ -61,8 +61,7 @@ class GestureInjectorTest {
     @Test
     fun `click presses and releases at one point with no hold, waiting for the app`() {
         // A tap is DOWN then UP with nothing between, as adb's `input tap`
-        // sends it (PILOT-974): a held press gives a list scrolling under it
-        // (a self-paging carousel) time to take the touch and cancel the tap.
+        // sends it (PILOT-974): a hold only makes each tap slower.
         val sink = FakeSink(clock)
         assertTrue(injector(sink).click(10, 20))
         assertEquals(listOf(TouchAction.DOWN, TouchAction.UP), sink.actions())

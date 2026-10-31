@@ -246,11 +246,10 @@ class GestureInjector(
         /**
          * How long a tap holds the pointer down: not at all, DOWN then UP, as
          * adb's `input tap` sends it (PILOT-974). UiAutomator holds 100 ms
-         * (REGULAR_CLICK_LENGTH), and a held press loses taps on screens that
-         * keep moving: React Native hands a touch to a scroll view that
-         * scrolls while it is down (a self-paging carousel beside the button),
-         * which cancels the press. Views, Compose and React Native all act on
-         * the release, however soon it comes.
+         * (REGULAR_CLICK_LENGTH), which only makes each tap slower: Views,
+         * Compose and React Native all act on the release, however soon it
+         * comes. (Unlike on iOS, React Native on Android did not cancel a held
+         * press when a carousel beside it turned, at holds up to 500 ms.)
          */
         const val CLICK_PRESS_MS = 0L
 

@@ -16,8 +16,9 @@ import {
  * carousel paging itself, and the press is cancelled. A self-paging carousel
  * turns at a random moment, so a tap held for long enough loses it now and
  * then (3 in 40 with a 100 ms hold). Here the carousel turns a page 50 ms
- * after a touch lands on the button below it, every time, so a tap held past
- * that is cancelled every time and a short one never is.
+ * after a touch lands on the button below it, every time, so on iOS a tap
+ * held past that is cancelled every time and a short one never is. React
+ * Native on Android keeps the press whatever the hold.
  */
 const PAGES = ["Summer sale", "New arrivals", "Free delivery"]
 const TURN_AFTER_MS = 50
