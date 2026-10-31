@@ -62,7 +62,9 @@ class ActionExecutor(
         /** Upper bound on a swipe's settle, for a scroll view that keeps moving. */
         private const val SWIPE_SETTLE_MAX_MS = 3000L
 
-        /** How long each press of a double tap (and a retried tap) is held. */
+        /** How long each press of a double tap is held. Unlike a single tap
+         *  (no hold, PILOT-974), kept: the double-tap timing was tuned with
+         *  it, and short holds are known to miss React Native double taps. */
         private const val TAP_PRESS_MS = 50L
 
         /** Time reserved after a focusing tap for the work that follows it
@@ -273,8 +275,8 @@ class ActionExecutor(
     /**
      * Tap at a planned point. A refused injection (the input dispatcher
      * dropping the event during a window transition on a loaded device) is
-     * retried once, with a shorter press, at the same point — never by the
-     * node click, which would ignore what covers the element.
+     * retried once at the same point — never by the node click, which would
+     * ignore what covers the element.
      */
     private fun clickAt(
         point: TouchPlan.Point,
@@ -282,7 +284,7 @@ class ActionExecutor(
     ) {
         if (input.click(point.x, point.y)) return
         Log.w(TAG, "$what: click at (${point.x}, ${point.y}) was refused; retrying once")
-        if (!input.click(point.x, point.y, TAP_PRESS_MS)) {
+        if (!input.click(point.x, point.y)) {
             throw ActionFailedException("Failed to $what at (${point.x}, ${point.y})")
         }
     }
@@ -951,13 +953,13 @@ class ActionExecutor(
             if (input.click(x, y, TAP_PRESS_MS)) return
             // First tap already landed — complete the gesture with one more
             // try rather than leaving a lone single tap behind.
-            if (input.click(x, y)) return
+            if (input.click(x, y, TAP_PRESS_MS)) return
             throw ActionFailedException("Failed to double tap at ($x, $y)")
         }
         // The first tap was refused: try the pair once more.
-        input.click(x, y)
+        input.click(x, y, TAP_PRESS_MS)
         SystemClock.sleep(interval)
-        if (!input.click(x, y)) {
+        if (!input.click(x, y, TAP_PRESS_MS)) {
             throw ActionFailedException("Failed to double tap at ($x, $y)")
         }
     }

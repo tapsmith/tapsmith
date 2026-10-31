@@ -243,8 +243,16 @@ class GestureInjector(
     private val tickMs: () -> Long = { DEFAULT_TICK_MS },
 ) {
     companion object {
-        /** How long a click holds the pointer down (UiAutomator's REGULAR_CLICK_LENGTH). */
-        const val CLICK_PRESS_MS = 100L
+        /**
+         * How long a tap holds the pointer down: not at all, DOWN then UP, as
+         * adb's `input tap` sends it (PILOT-974). UiAutomator holds 100 ms
+         * (REGULAR_CLICK_LENGTH), and a held press loses taps on screens that
+         * keep moving: React Native hands a touch to a scroll view that
+         * scrolls while it is down (a self-paging carousel beside the button),
+         * which cancels the press. Views, Compose and React Native all act on
+         * the release, however soon it comes.
+         */
+        const val CLICK_PRESS_MS = 0L
 
         /** A timed gesture's event interval when the display's refresh rate is unknown. */
         const val DEFAULT_TICK_MS = 8L
@@ -278,7 +286,8 @@ class GestureInjector(
     ) = sink.touch(TouchEvent(action, downTime, listOf(PointerState(0, x, y)), sync = sync))
 
     /**
-     * Press and release one pointer at ([x], [y]), held for [pressMs]. The
+     * Press and release one pointer at ([x], [y]), held for [pressMs] (a tap:
+     * no hold, [CLICK_PRESS_MS]). The
      * release is sent even when the press was refused (the input system may
      * have delivered it anyway), and a refused release is followed by a cancel,
      * so no pointer is left down. True only when both went through.
