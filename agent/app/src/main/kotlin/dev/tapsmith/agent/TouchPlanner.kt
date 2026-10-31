@@ -74,6 +74,22 @@ interface GuardScreen {
     fun windows(): List<OcclusionAnalyzer.WindowSpec>
 }
 
+/** Scrolls a list to move a target clear of a cover (PILOT-980). */
+interface GuardScroller {
+    /** Clearance kept around a target moved clear of a cover, in pixels. */
+    val margin: Int
+
+    /** How far a finger moves before a list starts scrolling, in pixels. */
+    val touchSlop: Int
+
+    /** How long [drag] takes, from the press to the list at rest. */
+    val dragMs: Long
+
+    /** Drag slowly from one point to another and hold there before letting
+     *  go, so the list moves with the finger and does not fling. */
+    fun drag(drag: CoverClearance.Drag)
+}
+
 sealed class TouchPlan {
     /** Touch at ([x], [y]): a point nothing covers. */
     data class Point(
@@ -89,18 +105,32 @@ sealed class TouchPlan {
 
 /**
  * Plans element-addressed touches so they never land on something drawn over
- * the element (PILOT-362): the keyboard, another window, or a touchable view
- * painted on top. A covered element is waited on — up to the action's budget,
- * the way Playwright waits out a click's intercepting element — and then the
- * action fails with ELEMENT_COVERED naming the cover. The geometry lives in
+ * the element (PILOT-362): the keyboard, another window, a touchable view, a
+ * loading overlay or a sticky list row painted on top (PILOT-979). A covered
+ * element is waited on — up to the action's budget, the way Playwright waits
+ * out a click's intercepting element — and then the action fails with
+ * ELEMENT_COVERED naming the cover.
+ *
+ * A target under fixed chrome in its own window, in a list that can scroll it
+ * away (a sticky footer or header), is first dragged clear of it — up to
+ * [MAX_CLEAR_DRAGS] times, while the drags move it — as a user would, and as
+ * Playwright scrolls a target whose click another element intercepts
+ * (PILOT-980). Then the checks run again. The geometry lives in
  * [OcclusionAnalyzer]; the live reads come in through [GuardTarget] and
  * [GuardScreen], so this runs in JVM unit tests.
  */
 class TouchPlanner(
     private val screen: GuardScreen,
     private val clock: GuardClock,
+    /** Drags a target clear of fixed chrome; null never scrolls. */
+    private val scroller: GuardScroller?,
     private val log: (String) -> Unit = {},
 ) {
+    companion object {
+        /** Drags at most per touch to move a target clear of a cover. */
+        const val MAX_CLEAR_DRAGS = 2
+    }
+
     /**
      * Where a touch on [target] can land. [initialBounds] are the element's
      * settled bounds for the first check; later checks (after waiting out a
@@ -131,6 +161,8 @@ class TouchPlanner(
         // container), the text inside it when a wait began: a replacement
         // rendered into the same view meanwhile shows different content.
         var contentWhenWaiting: String? = null
+        // Drags made to move the target clear of a cover (PILOT-980).
+        var clearDrags = 0
 
         fun armContentCheck(snapshot: TargetSnapshot?) {
             if (contentWhenWaiting == null && snapshot != null && expected?.identifiedOnlyByContent == true) {
@@ -178,6 +210,18 @@ class TouchPlanner(
                     clock.sleep(sleep)
                 }
                 is OcclusionAnalyzer.Verdict.Covered -> {
+                    val drag = clearingDrag(verdict, bounds, clearDrags, deadlines, now)
+                    if (drag != null) {
+                        clearDrags++
+                        log("element is covered by ${verdict.by}; dragging it clear ($drag)")
+                        CommandCancellation.checkpoint()
+                        scroller!!.drag(drag)
+                        // Read afresh next pass: did the drag move the target?
+                        val before = bounds
+                        val moved = target.read()?.bounds
+                        if (moved == null || moved == before) clearDrags = MAX_CLEAR_DRAGS
+                        continue
+                    }
                     val sleep =
                         deadlines.sleepBeforeNextPass(now)
                             ?: throw ElementCoveredException(
@@ -191,6 +235,29 @@ class TouchPlanner(
                 }
             }
         }
+    }
+
+    /**
+     * The drag that moves the target out from under [verdict]'s cover, or
+     * null when there is none to make: no list to scroll (or the cover is not
+     * one to scroll away from — the analyzer gives no scroller then), the
+     * drags are used up, or there is no time left for one and the touch after.
+     */
+    private fun clearingDrag(
+        verdict: OcclusionAnalyzer.Verdict.Covered,
+        bounds: Box,
+        dragsSoFar: Int,
+        deadlines: TouchPlanClock,
+        now: Long,
+    ): CoverClearance.Drag? {
+        val scroller = scroller ?: return null
+        val list = verdict.scroller ?: return null
+        if (verdict.kind != OcclusionAnalyzer.CoverKind.CONTROL || dragsSoFar >= MAX_CLEAR_DRAGS) return null
+        // The drag fits the action's timeout, and the touch after it still
+        // answers the daemon in time.
+        val after = now + scroller.dragMs
+        if (deadlines.sleepBeforeNextPass(after) == null || deadlines.isTooLateToAct(after)) return null
+        return CoverClearance.drag(bounds, verdict.bounds, list, screen.bounds, scroller.margin, scroller.touchSlop)
     }
 
     /**

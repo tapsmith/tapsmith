@@ -37,6 +37,10 @@ class AgentInput(
         /** UiObject2.scroll's pause before releasing, so the swipe does not fling. */
         private const val SCROLL_RELEASE_PAUSE_MS = 250L
 
+        /** Longest a [scrollDrag] takes: a screen-long move at the scroll
+         *  speed on a dense display, then the release pause. */
+        const val SCROLL_DRAG_MAX_MS = 1_200L
+
         /** UiObject2.pinchClose's pause before releasing. */
         private const val PINCH_CLOSE_RELEASE_PAUSE_MS = 250L
 
@@ -151,6 +155,18 @@ class AgentInput(
             left -= 1f
         }
         return true
+    }
+
+    /**
+     * A scroll's drag from [from] to [dest], as UiObject2.scroll moves: at the
+     * scroll speed, held still before letting go so the list does not fling
+     * (PILOT-980 drags a target clear of a cover with it).
+     */
+    fun scrollDrag(
+        from: ScreenPoint,
+        dest: ScreenPoint,
+    ) {
+        gestures.perform(PointerPath(from).moveTo(dest, dpSpeed(SCROLL_SPEED_DP)).pause(SCROLL_RELEASE_PAUSE_MS))
     }
 
     /** UiObject2.drag: a long press on the element's center, then a move to [dest]. */
