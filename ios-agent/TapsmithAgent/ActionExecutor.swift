@@ -292,7 +292,10 @@ class ActionExecutor {
     /// move, then a hold before letting go, so the list stops with the finger
     /// rather than flinging on. Then a moment for the tree to catch up.
     func scrollDrag(_ drag: CoverClearance.Drag) {
-        if !EventSynthesizer.swipePath(CoverClearance.path(of: drag)) {
+        if !EventSynthesizer.dragAndHold(
+            from: drag.from, to: drag.to,
+            duration: CoverClearance.moveSeconds(of: drag), hold: CoverClearance.releaseHoldSeconds
+        ) {
             NSLog("[ActionExecutor] clearing drag could not be synthesized")
         }
         Thread.sleep(forTimeInterval: 0.15)

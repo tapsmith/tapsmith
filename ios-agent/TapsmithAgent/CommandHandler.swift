@@ -777,12 +777,21 @@ class CommandHandler {
         // drag is to be made (looked up once; nil when nothing does).
         var identifying: XCUIElementQuery??
         func identifyingQuery() -> XCUIElementQuery? {
-            if identifying == nil { identifying = .some(uniquelyIdentifying(element)) }
+            if identifying == nil {
+                identifying = .some(uniquelyIdentifying(element))
+                if identifying == .some(nil) {
+                    NSLog("[TapsmithCommand] not dragging \(element.elementId) clear: nothing identifies it uniquely")
+                }
+            }
             return identifying ?? nil
         }
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
-            let hittable = xcElem?.isHittable ?? false
+            // Once the agent has scrolled the list itself, the tree has the
+            // last word: XCUITest's hit test called a React Native row under
+            // the sticky header it was dragged beside hittable (iOS 18.5),
+            // and XCUIElement.tap() then pressed the header.
+            let hittable = clearDrags == 0 && (xcElem?.isHittable ?? false)
             if preferElementTap, hittable, let xcElem {
                 try refuseIfLate(clock)
                 return .hittableElement(xcElem)
@@ -959,7 +968,10 @@ class CommandHandler {
         // dialog's backdrop, a second bar stacked on the cover).
         guard let appSnapshot = try? snapshotFinder.takeSnapshot(),
               OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
-                  .isDragStartOnList(target, list: list, at: drag.from) else { return nil }
+                  .isDragStartOnList(target, list: list, at: drag.from) else {
+            NSLog("[TapsmithCommand] not dragging clear: something other than the list is at \(drag.from)")
+            return nil
+        }
         return drag
     }
 

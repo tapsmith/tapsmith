@@ -551,6 +551,32 @@ check("…while a hittable target under the tab bar is still scrolled clear",
       analyzer(overlayOverTabBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: true),
       .coveredInList(by: "tab bar \"Tab Bar\"", cover: R(0, 791, 402, 83), list: list))
 
+// React Native (recorded on iOS 26.4, the test app's /covers screen): the
+// ScrollView's content view sits in another wrapper, and each row lists its
+// own empty background view beside its controls. The sticky header is the
+// wrapper holding "sticky-header".
+let rnNestedSticky: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(16, 326, 370, 531)),
+    (3, .other, "", "", R(16, 26, 370, 1940)),
+    (4, .other, "", "", R(16, 26, 370, 1940)),
+    (5, .button, "Row 5", "covers-row", R(16, 326, 290, 60)),
+    (5, .other, "", "", R(16, 326, 370, 60)),
+    (6, .other, "", "sticky-header", R(16, 326, 370, 60)),
+    (7, .staticText, "Sticky header", "", R(32, 346, 200, 20)),
+    (5, .other, "", "", R(16, 326, 370, 60)),
+    (5, .button, "Add", "", R(306, 326, 80, 59)),
+    (5, .button, "Row 6", "covers-row", R(16, 386, 290, 60)),
+    (5, .other, "", "", R(16, 386, 370, 60)),
+]
+check("a sticky header in React Native's nested content view covers the row under it",
+      analyzer(rnNestedSticky).analyze(.init(frame: R(16, 326, 290, 60), elementType: .button, label: "Row 5", identifier: "covers-row"), isHittable: false),
+      .coveredInList(by: "element", cover: R(16, 326, 370, 60), list: R(16, 326, 370, 531)))
+checkPoint("a row's own empty background view is not a sticky row",
+           analyzer(rnNestedSticky).analyze(.init(frame: R(16, 386, 290, 60), elementType: .button, label: "Row 6", identifier: "covers-row"), isHittable: false),
+           CGPoint(x: 161, y: 416))
+
 // ─── Where a clearing drag may start (PILOT-980) ───
 
 func expectBool(_ name: String, _ got: Bool, _ want: Bool) {

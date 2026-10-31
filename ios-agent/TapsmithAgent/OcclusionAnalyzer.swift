@@ -372,10 +372,13 @@ struct OcclusionAnalyzer {
                     let node = nodes[i]
                     if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
                     let f = clippedFrame(of: i)
-                    // A bar-sized row: a background laid behind the rows (a
-                    // view filling the content) is not a header stuck over one.
+                    // A bar-sized row with content of its own: a background
+                    // laid behind the rows (a view filling the content), or a
+                    // row's own empty background view React Native lists
+                    // beside its controls, is not a header stuck over one.
                     if f.contains(point), f.minX <= targetFrame.minX + 1, f.maxX >= targetFrame.maxX - 1,
-                       f.height * 2 <= nodes[list].frame.height {
+                       f.height * 2 <= nodes[list].frame.height,
+                       node.subtreeEnd > i + 1 || !node.label.isEmpty || !node.identifier.isEmpty {
                         return (i, list)
                     }
                 }
@@ -388,15 +391,21 @@ struct OcclusionAnalyzer {
 
     /// The scroller whose rows are `content`'s children: `content` itself (a
     /// table, a collection view, a scroll view whose rows are direct
-    /// children), or the scroll view `content` is the only content of.
+    /// children), or the scroll view `content` is the only content of —
+    /// through any chain of only-child wrappers (React Native nests its
+    /// content view in another).
     private func listOwning(content: Int) -> Int? {
         let type = nodes[content].elementType
-        if type == .table || type == .collectionView { return content }
-        if let p = nodes[content].parent, nodes[p].elementType == .scrollView {
+        if type == .table || type == .collectionView || type == .scrollView { return content }
+        var inner = content
+        while let p = nodes[inner].parent {
             let children = ((p + 1)..<nodes[p].subtreeEnd).filter { nodes[$0].parent == p && !isScrollIndicator(nodes[$0]) }
-            if children == [content] { return p }
+            guard children == [inner] else { return nil }
+            if nodes[p].elementType == .scrollView { return p }
+            guard nodes[p].elementType == .other else { return nil }
+            inner = p
         }
-        return type == .scrollView ? content : nil
+        return nil
     }
 
     /// The nearest vertical list holding target `t` but not node `cover`:

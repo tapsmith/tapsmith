@@ -23,28 +23,21 @@ enum CoverClearance {
     static let touchSlop: CGFloat = 10
     /// Speed of a clearing drag, points per second: slow enough that the
     /// list moves with the finger.
-    static let dragSpeed: CGFloat = 600
+    static let dragSpeed: CGFloat = 300
+    /// Shortest move: a quicker one is a flick.
+    static let minMoveSeconds: TimeInterval = 0.4
     /// How long the finger holds still before letting go, so the list does
     /// not fling.
     static let releaseHoldSeconds: TimeInterval = 0.25
     /// Longest a clearing drag takes, the hold and settling included.
-    static let dragSeconds: TimeInterval = 1.5
+    static let dragSeconds: TimeInterval = 2.5
 
-    /// The touch path of `drag`, as `EventSynthesizer.swipePath` takes it:
-    /// a steady move at `dragSpeed` in 60 Hz steps, then a hold.
-    static func path(of drag: Drag) -> [(CGPoint, TimeInterval)] {
-        let dy = drag.to.y - drag.from.y
+    /// How long the finger takes over `drag`'s move: steady at `dragSpeed`,
+    /// and never shorter than `minMoveSeconds`.
+    static func moveSeconds(of drag: Drag) -> TimeInterval {
         let dx = drag.to.x - drag.from.x
-        let length = (dx * dx + dy * dy).squareRoot()
-        let duration = max(0.15, TimeInterval(length / dragSpeed))
-        let steps = max(2, Int((duration * 60).rounded()))
-        var points: [(CGPoint, TimeInterval)] = [(drag.from, 0)]
-        for i in 1...steps {
-            let f = CGFloat(i) / CGFloat(steps)
-            points.append((CGPoint(x: drag.from.x + dx * f, y: drag.from.y + dy * f), duration * Double(f)))
-        }
-        points.append((drag.to, duration + releaseHoldSeconds))
-        return points
+        let dy = drag.to.y - drag.from.y
+        return max(minMoveSeconds, TimeInterval((dx * dx + dy * dy).squareRoot() / dragSpeed))
     }
 
     struct Drag: Equatable {
