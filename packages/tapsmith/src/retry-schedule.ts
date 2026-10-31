@@ -1,5 +1,5 @@
 /**
- * How long the SDK's host-side retry loops wait between reads (PILOT-972).
+ * How long the SDK's host-side retry loops wait between reads.
  *
  * The loops used to sleep a flat 250 ms between reads. The first read
  * usually misses right after a navigation, and the next one would mostly

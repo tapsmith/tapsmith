@@ -59,8 +59,8 @@ export interface BoundingBox {
  * Budget of one read issued by the action and probe loops (see
  * {@link tickBudget}); `waitFor` and the assertion poller keep their own,
  * deliberately longer, 500 ms read budget. Not a cadence: how long the loops
- * wait BETWEEN reads is Playwright's backoff, in retry-schedule.ts
- * (PILOT-972). It was once also the flat sleep between every read.
+ * wait BETWEEN reads is Playwright's backoff, in retry-schedule.ts. It
+ * was once also the flat sleep between every read.
  * @internal
  */
 export const TICK_READ_BUDGET_MS = 250;
