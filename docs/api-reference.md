@@ -297,7 +297,7 @@ Drag/swipe from one point to another in logical points. `options.duration` speci
 await device.dragXY({ x: 50, y: 200 }, { x: 50, y: 600 }, { duration: 400 });
 ```
 
-> **Platform note:** `duration` is honored on Android (it scales the gesture's step count). On iOS the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
+> **Platform note:** on Android the drag takes `duration` (then waits for any scroll it started to come to rest, as `swipe()` does). On iOS the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
 
 ### `device.inputText(text: string): Promise<void>`
 

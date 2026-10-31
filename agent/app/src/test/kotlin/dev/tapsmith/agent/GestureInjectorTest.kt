@@ -92,6 +92,98 @@ class GestureInjectorTest {
         assertEquals(listOf(TouchAction.DOWN, TouchAction.UP), sink.actions())
     }
 
+    // ─── longPress / timedSwipe (PILOT-970) ───
+
+    @Test
+    fun `a long press holds for its duration in real time, not one frame per step`() {
+        val sink = FakeSink(clock)
+        assertTrue(injector(sink).longPress(10, 20, holdMs = 1000))
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.UP), sink.actions())
+        assertEquals(1000L, sink.touches[1].first - sink.touches[0].first)
+        assertEquals(0, clock.frames)
+        assertTrue(sink.touches.all { it.second.pointers.single() == PointerState(0, 10, 20) })
+    }
+
+    @Test
+    fun `a refused long press release is cancelled so no pointer stays down`() {
+        val sink = FakeSink(clock, refuse = { it.action == TouchAction.UP })
+        assertFalse(injector(sink).longPress(5, 5, holdMs = 500))
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.UP, TouchAction.CANCEL), sink.actions())
+    }
+
+    @Test
+    fun `a timed swipe lasts its duration whatever the distance, and ends at its end point`() {
+        for ((distance, duration) in listOf(1000 to 300L, 20 to 1000L, 600 to 2000L)) {
+            val clock = FakeClock()
+            val sink = FakeSink(clock)
+            GestureInjector(sink, clock) { 8L }.timedSwipe(0, 0, distance, 0, durationMs = duration)
+            val events = sink.touches.map { it.second }
+            assertEquals(TouchAction.DOWN, events.first().action)
+            assertEquals(PointerState(0, 0, 0), events.first().pointers.single())
+            assertEquals(TouchAction.UP, events.last().action)
+            assertEquals(PointerState(0, distance, 0), events.last().pointers.single())
+            // Released on the first tick past the duration.
+            val took = sink.touches.last().first - sink.touches.first().first
+            assertTrue("$distance px in $duration ms took $took ms", took in duration..duration + 8)
+            assertEquals(0, clock.frames)
+            val xs = events.map { it.pointers.single().x }
+            assertEquals(xs.sorted(), xs)
+        }
+    }
+
+    @Test
+    fun `a timed gesture keeps to its duration when the clock's sleeps overrun`() {
+        // On a loaded device an 8 ms sleep takes longer, and injecting takes
+        // time too: the gesture is paced by the clock, not by counting ticks.
+        val slow =
+            object : GestureClock {
+                var nowMs = 0L
+
+                override fun now(): Long = nowMs
+
+                override fun sleep(ms: Long) {
+                    nowMs += ms + 4
+                }
+
+                override fun waitForNextFrame() {
+                    nowMs += 16
+                }
+            }
+        val times = mutableListOf<Long>()
+        val events = mutableListOf<TouchEvent>()
+        val sink =
+            object : InputSink {
+                override fun touch(event: TouchEvent): Boolean {
+                    times += slow.nowMs
+                    events += event
+                    return true
+                }
+
+                override fun key(event: KeyPress) = true
+            }
+        GestureInjector(sink, slow) { 8L }.timedSwipe(0, 0, 300, 0, durationMs = 300)
+        val took = times.last() - times.first()
+        assertTrue("took $took ms", took in 300L..312L)
+        assertEquals(PointerState(0, 300, 0), events.last().pointers.single())
+    }
+
+    @Test
+    fun `a timed swipe from a point to itself holds there for its duration`() {
+        val sink = FakeSink(clock)
+        injector(sink).timedSwipe(7, 9, 7, 9, durationMs = 400)
+        assertTrue(sink.touches.all { it.second.pointers.single() == PointerState(0, 7, 9) })
+        assertEquals(TouchAction.UP, sink.actions().last())
+        assertTrue(sink.touches.last().first - sink.touches.first().first in 400L..408L)
+    }
+
+    @Test
+    fun `a path that travels over a duration moves at the speed that takes`() {
+        val path = PointerPath(ScreenPoint(0, 0)).travelTo(ScreenPoint(100, 0), durationMs = 400)
+        assertEquals(400L, path.durationMs)
+        assertEquals(ScreenPoint(25, 0), path.pointAt(100))
+        assertEquals(ScreenPoint(100, 0), path.pointAt(400))
+    }
+
     // ─── stepSwipe (UiDevice.swipe) ───
 
     @Test
