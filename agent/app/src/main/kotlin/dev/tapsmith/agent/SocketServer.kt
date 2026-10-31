@@ -3,6 +3,7 @@ package dev.tapsmith.agent
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.net.InetAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
@@ -19,12 +20,14 @@ import java.net.SocketException
  * reading it, and a thread for each command, which is cancelled when the
  * daemon drops the connection (PILOT-605).
  */
-class SocketServer(
+internal class SocketServer(
     private val port: Int,
+    private val auth: AgentAuth,
     private val commandHandler: CommandHandler,
 ) {
     companion object {
         private const val TAG = "TapsmithSocket"
+        private const val BACKLOG = 50
     }
 
     /** One thread per connection and per command: see [newConnectionExecutor]. */
@@ -38,8 +41,11 @@ class SocketServer(
         running = true
         withContext(Dispatchers.IO) {
             try {
-                serverSocket = ServerSocket(port)
-                Log.i(TAG, "Listening on port $port")
+                // Loopback only: `adb forward` reaches it, the network does
+                // not (PILOT-969). Apps on the device still can, which is
+                // what the auth line is for.
+                serverSocket = ServerSocket(port, BACKLOG, InetAddress.getLoopbackAddress())
+                Log.i(TAG, "Listening on ${InetAddress.getLoopbackAddress().hostAddress}:$port")
 
                 while (running) {
                     val client =
@@ -76,10 +82,14 @@ class SocketServer(
         try {
             socket.use { s ->
                 s.tcpNoDelay = true
+                // A connection that never authenticates is dropped.
+                s.soTimeout = AgentAuth.DEADLINE_MS
                 CommandConnection(
                     input = s.getInputStream(),
                     output = s.getOutputStream(),
                     executor = executor,
+                    auth = auth,
+                    onAuthenticated = { s.soTimeout = 0 },
                     handle = { line ->
                         Log.d(TAG, "Received: $line")
                         commandHandler.handle(line).also { Log.d(TAG, "Responding: $it") }

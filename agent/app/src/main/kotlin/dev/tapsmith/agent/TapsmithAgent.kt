@@ -20,6 +20,9 @@ class TapsmithAgent : Instrumentation() {
         private const val DEFAULT_PORT = 18700
         private const val ARG_PORT = "port"
 
+        /** The daemon's agent token (PILOT-969): `am instrument -e token …`. */
+        private const val ARG_TOKEN = "token"
+
         @Volatile
         lateinit var device: UiDevice
             private set
@@ -78,7 +81,11 @@ class TapsmithAgent : Instrumentation() {
                 hierarchyDumper = hierarchyDumper,
             )
 
-        socketServer = SocketServer(port, commandHandler)
+        val token = arguments?.getString(ARG_TOKEN)
+        if (token.isNullOrEmpty()) {
+            Log.e(TAG, "Started without a token: every connection will be refused")
+        }
+        socketServer = SocketServer(port, AgentAuth(token), commandHandler)
 
         Log.i(TAG, "TapsmithAgent started on port $port")
 

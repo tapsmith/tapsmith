@@ -23,6 +23,10 @@ import java.util.concurrent.atomic.AtomicReference
  * of leaving it to run on.
  */
 class CommandConnectionTest {
+    private companion object {
+        val TOKEN = "ab".repeat(32)
+    }
+
     // The pool SocketServer serves connections on.
     private val executor = newConnectionExecutor()
     private val logs = CopyOnWriteArrayList<String>()
@@ -34,6 +38,7 @@ class CommandConnectionTest {
 
     /** A connection under test: what the daemon writes, and what it reads back. */
     private inner class Wire(
+        authenticate: Boolean = true,
         handle: (String) -> String,
     ) {
         private val toAgent = PipedOutputStream()
@@ -43,13 +48,18 @@ class CommandConnectionTest {
         private val served = CountDownLatch(1)
 
         init {
-            val connection = CommandConnection(agentIn, agentOut, executor, handle) { logs.add(it) }
+            val connection =
+                CommandConnection(agentIn, agentOut, executor, AgentAuth(TOKEN), handle, log = { logs.add(it) })
             executor.submit {
                 try {
                     connection.serve()
                 } finally {
                     served.countDown()
                 }
+            }
+            if (authenticate) {
+                send(authLine(TOKEN))
+                assertEquals(AgentAuth.ackLine(), readLine())
             }
         }
 
@@ -67,6 +77,67 @@ class CommandConnectionTest {
         fun close() = toAgent.close()
 
         fun awaitServed(): Boolean = served.await(5, TimeUnit.SECONDS)
+    }
+
+    private fun authLine(token: String) = """{"id":"auth","method":"auth","params":{"token":"$token"}}"""
+
+    // ─── Authentication (PILOT-969) ───
+
+    @Test
+    fun `a connection that authenticates is served, and the auth line never reaches the handler or the log`() {
+        val handled = CopyOnWriteArrayList<String>()
+        val wire =
+            Wire { line ->
+                handled.add(line)
+                """{"id":"${JSONObject(line).getString("id")}","result":{}}"""
+            }
+        wire.send(request("1"))
+        assertEquals("1", idOf(wire.readLine()))
+        assertEquals(listOf(request("1")), handled)
+        assertFalse(logs.any { it.contains(TOKEN) })
+    }
+
+    @Test
+    fun `a wrong token is refused and the connection ends without running anything`() {
+        val handled = AtomicInteger()
+        val wire = Wire(authenticate = false) { handled.incrementAndGet().let { "{}" } }
+        wire.send(authLine("cd".repeat(32)))
+        wire.send(request("1"))
+        val refusal = JSONObject(wire.readLine()!!)
+        assertEquals("UNAUTHORIZED", refusal.getJSONObject("error").getString("type"))
+        // serve() returning is the connection ending: SocketServer closes the socket.
+        assertTrue(wire.awaitServed())
+        assertEquals(0, handled.get())
+    }
+
+    @Test
+    fun `a command sent before authenticating is refused, not run`() {
+        val handled = AtomicInteger()
+        val wire = Wire(authenticate = false) { handled.incrementAndGet().let { "{}" } }
+        wire.send(request("1", method = "getClipboard"))
+        val refusal = JSONObject(wire.readLine()!!)
+        assertEquals("auth", refusal.getString("id"))
+        assertEquals("UNAUTHORIZED", refusal.getJSONObject("error").getString("type"))
+        assertTrue(wire.awaitServed())
+        assertEquals(0, handled.get())
+    }
+
+    @Test
+    fun `blank lines before the auth line are skipped`() {
+        val wire = Wire(authenticate = false) { """{"id":"${JSONObject(it).getString("id")}","result":{}}""" }
+        wire.send("")
+        wire.send(authLine(TOKEN))
+        assertEquals(AgentAuth.ackLine(), wire.readLine())
+        wire.send(request("1"))
+        assertEquals("1", idOf(wire.readLine()))
+    }
+
+    @Test
+    fun `a connection closed before authenticating ends quietly`() {
+        val wire = Wire(authenticate = false) { "{}" }
+        wire.close()
+        assertTrue(wire.awaitServed())
+        assertFalse(wire.hasOutput())
     }
 
     private fun request(

@@ -26,6 +26,12 @@ import java.util.concurrent.Future
  * on (and touching the screen) after nobody waits for them. A request that
  * does arrive early waits for the one before it.
  *
+ * The first non-blank line must authenticate the connection ([AgentAuth],
+ * PILOT-969): it is answered with the ack and never reaches [handle] or the
+ * log; anything else is answered with the refusal and the connection ends.
+ * [onAuthenticated] runs once it has (the server lifts its handshake read
+ * deadline there).
+ *
  * [serve] returns as soon as the connection closes, without waiting for a
  * cancelled command to reach a checkpoint: it may be stuck in a native call
  * that cannot be stopped, and the caller frees the connection's resources.
@@ -35,7 +41,9 @@ internal class CommandConnection(
     input: InputStream,
     output: OutputStream,
     private val executor: ExecutorService,
+    private val auth: AgentAuth,
     private val handle: (String) -> String,
+    private val onAuthenticated: () -> Unit = {},
     private val isRunning: () -> Boolean = { true },
     private val log: (String) -> Unit,
 ) {
@@ -45,6 +53,7 @@ internal class CommandConnection(
     fun serve() {
         var inFlight: Future<*>? = null
         var token: CommandCancellation? = null
+        if (!authenticate()) return
         try {
             while (isRunning()) {
                 val line =
@@ -70,6 +79,41 @@ internal class CommandConnection(
             // Nobody will read the answer now. A command that has already
             // answered is not affected.
             token?.cancel("the daemon closed the connection before the command finished")
+        }
+    }
+
+    /** Read the first line and judge it: true when the connection may go on. */
+    private fun authenticate(): Boolean {
+        var line: String?
+        do {
+            line =
+                try {
+                    reader.readLine()
+                } catch (e: IOException) {
+                    // Includes the handshake deadline running out.
+                    log("Client did not authenticate: ${e.message}")
+                    return false
+                }
+        } while (line != null && line.isBlank())
+        if (line == null) {
+            log("Client disconnected before authenticating")
+            return false
+        }
+        val refusal = auth.refusal(line)
+        if (refusal != null) {
+            log("Refused a connection: $refusal")
+            send(AgentAuth.refusalLine(refusal))
+            return false
+        }
+        onAuthenticated()
+        send(AgentAuth.ackLine())
+        return true
+    }
+
+    private fun send(line: String) {
+        synchronized(writer) {
+            writer.println(line)
+            writer.flush()
         }
     }
 
