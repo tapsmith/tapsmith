@@ -213,6 +213,9 @@ class TouchPlanner(
                     val drag = clearingDrag(verdict, bounds, clearDrags, deadlines, now)
                     if (drag != null) {
                         clearDrags++
+                        // A view the list rebinds meanwhile must still show
+                        // the same content afterwards, as after a wait.
+                        armContentCheck(snapshot)
                         log("element is covered by ${verdict.by}; dragging it clear ($drag)")
                         CommandCancellation.checkpoint()
                         scroller!!.drag(drag)

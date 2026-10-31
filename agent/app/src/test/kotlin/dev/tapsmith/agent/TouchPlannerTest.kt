@@ -268,6 +268,18 @@ class TouchPlannerTest {
     }
 
     @Test
+    fun `an unlabelled row the list rebinds during the drag is not touched`() {
+        val row = listUnderFooter(rowTop = 2250)
+        // The row shows item 20 until the drag, then the view is rebound to
+        // another item (a data update during the drag).
+        target.readAt = {
+            val item = if (scroller.drags.isEmpty()) "Item 20" else "Item 31"
+            snapshot(row.bounds, node = row, contentDescription = null, className = "android.view.ViewGroup", content = item)
+        }
+        assertThrows<TargetChangedException> { planner.plan(target, row.bounds, budget(), UNLABELLED) }
+    }
+
+    @Test
     fun `a dropped first drag leaves the second to clear the target`() {
         val row = listUnderFooter(rowTop = 2250)
         val scrolls = scroller.onDrag

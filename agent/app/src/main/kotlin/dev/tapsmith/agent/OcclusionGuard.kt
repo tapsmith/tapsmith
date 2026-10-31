@@ -44,8 +44,9 @@ class OcclusionGuard(
         /** Clearance kept between a target dragged clear and its cover. */
         private const val CLEAR_MARGIN_DP = 8
 
-        /** Wait after a clearing drag for the tree to catch up. */
-        private const val CLEAR_SETTLE_MS = 150L
+        /** Allowance after a clearing drag for the list to come to rest
+         *  (see [settleAfterDrag]). */
+        private const val CLEAR_SETTLE_MS = 500L
 
         /** How far up the tree [isInScrollView] looks for a scroll view. */
         private const val SCROLL_ANCESTOR_DEPTH = 40
@@ -82,6 +83,10 @@ class OcclusionGuard(
             override fun windows() = readWindows()
         }
 
+    /** Waits for a list to stop scrolling after a clearing drag; the action
+     *  executor, which listens for scroll events, sets it. */
+    var settleAfterDrag: () -> Unit = { SystemGuardClock.sleep(CLEAR_SETTLE_MS) }
+
     /** Drags a list to move a target clear of fixed chrome (PILOT-980). */
     private val scroller =
         object : GuardScroller {
@@ -92,9 +97,9 @@ class OcclusionGuard(
 
             override fun drag(drag: CoverClearance.Drag) {
                 input.scrollDrag(ScreenPoint(drag.fromX, drag.fromY), ScreenPoint(drag.toX, drag.toY))
-                // The list stops with the finger (the drag holds before letting
-                // go); give the tree a moment to report where it stopped.
-                SystemGuardClock.sleep(CLEAR_SETTLE_MS)
+                // A list still moving takes the next touch as "stop" (React
+                // Native's ScrollView does), so the tap after must wait for it.
+                settleAfterDrag()
             }
         }
 

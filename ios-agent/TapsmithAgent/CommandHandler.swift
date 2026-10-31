@@ -788,6 +788,15 @@ class CommandHandler {
                     clearDrags += 1
                     NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
                     actionExecutor.scrollDrag(drag)
+                    // A target the live query binds by position (no unique
+                    // identifier or label) may bind another element once the
+                    // list has scrolled — a table unloads its top cells. Have
+                    // the SDK find it again from a fresh tree instead.
+                    if !isUniquelyBound(element) {
+                        throw AgentError.elementNotFound(
+                            "Element was scrolled clear of \(cover); finding it again (it may have gone stale)"
+                        )
+                    }
                     // The next pass reads the target where the drag left it. A
                     // drag that did not move it (the list's end, or a record
                     // the runtime dropped — iOS 26 drops some) still uses only
@@ -893,6 +902,24 @@ class CommandHandler {
         throw AgentError.actionFailed(
             "Ran out of time checking whether the element is covered: the daemon would give up before the touch finished, so not touching it"
         )
+    }
+
+    /// Whether the live query for `element` can only bind the element itself:
+    /// its identifier, or failing that its label among elements of its type,
+    /// matches exactly one element. A query bound by index into several
+    /// matches can bind another one after a scroll (PILOT-980).
+    private func isUniquelyBound(_ element: ElementInfo) -> Bool {
+        guard let identity = snapshotFinder.getIdentity(element.elementId) else { return false }
+        let query: XCUIElementQuery
+        if !identity.identifier.isEmpty {
+            query = app.descendants(matching: .any).matching(identifier: identity.identifier)
+        } else if !identity.label.isEmpty {
+            query = app.descendants(matching: identity.elementType)
+                .matching(NSPredicate(format: "label == %@", identity.label))
+        } else {
+            return false
+        }
+        return query.count == 1
     }
 
     /// The drag that scrolls a target at `target` clear of `cover` in `list`,

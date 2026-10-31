@@ -23,7 +23,7 @@ export class CoversScreen {
     const footer = await this.footerAction.boundingBox()
     if (!footer) throw new Error("the footer is not on screen")
     for (let i = 1; i <= 30; i++) {
-      const box = await this.row(`Row ${i}`).boundingBox({ timeout: 0 }).catch(() => null)
+      const box = await this.row(`Row ${i}`).boundingBox({ timeout: 1_000 }).catch(() => null)
       if (!box) continue
       const midY = box.y + box.height / 2
       if (midY > footer.y && midY < footer.y + footer.height) return `Row ${i}`
