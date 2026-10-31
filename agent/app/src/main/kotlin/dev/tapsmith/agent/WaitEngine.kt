@@ -30,9 +30,6 @@ class WaitEngine(
         private const val DEFAULT_IDLE_TIMEOUT_MS = 5000L
         private const val DEFAULT_ELEMENT_TIMEOUT_MS = 10000L
 
-        /** Polling interval used when re-trying findElement inside the wait loop. */
-        private const val FIND_POLL_INTERVAL_MS = 200L
-
         /**
          * Max positional-stability re-checks before falling back to the current
          * match. Caps the settle phase so a never-settling (animated) screen
@@ -195,7 +192,8 @@ class WaitEngine(
      * Poll [ElementFinder.findElement] until a match exists or [deadline] passes.
      * Sleeps (never calls device.waitForIdle) between attempts, so it makes
      * forward progress on screens that never go idle. The first attempt happens
-     * before any sleep, so a visible element returns on the first snapshot.
+     * before any sleep, so a visible element returns on the first snapshot; the
+     * sleeps between later attempts ramp up ([FindRetrySchedule]).
      */
     private fun findOrThrow(
         selector: ElementSelector,
@@ -203,6 +201,7 @@ class WaitEngine(
         deadline: Long,
         timeoutMs: Long,
     ): ElementInfo {
+        var retry = 0
         while (true) {
             CommandCancellation.checkpoint()
             try {
@@ -215,7 +214,7 @@ class WaitEngine(
                             "Selector: ${selector.describe()}",
                     )
                 }
-                CommandCancellation.sleep(FIND_POLL_INTERVAL_MS.coerceAtMost(remaining))
+                CommandCancellation.sleep(FindRetrySchedule.delayMs(retry++, remaining))
             }
         }
     }

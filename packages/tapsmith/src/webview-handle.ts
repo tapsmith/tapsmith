@@ -4,12 +4,12 @@ import {
   buildStrictModeViolationError,
   STRICT_ERROR_MAX_ELEMENTS,
   type StrictModeViolationError,
-  POLL_INTERVAL_MS,
 } from './element-handle.js';
 import { WebViewLocator } from './webview-locator.js';
 import { escapeJsString } from './js-string-escape.js';
 import { checkOptions, checkTimeout, type TimeoutOptions } from './action-options.js';
 import { cssIdSelector } from './css-selector.js';
+import { ACTION_RETRY_DELAYS_MS, backoff } from './retry-schedule.js';
 import type { TraceCollector } from './trace/trace-collector.js';
 import { extractStack } from './trace/trace-collector.js';
 import type { WebKitInspectorClient } from './webkit-inspector.js';
@@ -572,12 +572,18 @@ export class WebViewHandle {
     return result.result?.value;
   }
 
+  /** @internal — The run's abort signal (a user stop), from the device client. */
+  _getAbortSignal(): AbortSignal | undefined {
+    return this._client._getAbortSignal?.();
+  }
+
   /** @internal — Wait for a CSS selector to match an element in the DOM. */
   async _waitForSelector(selector: string, timeoutMs?: number): Promise<void> {
     const timeout = timeoutMs ?? this._timeoutMs;
     const deadline = Date.now() + timeout;
     let lastReadError: unknown;
     let answered = false;
+    const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
     while (Date.now() < deadline) {
       const remaining = Math.max(1, deadline - Date.now());
       let found: unknown;
@@ -595,7 +601,7 @@ export class WebViewHandle {
       }
       answered = true;
       if (found) return;
-      await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
+      await sleep(nextDelay(deadline));
     }
     throw new Error(
       `Timed out waiting for selector "${selector}" in WebView (${timeout}ms)`,
@@ -673,6 +679,7 @@ export class WebViewHandle {
     const deadline = Date.now() + timeout;
     let lastReadError: unknown;
     let answered = false;
+    const nextDelay = backoff(ACTION_RETRY_DELAYS_MS);
     while (true) {
       const remaining = Math.max(1, deadline - Date.now());
       let probe: WebViewLocatorProbe;
@@ -695,7 +702,7 @@ export class WebViewHandle {
         if (probe.count === 1) return;
       }
       if (Date.now() >= deadline) break;
-      await sleep(Math.min(POLL_INTERVAL_MS, Math.max(0, deadline - Date.now())));
+      await sleep(nextDelay(deadline));
     }
     throw new Error(
       `Timed out waiting for "${loc._selector}" in WebView (${timeout}ms)`,
