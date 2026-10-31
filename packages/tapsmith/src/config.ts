@@ -34,7 +34,7 @@ export type Platform = 'android' | 'ios';
 export type ReducedMotion = 'reduce' | 'no-preference';
 
 /**
- * `reducedMotion` as the daemon's SetDevice flag (PILOT-971): `true` turns the
+ * `reducedMotion` as the daemon's SetDevice flag: `true` turns the
  * device's animations off for the session, `false` undoes that, and unset
  * (the option left out) changes nothing.
  */

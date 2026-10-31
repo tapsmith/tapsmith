@@ -244,7 +244,7 @@ export class Device {
 
   private _typingDelayMs: number;
   private _doubleTapIntervalMs: number;
-  /** The config's `reducedMotion`, sent with every device selection (PILOT-971). */
+  /** The config's `reducedMotion`, sent with every device selection. */
   private _reducedMotion: TapsmithConfig['reducedMotion'];
 
   constructor(client: TapsmithGrpcClient, config?: Partial<Pick<TapsmithConfig, 'timeout' | 'package' | 'platform' | 'simulator' | 'typingDelay' | 'doubleTapInterval' | 'appResetColdEvery' | 'reducedMotion'>>) {
