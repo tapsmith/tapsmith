@@ -14,6 +14,9 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   while rows scroll under it, and a "Footer action" button fixed over the
 //   bottom of the list, as a checkout bar is. "Put row 5 under header"
 //   scrolls so row 5 sits exactly under the header.
+// - Every row also has an "Add" button, all with the same name: a locator
+//   picks one by position (nth), which the iOS agent cannot follow through a
+//   scroll, so there it is waited out instead of scrolled clear.
 
 const ROW_HEIGHT = 60
 const ROWS = Array.from({ length: 30 }, (_, i) => `Row ${i + 1}`)
@@ -29,6 +32,7 @@ export default function CoversScreen() {
   const [loadingOverlayTaps, setLoadingOverlayTaps] = useState(0)
   const [lastRow, setLastRow] = useState("none")
   const [rowTaps, setRowTaps] = useState(0)
+  const [lastAdded, setLastAdded] = useState("none")
   const [footerTaps, setFooterTaps] = useState(0)
   const [headerTaps, setHeaderTaps] = useState(0)
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
@@ -45,6 +49,7 @@ export default function CoversScreen() {
     setLoadingOverlayTaps(0)
     setLastRow("none")
     setRowTaps(0)
+    setLastAdded("none")
     setFooterTaps(0)
     setHeaderTaps(0)
     list.current?.scrollToOffset({ offset: 0, animated: false })
@@ -60,7 +65,7 @@ export default function CoversScreen() {
   return (
     <View style={styles.container}>
       <Text testID="covers-counts" style={styles.counts}>
-        {`behindLoading=${behindLoadingTaps} loadingOverlay=${loadingOverlayTaps} row=${lastRow} rowTaps=${rowTaps} header=${headerTaps} footer=${footerTaps}`}
+        {`behindLoading=${behindLoadingTaps} loadingOverlay=${loadingOverlayTaps} row=${lastRow} rowTaps=${rowTaps} added=${lastAdded} header=${headerTaps} footer=${footerTaps}`}
       </Text>
 
       <View style={styles.controls}>
@@ -133,17 +138,27 @@ export default function CoversScreen() {
                 <Text style={styles.headerText}>Sticky header</Text>
               </View>
             ) : (
-              <TouchableOpacity
-                style={styles.row}
-                onPress={() => {
-                  setLastRow(item.key)
-                  setRowTaps((n) => n + 1)
-                }}
-                accessibilityRole="button"
-                accessibilityLabel={item.key}
-              >
-                <Text style={styles.rowText}>{item.key}</Text>
-              </TouchableOpacity>
+              <View style={styles.row}>
+                <TouchableOpacity
+                  style={styles.rowMain}
+                  onPress={() => {
+                    setLastRow(item.key)
+                    setRowTaps((n) => n + 1)
+                  }}
+                  accessibilityRole="button"
+                  accessibilityLabel={item.key}
+                >
+                  <Text style={styles.rowText}>{item.key}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.addButton}
+                  onPress={() => setLastAdded(item.key)}
+                  accessibilityRole="button"
+                  accessibilityLabel="Add"
+                >
+                  <Text style={styles.rowText}>Add</Text>
+                </TouchableOpacity>
+              </View>
             )
           }
         />
@@ -228,11 +243,20 @@ const styles = StyleSheet.create({
   },
   row: {
     height: ROW_HEIGHT,
+    flexDirection: "row",
     backgroundColor: "#fff",
     borderBottomWidth: 1,
     borderBottomColor: "#ddd",
+  },
+  rowMain: {
+    flex: 1,
     justifyContent: "center",
     paddingHorizontal: 16,
+  },
+  addButton: {
+    width: 80,
+    justifyContent: "center",
+    alignItems: "center",
   },
   rowText: {
     fontSize: 16,

@@ -773,6 +773,12 @@ class CommandHandler {
             reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
         var clearDrags = 0
+        // Whether the target can be followed through a drag (asked once).
+        var canTrack: Bool?
+        func trackable() -> Bool {
+            if canTrack == nil { canTrack = isUniquelyBound(element) }
+            return canTrack ?? false
+        }
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
             let hittable = xcElem?.isHittable ?? false
@@ -783,20 +789,17 @@ class CommandHandler {
             let target = occlusionTarget(for: element, xcElem: xcElem)
             var verdict = occlusionVerdict(for: target, isHittable: hittable)
             if case .coveredInList(let cover, let coverFrame, let list)? = verdict {
+                // Only a target its live query binds uniquely (a unique
+                // identifier or label) is dragged: one bound by position may
+                // bind another element once the list has scrolled — a table
+                // unloads its top cells — and one with no live query keeps
+                // the frame it was found at. Those are waited out as before.
                 if clearDrags < CoverClearance.maxDrags,
-                   let drag = clearingDrag(target: target.frame, cover: coverFrame, list: list, clock: clock) {
+                   let drag = clearingDrag(target: target.frame, cover: coverFrame, list: list, clock: clock),
+                   trackable() {
                     clearDrags += 1
                     NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
                     actionExecutor.scrollDrag(drag)
-                    // A target the live query binds by position (no unique
-                    // identifier or label) may bind another element once the
-                    // list has scrolled — a table unloads its top cells. Have
-                    // the SDK find it again from a fresh tree instead.
-                    if !isUniquelyBound(element) {
-                        throw AgentError.elementNotFound(
-                            "Element was scrolled clear of \(cover); finding it again (it may have gone stale)"
-                        )
-                    }
                     // The next pass reads the target where the drag left it. A
                     // drag that did not move it (the list's end, or a record
                     // the runtime dropped — iOS 26 drops some) still uses only

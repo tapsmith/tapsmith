@@ -17,6 +17,8 @@ export class CoversScreen {
 
   /** A list row by its label ("Row 5"). */
   row(label: string) { return this.device.getByRole("button", { name: label, exact: true }) }
+  /** Every row's "Add" button: all share the name, so pick one with nth(). */
+  get addButtons() { return this.device.getByRole("button", { name: "Add", exact: true }) }
 
   /** The first row whose centre lies under the footer, by its label. */
   async rowUnderFooter(): Promise<string> {

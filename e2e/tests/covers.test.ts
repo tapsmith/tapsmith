@@ -22,12 +22,12 @@ describe("Covers", () => {
       (e: unknown) => (e instanceof Error ? e.message : String(e)),
     )
 
-  type Counts = { behindLoading?: number; loadingOverlay?: number; row?: string; rowTaps?: number; header?: number; footer?: number }
+  type Counts = { behindLoading?: number; loadingOverlay?: number; row?: string; rowTaps?: number; added?: string; header?: number; footer?: number }
   const counts = (c: Counts) => {
-    const all = { behindLoading: 0, loadingOverlay: 0, row: "none", rowTaps: 0, header: 0, footer: 0, ...c }
+    const all = { behindLoading: 0, loadingOverlay: 0, row: "none", rowTaps: 0, added: "none", header: 0, footer: 0, ...c }
     return (
       `behindLoading=${all.behindLoading} loadingOverlay=${all.loadingOverlay} row=${all.row} ` +
-      `rowTaps=${all.rowTaps} header=${all.header} footer=${all.footer}`
+      `rowTaps=${all.rowTaps} added=${all.added} header=${all.header} footer=${all.footer}`
     )
   }
 
@@ -58,6 +58,26 @@ describe("Covers", () => {
       await coversScreen.row(label).tap()
 
       await expect(coversScreen.counts).toHaveText(counts({ row: label, rowTaps: 1 }))
+    })
+
+    // The "Add" buttons all share one name, so nth() picks one by position.
+    // Android follows the node it found through the scroll. The iOS agent
+    // re-finds an element through a live query, which for one bound only by
+    // position may pick another row once the list has moved, so iOS does not
+    // scroll for it: it waits the cover out and fails, never tapping the cover.
+    test("tap() on an nth() match under a footer bar scrolls it clear on Android and fails as covered on iOS", async ({ platform, coversScreen }) => {
+      const label = await coversScreen.rowUnderFooter()
+      const index = Number(label.replace("Row ", "")) - 1
+
+      const failure = await failureOf(coversScreen.addButtons.nth(index).tap({ timeout: 3_000 }))
+
+      if (platform === "android") {
+        expect(failure).toBe("")
+        await expect(coversScreen.counts).toHaveText(counts({ added: label }))
+      } else {
+        expect(failure).toMatch(/covered by .*Footer action/i)
+        await expect(coversScreen.counts).toHaveText(counts({}))
+      }
     })
 
     test("tap() on a row under a sticky header scrolls it clear and taps it", async ({ coversScreen }) => {
