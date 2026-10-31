@@ -256,8 +256,13 @@ enum EventSynthesizer {
     }
 
     /// Tap at a screen coordinate. Returns true if synthesis succeeded.
+    ///
+    /// The touch is lifted `TapTiming.pointTapHold` (20 ms) after it lands
+    /// (PILOT-974). A longer hold gives a scroll view that starts scrolling
+    /// under the touch time to take it, which cancels the press in React
+    /// Native: with 100 ms, every tap beside the test app's carousel was lost.
     static func tap(at point: CGPoint) -> Bool {
-        return synthesizeTap(at: point, duration: 0.1)
+        return synthesizeTap(at: point, duration: TapTiming.pointTapHold)
     }
 
     /// Outcome of a synthesized double-tap, so callers can fall back without
@@ -1060,7 +1065,10 @@ enum EventSynthesizer {
         // Add a moveToPoint at the same location — this generates a touchesMoved
         // event which helps UIScrollView's gesture recognizer classify the gesture
         // as a stationary tap (not a scroll), allowing the event to pass through
-        // to child responders like TouchableOpacity.
+        // to child responders like TouchableOpacity. Re-checked for PILOT-974 with
+        // 20 ms taps: with or without it, every tap landed on the test app's list
+        // rows, switch, tap area and carousel button. Kept, as it costs no time
+        // and a touch with no move has been seen dropped in a double tap.
         let moveSel = NSSelectorFromString("moveToPoint:atOffset:")
         if path.responds(to: moveSel) {
             let moveImp = path.method(for: moveSel)
