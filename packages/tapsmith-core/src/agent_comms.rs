@@ -2761,6 +2761,30 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn connect_gives_up_at_the_readiness_deadline() {
+        // An agent that never answers: the handshake keeps pinging for its
+        // whole readiness window, then fails with the unreachable error.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let attempts = spawn_agent_ready_after(listener, Duration::from_secs(3600));
+
+        let mut conn = AgentConnection::with_port(port);
+        let started = tokio::time::Instant::now();
+        let err = conn
+            .connect_for_platform("sim", true, Duration::from_millis(400))
+            .await
+            .expect_err("the agent never answers");
+        assert!(started.elapsed() >= Duration::from_millis(400));
+        assert!(
+            err.to_string()
+                .contains("Agent is not responding on device sim"),
+            "{err}"
+        );
+        assert!(!conn.connected);
+        assert!(attempts.lock().unwrap().len() >= 2, "it kept pinging");
+    }
+
     #[test]
     fn is_empty_response_matches_the_bail_marker() {
         let err = anyhow!("{}", EMPTY_RESPONSE_MARKER).context("wrapper context");
