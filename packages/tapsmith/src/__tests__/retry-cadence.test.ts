@@ -153,6 +153,21 @@ describe('assertions back off like Playwright (PILOT-972)', () => {
     });
     expect(gaps(calls).slice(0, EXPECT_GAPS.length)).toEqual(EXPECT_GAPS);
   });
+
+  it('expect.poll() never sleeps past its timeout', async () => {
+    // Tries at 0, 100, 350, 850; the next 1000 ms step is capped to the
+    // 50 ms left, so the final try lands on the 900 ms timeout.
+    const calls: number[] = [];
+    let failedAt = -1;
+    vi.useFakeTimers();
+    const start = Date.now();
+    const done = (tapsmithExpect.poll(() => { calls.push(Date.now()); return 0; }, { timeout: 900 }).toBe(1) as unknown as Promise<void>)
+      .catch(() => { failedAt = Date.now(); });
+    await vi.advanceTimersByTimeAsync(3000);
+    await done;
+    expect(calls.map((t) => t - start)).toEqual([0, 100, 350, 850, 900]);
+    expect(failedAt - start).toBe(900);
+  });
 });
 
 describe('WebView locator loops back off like Playwright (PILOT-972)', () => {

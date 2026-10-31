@@ -3531,7 +3531,7 @@ export class ElementHandle {
    * and `_resolveOne()` is likewise a single-tick resolution, so one call is
    * the non-waiting probe. Whether strict mode applies is the tick's call.
    *
-   * Every read is issued with one poll interval of budget — the same tick
+   * Every read is issued with one read budget — the same tick
    * budget the waiting loops use — on every handle shape (modified handles
    * are re-timed through {@link _resolveOneWithin}, so a filter/scope chain's
    * sequential reads carry it too). The budget does not bound a healthy dump;

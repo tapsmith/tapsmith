@@ -2964,7 +2964,9 @@ describe('count()/all()/allTextContents() re-read a stale snapshot until it sett
     // grace window and then surfaced — not hidden for the whole timeout.
     const faulting = makeMockClient({ findElements: vi.fn(async () => ({ requestId: '1', elements: [], errorMessage: 'UiAutomation not connected' })) });
     await expect(withFakeClock(10_000, () => new ElementHandle(faulting, _role('listitem'), 5000).all())).rejects.toThrow(/UiAutomation not connected/);
-    expect(faulting.findElements).toHaveBeenCalledTimes(9); // 0 … 2000 ms every 250 ms
+    // Reads at 0, 0, 20, 120, 220, 720, 1220, 1720 and 2220 ms: the first one
+    // past the 2 s window surfaces the fault.
+    expect(faulting.findElements).toHaveBeenCalledTimes(9);
     // A fatal error (a user stop) propagates at once.
     const aborted = makeMockClient({ findElements: vi.fn(async () => { throw new TestAbortedError('stopped'); }) });
     await expect(new ElementHandle(aborted, _role('listitem'), 5000).count()).rejects.toThrow(/stopped/);

@@ -1641,25 +1641,20 @@ function createPollAssertions(
           check(value);
           return; // Assertion passed
         } catch (err) {
+          // The try that reached the deadline is the last one; its failure
+          // is the assertion's.
+          if (Date.now() >= deadline) throw err instanceof Error ? err : new Error(String(err));
           if (process.env.TAPSMITH_DEBUG) {
             console.log(`[tapsmith.poll] Intermediate error: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
 
-        if (Date.now() >= deadline) break;
-
+        // Never sleep past the deadline: the default schedule's 1000 ms steps
+        // would otherwise end the poll up to a second after its timeout. The
+        // try that wakes at the deadline is then the final one.
         const interval = intervals[Math.min(intervalIdx, intervals.length - 1)];
         intervalIdx++;
-        await new Promise((r) => setTimeout(r, interval));
-      }
-
-      // One final attempt
-      try {
-        const value = await fn();
-        check(value);
-        return;
-      } catch (err) {
-        throw err instanceof Error ? err : new Error(String(err));
+        await new Promise((r) => setTimeout(r, Math.min(interval, Math.max(0, deadline - Date.now()))));
       }
     };
   }
