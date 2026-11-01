@@ -294,13 +294,16 @@ struct OcclusionAnalyzer {
     }
 
     /// Whether a drag that starts at `point` would press the vertical list at
-    /// `list` that holds `target` (PILOT-980), and nothing else: no control,
-    /// bar or leaf view painted after the list lies over the point — a
-    /// dialog's backdrop, a second bar stacked on the cover — and the
-    /// keyboard does not. A drag
-    /// that started there would press that instead. False too when the list
-    /// is not among the target's ancestors.
-    func isDragStartOnList(_ target: Target, list: CGRect, at point: CGPoint) -> Bool {
+    /// `list` that holds `target` (PILOT-980), and nothing else: no control
+    /// painted after the list lies over the point — a dialog's backdrop, a
+    /// second bar stacked on the cover — and the keyboard does not. A drag
+    /// that started there would press that instead. Nor does anything in the
+    /// layer the cover (`cover`, its frame) is laid out in, other than the
+    /// views that hold it: a dialog's backdrop with no role (a React Native
+    /// Pressable reads as `.other`) sits beside the dialog's card in one
+    /// host; a host that only lays out the chrome holds nothing else there.
+    /// False too when the list is not among the target's ancestors.
+    func isDragStartOnList(_ target: Target, list: CGRect, cover: CGRect, at point: CGPoint) -> Bool {
         guard let t = locate(target),
               let l = ancestors(of: t).first(where: {
                   Self.listTypes.contains(nodes[$0].elementType) && Self.framesMatch(nodes[$0].frame, list)
@@ -311,17 +314,27 @@ struct OcclusionAnalyzer {
             let node = nodes[i]
             if let w = node.window, keyboardWindows.contains(w) { continue }
             if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-            // A leaf in the list's window draws something there of its own:
-            // a dismissing backdrop that has no role (a React Native Pressable
-            // reads as .other) takes the drag as surely as a button. A host
-            // that only lays out the chrome holds children, and passes.
-            let drawsThere = isInteractive(node) || Self.barTypes.contains(node.elementType)
-                || (node.subtreeEnd == i + 1 && node.window == nodes[l].window)
-            if drawsThere, clippedFrame(of: i).contains(point) {
+            if (isInteractive(node) || Self.barTypes.contains(node.elementType)), clippedFrame(of: i).contains(point) {
                 return false
             }
         }
-        return true
+        return !coverLayerLies(over: point, cover: cover, after: nodes[l].subtreeEnd)
+    }
+
+    /// Whether something in the cover's layer — the outermost view painted
+    /// after the list (from index `start`) that holds the cover — other than
+    /// the cover and the views holding it lies over `point`.
+    private func coverLayerLies(over point: CGPoint, cover: CGRect, after start: Int) -> Bool {
+        guard start < nodes.count,
+              let c = (start..<nodes.count).first(where: { Self.framesMatch(clippedFrame(of: $0), cover) }) else { return false }
+        let holders = Set(ancestors(of: c).filter { $0 >= start })
+        guard let layer = holders.min() else { return false }
+        for i in layer..<nodes[layer].subtreeEnd where !holders.contains(i) && !(i >= c && i < nodes[c].subtreeEnd) {
+            let node = nodes[i]
+            if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
+            if clippedFrame(of: i).contains(point) { return true }
+        }
+        return false
     }
 
     /// The interactive control painted after the target that contains any of

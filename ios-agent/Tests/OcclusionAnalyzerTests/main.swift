@@ -584,7 +584,7 @@ func expectBool(_ name: String, _ got: Bool, _ want: Bool) {
 }
 let row20 = OcclusionAnalyzer.Target(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: "")
 expectBool("a drag starting on the list itself is on the list",
-           analyzer(footer).isDragStartOnList(row20, list: list, at: CGPoint(x: 201, y: 766)), true)
+           analyzer(footer).isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), true)
 // An in-window dialog (a JS modal): its full-screen dismissing backdrop lies
 // where the drag would start.
 let dialogOverList: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
@@ -593,7 +593,7 @@ let dialogOverList: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44
             (4, .other, "", "", R(20, 700, 362, 174)),
             (5, .button, "OK", "", R(20, 774, 362, 100))])
 expectBool("a drag starting on a dialog's backdrop is not on the list",
-           analyzer(dialogOverList).isDragStartOnList(row20, list: list, at: CGPoint(x: 201, y: 692)), false)
+           analyzer(dialogOverList).isDragStartOnList(row20, list: list, cover: R(20, 700, 362, 174), at: CGPoint(x: 201, y: 692)), false)
 // The same dialog with a role-less backdrop (a React Native Pressable with no
 // accessibilityRole reads as .other): still not the list.
 let rolelessBackdrop: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
@@ -602,16 +602,16 @@ let rolelessBackdrop: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 
             (4, .other, "", "", R(20, 700, 362, 174)),
             (5, .button, "OK", "", R(20, 774, 362, 100))])
 expectBool("a drag starting on a role-less dialog backdrop is not on the list",
-           analyzer(rolelessBackdrop).isDragStartOnList(row20, list: list, at: CGPoint(x: 201, y: 692)), false)
+           analyzer(rolelessBackdrop).isDragStartOnList(row20, list: list, cover: R(20, 700, 362, 174), at: CGPoint(x: 201, y: 692)), false)
 // A full-screen host that only lays a footer out (pointerEvents box-none)
-// holds the footer but draws nothing at the drag start.
+// holds the footer but nothing else at the drag start.
 let footerInHost: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
     after: [(3, .other, "", "", screen),
             (4, .button, "Checkout", "", R(0, 774, 402, 100))])
 expectBool("a drag starting under a host that only lays out the footer is on the list",
-           analyzer(footerInHost).isDragStartOnList(row20, list: list, at: CGPoint(x: 201, y: 766)), true)
+           analyzer(footerInHost).isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), true)
 expectBool("a target whose list is not found never gets a drag",
-           analyzer(footer).isDragStartOnList(row20, list: R(0, 0, 10, 10), at: CGPoint(x: 201, y: 766)), false)
+           analyzer(footer).isDragStartOnList(row20, list: R(0, 0, 10, 10), cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), false)
 
 // ─── Keyboard first (PILOT-622) ───
 

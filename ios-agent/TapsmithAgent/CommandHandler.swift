@@ -981,7 +981,7 @@ class CommandHandler {
         // dialog's backdrop, a second bar stacked on the cover).
         guard let appSnapshot = try? snapshotFinder.takeSnapshot(),
               OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
-                  .isDragStartOnList(target, list: list, at: drag.from) else {
+                  .isDragStartOnList(target, list: list, cover: cover, at: drag.from) else {
             NSLog("[TapsmithCommand] not dragging clear: something other than the list is at \(drag.from)")
             return nil
         }

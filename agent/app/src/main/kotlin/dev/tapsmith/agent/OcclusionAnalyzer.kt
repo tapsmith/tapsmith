@@ -405,18 +405,22 @@ object OcclusionAnalyzer {
     /**
      * Whether a drag that starts at ([x], [y]) would press the vertical list
      * at [list] that holds [target] (PILOT-980), and nothing else: no window
-     * above the target's lies over the point, and no touchable node or leaf
-     * view painted over the list from outside it does — a dialog's backdrop
-     * (one built on React Native's responder system is not clickable), a
-     * second bar stacked on the cover. A host that only lays out the chrome
-     * holds children, and passes. A drag that started there would press that
-     * instead (a backdrop dismisses its dialog on release). False too when
-     * the list is not among the target's ancestors any more.
+     * above the target's lies over the point, and no touchable node painted
+     * over the list from outside it does — a dialog's backdrop, a second bar
+     * stacked on the cover. Nor does anything in the layer the cover (at
+     * [cover], its bounds) is laid out in, other than the nodes that hold it:
+     * a dialog's backdrop that takes no clicks (one built on React Native's
+     * responder system) sits beside the dialog's card in one host; a host
+     * that only lays out the chrome holds nothing else there. A drag that
+     * started there would press that instead (a backdrop dismisses its
+     * dialog on release). False too when the list is not among the target's
+     * ancestors any more.
      */
     fun isDragStartOnList(
         target: HitNode,
         targetWindowId: Int?,
         list: Box,
+        cover: Box,
         x: Int,
         y: Int,
         windows: List<WindowSpec>,
@@ -434,7 +438,8 @@ object OcclusionAnalyzer {
                 if (i == branchIndex) continue
                 val sibling = reader.child(node, i) ?: continue
                 if (compareKeys(drawKey(sibling, i), branchKey) <= 0) continue
-                if (searchSubtree(sibling, x, y, reader, leavesTakeTouches = true) != null) return false
+                if (searchSubtree(sibling, x, y, reader) != null) return false
+                if (coverLayerLies(sibling, cover, x, y, reader)) return false
             }
             if (reader.exhausted) return false
         }
@@ -546,24 +551,60 @@ object OcclusionAnalyzer {
         }
     }
 
+    /** Whether [layer] holds the node at [cover] and something in it other
+     *  than that node and the nodes holding it lies over ([x], [y]). */
+    private fun coverLayerLies(
+        layer: HitNode,
+        cover: Box,
+        x: Int,
+        y: Int,
+        reader: BudgetedReader,
+    ): Boolean {
+        if (!holds(layer, cover, reader)) return false
+        val stack = ArrayDeque<HitNode>()
+        stack.addLast(layer)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            if (!node.isVisible || !node.bounds.contains(x, y) || node.bounds == cover) continue
+            if (!holds(node, cover, reader)) return true
+            if (reader.exhausted) return false
+            for (i in 0 until node.childCount()) reader.child(node, i)?.let(stack::addLast)
+        }
+        return false
+    }
+
+    /** Whether [node] is, or holds, a node whose bounds are [cover]. */
+    private fun holds(
+        node: HitNode,
+        cover: Box,
+        reader: BudgetedReader,
+    ): Boolean {
+        val stack = ArrayDeque<HitNode>()
+        stack.addLast(node)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeLast()
+            if (n.bounds == cover) return true
+            if (!n.bounds.contains(cover) || reader.exhausted) continue
+            for (i in 0 until n.childCount()) reader.child(n, i)?.let(stack::addLast)
+        }
+        return false
+    }
+
     /** Depth-first search of [root]'s subtree for a visible touchable node
      *  containing the point, pruned to nodes that contain it (Android clips
-     *  a child's bounds to its parent's). Topmost-painted children first.
-     *  With [leavesTakeTouches], a visible leaf containing the point counts
-     *  too (see [isDragStartOnList]). */
+     *  a child's bounds to its parent's). Topmost-painted children first. */
     private fun searchSubtree(
         root: HitNode,
         x: Int,
         y: Int,
         reader: BudgetedReader,
-        leavesTakeTouches: Boolean = false,
     ): HitNode? {
         val stack = ArrayDeque<HitNode>()
         stack.addLast(root)
         while (stack.isNotEmpty()) {
             val node = stack.removeLast()
             if (!node.isVisible || !node.bounds.contains(x, y)) continue
-            if (node.takesTouches || (leavesTakeTouches && node.childCount() == 0)) return node
+            if (node.takesTouches) return node
             if (reader.exhausted) return null
             val children =
                 (0 until node.childCount())

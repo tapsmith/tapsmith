@@ -265,7 +265,16 @@ class TouchPlanner(
         val drag = CoverClearance.drag(bounds, verdict.bounds, list, screen.bounds, scroller.margin, scroller.touchSlop) ?: return null
         // The drag must press the list, not something laid over it.
         val node = snapshot?.node ?: return null
-        val onList = OcclusionAnalyzer.isDragStartOnList(node, snapshot.windowId, list, drag.fromX, drag.fromY, screen.windows())
+        val onList =
+            OcclusionAnalyzer.isDragStartOnList(
+                node,
+                snapshot.windowId,
+                list,
+                verdict.bounds,
+                drag.fromX,
+                drag.fromY,
+                screen.windows(),
+            )
         return drag.takeIf { onList }
     }
 

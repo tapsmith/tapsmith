@@ -624,7 +624,9 @@ class OcclusionAnalyzerTest {
         val list = list(FakeNode(Box(0, 2100, 1080, 2250), takesTouches = true), row)
         val footer = FakeNode(Box(0, 2200, 1080, 2400), drawingOrder = 1, takesTouches = true)
         root(list, footer)
-        assertTrue(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2180, listOf(appWindow)))
+        assertTrue(
+            OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), Box(0, 2200, 1080, 2400), 540, 2180, listOf(appWindow)),
+        )
     }
 
     @Test
@@ -633,7 +635,9 @@ class OcclusionAnalyzerTest {
         val list = list(row)
         val miniPlayer = FakeNode(Box(0, 2050, 1080, 2200), drawingOrder = 1, takesTouches = true)
         root(list, miniPlayer)
-        assertFalse(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2180, listOf(appWindow)))
+        assertFalse(
+            OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), Box(0, 2200, 1080, 2400), 540, 2180, listOf(appWindow)),
+        )
     }
 
     @Test
@@ -641,19 +645,22 @@ class OcclusionAnalyzerTest {
         // A React Native backdrop built on the responder system is not
         // clickable, but it still takes the drag (and closes the dialog).
         val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
-        val ok = FakeNode(Box(40, 2200, 1040, 2350), takesTouches = true, name = "button \"OK\"")
-        val host = FakeNode(screen, drawingOrder = 1).add(FakeNode(screen), FakeNode(Box(40, 2150, 1040, 2380)).add(ok))
+        val card = FakeNode(Box(40, 2150, 1040, 2380)).add(FakeNode(Box(40, 2200, 1040, 2350), takesTouches = true))
+        val host = FakeNode(screen, drawingOrder = 1).add(FakeNode(screen), card)
         root(list(row), host)
-        assertFalse(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2080, listOf(appWindow)))
+        assertFalse(
+            OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), Box(40, 2150, 1040, 2380), 540, 2080, listOf(appWindow)),
+        )
     }
 
     @Test
     fun `a drag start under a host that only lays out the footer is on the list`() {
         val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
-        val footer = FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true)
-        val host = FakeNode(screen, drawingOrder = 1).add(footer)
+        val host = FakeNode(screen, drawingOrder = 1).add(FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true))
         root(list(row), host)
-        assertTrue(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2080, listOf(appWindow)))
+        assertTrue(
+            OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), Box(0, 2200, 1080, 2400), 540, 2080, listOf(appWindow)),
+        )
     }
 
     @Test
@@ -661,7 +668,17 @@ class OcclusionAnalyzerTest {
         val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
         root(list(row))
         val dialog = WindowSpec(id = 4, kind = WindowKind.APPLICATION, layer = 2, bounds = screen, title = "Dialog")
-        assertFalse(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2180, listOf(appWindow, dialog)))
+        assertFalse(
+            OcclusionAnalyzer.isDragStartOnList(
+                row,
+                1,
+                Box(0, 300, 1080, 2100),
+                Box(0, 2200, 1080, 2400),
+                540,
+                2180,
+                listOf(appWindow, dialog),
+            ),
+        )
     }
 
     // ─── Covers in the target's own window ───
