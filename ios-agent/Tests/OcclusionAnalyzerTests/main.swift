@@ -576,6 +576,31 @@ check("a sticky header in React Native's nested content view covers the row unde
 checkPoint("a row's own empty background view is not a sticky row",
            analyzer(rnNestedSticky).analyze(.init(frame: R(16, 386, 290, 60), elementType: .button, label: "Row 6", identifier: "covers-row"), isHittable: false),
            CGPoint(x: 161, y: 416))
+// React Native (recorded on iOS 26.4, the test app's /visibility screen):
+// a plain View with a testID is flattened into an empty node with the
+// identifier, listed just before its own contents, which follow it as
+// siblings inside its frame. It is the row the target is in, not a header
+// stuck over it.
+let rnFlattenedRow: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(0, 0, 402, 874)),
+    (3, .other, "", "", R(0, 0, 402, 1400)),
+    (4, .other, "", "", R(0, 0, 402, 1400)),
+    (5, .staticText, "Dynamic List", "", R(16, 391, 370, 22)),
+    (5, .other, "", "dynamic-item-Item A", R(16, 421, 370, 47)),
+    (5, .staticText, "Item A", "", R(30, 435, 46, 19)),
+    (5, .button, "Delete Item A", "", R(328, 436, 44, 17)),
+    (5, .other, "", "dynamic-item-Item B", R(16, 474, 370, 47)),
+    (5, .staticText, "Item B", "", R(30, 488, 46, 19)),
+    (5, .button, "Delete Item B", "", R(328, 489, 44, 17)),
+]
+checkPoint("a flattened React Native row container listed before its button is not a sticky row",
+           analyzer(rnFlattenedRow).analyze(button("Delete Item A", R(328, 436, 44, 17)), isHittable: false),
+           CGPoint(x: 350, y: 444.5))
+checkPoint("…nor for the second row's button",
+           analyzer(rnFlattenedRow).analyze(button("Delete Item B", R(328, 489, 44, 17)), isHittable: false),
+           CGPoint(x: 350, y: 497.5))
 
 // ─── Where a clearing drag may start (PILOT-980) ───
 
