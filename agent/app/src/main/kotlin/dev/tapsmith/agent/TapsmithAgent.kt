@@ -76,6 +76,7 @@ class TapsmithAgent : Instrumentation() {
                 actionExecutor = actionExecutor,
                 waitEngine = waitEngine,
                 hierarchyDumper = hierarchyDumper,
+                appReadiness = AppReadinessProbe(this),
             )
 
         socketServer = SocketServer(port, commandHandler)
