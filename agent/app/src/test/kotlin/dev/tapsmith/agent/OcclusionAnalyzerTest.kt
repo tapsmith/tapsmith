@@ -637,6 +637,26 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
+    fun `a drag start on a dialog backdrop that takes no clicks is not on the list`() {
+        // A React Native backdrop built on the responder system is not
+        // clickable, but it still takes the drag (and closes the dialog).
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val ok = FakeNode(Box(40, 2200, 1040, 2350), takesTouches = true, name = "button \"OK\"")
+        val host = FakeNode(screen, drawingOrder = 1).add(FakeNode(screen), FakeNode(Box(40, 2150, 1040, 2380)).add(ok))
+        root(list(row), host)
+        assertFalse(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2080, listOf(appWindow)))
+    }
+
+    @Test
+    fun `a drag start under a host that only lays out the footer is on the list`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val footer = FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true)
+        val host = FakeNode(screen, drawingOrder = 1).add(footer)
+        root(list(row), host)
+        assertTrue(OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), 540, 2080, listOf(appWindow)))
+    }
+
+    @Test
     fun `a drag start under another window is not on the list`() {
         val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
         root(list(row))

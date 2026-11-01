@@ -405,9 +405,11 @@ object OcclusionAnalyzer {
     /**
      * Whether a drag that starts at ([x], [y]) would press the vertical list
      * at [list] that holds [target] (PILOT-980), and nothing else: no window
-     * above the target's lies over the point, and no touchable node painted
-     * over the list from outside it does — a dialog's backdrop, a second bar
-     * stacked on the cover. A drag that started there would press that
+     * above the target's lies over the point, and no touchable node or leaf
+     * view painted over the list from outside it does — a dialog's backdrop
+     * (one built on React Native's responder system is not clickable), a
+     * second bar stacked on the cover. A host that only lays out the chrome
+     * holds children, and passes. A drag that started there would press that
      * instead (a backdrop dismisses its dialog on release). False too when
      * the list is not among the target's ancestors any more.
      */
@@ -432,7 +434,7 @@ object OcclusionAnalyzer {
                 if (i == branchIndex) continue
                 val sibling = reader.child(node, i) ?: continue
                 if (compareKeys(drawKey(sibling, i), branchKey) <= 0) continue
-                if (searchSubtree(sibling, x, y, reader) != null) return false
+                if (searchSubtree(sibling, x, y, reader, leavesTakeTouches = true) != null) return false
             }
             if (reader.exhausted) return false
         }
@@ -546,19 +548,22 @@ object OcclusionAnalyzer {
 
     /** Depth-first search of [root]'s subtree for a visible touchable node
      *  containing the point, pruned to nodes that contain it (Android clips
-     *  a child's bounds to its parent's). Topmost-painted children first. */
+     *  a child's bounds to its parent's). Topmost-painted children first.
+     *  With [leavesTakeTouches], a visible leaf containing the point counts
+     *  too (see [isDragStartOnList]). */
     private fun searchSubtree(
         root: HitNode,
         x: Int,
         y: Int,
         reader: BudgetedReader,
+        leavesTakeTouches: Boolean = false,
     ): HitNode? {
         val stack = ArrayDeque<HitNode>()
         stack.addLast(root)
         while (stack.isNotEmpty()) {
             val node = stack.removeLast()
             if (!node.isVisible || !node.bounds.contains(x, y)) continue
-            if (node.takesTouches) return node
+            if (node.takesTouches || (leavesTakeTouches && node.childCount() == 0)) return node
             if (reader.exhausted) return null
             val children =
                 (0 until node.childCount())

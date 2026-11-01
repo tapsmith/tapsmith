@@ -294,9 +294,10 @@ struct OcclusionAnalyzer {
     }
 
     /// Whether a drag that starts at `point` would press the vertical list at
-    /// `list` that holds `target` (PILOT-980), and nothing else: no control
-    /// painted after the list lies over the point — a dialog's backdrop, a
-    /// second bar stacked on the cover — and the keyboard does not. A drag
+    /// `list` that holds `target` (PILOT-980), and nothing else: no control,
+    /// bar or leaf view painted after the list lies over the point — a
+    /// dialog's backdrop, a second bar stacked on the cover — and the
+    /// keyboard does not. A drag
     /// that started there would press that instead. False too when the list
     /// is not among the target's ancestors.
     func isDragStartOnList(_ target: Target, list: CGRect, at point: CGPoint) -> Bool {
@@ -310,7 +311,13 @@ struct OcclusionAnalyzer {
             let node = nodes[i]
             if let w = node.window, keyboardWindows.contains(w) { continue }
             if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-            if (isInteractive(node) || Self.barTypes.contains(node.elementType)), clippedFrame(of: i).contains(point) {
+            // A leaf in the list's window draws something there of its own:
+            // a dismissing backdrop that has no role (a React Native Pressable
+            // reads as .other) takes the drag as surely as a button. A host
+            // that only lays out the chrome holds children, and passes.
+            let drawsThere = isInteractive(node) || Self.barTypes.contains(node.elementType)
+                || (node.subtreeEnd == i + 1 && node.window == nodes[l].window)
+            if drawsThere, clippedFrame(of: i).contains(point) {
                 return false
             }
         }
