@@ -112,6 +112,10 @@ const ANDROID_DEEP_LINK_IDLE_TIMEOUT_MS: u64 = 2_000;
 /// falls through.
 const ANDROID_RENDER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const ANDROID_RENDER_READY_POLL: Duration = Duration::from_millis(250);
+/// How much longer than its own budget the daemon waits for the agent's
+/// `waitForAppReady` answer, which arrives at the end of that budget at the
+/// latest.
+const ANDROID_RENDER_READY_TRANSPORT_SLACK_MS: u64 = 2_000;
 
 /// How long StartAgent waits for a freshly launched Android agent to answer
 /// its first ping. UIAutomator's accessibility bootstrap on a cold
@@ -1449,25 +1453,81 @@ impl TapsmithServiceImpl {
                 return Err(resp.error_message);
             }
         }
-        self.wait_for_android_rendered_content(serial, package_name)
+        self.wait_for_android_rendered_content(package_name, ANDROID_RENDER_READY_TIMEOUT)
             .await;
         Ok(())
     }
 
-    /// Poll the hierarchy until the app has drawn real content (a node of its
-    /// own package carrying text or a content description), so a deep link or
+    /// Wait until the app has drawn real content (a node of its own package
+    /// carrying text or a content description), so a deep link or
     /// interaction issued right after a relaunch isn't lost into a booting RN
-    /// app. Bounded and best-effort.
-    async fn wait_for_android_rendered_content(&self, _serial: &str, package_name: &str) {
+    /// app. Bounded and best-effort: returns whether the content appeared
+    /// within `timeout`.
+    ///
+    /// The agent's `waitForAppReady` polls the live window roots and stops at
+    /// the first such node (PILOT-976); an agent that predates it gets the
+    /// old full-dump polling. A failed agent call is retried within the
+    /// budget, as the dump polling ignored a failed dump.
+    pub(super) async fn wait_for_android_rendered_content(
+        &self,
+        package_name: &str,
+        timeout: Duration,
+    ) -> bool {
         let started = tokio::time::Instant::now();
+        let deadline = started + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining_ms = remaining.as_millis() as u64;
+            let result = self
+                .send_agent_command_with_timeout(
+                    &AgentCommand::WaitForAppReady {
+                        package: package_name.to_string(),
+                        timeout_ms: remaining_ms,
+                    },
+                    remaining_ms + ANDROID_RENDER_READY_TRANSPORT_SLACK_MS,
+                )
+                .await;
+            let answer = classify_agent_ready_answer(&result);
+            let ready = match answer {
+                AgentReadyAnswer::Ready => true,
+                AgentReadyAnswer::NotReady => false,
+                AgentReadyAnswer::Unsupported => {
+                    self.poll_hierarchy_for_rendered_content(package_name, deadline)
+                        .await
+                }
+                AgentReadyAnswer::Failed => {
+                    if tokio::time::Instant::now() < deadline {
+                        tokio::time::sleep(ANDROID_RENDER_READY_POLL.min(remaining)).await;
+                        continue;
+                    }
+                    false
+                }
+            };
+            crate::timing::timing_log!(
+                "kind=app_ready name={:?} dur_ms={} ready={}",
+                answer,
+                started.elapsed().as_millis(),
+                ready
+            );
+            return ready;
+        }
+    }
+
+    /// [`Self::wait_for_android_rendered_content`] for an agent without
+    /// `waitForAppReady`: a full hierarchy dump per poll.
+    async fn poll_hierarchy_for_rendered_content(
+        &self,
+        package_name: &str,
+        deadline: tokio::time::Instant,
+    ) -> bool {
         loop {
             if let Some(xml) = self.current_hierarchy_xml(5_000).await {
                 if android_hierarchy_has_rendered_content(&xml, package_name) {
-                    return;
+                    return true;
                 }
             }
-            if started.elapsed() >= ANDROID_RENDER_READY_TIMEOUT {
-                return;
+            if tokio::time::Instant::now() >= deadline {
+                return false;
             }
             tokio::time::sleep(ANDROID_RENDER_READY_POLL).await;
         }
@@ -3984,6 +4044,33 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     }
 
     #[instrument(skip_all, fields(request_id))]
+    async fn wait_for_app_ready(
+        &self,
+        request: Request<proto::WaitForAppReadyRequest>,
+    ) -> Result<Response<proto::WaitForAppReadyResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+
+        Self::validate_package_name(&req.package_name)?;
+
+        let timeout = if req.timeout_ms > 0 {
+            Duration::from_millis(req.timeout_ms)
+        } else {
+            ANDROID_RENDER_READY_TIMEOUT
+        };
+        let ready = self
+            .backend()
+            .await?
+            .wait_for_app_ready(&req.package_name, timeout)
+            .await;
+        Ok(Response::new(proto::WaitForAppReadyResponse {
+            request_id,
+            ready: ready.unwrap_or(false),
+            supported: ready.is_some(),
+        }))
+    }
+
+    #[instrument(skip_all, fields(request_id))]
     async fn clear_app_data(
         &self,
         request: Request<proto::ClearAppDataRequest>,
@@ -5880,6 +5967,40 @@ fn parse_component_name(dumpsys_output: &str) -> Option<(String, String)> {
     None
 }
 
+/// What the Android agent's `waitForAppReady` answered (PILOT-976).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentReadyAnswer {
+    /// The app shows text or a description.
+    Ready,
+    /// The budget passed first: an answer, not a failure.
+    NotReady,
+    /// The agent predates the command: poll hierarchy dumps instead.
+    Unsupported,
+    /// The call failed: try again within the budget.
+    Failed,
+}
+
+fn classify_agent_ready_answer(result: &Result<AgentResponse, Status>) -> AgentReadyAnswer {
+    match result {
+        Ok(resp) if resp.success => {
+            if resp.data.get("ready").and_then(|v| v.as_bool()) == Some(true) {
+                AgentReadyAnswer::Ready
+            } else {
+                AgentReadyAnswer::NotReady
+            }
+        }
+        Ok(resp)
+            if resp
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("Unknown method")) =>
+        {
+            AgentReadyAnswer::Unsupported
+        }
+        _ => AgentReadyAnswer::Failed,
+    }
+}
+
 /// True when the UIAutomator hierarchy has at least one node belonging to
 /// `package_name` that carries text or a content description — i.e. the app
 /// has drawn real UI, not just its bare Activity/splash window.
@@ -7632,6 +7753,192 @@ mod tests {
         let (pkg, act) = parse_component_name(output).unwrap();
         assert_eq!(pkg, "com.foo");
         assert_eq!(act, ".Bar");
+    }
+
+    /// A mock Android agent: answers each JSON line with `respond(method)`
+    /// and records the methods it was sent.
+    async fn service_with_mock_agent(
+        respond: impl Fn(&str, usize) -> Value + Send + Sync + 'static,
+    ) -> (TapsmithServiceImpl, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen_by_agent = seen.clone();
+        let respond = Arc::new(respond);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let seen = seen_by_agent.clone();
+                let respond = respond.clone();
+                tokio::spawn(async move {
+                    let (read_half, mut write_half) = stream.into_split();
+                    let mut lines = BufReader::new(read_half).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let req: Value = serde_json::from_str(&line).unwrap();
+                        let method = req["method"].as_str().unwrap_or("").to_string();
+                        let count = {
+                            let mut seen = seen.lock().unwrap();
+                            seen.push(method.clone());
+                            seen.iter().filter(|m| **m == method).count()
+                        };
+                        let mut reply = respond(&method, count);
+                        reply["id"] = req["id"].clone();
+                        let mut out = reply.to_string();
+                        out.push('\n');
+                        if write_half.write_all(out.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let svc = TapsmithServiceImpl::new(
+            Arc::new(RwLock::new(DeviceManager::new())),
+            Arc::new(RwLock::new(AgentConnection::connected_for_test(port))),
+            crate::daemon_log_bus::DaemonLogBus::new(16),
+        );
+        (svc, seen)
+    }
+
+    const SPLASH_XML: &str =
+        r#"<hierarchy><node package="com.example.app" text="" content-desc=""/></hierarchy>"#;
+    const RENDERED_XML: &str =
+        r#"<hierarchy><node package="com.example.app" text="Home"/></hierarchy>"#;
+
+    #[tokio::test]
+    async fn rendered_content_wait_asks_the_agent_and_pulls_no_dump() {
+        let (svc, seen) = service_with_mock_agent(|method, _| match method {
+            "waitForAppReady" => json!({"result": {"ready": true}}),
+            _ => json!({"result": {"hierarchy": RENDERED_XML}}),
+        })
+        .await;
+        assert!(
+            svc.wait_for_android_rendered_content("com.example.app", Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["waitForAppReady"]);
+    }
+
+    #[tokio::test]
+    async fn rendered_content_wait_takes_the_agents_not_ready_as_final() {
+        let (svc, seen) = service_with_mock_agent(|method, _| match method {
+            "waitForAppReady" => json!({"result": {"ready": false}}),
+            _ => json!({"result": {"hierarchy": RENDERED_XML}}),
+        })
+        .await;
+        assert!(
+            !svc.wait_for_android_rendered_content("com.example.app", Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["waitForAppReady"]);
+    }
+
+    #[tokio::test]
+    async fn rendered_content_wait_polls_dumps_for_an_agent_without_the_command() {
+        let (svc, seen) = service_with_mock_agent(|method, count| match method {
+            "waitForAppReady" => json!({"error": {"type": "ACTION_FAILED", "message": "Unknown method: waitForAppReady"}}),
+            _ if count < 3 => json!({"result": {"hierarchy": SPLASH_XML}}),
+            _ => json!({"result": {"hierarchy": RENDERED_XML}}),
+        })
+        .await;
+        assert!(
+            svc.wait_for_android_rendered_content("com.example.app", Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "waitForAppReady",
+                "getUiHierarchy",
+                "getUiHierarchy",
+                "getUiHierarchy"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_content_wait_retries_a_failed_agent_call() {
+        let (svc, seen) = service_with_mock_agent(|_, count| {
+            if count == 1 {
+                json!({"error": {"type": "INTERNAL_ERROR", "message": "window gone"}})
+            } else {
+                json!({"result": {"ready": true}})
+            }
+        })
+        .await;
+        assert!(
+            svc.wait_for_android_rendered_content("com.example.app", Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["waitForAppReady", "waitForAppReady"]
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_content_wait_gives_up_on_a_failing_agent_at_its_budget() {
+        let (svc, _) = service_with_mock_agent(
+            |_, _| json!({"error": {"type": "INTERNAL_ERROR", "message": "window gone"}}),
+        )
+        .await;
+        let started = std::time::Instant::now();
+        assert!(
+            !svc.wait_for_android_rendered_content("com.example.app", Duration::from_millis(600))
+                .await
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    fn agent_answer(success: bool, error: Option<&str>, data: Value) -> AgentResponse {
+        AgentResponse {
+            success,
+            error: error.map(str::to_string),
+            error_type: None,
+            data,
+        }
+    }
+
+    #[test]
+    fn agent_ready_answer_reads_the_ready_flag() {
+        assert_eq!(
+            classify_agent_ready_answer(&Ok(agent_answer(true, None, json!({"ready": true})))),
+            AgentReadyAnswer::Ready
+        );
+        // Running out of time is an answer, not a failure: no retry, no fallback.
+        assert_eq!(
+            classify_agent_ready_answer(&Ok(agent_answer(true, None, json!({"ready": false})))),
+            AgentReadyAnswer::NotReady
+        );
+    }
+
+    #[test]
+    fn agent_ready_answer_detects_an_agent_without_the_command() {
+        // An agent build that predates PILOT-976 falls back to dump polling.
+        assert_eq!(
+            classify_agent_ready_answer(&Ok(agent_answer(
+                false,
+                Some("Unknown method: waitForAppReady"),
+                json!({})
+            ))),
+            AgentReadyAnswer::Unsupported
+        );
+    }
+
+    #[test]
+    fn agent_ready_answer_retries_failures() {
+        assert_eq!(
+            classify_agent_ready_answer(&Ok(agent_answer(
+                false,
+                Some("Failed to read windows"),
+                json!({})
+            ))),
+            AgentReadyAnswer::Failed
+        );
+        assert_eq!(
+            classify_agent_ready_answer(&Err(Status::internal("Agent command timed out"))),
+            AgentReadyAnswer::Failed
+        );
     }
 
     #[test]

@@ -247,6 +247,14 @@ impl DeviceBackend for AndroidBackend<'_> {
         Some(!out.trim().is_empty())
     }
 
+    async fn wait_for_app_ready(&self, package: &str, timeout: Duration) -> Option<bool> {
+        Some(
+            self.svc
+                .wait_for_android_rendered_content(package, timeout)
+                .await,
+        )
+    }
+
     async fn relaunch_app(
         &self,
         serial: &str,

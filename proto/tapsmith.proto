@@ -52,6 +52,9 @@ service TapsmithService {
   rpc GetCurrentActivity(GetCurrentActivityRequest) returns (GetCurrentActivityResponse);
   rpc TerminateApp(TerminateAppRequest) returns (ActionResponse);
   rpc GetAppState(GetAppStateRequest) returns (GetAppStateResponse);
+  // Wait, bounded, for a just-(re)launched app to draw real content
+  // (PILOT-976). Android only; other platforms answer `supported = false`.
+  rpc WaitForAppReady(WaitForAppReadyRequest) returns (WaitForAppReadyResponse);
   rpc ClearAppData(ClearAppDataRequest) returns (ActionResponse);
   rpc GrantPermission(GrantPermissionRequest) returns (ActionResponse);
   rpc RevokePermission(RevokePermissionRequest) returns (ActionResponse);
@@ -647,6 +650,23 @@ message GetAppStateRequest {
 message GetAppStateResponse {
   string request_id = 1;
   string state = 2;  // "not_installed" | "stopped" | "background" | "foreground"
+}
+
+message WaitForAppReadyRequest {
+  string request_id = 1;
+  string package_name = 2;
+  uint64 timeout_ms = 3;  // 0 = the daemon's default (10s)
+}
+
+message WaitForAppReadyResponse {
+  string request_id = 1;
+  // A node of the package carries text or a content description. False when
+  // the timeout passed first, which is not an error: an app whose first
+  // screen has no text never becomes "ready".
+  bool ready = 2;
+  // False when the active platform has no such wait; `ready` is then
+  // meaningless and the caller uses its own readiness check.
+  bool supported = 3;
 }
 
 message ClearAppDataRequest {

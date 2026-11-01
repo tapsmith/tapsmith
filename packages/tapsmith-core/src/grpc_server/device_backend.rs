@@ -106,6 +106,9 @@ pub(super) trait DeviceBackend: Send + Sync {
 
     // ─── App lifecycle ───
     async fn app_is_running(&self, package: &str) -> Option<bool>;
+    /// Wait up to `timeout` for a just-(re)launched app to draw real content.
+    /// `None` when the platform has no such wait (the caller uses its own).
+    async fn wait_for_app_ready(&self, package: &str, timeout: Duration) -> Option<bool>;
     async fn relaunch_app(
         &self,
         serial: &str,
