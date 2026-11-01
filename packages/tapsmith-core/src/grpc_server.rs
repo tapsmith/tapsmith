@@ -932,9 +932,7 @@ impl TapsmithServiceImpl {
         idle_timeout_ms: u64,
     ) -> Result<(), String> {
         agent_comms::clear_stream_cache(&self.agent_stream).await;
-        let _ = ios::device::terminate_app(serial, package_name).await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        ios::device::launch_app(serial, package_name)
+        ios::device::relaunch_app(serial, package_name)
             .await
             .map_err(|e| e.to_string())?;
         let relaunch = self
@@ -982,7 +980,7 @@ impl TapsmithServiceImpl {
         wait_for_idle: bool,
         idle_timeout_ms: u64,
     ) -> Result<(), String> {
-        let _ = self
+        let terminated = self
             .send_agent_command_with_timeout(
                 &AgentCommand::TerminateApp {
                     package: package_name.to_string(),
@@ -990,7 +988,12 @@ impl TapsmithServiceImpl {
                 4_000,
             )
             .await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // The agent answers success only once the app reads as not running,
+        // so a confirmed terminate needs no pause (PILOT-976). An unconfirmed
+        // one keeps the old fixed pause before the launch.
+        if !matches!(terminated, Ok(ref resp) if resp.success) {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
 
         let launch = self
             .send_agent_command_with_timeout(
@@ -1073,9 +1076,7 @@ impl TapsmithServiceImpl {
         // `app.launch()` (inside the re-started agent) provides an equivalent
         // fresh launch — slower but correct.
         if !is_physical {
-            let _ = ios::device::terminate_app(serial, package_name).await;
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            ios::device::launch_app(serial, package_name)
+            ios::device::relaunch_app(serial, package_name)
                 .await
                 .map_err(|e| {
                     format!("Failed to relaunch app via simctl before agent restart: {e}")

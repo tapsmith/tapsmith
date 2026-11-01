@@ -2163,7 +2163,18 @@ class CommandHandler {
             // If running in background, this brings it to foreground.
             let targetApp = rebindApp(bundleId: targetBundleId(fallback: params))
             targetApp.activate()
-            Thread.sleep(forTimeInterval: 0.5)
+            // Wait for the state instead of a fixed 0.5 s (PILOT-976).
+            // activate() normally returns with the app already in front, so
+            // this costs nothing; the bound only matters for an app that does
+            // not get there, which the daemon's session probe then judges.
+            var inForeground = false
+            let waitStarted = Date()
+            _ = ObjCExceptionCatcher.catchException {
+                inForeground = targetApp.wait(for: .runningForeground, timeout: 5)
+            }
+            NSLog(
+                "[TapsmithAgent] launchApp: foreground=\(inForeground) after \(Int(Date().timeIntervalSince(waitStarted) * 1000)) ms"
+            )
             // Dismiss "Save Password?" dialog from iOS Passwords framework.
             let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
             let notNow = springboard.buttons["Not Now"]
