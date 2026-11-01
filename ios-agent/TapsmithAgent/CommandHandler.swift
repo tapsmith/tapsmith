@@ -760,11 +760,23 @@ class CommandHandler {
     ///
     /// **Cost** per pass: `isHittable` (one hit-test IPC); when not
     /// short-circuited, one `snapshot()` of the element plus one of the app.
+    /// What a touch has done to clear its target of fixed chrome (PILOT-980),
+    /// kept across every plan the touch makes (a re-plan after the settle, a
+    /// pinch's retries): the drag limit is per touch, and once the list has
+    /// been dragged XCUITest's hit test is not trusted again.
+    final class ClearingState {
+        var drags = 0
+        /// The query that finds the target by what identifies it alone,
+        /// looked up once a drag is to be made (nil inside: nothing does).
+        var identifying: XCUIElementQuery??
+    }
+
     private func planTouch(
         _ element: ElementInfo,
         timeoutMs: Int64,
         preferElementTap: Bool,
-        reserveMs: Int64 = 0
+        reserveMs: Int64 = 0,
+        clearing: ClearingState = ClearingState()
     ) throws -> TouchPlan {
         var clock = TouchPlanClock(
             start: Date(),
@@ -772,18 +784,14 @@ class CommandHandler {
             readDeadline: commandReadDeadline,
             reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
-        var clearDrags = 0
-        // The query that finds the target by what identifies it alone, once a
-        // drag is to be made (looked up once; nil when nothing does).
-        var identifying: XCUIElementQuery??
         func identifyingQuery() -> XCUIElementQuery? {
-            if identifying == nil {
-                identifying = .some(uniquelyIdentifying(element))
-                if identifying == .some(nil) {
+            if clearing.identifying == nil {
+                clearing.identifying = .some(uniquelyIdentifying(element))
+                if clearing.identifying == .some(nil) {
                     NSLog("[TapsmithCommand] not dragging \(element.elementId) clear: nothing identifies it uniquely")
                 }
             }
-            return identifying ?? nil
+            return clearing.identifying ?? nil
         }
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
@@ -791,7 +799,7 @@ class CommandHandler {
             // last word: XCUITest's hit test called a React Native row under
             // the sticky header it was dragged beside hittable (iOS 18.5),
             // and XCUIElement.tap() then pressed the header.
-            let hittable = clearDrags == 0 && (xcElem?.isHittable ?? false)
+            let hittable = clearing.drags == 0 && (xcElem?.isHittable ?? false)
             if preferElementTap, hittable, let xcElem {
                 try refuseIfLate(clock)
                 return .hittableElement(xcElem)
@@ -806,10 +814,10 @@ class CommandHandler {
                 // may bind it by position, and once the list has scrolled (a
                 // table unloads its top cells) that binds another element.
                 // Anything else is waited out as before.
-                if clearDrags < CoverClearance.maxDrags,
+                if clearing.drags < CoverClearance.maxDrags,
                    let drag = clearingDrag(target: target, cover: coverFrame, list: list, clock: clock),
                    let identifying = identifyingQuery() {
-                    clearDrags += 1
+                    clearing.drags += 1
                     snapshotFinder.rebind(element.elementId, to: identifying.firstMatch)
                     NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
                     actionExecutor.scrollDrag(drag)
@@ -889,15 +897,20 @@ class CommandHandler {
         _ element: ElementInfo,
         timeoutMs: Int64,
         preferElementTap: Bool,
-        reserveMs: Int64 = 0
+        reserveMs: Int64 = 0,
+        clearing: ClearingState = ClearingState()
     ) throws -> TouchPlan {
         let started = Date()
-        let plan = try planTouch(element, timeoutMs: timeoutMs, preferElementTap: preferElementTap, reserveMs: reserveMs)
+        let plan = try planTouch(
+            element, timeoutMs: timeoutMs, preferElementTap: preferElementTap, reserveMs: reserveMs, clearing: clearing
+        )
         let outcome = settleBeforeTouch(plan, reserveMs: reserveMs)
         guard case .point = plan, outcome.sawChange else { return plan }
         let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
         NSLog("[TapsmithCommand] \(element.elementId) changed while settling; planning the touch again")
-        return try planTouch(element, timeoutMs: remaining, preferElementTap: preferElementTap, reserveMs: reserveMs)
+        return try planTouch(
+            element, timeoutMs: remaining, preferElementTap: preferElementTap, reserveMs: reserveMs, clearing: clearing
+        )
     }
 
     /// Wait for the planned touch's target to stop changing on screen
@@ -1022,10 +1035,13 @@ class CommandHandler {
     /// nothing can be checked, so the pinch is refused rather than sent blind.
     private func planPinch(_ element: ElementInfo, scale: Double, timeoutMs: Int64, reserveMs: Int64) throws -> PinchPlan {
         let started = Date()
+        let clearing = ClearingState()
         while true {
             let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
             let visible: CGRect
-            switch try planSettledTouch(element, timeoutMs: remaining, preferElementTap: false, reserveMs: reserveMs) {
+            switch try planSettledTouch(
+                element, timeoutMs: remaining, preferElementTap: false, reserveMs: reserveMs, clearing: clearing
+            ) {
             case .point(_, let area):
                 visible = area
             case .hittableElement:
