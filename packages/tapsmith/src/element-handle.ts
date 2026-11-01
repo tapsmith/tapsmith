@@ -3760,7 +3760,7 @@ export class ElementHandle {
    * the scroll container cuts it, it moves it inside, with shorter, slower
    * swipes that count toward `maxScrolls`.
    *
-   * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`.
+   * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`, or `10` on Android, where each swipe is a drag that moves the list less than a fling.
    * @param options.speed - Swipe speed in pixels/second. Default `2000`.
    */
   async scrollIntoView(options?: {
@@ -3770,7 +3770,10 @@ export class ElementHandle {
   }): Promise<void> {
     checkOptions('scrollIntoView()', options, ['direction', 'maxScrolls', 'speed']);
     const explicitDirection = scrollDirectionOption(options?.direction);
-    const maxScrolls = options?.maxScrolls ?? 5;
+    // On Android each swipe is a drag that moves the list about its own
+    // length and stops (PILOT-973); a fling carried it further. So the
+    // default budget there is larger, to reach as far as the flings did.
+    const maxScrolls = options?.maxScrolls ?? (this._options.platform === 'android' ? 10 : 5);
     const speed = options?.speed ?? 2000;
 
     this._emitQueryStarted('scrollIntoView');

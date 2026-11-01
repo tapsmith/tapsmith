@@ -6370,6 +6370,27 @@ describe('scrollIntoView() drags without momentum on Android (PILOT-973)', () =>
     expect(reads[4 - 1] - swipedAt).toBeLessThan(50);
   });
 
+  it('allows 10 drags by default on Android, where a drag moves the list less than a fling did; 5 elsewhere', async () => {
+    for (const [platform, budget] of [['android', 10], ['ios', 5], [undefined, 5]] as const) {
+      const swipe = vi.fn(async () => successResponse());
+      const client = makeMockClient({ findElements: scripted([null]), swipe });
+
+      await expect(handle(client, platform).scrollIntoView()).rejects.toThrow(
+        new RegExp(`not visible after ${budget} scroll\\(s\\).*Raise maxScrolls \\(${budget}\\)`),
+      );
+      expect(swipe).toHaveBeenCalledTimes(budget);
+    }
+    // The iOS swipes each watch the list for 500 ms.
+  }, 15_000);
+
+  it('keeps an explicit maxScrolls on Android', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements: scripted([null]), swipe });
+
+    await expect(handle(client, 'android').scrollIntoView({ maxScrolls: 3 })).rejects.toThrow(/not visible after 3 scroll\(s\)/);
+    expect(swipe).toHaveBeenCalledTimes(3);
+  });
+
   it('still waits for a row that keeps moving after a drag to stop before it returns', async () => {
     // A pager snapping to its page after the lift: the row moves for three
     // reads, then holds for two.
