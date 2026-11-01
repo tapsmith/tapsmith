@@ -2084,8 +2084,10 @@ impl TapsmithServiceImpl {
                     }));
                 };
 
-                let fallback_cmd =
-                    format!("am start -S --activity-clear-task -n {package_name}/{activity}");
+                let fallback_cmd = format!(
+                    "am start -S --activity-clear-task -n {}",
+                    android_component_arg(package_name, &activity)
+                );
                 match adb::shell(serial, &fallback_cmd).await {
                     Ok(_) => {
                         self.finish_launch(request_id, wait_for_idle, idle_timeout_ms)
