@@ -230,12 +230,13 @@ pub struct TapsmithServiceImpl {
     /// StartAgent idempotent when the daemon is already connected to the same
     /// live agent for the same device/configuration.
     started_agent_config: Arc<RwLock<Option<StartedAgentConfig>>>,
-    /// Cached Android launcher activity (`.MainActivity`) for the active
-    /// package, resolved once at StartAgent when the device is calm. Reused by
-    /// every clean-task relaunch so a restart never depends on a per-reset
-    /// `resolve-activity` call succeeding under load. Cleared on device/agent
-    /// change.
-    android_launcher_activity: Arc<RwLock<Option<String>>>,
+    /// Cached Android launcher activities (`.MainActivity`), by package. The
+    /// target package's is resolved at StartAgent when the device is calm, so
+    /// a clean-task relaunch never depends on a per-reset `resolve-activity`
+    /// call succeeding under load; others are resolved on their first launch.
+    /// Every launch then starts the component directly instead of running
+    /// `monkey` (PILOT-976). Cleared on device/agent change.
+    android_launcher_activity: Arc<RwLock<std::collections::HashMap<String, String>>>,
     /// Counters behind the warm/cold decision for declared app resets
     /// (`ResetApp`). Reset whenever the active device or agent session changes.
     reset_policy: Arc<RwLock<app_reset::ResetPolicyState>>,
@@ -424,7 +425,7 @@ impl TapsmithServiceImpl {
             ios_ca_cert_installed: Arc::new(RwLock::new(std::collections::HashSet::new())),
             ios_agent_config: Arc::new(RwLock::new(None)),
             started_agent_config: Arc::new(RwLock::new(None)),
-            android_launcher_activity: Arc::new(RwLock::new(None)),
+            android_launcher_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
             reset_policy: Arc::new(RwLock::new(app_reset::ResetPolicyState::default())),
             last_hooks_marker: Arc::new(RwLock::new(None)),
             nav_probe_found_no_marker: Arc::new(RwLock::new(false)),
@@ -1384,28 +1385,14 @@ impl TapsmithServiceImpl {
         wait_for_idle: bool,
         idle_timeout_ms: u64,
     ) -> Result<(), String> {
-        let cached = self.android_launcher_activity.read().await.clone();
-        let activity = match cached {
-            Some(a) => Some(a),
-            None => {
-                let resolved = self
-                    .resolve_launcher_activity(serial, package_name)
-                    .await
-                    .ok()
-                    .flatten();
-                if let Some(ref a) = resolved {
-                    *self.android_launcher_activity.write().await = Some(a.clone());
-                }
-                resolved
-            }
-        };
+        let activity = self.launcher_activity(serial, package_name).await;
         let mut clean_started = false;
         if let Some(activity) = activity {
             let cmd = format!(
                 "am start -S -a android.intent.action.MAIN -c android.intent.category.LAUNCHER --activity-clear-task -n {package_name}/{activity}"
             );
             match adb::shell(serial, &cmd).await {
-                Ok(out) if !out.contains("Error") => {
+                Ok(out) if !am_start_reported_error(&out) => {
                     clean_started = true;
                     if wait_for_idle {
                         let timeout = if idle_timeout_ms > 0 {
@@ -1982,6 +1969,33 @@ impl TapsmithServiceImpl {
         }
     }
 
+    /// The cached launcher activity of `package_name`, if any.
+    async fn cached_launcher_activity(&self, package_name: &str) -> Option<String> {
+        self.android_launcher_activity
+            .read()
+            .await
+            .get(package_name)
+            .cloned()
+    }
+
+    /// The launcher activity of `package_name`: cached, or resolved now and
+    /// cached. `None` when it cannot be resolved.
+    async fn launcher_activity(&self, serial: &str, package_name: &str) -> Option<String> {
+        if let Some(activity) = self.cached_launcher_activity(package_name).await {
+            return Some(activity);
+        }
+        let resolved = self
+            .resolve_launcher_activity(serial, package_name)
+            .await
+            .ok()
+            .flatten()?;
+        self.android_launcher_activity
+            .write()
+            .await
+            .insert(package_name.to_string(), resolved.clone());
+        Some(resolved)
+    }
+
     async fn resolve_launcher_activity(
         &self,
         serial: &str,
@@ -2016,6 +2030,34 @@ impl TapsmithServiceImpl {
         // The relaunched process may render a marker an earlier probe missed
         // (see `nav_probe_found_no_marker`).
         *self.nav_probe_found_no_marker.write().await = false;
+
+        // Start the launcher component directly, with the intent a launcher
+        // tap sends (PILOT-976). `monkey` starts a VM of its own for the same
+        // intent; it stays the fallback for a package whose launcher activity
+        // cannot be resolved, or when the start is refused.
+        if let Some(activity) = self.launcher_activity(serial, package_name).await {
+            let cmd = android_launcher_intent_cmd(package_name, &activity);
+            match adb::shell(serial, &cmd).await {
+                Ok(out) if !am_start_reported_error(&out) => {
+                    return self
+                        .finish_launch(request_id, wait_for_idle, idle_timeout_ms)
+                        .await;
+                }
+                Ok(out) => {
+                    // A stale entry (the app was reinstalled with another
+                    // launcher activity) is resolved again next time.
+                    self.android_launcher_activity
+                        .write()
+                        .await
+                        .remove(package_name);
+                    warn!(%activity, output = %out.trim(), "launcher intent refused; falling back to monkey");
+                }
+                Err(e) => {
+                    warn!(%activity, error = %e, "launcher intent failed; falling back to monkey");
+                }
+            }
+        }
+
         let monkey_cmd = format!(
             "monkey -p {} -c android.intent.category.LAUNCHER 1",
             package_name
@@ -3275,7 +3317,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     self.cleanup_network_proxy().await;
                     *self.started_agent_config.write().await = None;
                     *self.ios_agent_config.write().await = None;
-                    *self.android_launcher_activity.write().await = None;
+                    self.android_launcher_activity.write().await.clear();
                     *self.reset_policy.write().await = app_reset::ResetPolicyState::default();
                     *self.last_hooks_marker.write().await = None;
                     *self.nav_probe_found_no_marker.write().await = false;
@@ -3374,7 +3416,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         }
 
         *self.started_agent_config.write().await = None;
-        *self.android_launcher_activity.write().await = None;
+        self.android_launcher_activity.write().await.clear();
         // A fresh agent session starts a fresh warm window.
         *self.reset_policy.write().await = app_reset::ResetPolicyState::default();
         *self.last_hooks_marker.write().await = None;
@@ -5967,6 +6009,26 @@ fn parse_component_name(dumpsys_output: &str) -> Option<(String, String)> {
     None
 }
 
+/// `am start` of `package/activity` with the intent a launcher tap sends,
+/// as `monkey -c LAUNCHER` did: MAIN + LAUNCHER, with NEW_TASK and
+/// RESET_TASK_IF_NEEDED (0x10200000), so a running app's task comes to the
+/// front as it was (PILOT-976).
+fn android_launcher_intent_cmd(package_name: &str, activity: &str) -> String {
+    format!(
+        "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
+         -f 0x10200000 -n {package_name}/{activity}"
+    )
+}
+
+/// `am start` exits 0 when it starts nothing, and says so on a line of its
+/// own that starts with `Error` ("Error type 3", "Error: Activity class …
+/// does not exist"). A "Warning: … brought to the front" is a launch.
+fn am_start_reported_error(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim_start().starts_with("Error"))
+}
+
 /// What the Android agent's `waitForAppReady` answered (PILOT-976).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AgentReadyAnswer {
@@ -7939,6 +8001,61 @@ mod tests {
             classify_agent_ready_answer(&Err(Status::internal("Agent command timed out"))),
             AgentReadyAnswer::Failed
         );
+    }
+
+    #[test]
+    fn launcher_intent_matches_what_monkey_and_the_launcher_send() {
+        // PILOT-976: MAIN + LAUNCHER with NEW_TASK | RESET_TASK_IF_NEEDED
+        // (0x10200000) resumes the app's existing task like a launcher tap,
+        // and unlike the clean relaunch it neither force-stops (-S) nor
+        // clears the task.
+        let cmd = android_launcher_intent_cmd("com.example.app", ".MainActivity");
+        assert_eq!(
+            cmd,
+            "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
+             -f 0x10200000 -n com.example.app/.MainActivity"
+        );
+        assert!(!cmd.contains(" -S"));
+        assert!(!cmd.contains("clear-task"));
+    }
+
+    #[test]
+    fn am_start_errors_are_read_from_its_output() {
+        // `am start` exits 0 when it fails to start anything.
+        assert!(am_start_reported_error(
+            "Starting: Intent { cmp=com.example.app/.Gone }\nError type 3\nError: Activity class {com.example.app/.Gone} does not exist.\n"
+        ));
+        assert!(am_start_reported_error(
+            "Error: Activity not started, unable to resolve Intent { act=android.intent.action.MAIN }"
+        ));
+        assert!(!am_start_reported_error(
+            "Starting: Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.app/.MainActivity }"
+        ));
+        // The app already in front is a successful launch.
+        assert!(!am_start_reported_error(
+            "Starting: Intent { cmp=com.example.app/.MainActivity }\nWarning: Activity not started, its current task has been brought to the front"
+        ));
+        // An activity whose name contains "Error" is not an error.
+        assert!(!am_start_reported_error(
+            "Starting: Intent { cmp=com.example.app/.ErrorReportActivity }"
+        ));
+    }
+
+    #[tokio::test]
+    async fn launcher_activity_cache_is_per_package() {
+        let svc = test_service();
+        svc.android_launcher_activity
+            .write()
+            .await
+            .insert("com.example.app".to_string(), ".MainActivity".to_string());
+        assert_eq!(
+            svc.cached_launcher_activity("com.example.app")
+                .await
+                .as_deref(),
+            Some(".MainActivity")
+        );
+        // launchApp("com.other") must not start the target's activity in it.
+        assert_eq!(svc.cached_launcher_activity("com.other").await, None);
     }
 
     #[test]

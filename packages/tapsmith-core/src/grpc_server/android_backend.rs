@@ -1116,7 +1116,15 @@ impl DeviceBackend for AndroidBackend<'_> {
                     .await
                     .ok()
                     .flatten();
-                *self.svc.android_launcher_activity.write().await = activity;
+                let mut cache = self.svc.android_launcher_activity.write().await;
+                match activity {
+                    Some(activity) => {
+                        cache.insert(target_package.to_string(), activity);
+                    }
+                    None => {
+                        cache.remove(target_package);
+                    }
+                }
             }
         }
     }
