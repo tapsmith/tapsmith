@@ -2044,17 +2044,18 @@ impl TapsmithServiceImpl {
                         .finish_launch(request_id, wait_for_idle, idle_timeout_ms)
                         .await;
                 }
-                Ok(out) => {
+                refused => {
                     // A stale entry (the app was reinstalled with another
                     // launcher activity) is resolved again next time.
                     self.android_launcher_activity
                         .write()
                         .await
                         .remove(package_name);
-                    warn!(%activity, output = %out.trim(), "launcher intent refused; falling back to monkey");
-                }
-                Err(e) => {
-                    warn!(%activity, error = %e, "launcher intent failed; falling back to monkey");
+                    let reason = match refused {
+                        Ok(out) => out.trim().to_string(),
+                        Err(e) => e.to_string(),
+                    };
+                    warn!(%activity, %reason, "launcher intent refused; falling back to monkey");
                 }
             }
         }
