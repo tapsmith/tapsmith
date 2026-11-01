@@ -566,6 +566,24 @@ class OcclusionAnalyzerTest {
     }
 
     @Test
+    fun `with no drawing order, a row-sized background laid under a button is not a sticky row`() {
+        // Compose before 1.9: Box { Image; Button(Modifier.matchParentSize()) },
+        // every drawing order 0. The backdrop is the button's own size.
+        val image = FakeNode(Box(0, 700, 1080, 850), name = "image \"Banner\"")
+        val button = FakeNode(Box(0, 700, 1080, 850), takesTouches = true)
+        root(list(image, button))
+        assertClearAt(analyze(button), 540, 775)
+    }
+
+    @Test
+    fun `with no drawing order, a backdrop enclosing a button within twice its height is not a sticky row`() {
+        val image = FakeNode(Box(0, 680, 1080, 950), name = "image \"Banner\"")
+        val button = FakeNode(Box(40, 700, 1040, 850), takesTouches = true)
+        root(list(image, button))
+        assertClearAt(analyze(button), 540, 775)
+    }
+
+    @Test
     fun `with no drawing order, a sticky header is not covered by the row scrolled under it`() {
         val header = FakeNode(Box(0, 300, 1080, 450), takesTouches = true, name = "header")
         val row = FakeNode(Box(0, 320, 1080, 470), name = "row 5")

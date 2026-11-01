@@ -469,11 +469,13 @@ object OcclusionAnalyzer {
      *  as the target's visible part (a grid's neighbouring cell is not), and
      *  painted over the target's row — or, with no drawing order to tell (a
      *  list reporting 0 for every child, which orders a sticky header before
-     *  the rows it is drawn over), listed before it and row-sized (no taller
-     *  than twice the target's row). A background drawn behind the row (a
-     *  decor view declared first in a ScrollView's content, an image under a
-     *  button) is not a cover, and nor is a row scrolled under a target that
-     *  is itself the sticky header. */
+     *  the rows it is drawn over), listed before it, row-sized (no taller
+     *  than twice the target's row) and not enclosing the target's row. A
+     *  background drawn behind the row (a decor view declared first in a
+     *  ScrollView's content, an image under a button, even one the button's
+     *  own size) is not a cover, and nor is a row scrolled under a target that
+     *  is itself the sticky header. Unordered, a header that happens to hide
+     *  a whole row is missed too, and the row is touched as before. */
     private fun stickyRow(
         content: HitNode,
         branch: HitNode,
@@ -489,7 +491,9 @@ object OcclusionAnalyzer {
                 reader.child(content, i)?.takeIf {
                     val drawnOver =
                         if (it.drawingOrder == 0 && branch.drawingOrder == 0) {
-                            i < branchIndex && it.bounds.height <= 2 * branch.bounds.height
+                            i < branchIndex &&
+                                it.bounds.height <= 2 * branch.bounds.height &&
+                                !it.bounds.contains(branch.bounds)
                         } else {
                             compareKeys(drawKey(it, i), drawKey(branch, branchIndex)) > 0
                         }
