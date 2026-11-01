@@ -6022,9 +6022,12 @@ fn android_launcher_intent_cmd(package_name: &str, activity: &str) -> String {
     )
 }
 
-/// `am start` exits 0 when it starts nothing, and says so on a line of its
-/// own that starts with `Error` ("Error type 3", "Error: Activity class …
-/// does not exist"). A "Warning: … brought to the front" is a launch.
+/// Whether `am start`'s output reports that it started nothing: a line of
+/// its own that starts with `Error` ("Error type 3", "Error: Activity class
+/// … does not exist"). Current Android writes those to stderr and exits 1,
+/// which `adb::shell` already returns as an error; an adb that merges stderr
+/// into stdout and drops the exit status (no shell protocol v2) leaves them
+/// here. A "Warning: … brought to the front" is a launch.
 fn am_start_reported_error(output: &str) -> bool {
     output
         .lines()
