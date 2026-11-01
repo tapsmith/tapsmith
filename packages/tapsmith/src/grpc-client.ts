@@ -152,7 +152,7 @@ export interface GetAppStateResponse {
   state: string;
 }
 
-/** `WaitForAppReady`: whether the app drew real content in time (PILOT-976). */
+/** `WaitForAppReady`: whether the app drew real content in time. */
 export interface WaitForAppReadyResponse {
   requestId: string;
   ready: boolean;
@@ -1011,9 +1011,8 @@ export class TapsmithGrpcClient {
 
   /**
    * Wait up to `timeoutMs` for a just-(re)launched app to draw real content:
-   * a node of the package with text or a content description (Android;
-   * PILOT-976). Rejects with gRPC `UNIMPLEMENTED` from a daemon that
-   * predates it.
+   * a node of the package with text or a content description (Android).
+   * Rejects with gRPC `UNIMPLEMENTED` from a daemon that predates it.
    */
   async waitForAppReady(packageName: string, timeoutMs: number, deadlineMs?: number): Promise<WaitForAppReadyResponse> {
     return this.call<WaitForAppReadyResponse>('waitForAppReady', {
