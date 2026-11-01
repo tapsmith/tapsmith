@@ -487,6 +487,21 @@ class GestureInjectorTest {
     }
 
     @Test
+    fun `a drag waits for a display frame only until it has started the scroll, then paces its moves by the clock`() {
+        // Every move is synchronous, so the app has handled it (on its next
+        // frame) before the next one goes; a frame wait on top of that made
+        // each step two frames long. Only the press and the first two moves,
+        // which take the touch past slop, also wait for a frame.
+        val sink = FakeSink(clock)
+        injector(sink).stepDrag(0, 1000, 0, 0, steps = 20)
+        assertEquals(3, clock.frames)
+        val moveTimes = sink.touches.filter { it.second.action == TouchAction.MOVE }.map { it.first }
+        val gaps = moveTimes.zipWithNext { a, b -> b - a }
+        assertTrue("gaps $gaps", gaps.all { it >= 16 })
+        assertTrue("gaps $gaps", gaps.drop(2).all { it == 16L })
+    }
+
+    @Test
     fun `a drag's rest is timed by the clock, however long a frame takes`() {
         val slowFrames =
             object : GestureClock {
@@ -524,6 +539,7 @@ class GestureInjectorTest {
 
                 override fun sleep(ms: Long) {
                     clock.nowMs += ms
+                    if (clock.nowMs >= 1_100L) token.cancel("the daemon closed the connection")
                 }
 
                 override fun waitForNextFrame() {

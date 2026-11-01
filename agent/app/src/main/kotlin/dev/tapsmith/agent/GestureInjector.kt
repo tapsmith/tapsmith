@@ -268,6 +268,15 @@ class GestureInjector(
          */
         const val DRAG_REST_MS = 120L
 
+        /**
+         * How many of a [stepDrag]'s moves wait for a display frame, as a step
+         * swipe's do: the ones that take the touch past slop, so the app has
+         * drawn the start of the scroll before the drag goes on. Speedrun
+         * found a parent never starts scrolling without that for the two
+         * moves past slop.
+         */
+        const val DRAG_FRAME_MOVES = 2
+
         /** Key codes that set modifier meta state while they are held, as UiAutomator sends them. */
         private val KEY_MODIFIERS =
             mapOf(
@@ -399,8 +408,14 @@ class GestureInjector(
      * so nothing flings and the caller can read the screen as soon as this
      * returns. It still lifts rather than cancels, so a pager or a React
      * Native `pagingEnabled` list snaps to a page, and React Native sees the
-     * drag end. The moves stay synchronous, one a frame, so the app sees the
-     * first moves past touch slop and starts scrolling.
+     * drag end.
+     *
+     * Every move is synchronous: it returns once the app has handled it, which
+     * is on the app's next frame. The press and the first [DRAG_FRAME_MOVES]
+     * moves, which take the touch past slop and start the scroll, also wait
+     * for a display frame, as [stepSwipe]'s do. After that a frame wait on top
+     * of the app's would make each step two frames long, so the rest are only
+     * spaced a frame interval apart by the clock.
      *
      * Refusals are handled as [stepSwipe] and [click] handle them: a refused
      * event stops the moves, the pointer is still released, and a refused
@@ -429,6 +444,20 @@ class GestureInjector(
                 throw e
             }
         }
+        val frameMs = 2 * tickMs().coerceAtLeast(1)
+        var moves = 0
+
+        fun move(): Boolean {
+            val sentAt = clock.now()
+            val moved = single(TouchAction.MOVE, downTime, x, y, sync = true)
+            if (++moves <= DRAG_FRAME_MOVES) {
+                clock.waitForNextFrame()
+            } else {
+                val left = sentAt + frameMs - clock.now()
+                if (left > 0) clock.sleep(left)
+            }
+            return moved
+        }
         var ok = single(TouchAction.DOWN, downTime, x, y, sync = true)
         clock.waitForNextFrame()
         var restFrom = 0L
@@ -442,8 +471,7 @@ class GestureInjector(
                 y = y2
                 restFrom = clock.now()
             }
-            ok = single(TouchAction.MOVE, downTime, x, y, sync = true)
-            clock.waitForNextFrame()
+            ok = move()
         }
         if (ok) {
             // Timed by the clock from the first sample at the end, so a slow
@@ -451,8 +479,7 @@ class GestureInjector(
             // velocity tracker's window at the lift is at the end.
             while (ok && clock.now() - restFrom < DRAG_REST_MS) {
                 checkpoint()
-                ok = single(TouchAction.MOVE, downTime, x2, y2, sync = true)
-                clock.waitForNextFrame()
+                ok = move()
             }
         }
         val upOk = single(TouchAction.UP, downTime, x, y, sync = true)
