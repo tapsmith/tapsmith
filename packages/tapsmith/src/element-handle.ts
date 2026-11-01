@@ -3752,15 +3752,15 @@ export class ElementHandle {
    * `"down"`, which reveals what is below.
    *
    * @param options.direction - The way the view scrolls, as {@link scroll} takes it: `"down"` reveals what is below, `"up"` what is above, `"left"` and `"right"` likewise (the finger swipes the opposite way). Default: chosen from the element's position, else `"down"`.
-   * On Android each swipe is a drag that leaves no momentum, so it looks
-   * again as soon as the drag ends; on iOS it watches the list while the
-   * momentum carries it. Once the element shows, it waits for the list to
+   * On Android each vertical swipe is a drag that leaves no momentum, so it
+   * looks again as soon as the drag ends; sideways on Android, and on iOS, it
+   * watches the list while the momentum carries it. Once the element shows, it waits for the list to
    * stop. If the momentum
    * carried the element off screen, it scrolls back for it, and if an edge of
    * the scroll container cuts it, it moves it inside, with shorter, slower
    * swipes that count toward `maxScrolls`.
    *
-   * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`, or `10` on Android, where each swipe is a drag that moves the list less than a fling.
+   * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`, or `10` on Android, where each vertical swipe is a drag that moves the list less than a fling.
    * @param options.speed - Swipe speed in pixels/second. Default `2000`.
    */
   async scrollIntoView(options?: {
@@ -3770,8 +3770,8 @@ export class ElementHandle {
   }): Promise<void> {
     checkOptions('scrollIntoView()', options, ['direction', 'maxScrolls', 'speed']);
     const explicitDirection = scrollDirectionOption(options?.direction);
-    // On Android each swipe is a drag that moves the list about its own
-    // length and stops (PILOT-973); a fling carried it further. So the
+    // On Android each vertical swipe is a drag that moves the list about its
+    // own length and stops (PILOT-973); a fling carried it further. So the
     // default budget there is larger, to reach as far as the flings did.
     const maxScrolls = options?.maxScrolls ?? (this._options.platform === 'android' ? 10 : 5);
     const speed = options?.speed ?? 2000;
@@ -3908,16 +3908,20 @@ export class ElementHandle {
       // SCROLL_SETTLE_MS has passed, so the settle waits at least as long
       // after a swipe as it did when a fixed sleep came first.
       let settleExtraTicks = 0;
-      // On Android every swipe is a drag that leaves no momentum (PILOT-973):
-      // the agent rests the finger before it lifts and returns as soon as it
-      // has, so the list is already where it stops and the next read can come
-      // at once. iOS swipes still fling (PILOT-886), so they are watched.
-      const drags = this._options.platform === 'android';
+      // On Android a vertical swipe is a drag that leaves no momentum
+      // (PILOT-973): the agent rests the finger before it lifts and returns as
+      // soon as it has, so the list is already where it stops and the next
+      // read can come at once. A sideways swipe still flings, so a pager turns
+      // its page (an androidx ViewPager released slowly turns only past 0.6 of
+      // a page, which a 0.6 drag never reaches), and is watched like an iOS
+      // swipe, which always flings (PILOT-886).
+      const android = this._options.platform === 'android';
       const swipe = async (): Promise<void> => {
         settleExtraTicks = 0;
         const opts = gentle
           ? { speed: Math.min(speed, SCROLL_GENTLE_MAX_SPEED), distance: SCROLL_GENTLE_DISTANCE }
           : { speed, distance: 0.6 };
+        const drags = android && (direction === 'up' || direction === 'down');
         const swipeRes = await this._client.swipe(OPPOSITE_DIRECTION[direction], {
           ...opts,
           ...(region ? { region } : {}),

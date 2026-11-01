@@ -6391,6 +6391,26 @@ describe('scrollIntoView() drags without momentum on Android (PILOT-973)', () =>
     expect(swipe).toHaveBeenCalledTimes(3);
   });
 
+  it('flings sideways and watches the list, so a pager that turns only on a fling still turns', async () => {
+    // An androidx ViewPager turns a page on a slow release only past 0.6 of a
+    // page, which a 0.6 drag minus touch slop never reaches; a fling turns it.
+    const card = (left: number) =>
+      makeElementInfo({ text: 'Item 25', visible: true, bounds: { left, top: 600, right: left + 400, bottom: 900 } });
+    const pagerScreen = (n: number) =>
+      `<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+      `<node class="androidx.viewpager.widget.ViewPager" scrollable="true" text="${n}" bounds="[0,500][1080,1000]"/></node></hierarchy>`;
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: scripted([null, null, ...afterSwipe(card(300))]),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([pagerScreen(0), pagerScreen(1)])),
+    });
+
+    await handle(client, 'android').scrollIntoView({ direction: 'right' });
+
+    expect(swipe.mock.calls).toEqual([['left', { speed: 2000, distance: 0.6, region: { left: 0, top: 500, right: 1080, bottom: 1000 } }]]);
+  });
+
   it('still waits for a row that keeps moving after a drag to stop before it returns', async () => {
     // A pager snapping to its page after the lift: the row moves for three
     // reads, then holds for two.
