@@ -339,7 +339,7 @@ message SwipeRequest {
   // End without momentum: the finger rests at the end before it lifts, so the
   // content stops where the finger does, and the swipe returns as soon as it
   // lifts instead of waiting for a fling to settle. scrollIntoView() sends it
-  // on Android (PILOT-973); the iOS agent ignores it. Only for a region or
+  // for vertical swipes on Android (PILOT-973); the iOS agent ignores it. Only for a region or
   // screen swipe.
   bool drag = 8;
 }

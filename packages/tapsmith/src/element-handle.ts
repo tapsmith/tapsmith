@@ -93,9 +93,9 @@ const SCROLL_END_CONFIRM_IDLE_MS = 1000;
  *  past where it should stop (PILOT-935), and to nudge an element its list's
  *  edge cuts: a shorter one, and slow enough to leave little momentum. The
  *  iOS agent turns a speed of 1000 or less into an 0.8 s drag instead of an
- *  0.3 s fling; on Android every scrollIntoView() swipe is a drag that leaves
- *  no momentum (PILOT-973), and at 1000 it is about as fast per pixel as the
- *  default. */
+ *  0.3 s fling; on Android a vertical scrollIntoView() swipe is a drag that
+ *  leaves no momentum (PILOT-973; a sideways one still flings), and at 1000 it
+ *  is about as fast per pixel as the default. */
 const SCROLL_GENTLE_DISTANCE = 0.3;
 /** How often scrollIntoView() looks for its element while a swipe's momentum
  *  is still moving the list (PILOT-935). One default fling moves a Flutter
