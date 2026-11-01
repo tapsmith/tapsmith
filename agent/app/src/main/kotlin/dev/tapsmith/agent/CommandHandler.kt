@@ -402,6 +402,9 @@ class CommandHandler(
                     val direction = params.getString("direction")
                     val speed = params.optInt("speed", 5000)
                     val distance = params.optDouble("distance", 0.5)
+                    // A drag that leaves no fling (scrollIntoView, PILOT-973);
+                    // only for a region or screen swipe.
+                    val drag = params.optBoolean("drag", false)
                     val elementId = params.optString("elementId", null)
                     if (elementId != null) {
                         actionExecutor.swipe(elementFinder.getElement(elementId), direction, speed, distance)
@@ -418,9 +421,9 @@ class CommandHandler(
                                 r.getInt("right"),
                                 r.getInt("bottom"),
                             )
-                        actionExecutor.swipeRegion(region, direction, speed, distance)
+                        actionExecutor.swipeRegion(region, direction, speed, distance, drag)
                     } else {
-                        actionExecutor.swipeScreen(direction, speed, distance)
+                        actionExecutor.swipeScreen(direction, speed, distance, drag)
                     }
                 }
                 JSONObject().put("success", true)

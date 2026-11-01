@@ -667,21 +667,33 @@ class ActionExecutor(
         direction: String,
         speed: Int = 5000,
         distance: Double = 0.5,
-    ) = swipeRegion(HierarchyAttributes.Box(0, 0, device.displayWidth, device.displayHeight), direction, speed, distance)
+        drag: Boolean = false,
+    ) = swipeRegion(HierarchyAttributes.Box(0, 0, device.displayWidth, device.displayHeight), direction, speed, distance, drag)
 
     /**
      * Swipe inside [region] (screen pixels) in a given direction, through its
      * centre ([SwipeGeometry]). `scrollIntoView()` sends the scroll container
      * it picked (PILOT-934).
+     *
+     * With [drag] (`scrollIntoView()`, PILOT-973) the finger rests at the end
+     * before it lifts ([GestureInjector.stepDrag]), so nothing flings, and it
+     * returns as soon as the finger lifts: there is no fling to settle, and
+     * the caller reads the screen next. Otherwise the swipe flings and waits
+     * for the fling to come to rest ([settleAfterSwipe]).
      */
     internal fun swipeRegion(
         region: HierarchyAttributes.Box,
         direction: String,
         speed: Int = 5000,
         distance: Double = 0.5,
+        drag: Boolean = false,
     ) {
         val p = SwipeGeometry.points(region, direction, distance)
         val steps = (speed / 100).coerceIn(5, 100)
+        if (drag) {
+            input.drag(p.fromX, p.fromY, p.toX, p.toY, steps)
+            return
+        }
         input.swipe(p.fromX, p.fromY, p.toX, p.toY, steps)
         settleAfterSwipe(vertical = p.fromX == p.toX)
     }

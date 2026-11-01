@@ -259,6 +259,15 @@ class GestureInjector(
         /** How often a long hold checks whether its command was cancelled. */
         const val HOLD_CHECK_MS = 50L
 
+        /**
+         * How long a [stepDrag] rests at its end before it lifts (PILOT-973).
+         * Android's VelocityTracker reads the last 100 ms of samples (its
+         * horizon), so once the pointer has sat still for longer than that,
+         * the velocity at the lift is zero and nothing flings. Speedrun rested
+         * 60 ms and still saw one fling in 159 drags.
+         */
+        const val DRAG_REST_MS = 120L
+
         /** Key codes that set modifier meta state while they are held, as UiAutomator sends them. */
         private val KEY_MODIFIERS =
             mapOf(
@@ -380,6 +389,74 @@ class GestureInjector(
             clock.waitForNextFrame()
         }
         val upOk = single(TouchAction.UP, downTime, x2, y2, sync = true)
+        return ok && upOk
+    }
+
+    /**
+     * A drag that leaves no momentum (PILOT-973): [stepSwipe]'s moves, then
+     * the pointer rests at the end, sending a stationary MOVE each frame, for
+     * [DRAG_REST_MS] before it lifts. The content stops where the finger does,
+     * so nothing flings and the caller can read the screen as soon as this
+     * returns. It still lifts rather than cancels, so a pager or a React
+     * Native `pagingEnabled` list snaps to a page, and React Native sees the
+     * drag end. The moves stay synchronous, one a frame, so the app sees the
+     * first moves past touch slop and starts scrolling.
+     *
+     * Refusals are handled as [stepSwipe] and [click] handle them: a refused
+     * event stops the moves, the pointer is still released, and a refused
+     * release is cancelled. A cancelled command (checked every frame) cancels
+     * the pointer instead of lifting it and throws [CommandCancelledException].
+     */
+    fun stepDrag(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        steps: Int,
+    ): Boolean {
+        val n = steps.coerceAtLeast(1)
+        val xStep = (x2 - x1).toDouble() / n
+        val yStep = (y2 - y1).toDouble() / n
+        val downTime = clock.now()
+        var x = x1
+        var y = y1
+
+        fun checkpoint() {
+            try {
+                CommandCancellation.checkpoint()
+            } catch (e: CommandCancelledException) {
+                single(TouchAction.CANCEL, downTime, x, y, sync = true)
+                throw e
+            }
+        }
+        var ok = single(TouchAction.DOWN, downTime, x, y, sync = true)
+        clock.waitForNextFrame()
+        var restFrom = 0L
+        for (i in 1..n) {
+            if (!ok) break
+            checkpoint()
+            x = x1 + (xStep * i).toInt()
+            y = y1 + (yStep * i).toInt()
+            if (i == n) {
+                x = x2
+                y = y2
+                restFrom = clock.now()
+            }
+            ok = single(TouchAction.MOVE, downTime, x, y, sync = true)
+            clock.waitForNextFrame()
+        }
+        if (ok) {
+            // Timed by the clock from the first sample at the end, so a slow
+            // frame does not stretch the rest, and every sample in the
+            // velocity tracker's window at the lift is at the end.
+            while (ok && clock.now() - restFrom < DRAG_REST_MS) {
+                checkpoint()
+                ok = single(TouchAction.MOVE, downTime, x2, y2, sync = true)
+                clock.waitForNextFrame()
+            }
+        }
+        val upOk = single(TouchAction.UP, downTime, x, y, sync = true)
+        if (!upOk) single(TouchAction.CANCEL, downTime, x, y, sync = true)
         return ok && upOk
     }
 

@@ -437,6 +437,124 @@ class GestureInjectorTest {
         assertEquals(listOf(TouchAction.DOWN, TouchAction.UP), sink.actions())
     }
 
+    // ─── stepDrag (scrollIntoView's drags, PILOT-973) ───
+
+    @Test
+    fun `a drag moves along the line one frame apart, then rests at its end before it lifts`() {
+        val sink = FakeSink(clock)
+        assertTrue(injector(sink).stepDrag(0, 0, 40, 80, steps = 4))
+        val actions = sink.actions()
+        assertEquals(TouchAction.DOWN, actions.first())
+        assertEquals(TouchAction.UP, actions.last())
+        assertTrue(actions.subList(1, actions.size - 1).all { it == TouchAction.MOVE })
+        val points =
+            sink.touches.map {
+                it.second.pointers
+                    .single()
+                    .let { p -> p.x to p.y }
+            }
+        assertEquals(listOf(0 to 0, 10 to 20, 20 to 40, 30 to 60, 40 to 80), points.take(5))
+        assertTrue(points.drop(4).all { it == (40 to 80) })
+        assertTrue(sink.touches.all { it.second.sync })
+        assertEquals(
+            1,
+            sink.touches
+                .map { it.second.downTime }
+                .toSet()
+                .size,
+        )
+    }
+
+    @Test
+    fun `a drag's last velocity window holds only stationary samples, so nothing flings`() {
+        // VelocityTracker reads the samples of the last 100 ms (its horizon):
+        // when all of them sit at one point, the velocity at the lift is zero.
+        val sink = FakeSink(clock)
+        injector(sink).stepDrag(0, 1000, 0, 200, steps = 20)
+        val upAt = sink.touches.last().first
+        val reachedEnd =
+            sink.touches
+                .first {
+                    it.second.pointers
+                        .single()
+                        .y == 200
+                }.first
+        assertTrue("rested ${upAt - reachedEnd} ms", upAt - reachedEnd >= GestureInjector.DRAG_REST_MS)
+        assertTrue(GestureInjector.DRAG_REST_MS > 100)
+        val window = sink.touches.filter { it.first >= upAt - 100 && it.second.action == TouchAction.MOVE }
+        assertTrue("stationary samples in the window: ${window.size}", window.size >= 3)
+        assertTrue(window.all { it.second.pointers.single() == PointerState(0, 0, 200) })
+    }
+
+    @Test
+    fun `a drag's rest is timed by the clock, however long a frame takes`() {
+        val slowFrames =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 45
+                }
+            }
+        val sink = FakeSink(clock)
+        GestureInjector(sink, slowFrames) { 8L }.stepDrag(0, 0, 0, 100, steps = 2)
+        val upAt = sink.touches.last().first
+        val reachedEnd =
+            sink.touches
+                .first {
+                    it.second.pointers
+                        .single()
+                        .y == 100
+                }.first
+        assertTrue(upAt - reachedEnd >= GestureInjector.DRAG_REST_MS)
+        assertTrue("rested ${upAt - reachedEnd} ms", upAt - reachedEnd < GestureInjector.DRAG_REST_MS + 45)
+    }
+
+    @Test
+    fun `a drag stops when its command is cancelled, cancelling its pointer instead of lifting it`() {
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                    if (clock.nowMs >= 1_100L) token.cancel("the daemon closed the connection")
+                }
+            }
+        try {
+            CommandCancellation.runWith(token) {
+                GestureInjector(sink, cancelling) { 8L }.stepDrag(0, 0, 0, 500, steps = 20)
+            }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+    }
+
+    @Test
+    fun `a refused move stops a drag's moves but still lifts, and a refused lift is cancelled`() {
+        var moves = 0
+        val refusedMove = FakeSink(clock, refuse = { it.action == TouchAction.MOVE && ++moves == 2 })
+        assertFalse(injector(refusedMove).stepDrag(0, 0, 50, 0, steps = 5))
+        assertEquals(listOf(TouchAction.DOWN, TouchAction.MOVE, TouchAction.MOVE, TouchAction.UP), refusedMove.actions())
+
+        val refusedUp = FakeSink(clock, refuse = { it.action == TouchAction.UP })
+        assertFalse(injector(refusedUp).stepDrag(0, 0, 50, 0, steps = 5))
+        assertEquals(listOf(TouchAction.UP, TouchAction.CANCEL), refusedUp.actions().takeLast(2))
+    }
+
     // ─── perform (UiObject2 gestures) ───
 
     @Test
