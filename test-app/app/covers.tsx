@@ -28,8 +28,10 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - Every row shares the testID "covers-row", as list rows often do, so a
 //   row is told apart by its name alone.
 // - A "Note" text field sits in the list after Row 12. "Put note under
-//   footer" scrolls it to the bottom of the list, under the footer bar, so
-//   typing into it needs its focusing tap scrolled clear first.
+//   header" scrolls it to the top of the list, under the sticky header, so
+//   typing into it needs its focusing tap scrolled clear first. (Not under
+//   the footer: once focused, the field would sit under its own keyboard,
+//   and Android hides a field its keyboard covers from the tree.)
 
 const ROW_HEIGHT = 60
 const ROWS = Array.from({ length: 30 }, (_, i) => `Row ${i + 1}`)
@@ -117,12 +119,12 @@ export default function CoversScreen() {
         <TouchableOpacity
           style={styles.smallButton}
           onPress={() =>
-            list.current?.scrollToIndex({ index: NOTE_INDEX, viewPosition: 1, animated: false })
+            list.current?.scrollToIndex({ index: NOTE_INDEX, viewPosition: 0, animated: false })
           }
           accessibilityRole="button"
-          accessibilityLabel="Put note under footer"
+          accessibilityLabel="Put note under header"
         >
-          <Text style={styles.smallButtonText}>Note under footer</Text>
+          <Text style={styles.smallButtonText}>Note under header</Text>
         </TouchableOpacity>
       </View>
 

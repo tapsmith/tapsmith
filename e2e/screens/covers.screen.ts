@@ -9,7 +9,7 @@ export class CoversScreen {
   get keepLoadingButton() { return this.device.getByRole("button", { name: "Keep loading" }) }
   get stopLoadingButton() { return this.device.getByRole("button", { name: "Stop loading" }) }
   get rowUnderHeaderButton() { return this.device.getByRole("button", { name: "Put row 5 under header" }) }
-  get noteUnderFooterButton() { return this.device.getByRole("button", { name: "Put note under footer" }) }
+  get noteUnderHeaderButton() { return this.device.getByRole("button", { name: "Put note under header" }) }
   /** The text field in the list, after Row 12. */
   get note() { return this.device.getByRole("textfield", { name: "Note" }) }
 
