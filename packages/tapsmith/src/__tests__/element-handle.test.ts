@@ -6293,6 +6293,97 @@ describe('scrollIntoView() swipes inside the scroll container (PILOT-934)', () =
   });
 });
 
+describe('scrollIntoView() drags without momentum on Android (PILOT-973)', () => {
+  // An Android screen: a header, then a list, `n` making each dump differ.
+  const listScreen = (n: number) =>
+    `<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+    `<node class="android.widget.TextView" text="30 items ${n}" bounds="[0,63][1080,563]"/>` +
+    `<node class="android.widget.ScrollView" scrollable="true" bounds="[0,563][1080,2400]"/></node></hierarchy>`;
+  const listRegion = { left: 0, top: 563, right: 1080, bottom: 2400 };
+  const row = (top: number) =>
+    makeElementInfo({ text: 'Item 25', visible: true, bounds: { left: 0, top, right: 1080, bottom: top + 150 } });
+  /** findElements answers from `script` in order (null = not in the tree), repeating the last entry. */
+  function scripted(script: (ElementInfo | null)[], log?: number[]) {
+    let i = 0;
+    return vi.fn(async () => {
+      log?.push(performance.now());
+      const el = script[Math.min(i++, script.length - 1)];
+      return makeFindElementsResponse(el ? [el] : []);
+    });
+  }
+  const handle = (client: TapsmithGrpcClient, platform?: 'android' | 'ios') =>
+    new ElementHandle(client, _text('Item 25'), 5000, (platform ? { platform } : {}) as never);
+
+  it('asks the Android agent for drags, in the list that holds the element', async () => {
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      findElements: scripted([null, null, null, row(1000)]),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1), listScreen(2)])),
+    });
+
+    await handle(client, 'android').scrollIntoView();
+
+    expect(swipe.mock.calls).toEqual([
+      ['up', { speed: 2000, distance: 0.6, region: listRegion, drag: true }],
+      ['up', { speed: 2000, distance: 0.6, region: listRegion, drag: true }],
+    ]);
+  });
+
+  it('leaves iOS swipes, and swipes on an unknown platform, as they were', async () => {
+    for (const platform of ['ios', undefined] as const) {
+      const swipe = vi.fn(async () => successResponse());
+      const client = makeMockClient({
+        findElements: scripted([null, null, ...afterSwipe(row(1000))]),
+        swipe,
+        getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1)])),
+      });
+
+      await handle(client, platform).scrollIntoView();
+
+      expect(swipe.mock.calls).toEqual([['up', { speed: 2000, distance: 0.6, region: listRegion }]]);
+    }
+  });
+
+  it('reads the screen again as soon as a drag returns: there is no momentum to watch', async () => {
+    const reads: number[] = [];
+    let swipedAt = 0;
+    const swipe = vi.fn(async () => {
+      swipedAt = performance.now();
+      return successResponse();
+    });
+    // Probe and confirmation miss; after the drag a miss, then after the
+    // second the row, then two equal reads that settle it.
+    const client = makeMockClient({
+      findElements: scripted([null, null, null, row(1000)], reads),
+      swipe,
+      getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1), listScreen(2)])),
+    });
+
+    await handle(client, 'android').scrollIntoView();
+
+    // Two before the first drag, one after each drag, two to settle: no watch reads.
+    expect(reads).toHaveLength(2 + 1 + 1 + 2);
+    expect(swipe).toHaveBeenCalledTimes(2);
+    // The read after the last drag comes straight away, not after the 100 ms
+    // watch interval.
+    expect(reads[4 - 1] - swipedAt).toBeLessThan(50);
+  });
+
+  it('still waits for a row that keeps moving after a drag to stop before it returns', async () => {
+    // A pager snapping to its page after the lift: the row moves for three
+    // reads, then holds for two.
+    const findElements = scripted([null, null, row(1000), row(900), row(800), row(700), row(700), row(700)]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1)])) });
+
+    await handle(client, 'android').scrollIntoView();
+
+    expect(findElements).toHaveBeenCalledTimes(8);
+    expect(swipe).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('scrollIntoView() checks the element is still on screen once the list has stopped (PILOT-935)', () => {
   // A Flutter ListView on iOS: the scroll view under a 118 pt app bar. Its
   // rows' frames are clipped to the viewport, so a row sliding off the top

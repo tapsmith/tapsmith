@@ -367,6 +367,12 @@ export interface SwipeOptions {
   timeoutMs?: number;
   /** Swipe inside these screen bounds instead of across the whole screen. */
   region?: { left: number; top: number; right: number; bottom: number };
+  /**
+   * End without momentum and return as soon as the finger lifts:
+   * the Android agent rests at the end before it lifts, so nothing flings.
+   * Only for a region or screen swipe; the iOS agent ignores it.
+   */
+  drag?: boolean;
 }
 
 export interface ScrollOptions {
@@ -694,6 +700,7 @@ export class TapsmithGrpcClient {
     };
     if (options?.timeoutMs != null) request.timeoutMs = options.timeoutMs;
     if (options?.region) request.region = options.region;
+    if (options?.drag) request.drag = true;
     return this.call<ActionResponse>('swipe', request);
   }
 
