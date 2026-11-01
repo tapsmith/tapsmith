@@ -80,6 +80,15 @@ describe("Covers", () => {
       }
     })
 
+    test("type() into a field under a footer bar scrolls it clear for its focusing tap", async ({ coversScreen }) => {
+      await coversScreen.noteUnderFooterButton.tap()
+
+      await coversScreen.note.type("hello")
+
+      await expect(coversScreen.note).toHaveValue("hello")
+      await expect(coversScreen.counts).toHaveText(counts({}))
+    })
+
     test("tap() on a row under a sticky header scrolls it clear and taps it", async ({ coversScreen }) => {
       await coversScreen.rowUnderHeaderButton.tap()
 

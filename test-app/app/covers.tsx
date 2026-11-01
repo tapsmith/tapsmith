@@ -1,5 +1,13 @@
 import { useEffect, useRef, useState } from "react"
-import { ActivityIndicator, FlatList, StyleSheet, Text, TouchableOpacity, View } from "react-native"
+import {
+  ActivityIndicator,
+  FlatList,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from "react-native"
 import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 
 // Covers that are not interactive controls (PILOT-979) and fixed chrome a
@@ -19,14 +27,20 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 //   scroll, so there it is waited out instead of scrolled clear.
 // - Every row shares the testID "covers-row", as list rows often do, so a
 //   row is told apart by its name alone.
+// - A "Note" text field sits in the list after Row 12. "Put note under
+//   footer" scrolls it to the bottom of the list, under the footer bar, so
+//   typing into it needs its focusing tap scrolled clear first.
 
 const ROW_HEIGHT = 60
 const ROWS = Array.from({ length: 30 }, (_, i) => `Row ${i + 1}`)
-type Item = { key: string; header: boolean }
+type Item = { key: string; header?: boolean; note?: boolean }
 const ITEMS: Item[] = [
   { key: "Sticky header", header: true },
-  ...ROWS.map((key) => ({ key, header: false })),
+  ...ROWS.slice(0, 12).map((key) => ({ key })),
+  { key: "Note", note: true },
+  ...ROWS.slice(12).map((key) => ({ key })),
 ]
+const NOTE_INDEX = ITEMS.findIndex((item) => item.note)
 
 export default function CoversScreen() {
   const [loading, setLoading] = useState(false)
@@ -37,6 +51,7 @@ export default function CoversScreen() {
   const [lastAdded, setLastAdded] = useState("none")
   const [footerTaps, setFooterTaps] = useState(0)
   const [headerTaps, setHeaderTaps] = useState(0)
+  const [note, setNote] = useState("")
   const hideTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const list = useRef<FlatList<Item>>(null)
 
@@ -54,6 +69,7 @@ export default function CoversScreen() {
     setLastAdded("none")
     setFooterTaps(0)
     setHeaderTaps(0)
+    setNote("")
     list.current?.scrollToOffset({ offset: 0, animated: false })
   }, [resetEpoch])
   useEffect(() => () => clearTimeout(hideTimer.current), [])
@@ -98,6 +114,16 @@ export default function CoversScreen() {
         >
           <Text style={styles.smallButtonText}>Row 5 under header</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.smallButton}
+          onPress={() =>
+            list.current?.scrollToIndex({ index: NOTE_INDEX, viewPosition: 1, animated: false })
+          }
+          accessibilityRole="button"
+          accessibilityLabel="Put note under footer"
+        >
+          <Text style={styles.smallButtonText}>Note under footer</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.stack}>
@@ -130,7 +156,20 @@ export default function CoversScreen() {
           getItemLayout={(_, index) => ({ length: ROW_HEIGHT, offset: ROW_HEIGHT * index, index })}
           contentContainerStyle={styles.listContent}
           renderItem={({ item }) =>
-            item.header ? (
+            item.note ? (
+              <View style={styles.row}>
+                <TextInput
+                  style={styles.noteInput}
+                  value={note}
+                  onChangeText={setNote}
+                  placeholder="Write a note"
+                  autoCapitalize="none"
+                  autoCorrect={false}
+                  accessibilityLabel="Note"
+                  testID="covers-note"
+                />
+              </View>
+            ) : item.header ? (
               <View
                 style={styles.header}
                 testID="sticky-header"
@@ -260,6 +299,11 @@ const styles = StyleSheet.create({
     width: 80,
     justifyContent: "center",
     alignItems: "center",
+  },
+  noteInput: {
+    flex: 1,
+    paddingHorizontal: 16,
+    fontSize: 16,
   },
   rowText: {
     fontSize: 16,
