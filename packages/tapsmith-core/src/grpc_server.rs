@@ -1390,7 +1390,8 @@ impl TapsmithServiceImpl {
         let mut clean_started = false;
         if let Some(activity) = activity {
             let cmd = format!(
-                "am start -S -a android.intent.action.MAIN -c android.intent.category.LAUNCHER --activity-clear-task -n {package_name}/{activity}"
+                "am start -S -a android.intent.action.MAIN -c android.intent.category.LAUNCHER --activity-clear-task -n {}",
+                android_component_arg(package_name, &activity)
             );
             match adb::shell(serial, &cmd).await {
                 Ok(out) if !am_start_reported_error(&out) => {
@@ -6018,8 +6019,17 @@ fn parse_component_name(dumpsys_output: &str) -> Option<(String, String)> {
 fn android_launcher_intent_cmd(package_name: &str, activity: &str) -> String {
     format!(
         "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
-         -f 0x10200000 -n {package_name}/{activity}"
+         -f 0x10200000 -n {}",
+        android_component_arg(package_name, activity)
     )
+}
+
+/// `package/activity`, single-quoted for the device shell: a nested-class
+/// activity (`.Shell$HomeActivity`) would otherwise lose its `$…` part to
+/// variable expansion, and the start would be refused. Package and class
+/// names cannot contain a single quote.
+fn android_component_arg(package_name: &str, activity: &str) -> String {
+    format!("'{package_name}/{activity}'")
 }
 
 /// Whether `am start`'s output reports that it started nothing: a line of
@@ -8018,7 +8028,12 @@ mod tests {
         assert_eq!(
             cmd,
             "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
-             -f 0x10200000 -n com.example.app/.MainActivity"
+             -f 0x10200000 -n 'com.example.app/.MainActivity'"
+        );
+        // A nested-class activity keeps its `$` part on the device shell.
+        assert!(
+            android_launcher_intent_cmd("com.google.android.youtube", ".Shell$HomeActivity")
+                .ends_with("-n 'com.google.android.youtube/.Shell$HomeActivity'")
         );
         assert!(!cmd.contains(" -S"));
         assert!(!cmd.contains("clear-task"));
