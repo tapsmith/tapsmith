@@ -8,7 +8,7 @@ import { withActionProgress, type ActionProgressHandle } from './action-progress
 import { appDependsOnTapsmithHooks } from './init-detect.js';
 
 type SessionDevice = Pick<Device, 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
-type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
+type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy' | 'waitForAppReady'>
 
 export interface SessionPreflightContext {
   label: string
@@ -393,6 +393,10 @@ const HIERARCHY_POLL_INTERVAL_MS = 500;
 /** How long a cold-launched Android app gets to render its first content
  * before we proceed anyway (see {@link waitForAndroidAppReady}). */
 const ANDROID_APP_READY_TIMEOUT_MS = 10_000;
+/** How much longer than its budget the `waitForAppReady` RPC may take: the
+ *  daemon answers at the end of the budget at the latest, plus its own agent
+ *  round-trip slack. */
+const APP_READY_RPC_SLACK_MS = 5_000;
 const DEFAULT_SOFT_RESET_WAIT_MS = 750;
 /**
  * Buttons that dismiss a system ANR/crash dialog, in the order we prefer them.
@@ -989,14 +993,36 @@ export function androidHierarchyHasRenderedContent(hierarchyXml: string, package
  * After a cold launch on Android, `ensureSessionReady` returns as soon as
  * the app's window exists — for a React Native app that is the splash,
  * seconds before the JS bundle has rendered anything. Anything sent to the
- * app in that window (a deep link, the hooks-marker probe) is lost. Poll for
+ * app in that window (a deep link, the hooks-marker probe) is lost. Wait for
  * rendered content, bounded; a first screen with no text at all simply falls
  * through after the timeout — the tests' own auto-waiting takes over.
+ *
+ * The daemon's `WaitForAppReady` has the agent watch the live window roots
+ * (PILOT-976). A daemon that predates it, or a call that fails, gets the old
+ * polling of full hierarchy dumps for what is left of the budget.
  */
 async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<void> {
   const pkg = ctx.config.package;
   if (!pkg) return;
   const start = Date.now();
+  const noContent = (): void => {
+    process.stderr.write(
+      `[tapsmith] ${pkg} showed no rendered content ${ANDROID_APP_READY_TIMEOUT_MS}ms after launch; continuing\n`,
+    );
+  };
+  try {
+    const answer = await ctx.client.waitForAppReady(
+      pkg,
+      ANDROID_APP_READY_TIMEOUT_MS,
+      ANDROID_APP_READY_TIMEOUT_MS + APP_READY_RPC_SLACK_MS,
+    );
+    if (answer.supported) {
+      if (!answer.ready) noContent();
+      return;
+    }
+  } catch {
+    // An older daemon (UNIMPLEMENTED) or a failed call: poll dumps below.
+  }
   while (true) {
     try {
       const h = await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS);
@@ -1005,9 +1031,7 @@ async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<voi
       // Agent may still be settling after the relaunch — keep polling.
     }
     if (Date.now() - start >= ANDROID_APP_READY_TIMEOUT_MS) {
-      process.stderr.write(
-        `[tapsmith] ${pkg} showed no rendered content ${ANDROID_APP_READY_TIMEOUT_MS}ms after launch; continuing\n`,
-      );
+      noContent();
       return;
     }
     await delay(HIERARCHY_POLL_INTERVAL_MS);
