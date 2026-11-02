@@ -388,6 +388,14 @@ struct OcclusionAnalyzer {
         var row = t
         while let content = nodes[row].parent {
             if let list = listOwning(content: content) {
+                // The target inside a row stuck at the list's visible top or
+                // bottom edge is in the sticky header itself, on top of the
+                // row scrolled under it (the tree has no paint order to say
+                // so). A target that is a row is still checked.
+                let edges = clippedFrame(of: list), rowFrame = clippedFrame(of: row)
+                if row != t, abs(rowFrame.minY - edges.minY) <= 1 || abs(rowFrame.maxY - edges.maxY) <= 1 {
+                    return nil
+                }
                 for i in (content + 1)..<nodes[content].subtreeEnd where nodes[i].parent == content && i != row {
                     let node = nodes[i]
                     if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }

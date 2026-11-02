@@ -576,6 +576,22 @@ check("a sticky header in React Native's nested content view covers the row unde
 checkPoint("a row's own empty background view is not a sticky row",
            analyzer(rnNestedSticky).analyze(.init(frame: R(16, 386, 290, 60), elementType: .button, label: "Row 6", identifier: "covers-row"), isHittable: false),
            CGPoint(x: 161, y: 416))
+// The header's own content as the target: the header is the row stuck at the
+// list's edge, on top of the row scrolled under it.
+checkPoint("content inside a stuck React Native sticky header is not covered by the row under it",
+           analyzer(rnNestedSticky).analyze(.init(frame: R(32, 346, 200, 20), elementType: .staticText, label: "Sticky header", identifier: ""), isHittable: false),
+           CGPoint(x: 132, y: 356))
+let uikitHeaderWithContent: [Row] = listRows([
+    (4, .other, "", "", R(0, 116, 402, 28)),
+    (5, .staticText, "Section A", "", R(16, 120, 200, 20)),
+    (4, .cell, "", "", R(0, 120, 402, 44)),
+    (5, .staticText, "Row 5", "", R(16, 130, 200, 20)),
+])
+// (Content inside such a header, targeted itself, reads as covered by the
+// cell listed after it: a cell is interactive — pre-existing, see paintedOver.)
+check("a cell under a floating header with content is still covered by it",
+      analyzer(uikitHeaderWithContent).analyze(.init(frame: R(0, 120, 402, 44), elementType: .cell, label: "", identifier: ""), isHittable: false),
+      .coveredInList(by: "element", cover: R(0, 116, 402, 28), list: list))
 // React Native (recorded on iOS 26.4, the test app's /visibility screen):
 // a plain View with a testID is flattened into an empty node with the
 // identifier, listed just before its own contents, which follow it as
