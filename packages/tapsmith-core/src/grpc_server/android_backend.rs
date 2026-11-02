@@ -5,6 +5,41 @@ use super::device_backend::{
 };
 use super::*;
 
+use crate::android_agent_install::{
+    agent_launch_command, force_install_requested, host_md5, installed_md5_command, needs_install,
+    parse_installed_md5s, AGENT_PACKAGE, AGENT_TEST_PACKAGE, FORCE_INSTALL_ENV,
+};
+
+/// The packages among `apks` (`(package, host path, label)`) whose APK must
+/// be installed: those whose host bytes differ from the device's installed
+/// APK, or whose identity cannot be established. Every one of them when
+/// `TAPSMITH_FORCE_AGENT_INSTALL` is set.
+async fn agent_apks_to_install(
+    serial: &str,
+    apks: &[(&'static str, &str, &str)],
+) -> Vec<&'static str> {
+    let all = || apks.iter().map(|(pkg, _, _)| *pkg).collect();
+    if force_install_requested(std::env::var(FORCE_INSTALL_ENV).ok().as_deref()) {
+        info!("{FORCE_INSTALL_ENV} is set; reinstalling the agent APKs");
+        return all();
+    }
+    let packages: Vec<&str> = apks.iter().map(|(pkg, _, _)| *pkg).collect();
+    let installed = match adb::shell_lenient(serial, &installed_md5_command(&packages)).await {
+        Ok(output) => parse_installed_md5s(&output),
+        Err(e) => {
+            debug!(error = %e, "Could not read the installed agent APK hashes; installing");
+            return all();
+        }
+    };
+    let mut to_install = Vec::new();
+    for (pkg, path, _) in apks {
+        if needs_install(pkg, host_md5(path).await.as_deref(), &installed) {
+            to_install.push(*pkg);
+        }
+    }
+    to_install
+}
+
 pub(super) struct AndroidBackend<'a> {
     pub(super) svc: &'a TapsmithServiceImpl,
 }
@@ -1014,62 +1049,60 @@ impl DeviceBackend for AndroidBackend<'_> {
         }
 
         let has_apk_paths = !req.agent_apk_path.is_empty() && !req.agent_test_apk_path.is_empty();
-        let agent_installed = adb::is_package_installed(&serial, "dev.tapsmith.agent")
-            .await
-            .unwrap_or(false);
 
-        if !agent_installed && !has_apk_paths {
-            return Err(proto::ActionResponse {
-                request_id,
-                success: false,
-                error_type: "AGENT_NOT_INSTALLED".to_string(),
-                error_message: "Tapsmith agent is not installed on the device. \
+        if !has_apk_paths {
+            let agent_installed = adb::is_package_installed(&serial, AGENT_PACKAGE)
+                .await
+                .unwrap_or(false);
+            if !agent_installed {
+                return Err(proto::ActionResponse {
+                    request_id,
+                    success: false,
+                    error_type: "AGENT_NOT_INSTALLED".to_string(),
+                    error_message: "Tapsmith agent is not installed on the device. \
                             Set agentApk and agentTestApk in your Tapsmith config, \
                             or install manually with: adb install <path-to-agent.apk>"
-                    .to_string(),
-                screenshot: Vec::new(),
-            });
-        }
-
-        // Always reinstall when APK paths are provided so that code
-        // changes to the agent are deployed without manual intervention.
-        if has_apk_paths {
-            info!("Installing agent APKs...");
-            if let Err(e) = adb::install_apk(&serial, &req.agent_apk_path, true).await {
-                return Err(proto::ActionResponse {
-                    request_id,
-                    success: false,
-                    error_type: "AGENT_INSTALL_FAILED".to_string(),
-                    error_message: format!("Failed to install agent APK: {e}"),
+                        .to_string(),
                     screenshot: Vec::new(),
                 });
             }
-            if let Err(e) = adb::install_apk(&serial, &req.agent_test_apk_path, true).await {
-                return Err(proto::ActionResponse {
-                    request_id,
-                    success: false,
-                    error_type: "AGENT_INSTALL_FAILED".to_string(),
-                    error_message: format!("Failed to install agent test APK: {e}"),
-                    screenshot: Vec::new(),
-                });
+        } else {
+            // Install each APK whose bytes differ from the device's copy, so
+            // a rebuilt agent is deployed without manual intervention and an
+            // unchanged one costs no install (PILOT-975).
+            let apks = [
+                (AGENT_PACKAGE, req.agent_apk_path.as_str(), "agent APK"),
+                (
+                    AGENT_TEST_PACKAGE,
+                    req.agent_test_apk_path.as_str(),
+                    "agent test APK",
+                ),
+            ];
+            let to_install = agent_apks_to_install(&serial, &apks).await;
+            for (_, path, label) in apks.iter().filter(|(pkg, _, _)| to_install.contains(pkg)) {
+                info!(apk = %path, "Installing {label}");
+                if let Err(e) = adb::install_apk(&serial, path, true).await {
+                    return Err(proto::ActionResponse {
+                        request_id,
+                        success: false,
+                        error_type: "AGENT_INSTALL_FAILED".to_string(),
+                        error_message: format!("Failed to install {label}: {e}"),
+                        screenshot: Vec::new(),
+                    });
+                }
             }
-            info!("Agent APKs installed successfully");
+            if to_install.is_empty() {
+                info!("Agent APKs on the device match the configured ones; skipping install");
+            } else {
+                info!("Agent APKs installed successfully");
+            }
         }
 
         // Launch the agent instrumentation
         agent_comms::clear_stream_cache(&self.svc.agent_stream).await;
-        let instrument_cmd = if req.target_package.is_empty() {
-            "am instrument -w dev.tapsmith.agent/.TapsmithAgent".to_string()
-        } else {
-            format!(
-                "am instrument -w -e targetPackage {} dev.tapsmith.agent/.TapsmithAgent",
-                req.target_package
-            )
-        };
-
         // Launch in background on device, keeping the runner's output
         // on the device for the failure diagnostics below.
-        let bg_cmd = format!("nohup {instrument_cmd} > {ANDROID_AGENT_LOG_PATH} 2>&1 &");
+        let bg_cmd = agent_launch_command(&req.target_package, ANDROID_AGENT_LOG_PATH);
         if let Err(e) = adb::shell(&serial, &bg_cmd).await {
             error!(error = %e, "Failed to start agent instrumentation");
             return Err(proto::ActionResponse {
