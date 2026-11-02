@@ -283,7 +283,7 @@ await device.tapXY(120, 340);
 
 ### `device.longPressXY(x: number, y: number, options?: { duration?: number }): Promise<void>`
 
-Long-press at raw screen coordinates in logical points. `options.duration` specifies the hold duration in milliseconds (default 1000).
+Long-press at raw screen coordinates in logical points. `options.duration` specifies the hold duration in milliseconds (default 1000). The press is held for that long, so a duration shorter than the app's own long-press delay (often around 500 ms) can register as a tap.
 
 ```typescript
 await device.longPressXY(120, 340, { duration: 800 });
@@ -297,7 +297,7 @@ Drag/swipe from one point to another in logical points. `options.duration` speci
 await device.dragXY({ x: 50, y: 200 }, { x: 50, y: 600 }, { duration: 400 });
 ```
 
-> **Platform note:** `duration` is honored on Android (it scales the gesture's step count). On iOS the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
+> **Platform note:** on Android the drag takes `duration`, at least 25 ms (then waits for any scroll it started to come to rest, as `swipe()` does). On iOS, the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
 
 ### `device.inputText(text: string): Promise<void>`
 
@@ -1198,7 +1198,7 @@ await device.getByText("Zoom here").doubleTap({ intervalMs: 150 });
 
 Long press this element.
 
-- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
+- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). The press is held for that long, so a duration shorter than the app's own long-press delay (often around 500 ms) can register as a tap. With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
 
 ```typescript
 await device.getByText("Item 1", { exact: true }).longPress(2000);
@@ -1507,7 +1507,7 @@ const box = await device.getByText("Header", { exact: true }).boundingBox();
 
 ## Assertions
 
-The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires.
+The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires. As in Playwright, an assertion reads the screen at once, then backs off: it reads again after 100, 250 and 500 ms, then once a second.
 
 ### `expect(elementHandle: ElementHandle): TapsmithAssertions`
 
@@ -1558,7 +1558,7 @@ await expect.poll(() => fetchStatus(), { timeout: 10000 }).toBe("ready");
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `timeout` | `number` | 5000 | How long to poll before failing |
-| `intervals` | `number[]` | `[250]` | Polling intervals in milliseconds |
+| `intervals` | `number[]` | `[100, 250, 500, 1000]` | Milliseconds to wait between tries, in order; the last one repeats. The default is Playwright's. |
 
 ### `flushSoftErrors(): Error[]`
 
@@ -2600,7 +2600,7 @@ interface TestResult {
   workerIndex?: number; // set in parallel mode — index of the worker that ran this test
   retry?: number; // zero-based attempt number this result was recorded on (omitted for a first-attempt pass)
   filePath?: string; // path to the test file this result belongs to
-  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed
+  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed, or one Tapsmith waited out during the test
   fileLevelFailure?: boolean; // the result stands for a whole file that failed to load, not a test in it
 }
 ```
@@ -2938,7 +2938,7 @@ npx tapsmith test --config=./configs/ios.config.mjs
 
 ### `tapsmith test --force-install`
 
-Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
+Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag: its APKs are compared the same way and reinstalled unless the device's copy is known to match (one whose hash the device can't report is reinstalled), and [`TAPSMITH_FORCE_AGENT_INSTALL`](environment-variables.md) forces them to be reinstalled every time. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
 
 ```bash
 npx tapsmith test --force-install

@@ -3,12 +3,12 @@ import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
 import { appResetAction, parseHooksMarker, satisfies, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
-import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, isSystemDrawnDialog } from './emulator.js';
+import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, GENERIC_BLOCKING_DIALOG, isSystemDrawnDialog } from './emulator.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
 import { appDependsOnTapsmithHooks } from './init-detect.js';
 
 type SessionDevice = Pick<Device, 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
-type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
+type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy' | 'takeSystemDialogEvents'>
 
 export interface SessionPreflightContext {
   label: string
@@ -54,7 +54,8 @@ export interface SessionPreflightContext {
   notices: PreflightNotice[]
 }
 
-/** A system ANR/crash dialog the Android preflight dealt with, or a session-level finding about the app. */
+/** A system ANR/crash dialog the Android preflight (or, mid-test, the agent)
+ *  dealt with, or a session-level finding about the app. */
 export interface PreflightNotice {
   /** `app-dialog`: the app under test's own, or one whose owner could not be
    *  read (dismissed, session recovered; its test gets a warning).
@@ -70,6 +71,51 @@ export interface PreflightNotice {
   message: string
   /** When it was handled (ms since epoch). */
   timestamp: number
+}
+
+/** Deadline for taking the agent's answered dialogs at the end of a test: a
+ *  queue read on the device, so anything slower is a wedged agent, and the
+ *  report must not hold the test's end for it. */
+const ANSWERED_DIALOGS_DEADLINE_MS = 3_000;
+
+/**
+ * Take the system ANR / crash dialogs the Android agent answered on its own
+ * (during a test, or a lookup or tap outside one) and add them to {@link SessionPreflightContext.notices},
+ * so the runner reports them like the preflight's: a trace row for each, and a
+ * warning on the test for the app under test's own ANR (a finding, not noise).
+ * Best effort: an agent that cannot say (an older one, a dead session) adds
+ * nothing, and the test's own outcome stands.
+ */
+export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext): Promise<void> {
+  if (ctx.config.platform === 'ios') return;
+  let events;
+  try {
+    ({ events } = await ctx.client.takeSystemDialogEvents(ANSWERED_DIALOGS_DEADLINE_MS));
+  } catch {
+    return;
+  }
+  for (const event of events ?? []) {
+    const title = event.title || GENERIC_BLOCKING_DIALOG;
+    const owner = event.owner || undefined;
+    const timestamp = Number(event.timestampMs) || Date.now();
+    ctx.notices.push(event.ownedByTarget
+      ? {
+        kind: 'app-dialog',
+        title,
+        owner,
+        message: `The app under test (${owner ?? ctx.config.package}) stopped responding and showed "${title}"; `
+          + `Tapsmith pressed ${event.button}. Check the app's logs (adb logcat) for what blocked its main thread.`,
+        timestamp,
+      }
+      : {
+        kind: 'foreign-dialog',
+        title,
+        owner,
+        message: `A system dialog from another app came up: ${formatBlockingDialog(title, owner)}. `
+          + `Tapsmith pressed ${event.button}.`,
+        timestamp,
+      });
+  }
 }
 
 /**

@@ -1,5 +1,6 @@
 mod adb;
 mod agent_comms;
+mod android_agent_install;
 mod android_keystore;
 mod android_permissions;
 mod app_reset;
