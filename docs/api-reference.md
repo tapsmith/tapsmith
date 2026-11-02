@@ -283,7 +283,7 @@ await device.tapXY(120, 340);
 
 ### `device.longPressXY(x: number, y: number, options?: { duration?: number }): Promise<void>`
 
-Long-press at raw screen coordinates in logical points. `options.duration` specifies the hold duration in milliseconds (default 1000).
+Long-press at raw screen coordinates in logical points. `options.duration` specifies the hold duration in milliseconds (default 1000). The press is held for that long, so a duration shorter than the app's own long-press delay (often around 500 ms) can register as a tap.
 
 ```typescript
 await device.longPressXY(120, 340, { duration: 800 });
@@ -297,7 +297,7 @@ Drag/swipe from one point to another in logical points. `options.duration` speci
 await device.dragXY({ x: 50, y: 200 }, { x: 50, y: 600 }, { duration: 400 });
 ```
 
-> **Platform note:** `duration` is honored on Android (it scales the gesture's step count). On iOS the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
+> **Platform note:** on Android the drag takes `duration`, at least 25 ms (then waits for any scroll it started to come to rest, as `swipe()` does). On iOS, the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
 
 ### `device.inputText(text: string): Promise<void>`
 
@@ -1198,7 +1198,7 @@ await device.getByText("Zoom here").doubleTap({ intervalMs: 150 });
 
 Long press this element.
 
-- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
+- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). The press is held for that long, so a duration shorter than the app's own long-press delay (often around 500 ms) can register as a tap. With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
 
 ```typescript
 await device.getByText("Item 1", { exact: true }).longPress(2000);
