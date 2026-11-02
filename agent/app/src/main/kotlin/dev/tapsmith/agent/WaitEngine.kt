@@ -21,6 +21,8 @@ import androidx.test.uiautomator.UiDevice
  */
 class WaitEngine(
     private val device: UiDevice,
+    /** The settle check's quiet-window wait (UiAutomation.waitForIdle); see [SettleIdle]. */
+    private val settleIdle: IdleWaiter,
 ) {
     companion object {
         private const val TAG = "TapsmithWait"
@@ -94,11 +96,13 @@ class WaitEngine(
         val findMs = SystemClock.uptimeMillis() - startTime
 
         // Phase 2: best-effort settle — prefer an enabled, positionally-stable
-        // match. The per-check wait is a BOUNDED idle wait (capped at
-        // STABILITY_WINDOW_MS): it returns immediately on an already-quiet
-        // screen (0ms fast-path for the common case) and caps at the window on
-        // a perpetually-animating screen, where we then fall back to the
-        // current match so it still makes progress.
+        // match. The per-check wait is a BOUNDED idle wait (a quiet window of
+        // STABILITY_WINDOW_MS, see SettleIdle): it returns immediately on an
+        // already-quiet screen (0ms fast-path for the common case) and costs
+        // at most twice the window on a perpetually-animating screen, where we
+        // then fall back to the current match so it still makes progress.
+        // Not device.waitForIdle(window): that asks for 500 ms of quiet and
+        // overshoots the window by up to 500 ms per check (PILOT-989).
         //
         // Each stability check re-reads ONLY the matched element's bounds (one
         // accessibility round-trip) rather than re-running the full find, which
@@ -119,7 +123,7 @@ class WaitEngine(
             val remaining = deadline - SystemClock.uptimeMillis()
             if (remaining <= 0) break
 
-            device.waitForIdle(STABILITY_WINDOW_MS.coerceAtMost(remaining))
+            SettleIdle.await(settleIdle, STABILITY_WINDOW_MS.coerceAtMost(remaining))
 
             if (selector.enabled == true || selector.xpath != null) {
                 val prevBounds = match.bounds
