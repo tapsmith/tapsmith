@@ -587,6 +587,16 @@ let uikitHeaderWithContent: [Row] = listRows([
     (4, .cell, "", "", R(0, 120, 402, 44)),
     (5, .staticText, "Row 5", "", R(16, 130, 200, 20)),
 ])
+// A cell partly scrolled past the list's top, under the header: its clipped
+// frame starts at the list's edge, but it is not stuck there.
+let cellPastTheEdge: [Row] = listRows([
+    (4, .other, "Section A", "", R(0, 116, 402, 28)),
+    (4, .cell, "", "", R(0, 100, 402, 44)),
+    (5, .staticText, "Row 5", "", R(16, 110, 200, 20)),
+])
+check("a row partly scrolled past the list's top is still covered by the header over it",
+      analyzer(cellPastTheEdge).analyze(.init(frame: R(16, 110, 200, 20), elementType: .staticText, label: "Row 5", identifier: ""), isHittable: false),
+      .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 28), list: list))
 // (Content inside such a header, targeted itself, reads as covered by the
 // cell listed after it: a cell is interactive — pre-existing, see paintedOver.)
 check("a cell under a floating header with content is still covered by it",

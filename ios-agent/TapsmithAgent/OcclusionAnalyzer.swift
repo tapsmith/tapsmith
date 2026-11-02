@@ -391,8 +391,10 @@ struct OcclusionAnalyzer {
                 // The target inside a row stuck at the list's visible top or
                 // bottom edge is in the sticky header itself, on top of the
                 // row scrolled under it (the tree has no paint order to say
-                // so). A target that is a row is still checked.
-                let edges = clippedFrame(of: list), rowFrame = clippedFrame(of: row)
+                // so). A target that is a row is still checked. The row's own
+                // frame, not its clipped one: a row partly scrolled past the
+                // edge is clipped to it without being stuck there.
+                let edges = clippedFrame(of: list), rowFrame = nodes[row].frame
                 if row != t, abs(rowFrame.minY - edges.minY) <= 1 || abs(rowFrame.maxY - edges.maxY) <= 1 {
                     return nil
                 }
