@@ -1507,7 +1507,7 @@ const box = await device.getByText("Header", { exact: true }).boundingBox();
 
 ## Assertions
 
-The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires.
+The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires. As in Playwright, an assertion reads the screen at once, then backs off: it reads again after 100, 250 and 500 ms, then once a second.
 
 ### `expect(elementHandle: ElementHandle): TapsmithAssertions`
 
@@ -1558,7 +1558,7 @@ await expect.poll(() => fetchStatus(), { timeout: 10000 }).toBe("ready");
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `timeout` | `number` | 5000 | How long to poll before failing |
-| `intervals` | `number[]` | `[250]` | Polling intervals in milliseconds |
+| `intervals` | `number[]` | `[100, 250, 500, 1000]` | Milliseconds to wait between tries, in order; the last one repeats. The default is Playwright's. |
 
 ### `flushSoftErrors(): Error[]`
 
