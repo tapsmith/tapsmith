@@ -597,6 +597,17 @@ let cellPastTheEdge: [Row] = listRows([
 check("a row partly scrolled past the list's top is still covered by the header over it",
       analyzer(cellPastTheEdge).analyze(.init(frame: R(16, 110, 200, 20), elementType: .staticText, label: "Row 5", identifier: ""), isHittable: false),
       .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 28), list: list))
+// A cell scrolled to sit exactly at the list's top under the header (a
+// scroll to a row): it is aligned with the edge, but a cell is never the
+// stuck header.
+let cellAtTheEdge: [Row] = listRows([
+    (4, .other, "Section A", "", R(0, 116, 402, 28)),
+    (4, .cell, "", "", R(0, 116, 402, 44)),
+    (5, .staticText, "Row 5", "", R(16, 126, 200, 20)),
+])
+check("a cell aligned with the list's top is still covered by the header over it",
+      analyzer(cellAtTheEdge).analyze(.init(frame: R(16, 126, 200, 20), elementType: .staticText, label: "Row 5", identifier: ""), isHittable: false),
+      .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 28), list: list))
 // (Content inside such a header, targeted itself, reads as covered by the
 // cell listed after it: a cell is interactive — pre-existing, see paintedOver.)
 check("a cell under a floating header with content is still covered by it",

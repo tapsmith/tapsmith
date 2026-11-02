@@ -388,14 +388,18 @@ struct OcclusionAnalyzer {
         var row = t
         while let content = nodes[row].parent {
             if let list = listOwning(content: content) {
-                // The target inside a row stuck at the list's visible top or
-                // bottom edge is in the sticky header itself, on top of the
-                // row scrolled under it (the tree has no paint order to say
-                // so). A target that is a row is still checked. The row's own
-                // frame, not its clipped one: a row partly scrolled past the
-                // edge is clipped to it without being stuck there.
+                // The target inside a plain view stuck at the list's visible
+                // top or bottom edge is in the sticky header itself (React
+                // Native's sticky wrapper holds its contents), on top of the
+                // row scrolled under it: the tree has no paint order to say
+                // so. The row's own frame, not its clipped one: a row partly
+                // scrolled past the edge is clipped to it without being stuck
+                // there. A cell is never the header, even when a scroll to a
+                // row aligns it with the edge; a target that is a row is
+                // still checked.
                 let edges = clippedFrame(of: list), rowFrame = nodes[row].frame
-                if row != t, abs(rowFrame.minY - edges.minY) <= 1 || abs(rowFrame.maxY - edges.maxY) <= 1 {
+                if row != t, nodes[row].elementType == .other,
+                   abs(rowFrame.minY - edges.minY) <= 1 || abs(rowFrame.maxY - edges.maxY) <= 1 {
                     return nil
                 }
                 for i in (content + 1)..<nodes[content].subtreeEnd where nodes[i].parent == content && i != row {
