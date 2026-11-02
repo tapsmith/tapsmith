@@ -24,28 +24,32 @@ fun interface IdleWaiter {
  * quiet for 500 ms (a ticker, a spinner, React Native re-renders) a "100 ms"
  * wait therefore cost up to 600 ms: ~370 ms median per find.
  *
- * This asks for a quiet window equal to the cap instead. The same loop then
- * costs at most twice the cap (an event just before the cap restarts one last
- * quiet window), returns at once on a screen already quiet for the window, and
- * returns as soon as the screen goes quiet within it.
+ * This asks for a [QUIET_MS] window instead. AOSP's loop then costs less than
+ * [QUIET_MS] + the cap, returns at once on a screen already quiet for the
+ * window, and returns as soon as the screen goes quiet.
  *
- * Why the window is not shorter than the cap: the settle loop's default cap
- * is 100 ms, the accessibility framework's throttle for recurring
- * content-change events (`ViewConfiguration.getSendRecurringAccessibilityEventsInterval`).
- * A view that keeps changing sends an event about that often, so a 100 ms
- * window keeps it from looking quiet; a shorter one would close between its
- * events, and the two bounds samples the settle compares would be taken back
- * to back.
+ * The pause is what makes the settle's bounds comparison mean anything: two
+ * samples taken back to back match even mid-animation. A view that keeps
+ * changing sends a content-change event at most once per throttle interval
+ * (`ViewConfiguration.getSendRecurringAccessibilityEventsInterval`, 100 ms),
+ * so its events arrive 100–116 ms apart. A window of one interval would close
+ * in every such gap and let the pause shrink to nothing; two intervals cannot
+ * close while anything animates, so a busy screen pauses for the full cap
+ * (as `device.waitForIdle` did) and only a screen with no event for
+ * [QUIET_MS] skips it.
  */
 object SettleIdle {
-    /** True when the screen was quiet for [capMs]; false when not, or when [capMs] is spent. */
+    /** Twice the recurring accessibility-event throttle interval. */
+    const val QUIET_MS = 200L
+
+    /** True when the screen was quiet for [QUIET_MS]; false when not, or when [capMs] is spent. */
     fun await(
         idle: IdleWaiter,
         capMs: Long,
     ): Boolean {
         if (capMs <= 0) return false
         return try {
-            idle.waitForIdle(capMs, capMs)
+            idle.waitForIdle(QUIET_MS, capMs)
             true
         } catch (_: TimeoutException) {
             false

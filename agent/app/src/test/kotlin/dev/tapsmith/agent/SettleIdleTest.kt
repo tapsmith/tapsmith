@@ -81,36 +81,56 @@ class SettleIdleTest {
     }
 
     @Test
-    fun `the settle check stops within twice its window on that screen`() {
+    fun `the settle check stops within its quiet window plus its cap on that screen`() {
         val ua = FakeUiAutomation(events = every(400), now = 410)
         val spent = cost(ua) { SettleIdle.await(ua, capMs = 100) }
-        assertTrue("spent $spent ms", spent <= 2 * 100)
+        assertTrue("spent $spent ms", spent < SettleIdle.QUIET_MS + 100)
     }
 
     @Test
-    fun `the quiet window never exceeds the cap`() {
+    fun `on a throttled animation every start point pauses for the full cap`() {
+        // A view that keeps changing sends a content-change event once per
+        // 100 ms throttle interval, delivered 100-116 ms apart. Wherever the
+        // find lands in that cycle, including the tail of a gap where a
+        // 100 ms quiet window would already have closed, the pause must
+        // last the cap so the two bounds samples are not back to back.
+        val cadence = every(108)
+        for (offset in 0L until 108L) {
+            val ua = FakeUiAutomation(events = cadence, now = 1_080 + offset)
+            var idle = true
+            val spent = cost(ua) { idle = SettleIdle.await(ua, capMs = 100) }
+            assertFalse("offset $offset reported idle", idle)
+            assertTrue("offset $offset paused only $spent ms", spent >= 100)
+            assertTrue("offset $offset spent $spent ms", spent < SettleIdle.QUIET_MS + 100)
+        }
+    }
+
+    @Test
+    fun `asks for the same quiet window whatever the cap`() {
         val ua = FakeUiAutomation(events = emptyList(), now = 10_000)
         SettleIdle.await(ua, capMs = 100)
         SettleIdle.await(ua, capMs = 37)
-        assertEquals(listOf(100L to 100L, 37L to 37L), ua.requests)
+        assertEquals(listOf(SettleIdle.QUIET_MS to 100L, SettleIdle.QUIET_MS to 37L), ua.requests)
     }
 
     @Test
     fun `a quiet screen returns at once and reports idle`() {
-        val ua = FakeUiAutomation(events = listOf(100), now = 5_000)
-        var idle = false
-        val spent = cost(ua) { idle = SettleIdle.await(ua, capMs = 100) }
-        assertEquals(0L, spent)
-        assertTrue(idle)
+        for (sinceLastEvent in listOf(SettleIdle.QUIET_MS, 4_900L)) {
+            val ua = FakeUiAutomation(events = listOf(100), now = 100 + sinceLastEvent)
+            var idle = false
+            val spent = cost(ua) { idle = SettleIdle.await(ua, capMs = 100) }
+            assertEquals(0L, spent)
+            assertTrue(idle)
+        }
     }
 
     @Test
-    fun `a screen going quiet inside the window returns when it does`() {
-        // Last event 30 ms ago and nothing after: quiet at 100 ms past it.
-        val ua = FakeUiAutomation(events = listOf(1_000), now = 1_030)
+    fun `a screen going quiet inside the cap returns when it does`() {
+        // Last event 150 ms ago and nothing after: quiet 50 ms from now.
+        val ua = FakeUiAutomation(events = listOf(1_000), now = 1_150)
         var idle = false
         val spent = cost(ua) { idle = SettleIdle.await(ua, capMs = 100) }
-        assertEquals(70L, spent)
+        assertEquals(50L, spent)
         assertTrue(idle)
     }
 
@@ -124,14 +144,13 @@ class SettleIdleTest {
     }
 
     @Test
-    fun `the worst case, an event just before the cap, stays under twice the cap`() {
-        // Last event long ago would be idle, so start just after one, with the
-        // next one landing 1 ms before the timeout: the final sleep runs a
-        // whole quiet window past the timeout.
+    fun `the worst case, an event just before the cap, stays under the quiet window plus the cap`() {
+        // The last event lands 1 ms before the cap and nothing follows: the
+        // final sleep runs a whole quiet window past the cap.
         val ua = FakeUiAutomation(events = listOf(1_000, 1_099), now = 1_000)
         val spent = cost(ua) { SettleIdle.await(ua, capMs = 100) }
-        assertEquals(199L, spent)
-        assertTrue(spent < 2 * 100)
+        assertEquals(299L, spent)
+        assertTrue(spent < SettleIdle.QUIET_MS + 100)
     }
 
     @Test
