@@ -392,14 +392,19 @@ struct OcclusionAnalyzer {
                     let node = nodes[i]
                     if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
                     let f = clippedFrame(of: i)
-                    // A bar-sized row with content of its own: a background
-                    // laid behind the rows (a view filling the content), or a
-                    // row's own empty background view React Native lists
-                    // beside its controls, is not a header stuck over one.
+                    // A bar-sized row with content of its own — children or
+                    // a label. A background laid behind the rows (a view
+                    // filling the content), a row's own empty background
+                    // view React Native lists beside its controls, or a
+                    // plain View with a testID, which React Native flattens
+                    // into an empty node with only that identifier, its
+                    // contents listed beside it in whatever order XCUITest
+                    // sorts them (the /visibility screen's banner and rows),
+                    // is not a header stuck over one. A sticky header holds
+                    // its contents (React Native) or carries a label (UIKit).
                     if f.contains(point), f.minX <= targetFrame.minX + 1, f.maxX >= targetFrame.maxX - 1,
                        f.height * 2 <= nodes[list].frame.height,
-                       node.subtreeEnd > i + 1 || !node.label.isEmpty || !node.identifier.isEmpty,
-                       !liesUnder(i, row: row) {
+                       node.subtreeEnd > i + 1 || !node.label.isEmpty {
                         return (i, list)
                     }
                 }
@@ -408,20 +413,6 @@ struct OcclusionAnalyzer {
             row = content
         }
         return nil
-    }
-
-    /// Whether sibling `i` lies under `row` rather than over it: a childless
-    /// view listed before the row whose frame holds the row's whole frame.
-    /// React Native lists a plain View that has a testID as just such an
-    /// empty node, before its own contents, which follow it as siblings (the
-    /// /visibility screen's banner and list rows; a card's badge may stick
-    /// out past its edge in between). React Native's sticky header wrapper
-    /// holds its contents, and a UIKit header holds a row's whole frame only
-    /// when the row is wholly under it: that row reads as clear, as before
-    /// PILOT-979, so the touch is tried rather than dragged clear first.
-    private func liesUnder(_ i: Int, row: Int) -> Bool {
-        nodes[i].subtreeEnd == i + 1 && i < row
-            && nodes[i].frame.insetBy(dx: -1, dy: -1).contains(nodes[row].frame)
     }
 
     /// The scroller whose rows are `content`'s children: `content` itself (a

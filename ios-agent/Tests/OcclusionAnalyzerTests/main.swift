@@ -618,6 +618,50 @@ let rnFlattenedCardWithBadge: [Row] = [
 checkPoint("a flattened card whose badge sticks out past its edge is not a sticky row over its button",
            analyzer(rnFlattenedCardWithBadge).analyze(button("Open B", R(32, 424, 120, 36)), isHittable: false),
            CGPoint(x: 92, y: 442))
+// …and cards whose own button sticks out past the card's bottom or top edge
+// (a negative margin).
+func rnFlattenedCard(_ card: CGRect, _ open: CGRect) -> [Row] {
+    [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .scrollView, "", "", R(0, 0, 402, 874)),
+        (3, .other, "", "", R(0, 0, 402, 1400)),
+        (4, .other, "", "", R(0, 0, 402, 1400)),
+        (5, .other, "", "card-s", card),
+        (5, .staticText, "Card S", "", R(28, card.minY + 8, 100, 20)),
+        (5, .button, "Open S", "", open),
+    ]
+}
+checkPoint("a flattened card whose button sticks out past its bottom edge is not a sticky row over it",
+           analyzer(rnFlattenedCard(R(16, 200, 370, 64), R(28, 240, 80, 36))).analyze(button("Open S", R(28, 240, 80, 36)), isHittable: false),
+           CGPoint(x: 68, y: 258))
+checkPoint("…nor past its top edge",
+           analyzer(rnFlattenedCard(R(16, 200, 370, 64), R(28, 180, 80, 36))).analyze(button("Open S", R(28, 180, 80, 36)), isHittable: false),
+           CGPoint(x: 68, y: 198))
+// XCUITest lists a flattened container's elements top first, so a button
+// pulled up over the card's top edge comes before the card (recorded on
+// iOS 27.2, a /qa-cards2 probe screen).
+let rnButtonBeforeItsCard: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(0, 0, 402, 874)),
+    (3, .other, "", "", R(0, 0, 402, 1400)),
+    (4, .other, "", "", R(0, 0, 402, 1400)),
+    (5, .button, "Open T", "", R(28, 192, 80, 36)),
+    (5, .other, "", "card-t", R(16, 200, 370, 64)),
+    (5, .staticText, "Card T", "", R(28, 236, 200, 20)),
+]
+checkPoint("a flattened card listed after its own button is not a sticky row over it",
+           analyzer(rnButtonBeforeItsCard).analyze(button("Open T", R(28, 192, 80, 36)), isHittable: false),
+           CGPoint(x: 68, y: 210))
+// A UIKit header listed before the rows it floats over carries a label.
+let labelledHeaderOverWholeRow: [Row] = listRows([
+    (4, .other, "Section A", "", R(0, 116, 402, 60)),
+    (4, .cell, "", "", R(0, 120, 402, 44)),
+])
+check("a labelled header listed before a row it wholly covers is still a sticky row",
+      analyzer(labelledHeaderOverWholeRow).analyze(.init(frame: R(0, 120, 402, 44), elementType: .cell, label: "", identifier: ""), isHittable: false),
+      .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 60), list: list))
 
 // ─── Where a clearing drag may start (PILOT-980) ───
 
