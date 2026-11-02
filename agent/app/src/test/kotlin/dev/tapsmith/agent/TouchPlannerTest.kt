@@ -38,7 +38,16 @@ class TouchPlannerTest {
         var windowsAt: (Long) -> List<WindowSpec> = { listOf(APP) }
         override val bounds = SCREEN
 
+        /** What answering system dialogs does (PILOT-977); default: none on screen. */
+        var answer: () -> Boolean = { false }
+        var answers = 0
+
         override fun windows(): List<WindowSpec> = windowsAt(clock.now())
+
+        override fun answerSystemDialogs(): Boolean {
+            answers++
+            return answer()
+        }
     }
 
     private class Node(
@@ -346,6 +355,37 @@ class TouchPlannerTest {
             }
         assertEquals(CoverKind.WINDOW, e.kind)
         assertEquals(1_000, clock.nowMs)
+    }
+
+    @Test
+    fun `a system dialog over the element is answered and the touch goes ahead at once`() {
+        // PILOT-977: an ANR dialog that came up mid-test is answered, not
+        // waited out until the action times out.
+        var dialogUp = true
+        screen.windowsAt = { if (dialogUp) listOf(APP, DIALOG) else listOf(APP) }
+        screen.answer = {
+            val was = dialogUp
+            dialogUp = false
+            was
+        }
+        assertEquals(TouchPlan.Point(540, 855), planner.plan(target, BUTTON, budget(), LABELLED))
+        assertTrue("no wait", clock.sleeps.isEmpty())
+    }
+
+    @Test
+    fun `a window cover that is not a system dialog is waited out as before`() {
+        screen.windowsAt = { listOf(APP, DIALOG) }
+        val e = assertThrows<ElementCoveredException> { planner.plan(target, BUTTON, budget(timeoutMs = 1_000), LABELLED) }
+        assertEquals(CoverKind.WINDOW, e.kind)
+        assertTrue("asked on every pass", screen.answers > 1)
+    }
+
+    @Test
+    fun `the keyboard is never treated as a system dialog`() {
+        target.readAt = { snapshot(LOW) }
+        keyboardUntil(600)
+        planner.plan(target, LOW, budget(), LABELLED)
+        assertEquals(0, screen.answers)
     }
 
     @Test

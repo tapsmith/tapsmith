@@ -109,8 +109,32 @@ const AGENT_PING_TIMEOUT: Duration = Duration::from_secs(3);
 /// before declaring it unreachable.
 const DEFAULT_CONNECT_READINESS: Duration = Duration::from_secs(8);
 
-/// Pause between handshake pings while waiting for an agent to answer.
-const CONNECT_RETRY_INTERVAL: Duration = Duration::from_secs(1);
+/// First pause between handshake pings while waiting for an agent to
+/// answer. Agent start-up usually takes a second or two, so a short first
+/// pause notices it within tens of milliseconds of its first pong instead
+/// of on a whole-second grid (PILOT-975).
+const CONNECT_RETRY_INTERVAL_MIN: Duration = Duration::from_millis(50);
+
+/// Longest pause between handshake pings. Each Android ping opens a new
+/// connection through `adb forward`; a cold software-GPU CI emulator can
+/// take most of the 60 s readiness window to start the agent, and pinging
+/// it every 50 ms throughout would add adb traffic to an already starved
+/// device.
+const CONNECT_RETRY_INTERVAL_MAX: Duration = Duration::from_millis(250);
+
+/// The pause after handshake ping number `attempt` (0-based) failed: starts
+/// at `CONNECT_RETRY_INTERVAL_MIN` and grows by half each time up to
+/// `CONNECT_RETRY_INTERVAL_MAX`.
+fn connect_retry_interval(attempt: u32) -> Duration {
+    let mut interval = CONNECT_RETRY_INTERVAL_MIN;
+    for _ in 0..attempt {
+        interval = interval.mul_f32(1.5);
+        if interval >= CONNECT_RETRY_INTERVAL_MAX {
+            return CONNECT_RETRY_INTERVAL_MAX;
+        }
+    }
+    interval
+}
 
 /// Sentinel string used by `try_send_command` to mark an empty-response
 /// failure. `anyhow::Error` does not preserve original error types across
@@ -619,6 +643,9 @@ pub enum AgentCommand {
     },
     HideKeyboard {},
     IsKeyboardShown {},
+    /// Take the system ANR / crash dialogs the Android agent answered on its
+    /// own since the last call (PILOT-977).
+    TakeSystemDialogEvents {},
     SetOrientation {
         orientation: String,
     },
@@ -689,6 +716,7 @@ impl AgentCommand {
             AgentCommand::AcceptOpenInAppDialog { .. } => "acceptOpenInAppDialog",
             AgentCommand::HideKeyboard {} => "hideKeyboard",
             AgentCommand::IsKeyboardShown {} => "isKeyboardShown",
+            AgentCommand::TakeSystemDialogEvents {} => "takeSystemDialogEvents",
             AgentCommand::SetOrientation { .. } => "setOrientation",
             AgentCommand::GetOrientation {} => "getOrientation",
             AgentCommand::GetColorScheme {} => "getColorScheme",
@@ -1060,6 +1088,7 @@ impl AgentCommand {
             }
             AgentCommand::HideKeyboard {} => ("hideKeyboard", json!({})),
             AgentCommand::IsKeyboardShown {} => ("isKeyboardShown", json!({})),
+            AgentCommand::TakeSystemDialogEvents {} => ("takeSystemDialogEvents", json!({})),
             AgentCommand::SetOrientation { orientation } => {
                 ("setOrientation", json!({ "orientation": orientation }))
             }
@@ -1309,11 +1338,13 @@ impl AgentConnection {
                 }
                 Err(e) => {
                     debug!(serial, attempt, error = %e, "agent handshake ping failed");
-                    if tokio::time::Instant::now() >= deadline {
+                    let now = tokio::time::Instant::now();
+                    if now >= deadline {
                         break e;
                     }
+                    let pause = connect_retry_interval(attempt).min(deadline - now);
                     attempt += 1;
-                    tokio::time::sleep(CONNECT_RETRY_INTERVAL).await;
+                    tokio::time::sleep(pause).await;
                 }
             }
         };
@@ -1791,6 +1822,7 @@ mod tests {
             AgentCommand::AcceptOpenInAppDialog { timeout_ms: None },
             AgentCommand::GetClipboard {},
             AgentCommand::GetOrientation {},
+            AgentCommand::TakeSystemDialogEvents {},
             AgentCommand::CaptureTraceState {
                 screenshot: true,
                 hierarchy: true,
@@ -2942,6 +2974,112 @@ mod tests {
         .to_string();
         assert!(err.contains("Failed to connect to agent socket"), "{err}");
         assert!(err.contains("refused this daemon's token"), "{err}");
+    }
+
+    // ─── Handshake polling (PILOT-975) ───
+
+    #[test]
+    fn connect_retry_interval_starts_fast_and_backs_off_to_a_cap() {
+        assert_eq!(connect_retry_interval(0), Duration::from_millis(50));
+        let intervals: Vec<Duration> = (0..40).map(connect_retry_interval).collect();
+        for pair in intervals.windows(2) {
+            assert!(pair[1] >= pair[0], "never speeds back up: {intervals:?}");
+        }
+        assert_eq!(intervals[39], CONNECT_RETRY_INTERVAL_MAX);
+        assert!(CONNECT_RETRY_INTERVAL_MAX <= Duration::from_millis(250));
+        // A 60 s cold-CI readiness window stays at a bounded number of
+        // pings through `adb forward`, not one every 50 ms.
+        let mut elapsed = Duration::ZERO;
+        let mut pings = 0u32;
+        while elapsed < Duration::from_secs(60) {
+            elapsed += connect_retry_interval(pings);
+            pings += 1;
+        }
+        assert!(pings <= 250, "{pings} pings in 60 s");
+    }
+
+    /// Mock agent that is still starting for `starting_for` — the
+    /// adb-forward shape, every connect accepted then closed — and after
+    /// that authenticates and answers pings like a real agent. Returns the
+    /// time of every handshake attempt.
+    fn spawn_agent_ready_after(
+        listener: tokio::net::TcpListener,
+        starting_for: Duration,
+    ) -> Arc<std::sync::Mutex<Vec<tokio::time::Instant>>> {
+        let ready_at = tokio::time::Instant::now() + starting_for;
+        let attempts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&attempts);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                recorded.lock().unwrap().push(tokio::time::Instant::now());
+                if tokio::time::Instant::now() < ready_at {
+                    drop(stream);
+                    continue;
+                }
+                let Some((mut reader, mut write_half)) = agent_handshake(stream).await else {
+                    continue;
+                };
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.is_ok() && !line.is_empty() {
+                    let _ = write_half
+                        .write_all(b"{\"id\":\"ping\",\"result\":{\"pong\":true}}\n")
+                        .await;
+                }
+            }
+        });
+        attempts
+    }
+
+    #[tokio::test]
+    async fn connect_notices_an_agent_soon_after_it_starts_answering() {
+        // The handshake used to retry on a 1 s grid, so an agent that came
+        // up 300 ms in was only seen at the 1 s ping. Judge the retry
+        // spacing rather than the total time: a stalled runner stretches
+        // some gaps, but not every one of them past the old 1 s grid.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let attempts = spawn_agent_ready_after(listener, Duration::from_millis(300));
+
+        let mut conn = AgentConnection::with_port(port);
+        conn.connect_ios("sim").await.expect("agent comes up");
+        let attempts = attempts.lock().unwrap().clone();
+        assert!(
+            attempts.len() >= 2,
+            "the agent was not ready at the first ping: {attempts:?}"
+        );
+        let shortest_gap = attempts
+            .windows(2)
+            .map(|pair| pair[1] - pair[0])
+            .min()
+            .unwrap();
+        assert!(
+            shortest_gap < Duration::from_millis(500),
+            "retries {shortest_gap:?} apart at best; expected the fast backoff"
+        );
+    }
+
+    #[tokio::test]
+    async fn connect_gives_up_at_the_readiness_deadline() {
+        // An agent that never answers: the handshake keeps pinging for its
+        // whole readiness window, then fails with the unreachable error.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let attempts = spawn_agent_ready_after(listener, Duration::from_secs(3600));
+
+        let mut conn = AgentConnection::with_port(port);
+        let started = tokio::time::Instant::now();
+        let err = conn
+            .connect_for_platform("sim", true, Duration::from_millis(400))
+            .await
+            .expect_err("the agent never answers");
+        assert!(started.elapsed() >= Duration::from_millis(400));
+        assert!(
+            err.to_string()
+                .contains("Agent is not responding on device sim"),
+            "{err}"
+        );
+        assert!(!conn.connected);
+        assert!(attempts.lock().unwrap().len() >= 2, "it kept pinging");
     }
 
     #[test]

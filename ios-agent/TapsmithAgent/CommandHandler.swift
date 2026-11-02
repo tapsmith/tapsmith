@@ -485,11 +485,12 @@ class CommandHandler {
         app = refreshedApp
         elementFinder = ElementFinder(app: refreshedApp)
         snapshotFinder = SnapshotElementFinder(app: refreshedApp)
+        snapshotFinder.commandDeadline = commandReadDeadline
         actionExecutor = ActionExecutor(app: refreshedApp)
         // Eagerly cache the screen size, but tolerate a transient XCUITest
-        // interruption: `screenSize` probes `app.windows.firstMatch.frame`, a
-        // direct query that can raise an "Interrupting test" NSException while
-        // SpringBoard is still settling (e.g. right after a deep-link launch).
+        // failure: `screenSize` probes `app.windows.firstMatch.frame`, a
+        // direct query whose failure XCTestIssueRelay raises as an NSException
+        // while SpringBoard is still settling (e.g. right after a deep-link launch).
         // On failure leave the cache unset — ActionExecutor resolves it lazily
         // on next use — so re-binding never fails a command that already
         // succeeded.
@@ -516,6 +517,7 @@ class CommandHandler {
         let params = json["params"] as? [String: Any] ?? [:]
         commandReadDeadline = (params["readTimeoutMs"] as? NSNumber)
             .map { Date(timeIntervalSinceNow: $0.doubleValue / 1000) }
+        snapshotFinder.commandDeadline = commandReadDeadline
 
         do {
             var result: [String: Any]?

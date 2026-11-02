@@ -446,10 +446,22 @@ class SnapshotElementFinder {
         return results
     }
 
-    /// Take a validated snapshot with retries for cold-start.
+    /// When the daemon stops waiting for the command being handled (its
+    /// `readTimeoutMs`); set by CommandHandler for each command. nil from an
+    /// older daemon.
+    var commandDeadline: Date?
+
+    /// Take a validated snapshot, trying a failed or empty one again (a cold
+    /// start, a request that timed out in a transition) while a new try can
+    /// still finish before the command's deadline (SnapshotRetry).
     func takeSnapshot() throws -> XCUIElementSnapshot {
+        let retry = SnapshotRetry(
+            deadline: commandDeadline,
+            attemptCost: AccessibilityTimeout.seconds + 0.5
+        )
         var lastError: Error?
-        for _ in 0..<5 {
+        var failedAttempts = 0
+        repeat {
             do {
                 let s = try app.snapshot()
                 if !s.dictionaryRepresentation.isEmpty {
@@ -458,8 +470,10 @@ class SnapshotElementFinder {
             } catch {
                 lastError = error
             }
-            Thread.sleep(forTimeInterval: 0.2)
-        }
+            failedAttempts += 1
+            guard retry.shouldRetry(failedAttempts: failedAttempts, now: Date()) else { break }
+            Thread.sleep(forTimeInterval: SnapshotRetry.pause)
+        } while true
         let msg = lastError.map { "Snapshot failed after retries: \($0)" }
             ?? "Snapshot returned empty tree after retries"
         NSLog("[TapsmithSnapshot] \(msg)")

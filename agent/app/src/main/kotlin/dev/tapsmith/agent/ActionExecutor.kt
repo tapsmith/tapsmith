@@ -52,6 +52,13 @@ class ActionExecutor(
          */
         private const val SWIPE_SETTLE_QUIET_MS = 300L
 
+        /**
+         * The shortest coordinate swipe (the old 5-step floor): a few ticks,
+         * so a near-zero duration still moves between the press and the
+         * release (unless the device stalls for the whole swipe).
+         */
+        private const val MIN_COORDINATE_SWIPE_MS = 25L
+
         /** Upper bound on a swipe's settle, for a scroll view that keeps moving. */
         private const val SWIPE_SETTLE_MAX_MS = 3000L
 
@@ -228,7 +235,9 @@ class ActionExecutor(
             // and the daemon's HID route (long_press_resolve_budget).
             val point =
                 planGesturePoint(element, bounds, budget.shortenedBy(durationMs), expected, "long press", reserveMs = durationMs)
-            input.swipe(point.x, point.y, point.x, point.y, (durationMs / 5).toInt().coerceAtLeast(1))
+            if (!input.longPress(point.x, point.y, durationMs.coerceAtLeast(0))) {
+                throw ActionFailedException("Failed to long press at (${point.x}, ${point.y})")
+            }
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ActionFailedException) {
@@ -308,8 +317,10 @@ class ActionExecutor(
         y: Int,
         durationMs: Long = 1000L,
     ) {
-        // swipe from point to same point with steps proportional to duration
-        input.swipe(x, y, x, y, (durationMs / 5).toInt().coerceAtLeast(1))
+        // Held for durationMs of real time (PILOT-970).
+        if (!input.longPress(x, y, durationMs.coerceAtLeast(0))) {
+            throw ActionFailedException("Failed to long press at ($x, $y)")
+        }
     }
 
     /**
@@ -723,9 +734,10 @@ class ActionExecutor(
         y2: Int,
         durationMs: Long = 300,
     ) {
-        // UIAutomator swipe is step-based (~5ms/step). Convert duration to steps.
-        val steps = (durationMs / 5).coerceIn(5L, 200L).toInt()
-        input.swipe(x1, y1, x2, y2, steps)
+        // Lasts durationMs of real time (PILOT-970): a step swipe waits a
+        // display frame per step, so steps derived from a duration ran ~3x
+        // long at 60 Hz, and longer still on a slow emulator.
+        input.timedSwipe(x1, y1, x2, y2, durationMs.coerceAtLeast(MIN_COORDINATE_SWIPE_MS))
         settleAfterSwipe(vertical = kotlin.math.abs(y2 - y1) >= kotlin.math.abs(x2 - x1))
     }
 
