@@ -74,7 +74,33 @@ class AgentInput(
         return gestures.click(x, y, pressMs)
     }
 
-    /** UiDevice.swipe: [steps] moves one frame apart. From a point to itself, a long press. */
+    /**
+     * A long press at ([x], [y]) held for [holdMs] of real time (PILOT-970).
+     * Refused (false) for a point past the display's right or bottom edge, as
+     * [click] is.
+     */
+    fun longPress(
+        x: Int,
+        y: Int,
+        holdMs: Long,
+    ): Boolean {
+        if (x >= device.displayWidth || y >= device.displayHeight) {
+            Log.w(TAG, "Cannot long press ($x, $y): outside the display (${device.displayWidth}, ${device.displayHeight})")
+            return false
+        }
+        return gestures.longPress(x, y, holdMs)
+    }
+
+    /** A swipe between two screen points that lasts [durationMs] of real time (PILOT-970). */
+    fun timedSwipe(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        durationMs: Long,
+    ) = gestures.timedSwipe(x1, y1, x2, y2, durationMs)
+
+    /** UiDevice.swipe: [steps] moves one frame apart, so it lasts [steps] frames, not a set time. */
     fun swipe(
         x1: Int,
         y1: Int,

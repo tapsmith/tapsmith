@@ -32,9 +32,43 @@ class CommandHandler(
     private val actionExecutor: ActionExecutor,
     private val waitEngine: WaitEngine,
     private val hierarchyDumper: HierarchyDumper,
+    private val systemDialogs: SystemDialogAnswerer,
 ) {
     companion object {
         private const val TAG = "TapsmithCommand"
+
+        /**
+         * Commands that answer a system ANR / crash dialog on screen before
+         * they run (PILOT-977). One that comes up mid-test takes focus and
+         * covers the app: input (a key, a tap) would go to it, and the app's
+         * elements cannot even be found while it is up. Hierarchy dumps,
+         * screenshots and `evaluateSelectors` (only ever asked for locator
+         * suggestions: MCP and UI-mode snapshots, the near-miss hint) stay free
+         * of side effects, so a trace or snapshot still shows the dialog; a
+         * gesture already under way (touchMove/Up) is not interrupted.
+         */
+        val DIALOG_ANSWERING_METHODS =
+            setOf(
+                // Finding elements.
+                "findElement",
+                "findElements",
+                "waitForElement",
+                // Input.
+                "tap",
+                "longPress",
+                "doubleTap",
+                "typeText",
+                "clearText",
+                "swipe",
+                "scroll",
+                "touchDown",
+                "pressKey",
+                "dragAndDrop",
+                "selectOption",
+                "pinchZoom",
+                "focus",
+                "blur",
+            )
     }
 
     /** Cache of last clipboard text set via setClipboard, used as fallback on Android 13+. */
@@ -59,6 +93,8 @@ class CommandHandler(
 
         val start = SystemClock.uptimeMillis()
         return try {
+            systemDialogs.startCommand()
+            if (method in DIALOG_ANSWERING_METHODS) systemDialogs.answer()
             val result = dispatch(method, params, actionBudget(params, start))
             successResponse(id, result)
         } catch (e: ElementCoveredException) {
@@ -571,6 +607,20 @@ class CommandHandler(
             "clearElementCache" -> {
                 elementFinder.clearElementCache()
                 JSONObject().put("success", true)
+            }
+
+            "takeSystemDialogEvents" -> {
+                val events =
+                    systemDialogs.takeEvents().map { e ->
+                        JSONObject()
+                            .put("title", e.title ?: "")
+                            .put("owner", e.owner ?: "")
+                            .put("ownedByTarget", e.ownedByTarget)
+                            .put("kind", e.kind.name.lowercase())
+                            .put("button", e.button.label)
+                            .put("timestampMs", e.timestampMs)
+                    }
+                JSONObject().put("events", org.json.JSONArray(events))
             }
 
             "ping" -> {
