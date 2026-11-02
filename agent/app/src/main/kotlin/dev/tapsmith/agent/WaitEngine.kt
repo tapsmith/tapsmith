@@ -21,6 +21,8 @@ import androidx.test.uiautomator.UiDevice
  */
 class WaitEngine(
     private val device: UiDevice,
+    /** The settle check's quiet-window wait (UiAutomation.waitForIdle); see [SettleIdle]. */
+    private val settleIdle: IdleWaiter,
     /** Answers a system ANR / crash dialog on screen ([SystemDialogAnswerer]);
      *  true when one was. While one is up the app's elements cannot be found
      *  (PILOT-977). */
@@ -73,8 +75,8 @@ class WaitEngine(
      * Resolution polls [ElementFinder.findElement] — which reads a live snapshot
      * of the accessibility tree and does the precise match — sleeping between
      * attempts rather than blocking on global idle. The settle phase is bounded
-     * and idle-free: if the screen never stabilizes, it returns the current
-     * match instead of waiting forever.
+     * (a short idle-paced pause per check, see [SettleIdle]): if the screen
+     * never stabilizes, it returns the current match instead of waiting forever.
      *
      * @param selector The element selector to wait for
      * @param timeoutMs Maximum time to wait for the element to exist
@@ -95,11 +97,14 @@ class WaitEngine(
         val findMs = SystemClock.uptimeMillis() - startTime
 
         // Phase 2: best-effort settle — prefer an enabled, positionally-stable
-        // match. The per-check wait is a BOUNDED idle wait (capped at
-        // STABILITY_WINDOW_MS): it returns immediately on an already-quiet
-        // screen (0ms fast-path for the common case) and caps at the window on
-        // a perpetually-animating screen, where we then fall back to the
-        // current match so it still makes progress.
+        // match. The per-check wait is a BOUNDED idle wait (SettleIdle): it
+        // returns immediately on an already-quiet screen (0ms fast-path for the
+        // common case) and otherwise pauses about STABILITY_WINDOW_MS, so the
+        // two bounds samples are not taken back to back mid-animation. On a
+        // perpetually-animating screen we then fall back to the current match
+        // so it still makes progress. Not device.waitForIdle(window): that
+        // asks for 500 ms of quiet and overshoots the window by up to 500 ms
+        // per check (PILOT-989).
         //
         // Each stability check re-reads ONLY the matched element's bounds (one
         // accessibility round-trip) rather than re-running the full find, which
@@ -120,7 +125,7 @@ class WaitEngine(
             val remaining = deadline - SystemClock.uptimeMillis()
             if (remaining <= 0) break
 
-            device.waitForIdle(STABILITY_WINDOW_MS.coerceAtMost(remaining))
+            SettleIdle.await(settleIdle, STABILITY_WINDOW_MS.coerceAtMost(remaining))
 
             if (selector.enabled == true || selector.xpath != null) {
                 val prevBounds = match.bounds
