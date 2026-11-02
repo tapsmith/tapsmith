@@ -5,6 +5,7 @@ import android.graphics.Rect
 import android.os.Build
 import android.os.SystemClock
 import android.util.Log
+import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import androidx.test.uiautomator.UiDevice
@@ -40,8 +41,39 @@ class OcclusionGuard(
         private const val CONTENT_NODES_READ = 64
         private const val CONTENT_DEPTH = 4
 
+        /** Clearance kept between a target dragged clear and its cover. */
+        private const val CLEAR_MARGIN_DP = 8
+
+        /** Allowance after a clearing drag for the list to come to rest
+         *  (see [settleAfterDrag]). */
+        private const val CLEAR_SETTLE_MS = 500L
+
         /** How far up the tree [isInScrollView] looks for a scroll view. */
         private const val SCROLL_ANCESTOR_DEPTH = 40
+
+        /**
+         * Whether scrollable [node] scrolls up and down: not a horizontal
+         * scroll view or pager, not a one-row collection, and not offering
+         * only sideways scroll actions (Compose's LazyRow).
+         */
+        @Suppress("DEPRECATION")
+        internal fun scrollsVertically(node: AccessibilityNodeInfo): Boolean {
+            val className = node.className?.toString().orEmpty()
+            if (className.contains("HorizontalScrollView") || className.contains("ViewPager")) return false
+            val collection = node.collectionInfo
+            if (collection != null && collection.rowCount == 1 && collection.columnCount > 1) return false
+            if (Build.VERSION.SDK_INT >= 23) {
+                val ids = node.actionList.map { it.id }.toSet()
+                val vertical =
+                    AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.id in ids ||
+                        AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.id in ids
+                val sideways =
+                    AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.id in ids ||
+                        AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT.id in ids
+                if (sideways && !vertical) return false
+            }
+            return true
+        }
     }
 
     private val screen =
@@ -51,7 +83,27 @@ class OcclusionGuard(
             override fun windows() = readWindows()
         }
 
-    private val planner = TouchPlanner(screen, SystemGuardClock) { Log.d(TAG, it) }
+    /** Waits for a list to stop scrolling after a clearing drag; the action
+     *  executor, which listens for scroll events, sets it. */
+    var settleAfterDrag: () -> Unit = { SystemGuardClock.sleep(CLEAR_SETTLE_MS) }
+
+    /** Drags a list to move a target clear of fixed chrome (PILOT-980). */
+    private val scroller =
+        object : GuardScroller {
+            private val density = instrumentation.targetContext.resources.displayMetrics.density
+            override val margin: Int get() = (CLEAR_MARGIN_DP * density).toInt()
+            override val touchSlop: Int get() = ViewConfiguration.get(instrumentation.targetContext).scaledTouchSlop
+            override val dragMs: Long get() = AgentInput.SCROLL_DRAG_MAX_MS + CLEAR_SETTLE_MS
+
+            override fun drag(drag: CoverClearance.Drag) {
+                input.scrollDrag(ScreenPoint(drag.fromX, drag.fromY), ScreenPoint(drag.toX, drag.toY))
+                // A list still moving takes the next touch as "stop" (React
+                // Native's ScrollView does), so the tap after must wait for it.
+                settleAfterDrag()
+            }
+        }
+
+    private val planner = TouchPlanner(screen, SystemGuardClock, scroller) { Log.d(TAG, it) }
 
     private val keyboard =
         object : GuardKeyboard {
@@ -196,6 +248,8 @@ class OcclusionGuard(
         override val isVisible: Boolean by lazy { node.isVisibleToUser }
         override val takesTouches: Boolean by lazy { node.isClickable || node.isLongClickable }
         override val offersDismiss: Boolean by lazy { node.isDismissable }
+        override val isProgressIndicator: Boolean by lazy { node.className?.toString()?.endsWith("ProgressBar") == true }
+        override val scrollsVertically: Boolean by lazy { node.isScrollable && OcclusionGuard.scrollsVertically(node) }
         private val childCount: Int by lazy { node.childCount }
         private val children = HashMap<Int, A11yHitNode?>()
 

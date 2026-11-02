@@ -526,6 +526,47 @@ enum EventSynthesizer {
         return dispatchSync(record) || dispatchViaDevice(record) || dispatchViaDaemonSession(record)
     }
 
+    /// A scroll drag that leaves the content where the finger stops
+    /// (PILOT-980): touch down at `start`, move in one steady segment to
+    /// `end` over `duration`, stay there for `hold`, lift. One segment, as
+    /// `swipe` makes, and sent the way `swipe` is: a path of many short
+    /// moves did not scroll a React Native list on iOS 26.4, and flung one
+    /// on iOS 18.5. The move is slow and the hold lets the pan's velocity
+    /// fall to nothing, so the list stops where the finger does.
+    static func dragAndHold(from start: CGPoint, to end: CGPoint, duration: TimeInterval, hold: TimeInterval) -> Bool {
+        guard let pathClass = objc_lookUpClass("XCPointerEventPath"),
+              let recordClass = objc_lookUpClass("XCSynthesizedEventRecord")
+        else { return false }
+        let pathObj = pathClass.alloc() as! NSObject
+        let initSel = NSSelectorFromString("initForTouchAtPoint:offset:")
+        guard pathObj.responds(to: initSel) else { return false }
+        typealias InitMethod = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> NSObject
+        let path = unsafeBitCast(pathObj.method(for: initSel), to: InitMethod.self)(pathObj, initSel, start, 0.0)
+        let moveSel = NSSelectorFromString("moveToPoint:atOffset:")
+        guard path.responds(to: moveSel) else { return false }
+        typealias MoveMethod = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> Void
+        unsafeBitCast(path.method(for: moveSel), to: MoveMethod.self)(path, moveSel, end, duration)
+        let liftSel = NSSelectorFromString("liftUpAtOffset:")
+        if path.responds(to: liftSel) {
+            typealias LiftMethod = @convention(c) (NSObject, Selector, TimeInterval) -> Void
+            unsafeBitCast(path.method(for: liftSel), to: LiftMethod.self)(path, liftSel, duration + hold)
+        }
+        let recordObj = recordClass.alloc() as! NSObject
+        let recordInitSel = NSSelectorFromString("initWithName:interfaceOrientation:")
+        let record: NSObject
+        if recordObj.responds(to: recordInitSel) {
+            typealias RMethod = @convention(c) (NSObject, Selector, NSString, Int) -> NSObject
+            record = unsafeBitCast(recordObj.method(for: recordInitSel), to: RMethod.self)(
+                recordObj, recordInitSel, "tapsmith-drag-hold" as NSString, currentOrientation
+            )
+        } else {
+            record = (recordClass as! NSObject.Type).init()
+        }
+        let addPathSel = NSSelectorFromString("addPointerEventPath:")
+        if record.responds(to: addPathSel) { record.perform(addPathSel, with: path) }
+        return dispatchSync(record) || dispatchViaDevice(record) || dispatchViaDaemonSession(record)
+    }
+
     /// Replay an arbitrary touch path as one synthesized gesture. `points` is
     /// [(location, offsetSeconds)] with the touch-down at the first entry
     /// (offset 0). Used by the interactive mirror's live-drag on iOS, where a

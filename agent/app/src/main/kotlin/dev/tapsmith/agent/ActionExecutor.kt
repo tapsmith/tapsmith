@@ -668,6 +668,9 @@ class ActionExecutor(
     @Volatile private var lastHorizontalScrollAt = 0L
 
     init {
+        // A clearing drag (PILOT-980) waits for its list to stop the same way
+        // a swipe does.
+        occlusionGuard.settleAfterDrag = { settleAfterSwipe(vertical = true) }
         // One listener for the agent's lifetime, so the settle measures quiet
         // from when scroll events ARRIVE. UiAutomation.executeAndWaitForEvent
         // drops events stamped before each wait began, so on a slow device

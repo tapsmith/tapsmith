@@ -73,6 +73,25 @@ data class Box(
  *   order still fall back to child order: Compose before 1.9, and every app
  *   below API 24, report 0 for all nodes, and there child order is paint
  *   order.
+ * - **A loading overlay** (PILOT-979): a node painted after the target, over
+ *   the touch point, that is a progress indicator (a ProgressBar — React
+ *   Native's ActivityIndicator is one) or holds a visible one. Apps lay one
+ *   over a screen while it loads, often see-through, and it takes the
+ *   touches though nothing in it is clickable. This is the one plain view
+ *   that is named: a spinner over the point says "wait", whether or not the
+ *   overlay passes touches through. Kind [CoverKind.LOADING].
+ * - **A sticky list row** (PILOT-979): another row of the vertical list the
+ *   target's row is in, at least as wide as the target, over the touch point.
+ *   A list's rows do not overlap, except a section header stuck to the top
+ *   (or a footer to the bottom) over the rows scrolling under it — and
+ *   Android lists order their children by place, so such a header comes
+ *   before the row it is drawn over, and it rarely takes touches itself.
+ *
+ * A cover in the target's own window that the list holding the target can
+ * scroll away from (a sticky row, or a control outside the list, such as a
+ * sticky footer's button) carries that list's bounds as
+ * [Verdict.Covered.scroller], for [TouchPlanner] to drag the target clear
+ * (PILOT-980).
  *
  * No Android dependencies — the tree and the windows come in through
  * [HitNode] and [WindowSpec] so the JVM unit tests can build them by hand.
@@ -110,6 +129,13 @@ object OcclusionAnalyzer {
         data class Covered(
             val by: String,
             val kind: CoverKind,
+            /** The cover's bounds on screen. */
+            val bounds: Box,
+            /** The bounds of the vertical list that holds the target but not
+             *  the cover — the list to scroll the target clear of it — or null
+             *  when there is none, or the cover is not one to scroll away
+             *  from (the keyboard, a window, a loading overlay). */
+            val scroller: Box? = null,
         ) : Verdict()
 
         /** No part of the element is on screen. */
@@ -123,7 +149,7 @@ object OcclusionAnalyzer {
     /** What a cover is. A focused field under the keyboard or a control on
      *  its own screen still gets the input; under another window it does
      *  not — that window has the input focus. */
-    enum class CoverKind { KEYBOARD, WINDOW, CONTROL }
+    enum class CoverKind { KEYBOARD, WINDOW, CONTROL, LOADING }
 
     data class WindowSpec(
         val id: Int,
@@ -146,6 +172,13 @@ object OcclusionAnalyzer {
 
         /** Offers the dismiss action (a Flutter modal barrier does). */
         val offersDismiss: Boolean get() = false
+
+        /** A spinner or a progress bar (Android's ProgressBar and its
+         *  subclasses, Compose's progress indicators). */
+        val isProgressIndicator: Boolean get() = false
+
+        /** A scroll container that scrolls up and down (a vertical list). */
+        val scrollsVertically: Boolean get() = false
 
         fun parent(): HitNode?
 
@@ -207,7 +240,7 @@ object OcclusionAnalyzer {
         val x = (visible.left + visible.right) / 2
         val y = (visible.top + visible.bottom) / 2
         if (target != null) {
-            findCoverInWindow(target, x, y)?.let { return Verdict.Covered(it.describe(), CoverKind.CONTROL) }
+            findCoverInWindow(target, onScreen, x, y)?.let { return it }
         }
         return Verdict.Clear(x, y, visible)
     }
@@ -259,6 +292,7 @@ object OcclusionAnalyzer {
         Verdict.Covered(
             windowName(window),
             if (window.kind == WindowKind.INPUT_METHOD) CoverKind.KEYBOARD else CoverKind.WINDOW,
+            window.bounds,
         )
 
     private fun windowName(window: WindowSpec): String {
@@ -288,22 +322,71 @@ object OcclusionAnalyzer {
     // ─── The target's own window ───
 
     /**
-     * A touchable node painted over ([x], [y]) in the target's window, or null.
+     * What covers ([x], [y]) in the target's window, or null: a touchable
+     * node, a loading overlay or a sticky list row painted over it.
      *
      * Walks up from the target; at each level, every sibling of the target's
      * branch that is painted after it is drawn over the whole branch, so its
-     * subtree is searched for a touchable node containing the point. Levels
-     * nearer the root are checked first — what they paint is on top.
+     * subtree is searched for a touchable node containing the point, then
+     * checked for a progress indicator. At a list's level, its other rows are
+     * checked for one stuck over the point. Levels nearer the root are checked
+     * first — what they paint is on top.
      */
     private fun findCoverInWindow(
         target: HitNode,
+        targetBounds: Box,
         x: Int,
         y: Int,
-    ): HitNode? {
-        val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
+    ): Verdict.Covered? {
         val reader = BudgetedReader(MAX_NODES_VISITED)
-        // (parent, the target's branch, its index among the parent's
-        // children), from the target's parent up to the root.
+        // The loading-overlay and sticky-row checks walk more widely; their
+        // own allowance keeps them from starving the touchable-cover search.
+        val extraReader = BudgetedReader(MAX_NODES_VISITED)
+        val rowReader = BudgetedReader(MAX_NODES_VISITED)
+        val levels = levelsOf(target)
+
+        // The nearest vertical list holding the target below level [depth]
+        // (an index into levels): a cover found at that level is outside it.
+        fun scrollerBelow(depth: Int): Box? = (0 until depth).map { levels[it].first }.firstOrNull { it.scrollsVertically }?.bounds
+
+        for ((depth, level) in levels.withIndex().reversed()) {
+            val (node, branch, branchIndex) = level
+            val branchKey = drawKey(branch, branchIndex)
+            val later =
+                (0 until node.childCount())
+                    .filter { it != branchIndex }
+                    .mapNotNull { i -> reader.child(node, i)?.let { it to drawKey(it, i) } }
+                    .filter { (sibling, key) -> compareKeys(key, branchKey) > 0 && !isModalBarrierBehind(sibling, key, branchKey) }
+                    .sortedWith { a, b -> compareKeys(b.second, a.second) }
+            for ((sibling, _) in later) {
+                searchSubtree(sibling, x, y, reader)?.let {
+                    // A control in a loading overlay (its Cancel button) is
+                    // waited out with the overlay, never scrolled away from.
+                    val list = scrollerBelow(depth)?.takeUnless { isLoadingOverlay(sibling, x, y, extraReader) }
+                    // Clear the chrome the control sits in, not just the
+                    // control: a bar's label above its button covers too.
+                    val bounds = if (list != null) chromeBounds(it, node, list) else it.bounds
+                    return Verdict.Covered(it.describe(), CoverKind.CONTROL, bounds, list)
+                }
+                if (isLoadingOverlay(sibling, x, y, extraReader)) {
+                    return Verdict.Covered("a loading overlay (${sibling.describe()})", CoverKind.LOADING, sibling.bounds)
+                }
+            }
+            if (isListContent(node)) {
+                stickyRow(node, branch, branchIndex, targetBounds, x, y, rowReader)?.let { row ->
+                    val list = if (node.scrollsVertically) node else node.parent()
+                    return Verdict.Covered(row.describe(), CoverKind.CONTROL, row.bounds, list?.bounds)
+                }
+            }
+            if (reader.exhausted) return null
+        }
+        return null
+    }
+
+    /** (parent, the target's branch, its index among the parent's children),
+     *  from the target's parent up to the root. */
+    private fun levelsOf(target: HitNode): List<Triple<HitNode, HitNode, Int>> {
+        val pathReader = BudgetedReader(MAX_PATH_NODES_VISITED)
         val levels = mutableListOf<Triple<HitNode, HitNode, Int>>()
         var child = target
         var parent = child.parent()
@@ -316,21 +399,139 @@ object OcclusionAnalyzer {
             child = level
             parent = child.parent()
         }
+        return levels
+    }
 
-        for ((node, branch, branchIndex) in levels.asReversed()) {
+    /**
+     * Whether a drag that starts at ([x], [y]) would press the vertical list
+     * at [list] that holds [target] (PILOT-980), and nothing else: no window
+     * above the target's lies over the point, and no touchable node painted
+     * over the list from outside it does — a dialog's backdrop, a second bar
+     * stacked on the cover. Nor does anything in the layer the cover (at
+     * [cover], its bounds) is laid out in, other than the nodes that hold it:
+     * a dialog's backdrop that takes no clicks (one built on React Native's
+     * responder system) sits beside the dialog's card in one host; a host
+     * that only lays out the chrome holds nothing else there. A drag that
+     * started there would press that instead (a backdrop dismisses its
+     * dialog on release). False too when the list is not among the target's
+     * ancestors any more.
+     */
+    fun isDragStartOnList(
+        target: HitNode,
+        targetWindowId: Int?,
+        list: Box,
+        cover: Box,
+        x: Int,
+        y: Int,
+        windows: List<WindowSpec>,
+    ): Boolean {
+        if (coveringWindows(windows, targetWindowId).any { it.bounds.contains(x, y) }) return false
+        val levels = levelsOf(target)
+        val listDepth = levels.indexOfFirst { it.first.scrollsVertically && it.first.bounds == list }
+        if (listDepth < 0) return false
+        val reader = BudgetedReader(MAX_NODES_VISITED)
+        for (depth in levels.indices.reversed()) {
+            if (depth <= listDepth) break
+            val (node, branch, branchIndex) = levels[depth]
             val branchKey = drawKey(branch, branchIndex)
-            val later =
-                (0 until node.childCount())
-                    .filter { it != branchIndex }
-                    .mapNotNull { i -> reader.child(node, i)?.let { it to drawKey(it, i) } }
-                    .filter { (sibling, key) -> compareKeys(key, branchKey) > 0 && !isModalBarrierBehind(sibling, key, branchKey) }
-                    .sortedWith { a, b -> compareKeys(b.second, a.second) }
-            for ((sibling, _) in later) {
-                searchSubtree(sibling, x, y, reader)?.let { return it }
+            for (i in 0 until node.childCount()) {
+                if (i == branchIndex) continue
+                val sibling = reader.child(node, i) ?: continue
+                if (compareKeys(drawKey(sibling, i), branchKey) <= 0) continue
+                if (searchSubtree(sibling, x, y, reader) != null) return false
+                if (coverLayerLies(sibling, cover, x, y, reader)) return false
             }
-            if (reader.exhausted) return null
+            if (reader.exhausted) return false
         }
-        return null
+        return true
+    }
+
+    /** Whether [node] holds a vertical list's rows: the list itself (a
+     *  RecyclerView) or a scroll view's only child (its content). */
+    private fun isListContent(node: HitNode): Boolean {
+        if (node.scrollsVertically) return true
+        val parent = node.parent() ?: return false
+        return parent.scrollsVertically && parent.childCount() == 1
+    }
+
+    /** The bounds of the fixed chrome [cover] sits in: its outermost ancestor
+     *  below [level] (where its branch splits from the target's) no taller
+     *  than half of [list] — a bar, not a full-screen host it is placed in. */
+    private fun chromeBounds(
+        cover: HitNode,
+        level: HitNode,
+        list: Box,
+    ): Box {
+        var node = cover
+        while (true) {
+            val parent = node.parent() ?: break
+            if (parent.sameAs(level) || parent.bounds.height * 2 > list.height) break
+            node = parent
+        }
+        return node.bounds
+    }
+
+    /** Another row of [content] than the target's ([branch] at [branchIndex])
+     *  stuck over ([x], [y]): visible, containing the point, at least as wide
+     *  as the target's visible part (a grid's neighbouring cell is not), and
+     *  painted over the target's row — or, with no drawing order to tell (a
+     *  list reporting 0 for every child, which orders a sticky header before
+     *  the rows it is drawn over), listed before it, row-sized (no taller
+     *  than twice the target's row) and not enclosing the target's row. A
+     *  background drawn behind the row (a decor view declared first in a
+     *  ScrollView's content, an image under a button, even one the button's
+     *  own size) is not a cover, and nor is a row scrolled under a target that
+     *  is itself the sticky header. Unordered, a header that happens to hide
+     *  a whole row is missed too, and the row is touched as before. */
+    private fun stickyRow(
+        content: HitNode,
+        branch: HitNode,
+        branchIndex: Int,
+        targetBounds: Box,
+        x: Int,
+        y: Int,
+        reader: BudgetedReader,
+    ): HitNode? =
+        (0 until content.childCount())
+            .filter { it != branchIndex }
+            .firstNotNullOfOrNull { i ->
+                reader.child(content, i)?.takeIf {
+                    val drawnOver =
+                        if (it.drawingOrder == 0 && branch.drawingOrder == 0) {
+                            i < branchIndex &&
+                                it.bounds.height <= 2 * branch.bounds.height &&
+                                !it.bounds.contains(branch.bounds)
+                        } else {
+                            compareKeys(drawKey(it, i), drawKey(branch, branchIndex)) > 0
+                        }
+                    drawnOver &&
+                        it.isVisible &&
+                        it.bounds.contains(x, y) &&
+                        it.bounds.left <= targetBounds.left &&
+                        it.bounds.right >= targetBounds.right
+                }
+            }
+
+    /** Whether [branch], painted over the target, is a loading overlay over
+     *  ([x], [y]): visible, containing the point, and a progress indicator
+     *  or holding a visible one inside its bounds. */
+    private fun isLoadingOverlay(
+        branch: HitNode,
+        x: Int,
+        y: Int,
+        reader: BudgetedReader,
+    ): Boolean {
+        if (!branch.isVisible || !branch.bounds.contains(x, y)) return false
+        val stack = ArrayDeque<HitNode>()
+        stack.addLast(branch)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            if (!node.isVisible || node.bounds.isEmpty || !node.bounds.intersects(branch.bounds)) continue
+            if (node.isProgressIndicator) return true
+            if (reader.exhausted) return false
+            for (i in 0 until node.childCount()) reader.child(node, i)?.let(stack::addLast)
+        }
+        return false
     }
 
     /** Reads children while counting them against a shared budget; once it is
@@ -348,6 +549,45 @@ object OcclusionAnalyzer {
             left--
             return node.child(index)
         }
+    }
+
+    /** Whether [layer] holds the node at [cover] and something in it other
+     *  than that node and the nodes holding it lies over ([x], [y]). */
+    private fun coverLayerLies(
+        layer: HitNode,
+        cover: Box,
+        x: Int,
+        y: Int,
+        reader: BudgetedReader,
+    ): Boolean {
+        if (!holds(layer, cover, reader)) return false
+        val stack = ArrayDeque<HitNode>()
+        stack.addLast(layer)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeLast()
+            if (!node.isVisible || !node.bounds.contains(x, y) || node.bounds == cover) continue
+            if (!holds(node, cover, reader)) return true
+            if (reader.exhausted) return false
+            for (i in 0 until node.childCount()) reader.child(node, i)?.let(stack::addLast)
+        }
+        return false
+    }
+
+    /** Whether [node] is, or holds, a node whose bounds are [cover]. */
+    private fun holds(
+        node: HitNode,
+        cover: Box,
+        reader: BudgetedReader,
+    ): Boolean {
+        val stack = ArrayDeque<HitNode>()
+        stack.addLast(node)
+        while (stack.isNotEmpty()) {
+            val n = stack.removeLast()
+            if (n.bounds == cover) return true
+            if (!n.bounds.contains(cover) || reader.exhausted) continue
+            for (i in 0 until n.childCount()) reader.child(n, i)?.let(stack::addLast)
+        }
+        return false
     }
 
     /** Depth-first search of [root]'s subtree for a visible touchable node

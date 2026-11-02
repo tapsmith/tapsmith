@@ -32,6 +32,21 @@ import XCTest
 ///   hittable. Plain views, texts, and images are never named: a
 ///   `pointerEvents="none"` overlay looks exactly like them, and on Xcode 26.6
 ///   it fools XCUITest's hit test as well (see `interactiveTypes`).
+/// - **A loading overlay** (PILOT-979), when XCUITest says the element is not
+///   hittable: a view painted after the target over the touch point that is
+///   an activity or progress indicator or holds one. Apps lay one over a
+///   screen while it loads, often see-through, and it takes the touches
+///   though nothing in it is a control. A spinner over the point says "wait"
+///   either way, so this is the one plain view that is named.
+/// - **A sticky list row** (PILOT-979), when not hittable: another row of the
+///   list the target's row is in, at least as wide as the target, over the
+///   touch point — a section header floating over the rows scrolled under it.
+///   A list's rows do not overlap otherwise.
+///
+/// A cover in the target's own window that the vertical list holding the
+/// target can scroll away from — a sticky row, a bar, or a control outside
+/// the list (a sticky footer's button) — is reported as `.coveredInList`, so
+/// the touch can drag the target clear of it first (PILOT-980).
 struct OcclusionAnalyzer {
     /// What the snapshot says about the target.
     enum Verdict: Equatable {
@@ -42,6 +57,10 @@ struct OcclusionAnalyzer {
         /// The element is covered, by the thing `by` names ("the keyboard",
         /// `button "Overlay"`).
         case covered(by: String)
+        /// Covered by in-window chrome at `cover` that the vertical list at
+        /// `list`, which holds the target but not the cover, can scroll the
+        /// target clear of (PILOT-980).
+        case coveredInList(by: String, cover: CGRect, list: CGRect)
         /// No part of the element is on screen.
         case offScreen
         /// The target is not hittable and could not be matched in the tree
@@ -181,21 +200,33 @@ struct OcclusionAnalyzer {
         let keyboardWindows = self.keyboardWindows()
         let targetInKeyboard = targetIndex.map { isInKeyboard($0, keyboardWindows: keyboardWindows) } ?? false
 
-        var clips: [(rect: CGRect, name: String)] = []
+        var clips: [(rect: CGRect, name: String, node: Int?)] = []
         if !targetInKeyboard, let region = keyboardRegion(keyboardWindows: keyboardWindows) {
-            clips.append((region, "the keyboard"))
+            clips.append((region, "the keyboard", nil))
         }
         for (i, node) in nodes.enumerated() where Self.barTypes.contains(node.elementType) {
             if let w = node.window, keyboardWindows.contains(w) { continue }
             if isSelfOrAncestor(i, of: targetIndex, targetFrame: target.frame) { continue }
             if !barCovers(i, target: targetIndex) { continue }
-            clips.append((node.frame, describe(node)))
+            clips.append((node.frame, describe(node), i))
         }
         for clip in clips {
+            let before = visible
             visible = Self.subtract(clip.rect, from: visible)
             if visible.isNull
                 || visible.width < Self.minVisibleExtent
                 || visible.height < Self.minVisibleExtent {
+                if let bar = clip.node, let t = targetIndex {
+                    // A loading overlay drawn over the bar is what is in the
+                    // way first: wait it out, and keep the drags for after.
+                    if !isHittable, let loading = paintedOver(
+                        t, at: CGPoint(x: before.midX, y: before.midY),
+                        keyboardWindows: keyboardWindows, targetInKeyboard: targetInKeyboard
+                    ).loading {
+                        return .covered(by: loadingName(loading))
+                    }
+                    return chromeCover(clip.name, at: bar, over: t)
+                }
                 return .covered(by: clip.name)
             }
         }
@@ -212,10 +243,36 @@ struct OcclusionAnalyzer {
                 ? .clear(point: point, visible: visible)
                 : .unlocated(point: point, visible: visible)
         }
+        let (cover, loading) = paintedOver(t, at: point, keyboardWindows: keyboardWindows, targetInKeyboard: targetInKeyboard)
+        if let loading {
+            // The overlay is on top of any control under it: wait it out. A
+            // control in the overlay (its Cancel button) is named, but is
+            // never scrolled away from either.
+            guard let cover, cover > loading else { return .covered(by: loadingName(loading)) }
+            if cover < nodes[loading].subtreeEnd { return .covered(by: describe(nodes[cover])) }
+        }
+        if let cover {
+            return chromeCover(describe(nodes[cover]), at: cover, over: t)
+        }
+        if let row = stickyRow(over: t, at: point, targetFrame: visible) {
+            return chromeCover(describe(nodes[row.row]), at: row.row, over: t, list: row.list)
+        }
+        return .clear(point: point, visible: visible)
+    }
+
+    private func loadingName(_ i: Int) -> String { "a loading overlay (\(describe(nodes[i])))" }
+
+    /// What is painted after target `t` over `point`: the topmost
+    /// interactive control, and the outermost view that is or holds a
+    /// progress indicator (a loading overlay).
+    private func paintedOver(
+        _ t: Int, at point: CGPoint, keyboardWindows: Set<Int>, targetInKeyboard: Bool
+    ) -> (cover: Int?, loading: Int?) {
         // Runs of the same text as the target (a link inside a paragraph).
         let paragraph = nodes[t].parent.flatMap { nodes[$0].elementType == .staticText ? $0 : nil }
 
-        var cover: Node?
+        var cover: Int?
+        var loading: Int?
         for i in nodes[t].subtreeEnd..<nodes.count {
             let node = nodes[i]
             if let w = node.window, keyboardWindows.contains(w), !targetInKeyboard { continue }
@@ -225,11 +282,59 @@ struct OcclusionAnalyzer {
             // over a sibling Pressable is not a run of the target's text.)
             if let paragraph, node.parent == paragraph, Self.textRunTypes.contains(node.elementType) { continue }
             if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
-            guard isInteractive(node), clippedFrame(of: i).contains(point) else { continue }
-            cover = node
+            guard clippedFrame(of: i).contains(point) else { continue }
+            if isInteractive(node) {
+                cover = i
+            } else if loading == nil, holdsProgressIndicator(i) {
+                // The outermost such view: what the overlay is.
+                loading = i
+            }
         }
-        if let cover { return .covered(by: describe(cover)) }
-        return .clear(point: point, visible: visible)
+        return (cover, loading)
+    }
+
+    /// Whether a drag that starts at `point` would press the vertical list at
+    /// `list` that holds `target` (PILOT-980), and nothing else: no control
+    /// painted after the list lies over the point — a dialog's backdrop, a
+    /// second bar stacked on the cover — and the keyboard does not. A drag
+    /// that started there would press that instead. Nor does anything in the
+    /// layer the cover (`cover`, its frame) is laid out in, other than the
+    /// views that hold it: a dialog's backdrop with no role (a React Native
+    /// Pressable reads as `.other`) sits beside the dialog's card in one
+    /// host; a host that only lays out the chrome holds nothing else there.
+    /// False too when the list is not among the target's ancestors.
+    func isDragStartOnList(_ target: Target, list: CGRect, cover: CGRect, at point: CGPoint) -> Bool {
+        guard let t = locate(target),
+              let l = ancestors(of: t).first(where: {
+                  Self.listTypes.contains(nodes[$0].elementType) && Self.framesMatch(nodes[$0].frame, list)
+              }) else { return false }
+        let keyboardWindows = self.keyboardWindows()
+        if let region = keyboardRegion(keyboardWindows: keyboardWindows), region.contains(point) { return false }
+        for i in nodes[l].subtreeEnd..<nodes.count {
+            let node = nodes[i]
+            if let w = node.window, keyboardWindows.contains(w) { continue }
+            if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
+            if (isInteractive(node) || Self.barTypes.contains(node.elementType)), clippedFrame(of: i).contains(point) {
+                return false
+            }
+        }
+        return !coverLayerLies(over: point, cover: cover, after: nodes[l].subtreeEnd)
+    }
+
+    /// Whether something in the cover's layer — the outermost view painted
+    /// after the list (from index `start`) that holds the cover — other than
+    /// the cover and the views holding it lies over `point`.
+    private func coverLayerLies(over point: CGPoint, cover: CGRect, after start: Int) -> Bool {
+        guard start < nodes.count,
+              let c = (start..<nodes.count).first(where: { Self.framesMatch(clippedFrame(of: $0), cover) }) else { return false }
+        let holders = Set(ancestors(of: c).filter { $0 >= start })
+        guard let layer = holders.min() else { return false }
+        for i in layer..<nodes[layer].subtreeEnd where !holders.contains(i) && !(i >= c && i < nodes[c].subtreeEnd) {
+            let node = nodes[i]
+            if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
+            if clippedFrame(of: i).contains(point) { return true }
+        }
+        return false
     }
 
     /// The interactive control painted after the target that contains any of
@@ -253,6 +358,134 @@ struct OcclusionAnalyzer {
             if points.contains(where: { frame.contains($0) }) { return describe(node) }
         }
         return nil
+    }
+
+    // MARK: - Loading overlays and sticky rows (PILOT-979)
+
+    static let progressTypes: Set<XCUIElement.ElementType> = [.activityIndicator, .progressIndicator]
+
+    /// Presented containers: never scrolled away from.
+    static let presentedTypes: Set<XCUIElement.ElementType> = [.alert, .sheet, .dialog, .popover]
+
+    /// Whether node `i` is a progress indicator or holds a visible one inside
+    /// its frame.
+    private func holdsProgressIndicator(_ i: Int) -> Bool {
+        let frame = clippedFrame(of: i)
+        for j in i..<nodes[i].subtreeEnd where Self.progressTypes.contains(nodes[j].elementType) {
+            let f = clippedFrame(of: j)
+            if !f.isNull, f.width > 0, f.height > 0, f.intersects(frame) { return true }
+        }
+        return false
+    }
+
+    /// Another row of the list the target's row is in, stuck over `point`:
+    /// containing it, at least as wide as the target, and no taller than half
+    /// the list. (The tree's order says nothing here: iOS lists a floating
+    /// header before the rows it is drawn over.) A list's rows are
+    /// the children of a table or collection view, or of a scroll view's
+    /// content view (React Native).
+    private func stickyRow(over t: Int, at point: CGPoint, targetFrame: CGRect) -> (row: Int, list: Int)? {
+        var row = t
+        while let content = nodes[row].parent {
+            if let list = listOwning(content: content) {
+                // The target inside a plain view stuck at the list's visible
+                // top or bottom edge is in the sticky header itself (React
+                // Native's sticky wrapper holds its contents), on top of the
+                // row scrolled under it: the tree has no paint order to say
+                // so. The row's own frame, not its clipped one: a row partly
+                // scrolled past the edge is clipped to it without being stuck
+                // there. A cell is never the header, even when a scroll to a
+                // row aligns it with the edge; a target that is a row is
+                // still checked.
+                let edges = clippedFrame(of: list), rowFrame = nodes[row].frame
+                if row != t, nodes[row].elementType == .other,
+                   abs(rowFrame.minY - edges.minY) <= 1 || abs(rowFrame.maxY - edges.maxY) <= 1 {
+                    return nil
+                }
+                for i in (content + 1)..<nodes[content].subtreeEnd where nodes[i].parent == content && i != row {
+                    let node = nodes[i]
+                    if isScrollIndicator(node) || isTapsmithHooksMarker(node) { continue }
+                    let f = clippedFrame(of: i)
+                    // A bar-sized row with content of its own — children or
+                    // a label. A background laid behind the rows (a view
+                    // filling the content), a row's own empty background
+                    // view React Native lists beside its controls, or a
+                    // plain View with a testID, which React Native flattens
+                    // into an empty node with only that identifier, its
+                    // contents listed beside it in whatever order XCUITest
+                    // sorts them (the /visibility screen's banner and rows),
+                    // is not a header stuck over one. A sticky header holds
+                    // its contents (React Native) or carries a label (UIKit).
+                    if f.contains(point), f.minX <= targetFrame.minX + 1, f.maxX >= targetFrame.maxX - 1,
+                       f.height * 2 <= nodes[list].frame.height,
+                       node.subtreeEnd > i + 1 || !node.label.isEmpty {
+                        return (i, list)
+                    }
+                }
+                return nil
+            }
+            row = content
+        }
+        return nil
+    }
+
+    /// The scroller whose rows are `content`'s children: `content` itself (a
+    /// table, a collection view, a scroll view whose rows are direct
+    /// children), or the scroll view `content` is the only content of —
+    /// through any chain of only-child wrappers (React Native nests its
+    /// content view in another).
+    private func listOwning(content: Int) -> Int? {
+        let type = nodes[content].elementType
+        if type == .table || type == .collectionView || type == .scrollView { return content }
+        var inner = content
+        while let p = nodes[inner].parent {
+            let children = ((p + 1)..<nodes[p].subtreeEnd).filter { nodes[$0].parent == p && !isScrollIndicator(nodes[$0]) }
+            guard children == [inner] else { return nil }
+            if nodes[p].elementType == .scrollView { return p }
+            guard nodes[p].elementType == .other else { return nil }
+            inner = p
+        }
+        return nil
+    }
+
+    /// The nearest vertical list holding target `t` but not node `cover`:
+    /// a scroller ancestor (not a web view) with room to scroll the target
+    /// up or down (taller than twice it).
+    private func verticalList(holding t: Int, notHolding cover: Int) -> Int? {
+        ancestors(of: t).first { a in
+            Self.listTypes.contains(nodes[a].elementType)
+                && !(a <= cover && nodes[a].subtreeEnd > cover)
+                && nodes[a].frame.height > 2 * nodes[t].frame.height
+        }
+    }
+
+    static let listTypes: Set<XCUIElement.ElementType> = [.scrollView, .table, .collectionView]
+
+    /// `.coveredInList` when a vertical list can scroll target `t` clear of
+    /// node `cover` (`list` when already known), else `.covered`.
+    /// A cover in a presented container (an alert's button, a popover's
+    /// row) or in another window is never scrolled away from: it is waited
+    /// out, and a drag under it would touch it.
+    private func chromeCover(_ name: String, at cover: Int, over t: Int, list known: Int? = nil) -> Verdict {
+        let presented = ([cover] + ancestors(of: cover)).contains { Self.presentedTypes.contains(nodes[$0].elementType) }
+        guard !presented, nodes[cover].window == nodes[t].window,
+              let list = known ?? verticalList(holding: t, notHolding: cover) else { return .covered(by: name) }
+        // A sticky row is cleared as itself; a control as the bar it sits in.
+        let bounds = known != nil ? clippedFrame(of: cover) : chromeFrame(of: cover, over: t, list: list)
+        return .coveredInList(by: name, cover: bounds, list: nodes[list].frame)
+    }
+
+    /// The frame of the fixed chrome control `cover` sits in: its outermost
+    /// ancestor that does not hold the target and is no taller than half of
+    /// `list` — a bar, with its labels, not a full-screen host it is placed in.
+    private func chromeFrame(of cover: Int, over t: Int, list: Int) -> CGRect {
+        var node = cover
+        while let p = nodes[node].parent,
+              !(p <= t && nodes[p].subtreeEnd > t),
+              nodes[p].frame.height * 2 <= nodes[list].frame.height {
+            node = p
+        }
+        return clippedFrame(of: node)
     }
 
     // MARK: - Target lookup

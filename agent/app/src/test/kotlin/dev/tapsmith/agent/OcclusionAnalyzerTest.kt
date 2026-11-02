@@ -25,6 +25,8 @@ class OcclusionAnalyzerTest {
         override val isVisible: Boolean = true,
         override val takesTouches: Boolean = false,
         override val offersDismiss: Boolean = false,
+        override val isProgressIndicator: Boolean = false,
+        override val scrollsVertically: Boolean = false,
         private val name: String = "node",
         val children: MutableList<FakeNode> = mutableListOf(),
     ) : OcclusionAnalyzer.HitNode {
@@ -89,6 +91,11 @@ class OcclusionAnalyzerTest {
     ) {
         assertTrue("expected Covered, got $verdict", verdict is Verdict.Covered)
         assertEquals(cover, (verdict as Verdict.Covered).by)
+    }
+
+    private fun coverBounds(verdict: Verdict): Box {
+        assertTrue("expected Covered, got $verdict", verdict is Verdict.Covered)
+        return (verdict as Verdict.Covered).bounds
     }
 
     private fun coverKind(verdict: Verdict): OcclusionAnalyzer.CoverKind {
@@ -342,6 +349,336 @@ class OcclusionAnalyzerTest {
         root(bar)
         // Left strip 0..300 (300 wide), right strip 500..1000 (500 wide).
         assertClearAt(analyze(bar, windows = listOf(appWindow, cover)), 750, 150)
+    }
+
+    // ─── Loading overlays (PILOT-979) ───
+
+    @Test
+    fun `a non-touchable overlay holding a spinner covers the target`() {
+        // A React Native loading overlay: a plain view (it may be see-through)
+        // over the screen, with an ActivityIndicator (a ProgressBar) in it.
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(490, 1150, 590, 1250), isProgressIndicator = true, name = "an unlabelled ProgressBar")
+        val overlay = FakeNode(Box(0, 0, 1080, 2400), drawingOrder = 2, name = "an unlabelled ViewGroup").add(spinner)
+        root(FakeNode(screen).add(button, overlay))
+        val verdict = analyze(button)
+        assertCoveredBy(verdict, "a loading overlay (an unlabelled ViewGroup)")
+        assertEquals(OcclusionAnalyzer.CoverKind.LOADING, coverKind(verdict))
+        assertEquals(Box(0, 0, 1080, 2400), coverBounds(verdict))
+    }
+
+    @Test
+    fun `a spinner drawn right over the touch point covers the target`() {
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(440, 805, 640, 905), drawingOrder = 2, isProgressIndicator = true, name = "an unlabelled ProgressBar")
+        root(FakeNode(screen).add(button, spinner))
+        assertCoveredBy(analyze(button), "a loading overlay (an unlabelled ProgressBar)")
+    }
+
+    @Test
+    fun `a spinner nested deep in a later branch over the point is found`() {
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(490, 1150, 590, 1250), isProgressIndicator = true)
+        val card = FakeNode(Box(300, 1000, 780, 1400)).add(FakeNode(Box(300, 1000, 780, 1400)).add(spinner))
+        val overlay = FakeNode(screen, drawingOrder = 2, name = "overlay").add(card)
+        root(FakeNode(screen).add(button, overlay))
+        assertCoveredBy(analyze(button), "a loading overlay (overlay)")
+    }
+
+    @Test
+    fun `an overlay without a spinner still does not cover the target`() {
+        // Indistinguishable from a pointerEvents="none" overlay.
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val overlay = FakeNode(screen, drawingOrder = 2).add(FakeNode(Box(490, 1150, 590, 1250), name = "text"))
+        root(FakeNode(screen).add(button, overlay))
+        assertClearAt(analyze(button), 540, 855)
+    }
+
+    @Test
+    fun `a spinner inside the target is not a cover`() {
+        val spinner = FakeNode(Box(940, 820, 1000, 880), isProgressIndicator = true)
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true).add(spinner)
+        root(FakeNode(screen).add(button))
+        assertClearAt(analyze(button), 540, 855)
+    }
+
+    @Test
+    fun `a spinner beside the target that misses the touch point is not a cover`() {
+        val button = FakeNode(Box(40, 780, 700, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(750, 805, 850, 905), drawingOrder = 2, isProgressIndicator = true)
+        root(FakeNode(screen).add(button, spinner))
+        assertClearAt(analyze(button), 370, 855)
+    }
+
+    @Test
+    fun `a spinner in a branch painted before the target is not a cover`() {
+        val spinner = FakeNode(Box(490, 1150, 590, 1250), isProgressIndicator = true)
+        val background = FakeNode(screen, drawingOrder = 1).add(spinner)
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 2, takesTouches = true)
+        root(FakeNode(screen).add(background, button))
+        assertClearAt(analyze(button), 540, 855)
+    }
+
+    @Test
+    fun `an invisible spinner does not make an overlay a cover`() {
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val spinner = FakeNode(Box(490, 1150, 590, 1250), isVisible = false, isProgressIndicator = true)
+        val overlay = FakeNode(screen, drawingOrder = 2).add(spinner)
+        root(FakeNode(screen).add(button, overlay))
+        assertClearAt(analyze(button), 540, 855)
+    }
+
+    @Test
+    fun `a touchable control over the point is named before a loading overlay`() {
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val cancel = FakeNode(Box(40, 780, 1040, 930), takesTouches = true, name = "button \"Cancel\"")
+        val overlay = FakeNode(screen, drawingOrder = 2).add(cancel, FakeNode(Box(490, 1150, 590, 1250), isProgressIndicator = true))
+        root(FakeNode(screen).add(button, overlay))
+        val verdict = analyze(button)
+        assertCoveredBy(verdict, "button \"Cancel\"")
+        assertEquals(OcclusionAnalyzer.CoverKind.CONTROL, coverKind(verdict))
+    }
+
+    // ─── Sticky list rows (PILOT-979) ───
+
+    /** A vertical list: scroll view > content > rows, rows 150 px tall from y = 300. */
+    private fun list(vararg rows: FakeNode): FakeNode {
+        val content = FakeNode(Box(0, 300, 1080, 2100)).add(*rows)
+        return FakeNode(Box(0, 300, 1080, 2100), scrollsVertically = true, name = "list").add(content)
+    }
+
+    @Test
+    fun `a sticky header row stuck over the target's row covers it`() {
+        // Android lists order their children by place: the header comes first
+        // though it is drawn over the row scrolled under it. It takes no touches.
+        val header = FakeNode(Box(0, 300, 1080, 450), name = "text \"Section A\"")
+        val row = FakeNode(Box(0, 320, 1080, 470), takesTouches = true, name = "row 5")
+        val title = FakeNode(Box(40, 340, 600, 450)).also { row.add(it) }
+        root(list(header, row))
+        val verdict = analyze(title)
+        assertCoveredBy(verdict, "text \"Section A\"")
+        assertEquals(OcclusionAnalyzer.CoverKind.CONTROL, coverKind(verdict))
+        assertEquals(Box(0, 300, 1080, 450), coverBounds(verdict))
+    }
+
+    @Test
+    fun `a row directly in a scrolling node (RecyclerView) is covered by a sticky sibling`() {
+        val header = FakeNode(Box(0, 300, 1080, 450), name = "header")
+        val row = FakeNode(Box(0, 320, 1080, 470), takesTouches = true)
+        root(FakeNode(Box(0, 300, 1080, 2100), scrollsVertically = true).add(header, row))
+        assertCoveredBy(analyze(row), "header")
+    }
+
+    @Test
+    fun `rows that only touch edges do not cover each other`() {
+        val a = FakeNode(Box(0, 300, 1080, 450), name = "a")
+        val b = FakeNode(Box(0, 450, 1080, 600), takesTouches = true)
+        val c = FakeNode(Box(0, 600, 1080, 750), name = "c")
+        root(list(a, b, c))
+        assertClearAt(analyze(b), 540, 525)
+    }
+
+    @Test
+    fun `a narrower sibling (a grid cell beside it) is not a sticky row`() {
+        val left = FakeNode(Box(0, 300, 540, 450), takesTouches = true)
+        val badge = FakeNode(Box(500, 330, 600, 420), name = "badge")
+        root(list(left, badge))
+        assertClearAt(analyze(left), 270, 375)
+    }
+
+    @Test
+    fun `rows of a horizontal list are not sticky rows`() {
+        val a = FakeNode(Box(0, 300, 600, 450), name = "a")
+        val b = FakeNode(Box(0, 300, 600, 450), takesTouches = true)
+        val content = FakeNode(Box(0, 300, 1080, 450)).add(a, b)
+        root(FakeNode(Box(0, 300, 1080, 450), scrollsVertically = false).add(content))
+        assertClearAt(analyze(b), 300, 375)
+    }
+
+    @Test
+    fun `a background drawn behind the target in scroll content is not a sticky row`() {
+        // NestedScrollView > ConstraintLayout > [card background declared
+        // first, button on top of it]: the background is painted under it.
+        val background = FakeNode(Box(0, 300, 1080, 700), drawingOrder = 1, name = "background")
+        val button = FakeNode(Box(40, 400, 1040, 550), drawingOrder = 2, takesTouches = true)
+        root(list(background, button))
+        assertClearAt(analyze(button), 540, 475)
+    }
+
+    @Test
+    fun `a sticky header drawn on top by z-order covers the row though listed first`() {
+        // React Native's stickyHeaderIndices: the header is the first cell,
+        // raised above the rows by its zIndex.
+        val header = FakeNode(Box(0, 300, 1080, 450), drawingOrder = 3, name = "header")
+        val row = FakeNode(Box(0, 320, 1080, 470), drawingOrder = 2, takesTouches = true)
+        root(list(header, row))
+        assertCoveredBy(analyze(row), "header")
+    }
+
+    @Test
+    fun `a wide later branch without a spinner does not use up the search for nearer covers`() {
+        // A full-screen host over the point holds a long list elsewhere; the
+        // loading-overlay check walks all of it, and must not stop the search
+        // from reaching the control drawn over the target lower down.
+        val far = FakeNode(Box(0, 0, 1080, 100))
+        repeat(OcclusionAnalyzer.MAX_NODES_VISITED + 500) { far.add(FakeNode(Box(0, 0, 1080, 100))) }
+        val host = FakeNode(screen, drawingOrder = 2).add(far)
+        val button = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 1, takesTouches = true)
+        val undo = FakeNode(Box(40, 780, 1040, 930), drawingOrder = 2, takesTouches = true, name = "button \"Undo\"")
+        root(FakeNode(screen, drawingOrder = 1).add(button, undo), host)
+        assertCoveredBy(analyze(button), "button \"Undo\"")
+    }
+
+    @Test
+    fun `a control in a bar over a list is cleared as the whole bar`() {
+        // A checkout bar: a "Total" label above its button. Clearing only the
+        // button would leave the row under the label.
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val content = FakeNode(Box(0, 200, 1080, 2400)).add(row)
+        val list = FakeNode(Box(0, 200, 1080, 2400), scrollsVertically = true).add(content)
+        val checkout = FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true, name = "button \"Checkout\"")
+        val bar = FakeNode(Box(0, 2000, 1080, 2400), drawingOrder = 1).add(FakeNode(Box(0, 2000, 1080, 2200), name = "total"), checkout)
+        root(list, bar)
+        val verdict = analyze(row)
+        assertCoveredBy(verdict, "button \"Checkout\"")
+        assertEquals(Box(0, 2000, 1080, 2400), coverBounds(verdict))
+        assertEquals(Box(0, 200, 1080, 2400), (verdict as Verdict.Covered).scroller)
+    }
+
+    @Test
+    fun `a full-screen host around a bar is not taken for the bar`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val list = FakeNode(Box(0, 200, 1080, 2400), scrollsVertically = true).add(FakeNode(Box(0, 200, 1080, 2400)).add(row))
+        val checkout = FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true, name = "checkout")
+        val host = FakeNode(screen, drawingOrder = 1).add(FakeNode(Box(0, 2200, 1080, 2400)).add(checkout))
+        root(list, host)
+        assertEquals(Box(0, 2200, 1080, 2400), coverBounds(analyze(row)))
+    }
+
+    @Test
+    fun `with no drawing order, an image laid under a button is not a sticky row`() {
+        // Compose before 1.9: Box { Image; Button } in a scrolling column,
+        // every drawing order 0. The image is listed first but is a backdrop.
+        val image = FakeNode(Box(0, 300, 1080, 900), name = "image \"Hero\"")
+        val button = FakeNode(Box(40, 700, 1040, 850), takesTouches = true)
+        root(list(image, button))
+        assertClearAt(analyze(button), 540, 775)
+    }
+
+    @Test
+    fun `with no drawing order, a row-sized background laid under a button is not a sticky row`() {
+        // Compose before 1.9: Box { Image; Button(Modifier.matchParentSize()) },
+        // every drawing order 0. The backdrop is the button's own size.
+        val image = FakeNode(Box(0, 700, 1080, 850), name = "image \"Banner\"")
+        val button = FakeNode(Box(0, 700, 1080, 850), takesTouches = true)
+        root(list(image, button))
+        assertClearAt(analyze(button), 540, 775)
+    }
+
+    @Test
+    fun `with no drawing order, a backdrop enclosing a button within twice its height is not a sticky row`() {
+        val image = FakeNode(Box(0, 680, 1080, 950), name = "image \"Banner\"")
+        val button = FakeNode(Box(40, 700, 1040, 850), takesTouches = true)
+        root(list(image, button))
+        assertClearAt(analyze(button), 540, 775)
+    }
+
+    @Test
+    fun `with no drawing order, a sticky header is not covered by the row scrolled under it`() {
+        val header = FakeNode(Box(0, 300, 1080, 450), takesTouches = true, name = "header")
+        val row = FakeNode(Box(0, 320, 1080, 470), name = "row 5")
+        root(list(header, row))
+        assertClearAt(analyze(header), 540, 375)
+    }
+
+    @Test
+    fun `a wide later branch does not use up the sticky-row check either`() {
+        val far = FakeNode(Box(0, 0, 1080, 100))
+        repeat(OcclusionAnalyzer.MAX_NODES_VISITED + 500) { far.add(FakeNode(Box(0, 0, 1080, 100))) }
+        val host = FakeNode(screen, drawingOrder = 2).add(far)
+        val header = FakeNode(Box(0, 300, 1080, 450), name = "header")
+        val row = FakeNode(Box(0, 320, 1080, 470), takesTouches = true)
+        root(FakeNode(screen, drawingOrder = 1).add(list(header, row)), host)
+        assertCoveredBy(analyze(row), "header")
+    }
+
+    @Test
+    fun `a control inside a loading overlay over a list row is never scrolled away from`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val rows = FakeNode(Box(0, 200, 1080, 2400), scrollsVertically = true).add(FakeNode(Box(0, 200, 1080, 2400)).add(row))
+        val cancel = FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true, name = "button \"Cancel\"")
+        val overlay =
+            FakeNode(
+                Box(0, 1800, 1080, 2400),
+                drawingOrder = 1,
+            ).add(FakeNode(Box(490, 1850, 590, 1950), isProgressIndicator = true), cancel)
+        root(rows, overlay)
+        val verdict = analyze(row)
+        assertCoveredBy(verdict, "button \"Cancel\"")
+        assertEquals(null, (verdict as Verdict.Covered).scroller)
+    }
+
+    @Test
+    fun `a drag start on the list itself is on the list`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val list = list(FakeNode(Box(0, 2100, 1080, 2250), takesTouches = true), row)
+        val footer = FakeNode(Box(0, 2200, 1080, 2400), drawingOrder = 1, takesTouches = true)
+        root(list, footer)
+        assertTrue(
+            OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), Box(0, 2200, 1080, 2400), 540, 2180, listOf(appWindow)),
+        )
+    }
+
+    @Test
+    fun `a drag start on a control laid over the list is not on the list`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val list = list(row)
+        val miniPlayer = FakeNode(Box(0, 2050, 1080, 2200), drawingOrder = 1, takesTouches = true)
+        root(list, miniPlayer)
+        assertFalse(
+            OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), Box(0, 2200, 1080, 2400), 540, 2180, listOf(appWindow)),
+        )
+    }
+
+    @Test
+    fun `a drag start on a dialog backdrop that takes no clicks is not on the list`() {
+        // A React Native backdrop built on the responder system is not
+        // clickable, but it still takes the drag (and closes the dialog).
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val card = FakeNode(Box(40, 2150, 1040, 2380)).add(FakeNode(Box(40, 2200, 1040, 2350), takesTouches = true))
+        val host = FakeNode(screen, drawingOrder = 1).add(FakeNode(screen), card)
+        root(list(row), host)
+        assertFalse(
+            OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), Box(40, 2150, 1040, 2380), 540, 2080, listOf(appWindow)),
+        )
+    }
+
+    @Test
+    fun `a drag start under a host that only lays out the footer is on the list`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        val host = FakeNode(screen, drawingOrder = 1).add(FakeNode(Box(0, 2200, 1080, 2400), takesTouches = true))
+        root(list(row), host)
+        assertTrue(
+            OcclusionAnalyzer.isDragStartOnList(row, 1, Box(0, 300, 1080, 2100), Box(0, 2200, 1080, 2400), 540, 2080, listOf(appWindow)),
+        )
+    }
+
+    @Test
+    fun `a drag start under another window is not on the list`() {
+        val row = FakeNode(Box(0, 2250, 1080, 2400), takesTouches = true)
+        root(list(row))
+        val dialog = WindowSpec(id = 4, kind = WindowKind.APPLICATION, layer = 2, bounds = screen, title = "Dialog")
+        assertFalse(
+            OcclusionAnalyzer.isDragStartOnList(
+                row,
+                1,
+                Box(0, 300, 1080, 2100),
+                Box(0, 2200, 1080, 2400),
+                540,
+                2180,
+                listOf(appWindow, dialog),
+            ),
+        )
     }
 
     // ─── Covers in the target's own window ───

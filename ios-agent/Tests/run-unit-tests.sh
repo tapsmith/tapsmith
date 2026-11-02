@@ -150,6 +150,12 @@ xcrun swiftc -sdk "$SDK" \
 "$OUT/pinch-plan-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/CoverClearanceTests/main.swift \
+  TapsmithAgent/CoverClearance.swift \
+  -o "$OUT/cover-clearance-tests"
+"$OUT/cover-clearance-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/SwipeGeometryTests/main.swift \
   TapsmithAgent/SwipeGeometry.swift \
   -o "$OUT/swipe-geometry-tests"

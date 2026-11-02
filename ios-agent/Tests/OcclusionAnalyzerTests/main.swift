@@ -367,6 +367,375 @@ check("an alert over an unhittable target covers it",
       // A native alert is named as one (PILOT-919).
       .covered(by: "alert \"Delete?\""))
 
+// ─── Loading overlays (PILOT-979) ───
+
+// A React Native loading overlay: a plain view (it may be see-through) over
+// the screen, with an ActivityIndicator in it. XCUITest's hit test lands on it,
+// so the target reads unhittable; the overlay is no interactive control.
+let loadingOverlay: [Row] = [
+    (3, .other, "", "loading-overlay", R(0, 116, 402, 758)),
+    (4, .activityIndicator, "In progress", "", R(181, 475, 40, 40)),
+]
+var loadingRows = screenRows()
+loadingRows.insert(contentsOf: loadingOverlay, at: loadingRows.count - 2)
+check("a plain overlay holding a spinner covers an unhittable target",
+      analyzer(loadingRows).analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (element \"loading-overlay\")"))
+checkPoint("…but XCUITest's hit test still wins when it says hittable",
+           analyzer(loadingRows).analyze(button("Covered action", covered), isHittable: true),
+           CGPoint(x: 201, y: 291.33))
+check("a spinner right over the touch point covers it",
+      analyzer(screenRows(extra: [(4, .activityIndicator, "In progress", "", R(181, 271, 40, 40))]))
+          .analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (progressbar \"In progress\")"))
+check("a progress bar counts as well",
+      analyzer(screenRows(extra: [(4, .other, "", "", R(0, 200, 402, 200)),
+                                  (5, .progressIndicator, "Uploading", "", R(16, 380, 370, 4))]))
+          .analyze(button("Covered action", covered), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+checkPoint("a spinner painted after the target that misses the point is not a cover",
+           analyzer(screenRows(extra: [(4, .activityIndicator, "", "", R(181, 600, 40, 40))]))
+               .analyze(button("Covered action", covered), isHittable: false),
+           CGPoint(x: 201, y: 291.33))
+checkPoint("a spinner inside the target is not a cover",
+           analyzer(screenRows(extra: []).enumerated().flatMap { i, row -> [Row] in
+               row.label == "Covered action" && row.type == .staticText
+                   ? [row, (5, .activityIndicator, "", "", R(340, 271, 40, 40))] : [row]
+           }).analyze(button("Covered action", covered), isHittable: false),
+           CGPoint(x: 201, y: 291.33))
+// The trailing full-screen RN wrappers are painted after everything; one that
+// holds no spinner is still no cover (pass-through overlays look the same).
+checkPoint("a plain overlay with no spinner is still not a cover",
+           analyzer(screenRows(passThrough: true)).analyze(button("Pass-through action", R(16, 331.33, 370, 56)), isHittable: false),
+           CGPoint(x: 201, y: 359.33))
+
+// ─── Sticky list rows and scrolling clear of chrome (PILOT-979, PILOT-980) ───
+
+/// A screen with a vertical list (116..874) under a nav bar; rows 44 tall.
+func listRows(_ rows: [Row], after: [Row] = []) -> [Row] {
+    [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .other, "", "", screen),
+        (3, .navigationBar, "List", "", R(0, 62, 402, 54)),
+        (3, .table, "", "", R(0, 116, 402, 758)),
+    ] + rows + after
+}
+let list = R(0, 116, 402, 758)
+
+// UIKit floats a section header over the rows scrolled under it.
+let stickyHeader: [Row] = listRows([
+    (4, .other, "Section A", "", R(0, 116, 402, 28)),
+    (4, .cell, "", "", R(0, 120, 402, 44)),
+    (5, .staticText, "Row 5", "", R(16, 130, 200, 20)),
+    (4, .cell, "", "", R(0, 164, 402, 44)),
+])
+check("a section header floating over an unhittable row covers it, and can be scrolled away from",
+      analyzer(stickyHeader).analyze(.init(frame: R(0, 120, 402, 44), elementType: .cell, label: "", identifier: ""), isHittable: false),
+      .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 28), list: list))
+checkPoint("rows that only touch do not cover each other",
+           analyzer(stickyHeader).analyze(.init(frame: R(0, 164, 402, 44), elementType: .cell, label: "", identifier: ""), isHittable: false),
+           CGPoint(x: 201, y: 186))
+// A React Native ScrollView's content view holds its rows.
+let rnSticky: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", list),
+    (3, .other, "", "", R(0, 0, 402, 3000)),
+    (4, .other, "Sticky header", "", R(0, 116, 402, 50)),
+    (4, .button, "Row 5", "", R(0, 130, 402, 60)),
+]
+check("a sticky header in a React Native ScrollView's content covers a row under it",
+      analyzer(rnSticky).analyze(button("Row 5", R(0, 130, 402, 60)), isHittable: false),
+      .coveredInList(by: "element \"Sticky header\"", cover: R(0, 116, 402, 50), list: list))
+let grid: [Row] = listRows([
+    (4, .cell, "Left", "", R(0, 200, 201, 100)),
+    (4, .other, "badge", "", R(150, 220, 80, 30)),
+])
+checkPoint("a narrower sibling (a badge) is not a sticky row",
+           analyzer(grid).analyze(.init(frame: R(0, 200, 201, 100), elementType: .cell, label: "Left", identifier: ""), isHittable: false),
+           CGPoint(x: 100.5, y: 250))
+
+// A sticky footer's button over a row of the list, outside the list.
+let footer: [Row] = listRows([
+    (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
+], after: [(3, .button, "Checkout", "", R(0, 774, 402, 100))])
+check("a control outside the list over an unhittable row can be scrolled away from",
+      analyzer(footer).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .coveredInList(by: "button \"Checkout\"", cover: R(0, 774, 402, 100), list: list))
+// The same control inside the list moves with the row: no scrolling away.
+let inListButton: [Row] = listRows([
+    (4, .cell, "Row 20", "", R(0, 790, 402, 44)),
+    (4, .button, "Checkout", "", R(0, 774, 402, 100)),
+])
+check("a control inside the same list is a plain cover",
+      analyzer(inListButton).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "button \"Checkout\""))
+// A presented alert is never scrolled away from, even when one of its
+// buttons is what covers the point.
+let alertWithButtons: [Row] = listRows([
+    (4, .cell, "Row 5", "", R(0, 300, 402, 44)),
+], after: [(3, .alert, "Delete?", "", R(40, 250, 322, 200)),
+           (4, .button, "Delete", "", R(40, 290, 322, 44)),
+           (4, .button, "Cancel", "", R(40, 334, 322, 44))])
+check("an alert's button over a row is a plain cover",
+      analyzer(alertWithButtons).analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
+      .covered(by: "button \"Delete\""))
+// A control in another window (an overlay window) is not scrolled away from.
+let otherWindowButton: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))])
+    + [(1, .window, "", "", screen), (2, .button, "Toast action", "", R(0, 774, 402, 100))]
+check("a control in another window is a plain cover",
+      analyzer(otherWindowButton).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "button \"Toast action\""))
+// A checkout bar: a "Total" label above its button. Clearing only the button
+// would leave the row under the label.
+let checkoutBar: [Row] = listRows([
+    (4, .cell, "Row 20", "", R(0, 800, 402, 44)),
+], after: [(3, .other, "", "checkout-bar", R(0, 700, 402, 174)),
+           (4, .staticText, "Total $42", "", R(16, 710, 200, 30)),
+           (4, .button, "Checkout", "", R(0, 774, 402, 100))])
+check("a control in a bar over a list is cleared as the whole bar",
+      analyzer(checkoutBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .coveredInList(by: "button \"Checkout\"", cover: R(0, 700, 402, 174), list: list))
+// A React Native ScrollView whose content has a background view behind its
+// rows: not a sticky row.
+let rnBackground: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", list),
+    (3, .other, "", "", R(0, 0, 402, 3000)),
+    (4, .other, "", "content-background", R(0, 0, 402, 3000)),
+    (4, .button, "Row 5", "", R(0, 130, 402, 60)),
+]
+checkPoint("a background behind a scroll view's rows is not a sticky row",
+           analyzer(rnBackground).analyze(button("Row 5", R(0, 130, 402, 60)), isHittable: false),
+           CGPoint(x: 201, y: 160))
+// A presented alert is never scrolled away from.
+let alertOverList: [Row] = listRows([
+    (4, .cell, "Row 5", "", R(0, 300, 402, 44)),
+], after: [(3, .alert, "Delete?", "", R(40, 250, 322, 200))])
+check("an alert over a row is a plain cover",
+      analyzer(alertOverList).analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
+      .covered(by: "alert \"Delete?\""))
+// A tab bar over a row: bars are checked whatever XCUITest says.
+let tabBarOverList: [Row] = listRows([
+    (4, .cell, "Row 20", "", R(0, 800, 402, 44)),
+], after: [(3, .tabBar, "Tab Bar", "", R(0, 791, 402, 83))])
+check("a row entirely under a tab bar can be scrolled away from",
+      analyzer(tabBarOverList).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: true),
+      .coveredInList(by: "tab bar \"Tab Bar\"", cover: R(0, 791, 402, 83), list: list))
+check("a loading overlay over a row is waited out, not scrolled away from",
+      analyzer(listRows([(4, .cell, "Row 5", "", R(0, 300, 402, 44))],
+                        after: [(3, .other, "", "", list), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]))
+          .analyze(.init(frame: R(0, 300, 402, 44), elementType: .cell, label: "Row 5", identifier: ""), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+
+// A loading overlay drawn over a footer button is what is in the way first:
+// wait it out (a drag under it would be wasted), whatever chrome is beneath.
+let overlayOverFooter: [Row] = footer + [(3, .other, "", "", screen), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]
+check("a loading overlay over a footer button is waited out, not scrolled away from",
+      analyzer(overlayOverFooter).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+let cancelInOverlay: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
+    after: [(3, .other, "", "", R(0, 600, 402, 274)),
+            (4, .activityIndicator, "", "", R(181, 620, 40, 40)),
+            (4, .button, "Cancel", "", R(0, 774, 402, 100))])
+check("a control inside a loading overlay is named but never scrolled away from",
+      analyzer(cancelInOverlay).analyze(.init(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "button \"Cancel\""))
+let overlayOverTabBar: [Row] = tabBarOverList + [(3, .other, "", "", screen), (4, .activityIndicator, "", "", R(181, 475, 40, 40))]
+check("a loading overlay over a tab bar is waited out before the bar is scrolled away from",
+      analyzer(overlayOverTabBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: false),
+      .covered(by: "a loading overlay (element)"))
+check("…while a hittable target under the tab bar is still scrolled clear",
+      analyzer(overlayOverTabBar).analyze(.init(frame: R(0, 800, 402, 44), elementType: .cell, label: "Row 20", identifier: ""), isHittable: true),
+      .coveredInList(by: "tab bar \"Tab Bar\"", cover: R(0, 791, 402, 83), list: list))
+
+// React Native (recorded on iOS 26.4, the test app's /covers screen): the
+// ScrollView's content view sits in another wrapper, and each row lists its
+// own empty background view beside its controls. The sticky header is the
+// wrapper holding "sticky-header".
+let rnNestedSticky: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(16, 326, 370, 531)),
+    (3, .other, "", "", R(16, 26, 370, 1940)),
+    (4, .other, "", "", R(16, 26, 370, 1940)),
+    (5, .button, "Row 5", "covers-row", R(16, 326, 290, 60)),
+    (5, .other, "", "", R(16, 326, 370, 60)),
+    (6, .other, "", "sticky-header", R(16, 326, 370, 60)),
+    (7, .staticText, "Sticky header", "", R(32, 346, 200, 20)),
+    (5, .other, "", "", R(16, 326, 370, 60)),
+    (5, .button, "Add", "", R(306, 326, 80, 59)),
+    (5, .button, "Row 6", "covers-row", R(16, 386, 290, 60)),
+    (5, .other, "", "", R(16, 386, 370, 60)),
+]
+check("a sticky header in React Native's nested content view covers the row under it",
+      analyzer(rnNestedSticky).analyze(.init(frame: R(16, 326, 290, 60), elementType: .button, label: "Row 5", identifier: "covers-row"), isHittable: false),
+      .coveredInList(by: "element", cover: R(16, 326, 370, 60), list: R(16, 326, 370, 531)))
+checkPoint("a row's own empty background view is not a sticky row",
+           analyzer(rnNestedSticky).analyze(.init(frame: R(16, 386, 290, 60), elementType: .button, label: "Row 6", identifier: "covers-row"), isHittable: false),
+           CGPoint(x: 161, y: 416))
+// The header's own content as the target: the header is the row stuck at the
+// list's edge, on top of the row scrolled under it.
+checkPoint("content inside a stuck React Native sticky header is not covered by the row under it",
+           analyzer(rnNestedSticky).analyze(.init(frame: R(32, 346, 200, 20), elementType: .staticText, label: "Sticky header", identifier: ""), isHittable: false),
+           CGPoint(x: 132, y: 356))
+let uikitHeaderWithContent: [Row] = listRows([
+    (4, .other, "", "", R(0, 116, 402, 28)),
+    (5, .staticText, "Section A", "", R(16, 120, 200, 20)),
+    (4, .cell, "", "", R(0, 120, 402, 44)),
+    (5, .staticText, "Row 5", "", R(16, 130, 200, 20)),
+])
+// A cell partly scrolled past the list's top, under the header: its clipped
+// frame starts at the list's edge, but it is not stuck there.
+let cellPastTheEdge: [Row] = listRows([
+    (4, .other, "Section A", "", R(0, 116, 402, 28)),
+    (4, .cell, "", "", R(0, 100, 402, 44)),
+    (5, .staticText, "Row 5", "", R(16, 110, 200, 20)),
+])
+check("a row partly scrolled past the list's top is still covered by the header over it",
+      analyzer(cellPastTheEdge).analyze(.init(frame: R(16, 110, 200, 20), elementType: .staticText, label: "Row 5", identifier: ""), isHittable: false),
+      .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 28), list: list))
+// A cell scrolled to sit exactly at the list's top under the header (a
+// scroll to a row): it is aligned with the edge, but a cell is never the
+// stuck header.
+let cellAtTheEdge: [Row] = listRows([
+    (4, .other, "Section A", "", R(0, 116, 402, 28)),
+    (4, .cell, "", "", R(0, 116, 402, 44)),
+    (5, .staticText, "Row 5", "", R(16, 126, 200, 20)),
+])
+check("a cell aligned with the list's top is still covered by the header over it",
+      analyzer(cellAtTheEdge).analyze(.init(frame: R(16, 126, 200, 20), elementType: .staticText, label: "Row 5", identifier: ""), isHittable: false),
+      .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 28), list: list))
+// (Content inside such a header, targeted itself, reads as covered by the
+// cell listed after it: a cell is interactive — pre-existing, see paintedOver.)
+check("a cell under a floating header with content is still covered by it",
+      analyzer(uikitHeaderWithContent).analyze(.init(frame: R(0, 120, 402, 44), elementType: .cell, label: "", identifier: ""), isHittable: false),
+      .coveredInList(by: "element", cover: R(0, 116, 402, 28), list: list))
+// React Native (recorded on iOS 26.4, the test app's /visibility screen):
+// a plain View with a testID is flattened into an empty node with the
+// identifier, listed just before its own contents, which follow it as
+// siblings inside its frame. It is the row the target is in, not a header
+// stuck over it.
+let rnFlattenedRow: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(0, 0, 402, 874)),
+    (3, .other, "", "", R(0, 0, 402, 1400)),
+    (4, .other, "", "", R(0, 0, 402, 1400)),
+    (5, .staticText, "Dynamic List", "", R(16, 391, 370, 22)),
+    (5, .other, "", "dynamic-item-Item A", R(16, 421, 370, 47)),
+    (5, .staticText, "Item A", "", R(30, 435, 46, 19)),
+    (5, .button, "Delete Item A", "", R(328, 436, 44, 17)),
+    (5, .other, "", "dynamic-item-Item B", R(16, 474, 370, 47)),
+    (5, .staticText, "Item B", "", R(30, 488, 46, 19)),
+    (5, .button, "Delete Item B", "", R(328, 489, 44, 17)),
+]
+checkPoint("a flattened React Native row container listed before its button is not a sticky row",
+           analyzer(rnFlattenedRow).analyze(button("Delete Item A", R(328, 436, 44, 17)), isHittable: false),
+           CGPoint(x: 350, y: 444.5))
+checkPoint("…nor for the second row's button",
+           analyzer(rnFlattenedRow).analyze(button("Delete Item B", R(328, 489, 44, 17)), isHittable: false),
+           CGPoint(x: 350, y: 497.5))
+// The same, with a badge laid out past the card's corner between the card's
+// contents and its button.
+let rnFlattenedCardWithBadge: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(0, 0, 402, 874)),
+    (3, .other, "", "", R(0, 0, 402, 1400)),
+    (4, .other, "", "", R(0, 0, 402, 1400)),
+    (5, .other, "", "card-b", R(16, 380, 370, 90)),
+    (5, .staticText, "Card B", "", R(32, 396, 100, 20)),
+    (5, .other, "", "badge-b", R(372, 370, 24, 24)),
+    (6, .staticText, "3", "", R(380, 374, 8, 16)),
+    (5, .button, "Open B", "", R(32, 424, 120, 36)),
+]
+checkPoint("a flattened card whose badge sticks out past its edge is not a sticky row over its button",
+           analyzer(rnFlattenedCardWithBadge).analyze(button("Open B", R(32, 424, 120, 36)), isHittable: false),
+           CGPoint(x: 92, y: 442))
+// …and cards whose own button sticks out past the card's bottom or top edge
+// (a negative margin).
+func rnFlattenedCard(_ card: CGRect, _ open: CGRect) -> [Row] {
+    [
+        (0, .application, "App", "", screen),
+        (1, .window, "", "", screen),
+        (2, .scrollView, "", "", R(0, 0, 402, 874)),
+        (3, .other, "", "", R(0, 0, 402, 1400)),
+        (4, .other, "", "", R(0, 0, 402, 1400)),
+        (5, .other, "", "card-s", card),
+        (5, .staticText, "Card S", "", R(28, card.minY + 8, 100, 20)),
+        (5, .button, "Open S", "", open),
+    ]
+}
+checkPoint("a flattened card whose button sticks out past its bottom edge is not a sticky row over it",
+           analyzer(rnFlattenedCard(R(16, 200, 370, 64), R(28, 240, 80, 36))).analyze(button("Open S", R(28, 240, 80, 36)), isHittable: false),
+           CGPoint(x: 68, y: 258))
+checkPoint("…nor past its top edge",
+           analyzer(rnFlattenedCard(R(16, 200, 370, 64), R(28, 180, 80, 36))).analyze(button("Open S", R(28, 180, 80, 36)), isHittable: false),
+           CGPoint(x: 68, y: 198))
+// XCUITest lists a flattened container's elements top first, so a button
+// pulled up over the card's top edge comes before the card (recorded on
+// iOS 27.2, a /qa-cards2 probe screen).
+let rnButtonBeforeItsCard: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(0, 0, 402, 874)),
+    (3, .other, "", "", R(0, 0, 402, 1400)),
+    (4, .other, "", "", R(0, 0, 402, 1400)),
+    (5, .button, "Open T", "", R(28, 192, 80, 36)),
+    (5, .other, "", "card-t", R(16, 200, 370, 64)),
+    (5, .staticText, "Card T", "", R(28, 236, 200, 20)),
+]
+checkPoint("a flattened card listed after its own button is not a sticky row over it",
+           analyzer(rnButtonBeforeItsCard).analyze(button("Open T", R(28, 192, 80, 36)), isHittable: false),
+           CGPoint(x: 68, y: 210))
+// A UIKit header listed before the rows it floats over carries a label.
+let labelledHeaderOverWholeRow: [Row] = listRows([
+    (4, .other, "Section A", "", R(0, 116, 402, 60)),
+    (4, .cell, "", "", R(0, 120, 402, 44)),
+])
+check("a labelled header listed before a row it wholly covers is still a sticky row",
+      analyzer(labelledHeaderOverWholeRow).analyze(.init(frame: R(0, 120, 402, 44), elementType: .cell, label: "", identifier: ""), isHittable: false),
+      .coveredInList(by: "element \"Section A\"", cover: R(0, 116, 402, 60), list: list))
+
+// ─── Where a clearing drag may start (PILOT-980) ───
+
+func expectBool(_ name: String, _ got: Bool, _ want: Bool) {
+    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got), want \(want)") }
+}
+let row20 = OcclusionAnalyzer.Target(frame: R(0, 790, 402, 44), elementType: .cell, label: "Row 20", identifier: "")
+expectBool("a drag starting on the list itself is on the list",
+           analyzer(footer).isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), true)
+// An in-window dialog (a JS modal): its full-screen dismissing backdrop lies
+// where the drag would start.
+let dialogOverList: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
+    after: [(3, .other, "", "", screen),
+            (4, .button, "Close modal", "", screen),
+            (4, .other, "", "", R(20, 700, 362, 174)),
+            (5, .button, "OK", "", R(20, 774, 362, 100))])
+expectBool("a drag starting on a dialog's backdrop is not on the list",
+           analyzer(dialogOverList).isDragStartOnList(row20, list: list, cover: R(20, 700, 362, 174), at: CGPoint(x: 201, y: 692)), false)
+// The same dialog with a role-less backdrop (a React Native Pressable with no
+// accessibilityRole reads as .other): still not the list.
+let rolelessBackdrop: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
+    after: [(3, .other, "", "", screen),
+            (4, .other, "", "", screen),
+            (4, .other, "", "", R(20, 700, 362, 174)),
+            (5, .button, "OK", "", R(20, 774, 362, 100))])
+expectBool("a drag starting on a role-less dialog backdrop is not on the list",
+           analyzer(rolelessBackdrop).isDragStartOnList(row20, list: list, cover: R(20, 700, 362, 174), at: CGPoint(x: 201, y: 692)), false)
+// A full-screen host that only lays a footer out (pointerEvents box-none)
+// holds the footer but nothing else at the drag start.
+let footerInHost: [Row] = listRows([(4, .cell, "Row 20", "", R(0, 790, 402, 44))],
+    after: [(3, .other, "", "", screen),
+            (4, .button, "Checkout", "", R(0, 774, 402, 100))])
+expectBool("a drag starting under a host that only lays out the footer is on the list",
+           analyzer(footerInHost).isDragStartOnList(row20, list: list, cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), true)
+expectBool("a target whose list is not found never gets a drag",
+           analyzer(footer).isDragStartOnList(row20, list: R(0, 0, 10, 10), cover: R(0, 774, 402, 100), at: CGPoint(x: 201, y: 766)), false)
+
 // ─── Keyboard first (PILOT-622) ───
 
 func checkKF(_ name: String, _ got: OcclusionAnalyzer.KeyboardFirst, _ want: OcclusionAnalyzer.KeyboardFirst) {

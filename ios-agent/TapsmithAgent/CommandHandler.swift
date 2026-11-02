@@ -747,6 +747,12 @@ class CommandHandler {
     /// cover, when it is still there at the deadline — never plans a touch
     /// that would land on the cover.
     ///
+    /// A target under in-window chrome that its list can scroll it away from
+    /// (`.coveredInList`: a sticky header or footer, a tab bar) is first
+    /// dragged clear — up to `CoverClearance.maxDrags` times, while the drags
+    /// move it — as a user would, and as Playwright scrolls a target whose
+    /// click another element intercepts (PILOT-980).
+    ///
     /// `preferElementTap` short-circuits to `.hittableElement` when XCUITest
     /// calls the element hittable, skipping the snapshot: `XCUIElement.tap()`
     /// picks its own hit point, which already avoids the keyboard (it taps
@@ -756,11 +762,23 @@ class CommandHandler {
     ///
     /// **Cost** per pass: `isHittable` (one hit-test IPC); when not
     /// short-circuited, one `snapshot()` of the element plus one of the app.
+    /// What a touch has done to clear its target of fixed chrome (PILOT-980),
+    /// kept across every plan the touch makes (a re-plan after the settle, a
+    /// pinch's retries): the drag limit is per touch, and once the list has
+    /// been dragged XCUITest's hit test is not trusted again.
+    final class ClearingState {
+        var drags = 0
+        /// The query that finds the target by what identifies it alone,
+        /// looked up once a drag is to be made (nil inside: nothing does).
+        var identifying: XCUIElementQuery??
+    }
+
     private func planTouch(
         _ element: ElementInfo,
         timeoutMs: Int64,
         preferElementTap: Bool,
-        reserveMs: Int64 = 0
+        reserveMs: Int64 = 0,
+        clearing: ClearingState = ClearingState()
     ) throws -> TouchPlan {
         var clock = TouchPlanClock(
             start: Date(),
@@ -768,14 +786,59 @@ class CommandHandler {
             readDeadline: commandReadDeadline,
             reserveSeconds: Double(max(0, reserveMs)) / 1000
         )
+        func identifyingQuery() -> XCUIElementQuery? {
+            if clearing.identifying == nil {
+                clearing.identifying = .some(uniquelyIdentifying(element))
+                if clearing.identifying == .some(nil) {
+                    NSLog("[TapsmithCommand] not dragging \(element.elementId) clear: nothing identifies it uniquely")
+                }
+            }
+            return clearing.identifying ?? nil
+        }
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
-            let hittable = xcElem?.isHittable ?? false
+            // Once the agent has scrolled the list itself, the tree has the
+            // last word: XCUITest's hit test called a React Native row under
+            // the sticky header it was dragged beside hittable (iOS 18.5),
+            // and XCUIElement.tap() then pressed the header.
+            let hittable = clearing.drags == 0 && (xcElem?.isHittable ?? false)
             if preferElementTap, hittable, let xcElem {
                 try refuseIfLate(clock)
                 return .hittableElement(xcElem)
             }
-            let verdict = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable)
+            let target = occlusionTarget(for: element, xcElem: xcElem)
+            var verdict = occlusionVerdict(for: target, isHittable: hittable)
+            if case .coveredInList(let cover, let coverFrame, let list)? = verdict {
+                // Only a target that something identifies uniquely (its
+                // identifier, or its label among its type) is dragged, and
+                // its id is bound to that from then on — for this pass, any
+                // re-plan, and the touch itself: the query it was cached with
+                // may bind it by position, and once the list has scrolled (a
+                // table unloads its top cells) that binds another element.
+                // Anything else is waited out as before.
+                if clearing.drags < CoverClearance.maxDrags,
+                   let drag = clearingDrag(target: target, cover: coverFrame, list: list, clock: clock),
+                   let identifying = identifyingQuery() {
+                    clearing.drags += 1
+                    snapshotFinder.rebind(element.elementId, to: identifying.firstMatch)
+                    NSLog("[TapsmithCommand] \(element.elementId) is covered by \(cover); dragging it clear \(drag)")
+                    actionExecutor.scrollDrag(drag)
+                    // Rows the drag brought in may share the name: then the
+                    // target can no longer be told apart. Say so rather than
+                    // touch whichever one the query finds first.
+                    if identifying.count != 1 {
+                        throw AgentError.actionFailed(
+                            "Scrolled the list to move the element out from under \(cover), but another element with the same name scrolled into view, so it can no longer be told apart. Give it a unique testID."
+                        )
+                    }
+                    // The next pass reads the target where the drag left it. A
+                    // drag that did not move it (the list's end, or a record
+                    // the runtime dropped — iOS 26 drops some) still uses only
+                    // one of the attempts.
+                    continue
+                }
+                verdict = .covered(by: cover)
+            }
             // Checked after the pass: a slow pass that ends past the deadline
             // fails now instead of paying for another one.
             try refuseIfLate(clock)
@@ -798,7 +861,7 @@ class CommandHandler {
                 throw AgentError.elementNotFound(
                     "Element not found any more — it went away before it could be touched (it may have gone stale)"
                 )
-            case .covered(let cover)?:
+            case .covered(let cover)?, .coveredInList(let cover, _, _)?:
                 guard sleep != nil else {
                     throw AgentError.elementCovered(coveredMessage(cover, timeoutMs: timeoutMs))
                 }
@@ -836,15 +899,20 @@ class CommandHandler {
         _ element: ElementInfo,
         timeoutMs: Int64,
         preferElementTap: Bool,
-        reserveMs: Int64 = 0
+        reserveMs: Int64 = 0,
+        clearing: ClearingState = ClearingState()
     ) throws -> TouchPlan {
         let started = Date()
-        let plan = try planTouch(element, timeoutMs: timeoutMs, preferElementTap: preferElementTap, reserveMs: reserveMs)
+        let plan = try planTouch(
+            element, timeoutMs: timeoutMs, preferElementTap: preferElementTap, reserveMs: reserveMs, clearing: clearing
+        )
         let outcome = settleBeforeTouch(plan, reserveMs: reserveMs)
         guard case .point = plan, outcome.sawChange else { return plan }
         let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
         NSLog("[TapsmithCommand] \(element.elementId) changed while settling; planning the touch again")
-        return try planTouch(element, timeoutMs: remaining, preferElementTap: preferElementTap, reserveMs: reserveMs)
+        return try planTouch(
+            element, timeoutMs: remaining, preferElementTap: preferElementTap, reserveMs: reserveMs, clearing: clearing
+        )
     }
 
     /// Wait for the planned touch's target to stop changing on screen
@@ -875,13 +943,58 @@ class CommandHandler {
         )
     }
 
+    /// A query that finds `element` by what identifies it alone — its
+    /// identifier, or failing that its label among elements of its type —
+    /// when exactly one element matches; nil otherwise. Unlike the query it
+    /// was cached with, which may bind it by position, this keeps binding it
+    /// after a scroll (PILOT-980).
+    private func uniquelyIdentifying(_ element: ElementInfo) -> XCUIElementQuery? {
+        guard let identity = snapshotFinder.getIdentity(element.elementId) else { return nil }
+        if !identity.identifier.isEmpty {
+            let byId = app.descendants(matching: .any).matching(identifier: identity.identifier)
+            if byId.count == 1 { return byId }
+        }
+        guard !identity.label.isEmpty else { return nil }
+        // A label within its type (and identifier, when it has one shared
+        // with others, as list rows often do).
+        var predicates = [NSPredicate(format: "label == %@", identity.label)]
+        if !identity.identifier.isEmpty {
+            predicates.append(NSPredicate(format: "identifier == %@", identity.identifier))
+        }
+        let byLabel = app.descendants(matching: identity.elementType)
+            .matching(NSCompoundPredicate(andPredicateWithSubpredicates: predicates))
+        return byLabel.count == 1 ? byLabel : nil
+    }
+
+    /// The drag that scrolls a target at `target` clear of `cover` in `list`,
+    /// or nil when there is none to make or no time for it and the touch
+    /// after (within the action's timeout and the daemon's read deadline).
+    private func clearingDrag(
+        target: OcclusionAnalyzer.Target, cover: CGRect, list: CGRect, clock: TouchPlanClock
+    ) -> CoverClearance.Drag? {
+        let after = Date().addingTimeInterval(CoverClearance.dragSeconds)
+        guard clock.sleepBeforeNextPass(at: after) != nil, !clock.isTooLateToAct(at: after) else { return nil }
+        let screenSize = snapshotFinder.screenSize
+        guard let drag = CoverClearance.drag(
+            target: target.frame, cover: cover, list: list, screen: CGRect(origin: .zero, size: screenSize),
+            margin: CoverClearance.margin, slop: CoverClearance.touchSlop
+        ) else { return nil }
+        // The drag must press the list, not something laid over it (a
+        // dialog's backdrop, a second bar stacked on the cover).
+        guard let appSnapshot = try? snapshotFinder.takeSnapshot(),
+              OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+                  .isDragStartOnList(target, list: list, cover: cover, at: drag.from) else {
+            NSLog("[TapsmithCommand] not dragging clear: something other than the list is at \(drag.from)")
+            return nil
+        }
+        return drag
+    }
+
     /// nil when no tree could be read.
     private func occlusionVerdict(
-        for element: ElementInfo,
-        xcElem: XCUIElement?,
+        for target: OcclusionAnalyzer.Target,
         isHittable: Bool
     ) -> OcclusionAnalyzer.Verdict? {
-        let target = occlusionTarget(for: element, xcElem: xcElem)
         let screenSize = snapshotFinder.screenSize
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
@@ -924,10 +1037,13 @@ class CommandHandler {
     /// nothing can be checked, so the pinch is refused rather than sent blind.
     private func planPinch(_ element: ElementInfo, scale: Double, timeoutMs: Int64, reserveMs: Int64) throws -> PinchPlan {
         let started = Date()
+        let clearing = ClearingState()
         while true {
             let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
             let visible: CGRect
-            switch try planSettledTouch(element, timeoutMs: remaining, preferElementTap: false, reserveMs: reserveMs) {
+            switch try planSettledTouch(
+                element, timeoutMs: remaining, preferElementTap: false, reserveMs: reserveMs, clearing: clearing
+            ) {
             case .point(_, let area):
                 visible = area
             case .hittableElement:
