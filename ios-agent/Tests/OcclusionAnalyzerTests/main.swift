@@ -601,6 +601,23 @@ checkPoint("a flattened React Native row container listed before its button is n
 checkPoint("…nor for the second row's button",
            analyzer(rnFlattenedRow).analyze(button("Delete Item B", R(328, 489, 44, 17)), isHittable: false),
            CGPoint(x: 350, y: 497.5))
+// The same, with a badge laid out past the card's corner between the card's
+// contents and its button.
+let rnFlattenedCardWithBadge: [Row] = [
+    (0, .application, "App", "", screen),
+    (1, .window, "", "", screen),
+    (2, .scrollView, "", "", R(0, 0, 402, 874)),
+    (3, .other, "", "", R(0, 0, 402, 1400)),
+    (4, .other, "", "", R(0, 0, 402, 1400)),
+    (5, .other, "", "card-b", R(16, 380, 370, 90)),
+    (5, .staticText, "Card B", "", R(32, 396, 100, 20)),
+    (5, .other, "", "badge-b", R(372, 370, 24, 24)),
+    (6, .staticText, "3", "", R(380, 374, 8, 16)),
+    (5, .button, "Open B", "", R(32, 424, 120, 36)),
+]
+checkPoint("a flattened card whose badge sticks out past its edge is not a sticky row over its button",
+           analyzer(rnFlattenedCardWithBadge).analyze(button("Open B", R(32, 424, 120, 36)), isHittable: false),
+           CGPoint(x: 92, y: 442))
 
 // ─── Where a clearing drag may start (PILOT-980) ───
 
