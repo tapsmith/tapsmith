@@ -620,6 +620,9 @@ pub enum AgentCommand {
     },
     HideKeyboard {},
     IsKeyboardShown {},
+    /// Take the system ANR / crash dialogs the Android agent answered on its
+    /// own since the last call (PILOT-977).
+    TakeSystemDialogEvents {},
     SetOrientation {
         orientation: String,
     },
@@ -690,6 +693,7 @@ impl AgentCommand {
             AgentCommand::AcceptOpenInAppDialog { .. } => "acceptOpenInAppDialog",
             AgentCommand::HideKeyboard {} => "hideKeyboard",
             AgentCommand::IsKeyboardShown {} => "isKeyboardShown",
+            AgentCommand::TakeSystemDialogEvents {} => "takeSystemDialogEvents",
             AgentCommand::SetOrientation { .. } => "setOrientation",
             AgentCommand::GetOrientation {} => "getOrientation",
             AgentCommand::GetColorScheme {} => "getColorScheme",
@@ -1061,6 +1065,7 @@ impl AgentCommand {
             }
             AgentCommand::HideKeyboard {} => ("hideKeyboard", json!({})),
             AgentCommand::IsKeyboardShown {} => ("isKeyboardShown", json!({})),
+            AgentCommand::TakeSystemDialogEvents {} => ("takeSystemDialogEvents", json!({})),
             AgentCommand::SetOrientation { orientation } => {
                 ("setOrientation", json!({ "orientation": orientation }))
             }
@@ -1735,6 +1740,7 @@ mod tests {
             AgentCommand::AcceptOpenInAppDialog { timeout_ms: None },
             AgentCommand::GetClipboard {},
             AgentCommand::GetOrientation {},
+            AgentCommand::TakeSystemDialogEvents {},
             AgentCommand::CaptureTraceState {
                 screenshot: true,
                 hierarchy: true,

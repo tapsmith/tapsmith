@@ -203,6 +203,20 @@ impl DeviceBackend for AndroidBackend<'_> {
         self.svc.android_is_keyboard_shown(&serial).await
     }
 
+    async fn take_system_dialog_events(&self) -> Result<Vec<proto::SystemDialogEvent>, Status> {
+        let result = self
+            .svc
+            .send_agent_command(&AgentCommand::TakeSystemDialogEvents {})
+            .await?;
+        if !result.success {
+            return Err(Status::internal(format!(
+                "Could not read the system dialogs the agent answered: {}",
+                result.error.unwrap_or_default()
+            )));
+        }
+        Ok(system_dialog_events_from(&result.data))
+    }
+
     async fn hide_keyboard(&self, request_id: String) -> ActionResult {
         // The Android soft keyboard is dismissed by BACK, not ESCAPE —
         // KEYCODE_ESCAPE is a no-op for the IME on most apps (incl.
@@ -1424,4 +1438,74 @@ async fn os_service_redirect(serial: &str, proxy: &NetworkProxy) -> Option<adb::
         device_port,
         uid_ranges,
     })
+}
+
+/// The agent's `takeSystemDialogEvents` result as proto events; malformed
+/// entries are skipped rather than failing the whole list.
+pub(super) fn system_dialog_events_from(data: &Value) -> Vec<proto::SystemDialogEvent> {
+    let text = |e: &Value, key: &str| {
+        e.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    data.get("events")
+        .and_then(Value::as_array)
+        .map(|events| {
+            events
+                .iter()
+                .filter(|e| e.is_object())
+                .map(|e| proto::SystemDialogEvent {
+                    title: text(e, "title"),
+                    owner: text(e, "owner"),
+                    owned_by_target: e
+                        .get("ownedByTarget")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    kind: text(e, "kind"),
+                    button: text(e, "button"),
+                    timestamp_ms: e.get("timestampMs").and_then(Value::as_i64).unwrap_or(0),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn system_dialog_events_map_every_field() {
+        let data = json!({"events": [
+            {"title": "Pixel Launcher isn't responding", "owner": "com.google.android.apps.nexuslauncher",
+             "ownedByTarget": false, "kind": "anr", "button": "Close app", "timestampMs": 1_793_463_831_403_i64},
+            {"title": "Test App isn't responding", "owner": "dev.tapsmith.testapp",
+             "ownedByTarget": true, "kind": "anr", "button": "Wait", "timestampMs": 5},
+        ]});
+        let events = system_dialog_events_from(&data);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].title, "Pixel Launcher isn't responding");
+        assert_eq!(events[0].owner, "com.google.android.apps.nexuslauncher");
+        assert!(!events[0].owned_by_target);
+        assert_eq!(events[0].kind, "anr");
+        assert_eq!(events[0].button, "Close app");
+        assert_eq!(events[0].timestamp_ms, 1_793_463_831_403);
+        assert!(events[1].owned_by_target);
+        assert_eq!(events[1].button, "Wait");
+    }
+
+    #[test]
+    fn system_dialog_events_tolerate_missing_and_malformed_entries() {
+        assert!(system_dialog_events_from(&json!({})).is_empty());
+        assert!(system_dialog_events_from(&json!({"events": "nope"})).is_empty());
+        let events =
+            system_dialog_events_from(&json!({"events": [42, {"title": "X isn't responding"}]}));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].title, "X isn't responding");
+        assert_eq!(events[0].owner, "");
+        assert!(!events[0].owned_by_target);
+        assert_eq!(events[0].timestamp_ms, 0);
+    }
 }

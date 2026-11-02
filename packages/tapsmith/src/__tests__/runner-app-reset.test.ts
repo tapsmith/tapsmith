@@ -1859,5 +1859,109 @@ describe('runner app reset (declared isolation)', () => {
         fs.rmSync(tempRoot, { recursive: true, force: true });
       }
     });
+
+    describe('dialogs the agent answered mid-test (PILOT-977)', () => {
+      const answered = (overrides: Record<string, unknown> = {}) => ({
+        title: 'Pixel Launcher isn\'t responding', owner: 'com.google.android.apps.nexuslauncher', ownedByTarget: false,
+        kind: 'anr', button: 'Close app', timestampMs: 1_793_463_831_403, ...overrides,
+      });
+      const withEvents = (d: ReturnType<typeof makeDevice>) => {
+        const take = vi.fn(async () => ({ requestId: '1', events: [] as ReturnType<typeof answered>[] }));
+        (d.client as unknown as { takeSystemDialogEvents: typeof take }).takeSystemDialogEvents = take;
+        return take;
+      };
+
+      it('warns on the test during which the app under test\'s own ANR was waited out, and on no other', async () => {
+        const d = makeDevice();
+        const take = withEvents(d);
+        pushContext();
+        tapsmithTest('one', async () => {});
+        tapsmithTest('two', async () => {
+          take.mockResolvedValueOnce({
+            requestId: '1',
+            events: [answered({ title: 'Example isn\'t responding', owner: 'com.example.app', ownedByTarget: true, button: 'Wait' })],
+          });
+        });
+        tapsmithTest('three', async () => {});
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none' })));
+
+        const [one, two, three] = collectResults(result);
+        expect(one.warnings).toBeUndefined();
+        expect(two.warnings).toEqual([
+          'The app under test (com.example.app) stopped responding and showed "Example isn\'t responding"; '
+          + 'Tapsmith pressed Wait. Check the app\'s logs (adb logcat) for what blocked its main thread.',
+        ]);
+        expect(three.warnings).toBeUndefined();
+        // Asked once per test.
+        expect(take).toHaveBeenCalledTimes(3);
+      });
+
+      it('another app\'s dialog is a trace row, not a warning', async () => {
+        const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-runner-dialog-'));
+        try {
+          const d = makeDevice();
+          const take = withEvents(d);
+          pushContext();
+          tapsmithTest('one', async () => {
+            take.mockResolvedValueOnce({ requestId: '1', events: [answered()] });
+          });
+          const ctx = popContext();
+
+          const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({
+            appReset: 'none',
+            rootDir: tempRoot,
+            trace: { mode: 'on', network: false, screenshots: false, snapshots: false, sources: false },
+          })));
+
+          expect(result.tests[0].warnings).toBeUndefined();
+          const zip = unzipSync(fs.readFileSync(result.tests[0].tracePath!));
+          const rows = new TextDecoder().decode(zip['trace.json']).split('\n').filter((l) => l.trim()).map((l) => JSON.parse(l))
+            .filter((e) => e.type === 'action' && e.action === 'systemDialog');
+          expect(rows.map((r) => r.detail)).toEqual([
+            'A system dialog from another app came up: '
+            + '"Pixel Launcher isn\'t responding" (com.google.android.apps.nexuslauncher). Tapsmith pressed Close app.',
+          ]);
+          expect(rows[0].log).toEqual([`handled at ${new Date(1_793_463_831_403).toISOString()}`]);
+        } finally {
+          fs.rmSync(tempRoot, { recursive: true, force: true });
+        }
+      });
+
+      it('a failing test still reports what was answered during it', async () => {
+        const d = makeDevice();
+        const take = withEvents(d);
+        pushContext();
+        tapsmithTest('one', async () => {
+          take.mockResolvedValueOnce({
+            requestId: '1',
+            events: [answered({ title: 'Example isn\'t responding', owner: 'com.example.app', ownedByTarget: true, button: 'Wait' })],
+          });
+          throw new Error('boom');
+        });
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none' })));
+
+        const [one] = collectResults(result);
+        expect(one.status).toBe('failed');
+        expect(one.warnings).toHaveLength(1);
+      });
+
+      it('an agent that cannot say adds nothing and fails nothing', async () => {
+        const d = makeDevice();
+        withEvents(d).mockRejectedValue(new Error('12 UNIMPLEMENTED'));
+        pushContext();
+        tapsmithTest('one', async () => {});
+        const ctx = popContext();
+
+        const result = await runSuiteContext(ctx, '', [], [], makeOpts(d, makeConfig({ appReset: 'none' })));
+
+        const [one] = collectResults(result);
+        expect(one.status).toBe('passed');
+        expect(one.warnings).toBeUndefined();
+      });
+    });
   });
 });
