@@ -39,9 +39,16 @@ expect("the frame-spanning hold outlasts a frame", TapTiming.frameSpanningHold >
 expect("a tap on an unknown target spans a frame",
        TapTiming.hold(for: nil) == TapTiming.frameSpanningHold)
 
-// An alert's or action sheet's buttons are UIKit controls.
-expect("a button in an alert or sheet spans a frame",
-       TapTiming.hold(for: .button, inAlertOrSheet: true) == TapTiming.frameSpanningHold)
+// An alert's or action sheet's buttons are UIKit controls, and so are the
+// buttons a segmented control or a stepper is touched through.
+for container in [XCUIElement.ElementType.alert, .sheet, .segmentedControl, .stepper, .picker] {
+    expect("a button inside a \(container.rawValue)-type element spans a frame",
+           TapTiming.hold(for: .button, within: [.application, .window, .other, container])
+               == TapTiming.frameSpanningHold)
+}
+expect("a button inside plain views and lists ends within one frame",
+       TapTiming.hold(for: .button, within: [.application, .window, .other, .scrollView, .cell, .table])
+           == TapTiming.oneFrameHold)
 
 // An element type nobody listed is treated as a control.
 expect("an unlisted type spans a frame",

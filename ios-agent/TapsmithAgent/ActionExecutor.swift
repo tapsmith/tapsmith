@@ -408,32 +408,44 @@ class ActionExecutor {
     // MARK: - Select Option
 
     /// Pick an option by text from a dropdown the caller has just opened.
-    func selectOption(_ optionText: String) throws {
+    /// `shownBefore`: the frames of the texts that showed it before the
+    /// dropdown opened (its trigger, the screen behind), which are not the
+    /// option.
+    func selectOption(_ optionText: String, shownBefore: [CGRect]) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
-        // Look for the option's text on screen, drawn on top: more than one
-        // text can carry it (React Native can expose a text and the view
-        // around it, and the screen behind may show it too).
+        // The option's text shown on top and uncovered: more than one text can
+        // carry it (React Native can expose a text and the view around it).
         let deadline = Date().addingTimeInterval(3)
-        var option = topmostOptionText(optionText)
+        var option = topmostOptionText(optionText, excluding: shownBefore)
         while option == nil, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.1)
-            option = topmostOptionText(optionText)
+            option = topmostOptionText(optionText, excluding: shownBefore)
         }
         if let option {
             tapCoordinates(
                 x: Int(option.frame.midX.rounded()),
                 y: Int(option.frame.midY.rounded()),
-                hold: TapTiming.hold(for: .staticText, inAlertOrSheet: option.inAlertOrSheet)
+                hold: TapTiming.hold(for: .staticText, within: option.ancestorTypes)
             )
+            return
+        }
+        // Not shown (below the fold of a scrolling list): XCUIElement.tap()
+        // scrolls it into view. Any copy but those shown before will do.
+        let unshown = app.staticTexts.matching(identifier: optionText).allElementsBoundByIndex.last { text in
+            guard let frame = try? text.snapshot().frame else { return false }
+            return !shownBefore.contains { OcclusionAnalyzer.framesMatch($0, frame) }
+        }
+        if let unshown {
+            unshown.tap()
+            return
+        }
+        // Try in picker wheels
+        let pickerWheel = app.pickerWheels.firstMatch
+        if pickerWheel.exists {
+            pickerWheel.adjust(toPickerWheelValue: optionText)
         } else {
-            // Try in picker wheels
-            let pickerWheel = app.pickerWheels.firstMatch
-            if pickerWheel.exists {
-                pickerWheel.adjust(toPickerWheelValue: optionText)
-            } else {
-                throw AgentError.elementNotFound("Option '\(optionText)' not found in dropdown")
-            }
+            throw AgentError.elementNotFound("Option '\(optionText)' not found in dropdown")
         }
     }
 
@@ -453,10 +465,21 @@ class ActionExecutor {
         try tapOption(cells.element(boundBy: index))
     }
 
-    private func topmostOptionText(_ text: String) -> (frame: CGRect, inAlertOrSheet: Bool)? {
+    private func optionAnalyzer() -> OcclusionAnalyzer? {
         guard let snapshot = try? app.snapshot() else { return nil }
-        let screen = cachedScreenSize ?? snapshot.frame.size
-        return OcclusionAnalyzer(snapshot: snapshot, screenSize: screen).topmostText(text)
+        return OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+    }
+
+    private func topmostOptionText(
+        _ text: String,
+        excluding: [CGRect]
+    ) -> (frame: CGRect, ancestorTypes: [XCUIElement.ElementType])? {
+        optionAnalyzer()?.topmostText(text, excluding: excluding)
+    }
+
+    /// The frames of the texts on screen that show `text` now.
+    func shownTexts(_ text: String) -> [CGRect] {
+        optionAnalyzer()?.shownTexts(text) ?? []
     }
 
     /// Tap a dropdown's option (a cell picked by index) at the centre of its
@@ -482,7 +505,7 @@ class ActionExecutor {
         tapCoordinates(
             x: Int(shown.midX.rounded()),
             y: Int(shown.midY.rounded()),
-            hold: TapTiming.hold(for: snap.elementType, inAlertOrSheet: analyzer.isInAlertOrSheet(target))
+            hold: TapTiming.hold(for: snap.elementType, within: analyzer.ancestorTypes(of: target))
         )
     }
 

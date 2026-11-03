@@ -16,7 +16,8 @@ import XCTest
 ///   display frame: a UISwitch never toggles from a 12 ms touch and always
 ///   does from 17 ms. So switches, toggles, checkboxes, every element type not
 ///   known to be safe at one frame (sliders, steppers, segmented controls,
-///   pickers…), a button inside an alert or action sheet, and a touch whose
+///   pickers…), anything inside such a control (a segment, a stepper's
+///   increment button) or inside an alert or action sheet, and a touch whose
 ///   target is unknown (a tap at a coordinate) are held 20 ms.
 enum TapTiming {
     /// A touch on anything not listed below: lifted inside one 60 Hz frame,
@@ -44,13 +45,25 @@ enum TapTiming {
         .activityIndicator, .progressIndicator,
     ]
 
+    /// Containers whose parts are touched as UIKit controls: a segmented
+    /// control's segments and a stepper's buttons are buttons of their own,
+    /// and so are an alert's and an action sheet's.
+    static let frameReadingContainers: Set<XCUIElement.ElementType> = [
+        .alert, .sheet,
+        .segmentedControl, .stepper, .picker, .pickerWheel, .datePicker,
+        .switch, .toggle, .checkBox, .slider,
+        .menu, .menuBar, .popUpButton, .comboBox, .pageIndicator,
+    ]
+
     /// The hold for a tap on an element of `elementType` (nil: unknown, as
-    /// for a tap at a coordinate). `inAlertOrSheet`: the element is inside an
-    /// alert or action sheet, whose buttons are UIKit controls.
-    static func hold(for elementType: XCUIElement.ElementType?, inAlertOrSheet: Bool = false) -> TimeInterval {
-        guard let elementType, !inAlertOrSheet, oneFrameTypes.contains(elementType) else {
-            return frameSpanningHold
-        }
+    /// for a tap at a coordinate) inside elements of `ancestors`' types.
+    static func hold(
+        for elementType: XCUIElement.ElementType?,
+        within ancestors: [XCUIElement.ElementType] = []
+    ) -> TimeInterval {
+        guard let elementType, oneFrameTypes.contains(elementType),
+              !ancestors.contains(where: frameReadingContainers.contains)
+        else { return frameSpanningHold }
         return oneFrameHold
     }
 }

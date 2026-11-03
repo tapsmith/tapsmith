@@ -873,8 +873,8 @@ class CommandHandler {
     }
 
     /// What the UI tree says about touching the element, and how long a tap
-    /// on it holds its touch (`TapTiming`, by its type and whether it is in an
-    /// alert or action sheet). nil when no tree could be read.
+    /// on it holds its touch (`TapTiming`, by its type and what it sits in:
+    /// an alert, a segmented control…). nil when no tree could be read.
     private func occlusionVerdict(
         for element: ElementInfo,
         xcElem: XCUIElement?,
@@ -885,7 +885,7 @@ class CommandHandler {
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
         let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
-        let hold = TapTiming.hold(for: target.elementType, inAlertOrSheet: analyzer.isInAlertOrSheet(target))
+        let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
         return (analyzer.analyze(target, isHittable: isHittable), hold)
     }
 
@@ -1995,10 +1995,13 @@ class CommandHandler {
                 throw AgentError.invalidSelector("selectOption requires either 'option' (string) or 'index' (int)")
             }
             let element = try resolveElement(params)
+            // What already shows the option's text (the trigger, the screen
+            // behind) is not the option.
+            let shownBefore = optionText.map { actionExecutor.shownTexts($0) } ?? []
             // Opened with the same planned, held tap as tap().
             try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params))
             if let optionText {
-                try actionExecutor.selectOption(optionText)
+                try actionExecutor.selectOption(optionText, shownBefore: shownBefore)
             } else if let index {
                 try actionExecutor.selectOptionByIndex(index)
             }

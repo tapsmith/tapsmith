@@ -532,13 +532,15 @@ if map.interactiveCover(of: lostTarget, at: [CGPoint(x: 350, y: 150)]) == nil {
     failures += 1; print("FAIL an unplaced target names no cover")
 }
 
-// An alert's and an action sheet's buttons are UIKit controls: a tap on one is
-// held across a display frame (TapTiming).
+// A button's containers decide its hold (TapTiming): an alert's, an action
+// sheet's and a segmented control's buttons are UIKit controls.
 let alertRows: [Row] = [
     (0, .application, "", "", screen),
     (1, .window, "", "", screen),
     (2, .other, "", "", screen),
     (3, .button, "Behind", "", R(16, 100, 370, 56)),
+    (3, .segmentedControl, "", "", R(16, 170, 370, 32)),
+    (4, .button, "Large", "", R(200, 170, 186, 32)),
     (2, .alert, "Delete?", "", R(40, 250, 322, 200)),
     (3, .other, "", "", R(40, 250, 322, 200)),
     (4, .button, "Delete", "", R(40, 400, 161, 50)),
@@ -546,20 +548,21 @@ let alertRows: [Row] = [
     (3, .button, "Copy", "", R(16, 700, 370, 56)),
 ]
 let alerts = analyzer(alertRows)
-let inAlert = [
-    ("a button inside an alert is in an alert", button("Delete", R(40, 400, 161, 50)), true),
-    ("a button inside an action sheet is in a sheet", button("Copy", R(16, 700, 370, 56)), true),
-    ("a button beside them is in neither", button("Behind", R(16, 100, 370, 56)), false),
-    ("an unplaced target is in neither", button("Gone", R(5, 5, 10, 10)), false),
+let containerCases: [(String, OcclusionAnalyzer.Target, [XCUIElement.ElementType])] = [
+    ("a button in an alert sits in the alert", button("Delete", R(40, 400, 161, 50)), [.other, .alert, .window, .application]),
+    ("a button in an action sheet sits in the sheet", button("Copy", R(16, 700, 370, 56)), [.sheet, .window, .application]),
+    ("a segment sits in its segmented control", button("Large", R(200, 170, 186, 32)),
+     [.segmentedControl, .other, .window, .application]),
+    ("a button beside them sits in plain views", button("Behind", R(16, 100, 370, 56)), [.other, .window, .application]),
+    ("an unplaced target has no known containers", button("Gone", R(5, 5, 10, 10)), []),
 ]
-for (name, target, want) in inAlert {
-    if alerts.isInAlertOrSheet(target) == want { print("ok   \(name)") } else {
-        failures += 1; print("FAIL \(name)")
-    }
+for (name, target, want) in containerCases {
+    let got = alerts.ancestorTypes(of: target)
+    if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got.map(\.rawValue))") }
 }
 
-// A dropdown's option is the text drawn last; one in an action sheet is held
-// across a frame.
+// A dropdown's option is the shown, uncovered text drawn last, leaving out
+// what showed it before the dropdown opened.
 let optionRows: [Row] = [
     (0, .application, "", "", screen),
     (1, .window, "", "", screen),
@@ -568,20 +571,28 @@ let optionRows: [Row] = [
     (3, .other, "", "", R(16, 300, 370, 140)),
     (4, .staticText, "Medium", "", R(16, 340, 370, 20)),
     (4, .staticText, "Gone", "", R(16, 2000, 370, 20)),
+    (4, .staticText, "Under", "", R(16, 380, 370, 20)),
     (3, .scrollView, "", "", R(16, 450, 370, 100)),
     (4, .staticText, "Clipped", "", R(16, 560, 370, 20)),
     (4, .staticText, "Half", "", R(16, 540, 370, 20)),
+    (3, .button, "Cover", "", R(0, 370, 402, 40)),
     (2, .sheet, "", "", R(0, 600, 402, 274)),
     (3, .staticText, "Large", "", R(16, 700, 370, 20)),
 ]
 let options = analyzer(optionRows)
-let medium = options.topmostText("Medium")
-if medium?.frame == R(16, 340, 370, 20), medium?.inAlertOrSheet == false {
+if options.topmostText("Medium")?.frame == R(16, 340, 370, 20) {
     print("ok   the option text drawn last is the one picked")
-} else { failures += 1; print("FAIL the option text drawn last is the one picked: \(String(describing: medium))") }
-if options.topmostText("Large")?.inAlertOrSheet == true { print("ok   an option in a sheet is in a sheet") } else {
-    failures += 1; print("FAIL an option in a sheet is in a sheet")
+} else { failures += 1; print("FAIL the option text drawn last is the one picked") }
+if options.topmostText("Medium", excluding: [R(16, 340, 370, 20)])?.frame == R(16, 100, 370, 20),
+   options.topmostText("Medium", excluding: options.shownTexts("Medium")) == nil {
+    print("ok   a text shown before the dropdown opened is left out")
+} else { failures += 1; print("FAIL a text shown before the dropdown opened is left out") }
+if options.topmostText("Under") == nil { print("ok   an option a control covers is not picked") } else {
+    failures += 1; print("FAIL an option a control covers is not picked")
 }
+if options.topmostText("Large")?.ancestorTypes.contains(.sheet) == true {
+    print("ok   an option in a sheet sits in the sheet")
+} else { failures += 1; print("FAIL an option in a sheet sits in the sheet") }
 if options.topmostText("Gone") == nil, options.topmostText("Missing") == nil {
     print("ok   an off-screen or missing option is not found")
 } else { failures += 1; print("FAIL an off-screen or missing option is not found") }
@@ -590,7 +601,7 @@ if options.topmostText("Clipped") == nil { print("ok   an option scrolled out of
 }
 if options.topmostText("Half")?.frame == R(16, 540, 370, 10) {
     print("ok   a half-shown option is touched in its shown part")
-} else { failures += 1; print("FAIL a half-shown option is touched in its shown part: \(String(describing: options.topmostText("Half")))") }
+} else { failures += 1; print("FAIL a half-shown option is touched in its shown part") }
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

@@ -66,7 +66,9 @@ export default function CarouselScreen() {
   const turnPageSoon = (afterMs = TURN_AFTER_MS) => {
     setTimeout(() => {
       page.current = (page.current + 1) % PAGES.length
-      carousel.current?.scrollTo({ x: page.current * pageWidth, animated: true })
+      // No animation: the jump's scroll event is what cancels a held
+      // touch, and no turn is still running when the next touch lands.
+      carousel.current?.scrollTo({ x: page.current * pageWidth, animated: false })
     }, afterMs)
   }
 

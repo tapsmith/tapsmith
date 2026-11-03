@@ -437,32 +437,45 @@ struct OcclusionAnalyzer {
         return result
     }
 
-    /// Whether the target sits inside an alert or action sheet, whose buttons
-    /// are UIKit controls that need a touch to span a display frame
-    /// (`TapTiming`). False when the target cannot be located in the tree.
-    func isInAlertOrSheet(_ target: Target) -> Bool {
-        guard let t = locate(target) else { return false }
-        return isInAlertOrSheet(node: t)
+    /// The types of the elements the target sits in, innermost first (an
+    /// alert, a segmented control: `TapTiming` holds a touch inside some of
+    /// them longer). Empty when the target cannot be located in the tree.
+    func ancestorTypes(of target: Target) -> [XCUIElement.ElementType] {
+        guard let t = locate(target) else { return [] }
+        return ancestors(of: t).map { nodes[$0].elementType }
     }
 
-    private func isInAlertOrSheet(node i: Int) -> Bool {
-        ancestors(of: i).contains { nodes[$0].elementType == .alert || nodes[$0].elementType == .sheet }
+    /// The frames of the shown texts whose label or identifier is `text`, as
+    /// the snapshot reported them.
+    func shownTexts(_ text: String) -> [CGRect] {
+        nodes.indices.filter { isText($0, text) && shownFrame(of: $0) != nil }.map { snapshotFrames[$0] }
     }
 
-    /// The shown text whose label or identifier is `text`, drawn last (on
-    /// top, as a dropdown's options are over the screen that opened them),
-    /// and whether it is in an alert or action sheet. `frame` is the part of
-    /// it on screen and inside its scroll views. nil when no shown text
-    /// carries it.
-    func topmostText(_ text: String) -> (frame: CGRect, inAlertOrSheet: Bool)? {
-        var match: (index: Int, frame: CGRect)?
-        for (i, node) in nodes.enumerated() where node.elementType == .staticText {
-            guard node.label == text || node.identifier == text else { continue }
+    /// The shown, uncovered text whose label or identifier is `text`, drawn
+    /// last (on top, as a dropdown's options are over the screen that opened
+    /// them), leaving out texts at the frames in `excluding` (what showed the
+    /// text before the dropdown opened: its trigger, the screen behind).
+    /// `frame` is the part of it on screen and inside its scroll views, and
+    /// `ancestorTypes` the types of the elements it sits in. nil when no such
+    /// text is shown.
+    func topmostText(
+        _ text: String,
+        excluding: [CGRect] = []
+    ) -> (frame: CGRect, ancestorTypes: [XCUIElement.ElementType])? {
+        for i in nodes.indices.reversed() where isText(i, text) {
+            if excluding.contains(where: { Self.framesMatch($0, snapshotFrames[i]) }) { continue }
             guard let shown = shownFrame(of: i) else { continue }
-            match = (i, shown)
+            let node = nodes[i]
+            let target = Target(frame: snapshotFrames[i], elementType: node.elementType, label: node.label,
+                                identifier: node.identifier)
+            guard case .clear = analyze(target, isHittable: false) else { continue }
+            return (shown, ancestors(of: i).map { nodes[$0].elementType })
         }
-        guard let m = match else { return nil }
-        return (m.frame, isInAlertOrSheet(node: m.index))
+        return nil
+    }
+
+    private func isText(_ i: Int, _ text: String) -> Bool {
+        nodes[i].elementType == .staticText && (nodes[i].label == text || nodes[i].identifier == text)
     }
 
     /// The part of `frame` on screen and inside the scroll views of node
