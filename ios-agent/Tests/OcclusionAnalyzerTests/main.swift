@@ -532,5 +532,31 @@ if map.interactiveCover(of: lostTarget, at: [CGPoint(x: 350, y: 150)]) == nil {
     failures += 1; print("FAIL an unplaced target names no cover")
 }
 
+// An alert's and an action sheet's buttons are UIKit controls: a tap on one is
+// held across a display frame (TapTiming).
+let alertRows: [Row] = [
+    (0, .application, "", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .button, "Behind", "", R(16, 100, 370, 56)),
+    (2, .alert, "Delete?", "", R(40, 250, 322, 200)),
+    (3, .other, "", "", R(40, 250, 322, 200)),
+    (4, .button, "Delete", "", R(40, 400, 161, 50)),
+    (2, .sheet, "Share", "", R(0, 600, 402, 274)),
+    (3, .button, "Copy", "", R(16, 700, 370, 56)),
+]
+let alerts = analyzer(alertRows)
+let inAlert = [
+    ("a button inside an alert is in an alert", button("Delete", R(40, 400, 161, 50)), true),
+    ("a button inside an action sheet is in a sheet", button("Copy", R(16, 700, 370, 56)), true),
+    ("a button beside them is in neither", button("Behind", R(16, 100, 370, 56)), false),
+    ("an unplaced target is in neither", button("Gone", R(5, 5, 10, 10)), false),
+]
+for (name, target, want) in inAlert {
+    if alerts.isInAlertOrSheet(target) == want { print("ok   \(name)") } else {
+        failures += 1; print("FAIL \(name)")
+    }
+}
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

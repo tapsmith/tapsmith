@@ -255,14 +255,11 @@ enum EventSynthesizer {
         return orientation.rawValue
     }
 
-    /// Tap at a screen coordinate. Returns true if synthesis succeeded.
-    ///
-    /// The touch is lifted `TapTiming.pointTapHold` (20 ms) after it lands
-    /// (PILOT-974). A longer hold gives a scroll view that starts scrolling
-    /// under the touch time to take it, which cancels the press in React
-    /// Native: with 100 ms, every tap beside the test app's carousel was lost.
-    static func tap(at point: CGPoint) -> Bool {
-        return synthesizeTap(at: point, duration: TapTiming.pointTapHold)
+    /// Tap at a screen coordinate, lifting the touch `hold` seconds after it
+    /// lands: `TapTiming.hold(for:)` picks it from what the tap lands on.
+    /// Returns true if synthesis succeeded.
+    static func tap(at point: CGPoint, hold: TimeInterval) -> Bool {
+        return synthesizeTap(at: point, duration: hold)
     }
 
     /// Outcome of a synthesized double-tap, so callers can fall back without
@@ -310,11 +307,13 @@ enum EventSynthesizer {
     /// flips: the sequential route never fired a native double-tap
     /// recognizer (0/8) while the single record did (8/8), so the single
     /// record is the primary there again. `DoubleTapRoute` makes the choice.
-    static func doubleTap(at point: CGPoint, intervalMs: Int = 0) -> DoubleTapResult {
+    ///
+    /// Each tap holds its touch `hold` seconds (`TapTiming`).
+    static func doubleTap(at point: CGPoint, intervalMs: Int = 0, hold: TimeInterval) -> DoubleTapResult {
         var interval = intervalMs > 0 ? TimeInterval(intervalMs) / 1000.0 : 0.15
 
         if doubleTapRoute == .singleRecord {
-            if doubleTapSingleRecord(at: point, interval: interval) {
+            if doubleTapSingleRecord(at: point, interval: interval, hold: hold) {
                 return .done
             }
             NSLog("[EventSynth] double-tap single-record dispatch failed; falling back to sequential taps")
@@ -324,7 +323,7 @@ enum EventSynthesizer {
         }
 
         let start = Date()
-        guard synthesizeTap(at: point, duration: 0.05) else { return .notStarted }
+        guard synthesizeTap(at: point, duration: hold) else { return .notStarted }
         // The dispatch completion fires only after the first tap has been
         // synthesized, so the app-visible gap starts HERE — sleep the full
         // interval from this point. Crediting dispatch-1's duration against
@@ -354,7 +353,7 @@ enum EventSynthesizer {
         } else {
             second = point
         }
-        guard synthesizeTap(at: second, duration: 0.05) else { return .firstTapOnly }
+        guard synthesizeTap(at: second, duration: hold) else { return .firstTapOnly }
         let elapsed = Date().timeIntervalSince(start)
         if elapsed > 0.5 {
             NSLog(
@@ -394,8 +393,8 @@ enum EventSynthesizer {
     /// Build and dispatch a single event record containing two sequential
     /// single-finger taps (path 1: down@0 lift@tapDuration; path 2:
     /// down@tapDuration+interval lift@2*tapDuration+interval).
-    private static func doubleTapSingleRecord(at point: CGPoint, interval: TimeInterval) -> Bool {
-        let tapDuration: TimeInterval = 0.05
+    private static func doubleTapSingleRecord(at point: CGPoint, interval: TimeInterval, hold: TimeInterval) -> Bool {
+        let tapDuration = hold
 
         guard let pathClass = objc_lookUpClass("XCPointerEventPath"),
               let recordClass = objc_lookUpClass("XCSynthesizedEventRecord")
@@ -1065,10 +1064,10 @@ enum EventSynthesizer {
         // Add a moveToPoint at the same location — this generates a touchesMoved
         // event which helps UIScrollView's gesture recognizer classify the gesture
         // as a stationary tap (not a scroll), allowing the event to pass through
-        // to child responders like TouchableOpacity. Re-checked for PILOT-974 with
-        // 20 ms taps: with or without it, every tap landed on the test app's list
-        // rows, switch, tap area and carousel button. Kept, as it costs no time
-        // and a touch with no move has been seen dropped in a double tap.
+        // to child responders like TouchableOpacity. Re-checked with 20 ms taps:
+        // with or without it, every tap landed on the test app's list rows,
+        // switch, tap area and carousel button. Kept, as it costs no time and a
+        // touch with no move has been seen dropped in a double tap.
         let moveSel = NSSelectorFromString("moveToPoint:atOffset:")
         if path.responds(to: moveSel) {
             let moveImp = path.method(for: moveSel)

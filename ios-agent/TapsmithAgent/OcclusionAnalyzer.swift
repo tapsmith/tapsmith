@@ -437,6 +437,14 @@ struct OcclusionAnalyzer {
         return result
     }
 
+    /// Whether the target sits inside an alert or action sheet, whose buttons
+    /// are UIKit controls that need a touch to span a display frame
+    /// (`TapTiming`). False when the target cannot be located in the tree.
+    func isInAlertOrSheet(_ target: Target) -> Bool {
+        guard let t = locate(target) else { return false }
+        return ancestors(of: t).contains { nodes[$0].elementType == .alert || nodes[$0].elementType == .sheet }
+    }
+
     /// `@tapsmith/react-native`'s test hooks marker: a screen-sized
     /// transparent text in a `pointerEvents="none"` wrapper, painted after all
     /// content (versions before PILOT-830 also drew a small visible copy in a

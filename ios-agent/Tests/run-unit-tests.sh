@@ -155,7 +155,8 @@ xcrun swiftc -sdk "$SDK" \
   -o "$OUT/swipe-geometry-tests"
 "$OUT/swipe-geometry-tests"
 
-xcrun swiftc -sdk "$SDK" \
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
   Tests/TapTimingTests/main.swift \
   TapsmithAgent/TapTiming.swift \
   -o "$OUT/tap-timing-tests"

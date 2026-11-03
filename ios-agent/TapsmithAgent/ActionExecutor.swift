@@ -127,9 +127,10 @@ class ActionExecutor {
         return drawn ? buffer : nil
     }
 
-    /// Tap at specific screen coordinates using event synthesis.
-    func tapCoordinates(x: Int, y: Int) {
-        if !EventSynthesizer.tap(at: CGPoint(x: x, y: y)) {
+    /// Tap at specific screen coordinates using event synthesis, holding the
+    /// touch `hold` seconds (`TapTiming.hold(for:)`, by what the tap lands on).
+    func tapCoordinates(x: Int, y: Int, hold: TimeInterval) {
+        if !EventSynthesizer.tap(at: CGPoint(x: x, y: y), hold: hold) {
             NSLog("[ActionExecutor] Event synthesis failed, falling back to XCUICoordinate.tap()")
             let normalized = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
             let point = normalized.withOffset(CGVector(dx: CGFloat(x), dy: CGFloat(y)))
@@ -151,10 +152,10 @@ class ActionExecutor {
     /// under CI load. Falls back to XCUICoordinate when synthesis is
     /// unavailable, completing a partially-delivered gesture with exactly one
     /// more tap rather than re-tapping twice (which would deliver three).
-    func doubleTapCoordinates(x: Int, y: Int, intervalMs: Int = 0) {
+    func doubleTapCoordinates(x: Int, y: Int, intervalMs: Int = 0, hold: TimeInterval) {
         let normalized = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         let point = normalized.withOffset(CGVector(dx: CGFloat(x), dy: CGFloat(y)))
-        switch EventSynthesizer.doubleTap(at: CGPoint(x: x, y: y), intervalMs: intervalMs) {
+        switch EventSynthesizer.doubleTap(at: CGPoint(x: x, y: y), intervalMs: intervalMs, hold: hold) {
         case .done:
             return
         case .firstTapOnly:
@@ -380,7 +381,7 @@ class ActionExecutor {
 
         // Fallback to a simple release on the source point instead of attempting
         // the XCUI drag APIs, which are what poison the XCTest session on Xcode 26.
-        tapCoordinates(x: Int(start.x), y: Int(start.y))
+        tapCoordinates(x: Int(start.x), y: Int(start.y), hold: TapTiming.hold(for: nil))
     }
 
     /// Drag between two element frames, biasing the path away from system-edge gestures.
@@ -406,15 +407,14 @@ class ActionExecutor {
 
     // MARK: - Select Option
 
-    /// Select an option from a picker/dropdown by text.
-    func selectOption(_ element: XCUIElement, optionText: String) throws {
-        element.tap()
+    /// Pick an option by text from a dropdown the caller has just opened.
+    func selectOption(_ optionText: String) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
         // Look for the option text in the app
         let option = app.staticTexts[optionText]
         if option.waitForExistence(timeout: 3) {
-            option.tap()
+            try tapOption(option)
         } else {
             // Try in picker wheels
             let pickerWheel = app.pickerWheels.firstMatch
@@ -426,9 +426,8 @@ class ActionExecutor {
         }
     }
 
-    /// Select an option from a picker/dropdown by index.
-    func selectOptionByIndex(_ element: XCUIElement, index: Int) throws {
-        element.tap()
+    /// Pick an option by index from a dropdown the caller has just opened.
+    func selectOptionByIndex(_ index: Int) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
         // On iOS, pickers work differently. Try to find options in an action sheet or popup.
@@ -440,7 +439,25 @@ class ActionExecutor {
         guard index >= 0 && index < count else {
             throw AgentError.actionFailed("Index \(index) out of range (0..\(count - 1))")
         }
-        cells.element(boundBy: index).tap()
+        try tapOption(cells.element(boundBy: index))
+    }
+
+    /// Tap a dropdown's option at the centre of its frame, held as its type
+    /// needs (`TapTiming`; a frame longer in an alert or action sheet), rather
+    /// than through `XCUIElement.tap()`, whose hold XCTest picks. Not refused
+    /// when XCUITest calls the option unhittable: it says so of most React
+    /// Native views, and `XCUIElement.tap()` tapped them all the same.
+    private func tapOption(_ option: XCUIElement) throws {
+        guard let snap = try? option.snapshot(), snap.frame.width > 0, snap.frame.height > 0 else {
+            option.tap()
+            return
+        }
+        let inPopup = app.alerts.firstMatch.exists || app.sheets.firstMatch.exists
+        tapCoordinates(
+            x: Int(snap.frame.midX.rounded()),
+            y: Int(snap.frame.midY.rounded()),
+            hold: TapTiming.hold(for: snap.elementType, inAlertOrSheet: inPopup)
+        )
     }
 
     // MARK: - Pinch Zoom
@@ -523,7 +540,8 @@ class ActionExecutor {
             tapY = 1
         }
 
-        tapCoordinates(x: Int(tapX), y: Int(tapY))
+        // Whatever is outside the element: an unknown target.
+        tapCoordinates(x: Int(tapX), y: Int(tapY), hold: TapTiming.hold(for: nil))
         Thread.sleep(forTimeInterval: Self.focusIdleTimeout)
     }
 
@@ -562,7 +580,7 @@ class ActionExecutor {
             if backButton.exists {
                 let frame = backButton.frame
                 if frame.width > 0 && frame.height > 0 {
-                    tapCoordinates(x: Int(frame.midX), y: Int(frame.midY))
+                    tapCoordinates(x: Int(frame.midX), y: Int(frame.midY), hold: TapTiming.hold(for: .button))
                 } else {
                     throw AgentError.actionFailed("Back button found but has zero frame")
                 }
