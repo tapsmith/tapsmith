@@ -109,8 +109,9 @@ impl HidInjector {
     /// Returns Err if the helper can't start or never reports `ready` — the
     /// caller then falls back to the agent path. The first such failure for a
     /// device is logged as a warning: the agent path's synthesized touches
-    /// are not always taken for real ones (a native double-tap recognizer
-    /// ignores them on iOS 26 — PILOT-795), so this is worth seeing.
+    /// cost a few hundred milliseconds more a tap, and are not always taken
+    /// for real ones (a native double-tap recognizer ignores them on iOS 26 —
+    /// PILOT-795), so this is worth seeing.
     pub async fn ensure(&self, udid: &str) -> anyhow::Result<()> {
         let result = self.start_or_reuse(udid).await;
         match &result {
@@ -119,9 +120,10 @@ impl HidInjector {
                 if self.note_unavailable(udid) {
                     warn!(
                         udid, helper = ?self.helper_path, error = %e,
-                        "iOS simulator HID helper could not start; double taps and long presses \
-                         use the agent's synthesized touches instead, which some native gesture \
-                         recognizers ignore"
+                        "iOS simulator HID helper could not start; taps, double taps and long \
+                         presses use the agent's synthesized touches instead, which take a few \
+                         hundred milliseconds longer a tap and which some native gesture \
+                         recognizers ignore (the helper ships beside the tapsmith-core binary)"
                     );
                 }
             }
