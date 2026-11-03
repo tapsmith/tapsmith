@@ -154,29 +154,52 @@ impl GatedLaunch {
         wipe: bool,
         prelaunch: Option<tokio::task::JoinHandle<()>>,
     ) -> Self {
-        let gate = LaunchGate::new_in(&std::env::temp_dir(), agent_port);
-        let path = gate.path().to_path_buf();
         let udid = udid.to_string();
         let bundle_id = target_bundle_id.to_string();
+        Self::start_with(
+            LaunchGate::new_in(&std::env::temp_dir(), agent_port),
+            async move { prepare_app_launch(&udid, &bundle_id, wipe).await },
+            prelaunch,
+            launch_gate::PREPARE_DEADLINE,
+        )
+    }
+
+    /// [`GatedLaunch::start`] with the pre-launch work and its deadline
+    /// passed in. The gate opens once `prepare` and `prelaunch` are done, or
+    /// at `deadline` (the start is then not vouched for). `prelaunch` is
+    /// joined either way before [`Self::settle`] returns: a deadline opens
+    /// the gate, it does not abandon the simulator's setup.
+    fn start_with(
+        gate: LaunchGate,
+        prepare: impl std::future::Future<Output = Prepared> + Send + 'static,
+        mut prelaunch: Option<tokio::task::JoinHandle<()>>,
+        deadline: Duration,
+    ) -> Self {
+        let path = gate.path().to_path_buf();
         let task = tokio::spawn(async move {
             let started = std::time::Instant::now();
-            let prepared = tokio::time::timeout(launch_gate::PREPARE_DEADLINE, async {
-                let (prepared, _) =
-                    tokio::join!(prepare_app_launch(&udid, &bundle_id, wipe), async {
-                        if let Some(prelaunch) = prelaunch {
-                            let _ = prelaunch.await;
-                        }
-                    });
+            let prepared = tokio::time::timeout(deadline, async {
+                let (prepared, _) = tokio::join!(prepare, async {
+                    if let Some(prelaunch) = prelaunch.as_mut() {
+                        let _ = prelaunch.await;
+                    }
+                });
                 prepared
             })
             .await
             .ok();
             launch_gate::open_at(&path);
             crate::timing::timing_log!(
-                "kind=boot name=launch_gate dur_ms={} wipe={wipe} prepared={:?}",
+                "kind=boot name=launch_gate dur_ms={} prepared={:?}",
                 started.elapsed().as_millis(),
                 prepared
             );
+            if prepared.is_none() {
+                // The deadline dropped the join; the setup still finishes.
+                if let Some(prelaunch) = prelaunch {
+                    let _ = prelaunch.await;
+                }
+            }
             prepared
         });
         Self {
@@ -1698,6 +1721,118 @@ mod tests {
             "/Users/me/Library/Developer/CoreSimulator/Devices/{udid}/data/Containers/Bundle/\
              Application/X/TapsmithAgentUITests-Runner.app/TapsmithAgentUITests-Runner"
         )
+    }
+
+    fn wiped() -> Prepared {
+        Prepared {
+            wipe_requested: true,
+            wiped: true,
+        }
+    }
+
+    fn flag() -> (
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        let f = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (f.clone(), f)
+    }
+
+    fn is_set(f: &std::sync::atomic::AtomicBool) -> bool {
+        f.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    #[tokio::test]
+    async fn the_gate_opens_only_after_the_prepare_and_the_prelaunch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (setup_done, setup_flag) = flag();
+        let prelaunch = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            setup_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let mut gated = GatedLaunch::start_with(
+            LaunchGate::new_in(dir.path(), 18700),
+            async {
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                wiped()
+            },
+            Some(prelaunch),
+            Duration::from_secs(5),
+        );
+        let path = gated.gate.path().to_path_buf();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(!path.exists(), "the gate waits for the prelaunch too");
+        gated.settle().await;
+        assert!(is_set(&setup_done));
+        assert!(path.exists(), "then opens");
+        // The runner acknowledges it: the start is fresh.
+        std::fs::remove_file(&path).unwrap();
+        assert!(gated.app_launched_fresh().await);
+    }
+
+    #[tokio::test]
+    async fn a_deadline_opens_the_gate_unvouched_for_and_still_joins_the_prelaunch() {
+        let dir = tempfile::tempdir().unwrap();
+        let (setup_done, setup_flag) = flag();
+        let prelaunch = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            setup_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+        let mut gated = GatedLaunch::start_with(
+            LaunchGate::new_in(dir.path(), 18700),
+            std::future::pending::<Prepared>(),
+            Some(prelaunch),
+            Duration::from_millis(30),
+        );
+        let path = gated.gate.path().to_path_buf();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(path.exists(), "the deadline opens the gate");
+        assert!(!is_set(&setup_done));
+        std::fs::remove_file(&path).unwrap();
+        assert!(
+            !gated.app_launched_fresh().await,
+            "an unfinished prepare is not fresh"
+        );
+        assert!(is_set(&setup_done), "settling waited for the setup");
+    }
+
+    #[tokio::test]
+    async fn a_relaunch_reopens_the_gate_and_is_not_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut gated = GatedLaunch::start_with(
+            LaunchGate::new_in(dir.path(), 18700),
+            async { wiped() },
+            None,
+            Duration::from_secs(5),
+        );
+        gated.settle().await;
+        let path = gated.gate.path().to_path_buf();
+        std::fs::remove_file(&path).unwrap();
+        gated.before_relaunch().await;
+        assert!(path.exists(), "the second runner finds the gate open");
+        std::fs::remove_file(&path).unwrap();
+        assert!(!gated.app_launched_fresh().await);
+    }
+
+    #[tokio::test]
+    async fn dropping_the_launch_stops_its_prepare_and_removes_the_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ran, ran_flag) = flag();
+        let gated = GatedLaunch::start_with(
+            LaunchGate::new_in(dir.path(), 18700),
+            async move {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                ran_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+                wiped()
+            },
+            None,
+            Duration::from_secs(5),
+        );
+        let path = gated.gate.path().to_path_buf();
+        drop(gated);
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!is_set(&ran));
+        assert!(!path.exists());
     }
 
     #[test]
