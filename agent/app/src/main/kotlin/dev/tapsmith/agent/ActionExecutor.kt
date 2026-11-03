@@ -62,11 +62,6 @@ class ActionExecutor(
         /** Upper bound on a swipe's settle, for a scroll view that keeps moving. */
         private const val SWIPE_SETTLE_MAX_MS = 3000L
 
-        /** How long each press of a double tap is held. Unlike a single tap
-         *  (no hold, PILOT-974), kept: the double-tap timing was tuned with
-         *  it, and short holds are known to miss React Native double taps. */
-        private const val TAP_PRESS_MS = 50L
-
         /** Time reserved after a focusing tap for the work that follows it
          *  (setting or clearing text and its idle waits), so the tap is not
          *  made when that work could not finish before the daemon gives up. */
@@ -925,7 +920,7 @@ class ActionExecutor(
                 }
             // Both presses and the gap between them must finish before the
             // daemon gives up, or the second tap lands in the next step.
-            val gestureMs = (if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS) + 2 * TAP_PRESS_MS
+            val gestureMs = if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS
             val point = planGesturePoint(element, bounds, budget, expected, "double tap", reserveMs = gestureMs)
             doubleTapCoordinates(point.x, point.y, intervalMs)
         } catch (e: StaleObjectException) {
@@ -941,6 +936,9 @@ class ActionExecutor(
 
     /**
      * Double-tap at specific screen coordinates with tightly controlled timing.
+     * Each tap is released as soon as it presses, as a single tap is: React
+     * Native's double-tap handlers landed 20 of 20 pairs with no hold, the same
+     * as with the 50 ms presses the pairs used to hold.
      */
     fun doubleTapCoordinates(
         x: Int,
@@ -948,18 +946,18 @@ class ActionExecutor(
         intervalMs: Long = DOUBLE_TAP_INTERVAL_MS,
     ) {
         val interval = if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS
-        if (input.click(x, y, TAP_PRESS_MS)) {
+        if (input.click(x, y)) {
             SystemClock.sleep(interval)
-            if (input.click(x, y, TAP_PRESS_MS)) return
+            if (input.click(x, y)) return
             // First tap already landed — complete the gesture with one more
             // try rather than leaving a lone single tap behind.
-            if (input.click(x, y, TAP_PRESS_MS)) return
+            if (input.click(x, y)) return
             throw ActionFailedException("Failed to double tap at ($x, $y)")
         }
         // The first tap was refused: try the pair once more.
-        input.click(x, y, TAP_PRESS_MS)
+        input.click(x, y)
         SystemClock.sleep(interval)
-        if (!input.click(x, y, TAP_PRESS_MS)) {
+        if (!input.click(x, y)) {
             throw ActionFailedException("Failed to double tap at ($x, $y)")
         }
     }
