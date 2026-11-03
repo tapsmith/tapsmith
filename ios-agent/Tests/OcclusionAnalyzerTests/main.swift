@@ -561,8 +561,8 @@ for (name, target, want) in containerCases {
     if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got.map(\.rawValue))") }
 }
 
-// A dropdown's option is the shown, uncovered text drawn last, leaving out
-// what showed it before the dropdown opened.
+// A dropdown's option is the uncovered text drawn last, leaving out what
+// showed it before the dropdown opened, touched where `analyze` says.
 let optionRows: [Row] = [
     (0, .application, "", "", screen),
     (1, .window, "", "", screen),
@@ -575,33 +575,35 @@ let optionRows: [Row] = [
     (3, .scrollView, "", "", R(16, 450, 370, 100)),
     (4, .staticText, "Clipped", "", R(16, 560, 370, 20)),
     (4, .staticText, "Half", "", R(16, 540, 370, 20)),
+    (3, .staticText, "Low", "", R(16, 590, 370, 30)),
     (3, .button, "Cover", "", R(0, 370, 402, 40)),
-    (2, .sheet, "", "", R(0, 600, 402, 274)),
+    (2, .sheet, "", "", R(0, 640, 402, 160)),
     (3, .staticText, "Large", "", R(16, 700, 370, 20)),
+    (2, .toolbar, "", "", R(0, 600, 402, 40)),
 ]
 let options = analyzer(optionRows)
-if options.topmostText("Medium")?.frame == R(16, 340, 370, 20) {
-    print("ok   the option text drawn last is the one picked")
-} else { failures += 1; print("FAIL the option text drawn last is the one picked") }
-if options.topmostText("Medium", excluding: [R(16, 340, 370, 20)])?.frame == R(16, 100, 370, 20),
-   options.topmostText("Medium", excluding: options.shownTexts("Medium")) == nil {
-    print("ok   a text shown before the dropdown opened is left out")
-} else { failures += 1; print("FAIL a text shown before the dropdown opened is left out") }
-if options.topmostText("Under") == nil { print("ok   an option a control covers is not picked") } else {
-    failures += 1; print("FAIL an option a control covers is not picked")
+func touch(_ result: OcclusionAnalyzer.OptionText) -> CGPoint? {
+    if case .touchable(let point, _) = result { return point }
+    return nil
 }
-if options.topmostText("Large")?.ancestorTypes.contains(.sheet) == true {
+let optionCases: [(String, Bool)] = [
+    ("the option text drawn last is the one picked", touch(options.optionText("Medium")) == CGPoint(x: 201, y: 350)),
+    ("a text shown before the dropdown opened is left out",
+     touch(options.optionText("Medium", excluding: [R(16, 340, 370, 20)])) == CGPoint(x: 201, y: 110)
+        && options.optionText("Medium", excluding: options.shownTexts("Medium")) == .absent),
+    ("an option a control covers is present but not touched", options.optionText("Under") == .present),
+    ("an option scrolled out of its list is present but not touched", options.optionText("Clipped") == .present),
+    ("an option off screen is present but not touched", options.optionText("Gone") == .present),
+    ("a missing option is absent", options.optionText("Missing") == .absent),
+    ("a half-shown option is touched in its shown part", touch(options.optionText("Half")) == CGPoint(x: 201, y: 545)),
+    ("an option half under a toolbar is touched clear of it", touch(options.optionText("Low")) == CGPoint(x: 201, y: 595)),
+]
+for (name, ok) in optionCases {
+    if ok { print("ok   \(name)") } else { failures += 1; print("FAIL \(name)") }
+}
+if case .touchable(_, let types) = options.optionText("Large"), types.contains(.sheet) {
     print("ok   an option in a sheet sits in the sheet")
 } else { failures += 1; print("FAIL an option in a sheet sits in the sheet") }
-if options.topmostText("Gone") == nil, options.topmostText("Missing") == nil {
-    print("ok   an off-screen or missing option is not found")
-} else { failures += 1; print("FAIL an off-screen or missing option is not found") }
-if options.topmostText("Clipped") == nil { print("ok   an option scrolled out of its list is not found") } else {
-    failures += 1; print("FAIL an option scrolled out of its list is not found")
-}
-if options.topmostText("Half")?.frame == R(16, 540, 370, 10) {
-    print("ok   a half-shown option is touched in its shown part")
-} else { failures += 1; print("FAIL a half-shown option is touched in its shown part") }
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

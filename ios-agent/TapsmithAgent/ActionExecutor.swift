@@ -416,22 +416,24 @@ class ActionExecutor {
 
         // The option's text shown on top and uncovered: more than one text can
         // carry it (React Native can expose a text and the view around it).
+        // Wait only while it is not in the tree at all.
         let deadline = Date().addingTimeInterval(3)
-        var option = topmostOptionText(optionText, excluding: shownBefore)
-        while option == nil, Date() < deadline {
+        var option = findOption(optionText, excluding: shownBefore)
+        while option == .absent, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.1)
-            option = topmostOptionText(optionText, excluding: shownBefore)
+            option = findOption(optionText, excluding: shownBefore)
         }
-        if let option {
+        if case .touchable(let point, let ancestorTypes) = option {
             tapCoordinates(
-                x: Int(option.frame.midX.rounded()),
-                y: Int(option.frame.midY.rounded()),
-                hold: TapTiming.hold(for: .staticText, within: option.ancestorTypes)
+                x: Int(point.x.rounded()),
+                y: Int(point.y.rounded()),
+                hold: TapTiming.hold(for: .staticText, within: ancestorTypes)
             )
             return
         }
-        // Not shown (below the fold of a scrolling list): XCUIElement.tap()
-        // scrolls it into view. Any copy but those shown before will do.
+        // Not touchable where it is (below the fold of a scrolling list):
+        // XCUIElement.tap() scrolls it into view. Any copy but those shown
+        // before will do.
         let unshown = app.staticTexts.matching(identifier: optionText).allElementsBoundByIndex.last { text in
             guard let frame = try? text.snapshot().frame else { return false }
             return !shownBefore.contains { OcclusionAnalyzer.framesMatch($0, frame) }
@@ -470,11 +472,8 @@ class ActionExecutor {
         return OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
     }
 
-    private func topmostOptionText(
-        _ text: String,
-        excluding: [CGRect]
-    ) -> (frame: CGRect, ancestorTypes: [XCUIElement.ElementType])? {
-        optionAnalyzer()?.topmostText(text, excluding: excluding)
+    private func findOption(_ text: String, excluding: [CGRect]) -> OcclusionAnalyzer.OptionText {
+        optionAnalyzer()?.optionText(text, excluding: excluding) ?? .absent
     }
 
     /// The frames of the texts on screen that show `text` now.
@@ -482,12 +481,12 @@ class ActionExecutor {
         optionAnalyzer()?.shownTexts(text) ?? []
     }
 
-    /// Tap a dropdown's option (a cell picked by index) at the centre of its
-    /// shown part, held as its type needs (`TapTiming`; a frame longer in an
-    /// alert or action sheet), rather than through `XCUIElement.tap()`, whose
-    /// hold XCTest picks. An option not shown (below the fold, scrolled out of
-    /// its list) or not found in the tree is left to `XCUIElement.tap()`,
-    /// which scrolls it into view or fails, so no tap goes where it is not.
+    /// Tap a dropdown's option (a cell picked by index) at the uncovered
+    /// point the analyzer picks, held as its type and containers need
+    /// (`TapTiming`), rather than through `XCUIElement.tap()`, whose hold
+    /// XCTest picks. An option that cannot be touched where it is (below the
+    /// fold, scrolled out of its list, covered) or is not found in the tree is
+    /// left to `XCUIElement.tap()`, which scrolls it into view or fails.
     private func tapOption(_ option: XCUIElement) throws {
         guard let snap = try? option.snapshot(),
               let appSnapshot = try? app.snapshot() else {
@@ -498,13 +497,13 @@ class ActionExecutor {
         let target = OcclusionAnalyzer.Target(
             frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier
         )
-        guard let index = analyzer.locate(target), let shown = analyzer.shownFrame(of: index) else {
+        guard let point = analyzer.touchPoint(target) else {
             option.tap()
             return
         }
         tapCoordinates(
-            x: Int(shown.midX.rounded()),
-            y: Int(shown.midY.rounded()),
+            x: Int(point.x.rounded()),
+            y: Int(point.y.rounded()),
             hold: TapTiming.hold(for: snap.elementType, within: analyzer.ancestorTypes(of: target))
         )
     }

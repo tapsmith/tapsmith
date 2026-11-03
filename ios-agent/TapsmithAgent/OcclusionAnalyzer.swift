@@ -451,27 +451,44 @@ struct OcclusionAnalyzer {
         nodes.indices.filter { isText($0, text) && shownFrame(of: $0) != nil }.map { snapshotFrames[$0] }
     }
 
-    /// The shown, uncovered text whose label or identifier is `text`, drawn
-    /// last (on top, as a dropdown's options are over the screen that opened
-    /// them), leaving out texts at the frames in `excluding` (what showed the
-    /// text before the dropdown opened: its trigger, the screen behind).
-    /// `frame` is the part of it on screen and inside its scroll views, and
-    /// `ancestorTypes` the types of the elements it sits in. nil when no such
-    /// text is shown.
-    func topmostText(
-        _ text: String,
-        excluding: [CGRect] = []
-    ) -> (frame: CGRect, ancestorTypes: [XCUIElement.ElementType])? {
+    /// A dropdown option's text as the tree shows it (`optionText`).
+    enum OptionText: Equatable {
+        /// Touch it at `point`, the uncovered point `analyze` picked; it sits
+        /// in elements of `ancestorTypes` (for `TapTiming`).
+        case touchable(point: CGPoint, ancestorTypes: [XCUIElement.ElementType])
+        /// In the tree, but no copy can be touched where it is: below the fold
+        /// of its list, or covered.
+        case present
+        /// Not in the tree.
+        case absent
+    }
+
+    /// Where to touch the dropdown option whose text (label or identifier)
+    /// is `text`: the copy drawn last (on top, as a dropdown's options are
+    /// over the screen that opened them) that `analyze` finds uncovered,
+    /// touched at the point it picked (clear of the keyboard and bars).
+    /// Copies at the frames in `excluding` are left out: what showed the text
+    /// before the dropdown opened (its trigger, the screen behind).
+    func optionText(_ text: String, excluding: [CGRect] = []) -> OptionText {
+        var present = false
         for i in nodes.indices.reversed() where isText(i, text) {
             if excluding.contains(where: { Self.framesMatch($0, snapshotFrames[i]) }) { continue }
-            guard let shown = shownFrame(of: i) else { continue }
+            present = true
             let node = nodes[i]
             let target = Target(frame: snapshotFrames[i], elementType: node.elementType, label: node.label,
                                 identifier: node.identifier)
-            guard case .clear = analyze(target, isHittable: false) else { continue }
-            return (shown, ancestors(of: i).map { nodes[$0].elementType })
+            if let point = touchPoint(target) {
+                return .touchable(point: point, ancestorTypes: ancestors(of: i).map { nodes[$0].elementType })
+            }
         }
-        return nil
+        return present ? .present : .absent
+    }
+
+    /// The uncovered point `analyze` picks on a target XCUITest has not
+    /// vouched for, or nil when it is off screen, covered or not found.
+    func touchPoint(_ target: Target) -> CGPoint? {
+        guard case .clear(let point, _) = analyze(target, isHittable: false) else { return nil }
+        return point
     }
 
     private func isText(_ i: Int, _ text: String) -> Bool {

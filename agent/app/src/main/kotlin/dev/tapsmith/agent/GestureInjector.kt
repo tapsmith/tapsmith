@@ -291,10 +291,11 @@ class GestureInjector(
      * have delivered it anyway), and a refused release is followed by a cancel,
      * so no pointer is left down. True only when both went through.
      *
-     * The hold stops when its command is cancelled (checked every
+     * A held press stops when its command is cancelled (checked every
      * [HOLD_CHECK_MS], and once at the end of a shorter press): the pointer is
      * cancelled, not released, so the abandoned press does not land as a
-     * click, and [CommandCancelledException] is thrown.
+     * click, and [CommandCancelledException] is thrown. A tap with no hold has
+     * nothing to stop: its release follows the press at once.
      */
     fun click(
         x: Int,
