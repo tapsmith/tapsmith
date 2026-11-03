@@ -792,6 +792,26 @@ describe('cleanupStaleSimulators', () => {
     expect(result.killed).toContain('ORPHAN');
   });
 
+  it('hands back the listing it read, without the simulators it deleted, so the caller need not list again', () => {
+    mockedReadFileSync.mockReturnValue('[]');
+    let lists = 0;
+    mockedExecFileSync.mockImplementation((cmd: string, args: string[]) => {
+      const a = args as string[];
+      if (cmd === 'xcrun' && a?.[0] === 'simctl' && a?.[1] === 'list') {
+        lists++;
+        return makeSimctlOutput([
+          { udid: 'MINE', name: 'iPhone 16', state: 'Booted' },
+          { udid: 'ORPHAN', name: 'iPhone 16 (Tapsmith Worker 1)', state: 'Booted' },
+        ]) as unknown as Buffer;
+      }
+      return '' as unknown as Buffer;
+    });
+
+    const result = cleanupStaleSimulators('iPhone 16');
+    expect(lists).toBe(1);
+    expect(result.simulators?.map((sim) => sim.udid)).toEqual(['MINE']);
+  });
+
   // Phase 1's view of the manifest is as old as the sweep, and its lock is
   // released before phase 2 deletes anything. A run that clones a worker in
   // between records it immediately — and this is what stops the sweep deleting
@@ -1146,7 +1166,7 @@ describe('simulators another live Tapsmith session holds', () => {
     claims.held = new Set(['HELD_CLONE', 'HELD_ORPHAN']);
 
     const result = cleanupStaleSimulators('iPhone 16');
-    expect(result).toEqual({ reusable: [], killed: [] });
+    expect(result).toMatchObject({ reusable: [], killed: [] });
     expect(calls.some((c) => c[2] === 'delete' || c[2] === 'shutdown')).toBe(false);
     // Still recorded: its owner's clone stays in the manifest.
     const written = JSON.parse(String(mockedWriteFileSync.mock.calls.at(-1)?.[1] ?? '[]')) as Array<{ udid: string }>;
