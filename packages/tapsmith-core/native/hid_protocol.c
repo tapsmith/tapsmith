@@ -24,11 +24,13 @@ HidEvent hid_parse_line(const char *line) {
 
   if (c == 'c') { e.cmd = HID_CANCEL; return e; }
 
-  int isDoubleTap = (c == 't' && line[1] == '2' &&
-                     (line[2] == '\0' || isspace((unsigned char)line[2])));
-  if (!isDoubleTap && c != 'd' && c != 'm' && c != 'u') return e;
+  /* t1 / t2: a whole tap or double tap, with an optional hold. */
+  int isTapLine = (c == 't' && (line[1] == '1' || line[1] == '2') &&
+                   (line[2] == '\0' || isspace((unsigned char)line[2])));
+  int isDoubleTap = isTapLine && line[1] == '2';
+  if (!isTapLine && c != 'd' && c != 'm' && c != 'u') return e;
 
-  const char *rest = line + (isDoubleTap ? 2 : 1);
+  const char *rest = line + (isTapLine ? 2 : 1);
   char *end = NULL;
   double x = strtod(rest, &end);
   if (end == rest) return e;          /* no x parsed */
@@ -36,7 +38,7 @@ HidEvent hid_parse_line(const char *line) {
   double y = strtod(rest2, &end);
   if (end == rest2) return e;         /* no y parsed */
 
-  if (isDoubleTap) {
+  if (isTapLine) {
     const char *rest3 = end;
     while (*rest3 && isspace((unsigned char)*rest3)) rest3++;
     if (*rest3) {
@@ -51,6 +53,7 @@ HidEvent hid_parse_line(const char *line) {
   e.x = x;
   e.y = y;
   e.cmd = isDoubleTap ? HID_DOUBLE_TAP
+        : isTapLine   ? HID_TAP
         : (c == 'd')  ? HID_DOWN
         : (c == 'm')  ? HID_MOVE
                       : HID_UP;

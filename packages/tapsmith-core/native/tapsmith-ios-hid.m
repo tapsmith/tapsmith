@@ -234,6 +234,9 @@ int main(int argc, char **argv) {
     const uint64_t kMinEventSpacingUs = 12000;
     // A double tap's press when its line gives no hold (an older daemon).
     const useconds_t kDefaultDoubleTapHoldUs = 40000;
+    // A single tap's press when its line gives no hold: long enough for a
+    // control that reads a touch on a display frame (a UISwitch).
+    const useconds_t kDefaultTapHoldUs = 20000;
     uint64_t lastInjectUs = 0;
     char buf[1024];
     while (fgets(buf, sizeof(buf), stdin)) {
@@ -258,6 +261,22 @@ int main(int argc, char **argv) {
         case HID_CANCEL:
           ok = sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
           break;
+        case HID_TAP: {
+          // Down, hold, up timed in-process: the down is fire-and-forget so
+          // the hold between the two events' creation timestamps (what the
+          // app's touch handling sees) is the usleep, not the down's delivery
+          // round trip. The up waits, so `ok` means the touch was lifted.
+          lastX = ev.x; lastY = ev.y;
+          double nx = hid_normalize(ev.x, widthPt);
+          double ny = hid_normalize(ev.y, heightPt);
+          useconds_t holdUs = ev.holdMs == HID_DEFAULT_HOLD
+              ? kDefaultTapHoldUs
+              : (useconds_t)ev.holdMs * 1000;
+          sendTouchNoWait(nx, ny, DirDown);
+          usleep(holdUs);
+          ok = sendTouch(nx, ny, DirUp);
+          break;
+        }
         case HID_DOUBLE_TAP: {
           // Full double-tap with in-process timing: each press held as the
           // line asks (kDefaultDoubleTapHoldUs without a hold), ~120ms

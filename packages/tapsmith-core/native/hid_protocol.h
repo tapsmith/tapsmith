@@ -18,6 +18,14 @@
  *               <hold>: how long each tap holds its touch, in whole
  *               milliseconds (0..HID_MAX_HOLD_MS); without it, the helper's
  *               default.
+ *   t1 <x> <y> [<hold>]
+ *               single-tap primitive: down, a hold of <hold> milliseconds
+ *               (0..HID_MAX_HOLD_MS; without it, the helper's default), up,
+ *               timed in-process. Lines are paced at least a frame apart and
+ *               each `d` waits for its delivery, so a `d`/`u` pair cannot hold
+ *               a touch for less than a frame, and its hold grows with load.
+ *               Only the up waits for delivery: the reply to the line comes
+ *               once the touch has been lifted.
  */
 typedef enum {
   HID_DOWN,
@@ -25,20 +33,21 @@ typedef enum {
   HID_UP,
   HID_CANCEL,
   HID_DOUBLE_TAP,
+  HID_TAP,
   HID_INVALID
 } HidCmd;
 
 /* holdMs when a line gives none. */
 #define HID_DEFAULT_HOLD (-1)
-/* The longest hold a double tap's line may ask for: a hold past this would
- * make the pair two separate taps, or a long press. */
+/* The longest hold a tap's or double tap's line may ask for: a hold past
+ * this would make the pair two separate taps, or a long press. */
 #define HID_MAX_HOLD_MS 500
 
 typedef struct {
   HidCmd cmd;
   double x;
   double y;
-  /* A double tap's hold in milliseconds, or HID_DEFAULT_HOLD. */
+  /* A tap's or double tap's hold in milliseconds, or HID_DEFAULT_HOLD. */
   int holdMs;
 } HidEvent;
 
