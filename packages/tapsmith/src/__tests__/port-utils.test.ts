@@ -2,12 +2,18 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 import * as childProcess from 'node:child_process';
 
 vi.mock('node:child_process');
+// Real sockets by default; one test swaps in a connect that never answers.
+vi.mock('node:net', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:net')>();
+  return { ...actual, connect: vi.fn(actual.connect) };
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overloaded execFileSync signatures make proper mock typing impractical
 const mockedExecFileSync = vi.mocked(childProcess.execFileSync) as any;
 const mockedSpawnSync = vi.mocked(childProcess.spawnSync);
 
-import { daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, parseDaemonsOnAgentPort } from '../port-utils.js';
+import * as net from 'node:net';
+import { connectionRefused, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, parseDaemonsOnAgentPort } from '../port-utils.js';
 
 // ─── Tests ───
 //
@@ -238,5 +244,64 @@ describe('daemonsOnAgentPort', () => {
   it('is undefined when ps cannot be read', () => {
     mockedExecFileSync.mockImplementation(() => { throw new Error('ENOENT'); });
     expect(daemonsOnAgentPort(18700, new Set())).toBeUndefined();
+  });
+});
+
+describe('connectionRefused', () => {
+  /** A loopback server on a free port, closed after the test. */
+  async function listen(host: string): Promise<{ port: number; close: () => Promise<void> }> {
+    const server = net.createServer((socket) => socket.destroy());
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(0, host, resolve);
+    });
+    const port = (server.address() as net.AddressInfo).port;
+    return { port, close: () => new Promise((resolve) => server.close(() => resolve())) };
+  }
+
+  /** A port that was free a moment ago: nothing listens there. */
+  async function deadPort(): Promise<number> {
+    const { port, close } = await listen('127.0.0.1');
+    await close();
+    return port;
+  }
+
+  it('is true when nothing listens on the address', async () => {
+    const port = await deadPort();
+    expect(await connectionRefused(`127.0.0.1:${port}`)).toBe(true);
+    expect(await connectionRefused(`localhost:${port}`)).toBe(true);
+  });
+
+  it('is false when something accepts the connection', async () => {
+    const server = await listen('127.0.0.1');
+    try {
+      expect(await connectionRefused(`127.0.0.1:${server.port}`)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('is false for localhost when only one of its addresses listens (the daemon binds 127.0.0.1 alone)', async () => {
+    // `localhost` can resolve to ::1 first; a refusal there must not hide the
+    // daemon on 127.0.0.1, which gRPC itself would reach.
+    const server = await listen('127.0.0.1');
+    try {
+      expect(await connectionRefused(`localhost:${server.port}`)).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it('is false when the connect neither succeeds nor is refused in time', async () => {
+    // A filtered port: the socket never connects and never errors.
+    vi.mocked(net.connect).mockImplementationOnce((() => new net.Socket()) as unknown as typeof net.connect);
+    const started = Date.now();
+    expect(await connectionRefused('127.0.0.1:50051', 50)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it('is false for an address it cannot parse or resolve', async () => {
+    expect(await connectionRefused('no-port-here')).toBe(false);
+    expect(await connectionRefused('host.invalid:50051')).toBe(false);
   });
 });

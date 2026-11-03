@@ -460,6 +460,12 @@ export class TapsmithGrpcClient {
         'grpc.keepalive_time_ms': 30_000,                      // ping every 30s
         'grpc.keepalive_timeout_ms': 10_000,                   // 10s to respond
         'grpc.keepalive_permit_without_calls': 1,              // ping even when idle
+        // The daemon is local, so a reconnect attempt costs next to nothing.
+        // grpc-js waits 1 s before its first one by default: every daemon
+        // start paid that second, because the first connect is refused
+        // until the daemon listens (~30 ms after it is spawned).
+        'grpc.initial_reconnect_backoff_ms': 50,
+        'grpc.max_reconnect_backoff_ms': 1_000,
       },
     // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
     ) as grpc.Client & Record<string, Function>;

@@ -62,7 +62,7 @@ import {
   ensureAdbRoot,
 } from './emulator.js';
 import { isRecoverableInfrastructureError, serializeConfig } from './worker-protocol.js';
-import { DEFAULT_AGENT_PORT, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, pickFreePort } from './port-utils.js';
+import { connectionRefused, DEFAULT_AGENT_PORT, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, pickFreePort } from './port-utils.js';
 import { findDaemonBin } from './daemon-bin.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, planDaemonPort, spawnDaemonBinary } from './daemon-start.js';
 import { splitHeadline } from './error-detail.js';
@@ -381,7 +381,10 @@ async function ensureDaemonRunning(
     else console.log(dim(`Daemon ${why}; starting on ${address}`));
   };
   let answered = false;
-  try {
+  // Nothing listening is the usual case (no other session): a refused connect
+  // says so at once, where the gRPC wait would retry for its whole second.
+  const refused = await connectionRefused(address);
+  if (!refused) try {
     const probe = new TapsmithGrpcClient(address);
     answered = await probe.waitForReady(1_000);
     probe.close();
@@ -391,7 +394,7 @@ async function ensureDaemonRunning(
   const portPlan = planDaemonPort({
     port: requestedPort,
     answered,
-    listeners: answered ? [] : findPidsOnPort(port),
+    listeners: answered || refused ? [] : findPidsOnPort(port),
     ownDaemons: stoppedOwnDaemons,
   });
   if (portPlan.kind === 'move') {

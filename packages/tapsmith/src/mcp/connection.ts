@@ -5,7 +5,7 @@ import { execFileSync, type ChildProcess, type StdioOptions } from 'node:child_p
 import { withFileLockSync } from '../file-lock.js';
 import { TapsmithGrpcClient, type DeviceInfoProto } from '../grpc-client.js';
 import { findDaemonBin } from '../daemon-bin.js';
-import { pickFreePort } from '../port-utils.js';
+import { connectionRefused, pickFreePort } from '../port-utils.js';
 import { resolveDeviceGroup, primaryDevicePin, reduceMotionFlag, type TapsmithConfig } from '../config.js';
 import { loadMcpConfig } from './config-loader.js';
 import { configDeviceTarget, configTargetMissMessage, type ConfigDeviceTarget } from './config-device-target.js';
@@ -878,6 +878,9 @@ async function discover(): Promise<void> {
     const results = await Promise.all(entries.map(async ([address, source]) => {
       let client: TapsmithGrpcClient | undefined;
       try {
+        // A candidate nothing listens on is answered at once, not after the
+        // gRPC wait's full second.
+        if (await connectionRefused(address)) return null;
         client = new TapsmithGrpcClient(address);
         const alive = await client.waitForReady(1_000);
         if (alive && await startedByAnotherSession(client, address, source)) {
