@@ -133,8 +133,13 @@ export async function probeResetCapabilities(
   const caps: ResetCapabilities = (ctx.capabilities ??= {});
   const deadline = Date.now() + (options.pollMs ?? HOOKS_PROBE_POLL_MS);
   let readWithoutMarker = false;
+  // Consecutive reads that showed the app's own rendered UI and no marker,
+  // and whether the project may stop on them (decided on first need).
+  let renderedWithoutMarker = 0;
+  let mayStopEarly: boolean | undefined;
   for (;;) {
-    const seen = await readHooksMarker(ctx);
+    const read = await readHooksMarkerAndContent(ctx);
+    const seen = read?.seen;
     if (seen === false) readWithoutMarker = true;
     if (seen) {
       caps.hooksDetected = true;
@@ -147,6 +152,14 @@ export async function probeResetCapabilities(
     // single-shot miss there would pin every file of a sequential run to
     // clear resets with nothing to upgrade it.
     if (caps.hooksDetected !== undefined || Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+    // Unless the app has rendered its own UI, twice in a row, without the
+    // marker, and the project does not depend on @tapsmith/react-native: the
+    // marker mounts with the React root, so there is nothing left to wait
+    // for, and an app without the hooks (most apps) paid the whole budget
+    // at every session start. A project that depends on the package keeps
+    // the budget: its app could render before the component that mounts it.
+    renderedWithoutMarker = read?.rendered ? renderedWithoutMarker + 1 : 0;
+    if (renderedWithoutMarker >= HOOKS_PROBE_RENDERED_READS && (mayStopEarly ??= projectWithoutHooks(ctx.config))) break;
     await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
   }
   // Sticky: hooks compiled into the app do not vanish mid-session. A probe
@@ -180,6 +193,60 @@ async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?:
   } catch {
     return undefined;
   }
+}
+
+/**
+ * {@link readHooksMarker} for the probe, with whether the read showed the
+ * app's own rendered UI (`rendered`); undefined when the read failed.
+ */
+async function readHooksMarkerAndContent(ctx: SessionPreflightContext): Promise<{ seen: boolean; rendered: boolean } | undefined> {
+  let xml: string;
+  try {
+    xml = (await ctx.client.getUiHierarchy()).hierarchyXml ?? '';
+  } catch {
+    return undefined;
+  }
+  const marker = parseHooksMarker(xml);
+  const rendered = ctx.config.platform === 'ios'
+    ? iosHierarchyHasRenderedContent(xml)
+    : !!ctx.config.package && androidHierarchyHasRenderedContent(xml, ctx.config.package);
+  return { seen: !!marker && marker.urlPrefix.length > 0, rendered };
+}
+
+/**
+ * True when the iOS hierarchy has an element of the app, other than the
+ * application node itself (which carries the app's name from launch on),
+ * with a label or an identifier: the app has drawn real UI. Keyboard subtrees
+ * (`tapsmith-non-app`) do not count.
+ */
+function iosHierarchyHasRenderedContent(hierarchyXml: string): boolean {
+  let nonAppDepth = 0;
+  for (const [tag] of hierarchyXml.matchAll(/<\/?XCUIElementType\w+\b[^>]*>/g)) {
+    const closing = tag.startsWith('</');
+    const selfClosing = tag.endsWith('/>');
+    if (nonAppDepth > 0) {
+      if (closing) nonAppDepth--;
+      else if (!selfClosing) nonAppDepth++;
+      continue;
+    }
+    if (closing) continue;
+    if (tag.includes('tapsmith-non-app="true"')) {
+      if (!selfClosing) nonAppDepth = 1;
+      continue;
+    }
+    if (tag.startsWith('<XCUIElementTypeApplication')) continue;
+    if (/\blabel="[^"]+"/.test(tag) || /\bidentifier="[^"]+"/.test(tag)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the project is known not to depend on `@tapsmith/react-native`.
+ * False when it does, and when there is no project to look in.
+ */
+function projectWithoutHooks(config: SessionPreflightContext['config']): boolean {
+  if (!config.rootDir) return false;
+  return !appUsesTapsmithHooks({ rootDir: config.rootDir, apk: config.apk, app: config.app });
 }
 
 /**
@@ -261,6 +328,12 @@ async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabi
 
 /** Marker poll cadence inside {@link probeResetCapabilities}. */
 const HOOKS_PROBE_POLL_INTERVAL_MS = 250;
+/**
+ * Consecutive reads of rendered UI without the marker after which a project
+ * without the hooks stops probing: two, a poll interval apart, so one frame
+ * caught mid-launch is not the answer.
+ */
+const HOOKS_PROBE_RENDERED_READS = 2;
 /**
  * How long a probe keeps looking for the hooks marker before concluding the
  * app has none. Only a session that has never seen the marker polls, so the
