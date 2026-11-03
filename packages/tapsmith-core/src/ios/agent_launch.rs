@@ -65,12 +65,7 @@ async fn clear_prior_xcresults(derived_data_path: &Path) -> Result<()> {
 ///
 /// `clear_app_data_first`: on a simulator, wipe the app's data while
 /// xcodebuild starts, before the runner launches it (see [`launch_gate`]).
-///
-/// `prelaunch`: host-side setup the app must see from its first launch (the
-/// simulator's defaults). It overlaps xcodebuild's start, but the runner does
-/// not launch the app before it is done; without a launch gate it is awaited
-/// before anything starts.
-#[instrument(skip(xctestrun_path, target_bundle_id, prelaunch))]
+#[instrument(skip(xctestrun_path, target_bundle_id))]
 pub async fn start_agent(
     udid: &str,
     xctestrun_path: &str,
@@ -78,7 +73,6 @@ pub async fn start_agent(
     agent_port: u16,
     is_physical: bool,
     clear_app_data_first: bool,
-    prelaunch: Option<tokio::task::JoinHandle<()>>,
 ) -> Result<AgentStart> {
     start_agent_impl(
         udid,
@@ -91,7 +85,6 @@ pub async fn start_agent(
         },
         agent_port,
         is_physical,
-        prelaunch,
     )
     .await
 }
@@ -117,7 +110,6 @@ pub async fn start_agent_fresh(
         },
         agent_port,
         is_physical,
-        None,
     )
     .await
     .map(|started| started.iproxy)
@@ -146,60 +138,35 @@ impl GatedLaunch {
     /// race its own terminate — the classic "Timed out attempting to launch
     /// app" on a busy SpringBoard) and, when asked, wipe its data, then open
     /// the gate. All of it overlaps xcodebuild's start, seconds before the
-    /// runner's test even begins. `prelaunch` finishes before the gate opens.
-    fn start(
-        udid: &str,
-        target_bundle_id: &str,
-        agent_port: u16,
-        wipe: bool,
-        prelaunch: Option<tokio::task::JoinHandle<()>>,
-    ) -> Self {
+    /// runner's test even begins.
+    fn start(udid: &str, target_bundle_id: &str, agent_port: u16, wipe: bool) -> Self {
         let udid = udid.to_string();
         let bundle_id = target_bundle_id.to_string();
         Self::start_with(
             LaunchGate::new_in(&std::env::temp_dir(), agent_port),
             async move { prepare_app_launch(&udid, &bundle_id, wipe).await },
-            prelaunch,
             launch_gate::PREPARE_DEADLINE,
         )
     }
 
     /// [`GatedLaunch::start`] with the pre-launch work and its deadline
-    /// passed in. The gate opens once `prepare` and `prelaunch` are done, or
-    /// at `deadline` (the start is then not vouched for). `prelaunch` is
-    /// joined either way before [`Self::settle`] returns: a deadline opens
-    /// the gate, it does not abandon the simulator's setup.
+    /// passed in. The gate opens once `prepare` is done, or at `deadline`
+    /// (the start is then not vouched for).
     fn start_with(
         gate: LaunchGate,
         prepare: impl std::future::Future<Output = Prepared> + Send + 'static,
-        mut prelaunch: Option<tokio::task::JoinHandle<()>>,
         deadline: Duration,
     ) -> Self {
         let path = gate.path().to_path_buf();
         let task = tokio::spawn(async move {
             let started = std::time::Instant::now();
-            let prepared = tokio::time::timeout(deadline, async {
-                let (prepared, _) = tokio::join!(prepare, async {
-                    if let Some(prelaunch) = prelaunch.as_mut() {
-                        let _ = prelaunch.await;
-                    }
-                });
-                prepared
-            })
-            .await
-            .ok();
+            let prepared = tokio::time::timeout(deadline, prepare).await.ok();
             launch_gate::open_at(&path);
             crate::timing::timing_log!(
                 "kind=boot name=launch_gate dur_ms={} prepared={:?}",
                 started.elapsed().as_millis(),
                 prepared
             );
-            if prepared.is_none() {
-                // The deadline dropped the join; the setup still finishes.
-                if let Some(prelaunch) = prelaunch {
-                    let _ = prelaunch.await;
-                }
-            }
             prepared
         });
         Self {
@@ -265,7 +232,6 @@ async fn start_agent_impl(
     mode: StartMode,
     agent_port: u16,
     is_physical: bool,
-    mut prelaunch: Option<tokio::task::JoinHandle<()>>,
 ) -> Result<AgentStart> {
     let StartMode {
         force,
@@ -311,9 +277,6 @@ async fn start_agent_impl(
         // iproxy tunnel is still up; no new handle is returned and the
         // caller's existing stored state remains authoritative. This runner
         // launched the app long ago: nothing here is fresh.
-        if let Some(prelaunch) = prelaunch {
-            let _ = prelaunch.await;
-        }
         return Ok(AgentStart {
             iproxy: None,
             app_launched_fresh: false,
@@ -340,14 +303,10 @@ async fn start_agent_impl(
             target_bundle_id,
             agent_port,
             clear_app_data_first,
-            prelaunch.take(),
         ))
     } else {
         None
     };
-    if let Some(prelaunch) = prelaunch {
-        let _ = prelaunch.await;
-    }
 
     info!(
         udid,
@@ -1743,27 +1702,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_gate_opens_only_after_the_prepare_and_the_prelaunch() {
+    async fn the_gate_opens_only_after_the_prepare() {
         let dir = tempfile::tempdir().unwrap();
-        let (setup_done, setup_flag) = flag();
-        let prelaunch = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(80)).await;
-            setup_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        });
         let mut gated = GatedLaunch::start_with(
             LaunchGate::new_in(dir.path(), 18700),
             async {
-                tokio::time::sleep(Duration::from_millis(40)).await;
+                tokio::time::sleep(Duration::from_millis(80)).await;
                 wiped()
             },
-            Some(prelaunch),
             Duration::from_secs(5),
         );
         let path = gated.gate.path().to_path_buf();
-        tokio::time::sleep(Duration::from_millis(60)).await;
-        assert!(!path.exists(), "the gate waits for the prelaunch too");
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert!(!path.exists(), "the gate waits for the prepare");
         gated.settle().await;
-        assert!(is_set(&setup_done));
         assert!(path.exists(), "then opens");
         // The runner acknowledges it: the start is fresh.
         std::fs::remove_file(&path).unwrap();
@@ -1771,29 +1723,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_deadline_opens_the_gate_unvouched_for_and_still_joins_the_prelaunch() {
+    async fn a_deadline_opens_the_gate_unvouched_for() {
         let dir = tempfile::tempdir().unwrap();
-        let (setup_done, setup_flag) = flag();
-        let prelaunch = tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(150)).await;
-            setup_flag.store(true, std::sync::atomic::Ordering::SeqCst);
-        });
         let mut gated = GatedLaunch::start_with(
             LaunchGate::new_in(dir.path(), 18700),
             std::future::pending::<Prepared>(),
-            Some(prelaunch),
             Duration::from_millis(30),
         );
         let path = gated.gate.path().to_path_buf();
         tokio::time::sleep(Duration::from_millis(80)).await;
         assert!(path.exists(), "the deadline opens the gate");
-        assert!(!is_set(&setup_done));
         std::fs::remove_file(&path).unwrap();
         assert!(
             !gated.app_launched_fresh().await,
             "an unfinished prepare is not fresh"
         );
-        assert!(is_set(&setup_done), "settling waited for the setup");
     }
 
     #[tokio::test]
@@ -1802,7 +1746,6 @@ mod tests {
         let mut gated = GatedLaunch::start_with(
             LaunchGate::new_in(dir.path(), 18700),
             async { wiped() },
-            None,
             Duration::from_secs(5),
         );
         gated.settle().await;
@@ -1825,7 +1768,6 @@ mod tests {
                 ran_flag.store(true, std::sync::atomic::Ordering::SeqCst);
                 wiped()
             },
-            None,
             Duration::from_secs(5),
         );
         let path = gated.gate.path().to_path_buf();

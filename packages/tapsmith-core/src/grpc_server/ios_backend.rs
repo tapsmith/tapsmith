@@ -1633,12 +1633,11 @@ impl DeviceBackend for IosBackend<'_> {
         }
 
         let agent_port = self.svc.agent.read().await.port();
-        // The autofill defaults are written while xcodebuild starts; the
-        // runner's launch of the app waits for them.
-        let configure = (!is_physical).then(|| {
-            let serial = serial.clone();
-            tokio::spawn(async move { ios::device::configure_simulator(&serial).await })
-        });
+        // Written before anything starts: the app must never launch before
+        // them, and their retry pass can outlast any launch-gate bound.
+        if !is_physical {
+            ios::device::configure_simulator(&serial).await;
+        }
         let started = ios::agent_launch::start_agent(
             &serial,
             &req.ios_xctestrun_path,
@@ -1646,7 +1645,6 @@ impl DeviceBackend for IosBackend<'_> {
             agent_port,
             is_physical,
             req.clear_app_data_first,
-            configure,
         )
         .await;
         let started = match started {
