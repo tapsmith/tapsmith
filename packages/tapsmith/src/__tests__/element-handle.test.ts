@@ -991,6 +991,80 @@ describe('tap()', () => {
     expect(remaining).toBeGreaterThan(3000);
   });
 
+  describe('on Android, by the id its auto-wait resolved', () => {
+    const android = { platform: 'android' } as never;
+
+    it('taps the element the auto-wait resolved, by id, without the agent finding it again', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: 'resolved-7' })]));
+      const client = makeMockClient({ findElements, tap });
+      await new ElementHandle(client, _text('Button'), 4000, android).tap();
+      expect(findElements).toHaveBeenCalledTimes(1);
+      expect(tap).toHaveBeenCalledTimes(1);
+      expect(tap).toHaveBeenCalledWith(undefined, expect.any(Number), 'resolved-7');
+    });
+
+    it('keeps strict mode in the SDK: two matches throw before anything is tapped', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const findElements = vi.fn(async () => makeFindElementsResponse([
+        makeElementInfo({ elementId: 'a', bounds: { left: 0, top: 0, right: 10, bottom: 10 } }),
+        makeElementInfo({ elementId: 'b', bounds: { left: 0, top: 20, right: 10, bottom: 30 } }),
+      ]));
+      const client = makeMockClient({ findElements, tap });
+      await expect(new ElementHandle(client, _text('Button'), 500, android).tap()).rejects.toBeInstanceOf(StrictModeViolationError);
+      expect(tap).not.toHaveBeenCalled();
+    });
+
+    it('re-resolves a stale id by selector, so the agent finds the element afresh', async () => {
+      const tap = vi.fn()
+        .mockResolvedValueOnce(failureResponse("Element 'resolved-7' not found. It may have gone stale."))
+        .mockResolvedValue(successResponse());
+      const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: 'resolved-7' })]));
+      const sel = _text('Button');
+      const client = makeMockClient({ findElements, tap });
+      await new ElementHandle(client, sel, 4000, android).tap();
+      expect(tap.mock.calls.map((c) => [c[0], c[2]])).toEqual([[undefined, 'resolved-7'], [sel, undefined]]);
+    });
+
+    it('a retry after a not-hittable refusal taps the id its fresh auto-wait resolved', async () => {
+      const tap = vi.fn()
+        .mockResolvedValueOnce(failureResponse('Element is not hittable'))
+        .mockResolvedValue(successResponse());
+      let n = 0;
+      const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: `resolved-${++n}` })]));
+      const client = makeMockClient({ findElements, tap });
+      await withFakeClock(5000, () => new ElementHandle(client, _text('Row'), 4000, android).tap());
+      expect(tap.mock.calls.map((c) => c[2])).toEqual(['resolved-1', 'resolved-2']);
+    });
+
+    it('a handle with a zero timeout resolves nothing first, so it still taps by selector', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const sel = _text('Button');
+      const client = makeMockClient({ tap });
+      await new ElementHandle(client, sel, 0, android).tap();
+      expect(tap).toHaveBeenCalledWith(sel, 0);
+    });
+
+    it('taps by selector when the resolved element carries no id', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const sel = _text('Button');
+      const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: '' })]));
+      const client = makeMockClient({ findElements, tap });
+      await new ElementHandle(client, sel, 4000, android).tap();
+      expect(tap).toHaveBeenCalledWith(sel, expect.any(Number));
+    });
+
+    it('leaves iOS taps, and the other tap-family actions, addressed by selector', async () => {
+      const sel = _text('Button');
+      const ios = makeMockClient();
+      await new ElementHandle(ios, sel, 4000, { platform: 'ios' } as never).tap();
+      expect(ios.tap).toHaveBeenCalledWith(sel, expect.any(Number));
+      const client = makeMockClient();
+      await new ElementHandle(client, sel, 4000, android).longPress();
+      expect(client.longPress).toHaveBeenCalledWith(sel, undefined, expect.any(Number));
+    });
+  });
+
   it('throws on failure', async () => {
     const client = makeMockClient({
       tap: vi.fn(async () => failureResponse('Tap target not found')),
