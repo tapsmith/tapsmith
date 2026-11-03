@@ -1633,9 +1633,8 @@ impl DeviceBackend for IosBackend<'_> {
         }
 
         let agent_port = self.svc.agent.read().await.port();
-        // The autofill defaults are written while xcodebuild starts: the
-        // runner launches the app seconds after its spawn, well after these
-        // writes, and the start answers only once they are done.
+        // The autofill defaults are written while xcodebuild starts; the
+        // runner's launch of the app waits for them.
         let configure = (!is_physical).then(|| {
             let serial = serial.clone();
             tokio::spawn(async move { ios::device::configure_simulator(&serial).await })
@@ -1647,11 +1646,9 @@ impl DeviceBackend for IosBackend<'_> {
             agent_port,
             is_physical,
             req.clear_app_data_first,
+            configure,
         )
         .await;
-        if let Some(configure) = configure {
-            let _ = configure.await;
-        }
         let started = match started {
             Ok(started) => started,
             Err(e) => {

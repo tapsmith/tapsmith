@@ -1489,23 +1489,39 @@ pub async fn clear_keychain(udid: &str, keychain_dir: &std::path::Path) -> Resul
         );
         return Ok(());
     }
-    let mut removed = 0;
-    for name in SIM_KEYCHAIN_FILES {
-        let path = keychain_dir.join(name);
-        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            tokio::fs::remove_file(&path)
-                .await
-                .with_context(|| format!("Failed to delete keychain file {name}"))?;
-            removed += 1;
+    // The unlink and the restart run as one task of their own, so a caller
+    // that is cancelled (a timeout, an aborted agent start) cannot stop
+    // between them and leave securityd serving the deleted keychain — which
+    // every later clear would then miss, finding no files to delete.
+    let udid_owned = udid.to_string();
+    let dir = keychain_dir.to_path_buf();
+    tokio::spawn(async move {
+        let udid = udid_owned.as_str();
+        let mut removed = 0;
+        for name in SIM_KEYCHAIN_FILES {
+            let path = dir.join(name);
+            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                tokio::fs::remove_file(&path)
+                    .await
+                    .with_context(|| format!("Failed to delete keychain file {name}"))?;
+                removed += 1;
+            }
         }
-    }
-    if removed == 0 {
-        debug!(udid, "No simulator keychain files to clear");
-        return Ok(());
-    }
-    restart_securityd(udid).await?;
-    info!(udid, "Simulator keychain cleared");
-    Ok(())
+        if removed == 0 {
+            // No database while securityd runs: an earlier clear unlinked it
+            // and never got to the restart. securityd may still be serving
+            // the deleted one, so restart it anyway.
+            debug!(
+                udid,
+                "No simulator keychain files on disk; restarting securityd anyway"
+            );
+        }
+        restart_securityd(udid).await?;
+        info!(udid, "Simulator keychain cleared");
+        Ok(())
+    })
+    .await
+    .map_err(|e| anyhow!("keychain clear task failed: {e}"))?
 }
 
 /// How many items in the simulator keychain at `keychain_dir` belong to an

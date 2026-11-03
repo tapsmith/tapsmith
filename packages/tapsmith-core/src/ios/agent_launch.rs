@@ -65,7 +65,12 @@ async fn clear_prior_xcresults(derived_data_path: &Path) -> Result<()> {
 ///
 /// `clear_app_data_first`: on a simulator, wipe the app's data while
 /// xcodebuild starts, before the runner launches it (see [`launch_gate`]).
-#[instrument(skip(xctestrun_path, target_bundle_id))]
+///
+/// `prelaunch`: host-side setup the app must see from its first launch (the
+/// simulator's defaults). It overlaps xcodebuild's start, but the runner does
+/// not launch the app before it is done; without a launch gate it is awaited
+/// before anything starts.
+#[instrument(skip(xctestrun_path, target_bundle_id, prelaunch))]
 pub async fn start_agent(
     udid: &str,
     xctestrun_path: &str,
@@ -73,6 +78,7 @@ pub async fn start_agent(
     agent_port: u16,
     is_physical: bool,
     clear_app_data_first: bool,
+    prelaunch: Option<tokio::task::JoinHandle<()>>,
 ) -> Result<AgentStart> {
     start_agent_impl(
         udid,
@@ -85,6 +91,7 @@ pub async fn start_agent(
         },
         agent_port,
         is_physical,
+        prelaunch,
     )
     .await
 }
@@ -110,6 +117,7 @@ pub async fn start_agent_fresh(
         },
         agent_port,
         is_physical,
+        None,
     )
     .await
     .map(|started| started.iproxy)
@@ -138,18 +146,29 @@ impl GatedLaunch {
     /// race its own terminate — the classic "Timed out attempting to launch
     /// app" on a busy SpringBoard) and, when asked, wipe its data, then open
     /// the gate. All of it overlaps xcodebuild's start, seconds before the
-    /// runner's test even begins.
-    fn start(udid: &str, target_bundle_id: &str, agent_port: u16, wipe: bool) -> Self {
+    /// runner's test even begins. `prelaunch` finishes before the gate opens.
+    fn start(
+        udid: &str,
+        target_bundle_id: &str,
+        agent_port: u16,
+        wipe: bool,
+        prelaunch: Option<tokio::task::JoinHandle<()>>,
+    ) -> Self {
         let gate = LaunchGate::new_in(&std::env::temp_dir(), agent_port);
         let path = gate.path().to_path_buf();
         let udid = udid.to_string();
         let bundle_id = target_bundle_id.to_string();
         let task = tokio::spawn(async move {
             let started = std::time::Instant::now();
-            let prepared = tokio::time::timeout(
-                launch_gate::PREPARE_DEADLINE,
-                prepare_app_launch(&udid, &bundle_id, wipe),
-            )
+            let prepared = tokio::time::timeout(launch_gate::PREPARE_DEADLINE, async {
+                let (prepared, _) =
+                    tokio::join!(prepare_app_launch(&udid, &bundle_id, wipe), async {
+                        if let Some(prelaunch) = prelaunch {
+                            let _ = prelaunch.await;
+                        }
+                    });
+                prepared
+            })
             .await
             .ok();
             launch_gate::open_at(&path);
@@ -223,6 +242,7 @@ async fn start_agent_impl(
     mode: StartMode,
     agent_port: u16,
     is_physical: bool,
+    mut prelaunch: Option<tokio::task::JoinHandle<()>>,
 ) -> Result<AgentStart> {
     let StartMode {
         force,
@@ -268,6 +288,9 @@ async fn start_agent_impl(
         // iproxy tunnel is still up; no new handle is returned and the
         // caller's existing stored state remains authoritative. This runner
         // launched the app long ago: nothing here is fresh.
+        if let Some(prelaunch) = prelaunch {
+            let _ = prelaunch.await;
+        }
         return Ok(AgentStart {
             iproxy: None,
             app_launched_fresh: false,
@@ -288,8 +311,20 @@ async fn start_agent_impl(
     // asked) from the host while xcodebuild starts, and the runner waits for
     // that before launching it. Attach mode intentionally preserves the
     // running app; physical devices have no host-side terminate or wipe.
-    let mut gated = (!is_physical && !attach_to_running_app && !target_bundle_id.is_empty())
-        .then(|| GatedLaunch::start(udid, target_bundle_id, agent_port, clear_app_data_first));
+    let mut gated = if !is_physical && !attach_to_running_app && !target_bundle_id.is_empty() {
+        Some(GatedLaunch::start(
+            udid,
+            target_bundle_id,
+            agent_port,
+            clear_app_data_first,
+            prelaunch.take(),
+        ))
+    } else {
+        None
+    };
+    if let Some(prelaunch) = prelaunch {
+        let _ = prelaunch.await;
+    }
 
     info!(
         udid,
