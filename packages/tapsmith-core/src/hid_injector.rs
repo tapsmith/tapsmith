@@ -11,14 +11,51 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
-use tokio::sync::Mutex;
+use tokio::sync::{oneshot, Mutex};
 use tracing::{debug, info, warn};
 
 struct Helper {
     child: Child,
     stdin: ChildStdin,
+    /// Lines written so far. The helper answers every line with one reply
+    /// line (`ok` or `err …`), in order, so the nth reply answers the nth line.
+    sent: u64,
+    replies: Arc<std::sync::Mutex<Replies>>,
+}
+
+/// The helper's replies as they arrive, for the senders waiting on one.
+#[derive(Default)]
+struct Replies {
+    /// Replies read so far.
+    received: u64,
+    /// Senders waiting for the reply to their line, by line number.
+    waiters: HashMap<u64, oneshot::Sender<String>>,
+    /// The helper's output ended: no more replies will come.
+    closed: bool,
+}
+
+/// Why `send_and_wait` did not get an `ok`.
+#[derive(Debug)]
+pub enum HidSendError {
+    /// The line never reached the helper (none running, or the write
+    /// failed): nothing was touched.
+    NotSent(anyhow::Error),
+    /// The helper took the line but reported a failure, or gave no answer by
+    /// the deadline or before it exited: part of the gesture may have landed.
+    Failed(String),
+}
+
+impl std::fmt::Display for HidSendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HidSendError::NotSent(e) => write!(f, "not sent: {e}"),
+            HidSendError::Failed(msg) => f.write_str(msg),
+        }
+    }
 }
 
 pub struct HidInjector {
@@ -186,32 +223,102 @@ impl HidInjector {
             return Ok(());
         }
 
-        // Drain remaining stdout so its pipe never fills and blocks the helper.
+        // Read every reply, so the pipe never fills and blocks the helper,
+        // and hand each to the sender waiting on its line, if any.
+        let replies = Arc::new(std::sync::Mutex::new(Replies::default()));
+        let drain_replies = Arc::clone(&replies);
         tokio::spawn(async move {
             let mut reader = reader;
             while let Ok(Some(l)) = reader.next_line().await {
                 if l.starts_with("err") {
                     debug!(line = %l, "iOS HID helper event error");
                 }
+                let mut r = drain_replies.lock().unwrap_or_else(|e| e.into_inner());
+                r.received += 1;
+                let seq = r.received;
+                if let Some(waiter) = r.waiters.remove(&seq) {
+                    let _ = waiter.send(l);
+                }
             }
+            // Dropping the waiters tells them no reply is coming.
+            let mut r = drain_replies.lock().unwrap_or_else(|e| e.into_inner());
+            r.closed = true;
+            r.waiters.clear();
         });
 
-        map.insert(udid.to_string(), Helper { child, stdin });
+        map.insert(
+            udid.to_string(),
+            Helper {
+                child,
+                stdin,
+                sent: 0,
+                replies,
+            },
+        );
         Ok(())
     }
 
-    /// Write one protocol line to the helper for `udid`. On write failure the
-    /// child is dropped so the next gesture re-spawns it.
+    /// Write one protocol line to the helper for `udid`, without waiting for
+    /// the helper to act on it. On write failure the child is dropped so the
+    /// next gesture re-spawns it.
     pub async fn send(&self, udid: &str, line: &str) -> anyhow::Result<()> {
+        self.write_line(udid, line, None).await
+    }
+
+    /// Write one protocol line and wait, up to `deadline`, for the helper's
+    /// reply to it: Ok once the helper has injected it (`ok`). The map lock is
+    /// not held while waiting, so other devices' (and this device's
+    /// fire-and-forget) touches are not held up.
+    pub async fn send_and_wait(
+        &self,
+        udid: &str,
+        line: &str,
+        deadline: Duration,
+    ) -> Result<(), HidSendError> {
+        let (tx, rx) = oneshot::channel();
+        self.write_line(udid, line, Some(tx))
+            .await
+            .map_err(HidSendError::NotSent)?;
+        match tokio::time::timeout(deadline, rx).await {
+            Ok(Ok(reply)) if reply == "ok" => Ok(()),
+            Ok(Ok(reply)) => Err(HidSendError::Failed(format!(
+                "the iOS HID helper reported: {reply}"
+            ))),
+            Ok(Err(_)) => Err(HidSendError::Failed(
+                "the iOS HID helper exited before answering".to_string(),
+            )),
+            Err(_) => Err(HidSendError::Failed(format!(
+                "the iOS HID helper gave no reply within {} ms",
+                deadline.as_millis()
+            ))),
+        }
+    }
+
+    async fn write_line(
+        &self,
+        udid: &str,
+        line: &str,
+        waiter: Option<oneshot::Sender<String>>,
+    ) -> anyhow::Result<()> {
         let mut map = self.helpers.lock().await;
         let helper = map
             .get_mut(udid)
             .ok_or_else(|| anyhow::anyhow!("no helper running for {udid}"))?;
+        let seq = helper.sent + 1;
+        if let Some(waiter) = waiter {
+            let mut r = helper.replies.lock().unwrap_or_else(|e| e.into_inner());
+            // Registered before the write, so the reply cannot come first.
+            // A helper whose output has ended drops it: the caller hears so.
+            if !r.closed {
+                r.waiters.insert(seq, waiter);
+            }
+        }
         let payload = format!("{line}\n");
         if let Err(e) = helper.stdin.write_all(payload.as_bytes()).await {
             map.remove(udid);
             return Err(anyhow::anyhow!("write to helper failed: {e}"));
         }
+        helper.sent = seq;
         // ChildStdin is an unbuffered pipe, so flush() is a no-op; called
         // defensively in case the underlying impl ever buffers. write_all above
         // already pushed the bytes into the kernel pipe buffer.
@@ -234,6 +341,7 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
+    use std::time::Duration;
 
     /// Write an executable stub helper script and return its path (kept alive by
     /// the returned tempdir).
@@ -336,6 +444,104 @@ mod tests {
                 .contains("did not report ready"),
             "error should name the non-ready handshake"
         );
+    }
+
+    /// A stub that replies to each line as the real helper does: `err` for a
+    /// tap line (so a misrouted reply shows), `ok` for anything else.
+    const REPLYING_STUB: &str = "echo 'ready 1 1 1'\nwhile IFS= read -r line; do \
+        case \"$line\" in t1*) echo 'err send failed';; *) echo ok;; esac; done\n";
+
+    #[tokio::test]
+    async fn send_and_wait_returns_once_the_helper_answers_ok() {
+        let (_dir, path) =
+            stub_helper("echo 'ready 1 1 1'\nwhile IFS= read -r line; do echo ok; done\n");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-A").await.unwrap();
+        injector
+            .send_and_wait("UDID-A", "t1 10 20 10", Duration::from_secs(5))
+            .await
+            .unwrap();
+        injector.shutdown("UDID-A").await;
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_reports_the_helpers_error_reply() {
+        let (_dir, path) = stub_helper(REPLYING_STUB);
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-B").await.unwrap();
+        match injector
+            .send_and_wait("UDID-B", "t1 10 20 10", Duration::from_secs(5))
+            .await
+        {
+            Err(HidSendError::Failed(msg)) => assert!(msg.contains("send failed"), "{msg}"),
+            other => panic!("expected the helper's error, got {other:?}"),
+        }
+        injector.shutdown("UDID-B").await;
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_gets_its_own_reply_after_unanswered_sends() {
+        // The mirror's d/m/u lines are sent without waiting; their replies
+        // must not be taken for the tap's.
+        let (_dir, path) = stub_helper(REPLYING_STUB);
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-C").await.unwrap();
+        injector.send("UDID-C", "d 1 2").await.unwrap();
+        injector.send("UDID-C", "m 1 3").await.unwrap();
+        injector.send("UDID-C", "u 1 3").await.unwrap();
+        assert!(matches!(
+            injector
+                .send_and_wait("UDID-C", "t1 1 2 10", Duration::from_secs(5))
+                .await,
+            Err(HidSendError::Failed(_))
+        ));
+        // ...and a later line gets its own reply too.
+        injector
+            .send_and_wait("UDID-C", "d 1 2", Duration::from_secs(5))
+            .await
+            .unwrap();
+        injector.shutdown("UDID-C").await;
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_fails_when_the_helper_dies_without_answering() {
+        let (_dir, path) = stub_helper("echo 'ready 1 1 1'\nread -r line\nexit 0\n");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-D").await.unwrap();
+        let started = std::time::Instant::now();
+        let result = injector
+            .send_and_wait("UDID-D", "t1 1 2 10", Duration::from_secs(10))
+            .await;
+        assert!(matches!(result, Err(HidSendError::Failed(_))), "{result:?}");
+        // Known as soon as the helper's output ends, not at the deadline.
+        assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_gives_up_at_its_deadline() {
+        let (_dir, path) = stub_helper("echo 'ready 1 1 1'\ncat >/dev/null\n");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-E").await.unwrap();
+        let result = injector
+            .send_and_wait("UDID-E", "t1 1 2 10", Duration::from_millis(200))
+            .await;
+        match result {
+            Err(HidSendError::Failed(msg)) => assert!(msg.contains("no reply"), "{msg}"),
+            other => panic!("expected a timeout, got {other:?}"),
+        }
+        injector.shutdown("UDID-E").await;
+    }
+
+    #[tokio::test]
+    async fn send_and_wait_without_a_helper_sends_nothing() {
+        let (_dir, path) = stub_helper("echo 'ready 1 1 1'\ncat >/dev/null\n");
+        let injector = HidInjector::with_helper_path(path);
+        assert!(matches!(
+            injector
+                .send_and_wait("NONE", "t1 1 2 10", Duration::from_secs(1))
+                .await,
+            Err(HidSendError::NotSent(_))
+        ));
     }
 
     #[tokio::test]
