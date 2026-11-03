@@ -1568,24 +1568,42 @@ class CommandHandler {
             // Resolve like findElement (which this replaces on the HID path):
             // dismiss a blocking system dialog, wait for a missing element.
             // Whatever the wait used comes off the cover-wait budget.
+            //
+            // `forTap`: the point is for a tap (the daemon's HID tap on a
+            // simulator), so plan it as the `tap` command plans its touch — on
+            // a SwiftUI Toggle's knob — and do the bookkeeping `tap` does
+            // after touching, since the daemon touches straight after this
+            // answer and tells the agent nothing more. The answer says
+            // `tap: true`, so the daemon knows this agent did both.
             let started = Date()
             let budget = actionTimeoutMs(params)
+            let forTap = (params["forTap"] as? Bool) == true
             let element: ElementInfo
             if let elementId = params["elementId"] as? String, !elementId.isEmpty {
                 element = try resolveElement(params)
             } else {
                 element = try findTopLevelElement(SelectorParser.parse(params), timeoutMs: budget)
             }
-            // The daemon's HID double tap and long press land at this point.
-            putKeyboardAwayIfItWouldEatTheTouch(element)
+            let target = forTap ? (switchKnob(of: element) ?? element) : element
+            // The daemon's HID tap, double tap and long press land at this point.
+            putKeyboardAwayIfItWouldEatTheTouch(target)
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
             // The daemon touches the point as soon as it has it, so the target
             // must have stopped changing first (PILOT-791).
-            switch try planSettledTouch(element, timeoutMs: remaining) {
+            switch try planSettledTouch(target, timeoutMs: remaining) {
             case .point(let point, _, let hold):
-                // holdMs: how long each tap of the daemon's HID double tap
-                // holds its touch (`TapTiming`, by the element's type).
-                return ["x": Double(point.x), "y": Double(point.y), "holdMs": Int((hold * 1000).rounded())]
+                // holdMs: how long the daemon's HID tap, and each tap of its
+                // double tap, holds its touch (`TapTiming`, by the element's
+                // type).
+                var answer: [String: Any] = [
+                    "x": Double(point.x), "y": Double(point.y), "holdMs": Int((hold * 1000).rounded()),
+                ]
+                if forTap {
+                    snapshotFinder.recordFocusedTextInputHint(element)
+                    if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
+                    answer["tap"] = true
+                }
+                return answer
             case .hittableElement, .offScreen:
                 // No point to hand out (off screen, or hittable with no tree
                 // to choose one from): the daemon should use the agent's own
