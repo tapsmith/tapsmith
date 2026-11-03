@@ -52,7 +52,7 @@ export async function connectionRefused(address: string, timeoutMs = 500): Promi
   let addresses: string[];
   let lookupTimer: NodeJS.Timeout | undefined;
   try {
-    // A slow resolver must not cost more than the gRPC wait it replaces.
+    // A slow resolver must not hold the start up past the connect budget.
     const resolved = await Promise.race([
       lookup(host, { all: true }),
       new Promise<never>((_, reject) => {
