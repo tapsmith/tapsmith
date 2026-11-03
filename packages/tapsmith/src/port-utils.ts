@@ -41,18 +41,29 @@ export async function pickFreePort(): Promise<number> {
  * Only a refusal from every address counts: `localhost` can resolve to `::1`
  * before `127.0.0.1`, and the daemon listens on `127.0.0.1` alone. Anything
  * else — a connection, no answer within `timeoutMs`, an address that does not
- * resolve — is `false`, and the caller asks gRPC as before.
+ * resolve within it, a port out of range — is `false`, and the caller asks
+ * gRPC as before.
  */
 export async function connectionRefused(address: string, timeoutMs = 500): Promise<boolean> {
   const colon = address.lastIndexOf(':');
   const port = Number(address.slice(colon + 1));
   const host = address.slice(0, colon).replace(/^\[(.*)\]$/, '$1');
-  if (colon <= 0 || !Number.isInteger(port) || port <= 0) return false;
+  if (colon <= 0 || !Number.isInteger(port) || port <= 0 || port > 65535) return false;
   let addresses: string[];
+  let lookupTimer: NodeJS.Timeout | undefined;
   try {
-    addresses = (await lookup(host, { all: true })).map((a) => a.address);
+    // A slow resolver must not cost more than the gRPC wait it replaces.
+    const resolved = await Promise.race([
+      lookup(host, { all: true }),
+      new Promise<never>((_, reject) => {
+        lookupTimer = setTimeout(() => reject(new Error('lookup timed out')), timeoutMs);
+      }),
+    ]);
+    addresses = resolved.map((a) => a.address);
   } catch {
     return false;
+  } finally {
+    clearTimeout(lookupTimer);
   }
   if (addresses.length === 0) return false;
   const refused = await Promise.all(addresses.map((ip) => new Promise<boolean>((resolve) => {

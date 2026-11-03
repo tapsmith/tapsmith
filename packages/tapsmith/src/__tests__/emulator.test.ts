@@ -249,6 +249,12 @@ describe('emulator utilities', () => {
       expect(probe).toHaveBeenCalledTimes(1);
     });
 
+    it('counts a device up for exactly a minute as settled', () => {
+      const exec = makeExec({ [UPTIME]: '60.00 240.11\n' });
+      expect(probeDeviceHealthIfSettled('emulator-5554', exec, probe)).toEqual({ serial: 'emulator-5554', healthy: true });
+      expect(probe).toHaveBeenCalledTimes(1);
+    });
+
     it('answers nothing for a device that just booted, or whose uptime cannot be read', () => {
       for (const uptime of ['12.04 30.00\n', 'garbage', new Error('device offline')]) {
         expect(probeDeviceHealthIfSettled('emulator-5554', makeExec({ [UPTIME]: uptime }), probe)).toBeUndefined();
