@@ -568,6 +568,9 @@ let optionRows: [Row] = [
     (3, .other, "", "", R(16, 300, 370, 140)),
     (4, .staticText, "Medium", "", R(16, 340, 370, 20)),
     (4, .staticText, "Gone", "", R(16, 2000, 370, 20)),
+    (3, .scrollView, "", "", R(16, 450, 370, 100)),
+    (4, .staticText, "Clipped", "", R(16, 560, 370, 20)),
+    (4, .staticText, "Half", "", R(16, 540, 370, 20)),
     (2, .sheet, "", "", R(0, 600, 402, 274)),
     (3, .staticText, "Large", "", R(16, 700, 370, 20)),
 ]
@@ -582,6 +585,12 @@ if options.topmostText("Large")?.inAlertOrSheet == true { print("ok   an option 
 if options.topmostText("Gone") == nil, options.topmostText("Missing") == nil {
     print("ok   an off-screen or missing option is not found")
 } else { failures += 1; print("FAIL an off-screen or missing option is not found") }
+if options.topmostText("Clipped") == nil { print("ok   an option scrolled out of its list is not found") } else {
+    failures += 1; print("FAIL an option scrolled out of its list is not found")
+}
+if options.topmostText("Half")?.frame == R(16, 540, 370, 10) {
+    print("ok   a half-shown option is touched in its shown part")
+} else { failures += 1; print("FAIL a half-shown option is touched in its shown part: \(String(describing: options.topmostText("Half")))") }
 
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

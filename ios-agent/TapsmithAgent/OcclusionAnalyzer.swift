@@ -449,21 +449,29 @@ struct OcclusionAnalyzer {
         ancestors(of: i).contains { nodes[$0].elementType == .alert || nodes[$0].elementType == .sheet }
     }
 
-    /// The on-screen text whose label or identifier is `text`, drawn last
-    /// (on top, as a dropdown's options are over the screen that opened
-    /// them), and whether it is in an alert or action sheet. nil when no text
-    /// on screen carries it.
+    /// The shown text whose label or identifier is `text`, drawn last (on
+    /// top, as a dropdown's options are over the screen that opened them),
+    /// and whether it is in an alert or action sheet. `frame` is the part of
+    /// it on screen and inside its scroll views. nil when no shown text
+    /// carries it.
     func topmostText(_ text: String) -> (frame: CGRect, inAlertOrSheet: Bool)? {
-        var match: Int?
+        var match: (index: Int, frame: CGRect)?
         for (i, node) in nodes.enumerated() where node.elementType == .staticText {
             guard node.label == text || node.identifier == text else { continue }
-            let visible = node.frame.intersection(screen)
-            guard !visible.isNull, visible.width >= Self.minVisibleExtent, visible.height >= Self.minVisibleExtent
-            else { continue }
-            match = i
+            guard let shown = shownFrame(of: i) else { continue }
+            match = (i, shown)
         }
         guard let m = match else { return nil }
-        return (nodes[m].frame.intersection(screen), isInAlertOrSheet(node: m))
+        return (m.frame, isInAlertOrSheet(node: m.index))
+    }
+
+    /// The part of `frame` on screen and inside the scroll views of node
+    /// `i`'s ancestors, or nil when too little of it is shown to touch.
+    func shownFrame(of i: Int) -> CGRect? {
+        let visible = clippedFrame(of: i).intersection(screen)
+        guard !visible.isNull, visible.width >= Self.minVisibleExtent, visible.height >= Self.minVisibleExtent
+        else { return nil }
+        return visible
     }
 
     /// `@tapsmith/react-native`'s test hooks marker: a screen-sized

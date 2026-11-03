@@ -459,21 +459,30 @@ class ActionExecutor {
         return OcclusionAnalyzer(snapshot: snapshot, screenSize: screen).topmostText(text)
     }
 
-    /// Tap a dropdown's option at the centre of its frame, held as its type
-    /// needs (`TapTiming`; a frame longer in an alert or action sheet), rather
-    /// than through `XCUIElement.tap()`, whose hold XCTest picks. Not refused
-    /// when XCUITest calls the option unhittable: it says so of most React
-    /// Native views, and `XCUIElement.tap()` tapped them all the same.
+    /// Tap a dropdown's option (a cell picked by index) at the centre of its
+    /// shown part, held as its type needs (`TapTiming`; a frame longer in an
+    /// alert or action sheet), rather than through `XCUIElement.tap()`, whose
+    /// hold XCTest picks. An option not shown (below the fold, scrolled out of
+    /// its list) or not found in the tree is left to `XCUIElement.tap()`,
+    /// which scrolls it into view or fails, so no tap goes where it is not.
     private func tapOption(_ option: XCUIElement) throws {
-        guard let snap = try? option.snapshot(), snap.frame.width > 0, snap.frame.height > 0 else {
+        guard let snap = try? option.snapshot(),
+              let appSnapshot = try? app.snapshot() else {
             option.tap()
             return
         }
-        let inPopup = app.alerts.firstMatch.exists || app.sheets.firstMatch.exists
+        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: cachedScreenSize ?? appSnapshot.frame.size)
+        let target = OcclusionAnalyzer.Target(
+            frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier
+        )
+        guard let index = analyzer.locate(target), let shown = analyzer.shownFrame(of: index) else {
+            option.tap()
+            return
+        }
         tapCoordinates(
-            x: Int(snap.frame.midX.rounded()),
-            y: Int(snap.frame.midY.rounded()),
-            hold: TapTiming.hold(for: snap.elementType, inAlertOrSheet: inPopup)
+            x: Int(shown.midX.rounded()),
+            y: Int(shown.midY.rounded()),
+            hold: TapTiming.hold(for: snap.elementType, inAlertOrSheet: analyzer.isInAlertOrSheet(target))
         )
     }
 

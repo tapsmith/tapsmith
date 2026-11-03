@@ -5607,13 +5607,14 @@ enum HidTarget {
     AgentRoute,
 }
 
-#[cfg(any(target_os = "macos", test))]
 /// The longest hold the HID helper accepts on a double tap's line
 /// (`HID_MAX_HOLD_MS` in `native/hid_protocol.h`).
+#[cfg(any(target_os = "macos", test))]
 const HID_MAX_HOLD_MS: u64 = 500;
 
 /// The HID helper's double-tap line: both taps at (`x`, `y`), each held
 /// `hold_ms` (the helper's default when None).
+#[cfg(any(target_os = "macos", test))]
 fn hid_double_tap_line(x: f64, y: f64, hold_ms: Option<u64>) -> String {
     match hold_ms {
         Some(ms) => format!("t2 {x} {y} {ms}"),
@@ -5621,6 +5622,7 @@ fn hid_double_tap_line(x: f64, y: f64, hold_ms: Option<u64>) -> String {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
     let resp = match result {
         Ok(resp) => resp,
