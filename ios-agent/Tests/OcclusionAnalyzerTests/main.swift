@@ -558,5 +558,30 @@ for (name, target, want) in inAlert {
     }
 }
 
+// A dropdown's option is the text drawn last; one in an action sheet is held
+// across a frame.
+let optionRows: [Row] = [
+    (0, .application, "", "", screen),
+    (1, .window, "", "", screen),
+    (2, .other, "", "", screen),
+    (3, .staticText, "Medium", "", R(16, 100, 370, 20)),
+    (3, .other, "", "", R(16, 300, 370, 140)),
+    (4, .staticText, "Medium", "", R(16, 340, 370, 20)),
+    (4, .staticText, "Gone", "", R(16, 2000, 370, 20)),
+    (2, .sheet, "", "", R(0, 600, 402, 274)),
+    (3, .staticText, "Large", "", R(16, 700, 370, 20)),
+]
+let options = analyzer(optionRows)
+let medium = options.topmostText("Medium")
+if medium?.frame == R(16, 340, 370, 20), medium?.inAlertOrSheet == false {
+    print("ok   the option text drawn last is the one picked")
+} else { failures += 1; print("FAIL the option text drawn last is the one picked: \(String(describing: medium))") }
+if options.topmostText("Large")?.inAlertOrSheet == true { print("ok   an option in a sheet is in a sheet") } else {
+    failures += 1; print("FAIL an option in a sheet is in a sheet")
+}
+if options.topmostText("Gone") == nil, options.topmostText("Missing") == nil {
+    print("ok   an off-screen or missing option is not found")
+} else { failures += 1; print("FAIL an off-screen or missing option is not found") }
+
 print(failures == 0 ? "ALL OK" : "\(failures) FAILED")
 exit(failures == 0 ? 0 : 1)

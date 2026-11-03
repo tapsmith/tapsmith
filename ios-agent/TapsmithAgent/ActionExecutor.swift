@@ -411,10 +411,21 @@ class ActionExecutor {
     func selectOption(_ optionText: String) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
-        // Look for the option text in the app
-        let option = app.staticTexts[optionText]
-        if option.waitForExistence(timeout: 3) {
-            try tapOption(option)
+        // Look for the option's text on screen, drawn on top: more than one
+        // text can carry it (React Native can expose a text and the view
+        // around it, and the screen behind may show it too).
+        let deadline = Date().addingTimeInterval(3)
+        var option = topmostOptionText(optionText)
+        while option == nil, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+            option = topmostOptionText(optionText)
+        }
+        if let option {
+            tapCoordinates(
+                x: Int(option.frame.midX.rounded()),
+                y: Int(option.frame.midY.rounded()),
+                hold: TapTiming.hold(for: .staticText, inAlertOrSheet: option.inAlertOrSheet)
+            )
         } else {
             // Try in picker wheels
             let pickerWheel = app.pickerWheels.firstMatch
@@ -440,6 +451,12 @@ class ActionExecutor {
             throw AgentError.actionFailed("Index \(index) out of range (0..\(count - 1))")
         }
         try tapOption(cells.element(boundBy: index))
+    }
+
+    private func topmostOptionText(_ text: String) -> (frame: CGRect, inAlertOrSheet: Bool)? {
+        guard let snapshot = try? app.snapshot() else { return nil }
+        let screen = cachedScreenSize ?? snapshot.frame.size
+        return OcclusionAnalyzer(snapshot: snapshot, screenSize: screen).topmostText(text)
     }
 
     /// Tap a dropdown's option at the centre of its frame, held as its type

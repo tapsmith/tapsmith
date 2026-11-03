@@ -442,7 +442,28 @@ struct OcclusionAnalyzer {
     /// (`TapTiming`). False when the target cannot be located in the tree.
     func isInAlertOrSheet(_ target: Target) -> Bool {
         guard let t = locate(target) else { return false }
-        return ancestors(of: t).contains { nodes[$0].elementType == .alert || nodes[$0].elementType == .sheet }
+        return isInAlertOrSheet(node: t)
+    }
+
+    private func isInAlertOrSheet(node i: Int) -> Bool {
+        ancestors(of: i).contains { nodes[$0].elementType == .alert || nodes[$0].elementType == .sheet }
+    }
+
+    /// The on-screen text whose label or identifier is `text`, drawn last
+    /// (on top, as a dropdown's options are over the screen that opened
+    /// them), and whether it is in an alert or action sheet. nil when no text
+    /// on screen carries it.
+    func topmostText(_ text: String) -> (frame: CGRect, inAlertOrSheet: Bool)? {
+        var match: Int?
+        for (i, node) in nodes.enumerated() where node.elementType == .staticText {
+            guard node.label == text || node.identifier == text else { continue }
+            let visible = node.frame.intersection(screen)
+            guard !visible.isNull, visible.width >= Self.minVisibleExtent, visible.height >= Self.minVisibleExtent
+            else { continue }
+            match = i
+        }
+        guard let m = match else { return nil }
+        return (nodes[m].frame.intersection(screen), isInAlertOrSheet(node: m))
     }
 
     /// `@tapsmith/react-native`'s test hooks marker: a screen-sized
