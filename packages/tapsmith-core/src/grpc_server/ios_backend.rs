@@ -2,7 +2,7 @@
 //! the only path on physical devices.
 
 use super::device_backend::{
-    ActionResult, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
+    ActionResult, AgentLaunched, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
 };
 use super::*;
 
@@ -391,16 +391,7 @@ impl DeviceBackend for IosBackend<'_> {
             .await
         {
             Ok(ref container) => {
-                if let Err(e) = ios::device::clear_container(container).await {
-                    warn!(error = %e, "Failed to clear app container, continuing anyway");
-                }
-                if !ios::device::keychain_state_disabled() {
-                    if let Some(keychain_dir) = ios::device::simulator_keychain_dir(container) {
-                        if let Err(e) = ios::device::clear_keychain(serial, &keychain_dir).await {
-                            warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
-                        }
-                    }
-                }
+                ios::device::wipe_simulator_app_data(serial, container).await;
             }
             Err(e) => {
                 debug!(error = %e, "Could not get app container (app may not be installed)");
@@ -788,6 +779,7 @@ impl DeviceBackend for IosBackend<'_> {
             error_type: String::new(),
             error_message: String::new(),
             screenshot: Vec::new(),
+            app_launched_fresh: false,
         }))
     }
 
@@ -890,6 +882,7 @@ impl DeviceBackend for IosBackend<'_> {
                 error_type: String::new(),
                 error_message: String::new(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             }));
         }
         let serial = self.svc.active_serial().await?;
@@ -904,29 +897,9 @@ impl DeviceBackend for IosBackend<'_> {
             .await
         {
             Ok(ref container) => {
-                if let Err(e) = ios::device::clear_container(container).await {
-                    warn!(error = %e, "Failed to clear app container, continuing anyway");
-                }
-                // Also clear the simulator's device-level keychain so
-                // keychain-backed auth state (e.g. Firebase Auth)
-                // doesn't survive a "full" data clear, leaving a
-                // half-signed-in app. The keychain is device-global,
-                // so this clears it for every app on the simulator —
-                // acceptable for test-owned simulators.
-                if !ios::device::keychain_state_disabled() {
-                    match ios::device::simulator_keychain_dir(container) {
-                        Some(keychain_dir) => {
-                            if let Err(e) =
-                                ios::device::clear_keychain(&serial, &keychain_dir).await
-                            {
-                                warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
-                            }
-                        }
-                        None => {
-                            warn!(container = %container, "Could not derive simulator keychain dir; keychain not cleared");
-                        }
-                    }
-                }
+                // Data container, then the device-global keychain — acceptable
+                // for test-owned simulators.
+                ios::device::wipe_simulator_app_data(&serial, container).await;
             }
             Err(e) => {
                 debug!(error = %e, "Could not get app container (app may not be installed)");
@@ -938,6 +911,7 @@ impl DeviceBackend for IosBackend<'_> {
             error_type: String::new(),
             error_message: String::new(),
             screenshot: Vec::new(),
+            app_launched_fresh: false,
         }))
     }
 
@@ -1598,6 +1572,7 @@ impl DeviceBackend for IosBackend<'_> {
                     Set iosXctestrun in your Tapsmith config."
                     .to_string(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             });
         }
         Ok(())
@@ -1616,17 +1591,14 @@ impl DeviceBackend for IosBackend<'_> {
         request_id: String,
         serial: String,
         req: &proto::StartAgentRequest,
-    ) -> Result<(), proto::ActionResponse> {
+    ) -> Result<AgentLaunched, proto::ActionResponse> {
         // ─── iOS: launch XCUITest agent ───
         let is_physical = self.svc.is_active_ios_physical().await;
 
-        // Apply test-friendly defaults every time the agent starts,
-        // not just on first boot — reused simulators may have stale config.
-        // Skipped entirely on physical devices: the simctl spawns
-        // would fail, and the device's defaults are user-owned anyway.
-        if !is_physical {
-            ios::device::configure_simulator(&serial).await;
-        }
+        // Test-friendly defaults are applied every time the agent starts (below,
+        // alongside it), not just on first boot — reused simulators may have
+        // stale config. Skipped entirely on physical devices: the simctl
+        // spawns would fail, and the device's defaults are user-owned anyway.
 
         // Drop any prior iproxy tunnel BEFORE start_agent so the
         // existing host port is free when start_agent tries to bind
@@ -1661,16 +1633,27 @@ impl DeviceBackend for IosBackend<'_> {
         }
 
         let agent_port = self.svc.agent.read().await.port();
-        let iproxy_handle = match ios::agent_launch::start_agent(
+        // The autofill defaults are written while xcodebuild starts: the
+        // runner launches the app seconds after its spawn, well after these
+        // writes, and the start answers only once they are done.
+        let configure = (!is_physical).then(|| {
+            let serial = serial.clone();
+            tokio::spawn(async move { ios::device::configure_simulator(&serial).await })
+        });
+        let started = ios::agent_launch::start_agent(
             &serial,
             &req.ios_xctestrun_path,
             &req.target_package,
             agent_port,
             is_physical,
+            req.clear_app_data_first,
         )
-        .await
-        {
-            Ok(handle) => handle,
+        .await;
+        if let Some(configure) = configure {
+            let _ = configure.await;
+        }
+        let started = match started {
+            Ok(started) => started,
             Err(e) => {
                 error!(error = %e, "Failed to start iOS agent");
                 return Err(proto::ActionResponse {
@@ -1679,10 +1662,11 @@ impl DeviceBackend for IosBackend<'_> {
                     error_type: "AGENT_START_FAILED".to_string(),
                     error_message: e.to_string(),
                     screenshot: Vec::new(),
+                    app_launched_fresh: false,
                 });
             }
         };
-        if let Some(handle) = iproxy_handle {
+        if let Some(handle) = started.iproxy {
             *self.svc.ios_iproxy.write().await = Some(handle);
         }
 
@@ -1692,7 +1676,9 @@ impl DeviceBackend for IosBackend<'_> {
             target_package: req.target_package.clone(),
             app_path: (!req.ios_app_path.is_empty()).then(|| req.ios_app_path.clone()),
         });
-        Ok(())
+        Ok(AgentLaunched {
+            app_launched_fresh: started.app_launched_fresh,
+        })
     }
 
     async fn connect_agent(&self, agent: &mut AgentConnection, serial: &str) -> anyhow::Result<()> {

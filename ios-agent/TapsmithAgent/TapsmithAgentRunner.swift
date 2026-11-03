@@ -100,6 +100,11 @@ class TapsmithAgentRunner: XCTestCase {
             // Xcode 26 restoring stale navigation state during restartApp().
             app.activate()
         } else {
+            // On a cold simulator start the daemon terminates (and may wipe)
+            // the app while xcodebuild starts; wait for it before launching.
+            if let gate = ProcessInfo.processInfo.environment[LaunchGate.environmentKey], !gate.isEmpty {
+                NSLog("[TapsmithAgent] Launch gate: \(LaunchGate.wait(path: gate))")
+            }
             // launch() implicitly terminates a running instance first, and on
             // a busy SpringBoard that terminate+relaunch handshake is the
             // classic "Timed out attempting to launch app" trigger. Terminate

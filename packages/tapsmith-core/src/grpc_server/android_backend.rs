@@ -1,7 +1,7 @@
 //! Android device work: ADB on the host plus the UIAutomator2 agent.
 
 use super::device_backend::{
-    ActionResult, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
+    ActionResult, AgentLaunched, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
 };
 use super::*;
 
@@ -314,6 +314,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_type: "ADB_COMMAND_FAILED".to_string(),
                 error_message: e.to_string(),
                 screenshot,
+                app_launched_fresh: false,
             }));
         }
 
@@ -437,6 +438,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         error_type: "CLEAR_DATA_FAILED".to_string(),
                         error_message: format!("Failed to clear app data: {}", output.trim()),
                         screenshot,
+                        app_launched_fresh: false,
                     }));
                 }
                 Err(e) => {
@@ -448,6 +450,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         error_type: "CLEAR_DATA_FAILED".to_string(),
                         error_message: format!("Failed to clear app data: {e}"),
                         screenshot,
+                        app_launched_fresh: false,
                     }));
                 }
                 Ok(_) => {} // Success
@@ -503,6 +506,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_type: "FORCE_STOP_FAILED".to_string(),
                 error_message: format!("Failed to stop app: {e}"),
                 screenshot,
+                app_launched_fresh: false,
             }));
         }
 
@@ -1009,7 +1013,7 @@ impl DeviceBackend for AndroidBackend<'_> {
         request_id: String,
         serial: String,
         req: &proto::StartAgentRequest,
-    ) -> Result<(), proto::ActionResponse> {
+    ) -> Result<AgentLaunched, proto::ActionResponse> {
         // ─── Android: install APKs and launch instrumentation ───
         if let Err(e) = adb::wait_for_device_ready(&serial, Duration::from_secs(45)).await {
             return Err(proto::ActionResponse {
@@ -1018,6 +1022,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_type: "DEVICE_NOT_READY".to_string(),
                 error_message: format!("Android device was not ready before starting agent: {e}"),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             });
         }
 
@@ -1036,6 +1041,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                             or install manually with: adb install <path-to-agent.apk>"
                     .to_string(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             });
         }
 
@@ -1050,6 +1056,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                     error_type: "AGENT_INSTALL_FAILED".to_string(),
                     error_message: format!("Failed to install agent APK: {e}"),
                     screenshot: Vec::new(),
+                    app_launched_fresh: false,
                 });
             }
             if let Err(e) = adb::install_apk(&serial, &req.agent_test_apk_path, true).await {
@@ -1059,6 +1066,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                     error_type: "AGENT_INSTALL_FAILED".to_string(),
                     error_message: format!("Failed to install agent test APK: {e}"),
                     screenshot: Vec::new(),
+                    app_launched_fresh: false,
                 });
             }
             info!("Agent APKs installed successfully");
@@ -1086,9 +1094,11 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_type: "AGENT_START_FAILED".to_string(),
                 error_message: e.to_string(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             });
         }
-        Ok(())
+        // The Android agent never launches the app.
+        Ok(AgentLaunched::default())
     }
 
     async fn connect_agent(&self, agent: &mut AgentConnection, serial: &str) -> anyhow::Result<()> {

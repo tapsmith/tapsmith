@@ -8,6 +8,17 @@ use tracing::{debug, info, instrument, warn};
 
 use super::agent_registry::TrackedAgent;
 use super::iproxy::{kill_stray_iproxy, IproxyHandle};
+use super::launch_gate::{self, LaunchGate, Prepared};
+
+/// What [`start_agent`] did.
+pub struct AgentStart {
+    /// For physical devices: the USB tunnel, which the caller must keep for
+    /// the lifetime of the agent. `None` for simulators and for a reused agent.
+    pub iproxy: Option<IproxyHandle>,
+    /// The runner launched the app under test as part of this start, after
+    /// wiping its data when that was asked for (see [`launch_gate`]).
+    pub app_launched_fresh: bool,
+}
 
 /// Stable per-udid DerivedData location for `xcodebuild test-without-building`.
 ///
@@ -46,11 +57,14 @@ async fn clear_prior_xcresults(derived_data_path: &Path) -> Result<()> {
 /// `.xctestrun` plist (not the xcodebuild process env) because XCUITest reads its
 /// configuration exclusively from that file.
 ///
-/// Returns `Some(IproxyHandle)` for physical devices — the caller must store
-/// the handle for the lifetime of the agent so the USB tunnel stays alive.
-/// For simulators (and for the fast-path case where an existing agent is
-/// already responding) returns `None` and the caller keeps any existing
-/// tracking state unchanged.
+/// The returned [`AgentStart::iproxy`] is `Some` for physical devices — the
+/// caller must store the handle for the lifetime of the agent so the USB
+/// tunnel stays alive. For simulators (and for the fast-path case where an
+/// existing agent is already responding) it is `None` and the caller keeps any
+/// existing tracking state unchanged.
+///
+/// `clear_app_data_first`: on a simulator, wipe the app's data while
+/// xcodebuild starts, before the runner launches it (see [`launch_gate`]).
 #[instrument(skip(xctestrun_path, target_bundle_id))]
 pub async fn start_agent(
     udid: &str,
@@ -58,13 +72,17 @@ pub async fn start_agent(
     target_bundle_id: &str,
     agent_port: u16,
     is_physical: bool,
-) -> Result<Option<IproxyHandle>> {
+    clear_app_data_first: bool,
+) -> Result<AgentStart> {
     start_agent_impl(
         udid,
         xctestrun_path,
         target_bundle_id,
-        false,
-        false,
+        StartMode {
+            force: false,
+            attach_to_running_app: false,
+            clear_app_data_first,
+        },
         agent_port,
         is_physical,
     )
@@ -85,23 +103,132 @@ pub async fn start_agent_fresh(
         udid,
         xctestrun_path,
         target_bundle_id,
-        true,
-        true,
+        StartMode {
+            force: true,
+            attach_to_running_app: true,
+            clear_app_data_first: false,
+        },
         agent_port,
         is_physical,
     )
     .await
+    .map(|started| started.iproxy)
+}
+
+#[derive(Clone, Copy)]
+struct StartMode {
+    /// Start a runner even if one answers on the port.
+    force: bool,
+    /// The runner attaches to the running app instead of launching it.
+    attach_to_running_app: bool,
+    clear_app_data_first: bool,
+}
+
+/// A launch gate and the task that opens it (see [`launch_gate`]).
+struct GatedLaunch {
+    gate: LaunchGate,
+    task: Option<tokio::task::JoinHandle<Option<Prepared>>>,
+    prepared: Option<Prepared>,
+    /// xcodebuild was relaunched in place after the gate opened.
+    relaunched: bool,
+}
+
+impl GatedLaunch {
+    /// Terminate the app (a running instance makes the runner's `launch()`
+    /// race its own terminate — the classic "Timed out attempting to launch
+    /// app" on a busy SpringBoard) and, when asked, wipe its data, then open
+    /// the gate. All of it overlaps xcodebuild's start, seconds before the
+    /// runner's test even begins.
+    fn start(udid: &str, target_bundle_id: &str, agent_port: u16, wipe: bool) -> Self {
+        let gate = LaunchGate::new_in(&std::env::temp_dir(), agent_port);
+        let path = gate.path().to_path_buf();
+        let udid = udid.to_string();
+        let bundle_id = target_bundle_id.to_string();
+        let task = tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let prepared = tokio::time::timeout(
+                launch_gate::PREPARE_DEADLINE,
+                prepare_app_launch(&udid, &bundle_id, wipe),
+            )
+            .await
+            .ok();
+            launch_gate::open_at(&path);
+            crate::timing::timing_log!(
+                "kind=boot name=launch_gate dur_ms={} wipe={wipe} prepared={:?}",
+                started.elapsed().as_millis(),
+                prepared
+            );
+            prepared
+        });
+        Self {
+            gate,
+            task: Some(task),
+            prepared: None,
+            relaunched: false,
+        }
+    }
+
+    async fn settle(&mut self) {
+        if let Some(task) = self.task.take() {
+            self.prepared = task.await.ok().flatten();
+        }
+    }
+
+    /// Before an in-place xcodebuild relaunch: let the task finish, and open
+    /// the gate again (the first runner consumed it) so the new runner does not
+    /// wait out its bound. That launch is no longer vouched for.
+    async fn before_relaunch(&mut self) {
+        self.settle().await;
+        self.relaunched = true;
+        self.gate.open();
+    }
+
+    async fn app_launched_fresh(&mut self) -> bool {
+        self.settle().await;
+        launch_gate::app_launched_fresh(self.prepared, self.gate.consumed(), self.relaunched)
+    }
+}
+
+impl Drop for GatedLaunch {
+    fn drop(&mut self) {
+        if let Some(task) = self.task.take() {
+            task.abort();
+        }
+    }
+}
+
+/// The launch gate's pre-launch work: terminate the app, then wipe it.
+async fn prepare_app_launch(udid: &str, bundle_id: &str, wipe: bool) -> Prepared {
+    if let Err(e) = super::device::terminate_app(udid, bundle_id).await {
+        debug!(udid, error = %e, "pre-launch terminate of target app failed (may not be running)");
+    }
+    let wiped = wipe
+        && match super::device::get_app_container(udid, bundle_id).await {
+            Ok(container) => super::device::wipe_simulator_app_data(udid, &container).await,
+            Err(e) => {
+                debug!(udid, error = %e, "no app container to wipe before the launch");
+                false
+            }
+        };
+    Prepared {
+        wipe_requested: wipe,
+        wiped,
+    }
 }
 
 async fn start_agent_impl(
     udid: &str,
     xctestrun_path: &str,
     target_bundle_id: &str,
-    force: bool,
-    attach_to_running_app: bool,
+    mode: StartMode,
     agent_port: u16,
     is_physical: bool,
-) -> Result<Option<IproxyHandle>> {
+) -> Result<AgentStart> {
+    let StartMode {
+        force,
+        attach_to_running_app,
+        clear_app_data_first,
+    } = mode;
     let boot_start = std::time::Instant::now();
     // Agents orphaned by a SIGKILLed daemon are stopped before we look for a
     // running one, so we never adopt an agent the reaper is about to kill.
@@ -139,8 +266,12 @@ async fn start_agent_impl(
         );
         // For physical devices, pingable-on-localhost means the caller's
         // iproxy tunnel is still up; no new handle is returned and the
-        // caller's existing stored state remains authoritative.
-        return Ok(None);
+        // caller's existing stored state remains authoritative. This runner
+        // launched the app long ago: nothing here is fresh.
+        return Ok(AgentStart {
+            iproxy: None,
+            app_launched_fresh: false,
+        });
     }
 
     // Kill any stale xcodebuild processes targeting this device/simulator before
@@ -153,16 +284,12 @@ async fn start_agent_impl(
         kill_stray_iproxy(udid, agent_port, agent_port).await;
     }
 
-    // In launch mode the runner's `XCUIApplication.launch()` must first kill
-    // any already-running instance of the target app — the classic trigger
-    // for "Timed out attempting to launch app" on a busy SpringBoard. Clear
-    // it from the host side instead so the runner always cold-launches into
-    // a clean slate. Attach mode intentionally preserves the running app.
-    if !is_physical && !attach_to_running_app && !target_bundle_id.is_empty() {
-        if let Err(e) = super::device::terminate_app(udid, target_bundle_id).await {
-            debug!(udid, error = %e, "pre-launch terminate of target app failed (may not be running)");
-        }
-    }
+    // In launch mode on a simulator, the app is terminated (and wiped, when
+    // asked) from the host while xcodebuild starts, and the runner waits for
+    // that before launching it. Attach mode intentionally preserves the
+    // running app; physical devices have no host-side terminate or wipe.
+    let mut gated = (!is_physical && !attach_to_running_app && !target_bundle_id.is_empty())
+        .then(|| GatedLaunch::start(udid, target_bundle_id, agent_port, clear_app_data_first));
 
     info!(
         udid,
@@ -177,6 +304,7 @@ async fn start_agent_impl(
         target_bundle_id,
         attach_to_running_app,
         agent_port,
+        gated.as_ref().map(|g| g.gate.path()),
     )
     .await
     .context("Failed to patch xctestrun file")?;
@@ -289,6 +417,9 @@ async fn start_agent_impl(
                 );
                 kill_existing_agents_on(udid).await;
                 let _ = super::device::terminate_app(udid, target_bundle_id).await;
+                if let Some(g) = gated.as_mut() {
+                    g.before_relaunch().await;
+                }
                 (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
                     &patched_xctestrun,
                     udid,
@@ -338,6 +469,9 @@ async fn start_agent_impl(
                 if !target_bundle_id.is_empty() {
                     let _ = super::device::terminate_app(udid, target_bundle_id).await;
                 }
+                if let Some(g) = gated.as_mut() {
+                    g.before_relaunch().await;
+                }
                 (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
                     &patched_xctestrun,
                     udid,
@@ -384,6 +518,9 @@ async fn start_agent_impl(
                     if !attach_to_running_app && !target_bundle_id.is_empty() {
                         let _ = super::device::terminate_app(udid, target_bundle_id).await;
                     }
+                    if let Some(g) = gated.as_mut() {
+                        g.before_relaunch().await;
+                    }
                     (child, stdout_tail, stderr_tail, launch_failure) = spawn_agent_xcodebuild(
                         &patched_xctestrun,
                         udid,
@@ -412,9 +549,15 @@ async fn start_agent_impl(
 
         match ping_agent(agent_port).await {
             Ok(_) => {
-                info!(udid, "iOS agent is ready");
+                // The runner deleted the gate before launching, so by the time
+                // it listens the answer is settled.
+                let app_launched_fresh = match gated.as_mut() {
+                    Some(g) => g.app_launched_fresh().await,
+                    None => false,
+                };
+                info!(udid, app_launched_fresh, "iOS agent is ready");
                 crate::timing::timing_log!(
-                    "kind=boot name=agent dur_ms={} reused=false udid={udid}",
+                    "kind=boot name=agent dur_ms={} reused=false fresh_launch={app_launched_fresh} udid={udid}",
                     boot_start.elapsed().as_millis()
                 );
                 // Hand the child off to a reaper task so the kernel can collect
@@ -425,7 +568,10 @@ async fn start_agent_impl(
                 tokio::spawn(async move {
                     let _ = child.wait().await;
                 });
-                return Ok(iproxy_handle);
+                return Ok(AgentStart {
+                    iproxy: iproxy_handle,
+                    app_launched_fresh,
+                });
             }
             Err(_) => {
                 debug!("Agent not ready yet, retrying...");
@@ -608,25 +754,70 @@ pub async fn kill_existing_agents_on(udid: &str) {
     // Kill host-side xcodebuild targeting this specific simulator.
     // Match on the destination id= argument to avoid killing agents for other simulators.
     let pattern = format!("xcodebuild test-without-building.*id={udid}");
-    let _ = super::device::bounded_output(
+    let pkill = super::device::bounded_output(
         "pkill xcodebuild",
         Command::new("pkill").args(["-f", &pattern]),
         Duration::from_secs(10),
     )
     .await;
+    let xcodebuild_killed = pkill_signalled(pkill.as_ref().ok().and_then(|o| o.status.code()));
 
     // Kill the runner app on the simulator — xcrun simctl terminate
     // targets the simulator process, not the host. The runner's bundle ID
-    // is set in the Xcode project (dev.tapsmith.agent.xctrunner).
-    let _ = super::device::bounded_output(
-        "simctl terminate xctrunner",
-        Command::new("xcrun").args(["simctl", "terminate", udid, "dev.tapsmith.agent.xctrunner"]),
-        super::device::SIMCTL_TIMEOUT,
+    // is set in the Xcode project (dev.tapsmith.agent.xctrunner). A
+    // simulator app is a host process whose path names its simulator, so
+    // `pgrep` (~10 ms) says whether there is one before paying for `simctl
+    // terminate` (~0.3–0.6 s even with nothing to stop).
+    let runner_running = runner_may_be_running(udid).await;
+    if runner_running {
+        let _ = super::device::bounded_output(
+            "simctl terminate xctrunner",
+            Command::new("xcrun").args([
+                "simctl",
+                "terminate",
+                udid,
+                "dev.tapsmith.agent.xctrunner",
+            ]),
+            super::device::SIMCTL_TIMEOUT,
+        )
+        .await;
+    }
+
+    // Brief pause for processes to die and port to be released — only when
+    // something was running.
+    if xcodebuild_killed || runner_running {
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+    }
+}
+
+/// Whether `pkill` signalled anything, from its exit code: 0 when it matched
+/// a process, 1 when none matched. Anything else (an error, a timeout, no
+/// code) is taken as "maybe", so the caller still pauses.
+fn pkill_signalled(exit_code: Option<i32>) -> bool {
+    exit_code != Some(1)
+}
+
+/// Whether the simulator `udid` may be running a Tapsmith runner. Only a
+/// clean "no match" from `pgrep` says no; anything else says maybe.
+async fn runner_may_be_running(udid: &str) -> bool {
+    if udid == "booted" {
+        // Not a device path component: pgrep cannot answer for it.
+        return true;
+    }
+    let pattern = runner_process_pattern(udid);
+    let pgrep = super::device::bounded_output(
+        "pgrep runner",
+        Command::new("pgrep").args(["-f", &pattern]),
+        Duration::from_secs(5),
     )
     .await;
+    pkill_signalled(pgrep.as_ref().ok().and_then(|o| o.status.code()))
+}
 
-    // Brief pause for processes to die and port to be released
-    tokio::time::sleep(Duration::from_millis(1000)).await;
+/// `pgrep -f` pattern for the host process of a Tapsmith runner on simulator
+/// `udid` (its path runs through `…/Devices/<udid>/data/Containers/…`).
+fn runner_process_pattern(udid: &str) -> String {
+    format!("/{udid}/.*TapsmithAgentUITests-Runner")
 }
 
 /// Backward-compatible version that terminates on all booted simulators.
@@ -644,6 +835,7 @@ async fn patch_xctestrun(
     target_bundle_id: &str,
     attach_to_running_app: bool,
     agent_port: u16,
+    launch_gate: Option<&Path>,
 ) -> Result<String> {
     let mode = if attach_to_running_app {
         "attach"
@@ -697,6 +889,14 @@ async fn patch_xctestrun(
                 format!("string {agent_port}"),
             ),
         ];
+        if let Some(gate) = launch_gate {
+            for dict in ["EnvironmentVariables", "TestingEnvironmentVariables"] {
+                k.push((
+                    format!(":{base}:{dict}:{}", launch_gate::LAUNCH_GATE_ENV),
+                    format!("string {}", gate.display()),
+                ));
+            }
+        }
         if attach_to_running_app {
             k.push((
                 format!(":{base}:EnvironmentVariables:TAPSMITH_ATTACH_TO_RUNNING_APP"),
@@ -1271,9 +1471,15 @@ mod tests {
     async fn patch_xctestrun_launch_mode_injects_bundle_id_and_port() {
         let (_dir, path) = write_fixture(FIXTURE_EMPTY).await;
 
-        let patched_path = patch_xctestrun(path.to_str().unwrap(), "com.example.app", false, 18800)
-            .await
-            .expect("patch should succeed");
+        let patched_path = patch_xctestrun(
+            path.to_str().unwrap(),
+            "com.example.app",
+            false,
+            18800,
+            None,
+        )
+        .await
+        .expect("patch should succeed");
 
         assert!(
             patched_path.ends_with(".launch.port18800.patched.xctestrun"),
@@ -1287,15 +1493,55 @@ mod tests {
         assert!(contents.contains("UITargetAppBundleIdentifier"));
         // Launch mode must NOT inject the attach flag.
         assert!(!contents.contains("TAPSMITH_ATTACH_TO_RUNNING_APP"));
+        // Nor a launch gate nobody asked for.
+        assert!(!contents.contains(launch_gate::LAUNCH_GATE_ENV));
+    }
+
+    #[tokio::test]
+    async fn patch_xctestrun_passes_the_launch_gate_to_the_runner() {
+        let (dir, path) = write_fixture(FIXTURE_EMPTY).await;
+        let gate = dir.path().join("tapsmith-launch-gate-18800-abc");
+
+        let patched_path = patch_xctestrun(
+            path.to_str().unwrap(),
+            "com.example.app",
+            false,
+            18800,
+            Some(&gate),
+        )
+        .await
+        .expect("patch should succeed");
+
+        let value = plist::Value::from_file(&patched_path).unwrap();
+        let target = value
+            .as_dictionary()
+            .and_then(|d| d.get("TestConfigurations"))
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_dictionary())
+            .and_then(|d| d.get("TestTargets"))
+            .and_then(|v| v.as_array())
+            .and_then(|a| a.first())
+            .and_then(|v| v.as_dictionary())
+            .expect("test target");
+        for dict in ["EnvironmentVariables", "TestingEnvironmentVariables"] {
+            let got = target
+                .get(dict)
+                .and_then(|v| v.as_dictionary())
+                .and_then(|d| d.get(launch_gate::LAUNCH_GATE_ENV))
+                .and_then(|v| v.as_string());
+            assert_eq!(got, gate.to_str(), "{dict}");
+        }
     }
 
     #[tokio::test]
     async fn patch_xctestrun_attach_mode_sets_attach_flag() {
         let (_dir, path) = write_fixture(FIXTURE_EMPTY).await;
 
-        let patched_path = patch_xctestrun(path.to_str().unwrap(), "com.example.app", true, 19000)
-            .await
-            .expect("patch should succeed");
+        let patched_path =
+            patch_xctestrun(path.to_str().unwrap(), "com.example.app", true, 19000, None)
+                .await
+                .expect("patch should succeed");
 
         assert!(
             patched_path.ends_with(".attach.port19000.patched.xctestrun"),
@@ -1313,10 +1559,15 @@ mod tests {
         // sequence — otherwise the runner would keep the wrong port/bundle id.
         let (_dir, path) = write_fixture(FIXTURE_WITH_STALE).await;
 
-        let patched_path =
-            patch_xctestrun(path.to_str().unwrap(), "com.fresh.bundle", false, 18800)
-                .await
-                .expect("patch should succeed");
+        let patched_path = patch_xctestrun(
+            path.to_str().unwrap(),
+            "com.fresh.bundle",
+            false,
+            18800,
+            None,
+        )
+        .await
+        .expect("patch should succeed");
 
         let contents = tokio::fs::read_to_string(&patched_path).await.unwrap();
         assert!(contents.contains("com.fresh.bundle"));
@@ -1339,13 +1590,13 @@ mod tests {
         let (_dir, path) = write_fixture(FIXTURE_EMPTY).await;
         let src = path.to_str().unwrap();
 
-        let p1 = patch_xctestrun(src, "com.example.app", false, 18800)
+        let p1 = patch_xctestrun(src, "com.example.app", false, 18800, None)
             .await
             .unwrap();
-        let p2 = patch_xctestrun(src, "com.example.app", false, 18801)
+        let p2 = patch_xctestrun(src, "com.example.app", false, 18801, None)
             .await
             .unwrap();
-        let p3 = patch_xctestrun(src, "com.example.app", true, 18800)
+        let p3 = patch_xctestrun(src, "com.example.app", true, 18800, None)
             .await
             .unwrap();
         assert_ne!(p1, p2);
@@ -1358,8 +1609,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bogus = dir.path().join("does-not-exist.xctestrun");
 
-        let result =
-            patch_xctestrun(bogus.to_str().unwrap(), "com.example.app", false, 18800).await;
+        let result = patch_xctestrun(
+            bogus.to_str().unwrap(),
+            "com.example.app",
+            false,
+            18800,
+            None,
+        )
+        .await;
         assert!(result.is_err(), "expected error for missing source file");
     }
 
@@ -1406,6 +1663,22 @@ mod tests {
             "/Users/me/Library/Developer/CoreSimulator/Devices/{udid}/data/Containers/Bundle/\
              Application/X/TapsmithAgentUITests-Runner.app/TapsmithAgentUITests-Runner"
         )
+    }
+
+    #[test]
+    fn pkill_and_pgrep_say_nothing_ran_only_on_a_clean_no_match() {
+        assert!(pkill_signalled(Some(0)));
+        assert!(!pkill_signalled(Some(1)));
+        // A usage error, a timeout or a missing tool: assume something ran.
+        assert!(pkill_signalled(Some(2)));
+        assert!(pkill_signalled(None));
+    }
+
+    #[test]
+    fn the_runner_pattern_matches_this_simulators_runner_only() {
+        let re = regex::Regex::new(&runner_process_pattern(SIM_A)).unwrap();
+        assert!(re.is_match(&runner_command(SIM_A)));
+        assert!(!re.is_match(&runner_command(SIM_B)));
     }
 
     #[test]

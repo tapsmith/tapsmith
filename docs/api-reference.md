@@ -519,7 +519,7 @@ await device.clearAppData("com.example.myapp");
 ```
 
 - **Android**: `pm clear` — wipes all persisted state, including the app's Android Keystore keys.
-- **iOS simulator**: clears the app's data container **and the simulator's keychain**, so keychain-backed state (e.g. native Firebase Auth sessions, `expo-secure-store` items) doesn't survive a "full" clear. The simulator keychain is device-global, so this clears keychain items for *every* app on the simulator — fine for test-owned simulators. Set `TAPSMITH_NO_KEYCHAIN_STATE=1` to skip the keychain wipe.
+- **iOS simulator**: clears the app's data container **and the simulator's keychain**, so keychain-backed state (e.g. native Firebase Auth sessions, `expo-secure-store` items) doesn't survive a "full" clear. The simulator keychain is device-global, so this clears keychain items for *every* app on the simulator — fine for test-owned simulators. A keychain that holds no app's items (only the simulator's own, under Apple's `com.apple.*` access groups) is left as it is, which skips a restart of `securityd`. Set `TAPSMITH_NO_KEYCHAIN_STATE=1` to skip the keychain wipe.
 - **iOS physical device**: uninstalls and reinstalls the app bundle (iOS deletes the app's keychain entries on uninstall).
 
 ### `device.saveAppState(packageName: string, path: string): Promise<void>`
