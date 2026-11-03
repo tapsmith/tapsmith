@@ -612,7 +612,17 @@ export async function ensureSessionReady(
 export async function launchConfiguredApp(
   ctx: SessionPreflightContext,
   phase: string,
-  options: { readinessAttempts?: number; freshInstall?: boolean; hooksProbeMs?: number } = {},
+  options: {
+    readinessAttempts?: number
+    freshInstall?: boolean
+    hooksProbeMs?: number
+    /**
+     * The app was already cleared (unless `freshInstall`) and launched for
+     * this phase, by `startAndroidLaunchEarly` before the agent started:
+     * skip straight to the readiness checks.
+     */
+    appLaunched?: boolean
+  } = {},
 ): Promise<PreparedState> {
   const readinessAttempts = options.readinessAttempts;
   const probe = { pollMs: options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS };
@@ -637,7 +647,7 @@ export async function launchConfiguredApp(
     // Fresh install: there's no state to clear. On Android,
     // explicitly launch the app (iOS auto-launches via the XCUITest agent
     // during startAgent), then go straight to ensuring the session is ready.
-    if (ctx.config.platform !== 'ios') {
+    if (ctx.config.platform !== 'ios' && !options.appLaunched) {
       await ctx.device.launchApp(ctx.config.package, launchOptions(ctx.config));
     }
     await ensureSessionReady(ctx, phase, readinessAttempts);
@@ -647,12 +657,51 @@ export async function launchConfiguredApp(
     return prepared();
   }
 
-  await hardClearAndLaunch(ctx);
+  if (!options.appLaunched) await hardClearAndLaunch(ctx);
   await ensureSessionReady(ctx, phase, readinessAttempts);
   await waitForAppReady(ctx);
   await probeResetCapabilities(ctx, probe);
   await checkMissingResetHooks(ctx, probe.pollMs);
   return prepared();
+}
+
+/** A startup launch started by `startAndroidLaunchEarly`. */
+export interface EarlyLaunch {
+  /** Whether the launch went through. Never rejects. */
+  launched: Promise<boolean>
+}
+
+/**
+ * Android startup launch, started before the agent: terminate and clear the
+ * app (unless it was just installed), then start its launch without waiting
+ * for it, so the app's cold start overlaps the agent's instrumentation start
+ * (each takes about a second). Resolves once the clear has finished, since a
+ * clear must not race the agent start; pass `appLaunched` to
+ * `launchConfiguredApp` once `launched` resolves true. Resolves undefined
+ * when the clear fails, having launched nothing, so the caller's usual
+ * launch path runs the whole sequence after the agent and reports the error
+ * as it always has.
+ */
+export async function startAndroidLaunchEarly(
+  ctx: Pick<SessionPreflightContext, 'config' | 'device'>,
+  options: { freshInstall: boolean },
+): Promise<EarlyLaunch | undefined> {
+  const pkg = ctx.config.package;
+  if (!pkg || ctx.config.platform === 'ios') return undefined;
+  if (!options.freshInstall) {
+    try {
+      await ctx.device.terminateApp(pkg);
+    } catch {
+      // App may not be running yet
+    }
+    try {
+      await ctx.device.clearAppData(pkg);
+    } catch {
+      return undefined;
+    }
+  }
+  const launched = ctx.device.launchApp(pkg, launchOptions(ctx.config)).then(() => true, () => false);
+  return { launched };
 }
 
 export interface ExecuteAppResetOptions {
