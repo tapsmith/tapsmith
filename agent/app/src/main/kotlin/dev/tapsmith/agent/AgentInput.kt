@@ -128,9 +128,14 @@ class AgentInput(
         return pressed
     }
 
-    /** UiObject2.click: a press and an immediate release at the center of its visible bounds. */
+    /**
+     * UiObject2.click: a press and a release at the center of its visible
+     * bounds, with no hold between them, as [click] at a point (a gesture path
+     * would hold it a frame).
+     */
     fun click(element: UiObject2) {
-        gestures.perform(PointerPath(GestureGeometry.center(element.visibleBounds.toBox())))
+        val center = GestureGeometry.center(element.visibleBounds.toBox())
+        gestures.click(center.x, center.y)
     }
 
     /** UiObject2.swipe: over [percent] of the element less its margins, at [speedPxPerSec]. */
