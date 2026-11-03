@@ -12,7 +12,11 @@ import type { ElementHandle } from "tapsmith"
  * 100 ms lost 30 of 30). Touches are held 10 ms, or 20 ms on a control that
  * needs the touch to span a display frame (the switch), or whose target is
  * unknown (a tap at a point). React Native on Android keeps the press whatever
- * the hold, so there the tests only check that the actions land.
+ * the hold, so there the tests only check that the actions land. The
+ * double-tap target turns 15 ms after its second touch, as a double tap's
+ * presses used to be held 40 ms. A switch needs its 20 ms, and XCTest's own
+ * tap (what setChecked() used before) also lifts within 50 ms, so the switch
+ * test checks only that setChecked() lands.
  */
 async function count(handle: ElementHandle, pattern: RegExp): Promise<number> {
   const match = pattern.exec(await handle.getText())

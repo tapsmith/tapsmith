@@ -30,13 +30,16 @@ import {
  */
 const PAGES = ["Summer sale", "New arrivals", "Free delivery"]
 const TURN_AFTER_MS = 50
+// The double-tap target turns sooner: a double tap's presses used to be held
+// 40 ms each, which a 50 ms turn would not catch.
+const DOUBLE_TAP_TURN_AFTER_MS = 15
 const SIZES = ["Small", "Medium", "Large"]
 // Measured between JS onPress callbacks, as on the gestures screen.
 const DOUBLE_TAP_WINDOW_MS = 800
 
 /** A touch anywhere inside calls `onTouch` as it lands. */
 function Turns({ onTouch, children }: { onTouch: () => void; children: ReactNode }) {
-  return <View onTouchStart={onTouch}>{children}</View>
+  return <View onTouchStart={() => onTouch()}>{children}</View>
 }
 
 export default function CarouselScreen() {
@@ -60,11 +63,11 @@ export default function CarouselScreen() {
 
   const likeTouches = useRef(0)
 
-  const turnPageSoon = () => {
+  const turnPageSoon = (afterMs = TURN_AFTER_MS) => {
     setTimeout(() => {
       page.current = (page.current + 1) % PAGES.length
       carousel.current?.scrollTo({ x: page.current * pageWidth, animated: true })
-    }, TURN_AFTER_MS)
+    }, afterMs)
   }
 
   const likeTapped = () => {
@@ -116,7 +119,7 @@ export default function CarouselScreen() {
       <Turns
         onTouch={() => {
           likeTouches.current += 1
-          if (likeTouches.current % 2 === 0) turnPageSoon()
+          if (likeTouches.current % 2 === 0) turnPageSoon(DOUBLE_TAP_TURN_AFTER_MS)
         }}
       >
         <TouchableOpacity
