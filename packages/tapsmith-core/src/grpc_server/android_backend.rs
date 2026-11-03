@@ -246,6 +246,12 @@ impl DeviceBackend for AndroidBackend<'_> {
     }
 
     async fn wake(&self, request_id: String) -> ActionResult {
+        // A screen that is already on needs no wake key. Every session start
+        // wakes before it unlocks, and `input` costs a process start.
+        let serial = self.svc.active_serial().await?;
+        if adb::screen_awake(&serial).await == Some(true) {
+            return Ok(TapsmithServiceImpl::success_action_response(request_id));
+        }
         self.svc
             .adb_action(request_id, "input keyevent KEYCODE_WAKEUP")
             .await
@@ -253,9 +259,18 @@ impl DeviceBackend for AndroidBackend<'_> {
 
     async fn unlock(&self, request_id: String) -> ActionResult {
         let serial = self.svc.active_serial().await?;
-        // Wake the screen first
-        let _ = adb::shell_lenient(&serial, "input keyevent KEYCODE_WAKEUP").await;
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let (awake, keyguard) =
+            tokio::join!(adb::screen_awake(&serial), adb::keyguard_showing(&serial));
+        match unlock_start(awake, keyguard) {
+            UnlockStart::AlreadyUnlocked => {
+                return Ok(TapsmithServiceImpl::success_action_response(request_id));
+            }
+            UnlockStart::Dismiss => {}
+            UnlockStart::WakeFirst => {
+                let _ = adb::shell_lenient(&serial, "input keyevent KEYCODE_WAKEUP").await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
         // Only dismiss a keyguard that is actually showing. The
         // legacy sequence below is a MENU key plus a swipe up, and
         // on an already-unlocked device both land on the foreground
@@ -1440,6 +1455,28 @@ async fn os_service_redirect(serial: &str, proxy: &NetworkProxy) -> Option<adb::
     })
 }
 
+/// Where `unlock` starts, from the screen's wakefulness and the keyguard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnlockStart {
+    /// The screen is on and no lock screen shows: nothing to do. Sending
+    /// any key or swipe here would land on the foreground app.
+    AlreadyUnlocked,
+    /// The screen is on but a lock screen shows (or the dump cannot tell):
+    /// dismiss it without the wake key and its settle wait.
+    Dismiss,
+    /// The screen is off, dozing or dreaming, or its state is unknown: wake
+    /// it first, as before.
+    WakeFirst,
+}
+
+fn unlock_start(awake: Option<bool>, keyguard_showing: Option<bool>) -> UnlockStart {
+    match (awake, keyguard_showing) {
+        (Some(true), Some(false)) => UnlockStart::AlreadyUnlocked,
+        (Some(true), _) => UnlockStart::Dismiss,
+        _ => UnlockStart::WakeFirst,
+    }
+}
+
 /// The agent's `takeSystemDialogEvents` result as proto events; malformed
 /// entries are skipped rather than failing the whole list.
 pub(super) fn system_dialog_events_from(data: &Value) -> Vec<proto::SystemDialogEvent> {
@@ -1475,6 +1512,24 @@ pub(super) fn system_dialog_events_from(data: &Value) -> Vec<proto::SystemDialog
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn unlock_skips_everything_only_when_awake_and_unlocked() {
+        assert_eq!(
+            unlock_start(Some(true), Some(false)),
+            UnlockStart::AlreadyUnlocked
+        );
+        // Awake with a lock screen up, or a keyguard dump that can't tell:
+        // dismiss, but there is nothing to wake.
+        assert_eq!(unlock_start(Some(true), Some(true)), UnlockStart::Dismiss);
+        assert_eq!(unlock_start(Some(true), None), UnlockStart::Dismiss);
+        // Asleep, or a power dump that can't tell, wakes first even when no
+        // keyguard shows: the screen must be on before anything else.
+        for keyguard in [Some(true), Some(false), None] {
+            assert_eq!(unlock_start(Some(false), keyguard), UnlockStart::WakeFirst);
+            assert_eq!(unlock_start(None, keyguard), UnlockStart::WakeFirst);
+        }
+    }
 
     #[test]
     fn system_dialog_events_map_every_field() {
