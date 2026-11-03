@@ -979,13 +979,16 @@ class CommandHandler {
     /// `scrollsIntoView`: an element that is off screen is tapped through
     /// `XCUIElement.tap()`, which scrolls it into view first, rather than
     /// refused (selectOption's trigger, which `XCUIElement.tap()` opened
-    /// before taps were planned).
+    /// before taps were planned). Returns how far that scroll moved the
+    /// element (zero when it did not scroll), so what `beforeTouch` read can
+    /// be moved with it.
+    @discardableResult
     private func tapResolvedElement(
         _ element: ElementInfo,
         timeoutMs: Int64,
         scrollsIntoView: Bool = false,
         beforeTouch: (() -> Void)? = nil
-    ) throws {
+    ) throws -> CGVector {
         // Surface a stale id up front (the SDK's re-resolve retry keys on the
         // "gone stale" message) — but only once nothing else can tap: the
         // bounds-cache recovery path in resolveElement hands us ids with no
@@ -1005,9 +1008,11 @@ class CommandHandler {
             actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
         case .offScreen:
             if scrollsIntoView, staleError == nil, let xcElem = try? getXCUIElement(element.elementId), xcElem.exists {
+                let before = xcElem.frame
                 beforeTouch?()
                 xcElem.tap()
-                return
+                guard let after = try? xcElem.snapshot().frame else { return .zero }
+                return CGVector(dx: after.minX - before.minX, dy: after.minY - before.minY)
             }
             // An id with the bounds it was found at but no live element is
             // one found that way by design (a row's accessory indicator,
@@ -1016,6 +1021,7 @@ class CommandHandler {
             throw (foundWithoutLiveElement ? nil : staleError)
                 ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
+        return .zero
     }
 
     /// The knob of a SwiftUI Toggle, as an element of its own, when `element`
@@ -2019,10 +2025,13 @@ class CommandHandler {
             // just before the opening touch: putting the keyboard away or
             // settling can move it first.
             var shownBefore: [CGRect] = []
-            // Opened with the same planned, held tap as tap().
-            try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params), scrollsIntoView: true) {
+            // Opened with the same planned, held tap as tap(). A trigger off
+            // screen is scrolled in by the opening tap, which moves what was
+            // read before it by as much as it moved the trigger.
+            let scrolled = try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params), scrollsIntoView: true) {
                 if let optionText { shownBefore = self.actionExecutor.textFrames(optionText) }
             }
+            shownBefore = shownBefore.map { $0.offsetBy(dx: scrolled.dx, dy: scrolled.dy) }
             if let optionText {
                 try actionExecutor.selectOption(optionText, shownBefore: shownBefore)
             } else if let index {
