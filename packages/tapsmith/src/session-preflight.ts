@@ -241,8 +241,11 @@ function iosHierarchyHasRenderedContent(hierarchyXml: string): boolean {
 }
 
 /**
- * Whether the project is known not to depend on `@tapsmith/react-native`.
- * False when it does, and when there is no project to look in.
+ * Whether the project's package.json lookup finds no `@tapsmith/react-native`
+ * dependency. False when it finds one, and when there is no `rootDir` to look
+ * from. A lookup that finds no package.json at all also reads as true: a
+ * hooked app tested from outside its repo then stops early, and its first
+ * resets are clear ones until a clear reset's re-read sees the marker.
  */
 function projectWithoutHooks(config: SessionPreflightContext['config']): boolean {
   if (!config.rootDir) return false;
