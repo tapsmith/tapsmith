@@ -1507,7 +1507,7 @@ const box = await device.getByText("Header", { exact: true }).boundingBox();
 
 ## Assertions
 
-The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires.
+The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires. As in Playwright, an assertion reads the screen at once, then backs off: it reads again after 100, 250 and 500 ms, then once a second.
 
 ### `expect(elementHandle: ElementHandle): TapsmithAssertions`
 
@@ -1558,7 +1558,7 @@ await expect.poll(() => fetchStatus(), { timeout: 10000 }).toBe("ready");
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `timeout` | `number` | 5000 | How long to poll before failing |
-| `intervals` | `number[]` | `[250]` | Polling intervals in milliseconds |
+| `intervals` | `number[]` | `[100, 250, 500, 1000]` | Milliseconds to wait between tries, in order; the last one repeats. The default is Playwright's. |
 
 ### `flushSoftErrors(): Error[]`
 
@@ -2291,6 +2291,13 @@ emulators it boots for `avd`. Mirrors Playwright's `launchOptions`.
 
 See [How Tapsmith launches emulators](configuration.md#how-tapsmith-launches-emulators).
 
+### `ReducedMotion`
+
+The type of the root config's `reducedMotion`: `'reduce' | 'no-preference'`, as in Playwright.
+`'reduce'` turns the Android animation scales off for the session and restores the device's own
+values when it ends; `'no-preference'` (the default) leaves them alone. Not applied on iOS yet. See
+[`reducedMotion`](configuration.md#all-options).
+
 ### Projects
 
 Projects group test files with shared options and dependency ordering, mirroring Playwright's project concept. Each project can target its own device by overriding device-shaping fields under `use:`. Setup projects run first; dependent projects run after their dependencies complete.
@@ -2600,7 +2607,7 @@ interface TestResult {
   workerIndex?: number; // set in parallel mode — index of the worker that ran this test
   retry?: number; // zero-based attempt number this result was recorded on (omitted for a first-attempt pass)
   filePath?: string; // path to the test file this result belongs to
-  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed
+  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed, or one Tapsmith waited out during the test
   fileLevelFailure?: boolean; // the result stands for a whole file that failed to load, not a test in it
 }
 ```
@@ -2938,7 +2945,7 @@ npx tapsmith test --config=./configs/ios.config.mjs
 
 ### `tapsmith test --force-install`
 
-Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
+Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag: its APKs are compared the same way and reinstalled unless the device's copy is known to match (one whose hash the device can't report is reinstalled), and [`TAPSMITH_FORCE_AGENT_INSTALL`](environment-variables.md) forces them to be reinstalled every time. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
 
 ```bash
 npx tapsmith test --force-install

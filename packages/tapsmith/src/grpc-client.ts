@@ -167,6 +167,27 @@ export interface IsKeyboardShownResponse {
   shown: boolean;
 }
 
+/** A system ANR / crash dialog the Android agent answered on its own. */
+export interface SystemDialogEvent {
+  /** The dialog's title, e.g. `Pixel Launcher isn't responding`; empty when unknown. */
+  title: string;
+  /** The owning process when the window list named exactly one (or it was the app's); empty otherwise. */
+  owner: string;
+  /** The app under test owns it: its own ANR, answered with Wait. */
+  ownedByTarget: boolean;
+  /** `anr` (isn't responding) or `crash` (keeps stopping). */
+  kind: string;
+  /** The button pressed: `Close app` or `Wait`. */
+  button: string;
+  /** When it was answered, device wall-clock ms since the epoch. */
+  timestampMs: number;
+}
+
+export interface TakeSystemDialogEventsResponse {
+  requestId: string;
+  events: SystemDialogEvent[];
+}
+
 export interface GetColorSchemeResponse {
   requestId: string;
   scheme: string;
@@ -785,6 +806,7 @@ export class TapsmithGrpcClient {
     networkTracingEnabled = false,
     networkHosts: string[] = [],
     passthroughHosts: string[] = [],
+    reduceMotion?: boolean,
   ): Promise<ActionResponse> {
     return this.call<ActionResponse>('setDevice', {
       requestId: requestId(),
@@ -792,6 +814,8 @@ export class TapsmithGrpcClient {
       networkTracingEnabled,
       networkHosts,
       passthroughHosts,
+      // Optional on the wire: unset tells the daemon to change nothing.
+      ...(reduceMotion !== undefined ? { reduceMotion } : {}),
     }, 120_000);
   }
 
@@ -1051,6 +1075,13 @@ export class TapsmithGrpcClient {
     return this.call<IsKeyboardShownResponse>('isKeyboardShown', {
       requestId: requestId(),
     });
+  }
+
+  /** The system dialogs the agent answered since the last call, oldest first. */
+  async takeSystemDialogEvents(deadlineMs?: number): Promise<TakeSystemDialogEventsResponse> {
+    return this.call<TakeSystemDialogEventsResponse>('takeSystemDialogEvents', {
+      requestId: requestId(),
+    }, deadlineMs);
   }
 
   async hideKeyboard(): Promise<ActionResponse> {

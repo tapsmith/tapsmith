@@ -160,3 +160,21 @@ xcrun swiftc -sdk "$SDK" \
   TapsmithAgent/TapTiming.swift \
   -o "$OUT/tap-timing-tests"
 "$OUT/tap-timing-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/SnapshotRetryTests/main.swift \
+  TapsmithAgent/SnapshotRetry.swift \
+  -o "$OUT/snapshot-retry-tests"
+"$OUT/snapshot-retry-tests"
+
+# XCTestIssueRelay needs the Objective-C exception catcher it raises into.
+xcrun clang -c -fobjc-arc -isysroot "$SDK" \
+  TapsmithAgent/ObjCExceptionCatcher.m \
+  -o "$OUT/objc-exception-catcher.o"
+xcrun swiftc -sdk "$SDK" \
+  -import-objc-header TapsmithAgent/ObjCExceptionCatcher.h \
+  Tests/XCTestIssueRelayTests/main.swift \
+  TapsmithAgent/XCTestIssueRelay.swift \
+  "$OUT/objc-exception-catcher.o" \
+  -o "$OUT/xctest-issue-relay-tests"
+"$OUT/xctest-issue-relay-tests"

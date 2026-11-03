@@ -498,6 +498,29 @@ npx tapsmith test
 
 See [Android emulator image requirements](network.md#android-emulator-image-requirements) for details on why the system image type matters for network capture.
 
+### Turning animations off
+
+Set `reducedMotion: "reduce"` in the config to run Android tests with the system animations off:
+
+```typescript
+import { defineConfig } from "tapsmith";
+
+export default defineConfig({
+  apk: "./app/build/outputs/apk/release/app-release.apk",
+  reducedMotion: "reduce",
+});
+```
+
+Tapsmith sets the window, transition and animator duration scales to 0 when it selects the
+device, and puts the device's own values back when the session ends (or, after a run that was
+killed, when the next session selects that device). Screen transitions then finish at once, so
+tests wait less, and fewer taps land on an element that is still moving. You no longer need
+`adb shell settings put global …_animation_scale 0` steps in the workflow.
+
+It is opt-in because apps see it as the system's "Remove animations" setting: an app that reads
+that setting (React Native's `AccessibilityInfo.isReduceMotionEnabled()`, for example) or relies on
+animator callbacks can behave differently from a user's device. It is not applied on iOS yet.
+
 ### ADB Setup
 
 Most CI images with Android tooling already have ADB on the PATH. If yours does not:

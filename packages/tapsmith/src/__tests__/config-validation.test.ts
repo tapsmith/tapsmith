@@ -97,6 +97,7 @@ describe('config validation at load (PILOT-552)', () => {
     it.each([
       ['screenshot', '"on-failure"', "screenshot must be one of 'always', 'only-on-failure', 'never'"],
       ['deviceStrategy', '"avd"', "deviceStrategy must be 'prefer-connected' or 'avd-only'"],
+      ['reducedMotion', 'true', "reducedMotion must be 'reduce' or 'no-preference' (got true)"],
     ])('rejects an unknown %s', async (key, value, expected) => {
       expect((await loadError(`{ ${key}: ${value} }`)).message).toContain(expected);
     });
@@ -313,6 +314,14 @@ describe('config validation at load (PILOT-552)', () => {
     it('explains a root-only option put inside `use`', async () => {
       expect((await loadError('{ projects: [{ name: "a", use: { reporter: "dot" } }] }')).message).toContain(
         "projects[0].use.reporter can't be set per project; set it at the top level of the config",
+      );
+    });
+
+    // PILOT-971: projects on one device target share its device, so a
+    // per-project value could not be honoured.
+    it('keeps reducedMotion a root-level option', async () => {
+      expect((await loadError('{ projects: [{ name: "a", use: { reducedMotion: "reduce" } }] }')).message).toContain(
+        "projects[0].use.reducedMotion can't be set per project; set it at the top level of the config",
       );
     });
 

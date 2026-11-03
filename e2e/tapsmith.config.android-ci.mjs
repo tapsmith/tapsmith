@@ -6,6 +6,9 @@ export default defineConfig({
   activity: "dev.tapsmith.testapp.MainActivity",
   package: "dev.tapsmith.testapp",
   timeout: 15_000,
+  // The workflow already turns the emulator's animations off; this exercises
+  // Tapsmith's own setting and restore on every run (PILOT-971).
+  reducedMotion: "reduce",
   // Two retries (Playwright's CI convention): emulator-load one-offs can
   // outlast a single retry on oversubscribed runners.
   retries: 2,

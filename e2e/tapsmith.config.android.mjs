@@ -5,6 +5,8 @@ export default defineConfig({
   activity: "dev.tapsmith.testapp.MainActivity",
   package: "dev.tapsmith.testapp",
   timeout: 15_000,
+  // Animations off for the run; the device's own values come back after (PILOT-971).
+  reducedMotion: "reduce",
   retries: 0,
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
