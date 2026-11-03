@@ -561,8 +561,8 @@ for (name, target, want) in containerCases {
     if got == want { print("ok   \(name)") } else { failures += 1; print("FAIL \(name): got \(got.map(\.rawValue))") }
 }
 
-// A dropdown's option is the uncovered text drawn last, leaving out what
-// showed it before the dropdown opened, touched where `analyze` says.
+// A dropdown's option is the first uncovered copy of its text, leaving out
+// what showed it before the dropdown opened, touched where `analyze` says.
 let optionRows: [Row] = [
     (0, .application, "", "", screen),
     (1, .window, "", "", screen),
@@ -572,6 +572,7 @@ let optionRows: [Row] = [
     (4, .staticText, "Medium", "", R(16, 340, 370, 20)),
     (4, .staticText, "Gone", "", R(16, 2000, 370, 20)),
     (4, .staticText, "Under", "", R(16, 380, 370, 20)),
+    (4, .staticText, "Medium", "", R(16, 420, 370, 15)),
     (3, .scrollView, "", "", R(16, 450, 370, 100)),
     (4, .staticText, "Clipped", "", R(16, 560, 370, 20)),
     (4, .staticText, "Half", "", R(16, 540, 370, 20)),
@@ -587,10 +588,11 @@ func touch(_ result: OcclusionAnalyzer.OptionText) -> CGPoint? {
     return nil
 }
 let optionCases: [(String, Bool)] = [
-    ("the option text drawn last is the one picked", touch(options.optionText("Medium")) == CGPoint(x: 201, y: 350)),
-    ("a text shown before the dropdown opened is left out",
-     touch(options.optionText("Medium", excluding: [R(16, 340, 370, 20)])) == CGPoint(x: 201, y: 110)
-        && options.optionText("Medium", excluding: options.shownTexts("Medium")) == .absent),
+    ("the first copy is the one picked", touch(options.optionText("Medium")) == CGPoint(x: 201, y: 110)),
+    ("a text shown before the dropdown opened is left out, not a later copy",
+     touch(options.optionText("Medium", excluding: [R(16, 100, 370, 20)])) == CGPoint(x: 201, y: 350)),
+    ("every copy shown before leaves nothing",
+     options.optionText("Medium", excluding: options.shownTexts("Medium")) == .absent),
     ("an option a control covers is present but not touched", options.optionText("Under") == .present),
     ("an option scrolled out of its list is present but not touched", options.optionText("Clipped") == .present),
     ("an option off screen is present but not touched", options.optionText("Gone") == .present),

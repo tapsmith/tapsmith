@@ -464,14 +464,17 @@ struct OcclusionAnalyzer {
     }
 
     /// Where to touch the dropdown option whose text (label or identifier)
-    /// is `text`: the copy drawn last (on top, as a dropdown's options are
-    /// over the screen that opened them) that `analyze` finds uncovered,
+    /// is `text`: the first copy in the tree that `analyze` finds uncovered,
     /// touched at the point it picked (clear of the keyboard and bars).
     /// Copies at the frames in `excluding` are left out: what showed the text
-    /// before the dropdown opened (its trigger, the screen behind).
+    /// before the dropdown opened (its trigger, the screen behind). The first
+    /// of the rest, not the last: an inline dropdown's options come right
+    /// after its trigger, ahead of the content they push down (where the same
+    /// text, moved, is no longer at an excluded frame), and a popup's options
+    /// are then the only copies left.
     func optionText(_ text: String, excluding: [CGRect] = []) -> OptionText {
         var present = false
-        for i in nodes.indices.reversed() where isText(i, text) {
+        for i in nodes.indices where isText(i, text) {
             if excluding.contains(where: { Self.framesMatch($0, snapshotFrames[i]) }) { continue }
             present = true
             let node = nodes[i]

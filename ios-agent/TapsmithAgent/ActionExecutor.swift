@@ -414,8 +414,8 @@ class ActionExecutor {
     func selectOption(_ optionText: String, shownBefore: [CGRect]) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
-        // The option's text shown on top and uncovered: more than one text can
-        // carry it (React Native can expose a text and the view around it).
+        // The option's text, uncovered: more than one text can carry it (React
+        // Native can expose a text and the view around it).
         // Wait only while it is not in the tree at all.
         let deadline = Date().addingTimeInterval(3)
         var option = findOption(optionText, excluding: shownBefore)
@@ -432,9 +432,9 @@ class ActionExecutor {
             return
         }
         // Not touchable where it is (below the fold of a scrolling list):
-        // XCUIElement.tap() scrolls it into view. Any copy but those shown
-        // before will do.
-        let unshown = app.staticTexts.matching(identifier: optionText).allElementsBoundByIndex.last { text in
+        // XCUIElement.tap() scrolls it into view. The first copy but those
+        // shown before, as for a touchable one.
+        let unshown = app.staticTexts.matching(identifier: optionText).allElementsBoundByIndex.first { text in
             guard let frame = try? text.snapshot().frame else { return false }
             return !shownBefore.contains { OcclusionAnalyzer.framesMatch($0, frame) }
         }
