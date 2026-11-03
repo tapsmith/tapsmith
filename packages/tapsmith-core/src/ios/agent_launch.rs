@@ -1731,7 +1731,8 @@ mod tests {
             Duration::from_millis(30),
         );
         let path = gated.gate.path().to_path_buf();
-        tokio::time::sleep(Duration::from_millis(80)).await;
+        // Never finishes, yet settles: the deadline ends the task.
+        gated.settle().await;
         assert!(path.exists(), "the deadline opens the gate");
         std::fs::remove_file(&path).unwrap();
         assert!(
