@@ -445,10 +445,10 @@ struct OcclusionAnalyzer {
         return ancestors(of: t).map { nodes[$0].elementType }
     }
 
-    /// The frames of the shown texts whose label or identifier is `text`, as
-    /// the snapshot reported them.
-    func shownTexts(_ text: String) -> [CGRect] {
-        nodes.indices.filter { isText($0, text) && shownFrame(of: $0) != nil }.map { snapshotFrames[$0] }
+    /// The frames of the texts in the tree whose label or identifier is
+    /// `text`, shown or not, as the snapshot reported them.
+    func textFrames(_ text: String) -> [CGRect] {
+        nodes.indices.filter { isText($0, text) }.map { snapshotFrames[$0] }
     }
 
     /// A dropdown option's text as the tree shows it (`optionText`).
@@ -496,15 +496,6 @@ struct OcclusionAnalyzer {
 
     private func isText(_ i: Int, _ text: String) -> Bool {
         nodes[i].elementType == .staticText && (nodes[i].label == text || nodes[i].identifier == text)
-    }
-
-    /// The part of `frame` on screen and inside the scroll views of node
-    /// `i`'s ancestors, or nil when too little of it is shown to touch.
-    func shownFrame(of i: Int) -> CGRect? {
-        let visible = clippedFrame(of: i).intersection(screen)
-        guard !visible.isNull, visible.width >= Self.minVisibleExtent, visible.height >= Self.minVisibleExtent
-        else { return nil }
-        return visible
     }
 
     /// `@tapsmith/react-native`'s test hooks marker: a screen-sized

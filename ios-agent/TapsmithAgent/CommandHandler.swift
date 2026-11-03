@@ -976,9 +976,14 @@ class CommandHandler {
     ///
     /// `beforeTouch` runs once the touch is planned and settled, just before
     /// it is made (when the screen is as the touch will find it).
+    /// `scrollsIntoView`: an element that is off screen is tapped through
+    /// `XCUIElement.tap()`, which scrolls it into view first, rather than
+    /// refused (selectOption's trigger, which `XCUIElement.tap()` opened
+    /// before taps were planned).
     private func tapResolvedElement(
         _ element: ElementInfo,
         timeoutMs: Int64,
+        scrollsIntoView: Bool = false,
         beforeTouch: (() -> Void)? = nil
     ) throws {
         // Surface a stale id up front (the SDK's re-resolve retry keys on the
@@ -999,6 +1004,11 @@ class CommandHandler {
             beforeTouch?()
             actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
         case .offScreen:
+            if scrollsIntoView, staleError == nil, let xcElem = try? getXCUIElement(element.elementId), xcElem.exists {
+                beforeTouch?()
+                xcElem.tap()
+                return
+            }
             // An id with the bounds it was found at but no live element is
             // one found that way by design (a row's accessory indicator,
             // PILOT-895, or a getByLabel match): off screen, not stale.
@@ -2004,13 +2014,14 @@ class CommandHandler {
                 throw AgentError.invalidSelector("selectOption requires either 'option' (string) or 'index' (int)")
             }
             let element = try resolveElement(params)
-            // What already shows the option's text (the trigger, the screen
-            // behind) is not the option. Read just before the opening touch:
-            // putting the keyboard away or settling can move it first.
+            // What already carries the option's text (the trigger, the screen
+            // behind, on screen or below the fold) is not the option. Read
+            // just before the opening touch: putting the keyboard away or
+            // settling can move it first.
             var shownBefore: [CGRect] = []
             // Opened with the same planned, held tap as tap().
-            try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params)) {
-                if let optionText { shownBefore = self.actionExecutor.shownTexts(optionText) }
+            try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params), scrollsIntoView: true) {
+                if let optionText { shownBefore = self.actionExecutor.textFrames(optionText) }
             }
             if let optionText {
                 try actionExecutor.selectOption(optionText, shownBefore: shownBefore)

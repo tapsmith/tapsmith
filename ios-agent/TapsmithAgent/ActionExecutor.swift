@@ -477,8 +477,8 @@ class ActionExecutor {
     }
 
     /// The frames of the texts on screen that show `text` now.
-    func shownTexts(_ text: String) -> [CGRect] {
-        optionAnalyzer()?.shownTexts(text) ?? []
+    func textFrames(_ text: String) -> [CGRect] {
+        optionAnalyzer()?.textFrames(text) ?? []
     }
 
     /// Tap a dropdown's option (a cell picked by index) at the uncovered
