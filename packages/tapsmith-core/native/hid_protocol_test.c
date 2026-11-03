@@ -33,6 +33,26 @@ int main(void) {
   e = hid_parse_line("t2\t150 300");   /* tab delimiter accepted */
   assert(e.cmd == HID_DOUBLE_TAP && approx(e.x, 150) && approx(e.y, 300));
 
+  /* A double tap's hold: optional, in whole milliseconds. */
+  e = hid_parse_line("t2 150 300");
+  assert(e.holdMs == HID_DEFAULT_HOLD);
+  e = hid_parse_line("t2 150 300 10");
+  assert(e.cmd == HID_DOUBLE_TAP && approx(e.x, 150) && e.holdMs == 10);
+  e = hid_parse_line("t2 150 300 0");
+  assert(e.cmd == HID_DOUBLE_TAP && e.holdMs == 0);
+  e = hid_parse_line("t2 150 300 -5");  /* negative hold -> invalid */
+  assert(e.cmd == HID_INVALID);
+  e = hid_parse_line("t2 150 300 1000");  /* past the cap -> invalid */
+  assert(e.cmd == HID_INVALID);
+  e = hid_parse_line("t2 150 300 abc");  /* not a number -> invalid */
+  assert(e.cmd == HID_INVALID);
+  e = hid_parse_line("t2 150 300 10ms");  /* trailing junk -> invalid */
+  assert(e.cmd == HID_INVALID);
+  e = hid_parse_line("t2 150 300 10\n");  /* a line's newline is fine */
+  assert(e.cmd == HID_DOUBLE_TAP && e.holdMs == 10);
+  e = hid_parse_line("d 100 200 10");   /* only a double tap takes a hold */
+  assert(e.cmd == HID_DOWN && e.holdMs == HID_DEFAULT_HOLD);
+
   e = hid_parse_line("t 100 200");     /* bare 't' is not a command */
   assert(e.cmd == HID_INVALID);
 
