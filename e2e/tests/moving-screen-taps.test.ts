@@ -78,4 +78,17 @@ describe("Touches on a moving screen", () => {
       await expect(carouselScreen.sizeChosen).toHaveText(`Size: ${size}`)
     }
   })
+
+  test("a tap waits for a button still sliding into place, and lands on it", async ({ carouselScreen }) => {
+    // The tap comes straight after the slide starts, so its find sees the
+    // button moving: the tap has to wait until it stops rather than land
+    // where the find saw it, which the button has left by then.
+    await carouselScreen.slidingButton.scrollIntoView()
+    const start = await count(carouselScreen.caught, /Caught: (\d+)/)
+    for (let n = 1; n <= 3; n++) {
+      await carouselScreen.slideButton.tap()
+      await carouselScreen.slidingButton.tap()
+      await expect(carouselScreen.caught).toHaveText(`Caught: ${start + n}`)
+    }
+  })
 })
