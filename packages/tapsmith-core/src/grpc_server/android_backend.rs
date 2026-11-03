@@ -246,12 +246,6 @@ impl DeviceBackend for AndroidBackend<'_> {
     }
 
     async fn wake(&self, request_id: String) -> ActionResult {
-        // A screen that is already on needs no wake key. Every session start
-        // wakes before it unlocks, and `input` costs a process start.
-        let serial = self.svc.active_serial().await?;
-        if adb::screen_awake(&serial).await == Some(true) {
-            return Ok(TapsmithServiceImpl::success_action_response(request_id));
-        }
         self.svc
             .adb_action(request_id, "input keyevent KEYCODE_WAKEUP")
             .await
