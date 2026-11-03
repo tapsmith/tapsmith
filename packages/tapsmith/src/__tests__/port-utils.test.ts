@@ -7,11 +7,17 @@ vi.mock('node:net', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:net')>();
   return { ...actual, connect: vi.fn(actual.connect) };
 });
+// Real resolution by default; one test swaps in a lookup that never answers.
+vi.mock('node:dns/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:dns/promises')>();
+  return { ...actual, lookup: vi.fn(actual.lookup) };
+});
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- overloaded execFileSync signatures make proper mock typing impractical
 const mockedExecFileSync = vi.mocked(childProcess.execFileSync) as any;
 const mockedSpawnSync = vi.mocked(childProcess.spawnSync);
 
+import * as dns from 'node:dns/promises';
 import * as net from 'node:net';
 import { connectionRefused, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, parseDaemonsOnAgentPort } from '../port-utils.js';
 
@@ -303,5 +309,16 @@ describe('connectionRefused', () => {
   it('is false for an address it cannot parse or resolve', async () => {
     expect(await connectionRefused('no-port-here')).toBe(false);
     expect(await connectionRefused('host.invalid:50051')).toBe(false);
+  });
+
+  it('is false for a port out of range rather than throwing', async () => {
+    await expect(connectionRefused('localhost:65536')).resolves.toBe(false);
+  });
+
+  it('is false when the host name does not resolve in time', async () => {
+    vi.mocked(dns.lookup).mockImplementationOnce((() => new Promise(() => {})) as unknown as typeof dns.lookup);
+    const started = Date.now();
+    expect(await connectionRefused('slow-resolver.test:50051', 50)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
