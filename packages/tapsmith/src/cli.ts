@@ -54,6 +54,7 @@ import {
   resolveEmulatorLaunchSettings,
   prefilterDevicesForStrategy,
   probeDeviceHealth,
+  probeDeviceHealthIfSettled,
   provisionEmulators,
   type DeviceHealthResult,
   type LaunchedEmulator,
@@ -220,6 +221,7 @@ async function checkDeviceHealth(serial: string, progress?: LaunchProgressSink):
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }),
+    probeIfSettled: async (s) => probeDeviceHealthIfSettled(s),
     waitForStable: (s) => waitForDeviceStability(s, 20_000, probeDeviceHealth),
     heldElsewhere: () => {
       const session = currentSession();
