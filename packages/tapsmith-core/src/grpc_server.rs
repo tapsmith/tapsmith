@@ -268,6 +268,11 @@ pub struct TapsmithServiceImpl {
     /// not exist yet at set_device time — every proxy start site pushes the
     /// current value into the new proxy.
     passthrough_hosts: Arc<RwLock<Vec<String>>>,
+    /// The Android device whose animation scales this daemon turned off for
+    /// `reducedMotion: 'reduce'` (PILOT-971), restored when the daemon moves
+    /// to another device or shuts down. A mutex, not an RwLock: selecting and
+    /// restoring must not interleave.
+    animation_scales: Arc<tokio::sync::Mutex<Option<crate::android_animation_scales::Applied>>>,
     /// Active route interception handler, if a `NetworkRoute` stream is open.
     /// Stored here so that `start_network_capture` can install it on newly
     /// created proxies (the stream may open before or after capture starts).
@@ -419,6 +424,7 @@ impl TapsmithServiceImpl {
             ios_iproxy: Arc::new(RwLock::new(None)),
             network_tracing_enabled: Arc::new(RwLock::new(false)),
             passthrough_hosts: Arc::new(RwLock::new(Vec::new())),
+            animation_scales: Arc::new(tokio::sync::Mutex::new(None)),
             active_route_handler: Arc::new(RwLock::new(None)),
             webview_forwards: Arc::new(RwLock::new(std::collections::HashMap::new())),
             #[cfg(target_os = "macos")]
@@ -1508,6 +1514,46 @@ impl TapsmithServiceImpl {
             error_message,
             screenshot,
         })
+    }
+
+    /// Apply `reducedMotion` to the device just selected (PILOT-971): restore
+    /// the previous device's scales if this daemon moved off one it had
+    /// turned off, then turn this one's off, or undo or recover them, as
+    /// `want` and any owner record say. Android only; never fails selection.
+    async fn select_animation_scales(&self, serial: &str, want: Option<bool>) {
+        let mut applied = self.animation_scales.lock().await;
+        let host = crate::android_animation_scales::RealHost;
+        if let Some(previous) = applied.as_ref().filter(|a| a.serial != serial) {
+            crate::android_animation_scales::restore(
+                &host,
+                previous,
+                crate::android_animation_scales::SELECT_TIMEOUT,
+            )
+            .await;
+            *applied = None;
+        }
+        if self.active_platform().await != Some(Platform::Android) {
+            return;
+        }
+        let Some(dir) = crate::android_animation_scales::records_dir() else {
+            return;
+        };
+        *applied =
+            crate::android_animation_scales::on_select(&host, &dir, serial, want, applied.as_ref())
+                .await;
+    }
+
+    /// Put back the animation scales this daemon turned off. Called at
+    /// graceful shutdown.
+    pub async fn restore_animation_scales(&self) {
+        if let Some(applied) = self.animation_scales.lock().await.take() {
+            crate::android_animation_scales::restore(
+                &crate::android_animation_scales::RealHost,
+                &applied,
+                crate::android_animation_scales::SHUTDOWN_TIMEOUT,
+            )
+            .await;
+        }
     }
 
     /// Clean up network proxy state: revert device proxy settings, remove CA
@@ -3144,6 +3190,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 if let Ok(backend) = self.backend().await {
                     backend.prearm_network_tracing(&req).await;
                 }
+                // Before any install or launch, so the app starts with the
+                // session's animation scales.
+                self.select_animation_scales(&req.serial, req.reduce_motion)
+                    .await;
                 Ok(Response::new(proto::ActionResponse {
                     request_id,
                     success: true,

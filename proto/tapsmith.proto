@@ -486,6 +486,13 @@ message SetDeviceRequest {
   // host-based passthrough; HTTP/2-only clients (gRPC) are always
   // tunneled automatically regardless of this list (PILOT-231).
   repeated string passthrough_hosts = 5;
+  // `reducedMotion` from tapsmith.config.ts (PILOT-971). true: turn the
+  // Android animation scales (window, transition, animator duration) off for
+  // the session and restore the device's own values when it ends; false: undo
+  // what this daemon turned off; unset: leave this daemon's setting as it is.
+  // Either way the daemon restores scales left off by a daemon that died.
+  // iOS ignores it.
+  optional bool reduce_motion = 6;
 }
 
 message StartAgentRequest {
