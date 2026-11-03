@@ -973,7 +973,14 @@ class CommandHandler {
     /// a held press when a scroll view beside it moves (a carousel paging
     /// itself), and XCTest's taps lost 1 in 40 there. It is only the fallback
     /// when no UI tree can be read to plan a point.
-    private func tapResolvedElement(_ element: ElementInfo, timeoutMs: Int64) throws {
+    ///
+    /// `beforeTouch` runs once the touch is planned and settled, just before
+    /// it is made (when the screen is as the touch will find it).
+    private func tapResolvedElement(
+        _ element: ElementInfo,
+        timeoutMs: Int64,
+        beforeTouch: (() -> Void)? = nil
+    ) throws {
         // Surface a stale id up front (the SDK's re-resolve retry keys on the
         // "gone stale" message) — but only once nothing else can tap: the
         // bounds-cache recovery path in resolveElement hands us ids with no
@@ -986,8 +993,10 @@ class CommandHandler {
         putKeyboardAwayIfItWouldEatTheTouch(element)
         switch try planSettledTouch(element, timeoutMs: timeoutMs) {
         case .hittableElement(let xcElem):
+            beforeTouch?()
             xcElem.tap()
         case .point(let point, _, let hold):
+            beforeTouch?()
             actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
         case .offScreen:
             // An id with the bounds it was found at but no live element is
@@ -1996,10 +2005,13 @@ class CommandHandler {
             }
             let element = try resolveElement(params)
             // What already shows the option's text (the trigger, the screen
-            // behind) is not the option.
-            let shownBefore = optionText.map { actionExecutor.shownTexts($0) } ?? []
+            // behind) is not the option. Read just before the opening touch:
+            // putting the keyboard away or settling can move it first.
+            var shownBefore: [CGRect] = []
             // Opened with the same planned, held tap as tap().
-            try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params))
+            try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params)) {
+                if let optionText { shownBefore = self.actionExecutor.shownTexts(optionText) }
+            }
             if let optionText {
                 try actionExecutor.selectOption(optionText, shownBefore: shownBefore)
             } else if let index {
