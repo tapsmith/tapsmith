@@ -2539,6 +2539,14 @@ class CommandHandler {
                 XCUIDevice.shared.orientation = target
                 Thread.sleep(forTimeInterval: 0.4)
             }
+            // The screen size is cached and decides what counts as on screen,
+            // so re-read it only once the app's window has turned: on a
+            // loaded simulator it can still be portrait here (RotationSettle).
+            _ = RotationSettle.waitForWindow(
+                landscape: target.isLandscape,
+                deadline: Date(timeIntervalSinceNow: Self.rotationSettleTimeout),
+                readSize: { app.windows.firstMatch.frame.size }
+            )
             snapshotFinder.invalidateScreenSize()
             return ["success": true]
 
@@ -2818,6 +2826,9 @@ class CommandHandler {
     /// How long a keyboard element with no on-screen area gets to slide in
     /// before isKeyboardShown and hideKeyboard treat it as not on screen.
     private static let keyboardAppearGrace: TimeInterval = 1.5
+    /// How long setOrientation waits for the app's window to turn. An app
+    /// that does not rotate waits it out, so it is kept short.
+    private static let rotationSettleTimeout: TimeInterval = 2
 
     /// Set by `dismissKeyboard`: whether any strategy touched the screen.
     private var touchedScreen = false
