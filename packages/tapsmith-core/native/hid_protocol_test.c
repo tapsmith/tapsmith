@@ -71,6 +71,24 @@ int main(void) {
   e = hid_parse_line("t10 1 2");         /* no delimiter after t1 -> invalid */
   assert(e.cmd == HID_INVALID);
 
+  /* A whole tap or double tap first lifts a contact a d/m left down (a
+   * mirror flick whose u was lost), or its own down would only move it. */
+  assert(hid_lifts_held_contact(HID_TAP, 1));
+  assert(hid_lifts_held_contact(HID_DOUBLE_TAP, 1));
+  assert(!hid_lifts_held_contact(HID_TAP, 0));
+  assert(!hid_lifts_held_contact(HID_DOWN, 1));
+  assert(!hid_lifts_held_contact(HID_MOVE, 1));
+  assert(!hid_lifts_held_contact(HID_UP, 1));
+  /* Which commands leave a contact down. */
+  assert(hid_contact_after(HID_DOWN, 0) == 1);
+  assert(hid_contact_after(HID_MOVE, 1) == 1);
+  assert(hid_contact_after(HID_UP, 1) == 0);
+  assert(hid_contact_after(HID_CANCEL, 1) == 0);
+  assert(hid_contact_after(HID_TAP, 1) == 0);
+  assert(hid_contact_after(HID_DOUBLE_TAP, 1) == 0);
+  assert(hid_contact_after(HID_INVALID, 1) == 1);  /* nothing sent: unchanged */
+  assert(hid_contact_after(HID_INVALID, 0) == 0);
+
   e = hid_parse_line("t 100 200");     /* bare 't' is not a command */
   assert(e.cmd == HID_INVALID);
 

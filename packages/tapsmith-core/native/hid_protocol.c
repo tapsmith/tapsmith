@@ -15,6 +15,26 @@ double hid_normalize(double point, double extentPt) {
   return clamp01(point / extentPt);
 }
 
+int hid_contact_after(HidCmd cmd, int contactDown) {
+  switch (cmd) {
+    case HID_DOWN:
+    case HID_MOVE:
+      return 1;
+    case HID_UP:
+    case HID_CANCEL:
+    case HID_TAP:
+    case HID_DOUBLE_TAP:
+      return 0;
+    case HID_INVALID:
+    default:
+      return contactDown;
+  }
+}
+
+int hid_lifts_held_contact(HidCmd cmd, int contactDown) {
+  return contactDown && (cmd == HID_TAP || cmd == HID_DOUBLE_TAP);
+}
+
 HidEvent hid_parse_line(const char *line) {
   HidEvent e = { .cmd = HID_INVALID, .x = 0.0, .y = 0.0, .holdMs = HID_DEFAULT_HOLD };
   if (!line) return e;

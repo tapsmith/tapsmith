@@ -55,6 +55,16 @@ typedef struct {
  * (unknown command, missing coordinate, or NULL). */
 HidEvent hid_parse_line(const char *line);
 
+/* Whether the simulator has a contact down after `cmd` was sent, given
+ * whether it had one before (`contactDown`). A d or m (sent as a down)
+ * leaves one; u, c, t1 and t2 end with none; an invalid line sends nothing. */
+int hid_contact_after(HidCmd cmd, int contactDown);
+
+/* Whether `cmd` must first lift a contact left down (a mirror gesture whose
+ * u never came): a t1 or t2 down would otherwise only move that finger, and
+ * the app would see no tap. */
+int hid_lifts_held_contact(HidCmd cmd, int contactDown);
+
 /* Convert a logical-point coordinate to a normalized 0..1 ratio, clamped to
  * [0,1]. Returns 0.0 when extentPt <= 0 (divide-by-zero guard). */
 double hid_normalize(double point, double extentPt);

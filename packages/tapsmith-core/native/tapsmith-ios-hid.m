@@ -224,6 +224,8 @@ int main(int argc, char **argv) {
 
     // Process stdin events. Track the last point so a bare `c` can lift there.
     double lastX = 0, lastY = 0;
+    // Whether a d/m left a finger down that no u/c has lifted yet.
+    int contactDown = 0;
     // Pace injections to at least ~a frame apart. iOS never engages the pan
     // recognizer for a gesture whose entire path lands within a single frame:
     // a synthetic stream written back-to-back (e.g. a test replaying a drag
@@ -248,6 +250,13 @@ int main(int argc, char **argv) {
         }
       }
       BOOL ok = NO;
+      // A whole tap after a gesture whose lift never came (a UI-mode mirror
+      // flick cut short): lift that finger first, or the tap's down would only
+      // move it and the app would see no tap.
+      if (hid_lifts_held_contact(ev.cmd, contactDown)) {
+        sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
+        contactDown = 0;
+      }
       switch (ev.cmd) {
         case HID_DOWN:
         case HID_MOVE:  // moves keep contact: same DirDown direction as the spike
@@ -305,6 +314,7 @@ int main(int argc, char **argv) {
           continue;
       }
       lastInjectUs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
+      contactDown = hid_contact_after(ev.cmd, contactDown);
       printf(ok ? "ok\n" : "err send failed\n");
       fflush(stdout);
     }
