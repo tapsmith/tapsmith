@@ -9,7 +9,7 @@
  * device's real resolution, a hierarchy snapshot that actually contains the
  * element its action targeted, or the app's genuine HTTPS traffic. Those are
  * the failures a mock cannot reproduce, and they were invisible to the device
- * E2E suite, which records `retain-on-failure` traces nobody ever opens.
+ * E2E suite, which traces only retried attempts (`on-all-retries`).
  *
  * This drives one existing E2E test with tracing forced on, then reads the
  * archive it produced and checks it. Everything it asserts is derived from the

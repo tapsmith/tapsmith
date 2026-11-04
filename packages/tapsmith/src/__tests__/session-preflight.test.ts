@@ -1834,6 +1834,78 @@ describe('session-preflight', () => {
       expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(polled + 1);
     });
 
+    describe('stopping early on an app that has rendered without the marker', () => {
+      const HOME = '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>';
+      const SPLASH = '<hierarchy><node package="com.example.app" text="" /><node package="com.android.systemui" text="12:00" /></hierarchy>';
+      const MARKER_XML = '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=exp://x/" /></hierarchy>';
+      const read = (xml: string) => ({ requestId: '1', hierarchyXml: xml, errorMessage: '' });
+      let tmp: string;
+      beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-probe-')); });
+      afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+      /** A project whose package.json lists `deps`. */
+      function project(deps: Record<string, string>): string {
+        fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ dependencies: deps }));
+        return tmp;
+      }
+      function probeContext(rootDir: string | undefined, platform: 'android' | 'ios' = 'android') {
+        return makeContext({ config: { package: 'com.example.app', activity: '.MainActivity', platform, rootDir } });
+      }
+
+      it('stops after two reads of rendered UI without the marker, for a project without the hooks', async () => {
+        // Every app without @tapsmith/react-native paid the whole budget at
+        // each session start.
+        const ctx = probeContext(project({ expo: '~58.0.0' }));
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(read(HOME));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(2);
+      });
+
+      it('keeps the whole budget for a project that depends on the hooks, or one it cannot look up', async () => {
+        // A hooked app can render a screen before the root that mounts the marker.
+        for (const rootDir of [project({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }), undefined]) {
+          const ctx = probeContext(rootDir);
+          vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(read(HOME));
+          await probeResetCapabilities(ctx, { pollMs: 700 });
+          expect(vi.mocked(ctx.client.getUiHierarchy).mock.calls.length).toBeGreaterThan(2);
+        }
+      });
+
+      it('counts only consecutive reads of the app\'s own rendered UI', async () => {
+        const ctx = probeContext(project({}));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(read(SPLASH))
+          .mockResolvedValueOnce(read(HOME))
+          .mockRejectedValueOnce(new Error('agent busy'))
+          .mockResolvedValueOnce(read(HOME))
+          .mockResolvedValueOnce(read(SPLASH))
+          .mockResolvedValue(read(HOME));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(7);
+      });
+
+      it('still finds a marker that mounts after the first rendered read', async () => {
+        const ctx = probeContext(project({}));
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce(read(HOME)).mockResolvedValue(read(MARKER_XML));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true });
+      });
+
+      it('on iOS, counts an element of the app with a label or identifier, not the application node or keyboard', async () => {
+        const app = (inner: string) => `<hierarchy><XCUIElementTypeApplication label="Example" identifier="" type="XCUIElementTypeApplication">${inner}</XCUIElementTypeApplication></hierarchy>`;
+        const ctx = probeContext(project({}), 'ios');
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(read(app('<XCUIElementTypeWindow label="" identifier="" type="XCUIElementTypeWindow" />')))
+          .mockResolvedValueOnce(read(app('<XCUIElementTypeKeyboard label="" identifier="" type="XCUIElementTypeKeyboard" tapsmith-non-app="true"><XCUIElementTypeKey label="q" identifier="q" type="XCUIElementTypeKey" /></XCUIElementTypeKeyboard>')))
+          .mockResolvedValue(read(app('<XCUIElementTypeStaticText label="Welcome" identifier="" type="XCUIElementTypeStaticText" />')));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(4);
+      });
+    });
+
     it('a probe failure leaves the capabilities as they were', async () => {
       const ctx = makeContext();
       ctx.capabilities = { hooksDetected: true };

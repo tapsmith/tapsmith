@@ -710,8 +710,8 @@ jobs:
       # Record one trace against the live simulator and assert what is inside
       # it: decodable screenshots at the device's real resolution, hierarchy
       # dumps that contain the element each action resolved, and the app's real
-      # HTTPS traffic. The sharded run above records `retain-on-failure`
-      # traces nobody opens, so nothing else here would notice a trace that
+      # HTTPS traffic. The sharded run above traces only retries
+      # (`on-all-retries`), so nothing else here would notice a trace that
       # packages successfully but holds the wrong data. One shard is enough —
       # this verifies the recording path, not the tests.
       - name: Verify trace archive contents
