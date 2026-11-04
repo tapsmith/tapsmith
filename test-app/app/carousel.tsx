@@ -30,9 +30,6 @@ import {
  */
 const PAGES = ["Summer sale", "New arrivals", "Free delivery"]
 const TURN_AFTER_MS = 50
-// The double-tap target turns sooner: a double tap's presses used to be held
-// 40 ms each, which a 50 ms turn would not catch.
-const DOUBLE_TAP_TURN_AFTER_MS = 15
 const SIZES = ["Small", "Medium", "Large"]
 // Measured between JS onPress callbacks, as on the gestures screen.
 const DOUBLE_TAP_WINDOW_MS = 800
@@ -63,13 +60,13 @@ export default function CarouselScreen() {
 
   const likeTouches = useRef(0)
 
-  const turnPageSoon = (afterMs = TURN_AFTER_MS) => {
+  const turnPageSoon = () => {
     setTimeout(() => {
       page.current = (page.current + 1) % PAGES.length
       // No animation: the jump's scroll event is what cancels a held
       // touch, and no turn is still running when the next touch lands.
       carousel.current?.scrollTo({ x: page.current * pageWidth, animated: false })
-    }, afterMs)
+    }, TURN_AFTER_MS)
   }
 
   const likeTapped = () => {
@@ -121,7 +118,7 @@ export default function CarouselScreen() {
       <Turns
         onTouch={() => {
           likeTouches.current += 1
-          if (likeTouches.current % 2 === 0) turnPageSoon(DOUBLE_TAP_TURN_AFTER_MS)
+          if (likeTouches.current % 2 === 0) turnPageSoon()
         }}
       >
         <TouchableOpacity

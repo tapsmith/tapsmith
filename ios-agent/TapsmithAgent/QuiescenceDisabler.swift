@@ -425,10 +425,9 @@ enum EventSynthesizer {
             let raw = unsafeBitCast(allocImp, to: AllocFn.self)(pathClass, allocSel)
             guard let path = unsafeBitCast(initImp, to: InitMethod.self)(raw, initSel, point, offset)?.takeRetainedValue()
             else { return nil }
-            // Stationary move mid-tap, mirroring synthesizeTap: a touch with
-            // no move event is intermittently misclassified/dropped by the
-            // gesture pipeline (observed as the app registering only one of
-            // the two taps).
+            // Stationary move mid-tap, as a double tap's sequential taps make
+            // (`synthesizeTap(stationaryMove:)`): kept from when a double tap
+            // was seen registering only one of its taps. A single tap has none.
             if path.responds(to: moveSel) {
                 let moveFunc = unsafeBitCast(path.method(for: moveSel), to: MoveMethod.self)
                 moveFunc(path, moveSel, point, offset + tapDuration * 0.5)
