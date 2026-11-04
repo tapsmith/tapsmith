@@ -102,7 +102,11 @@ class ActionExecutor(
      * passes [resolvedBounds] from a resolve that just completed (WaitEngine
      * has already settle-checked them), the stability wait is skipped —
      * repeating the check would only stack more blocking accessibility
-     * round-trips (PILOT-278).
+     * round-trips (PILOT-278). An element addressed by id passes
+     * [findSample], the bounds the find that resolved it read: one read at
+     * least two frames after it that shows the same bounds is enough
+     * ([FindSampleStability]); bounds that moved fall back to the polling
+     * check.
      *
      * A tap lands on whatever is on top, so [OcclusionGuard] picks the point:
      * the visible part of an element the keyboard half covers, and never an
@@ -123,14 +127,23 @@ class ActionExecutor(
         budget: ActionBudget,
         expected: TargetIdentity?,
         followUpMs: Long = 0,
+        findSample: FindSample<Rect>? = null,
     ) {
         try {
             // Bounds from before the keyboard went away are stale: the screen
             // lays itself out again without it.
             val keyboardPutAway = occlusionGuard.putKeyboardAwayFirst(element, budget)
             val trusted = resolvedBounds?.takeIf { !it.isEmpty && !keyboardPutAway }
+            val sample = findSample?.takeIf { trusted == null && !keyboardPutAway }
             val stableStart = SystemClock.uptimeMillis()
-            val bounds = trusted ?: waitForStableBounds(element)
+            val check = sample?.let { checkFindSample(element, it) }
+            val bounds =
+                trusted ?: when (check) {
+                    is SampleCheck.Stable -> check.bounds
+                    // The read that showed the move is the polling check's first.
+                    is SampleCheck.Moved -> waitForStableBounds(element, first = check.current)
+                    null -> waitForStableBounds(element)
+                }
             val stableMs = SystemClock.uptimeMillis() - stableStart
             val planStart = SystemClock.uptimeMillis()
             val point = planTouchPoint(element, bounds, budget, expected, followUpMs)
@@ -139,7 +152,8 @@ class ActionExecutor(
             clickAt(point, "tap element")
             Log.d(
                 TAG,
-                "tap phases: stableBounds=${stableMs}ms (resolvedBoundsReused=${trusted != null}) " +
+                "tap phases: stableBounds=${stableMs}ms (resolvedBoundsReused=${trusted != null}, " +
+                    "findSample=${check?.javaClass?.simpleName ?: "none"}) " +
                     "occlusion=${planMs}ms inject=${SystemClock.uptimeMillis() - injectStart}ms",
             )
         } catch (e: StaleObjectException) {
@@ -170,9 +184,10 @@ class ActionExecutor(
     private fun waitForStableBounds(
         element: UiObject2,
         timeoutMs: Long = STABLE_BOUNDS_TIMEOUT_MS,
+        first: Rect? = null,
     ): Rect {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
-        var prev = element.visibleBounds
+        var prev = first ?: element.visibleBounds
         while (SystemClock.uptimeMillis() < deadline) {
             CommandCancellation.sleep(STABLE_BOUNDS_POLL_MS)
             val readStart = SystemClock.uptimeMillis()
@@ -193,6 +208,22 @@ class ActionExecutor(
         // rather than failing.
         return prev
     }
+
+    /**
+     * One read of [element]'s bounds, at least two frames after the find that
+     * read [sample], compared with it ([FindSampleStability]).
+     */
+    private fun checkFindSample(
+        element: UiObject2,
+        sample: FindSample<Rect>,
+    ): SampleCheck<Rect> =
+        FindSampleStability.check(
+            sample,
+            isEmpty = { it.isEmpty },
+            now = SystemClock::uptimeMillis,
+            sleep = CommandCancellation::sleep,
+            read = { element.visibleBounds },
+        )
 
     /**
      * Tap at specific screen coordinates.

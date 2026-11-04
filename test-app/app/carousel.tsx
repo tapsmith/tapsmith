@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
+  Animated,
+  Easing,
   ScrollView,
   StyleSheet,
   Switch,
@@ -27,12 +29,20 @@ import {
  * touch only, so each tap's own hold is what is tested: a tap that lands while
  * the carousel is still turning is a different case, lost on iOS at any hold
  * but none.
+ *
+ * Below them, a button that slides across its track when "Slide the button
+ * in" is pressed, so a tap that comes straight after finds it mid-slide: the
+ * tap has to wait for it to stop, not land where the find saw it.
  */
 const PAGES = ["Summer sale", "New arrivals", "Free delivery"]
 const TURN_AFTER_MS = 50
 const SIZES = ["Small", "Medium", "Large"]
 // Measured between JS onPress callbacks, as on the gestures screen.
 const DOUBLE_TAP_WINDOW_MS = 800
+// Fast enough that the button moves further than half its width between a
+// find and a tap made from it, slow enough that the find sees it moving.
+const SLIDE_MS = 400
+const SLIDER_WIDTH_SHARE = 0.3
 
 /** A touch anywhere inside calls `onTouch` as it lands. */
 function Turns({ onTouch, children }: { onTouch: () => void; children: ReactNode }) {
@@ -50,6 +60,20 @@ export default function CarouselScreen() {
   const pendingTap = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { width } = useWindowDimensions()
   const pageWidth = width - 32
+  const [caught, setCaught] = useState(0)
+  const slide = useRef(new Animated.Value(0)).current
+  const slideTravel = pageWidth * (1 - SLIDER_WIDTH_SHARE)
+
+  const slideIn = () => {
+    // From the far end of the track to the near one, at an even speed.
+    slide.setValue(slideTravel)
+    Animated.timing(slide, {
+      toValue: 0,
+      duration: SLIDE_MS,
+      easing: Easing.linear,
+      useNativeDriver: true,
+    }).start()
+  }
 
   useEffect(
     () => () => {
@@ -181,6 +205,34 @@ export default function CarouselScreen() {
       <Text style={styles.status} testID="carousel-size-chosen">
         Size: {size}
       </Text>
+
+      <TouchableOpacity
+        style={styles.button}
+        onPress={slideIn}
+        accessibilityRole="button"
+        accessibilityLabel="Slide the button in"
+        testID="carousel-slide"
+      >
+        <Text style={styles.buttonText}>Slide the button in</Text>
+      </TouchableOpacity>
+      <View style={styles.track}>
+        <Animated.View
+          style={{ width: pageWidth * SLIDER_WIDTH_SHARE, transform: [{ translateX: slide }] }}
+        >
+          <TouchableOpacity
+            style={[styles.button, styles.slider]}
+            onPress={() => setCaught((n) => n + 1)}
+            accessibilityRole="button"
+            accessibilityLabel="Catch me"
+            testID="carousel-catch"
+          >
+            <Text style={styles.buttonText}>Catch me</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
+      <Text style={styles.status} testID="carousel-caught">
+        Caught: {caught}
+      </Text>
     </ScrollView>
   )
 }
@@ -226,6 +278,12 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     color: "#333",
+  },
+  track: {
+    marginTop: 8,
+  },
+  slider: {
+    marginTop: 0,
   },
   option: {
     backgroundColor: "#fff",

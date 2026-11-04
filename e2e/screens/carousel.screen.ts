@@ -11,4 +11,7 @@ export class CarouselScreen {
   get giftWrapState() { return this.device.getByTestId("carousel-gift-wrap-state") }
   get sizeButton() { return this.device.getByRole("button", { name: "Choose a size" }) }
   get sizeChosen() { return this.device.getByTestId("carousel-size-chosen") }
+  get slideButton() { return this.device.getByRole("button", { name: "Slide the button in" }) }
+  get slidingButton() { return this.device.getByRole("button", { name: "Catch me" }) }
+  get caught() { return this.device.getByTestId("carousel-caught") }
 }
