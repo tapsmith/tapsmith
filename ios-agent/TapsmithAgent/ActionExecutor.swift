@@ -92,8 +92,9 @@ class ActionExecutor {
     /// samples come from the same kind of capture, so two of them never
     /// differ only in how they were taken — except once, when a region
     /// screenshot fails partway through and the rest of the wait falls back
-    /// to the whole screen (that one difference reads as a change, which
-    /// costs a sample, never a touch on a moving target).
+    /// to the whole screen. That one difference reads as a change: it costs
+    /// a sample and a fresh touch plan (`sawChange`), never a touch on a
+    /// moving target.
     private struct RegionSampler {
         let region: CGRect
         var useRegionScreenshot: Bool
