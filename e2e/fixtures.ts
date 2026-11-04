@@ -2,6 +2,7 @@ import { test as base } from "tapsmith"
 import { AccessibilityScreen } from "./screens/accessibility.screen.js"
 import { AnimatingScreen } from "./screens/animating.screen.js"
 import { ApiCallsScreen } from "./screens/api-calls.screen.js"
+import { CarouselScreen } from "./screens/carousel.screen.js"
 import { DialogsScreen } from "./screens/dialogs.screen.js"
 import { GesturesScreen } from "./screens/gestures.screen.js"
 import { HomeScreen } from "./screens/home.screen.js"
@@ -21,6 +22,7 @@ type ScreenFixtures = {
   accessibilityScreen: AccessibilityScreen
   animatingScreen: AnimatingScreen
   apiCallsScreen: ApiCallsScreen
+  carouselScreen: CarouselScreen
   dialogsScreen: DialogsScreen
   gesturesScreen: GesturesScreen
   homeScreen: HomeScreen
@@ -46,6 +48,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   apiCallsScreen: async ({ device }, use) => {
     await use(new ApiCallsScreen(device))
+  },
+  carouselScreen: async ({ device }, use) => {
+    await use(new CarouselScreen(device))
   },
   dialogsScreen: async ({ device }, use) => {
     await use(new DialogsScreen(device))

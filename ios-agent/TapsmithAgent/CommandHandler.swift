@@ -732,11 +732,14 @@ class CommandHandler {
 
     /// How an element-addressed touch should be delivered.
     private enum TouchPlan {
-        /// XCUITest's hit test passed — tap through the element itself.
+        /// No UI tree could be read to plan a point, but XCUITest's hit test
+        /// passed: tap through the element itself.
         case hittableElement(XCUIElement)
         /// Touch at this screen point; nothing in the snapshot covers it.
-        /// `visible` is the uncovered part of the element around it.
-        case point(CGPoint, visible: CGRect)
+        /// `visible` is the uncovered part of the element around it. A tap
+        /// there holds its touch `hold` seconds (`TapTiming`, by the element's
+        /// type).
+        case point(CGPoint, visible: CGRect, hold: TimeInterval)
         /// No part of the element is on screen.
         case offScreen
     }
@@ -747,19 +750,17 @@ class CommandHandler {
     /// cover, when it is still there at the deadline — never plans a touch
     /// that would land on the cover.
     ///
-    /// `preferElementTap` short-circuits to `.hittableElement` when XCUITest
-    /// calls the element hittable, skipping the snapshot: `XCUIElement.tap()`
-    /// picks its own hit point, which already avoids the keyboard (it taps
-    /// the visible part of a half-covered element). Coordinate gestures
-    /// (double tap, long press, HID input) need an explicit point and always
-    /// take the snapshot.
+    /// Every touch is planned at a point, taps included: a tap through
+    /// `XCUIElement.tap()` holds its touch as long as XCTest chooses, which
+    /// React Native cancels when a scroll view beside the target moves under
+    /// it (`TapTiming`). `.hittableElement` is only the plan when no UI tree
+    /// can be read.
     ///
-    /// **Cost** per pass: `isHittable` (one hit-test IPC); when not
-    /// short-circuited, one `snapshot()` of the element plus one of the app.
+    /// **Cost** per pass: `isHittable` (one hit-test IPC), one `snapshot()`
+    /// of the element plus one of the app.
     private func planTouch(
         _ element: ElementInfo,
         timeoutMs: Int64,
-        preferElementTap: Bool,
         reserveMs: Int64 = 0
     ) throws -> TouchPlan {
         var clock = TouchPlanClock(
@@ -771,24 +772,21 @@ class CommandHandler {
         while true {
             let xcElem = try? getXCUIElement(element.elementId)
             let hittable = xcElem?.isHittable ?? false
-            if preferElementTap, hittable, let xcElem {
-                try refuseIfLate(clock)
-                return .hittableElement(xcElem)
-            }
-            let verdict = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable)
+            let read = occlusionVerdict(for: element, xcElem: xcElem, isHittable: hittable)
             // Checked after the pass: a slow pass that ends past the deadline
             // fails now instead of paying for another one.
             try refuseIfLate(clock)
             var sleep = clock.sleepBeforeNextPass(at: Date())
-            switch verdict {
+            let hold = read?.hold ?? TapTiming.frameSpanningHold
+            switch read?.verdict {
             case .clear(let point, let visible)?:
-                return .point(point, visible: visible)
+                return .point(point, visible: visible, hold: hold)
             case .unlocated(let point, let visible)?:
                 // Moved between the two reads (animating): read again for a
                 // moment — whatever the budget — and fall back to the old
                 // coordinate tap only if it does not settle.
                 if clock.shouldFallBackWhenUnlocated(at: Date()) {
-                    return .point(point, visible: visible)
+                    return .point(point, visible: visible, hold: hold)
                 }
                 sleep = TouchPlanClock.pollSeconds
             case .offScreen?:
@@ -835,16 +833,15 @@ class CommandHandler {
     private func planSettledTouch(
         _ element: ElementInfo,
         timeoutMs: Int64,
-        preferElementTap: Bool,
         reserveMs: Int64 = 0
     ) throws -> TouchPlan {
         let started = Date()
-        let plan = try planTouch(element, timeoutMs: timeoutMs, preferElementTap: preferElementTap, reserveMs: reserveMs)
+        let plan = try planTouch(element, timeoutMs: timeoutMs, reserveMs: reserveMs)
         let outcome = settleBeforeTouch(plan, reserveMs: reserveMs)
         guard case .point = plan, outcome.sawChange else { return plan }
         let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
         NSLog("[TapsmithCommand] \(element.elementId) changed while settling; planning the touch again")
-        return try planTouch(element, timeoutMs: remaining, preferElementTap: preferElementTap, reserveMs: reserveMs)
+        return try planTouch(element, timeoutMs: remaining, reserveMs: reserveMs)
     }
 
     /// Wait for the planned touch's target to stop changing on screen
@@ -861,7 +858,7 @@ class CommandHandler {
         switch plan {
         case .hittableElement(let xcElem):
             return actionExecutor.waitUntilSettled(xcElem, deadline: deadline)
-        case .point(_, let visible):
+        case .point(_, let visible, _):
             return actionExecutor.waitUntilSettled(region: visible, deadline: deadline)
         case .offScreen:
             return .unreadable
@@ -875,18 +872,21 @@ class CommandHandler {
         )
     }
 
-    /// nil when no tree could be read.
+    /// What the UI tree says about touching the element, and how long a tap
+    /// on it holds its touch (`TapTiming`, by its type and what it sits in:
+    /// an alert, a segmented control…). nil when no tree could be read.
     private func occlusionVerdict(
         for element: ElementInfo,
         xcElem: XCUIElement?,
         isHittable: Bool
-    ) -> OcclusionAnalyzer.Verdict? {
+    ) -> (verdict: OcclusionAnalyzer.Verdict, hold: TimeInterval)? {
         let target = occlusionTarget(for: element, xcElem: xcElem)
         let screenSize = snapshotFinder.screenSize
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
-        return OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
-            .analyze(target, isHittable: isHittable)
+        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
+        let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
+        return (analyzer.analyze(target, isHittable: isHittable), hold)
     }
 
     /// The element as the occlusion analyzer identifies it: read live, or from
@@ -927,8 +927,8 @@ class CommandHandler {
         while true {
             let remaining = max(0, timeoutMs - Int64(Date().timeIntervalSince(started) * 1000))
             let visible: CGRect
-            switch try planSettledTouch(element, timeoutMs: remaining, preferElementTap: false, reserveMs: reserveMs) {
-            case .point(_, let area):
+            switch try planSettledTouch(element, timeoutMs: remaining, reserveMs: reserveMs) {
+            case .point(_, let area, _):
                 visible = area
             case .hittableElement:
                 throw AgentError.actionFailed(
@@ -966,12 +966,29 @@ class CommandHandler {
         return message
     }
 
-    /// Tap a resolved element. Prefer XCUIElement.tap() — synthesized
-    /// coordinate events are unreliable with UIKit/RN gesture recognizers
-    /// regardless of element type. A coordinate tap is only the fallback for
-    /// elements XCUITest calls unhittable, and only at a point the snapshot
-    /// shows uncovered (PILOT-223: the unguarded fallback tapped covers).
-    private func tapResolvedElement(_ element: ElementInfo, timeoutMs: Int64) throws {
+    /// Tap a resolved element: a synthesized tap at a point the snapshot
+    /// shows uncovered (PILOT-223: an unguarded coordinate tap tapped
+    /// covers), held as long as the element's type needs (`TapTiming`).
+    /// Not `XCUIElement.tap()`, whose hold XCTest picks: React Native cancels
+    /// a held press when a scroll view beside it moves (a carousel paging
+    /// itself), and XCTest's taps lost 1 in 40 there. It is only the fallback
+    /// when no UI tree can be read to plan a point.
+    ///
+    /// `beforeTouch` runs once the touch is planned and settled, just before
+    /// it is made (when the screen is as the touch will find it).
+    /// `scrollsIntoView`: an element that is off screen is tapped through
+    /// `XCUIElement.tap()`, which scrolls it into view first, rather than
+    /// refused (selectOption's trigger, which `XCUIElement.tap()` opened
+    /// before taps were planned). Returns how far that scroll moved the
+    /// element (zero when it did not scroll), so what `beforeTouch` read can
+    /// be moved with it.
+    @discardableResult
+    private func tapResolvedElement(
+        _ element: ElementInfo,
+        timeoutMs: Int64,
+        scrollsIntoView: Bool = false,
+        beforeTouch: (() -> Void)? = nil
+    ) throws -> CGVector {
         // Surface a stale id up front (the SDK's re-resolve retry keys on the
         // "gone stale" message) — but only once nothing else can tap: the
         // bounds-cache recovery path in resolveElement hands us ids with no
@@ -982,13 +999,21 @@ class CommandHandler {
         // A SwiftUI Toggle only flips from its knob: touch that (PILOT-790).
         let element = switchKnob(of: element) ?? element
         putKeyboardAwayIfItWouldEatTheTouch(element)
-        switch try planSettledTouch(element, timeoutMs: timeoutMs, preferElementTap: true) {
+        switch try planSettledTouch(element, timeoutMs: timeoutMs) {
         case .hittableElement(let xcElem):
+            beforeTouch?()
             xcElem.tap()
-        case .point(let point, _):
-            NSLog("[TapsmithCommand] \(element.elementId) is not hittable; tapping the uncovered point \(point)")
-            actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
+        case .point(let point, _, let hold):
+            beforeTouch?()
+            actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
         case .offScreen:
+            if scrollsIntoView, staleError == nil, let xcElem = try? getXCUIElement(element.elementId), xcElem.exists {
+                let before = xcElem.frame
+                beforeTouch?()
+                xcElem.tap()
+                guard let after = try? xcElem.snapshot().frame else { return .zero }
+                return CGVector(dx: after.minX - before.minX, dy: after.minY - before.minY)
+            }
             // An id with the bounds it was found at but no live element is
             // one found that way by design (a row's accessory indicator,
             // PILOT-895, or a getByLabel match): off screen, not stale.
@@ -996,6 +1021,7 @@ class CommandHandler {
             throw (foundWithoutLiveElement ? nil : staleError)
                 ?? AgentError.actionFailed("Element is not hittable (may be off-screen or hidden)")
         }
+        return .zero
     }
 
     /// The knob of a SwiftUI Toggle, as an element of its own, when `element`
@@ -1067,12 +1093,13 @@ class CommandHandler {
         // it gone. Ids that never had a query (placeholder, className, …)
         // still take the coordinate path.
         putKeyboardAwayIfItWouldEatTheTouch(element)
-        switch try planSettledTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
-        case .point(let point, _):
+        switch try planSettledTouch(element, timeoutMs: timeoutMs) {
+        case .point(let point, _, let hold):
             actionExecutor.doubleTapCoordinates(
                 x: Int(point.x.rounded()),
                 y: Int(point.y.rounded()),
-                intervalMs: intervalMs
+                intervalMs: intervalMs,
+                hold: hold
             )
         case .hittableElement, .offScreen:
             try actionExecutor.doubleTap(try getXCUIElement(element.elementId))
@@ -1120,8 +1147,8 @@ class CommandHandler {
     }
 
     private func focusTarget(_ element: ElementInfo, timeoutMs: Int64) throws -> FocusTarget {
-        switch try planTouch(element, timeoutMs: timeoutMs, preferElementTap: false) {
-        case .point(_, let visible):
+        switch try planTouch(element, timeoutMs: timeoutMs) {
+        case .point(_, let visible, _):
             return .area(visible)
         case .hittableElement, .offScreen:
             return .element
@@ -1137,7 +1164,7 @@ class CommandHandler {
     private func refocusForTyping(_ element: ElementInfo, settleTime: TimeInterval) throws {
         let plan: TouchPlan
         do {
-            plan = try planTouch(element, timeoutMs: 0, preferElementTap: false)
+            plan = try planTouch(element, timeoutMs: 0)
         } catch {
             // Still the focused input (typically behind the keyboard it
             // raised): input reaches it without a tap.
@@ -1145,7 +1172,7 @@ class CommandHandler {
             throw error
         }
         switch plan {
-        case .point(_, let visible):
+        case .point(_, let visible, _):
             try focusElementForTyping(element, settleTime: settleTime, within: visible)
         case .hittableElement:
             try focusElementForTyping(element, settleTime: settleTime, within: nil)
@@ -1192,9 +1219,9 @@ class CommandHandler {
                                   maxWait: focusWait, settleTime: settleTime) { return }
             // Planned again, one check and no waiting: the first tap can have
             // moved the field or raised a keyboard over its old spot.
-            let plan = try? planTouch(element, timeoutMs: 0, preferElementTap: false)
+            let plan = try? planTouch(element, timeoutMs: 0)
             var fallbacks: [CGPoint] = []
-            if case .point(_, let visible)? = plan {
+            if case .point(_, let visible, _)? = plan {
                 fallbacks = TypingFocus.fallbackPoints(in: visible, after: first)
             }
             for point in fallbacks + [nil] {
@@ -1228,8 +1255,15 @@ class CommandHandler {
     }
 
     private func tapToFocus(_ element: ElementInfo, at point: CGPoint) {
-        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()))
+        actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: tapHold(on: element))
         snapshotFinder.recordFocusedTextInputHint(element)
+    }
+
+    /// The hold for a tap on `element` planned without a UI tree read (a
+    /// focusing tap): by the type it was found with, unknown when that was not
+    /// kept.
+    private func tapHold(on element: ElementInfo) -> TimeInterval {
+        TapTiming.hold(for: snapshotFinder.getIdentity(element.elementId)?.elementType)
     }
 
     private static func describe(_ point: CGPoint) -> String {
@@ -1471,7 +1505,8 @@ class CommandHandler {
             let x = (params["x"] as? NSNumber)?.intValue ?? -1
             let y = (params["y"] as? NSNumber)?.intValue ?? -1
             if x >= 0 && y >= 0 {
-                actionExecutor.tapCoordinates(x: x, y: y)
+                // What is at the point is unknown: held as for a control.
+                actionExecutor.tapCoordinates(x: x, y: y, hold: TapTiming.hold(for: nil))
                 snapshotFinder.recordFocusedTextInputHint(at: CGPoint(x: CGFloat(x), y: CGFloat(y)))
                 // It may have landed on a text field.
                 keyboardFirstGate.arm()
@@ -1509,8 +1544,8 @@ class CommandHandler {
                 putKeyboardAwayIfItWouldEatTheTouch(element)
                 // The press itself must still fit the daemon's read timeout.
                 let coverBudget = max(0, actionTimeoutMs(params) - duration)
-                switch try planSettledTouch(element, timeoutMs: coverBudget, preferElementTap: false, reserveMs: duration) {
-                case .point(let point, _):
+                switch try planSettledTouch(element, timeoutMs: coverBudget, reserveMs: duration) {
+                case .point(let point, _, _):
                     actionExecutor.longPressCoordinates(
                         x: Int(point.x.rounded()),
                         y: Int(point.y.rounded()),
@@ -1546,9 +1581,11 @@ class CommandHandler {
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
             // The daemon touches the point as soon as it has it, so the target
             // must have stopped changing first (PILOT-791).
-            switch try planSettledTouch(element, timeoutMs: remaining, preferElementTap: false) {
-            case .point(let point, _):
-                return ["x": Double(point.x), "y": Double(point.y)]
+            switch try planSettledTouch(element, timeoutMs: remaining) {
+            case .point(let point, _, let hold):
+                // holdMs: how long each tap of the daemon's HID double tap
+                // holds its touch (`TapTiming`, by the element's type).
+                return ["x": Double(point.x), "y": Double(point.y), "holdMs": Int((hold * 1000).rounded())]
             case .hittableElement, .offScreen:
                 // No point to hand out (off screen, or hittable with no tree
                 // to choose one from): the daemon should use the agent's own
@@ -1681,7 +1718,9 @@ class CommandHandler {
             if target == nil {
                 // Already first responder behind a cover: clear it as is.
             } else if case .area(let area)? = target {
-                actionExecutor.tapCoordinates(x: Int(area.midX.rounded()), y: Int(area.midY.rounded()))
+                actionExecutor.tapCoordinates(
+                    x: Int(area.midX.rounded()), y: Int(area.midY.rounded()), hold: tapHold(on: element)
+                )
                 Thread.sleep(forTimeInterval: 0.1)
             } else if let xcElem = try? getXCUIElement(element.elementId), xcElem.isHittable {
                 xcElem.tap()
@@ -1975,15 +2014,30 @@ class CommandHandler {
         // ─── Select Option ───
 
         case "selectOption":
-            let element = try resolveElement(params)
-            let xcElem = try getXCUIElement(element.elementId)
-            if let optionText = params["option"] as? String {
-                try actionExecutor.selectOption(xcElem, optionText: optionText)
-            } else if let index = params["index"] as? Int, index >= 0 {
-                try actionExecutor.selectOptionByIndex(xcElem, index: index)
-            } else {
+            let optionText = params["option"] as? String
+            let index = (params["index"] as? Int).flatMap { $0 >= 0 ? $0 : nil }
+            guard optionText != nil || index != nil else {
                 throw AgentError.invalidSelector("selectOption requires either 'option' (string) or 'index' (int)")
             }
+            let element = try resolveElement(params)
+            // What already carries the option's text (the trigger, the screen
+            // behind, on screen or below the fold) is not the option. Read
+            // just before the opening touch: putting the keyboard away or
+            // settling can move it first.
+            var shownBefore: [CGRect] = []
+            // Opened with the same planned, held tap as tap(). A trigger off
+            // screen is scrolled in by the opening tap, which moves what was
+            // read before it by as much as it moved the trigger.
+            let scrolled = try tapResolvedElement(element, timeoutMs: actionTimeoutMs(params), scrollsIntoView: true) {
+                if let optionText { shownBefore = self.actionExecutor.textFrames(optionText) }
+            }
+            shownBefore = shownBefore.map { $0.offsetBy(dx: scrolled.dx, dy: scrolled.dy) }
+            if let optionText {
+                try actionExecutor.selectOption(optionText, shownBefore: shownBefore)
+            } else if let index {
+                try actionExecutor.selectOptionByIndex(index)
+            }
+            touchBarrier()
             return ["success": true]
 
         // ─── Pinch Zoom ───
@@ -2010,7 +2064,9 @@ class CommandHandler {
             if target == nil {
                 // Verified focused behind a cover: nothing to do.
             } else if case .area(let area)? = target {
-                actionExecutor.tapCoordinates(x: Int(area.midX.rounded()), y: Int(area.midY.rounded()))
+                actionExecutor.tapCoordinates(
+                    x: Int(area.midX.rounded()), y: Int(area.midY.rounded()), hold: tapHold(on: element)
+                )
             } else {
                 let xcElem = try getXCUIElement(element.elementId)
                 try actionExecutor.focus(xcElem)
@@ -2760,7 +2816,7 @@ class CommandHandler {
             return .keyboardStayed
         case .dismissKey:
             guard let key = planner.dismissKey() else { return .notPossible("this keyboard has none") }
-            guard EventSynthesizer.tap(at: key) else { return .notPossible("the tap could not be synthesized") }
+            guard EventSynthesizer.tap(at: key, hold: TapTiming.hold(for: .key)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .blankTap:
             guard let field = snapshotFinder.liveFocusedTextInput() else {
@@ -2769,7 +2825,8 @@ class CommandHandler {
             guard let point = planner.blankPoint(focusedFrame: field.frame) else {
                 return .notPossible("no blank spot beside the field above the keyboard")
             }
-            guard EventSynthesizer.tap(at: point) else { return .notPossible("the tap could not be synthesized") }
+            // A blank spot: nothing known is there.
+            guard EventSynthesizer.tap(at: point, hold: TapTiming.hold(for: nil)) else { return .notPossible("the tap could not be synthesized") }
             return .keyboardStayed
         case .returnKey:
             switch planner.returnKey(focusedInput: snapshotFinder.liveFocusedTextInput()?.elementType) {

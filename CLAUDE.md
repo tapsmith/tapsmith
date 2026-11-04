@@ -91,10 +91,10 @@ adopted device or an untracked leftover emulator/simulator fails the job even wh
 Shard 1 of each device workflow also runs `e2e/verify-trace-archive.mjs`, which records one trace
 with `--trace on` and then asserts what is *inside* the archive — screenshots that decode at the
 device's real resolution, hierarchy dumps containing the element each action resolved, and the
-app's real HTTPS traffic. The sharded runs record `retain-on-failure` traces nobody opens, so this
-is the only place a trace that packages cleanly but holds the wrong data gets caught. The checks
-live in `e2e/utils/trace-archive-checks.mjs` and are themselves unit-tested by the `typescript`
-job's **E2E helper tests** step (`cd e2e && npm test`, no device needed);
+app's real HTTPS traffic. The sharded runs trace only retried attempts (`on-all-retries`), so
+this is the only place a trace that packages cleanly but holds the wrong data gets caught. The
+checks live in `e2e/utils/trace-archive-checks.mjs` and are themselves unit-tested by the
+`typescript` job's **E2E helper tests** step (`cd e2e && npm test`, no device needed);
 `--verify-only <trace.zip>` re-runs them against a trace downloaded from a CI artifact.
 
 The archive format is a versioned public contract (`docs/trace-format.md`): `trace/types.ts`,
