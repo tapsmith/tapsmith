@@ -296,8 +296,9 @@ pub struct TapsmithServiceImpl {
     hid_injector: Arc<crate::hid_injector::HidInjector>,
     /// The connected iOS agent answered a `forTap` resolve without planning
     /// the tap: it predates HID taps. Later taps go straight to its own tap
-    /// instead of paying for a resolve it will repeat. Cleared when an agent
-    /// is launched.
+    /// instead of paying for a resolve it will repeat. Cleared when
+    /// StartAgent launches an agent; the reset ladder's restart relaunches the
+    /// same build, so it keeps the flag.
     #[cfg(target_os = "macos")]
     agent_predates_hid_tap: Arc<std::sync::atomic::AtomicBool>,
     /// In-process broadcast of daemon `tracing` events, fanned out by the
