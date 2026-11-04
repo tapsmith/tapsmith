@@ -27,6 +27,9 @@ class CommandHandler {
     /// `KeyboardFirstGate`). A keyboard the app raises by itself
     /// (`autoFocus`) is not seen until the test types into the field.
     private var keyboardFirstGate = KeyboardFirstGate()
+    /// The screen as the last touch plan's app snapshot saw it (it follows a
+    /// rotation, unlike the cached `screenSize`); nil before a plan read one.
+    private var plannedScreenSize: CGSize?
 
     // Interactive-mirror live-drag: iOS can't stream touches, so buffer the
     // path during the drag and dispatch it as one gesture on touchUp.
@@ -884,6 +887,7 @@ class CommandHandler {
         let screenSize = snapshotFinder.screenSize
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
+        plannedScreenSize = self.screenSize(of: appSnapshot)
         let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
         let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
         return (analyzer.analyze(target, isHittable: isHittable), hold)
@@ -1578,6 +1582,10 @@ class CommandHandler {
             let started = Date()
             let budget = actionTimeoutMs(params)
             let forTap = (params["forTap"] as? Bool) == true
+            // XPath resolves only through the live element finder, which the
+            // agent's own gestures use (and which refuses it on iOS); the
+            // snapshot finder below would ignore it and match anything.
+            if params["xpath"] != nil { return ["useElement": true] }
             let element: ElementInfo
             if let elementId = params["elementId"] as? String, !elementId.isEmpty {
                 element = try resolveElement(params)
@@ -1590,15 +1598,26 @@ class CommandHandler {
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
             // The daemon touches the point as soon as it has it, so the target
             // must have stopped changing first (PILOT-791).
+            plannedScreenSize = nil
             let plan = try planSettledTouch(target, timeoutMs: remaining)
             // The daemon's helper places a point in the device's native
             // portrait space, while the plan's point is in the app's
-            // interface space: they agree only while the interface is upright.
-            // Otherwise XCTest touches, as it maps the orientation itself.
-            if case .point = plan, !Self.interfaceIsUpright(
-                screen: snapshotFinder.screenSize, device: XCUIDevice.shared.orientation
+            // interface space: they agree only while the interface is upright,
+            // as the snapshot the plan was made from shows it (the cached
+            // screen size misses a rotation Tapsmith did not make). Otherwise
+            // XCTest touches, as it maps the orientation itself: a tap is made
+            // here, at the planned point, as the `tap` command would make it
+            // (`tapped: true`), rather than handed back to be planned and
+            // settled all over again; other gestures go to the agent's own.
+            if case .point(let point, _, let hold) = plan, !Self.interfaceIsUpright(
+                screen: plannedScreenSize ?? snapshotFinder.screenSize, device: XCUIDevice.shared.orientation
             ) {
-                return ["useElement": true]
+                guard forTap else { return ["useElement": true] }
+                actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
+                snapshotFinder.recordFocusedTextInputHint(element)
+                if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
+                touchBarrier()
+                return ["tapped": true]
             }
             switch plan {
             case .point(let point, _, let hold):

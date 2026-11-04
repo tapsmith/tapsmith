@@ -2059,7 +2059,8 @@ impl TapsmithServiceImpl {
         {
             HidTarget::Point { x, y, hold_ms, .. } => (x, y, hold_ms),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
-            HidTarget::AgentRoute => return HidOutcome::NotHandled,
+            // Only a resolve `for_tap` is answered with a tap already made.
+            HidTarget::AgentRoute | HidTarget::Tapped => return HidOutcome::NotHandled,
         };
         // One wire command: the helper owns the press/gap timing in-process
         // (each press held as the agent chose for the element, ~120ms gap:
@@ -2135,6 +2136,10 @@ impl TapsmithServiceImpl {
             }
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             HidTarget::AgentRoute => return HidOutcome::NotHandled,
+            HidTarget::Tapped => {
+                debug!(%udid, "tap made by the agent: the screen is rotated");
+                return HidOutcome::Injected;
+            }
         };
         match self
             .hid_injector
@@ -2232,7 +2237,8 @@ impl TapsmithServiceImpl {
             // A long press holds for its duration, not a tap's hold.
             HidTarget::Point { x, y, .. } => (x, y),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
-            HidTarget::AgentRoute => return HidOutcome::NotHandled,
+            // Only a resolve `for_tap` is answered with a tap already made.
+            HidTarget::AgentRoute | HidTarget::Tapped => return HidOutcome::NotHandled,
         };
         if self
             .hid_long_press_at(&udid, x as f32, y as f32, duration_ms)
@@ -5712,6 +5718,9 @@ enum HidTarget {
     /// or hittable with no tree to choose one from), or is too old to know
     /// the method.
     AgentRoute,
+    /// The agent made the tap itself (asked with `for_tap`, on a rotated
+    /// screen, whose touches only XCTest places right): nothing to press.
+    Tapped,
 }
 
 /// The longest hold the HID helper accepts on a double tap's line
@@ -5788,6 +5797,9 @@ fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
     }
     if resp.data.get("useElement").and_then(Value::as_bool) == Some(true) {
         return HidTarget::AgentRoute;
+    }
+    if resp.data.get("tapped").and_then(Value::as_bool) == Some(true) {
+        return HidTarget::Tapped;
     }
     // The helper parses coordinates with strtod, so only hand it sane
     // numbers — the same bound the agent puts on cached frames.
@@ -7237,6 +7249,19 @@ mod tests {
                 other => panic!("expected a point, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn hid_target_knows_a_tap_the_agent_made_itself() {
+        assert!(matches!(
+            hid_target(agent_ok(json!({"tapped": true}))),
+            HidTarget::Tapped
+        ));
+        // Anything but a true flag still needs a point.
+        assert!(matches!(
+            hid_target(agent_ok(json!({"tapped": "yes"}))),
+            HidTarget::Refuse(_)
+        ));
     }
 
     #[test]
