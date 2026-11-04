@@ -3286,7 +3286,10 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     if is_ios_sim {
                         let hid = Arc::clone(&self.hid_injector);
                         let udid = req.serial.clone();
-                        tokio::spawn(async move { hid.warm(&udid).await });
+                        // Taken now, so a deselect that runs before the task
+                        // does makes it drop its helper.
+                        let epoch = hid.stop_epoch(&udid);
+                        tokio::spawn(async move { hid.warm(&udid, epoch).await });
                     }
                 }
                 if device_changed {

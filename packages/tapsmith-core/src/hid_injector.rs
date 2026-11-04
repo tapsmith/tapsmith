@@ -186,10 +186,20 @@ impl HidInjector {
     }
 
     /// Start `udid`'s helper ahead of the first touch, so that touch does not
-    /// pay for the start. Quiet on failure: the next touch tries again and
-    /// reports it.
-    pub async fn warm(&self, udid: &str) {
-        match self.start_or_reuse(udid, self.warm_start_bound).await {
+    /// pay for the start. `epoch` is [`Self::stop_epoch`] taken when the
+    /// warm-up was asked for: a device stopped since then keeps no helper.
+    /// Skipped while another start for the device is in flight (a touch, or
+    /// an earlier warm-up), so repeated selections don't queue starts. Quiet
+    /// on failure: the next touch tries again and reports it.
+    pub async fn warm(&self, udid: &str, epoch: u64) {
+        let gate = self.start_gate(udid);
+        let Ok(_starting) = gate.try_lock() else {
+            return;
+        };
+        if self.has_live_helper(udid).await {
+            return;
+        }
+        match self.start_locked(udid, self.warm_start_bound, epoch).await {
             Ok(()) => self.note_available(udid),
             Err(e) => debug!(udid, error = %e, "iOS HID helper warm-up failed"),
         }
@@ -218,7 +228,7 @@ impl HidInjector {
         Arc::clone(gates.entry(udid.to_string()).or_default())
     }
 
-    fn stop_epoch(&self, udid: &str) -> u64 {
+    pub fn stop_epoch(&self, udid: &str) -> u64 {
         let epochs = self.stop_epochs.lock().unwrap_or_else(|e| e.into_inner());
         epochs.get(udid).copied().unwrap_or(0)
     }
@@ -238,7 +248,13 @@ impl HidInjector {
             return Ok(());
         }
         let epoch = self.stop_epoch(udid);
+        self.start_locked(udid, bound, epoch).await
+    }
 
+    /// Spawn `udid`'s helper and wait up to `bound` for it to report `ready`,
+    /// then install it — unless the device was stopped after `epoch` was
+    /// taken. The caller holds the device's start gate.
+    async fn start_locked(&self, udid: &str, bound: Duration, epoch: u64) -> anyhow::Result<()> {
         let mut child = tokio::process::Command::new(&self.helper_path)
             .arg(udid)
             .stdin(Stdio::piped())
@@ -669,7 +685,7 @@ mod tests {
         );
         let warming = {
             let injector = Arc::clone(&injector);
-            tokio::spawn(async move { injector.warm("UDID-W1").await })
+            tokio::spawn(async move { injector.warm("UDID-W1", 0).await })
         };
         // Let the warm-up spawn the helper before the touch arrives.
         tokio::time::sleep(Duration::from_millis(200)).await;
@@ -690,7 +706,7 @@ mod tests {
         let (_dir, path) = slow_stub(&starts, "0");
         let injector = HidInjector::with_helper_path(path);
         injector.ensure("UDID-W2").await.unwrap();
-        injector.warm("UDID-W2").await;
+        injector.warm("UDID-W2", 0).await;
         assert_eq!(start_count(&starts), 1);
         injector.shutdown("UDID-W2").await;
     }
@@ -700,7 +716,7 @@ mod tests {
         // The touch that then fails reports it, with its own error.
         let (_dir, path) = stub_helper("exit 1\n");
         let injector = HidInjector::with_helper_path(path);
-        injector.warm("UDID-W3").await;
+        injector.warm("UDID-W3", 0).await;
         assert!(injector.note_unavailable("UDID-W3"));
     }
 
@@ -712,7 +728,7 @@ mod tests {
         let injector = Arc::new(HidInjector::with_helper_path(path));
         let warming = {
             let injector = Arc::clone(&injector);
-            tokio::spawn(async move { injector.warm("UDID-W4").await })
+            tokio::spawn(async move { injector.warm("UDID-W4", 0).await })
         };
         tokio::time::sleep(Duration::from_millis(100)).await;
         injector.shutdown("UDID-W4").await;
@@ -721,6 +737,41 @@ mod tests {
             !injector.helpers.lock().await.contains_key("UDID-W4"),
             "a warm-up that finished after shutdown must not install its helper"
         );
+    }
+
+    #[tokio::test]
+    async fn a_warm_up_for_a_device_stopped_before_it_ran_keeps_no_helper() {
+        // SetDevice(A) spawns the warm-up; SetDevice(B) stops A before the
+        // task first runs.
+        let (_dir, path) = slow_stub(&tempfile::tempdir().unwrap().path().join("s"), "0");
+        let injector = HidInjector::with_helper_path(path);
+        let epoch = injector.stop_epoch("UDID-W5");
+        injector.shutdown("UDID-W5").await;
+        injector.warm("UDID-W5", epoch).await;
+        assert!(!injector.helpers.lock().await.contains_key("UDID-W5"));
+    }
+
+    #[tokio::test]
+    async fn a_warm_up_while_a_start_is_in_flight_does_not_queue_another() {
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = slow_stub(&starts, "0.6");
+        let injector = Arc::new(HidInjector::with_helper_path(path));
+        let first = {
+            let injector = Arc::clone(&injector);
+            tokio::spawn(async move { injector.warm("UDID-W6", 0).await })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let started = std::time::Instant::now();
+        injector.warm("UDID-W6", 0).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "a second warm-up waited for the first: {:?}",
+            started.elapsed()
+        );
+        first.await.unwrap();
+        assert_eq!(start_count(&starts), 1);
+        injector.shutdown("UDID-W6").await;
     }
 
     #[tokio::test]

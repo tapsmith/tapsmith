@@ -68,7 +68,8 @@ env:
   # tapsmith-ios-hid helper. When the helper can't start (or the agent build
   # predates HID taps) they quietly fall back to the agent's slower XCTest
   # touches; this makes that fail the run instead, so the suite proves the
-  # HID route is the one taken.
+  # helper works. Taps the agent chooses to make itself (an XPath selector,
+  # a rotated screen it can't map) are not failed by it.
   TAPSMITH_REQUIRE_IOS_HID: "1"
   # Fixed per-shard overhead (cache restores, simulator boot, app install,
   # agent start) is ~10 of a shard's ~20 min, so fewer shards spend fewer
