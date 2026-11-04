@@ -5,6 +5,41 @@ use super::device_backend::{
 };
 use super::*;
 
+use crate::android_agent_install::{
+    agent_launch_command, force_install_requested, host_md5, installed_md5_command, needs_install,
+    parse_installed_md5s, AGENT_PACKAGE, AGENT_TEST_PACKAGE, FORCE_INSTALL_ENV,
+};
+
+/// The packages among `apks` (`(package, host path, label)`) whose APK must
+/// be installed: those whose host bytes differ from the device's installed
+/// APK, or whose identity cannot be established. Every one of them when
+/// `TAPSMITH_FORCE_AGENT_INSTALL` is set.
+async fn agent_apks_to_install(
+    serial: &str,
+    apks: &[(&'static str, &str, &str)],
+) -> Vec<&'static str> {
+    let all = || apks.iter().map(|(pkg, _, _)| *pkg).collect();
+    if force_install_requested(std::env::var(FORCE_INSTALL_ENV).ok().as_deref()) {
+        info!("{FORCE_INSTALL_ENV} is set; reinstalling the agent APKs");
+        return all();
+    }
+    let packages: Vec<&str> = apks.iter().map(|(pkg, _, _)| *pkg).collect();
+    let installed = match adb::shell_lenient(serial, &installed_md5_command(&packages)).await {
+        Ok(output) => parse_installed_md5s(&output),
+        Err(e) => {
+            debug!(error = %e, "Could not read the installed agent APK hashes; installing");
+            return all();
+        }
+    };
+    let mut to_install = Vec::new();
+    for (pkg, path, _) in apks {
+        if needs_install(pkg, host_md5(path).await.as_deref(), &installed) {
+            to_install.push(*pkg);
+        }
+    }
+    to_install
+}
+
 pub(super) struct AndroidBackend<'a> {
     pub(super) svc: &'a TapsmithServiceImpl,
 }
@@ -168,6 +203,20 @@ impl DeviceBackend for AndroidBackend<'_> {
         self.svc.android_is_keyboard_shown(&serial).await
     }
 
+    async fn take_system_dialog_events(&self) -> Result<Vec<proto::SystemDialogEvent>, Status> {
+        let result = self
+            .svc
+            .send_agent_command(&AgentCommand::TakeSystemDialogEvents {})
+            .await?;
+        if !result.success {
+            return Err(Status::internal(format!(
+                "Could not read the system dialogs the agent answered: {}",
+                result.error.unwrap_or_default()
+            )));
+        }
+        Ok(system_dialog_events_from(&result.data))
+    }
+
     async fn hide_keyboard(&self, request_id: String) -> ActionResult {
         // The Android soft keyboard is dismissed by BACK, not ESCAPE —
         // KEYCODE_ESCAPE is a no-op for the IME on most apps (incl.
@@ -204,9 +253,18 @@ impl DeviceBackend for AndroidBackend<'_> {
 
     async fn unlock(&self, request_id: String) -> ActionResult {
         let serial = self.svc.active_serial().await?;
-        // Wake the screen first
-        let _ = adb::shell_lenient(&serial, "input keyevent KEYCODE_WAKEUP").await;
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let (awake, keyguard) =
+            tokio::join!(adb::screen_awake(&serial), adb::keyguard_showing(&serial));
+        match unlock_start(awake, keyguard) {
+            UnlockStart::AlreadyUnlocked => {
+                return Ok(TapsmithServiceImpl::success_action_response(request_id));
+            }
+            UnlockStart::Dismiss => {}
+            UnlockStart::WakeFirst => {
+                let _ = adb::shell_lenient(&serial, "input keyevent KEYCODE_WAKEUP").await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
         // Only dismiss a keyguard that is actually showing. The
         // legacy sequence below is a MENU key plus a swipe up, and
         // on an already-unlocked device both land on the foreground
@@ -1014,62 +1072,60 @@ impl DeviceBackend for AndroidBackend<'_> {
         }
 
         let has_apk_paths = !req.agent_apk_path.is_empty() && !req.agent_test_apk_path.is_empty();
-        let agent_installed = adb::is_package_installed(&serial, "dev.tapsmith.agent")
-            .await
-            .unwrap_or(false);
 
-        if !agent_installed && !has_apk_paths {
-            return Err(proto::ActionResponse {
-                request_id,
-                success: false,
-                error_type: "AGENT_NOT_INSTALLED".to_string(),
-                error_message: "Tapsmith agent is not installed on the device. \
+        if !has_apk_paths {
+            let agent_installed = adb::is_package_installed(&serial, AGENT_PACKAGE)
+                .await
+                .unwrap_or(false);
+            if !agent_installed {
+                return Err(proto::ActionResponse {
+                    request_id,
+                    success: false,
+                    error_type: "AGENT_NOT_INSTALLED".to_string(),
+                    error_message: "Tapsmith agent is not installed on the device. \
                             Set agentApk and agentTestApk in your Tapsmith config, \
                             or install manually with: adb install <path-to-agent.apk>"
-                    .to_string(),
-                screenshot: Vec::new(),
-            });
-        }
-
-        // Always reinstall when APK paths are provided so that code
-        // changes to the agent are deployed without manual intervention.
-        if has_apk_paths {
-            info!("Installing agent APKs...");
-            if let Err(e) = adb::install_apk(&serial, &req.agent_apk_path, true).await {
-                return Err(proto::ActionResponse {
-                    request_id,
-                    success: false,
-                    error_type: "AGENT_INSTALL_FAILED".to_string(),
-                    error_message: format!("Failed to install agent APK: {e}"),
+                        .to_string(),
                     screenshot: Vec::new(),
                 });
             }
-            if let Err(e) = adb::install_apk(&serial, &req.agent_test_apk_path, true).await {
-                return Err(proto::ActionResponse {
-                    request_id,
-                    success: false,
-                    error_type: "AGENT_INSTALL_FAILED".to_string(),
-                    error_message: format!("Failed to install agent test APK: {e}"),
-                    screenshot: Vec::new(),
-                });
+        } else {
+            // Install each APK whose bytes differ from the device's copy, so
+            // a rebuilt agent is deployed without manual intervention and an
+            // unchanged one costs no install (PILOT-975).
+            let apks = [
+                (AGENT_PACKAGE, req.agent_apk_path.as_str(), "agent APK"),
+                (
+                    AGENT_TEST_PACKAGE,
+                    req.agent_test_apk_path.as_str(),
+                    "agent test APK",
+                ),
+            ];
+            let to_install = agent_apks_to_install(&serial, &apks).await;
+            for (_, path, label) in apks.iter().filter(|(pkg, _, _)| to_install.contains(pkg)) {
+                info!(apk = %path, "Installing {label}");
+                if let Err(e) = adb::install_apk(&serial, path, true).await {
+                    return Err(proto::ActionResponse {
+                        request_id,
+                        success: false,
+                        error_type: "AGENT_INSTALL_FAILED".to_string(),
+                        error_message: format!("Failed to install {label}: {e}"),
+                        screenshot: Vec::new(),
+                    });
+                }
             }
-            info!("Agent APKs installed successfully");
+            if to_install.is_empty() {
+                info!("Agent APKs on the device match the configured ones; skipping install");
+            } else {
+                info!("Agent APKs installed successfully");
+            }
         }
 
         // Launch the agent instrumentation
         agent_comms::clear_stream_cache(&self.svc.agent_stream).await;
-        let instrument_cmd = if req.target_package.is_empty() {
-            "am instrument -w dev.tapsmith.agent/.TapsmithAgent".to_string()
-        } else {
-            format!(
-                "am instrument -w -e targetPackage {} dev.tapsmith.agent/.TapsmithAgent",
-                req.target_package
-            )
-        };
-
         // Launch in background on device, keeping the runner's output
         // on the device for the failure diagnostics below.
-        let bg_cmd = format!("nohup {instrument_cmd} > {ANDROID_AGENT_LOG_PATH} 2>&1 &");
+        let bg_cmd = agent_launch_command(&req.target_package, ANDROID_AGENT_LOG_PATH);
         if let Err(e) = adb::shell(&serial, &bg_cmd).await {
             error!(error = %e, "Failed to start agent instrumentation");
             return Err(proto::ActionResponse {
@@ -1391,4 +1447,114 @@ async fn os_service_redirect(serial: &str, proxy: &NetworkProxy) -> Option<adb::
         device_port,
         uid_ranges,
     })
+}
+
+/// Where `unlock` starts, from the screen's wakefulness and the keyguard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnlockStart {
+    /// The screen is on and no lock screen shows: nothing to do. Sending
+    /// any key or swipe here would land on the foreground app.
+    AlreadyUnlocked,
+    /// The screen is on but a lock screen shows (or the dump cannot tell):
+    /// dismiss it without the wake key and its settle wait.
+    Dismiss,
+    /// The screen is off, dozing or dreaming, or its state is unknown: wake
+    /// it first, as before.
+    WakeFirst,
+}
+
+fn unlock_start(awake: Option<bool>, keyguard_showing: Option<bool>) -> UnlockStart {
+    match (awake, keyguard_showing) {
+        (Some(true), Some(false)) => UnlockStart::AlreadyUnlocked,
+        (Some(true), _) => UnlockStart::Dismiss,
+        _ => UnlockStart::WakeFirst,
+    }
+}
+
+/// The agent's `takeSystemDialogEvents` result as proto events; malformed
+/// entries are skipped rather than failing the whole list.
+pub(super) fn system_dialog_events_from(data: &Value) -> Vec<proto::SystemDialogEvent> {
+    let text = |e: &Value, key: &str| {
+        e.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    data.get("events")
+        .and_then(Value::as_array)
+        .map(|events| {
+            events
+                .iter()
+                .filter(|e| e.is_object())
+                .map(|e| proto::SystemDialogEvent {
+                    title: text(e, "title"),
+                    owner: text(e, "owner"),
+                    owned_by_target: e
+                        .get("ownedByTarget")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                    kind: text(e, "kind"),
+                    button: text(e, "button"),
+                    timestamp_ms: e.get("timestampMs").and_then(Value::as_i64).unwrap_or(0),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn unlock_skips_everything_only_when_awake_and_unlocked() {
+        assert_eq!(
+            unlock_start(Some(true), Some(false)),
+            UnlockStart::AlreadyUnlocked
+        );
+        // Awake with a lock screen up, or a keyguard dump that can't tell:
+        // dismiss, but there is nothing to wake.
+        assert_eq!(unlock_start(Some(true), Some(true)), UnlockStart::Dismiss);
+        assert_eq!(unlock_start(Some(true), None), UnlockStart::Dismiss);
+        // Asleep, or a power dump that can't tell, wakes first even when no
+        // keyguard shows: the screen must be on before anything else.
+        for keyguard in [Some(true), Some(false), None] {
+            assert_eq!(unlock_start(Some(false), keyguard), UnlockStart::WakeFirst);
+            assert_eq!(unlock_start(None, keyguard), UnlockStart::WakeFirst);
+        }
+    }
+
+    #[test]
+    fn system_dialog_events_map_every_field() {
+        let data = json!({"events": [
+            {"title": "Pixel Launcher isn't responding", "owner": "com.google.android.apps.nexuslauncher",
+             "ownedByTarget": false, "kind": "anr", "button": "Close app", "timestampMs": 1_793_463_831_403_i64},
+            {"title": "Test App isn't responding", "owner": "dev.tapsmith.testapp",
+             "ownedByTarget": true, "kind": "anr", "button": "Wait", "timestampMs": 5},
+        ]});
+        let events = system_dialog_events_from(&data);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].title, "Pixel Launcher isn't responding");
+        assert_eq!(events[0].owner, "com.google.android.apps.nexuslauncher");
+        assert!(!events[0].owned_by_target);
+        assert_eq!(events[0].kind, "anr");
+        assert_eq!(events[0].button, "Close app");
+        assert_eq!(events[0].timestamp_ms, 1_793_463_831_403);
+        assert!(events[1].owned_by_target);
+        assert_eq!(events[1].button, "Wait");
+    }
+
+    #[test]
+    fn system_dialog_events_tolerate_missing_and_malformed_entries() {
+        assert!(system_dialog_events_from(&json!({})).is_empty());
+        assert!(system_dialog_events_from(&json!({"events": "nope"})).is_empty());
+        let events =
+            system_dialog_events_from(&json!({"events": [42, {"title": "X isn't responding"}]}));
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].title, "X isn't responding");
+        assert_eq!(events[0].owner, "");
+        assert!(!events[0].owned_by_target);
+        assert_eq!(events[0].timestamp_ms, 0);
+    }
 }

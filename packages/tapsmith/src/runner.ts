@@ -42,7 +42,7 @@ import {
   type PreparedState,
   type ResetCapabilities,
 } from './app-reset.js';
-import { executeAppReset, type ExecuteAppResetOptions, type SessionPreflightContext } from './session-preflight.js';
+import { collectAnsweredSystemDialogs, executeAppReset, type ExecuteAppResetOptions, type SessionPreflightContext } from './session-preflight.js';
 import { deviceGroupSize, resolveDeviceGroup, validateAppResetOptions, validateDevicesOption, validateRecordingModes } from './config.js';
 import { type AttemptToken } from './attempt-fence.js';
 import { isRunnerTimeoutError, runBounded } from './run-bounded.js';
@@ -3089,6 +3089,14 @@ async function runSuiteContext(
         // device.on() listeners the test added end with it too (PILOT-775).
         d._routeManager?.removeTestListeners?.();
       });
+
+      // System ANR / crash dialogs the agent answered during the attempt
+      // (PILOT-977): a trace row each, while the trace is still recording,
+      // and a warning on this test for the app under test's own.
+      if (!opts.abortSignal?.aborted) {
+        await Promise.all(resettableDevices(opts).map((rd) => collectAnsweredSystemDialogs(rd.sessionContext)));
+        drainPreflightNotices(opts, traceCollector);
+      }
 
       // An unhandled rejection raised during the
       // attempt fails it — only it — as in Playwright (PILOT-543).

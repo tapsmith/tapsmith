@@ -232,6 +232,8 @@ int main(int argc, char **argv) {
     // (measured on iOS 26.1). Human-paced mirror input arrives slower than
     // this floor and is unaffected.
     const uint64_t kMinEventSpacingUs = 12000;
+    // A double tap's press when its line gives no hold (an older daemon).
+    const useconds_t kDefaultDoubleTapHoldUs = 40000;
     uint64_t lastInjectUs = 0;
     char buf[1024];
     while (fgets(buf, sizeof(buf), stdin)) {
@@ -257,7 +259,8 @@ int main(int argc, char **argv) {
           ok = sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
           break;
         case HID_DOUBLE_TAP: {
-          // Full double-tap with in-process timing: ~40ms press, ~120ms
+          // Full double-tap with in-process timing: each press held as the
+          // line asks (kDefaultDoubleTapHoldUs without a hold), ~120ms
           // inter-tap gap — inside every double-tap recognizer window. The
           // first three events are fire-and-forget so the gap between the
           // CREATION timestamps (what recognizers key on) is exactly the
@@ -266,12 +269,15 @@ int main(int argc, char **argv) {
           lastX = ev.x; lastY = ev.y;
           double nx = hid_normalize(ev.x, widthPt);
           double ny = hid_normalize(ev.y, heightPt);
+          useconds_t holdUs = ev.holdMs == HID_DEFAULT_HOLD
+              ? kDefaultDoubleTapHoldUs
+              : (useconds_t)ev.holdMs * 1000;
           sendTouchNoWait(nx, ny, DirDown);
-          usleep(40000);
+          usleep(holdUs);
           sendTouchNoWait(nx, ny, DirUp);
           usleep(120000);
           sendTouchNoWait(nx, ny, DirDown);
-          usleep(40000);
+          usleep(holdUs);
           ok = sendTouch(nx, ny, DirUp);
           break;
         }

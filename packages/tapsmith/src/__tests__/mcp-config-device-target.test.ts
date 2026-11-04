@@ -63,6 +63,8 @@ let nextPort = 44000;
 vi.mock('../port-utils.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../port-utils.js')>()),
   pickFreePort: () => Promise.resolve(nextPort++),
+  // The fake daemons answer through the mocked gRPC client, not a socket.
+  connectionRefused: () => Promise.resolve(false),
 }));
 
 let mcpConfig: Partial<TapsmithConfig> | null = null;

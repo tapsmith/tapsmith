@@ -275,7 +275,7 @@ await device.pressBack();
 
 ### `device.tapXY(x: number, y: number): Promise<void>`
 
-Tap at raw screen coordinates in logical points (Android pixels; iOS points). Prefer locator-based `tap()` in tests; use this for coordinate-driven interaction (e.g., device mirror gestures).
+Tap at raw screen coordinates in logical points (Android pixels; iOS points). Prefer locator-based `tap()` in tests; use this for coordinate-driven interaction (e.g., device mirror gestures). On iOS what is at the point is unknown, so the touch is held 20 ms, as on a switch (see [Touch hold](api-reference.md#elementhandletapoptions-promisevoid)).
 
 ```typescript
 await device.tapXY(120, 340);
@@ -283,7 +283,7 @@ await device.tapXY(120, 340);
 
 ### `device.longPressXY(x: number, y: number, options?: { duration?: number }): Promise<void>`
 
-Long-press at raw screen coordinates in logical points. `options.duration` specifies the hold duration in milliseconds (default 1000).
+Long-press at raw screen coordinates in logical points. `options.duration` specifies the hold duration in milliseconds (default 1000). The press is held for that long, so a duration shorter than the app's own long-press delay (often around 500 ms) can register as a tap.
 
 ```typescript
 await device.longPressXY(120, 340, { duration: 800 });
@@ -297,7 +297,7 @@ Drag/swipe from one point to another in logical points. `options.duration` speci
 await device.dragXY({ x: 50, y: 200 }, { x: 50, y: 600 }, { duration: 400 });
 ```
 
-> **Platform note:** `duration` is honored on Android (it scales the gesture's step count). On iOS the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
+> **Platform note:** on Android the drag takes `duration`, at least 25 ms (then waits for any scroll it started to come to rest, as `swipe()` does). On iOS, the drag is performed via a fixed-duration synthesized gesture, so `duration` currently has no effect on speed.
 
 ### `device.inputText(text: string): Promise<void>`
 
@@ -1155,7 +1155,11 @@ await device.getByRole("button", { name: "Submit" }).tap({ timeout: 5000 });
 
 **Covered elements.** Like a Playwright click, a tap auto-waits for the element to be enabled and then for nothing to be drawn over it. If something covers the point it would tap, the tap waits for the cover to go away. Covers include the software keyboard, a bar or window drawn over the element, and another control painted on top of it (a button, link, text input, list cell, alert, sheet…). If the cover clears within the action timeout, the tap goes ahead. If it is still there at the timeout, the tap fails instead of tapping the cover: `Element is covered by the keyboard …` or `Element is covered by button "Overlay" …`. When the keyboard or a bar covers only part of the element, the tap lands on the visible part. `doubleTap()`, `longPress()`, and the tap that `type()`, `clear()` and `focus()` use to focus a field follow the same rules. A field that already has focus is not tapped at all when the keyboard, or a control on the same screen, covers it (typically its own keyboard): typing reaches it anyway. A dialog or other window over the field is waited out like any other cover, since it takes the input. If the element goes away, or turns into a different element, while its cover is being waited out, the action does not tap whatever replaced it: it looks the locator up again and fails as not found if nothing matches. If the keyboard covers an element that is not in a scroll view, dismiss it first (`device.hideKeyboard()`, or submit the field). A plain view that is not a control (for example an unlabeled backdrop) is not detected as a cover yet.
 
-**Moving elements.** Like a Playwright click, a tap on iOS waits for the element to be stable before touching it, so a button in a menu, popover or action sheet that is still animating in is not tapped mid-animation (such a tap highlights the button without running its action). It waits for what the element shows on screen to stop changing, since iOS reports an animating element's final frame from the start. The wait lasts up to a second: an element that keeps changing (a spinner inside a button) is tapped after that rather than failing. `doubleTap()` and `longPress()` wait the same way.
+**Moving elements.** Like a Playwright click, a tap on iOS waits for the element to be stable before touching it, so a button in a menu, popover or action sheet that is still animating in is not tapped mid-animation (such a tap highlights the button without running its action). It waits for what the element shows on screen to stop changing, since iOS reports an animating element's final frame from the start. The wait lasts up to a second: an element that keeps changing (a spinner inside a button) is tapped after that rather than failing. `doubleTap()` and `longPress()` wait the same way. On Android, `tap()` touches the element its auto-wait found (the one strict mode and the enabled check passed), and waits for its position to hold still across two display frames: its bounds are read again at least 34 ms after the read that found it, and if they moved, the tap waits until two reads 50 ms apart agree, for up to a second. If that element has gone in the meantime (the app re-rendered it), the tap looks the locator up again.
+
+**Touch hold.** A tap presses and lifts at once on Android, and within one display frame (10 ms) on iOS. React Native cancels a press when a scroll view beside the element moves while the finger is down (a carousel paging itself, a list still settling), so a longer press could report a tap the app never received. On iOS, UIKit controls that only register a touch that spans a display frame are held 20 ms: switches, checkboxes, sliders, steppers, segmented controls, pickers and other control types, anything inside one of them (a segment, a stepper's increment button) or inside an alert or action sheet, and a touch whose target is unknown. Buttons, texts, cells, images, links, text inputs and plain views (which is what most React Native components are, including their checkboxes) are held 10 ms. `doubleTap()`, `setChecked()`, `selectOption()`, `device.tapXY()` and the MCP and UI-mode tap tools hold their touches the same way.
+
+**Touch hold.** A tap presses and lifts at once on Android, and within one display frame (10 ms) on iOS. React Native cancels a press when a scroll view beside the element moves while the finger is down (a carousel paging itself, a list still settling), so a longer press could report a tap the app never received. On iOS, UIKit controls that only register a touch that spans a display frame are held 20 ms: switches, checkboxes, sliders, steppers, segmented controls, pickers and other control types, anything inside one of them (a segment, a stepper's increment button) or inside an alert or action sheet, and a touch whose target is unknown. Buttons, texts, cells, images, links, text inputs and plain views (which is what most React Native components are, including their checkboxes) are held 10 ms. `doubleTap()`, `setChecked()`, `selectOption()`, `device.tapXY()` and the MCP and UI-mode tap tools hold their touches the same way. On an iOS simulator, `doubleTap()` presses as a real touch through the simulator's input system. Such a touch reaches the app as it happens, so a scroll event could arrive inside even a 10 ms hold: there, each of its taps that would be held 10 ms is pressed and lifted back to back instead, and a control's 20 ms hold is kept.
 
 **The keyboard.** A React Native `ScrollView` (or `FlatList`) with the default `keyboardShouldPersistTaps` spends the first touch after typing on closing the keyboard, and the button under the finger never gets it. So when the software keyboard is up and the element is in a React Native scroll view (a `ScrollView` on Android, a `.scrollView` on iOS; native lists, tables and web content don't count), `tap()` puts the keyboard away first, then taps the element where it has moved to. `doubleTap()` and `longPress()` do the same. A text input, or a control inside one such as its clear button, is tapped with the keyboard left up, so tapping the next field just moves the focus. An element outside a scroll view, such as a row of a native suggestion list, is tapped with the keyboard up too: if the keyboard covers it, the rules above apply. If the keyboard can't be put away, the tap goes ahead as before.
 
@@ -1198,7 +1202,7 @@ await device.getByText("Zoom here").doubleTap({ intervalMs: 150 });
 
 Long press this element.
 
-- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
+- `options`: `number | { duration?: number; timeout?: number }` — how long to hold, in milliseconds, either as a number or as `duration` (the agent's default when omitted), and the [per-call timeout](#per-call-timeout). The press is held for that long, so a duration shorter than the app's own long-press delay (often around 500 ms) can register as a tap. With the number form, the timeout goes in a second argument: `longPress(2000, { timeout: 5000 })`.
 
 ```typescript
 await device.getByText("Item 1", { exact: true }).longPress(2000);
@@ -1507,7 +1511,7 @@ const box = await device.getByText("Header", { exact: true }).boundingBox();
 
 ## Assertions
 
-The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires.
+The `expect()` function creates assertions for an `ElementHandle` or a plain value. Locator assertions auto-wait by polling until the condition is met or the timeout expires. As in Playwright, an assertion reads the screen at once, then backs off: it reads again after 100, 250 and 500 ms, then once a second.
 
 ### `expect(elementHandle: ElementHandle): TapsmithAssertions`
 
@@ -1558,7 +1562,7 @@ await expect.poll(() => fetchStatus(), { timeout: 10000 }).toBe("ready");
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `timeout` | `number` | 5000 | How long to poll before failing |
-| `intervals` | `number[]` | `[250]` | Polling intervals in milliseconds |
+| `intervals` | `number[]` | `[100, 250, 500, 1000]` | Milliseconds to wait between tries, in order; the last one repeats. The default is Playwright's. |
 
 ### `flushSoftErrors(): Error[]`
 
@@ -2608,7 +2612,7 @@ interface TestResult {
   workerIndex?: number; // set in parallel mode — index of the worker that ran this test
   retry?: number; // zero-based attempt number this result was recorded on (omitted for a first-attempt pass)
   filePath?: string; // path to the test file this result belongs to
-  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed
+  warnings?: string[]; // things that did not fail the test but a reader should know, e.g. the app's own ANR dialog the preflight closed, or one Tapsmith waited out during the test
   fileLevelFailure?: boolean; // the result stands for a whole file that failed to load, not a test in it
 }
 ```
@@ -2946,7 +2950,7 @@ npx tapsmith test --config=./configs/ios.config.mjs
 
 ### `tapsmith test --force-install`
 
-Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
+Reinstall the app under test (APK or `.app`) on every device the run sets up, even when the installed build already matches. Applies in every mode: the sequential run, each `--workers` worker, and the workers watch and UI mode start (a UI worker respawned mid-session does not reinstall). The Tapsmith agent is not reinstalled by this flag: its APKs are compared the same way and reinstalled unless the device's copy is known to match (one whose hash the device can't report is reinstalled), and [`TAPSMITH_FORCE_AGENT_INSTALL`](environment-variables.md) forces them to be reinstalled every time. Useful when the app's installed state has drifted outside Tapsmith — a rebuilt APK, or a rebuilt `.app` on a simulator, is already detected and reinstalled without it (on a simulator the whole installed bundle is compared with the built one, so a Debug rebuild that changes only `<App>.debug.dylib` is reinstalled too). On a physical iOS device an installed app is kept whatever its build, so pass this flag after rebuilding.
 
 ```bash
 npx tapsmith test --force-install

@@ -3,12 +3,12 @@ import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
 import { appResetAction, parseHooksMarker, satisfies, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
-import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, isSystemDrawnDialog } from './emulator.js';
+import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, GENERIC_BLOCKING_DIALOG, isSystemDrawnDialog } from './emulator.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
 import { appDependsOnTapsmithHooks } from './init-detect.js';
 
 type SessionDevice = Pick<Device, 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
-type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy'>
+type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy' | 'takeSystemDialogEvents'>
 
 export interface SessionPreflightContext {
   label: string
@@ -54,7 +54,8 @@ export interface SessionPreflightContext {
   notices: PreflightNotice[]
 }
 
-/** A system ANR/crash dialog the Android preflight dealt with, or a session-level finding about the app. */
+/** A system ANR/crash dialog the Android preflight (or, mid-test, the agent)
+ *  dealt with, or a session-level finding about the app. */
 export interface PreflightNotice {
   /** `app-dialog`: the app under test's own, or one whose owner could not be
    *  read (dismissed, session recovered; its test gets a warning).
@@ -72,6 +73,51 @@ export interface PreflightNotice {
   timestamp: number
 }
 
+/** Deadline for taking the agent's answered dialogs at the end of a test: a
+ *  queue read on the device, so anything slower is a wedged agent, and the
+ *  report must not hold the test's end for it. */
+const ANSWERED_DIALOGS_DEADLINE_MS = 3_000;
+
+/**
+ * Take the system ANR / crash dialogs the Android agent answered on its own
+ * (during a test, or a lookup or tap outside one) and add them to {@link SessionPreflightContext.notices},
+ * so the runner reports them like the preflight's: a trace row for each, and a
+ * warning on the test for the app under test's own ANR (a finding, not noise).
+ * Best effort: an agent that cannot say (an older one, a dead session) adds
+ * nothing, and the test's own outcome stands.
+ */
+export async function collectAnsweredSystemDialogs(ctx: SessionPreflightContext): Promise<void> {
+  if (ctx.config.platform === 'ios') return;
+  let events;
+  try {
+    ({ events } = await ctx.client.takeSystemDialogEvents(ANSWERED_DIALOGS_DEADLINE_MS));
+  } catch {
+    return;
+  }
+  for (const event of events ?? []) {
+    const title = event.title || GENERIC_BLOCKING_DIALOG;
+    const owner = event.owner || undefined;
+    const timestamp = Number(event.timestampMs) || Date.now();
+    ctx.notices.push(event.ownedByTarget
+      ? {
+        kind: 'app-dialog',
+        title,
+        owner,
+        message: `The app under test (${owner ?? ctx.config.package}) stopped responding and showed "${title}"; `
+          + `Tapsmith pressed ${event.button}. Check the app's logs (adb logcat) for what blocked its main thread.`,
+        timestamp,
+      }
+      : {
+        kind: 'foreign-dialog',
+        title,
+        owner,
+        message: `A system dialog from another app came up: ${formatBlockingDialog(title, owner)}. `
+          + `Tapsmith pressed ${event.button}.`,
+        timestamp,
+      });
+  }
+}
+
 /**
  * Look at the app's accessibility tree once and record whether it advertises
  * `@tapsmith/react-native` reset hooks. Cheap (one hierarchy fetch) and
@@ -87,8 +133,13 @@ export async function probeResetCapabilities(
   const caps: ResetCapabilities = (ctx.capabilities ??= {});
   const deadline = Date.now() + (options.pollMs ?? HOOKS_PROBE_POLL_MS);
   let readWithoutMarker = false;
+  // Consecutive reads that showed the app's own rendered UI and no marker,
+  // and whether the project may stop on them (decided on first need).
+  let renderedWithoutMarker = 0;
+  let mayStopEarly: boolean | undefined;
   for (;;) {
-    const seen = await readHooksMarker(ctx);
+    const read = await readHooksMarkerAndContent(ctx);
+    const seen = read?.seen;
     if (seen === false) readWithoutMarker = true;
     if (seen) {
       caps.hooksDetected = true;
@@ -101,6 +152,14 @@ export async function probeResetCapabilities(
     // single-shot miss there would pin every file of a sequential run to
     // clear resets with nothing to upgrade it.
     if (caps.hooksDetected !== undefined || Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+    // Unless the app has rendered its own UI, twice in a row, without the
+    // marker, and the project does not depend on @tapsmith/react-native: the
+    // marker mounts with the React root, so there is nothing left to wait
+    // for, and an app without the hooks (most apps) paid the whole budget
+    // at every session start. A project that depends on the package keeps
+    // the budget: its app could render before the component that mounts it.
+    renderedWithoutMarker = read?.rendered ? renderedWithoutMarker + 1 : 0;
+    if (renderedWithoutMarker >= HOOKS_PROBE_RENDERED_READS && (mayStopEarly ??= projectWithoutHooks(ctx.config))) break;
     await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
   }
   // Sticky: hooks compiled into the app do not vanish mid-session. A probe
@@ -134,6 +193,63 @@ async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?:
   } catch {
     return undefined;
   }
+}
+
+/**
+ * {@link readHooksMarker} for the probe, with whether the read showed the
+ * app's own rendered UI (`rendered`); undefined when the read failed.
+ */
+async function readHooksMarkerAndContent(ctx: SessionPreflightContext): Promise<{ seen: boolean; rendered: boolean } | undefined> {
+  let xml: string;
+  try {
+    xml = (await ctx.client.getUiHierarchy()).hierarchyXml ?? '';
+  } catch {
+    return undefined;
+  }
+  const marker = parseHooksMarker(xml);
+  const rendered = ctx.config.platform === 'ios'
+    ? iosHierarchyHasRenderedContent(xml)
+    : !!ctx.config.package && androidHierarchyHasRenderedContent(xml, ctx.config.package);
+  return { seen: !!marker && marker.urlPrefix.length > 0, rendered };
+}
+
+/**
+ * True when the iOS hierarchy has an element of the app, other than the
+ * application node itself (which carries the app's name from launch on),
+ * with a label or an identifier: the app has drawn real UI. Keyboard subtrees
+ * (`tapsmith-non-app`) do not count.
+ */
+function iosHierarchyHasRenderedContent(hierarchyXml: string): boolean {
+  let nonAppDepth = 0;
+  for (const [tag] of hierarchyXml.matchAll(/<\/?XCUIElementType\w+\b[^>]*>/g)) {
+    const closing = tag.startsWith('</');
+    const selfClosing = tag.endsWith('/>');
+    if (nonAppDepth > 0) {
+      if (closing) nonAppDepth--;
+      else if (!selfClosing) nonAppDepth++;
+      continue;
+    }
+    if (closing) continue;
+    if (tag.includes('tapsmith-non-app="true"')) {
+      if (!selfClosing) nonAppDepth = 1;
+      continue;
+    }
+    if (tag.startsWith('<XCUIElementTypeApplication')) continue;
+    if (/\blabel="[^"]+"/.test(tag) || /\bidentifier="[^"]+"/.test(tag)) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether the project's package.json lookup finds no `@tapsmith/react-native`
+ * dependency. False when it finds one, and when there is no `rootDir` to look
+ * from. A lookup that finds no package.json at all also reads as true: a
+ * hooked app tested from outside its repo then stops early, and its first
+ * resets are clear ones until a clear reset's re-read sees the marker.
+ */
+function projectWithoutHooks(config: SessionPreflightContext['config']): boolean {
+  if (!config.rootDir) return false;
+  return !appUsesTapsmithHooks({ rootDir: config.rootDir, apk: config.apk, app: config.app });
 }
 
 /**
@@ -215,6 +331,12 @@ async function checkMissingHooks(ctx: SessionPreflightContext, caps: ResetCapabi
 
 /** Marker poll cadence inside {@link probeResetCapabilities}. */
 const HOOKS_PROBE_POLL_INTERVAL_MS = 250;
+/**
+ * Consecutive reads of rendered UI without the marker after which a project
+ * without the hooks stops probing: two, a poll interval apart, so one frame
+ * caught mid-launch is not the answer.
+ */
+const HOOKS_PROBE_RENDERED_READS = 2;
 /**
  * How long a probe keeps looking for the hooks marker before concluding the
  * app has none. Only a session that has never seen the marker polls, so the
@@ -490,7 +612,17 @@ export async function ensureSessionReady(
 export async function launchConfiguredApp(
   ctx: SessionPreflightContext,
   phase: string,
-  options: { readinessAttempts?: number; freshInstall?: boolean; hooksProbeMs?: number } = {},
+  options: {
+    readinessAttempts?: number
+    freshInstall?: boolean
+    hooksProbeMs?: number
+    /**
+     * The app was already cleared (unless `freshInstall`) and launched for
+     * this phase, by `startAndroidLaunchEarly` before the agent started:
+     * skip straight to the readiness checks.
+     */
+    appLaunched?: boolean
+  } = {},
 ): Promise<PreparedState> {
   const readinessAttempts = options.readinessAttempts;
   const probe = { pollMs: options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS };
@@ -515,7 +647,7 @@ export async function launchConfiguredApp(
     // Fresh install: there's no state to clear. On Android,
     // explicitly launch the app (iOS auto-launches via the XCUITest agent
     // during startAgent), then go straight to ensuring the session is ready.
-    if (ctx.config.platform !== 'ios') {
+    if (ctx.config.platform !== 'ios' && !options.appLaunched) {
       await ctx.device.launchApp(ctx.config.package, launchOptions(ctx.config));
     }
     await ensureSessionReady(ctx, phase, readinessAttempts);
@@ -525,12 +657,51 @@ export async function launchConfiguredApp(
     return prepared();
   }
 
-  await hardClearAndLaunch(ctx);
+  if (!options.appLaunched) await hardClearAndLaunch(ctx);
   await ensureSessionReady(ctx, phase, readinessAttempts);
   await waitForAppReady(ctx);
   await probeResetCapabilities(ctx, probe);
   await checkMissingResetHooks(ctx, probe.pollMs);
   return prepared();
+}
+
+/** A startup launch started by `startAndroidLaunchEarly`. */
+export interface EarlyLaunch {
+  /** Whether the launch went through. Never rejects. */
+  launched: Promise<boolean>
+}
+
+/**
+ * Android startup launch, started before the agent: terminate and clear the
+ * app (unless it was just installed), then start its launch without waiting
+ * for it, so the app's cold start overlaps the agent's instrumentation start
+ * (each takes about a second). Resolves once the clear has finished, since a
+ * clear must not race the agent start; pass `appLaunched` to
+ * `launchConfiguredApp` once `launched` resolves true. Resolves undefined
+ * when the clear fails, having launched nothing, so the caller's usual
+ * launch path runs the whole sequence after the agent and reports the error
+ * as it always has.
+ */
+export async function startAndroidLaunchEarly(
+  ctx: Pick<SessionPreflightContext, 'config' | 'device'>,
+  options: { freshInstall: boolean },
+): Promise<EarlyLaunch | undefined> {
+  const pkg = ctx.config.package;
+  if (!pkg || ctx.config.platform === 'ios') return undefined;
+  if (!options.freshInstall) {
+    try {
+      await ctx.device.terminateApp(pkg);
+    } catch {
+      // App may not be running yet
+    }
+    try {
+      await ctx.device.clearAppData(pkg);
+    } catch {
+      return undefined;
+    }
+  }
+  const launched = ctx.device.launchApp(pkg, launchOptions(ctx.config)).then(() => true, () => false);
+  return { launched };
 }
 
 export interface ExecuteAppResetOptions {
