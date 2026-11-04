@@ -294,6 +294,12 @@ pub struct TapsmithServiceImpl {
     /// streamed touch here, falling back to the agent if it's unavailable.
     #[cfg(target_os = "macos")]
     hid_injector: Arc<crate::hid_injector::HidInjector>,
+    /// The connected iOS agent answered a `forTap` resolve without planning
+    /// the tap: it predates HID taps. Later taps go straight to its own tap
+    /// instead of paying for a resolve it will repeat. Cleared when an agent
+    /// is launched.
+    #[cfg(target_os = "macos")]
+    agent_predates_hid_tap: Arc<std::sync::atomic::AtomicBool>,
     /// In-process broadcast of daemon `tracing` events, fanned out by the
     /// `StreamDaemonLogs` RPC so the SDK can fold daemon logs into traces.
     daemon_log_bus: crate::daemon_log_bus::DaemonLogBus,
@@ -435,6 +441,8 @@ impl TapsmithServiceImpl {
             video_recording: Arc::new(RwLock::new(None)),
             #[cfg(target_os = "macos")]
             hid_injector: Arc::new(crate::hid_injector::HidInjector::new()),
+            #[cfg(target_os = "macos")]
+            agent_predates_hid_tap: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -2099,7 +2107,8 @@ impl TapsmithServiceImpl {
     /// ([`REQUIRE_IOS_HID_ENV`]) but unavailable. `NotHandled` — caller falls
     /// back to the agent's tap — when the device isn't an iOS simulator, the
     /// helper is unavailable, or the agent asks for its own gesture or
-    /// predates HID taps.
+    /// predates HID taps (remembered for the agent session, so each later
+    /// tap skips the resolve that agent's own tap would repeat).
     #[cfg(target_os = "macos")]
     async fn try_hid_tap(
         &self,
@@ -2107,6 +2116,8 @@ impl TapsmithServiceImpl {
         element_id: &Option<String>,
         timeout_ms: u64,
     ) -> HidOutcome {
+        use std::sync::atomic::Ordering;
+        const AGENT_TOO_OLD: &str = "the iOS agent predates HID taps (rebuild it)";
         let udid = {
             let dm = self.device_manager.read().await;
             match dm.active_device() {
@@ -2114,6 +2125,9 @@ impl TapsmithServiceImpl {
                 _ => return HidOutcome::NotHandled,
             }
         };
+        if self.agent_predates_hid_tap.load(Ordering::Relaxed) {
+            return hid_unavailable(&udid, "tap", &AGENT_TOO_OLD);
+        }
         if let Err(e) = self.hid_injector.ensure(&udid).await {
             return hid_unavailable(&udid, "tap", &e);
         }
@@ -2128,11 +2142,8 @@ impl TapsmithServiceImpl {
                 tap_ready: true,
             } => (x, y, hold_ms),
             HidTarget::Point { .. } => {
-                return hid_unavailable(
-                    &udid,
-                    "tap",
-                    &"the iOS agent predates HID taps (rebuild it)",
-                )
+                self.agent_predates_hid_tap.store(true, Ordering::Relaxed);
+                return hid_unavailable(&udid, "tap", &AGENT_TOO_OLD);
             }
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             HidTarget::AgentRoute => return HidOutcome::NotHandled,
@@ -3366,6 +3377,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         *self.reset_policy.write().await = app_reset::ResetPolicyState::default();
         *self.last_hooks_marker.write().await = None;
         *self.nav_probe_found_no_marker.write().await = false;
+        #[cfg(target_os = "macos")]
+        self.agent_predates_hid_tap
+            .store(false, std::sync::atomic::Ordering::Relaxed);
 
         if let Err(resp) = backend
             .launch_agent(request_id.clone(), serial.clone(), &req)
