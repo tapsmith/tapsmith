@@ -9,11 +9,15 @@
  *   m <x> <y>   touch move (contact maintained)
  *   u <x> <y>   touch up
  *   c           cancel (lift at last point; x/y unused)
- *   t2 <x> <y>  double-tap primitive: the helper injects both down/up pairs
+ *   t2 <x> <y> [<hold>]
+ *               double-tap primitive: the helper injects both down/up pairs
  *               with in-process timing, so the inter-tap gap stays inside
  *               every double-tap recognizer window regardless of how loaded
  *               the daemon-side event loop is (four host round-trips were
- *               observed stretching the gap past the app's window on CI)
+ *               observed stretching the gap past the app's window on CI).
+ *               <hold>: how long each tap holds its touch, in whole
+ *               milliseconds (0..HID_MAX_HOLD_MS); without it, the helper's
+ *               default.
  */
 typedef enum {
   HID_DOWN,
@@ -24,10 +28,18 @@ typedef enum {
   HID_INVALID
 } HidCmd;
 
+/* holdMs when a line gives none. */
+#define HID_DEFAULT_HOLD (-1)
+/* The longest hold a double tap's line may ask for: a hold past this would
+ * make the pair two separate taps, or a long press. */
+#define HID_MAX_HOLD_MS 500
+
 typedef struct {
   HidCmd cmd;
   double x;
   double y;
+  /* A double tap's hold in milliseconds, or HID_DEFAULT_HOLD. */
+  int holdMs;
 } HidEvent;
 
 /* Parse one protocol line. Returns cmd==HID_INVALID on malformed input

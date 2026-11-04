@@ -16,7 +16,7 @@ double hid_normalize(double point, double extentPt) {
 }
 
 HidEvent hid_parse_line(const char *line) {
-  HidEvent e = { .cmd = HID_INVALID, .x = 0.0, .y = 0.0 };
+  HidEvent e = { .cmd = HID_INVALID, .x = 0.0, .y = 0.0, .holdMs = HID_DEFAULT_HOLD };
   if (!line) return e;
 
   while (*line && isspace((unsigned char)*line)) line++;
@@ -35,6 +35,18 @@ HidEvent hid_parse_line(const char *line) {
   const char *rest2 = end;
   double y = strtod(rest2, &end);
   if (end == rest2) return e;         /* no y parsed */
+
+  if (isDoubleTap) {
+    const char *rest3 = end;
+    while (*rest3 && isspace((unsigned char)*rest3)) rest3++;
+    if (*rest3) {
+      long hold = strtol(rest3, &end, 10);
+      if (end == rest3 || hold < 0 || hold > HID_MAX_HOLD_MS) return e;
+      while (*end && isspace((unsigned char)*end)) end++;
+      if (*end) return e;               /* trailing junk */
+      e.holdMs = (int)hold;
+    }
+  }
 
   e.x = x;
   e.y = y;

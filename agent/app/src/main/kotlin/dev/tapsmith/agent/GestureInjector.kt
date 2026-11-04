@@ -243,8 +243,15 @@ class GestureInjector(
     private val tickMs: () -> Long = { DEFAULT_TICK_MS },
 ) {
     companion object {
-        /** How long a click holds the pointer down (UiAutomator's REGULAR_CLICK_LENGTH). */
-        const val CLICK_PRESS_MS = 100L
+        /**
+         * How long a tap holds the pointer down: not at all, DOWN then UP, as
+         * adb's `input tap` sends it (PILOT-974). UiAutomator holds 100 ms
+         * (REGULAR_CLICK_LENGTH), which only makes each tap slower: Views,
+         * Compose and React Native all act on the release, however soon it
+         * comes. (Unlike on iOS, React Native on Android did not cancel a held
+         * press when a carousel beside it turned, at holds up to 500 ms.)
+         */
+        const val CLICK_PRESS_MS = 0L
 
         /** A timed gesture's event interval when the display's refresh rate is unknown. */
         const val DEFAULT_TICK_MS = 8L
@@ -278,15 +285,17 @@ class GestureInjector(
     ) = sink.touch(TouchEvent(action, downTime, listOf(PointerState(0, x, y)), sync = sync))
 
     /**
-     * Press and release one pointer at ([x], [y]), held for [pressMs]. The
+     * Press and release one pointer at ([x], [y]), held for [pressMs] (a tap:
+     * no hold, [CLICK_PRESS_MS]). The
      * release is sent even when the press was refused (the input system may
      * have delivered it anyway), and a refused release is followed by a cancel,
      * so no pointer is left down. True only when both went through.
      *
-     * The hold stops when its command is cancelled (checked every
+     * A held press stops when its command is cancelled (checked every
      * [HOLD_CHECK_MS], and once at the end of a shorter press): the pointer is
      * cancelled, not released, so the abandoned press does not land as a
-     * click, and [CommandCancelledException] is thrown.
+     * click, and [CommandCancelledException] is thrown. A tap with no hold has
+     * nothing to stop: its release follows the press at once.
      */
     fun click(
         x: Int,
