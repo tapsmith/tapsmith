@@ -16,6 +16,7 @@ import {
   type Route,
 } from "../fixtures.js"
 import { openScreen, resetApp } from "../utils/app-reset.js"
+import { NETWORK_TRACE } from "../utils/network-trace.js"
 
 function routeFetchNoCacheOptions(route: Route) {
   const headers = { ...route.request().headers }
@@ -41,7 +42,7 @@ function routeFetchNoCacheOptions(route: Route) {
 
 describe("Network mocking", () => {
   // Network interception + real HTTP need generous timeout.
-  test.use({ timeout: 20_000 })
+  test.use({ timeout: 20_000, trace: NETWORK_TRACE })
 
   let crossOriginServer: Server | undefined
   let crossOriginUserUrl = ""
