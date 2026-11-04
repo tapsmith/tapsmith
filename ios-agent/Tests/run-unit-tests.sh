@@ -162,6 +162,14 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/tap-timing-tests"
 "$OUT/tap-timing-tests"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/HidTouchTests/main.swift \
+  TapsmithAgent/HidTouch.swift \
+  TapsmithAgent/TapTiming.swift \
+  -o "$OUT/hid-touch-tests"
+"$OUT/hid-touch-tests"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/SnapshotRetryTests/main.swift \
   TapsmithAgent/SnapshotRetry.swift \

@@ -1609,8 +1609,9 @@ class CommandHandler {
             // here, at the planned point, as the `tap` command would make it
             // (`tapped: true`), rather than handed back to be planned and
             // settled all over again; other gestures go to the agent's own.
-            if case .point(let point, _, let hold) = plan, !Self.interfaceIsUpright(
-                screen: plannedScreenSize ?? snapshotFinder.screenSize, device: XCUIDevice.shared.orientation
+            if case .point(let point, _, let hold) = plan, !HidTouch.interfaceIsUpright(
+                screen: plannedScreenSize ?? snapshotFinder.screenSize,
+                deviceUpsideDown: XCUIDevice.shared.orientation == .portraitUpsideDown
             ) {
                 guard forTap else { return ["useElement": true] }
                 actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
@@ -1623,9 +1624,11 @@ class CommandHandler {
             case .point(let point, _, let hold):
                 // holdMs: how long the daemon's HID tap, and each tap of its
                 // double tap, holds its touch (`TapTiming`, by the element's
-                // type).
+                // type; a tap's one-frame hold is pressed back to back over
+                // HID, `HidTouch.hold`).
+                let pressHold = forTap ? HidTouch.hold(forTapHold: hold) : hold
                 var answer: [String: Any] = [
-                    "x": Double(point.x), "y": Double(point.y), "holdMs": Int((hold * 1000).rounded()),
+                    "x": Double(point.x), "y": Double(point.y), "holdMs": Int((pressHold * 1000).rounded()),
                 ]
                 if forTap {
                     snapshotFinder.recordFocusedTextInputHint(element)
@@ -2699,13 +2702,6 @@ class CommandHandler {
         Thread.sleep(forTimeInterval: 0.35)
         snapshotFinder.clearFocusedTextInputHint()
         keyboardFirstGate.disarm()
-    }
-
-    /// Whether the app's interface is in the device's native portrait
-    /// orientation: its window taller than wide, and the device not upside
-    /// down (an app that rotates to upside-down portrait keeps a tall window).
-    static func interfaceIsUpright(screen: CGSize, device: UIDeviceOrientation) -> Bool {
-        screen.height >= screen.width && device != .portraitUpsideDown
     }
 
     private static let textInputClassNames: Set<String> = Set(
