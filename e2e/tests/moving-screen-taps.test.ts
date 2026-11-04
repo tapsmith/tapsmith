@@ -13,11 +13,14 @@ import type { ElementHandle } from "tapsmith"
  * needs the touch to span a display frame (the switch), or whose target is
  * unknown (a tap at a point). React Native on Android keeps the press whatever
  * the hold, so there the tests only check that the actions land. The
- * double-tap target turns on its second touch. A double tap's presses were
- * held 40 ms before, also inside the 50 ms turn, so that test, like the
- * switch's (a switch needs its 20 ms, and XCTest's own tap also lifts within
- * 50 ms), checks only that the action lands: a turn sooner than 50 ms to
- * catch a 40 ms press left too little margin on a slow CI simulator.
+ * double-tap target turns on its second touch. On an iOS simulator a double
+ * tap presses through the simulator's input system, where each touch reaches
+ * the app as it happens: on a slow CI simulator the lift of a 10 ms press
+ * reached React Native after the turn, and one of the taps was lost in every
+ * attempt. Its taps are now pressed and lifted back to back, so the lift
+ * arrives with the press, well before the turn. The switch's
+ * test checks only that setChecked() lands (a switch needs its 20 ms, and
+ * XCTest's own tap also lifts within 50 ms).
  */
 async function count(handle: ElementHandle, pattern: RegExp): Promise<number> {
   const match = pattern.exec(await handle.getText())
