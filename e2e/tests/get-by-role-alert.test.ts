@@ -1,6 +1,6 @@
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
-import { startNetworkProxy } from "../utils/network-proxy.js"
+import { NETWORK_TRACE } from "../utils/network-trace.js"
 
 // PILOT-718: React Native renders <Text accessibilityRole="alert"> as plain
 // static text on iOS — no trait, no role description — so
@@ -45,10 +45,9 @@ describe("an unnamed query scoped to React Native's Alert.alert", () => {
 })
 
 describe("getByRole('alert') on a React Native alert Text", () => {
-  test.use({ timeout: 20_000 })
+  test.use({ timeout: 20_000, trace: NETWORK_TRACE })
 
   test.beforeEach(async ({ device, apiCallsScreen }) => {
-    await startNetworkProxy(device)
     await openScreen(device, "/api-calls")
     await expect(apiCallsScreen.heading).toBeVisible()
     await device.route("**/posts*", (route) => route.fulfill({ status: 500, body: "boom" }))

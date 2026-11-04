@@ -16,7 +16,7 @@ import {
   type Route,
 } from "../fixtures.js"
 import { openScreen, resetApp } from "../utils/app-reset.js"
-import { startNetworkProxy } from "../utils/network-proxy.js"
+import { NETWORK_TRACE } from "../utils/network-trace.js"
 
 function routeFetchNoCacheOptions(route: Route) {
   const headers = { ...route.request().headers }
@@ -42,7 +42,7 @@ function routeFetchNoCacheOptions(route: Route) {
 
 describe("Network mocking", () => {
   // Network interception + real HTTP need generous timeout.
-  test.use({ timeout: 20_000 })
+  test.use({ timeout: 20_000, trace: NETWORK_TRACE })
 
   let crossOriginServer: Server | undefined
   let crossOriginUserUrl = ""
@@ -84,7 +84,6 @@ describe("Network mocking", () => {
   })
 
   test.beforeEach(async ({ device, apiCallsScreen }) => {
-    await startNetworkProxy(device)
     await openScreen(device, "/api-calls")
     await expect(apiCallsScreen.heading).toBeVisible()
   })

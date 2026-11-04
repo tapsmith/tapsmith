@@ -15,15 +15,14 @@
  */
 import { describe, expect, test } from "../fixtures.js"
 import { resetApp } from "../utils/app-reset.js"
-import { startNetworkProxy } from "../utils/network-proxy.js"
+import { NETWORK_TRACE } from "../utils/network-trace.js"
 
 const FIRESTORE_HOST = "firestore.googleapis.com"
 
 describe("Embedded-root passthrough defaults (iOS)", () => {
-  test.use({ timeout: 30_000 })
+  test.use({ timeout: 30_000, trace: NETWORK_TRACE })
 
   test.beforeEach(async ({ device, apiCallsScreen }) => {
-    await startNetworkProxy(device)
     await resetApp(device, "/api-calls")
     await expect(apiCallsScreen.heading).toBeVisible()
   })

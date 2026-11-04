@@ -9,15 +9,14 @@ import {
   test,
 } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
-import { startNetworkProxy } from "../utils/network-proxy.js"
+import { NETWORK_TRACE } from "../utils/network-trace.js"
 
 const SHARED_TITLE = "Shared beforeAll Mock"
 
 describe("Route lifetime", () => {
-  test.use({ timeout: 20_000 })
+  test.use({ timeout: 20_000, trace: NETWORK_TRACE })
 
   test.beforeEach(async ({ device, apiCallsScreen }) => {
-    await startNetworkProxy(device)
     await openScreen(device, "/api-calls")
     await expect(apiCallsScreen.heading).toBeVisible()
   })
