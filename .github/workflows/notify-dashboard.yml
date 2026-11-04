@@ -1,0 +1,25 @@
+name: Notify Dashboard
+
+# Tells the private tapsmith/dashboard repo that an E2E run finished, so it can
+# collect the results. workflow_run always runs this file from main, with main's
+# secrets, so a pull request can't change it or read the token. The dashboard
+# fetches the results itself; nothing is sent from here but the event name.
+on:
+  workflow_run:
+    workflows: [E2E Android, E2E iOS]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  notify:
+    name: Notify
+    # Skipped runs (a draft PR, or changes that can't reach iOS) have no results.
+    if: github.repository == 'tapsmith/tapsmith' && github.event.workflow_run.conclusion != 'skipped'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Send the event
+        env:
+          GH_TOKEN: ${{ secrets.DASHBOARD_DISPATCH_TOKEN }}
+        run: gh api repos/tapsmith/dashboard/dispatches -f event_type=tapsmith-e2e-finished
