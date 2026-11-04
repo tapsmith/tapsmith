@@ -274,7 +274,13 @@ int main(int argc, char **argv) {
       // flick cut short): lift that finger first, or the tap's down would only
       // move it and the app would see no tap.
       if (hid_lifts_held_contact(ev.cmd, contactDown)) {
-        sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
+        // If that lift failed, the finger may still be down: fail the tap
+        // rather than move it and report a tap the app never saw. The
+        // contact stays held, so the next tap tries the lift again.
+        if (!sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp)) {
+          printf("err send failed\n"); fflush(stdout);
+          continue;
+        }
         contactDown = 0;
       }
       switch (ev.cmd) {

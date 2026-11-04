@@ -2545,7 +2545,16 @@ class CommandHandler {
             _ = RotationSettle.waitForWindow(
                 landscape: target.isLandscape,
                 deadline: Date(timeIntervalSinceNow: Self.rotationSettleTimeout),
-                readSize: { app.windows.firstMatch.frame.size }
+                readSize: {
+                    // A failed read (an AX timeout on a loaded simulator) counts
+                    // as not turned yet: the rotation itself has happened, and
+                    // the caches below must still be dropped.
+                    var size = CGSize.zero
+                    _ = ObjCExceptionCatcher.catchException {
+                        size = app.windows.firstMatch.frame.size
+                    }
+                    return size
+                }
             )
             snapshotFinder.invalidateScreenSize()
             // The action executor keeps its own copy (dropdown options are
