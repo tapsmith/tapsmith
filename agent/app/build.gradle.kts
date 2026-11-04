@@ -16,7 +16,10 @@ android {
 
     defaultConfig {
         applicationId = "dev.tapsmith.agent"
-        minSdk = 23
+        // 24 (Android 7): from here on /proc hides other apps' processes, so
+        // no app can read the agent token from the `am instrument -e token`
+        // command line (PILOT-969). Tapsmith documents API 26+ anyway.
+        minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
