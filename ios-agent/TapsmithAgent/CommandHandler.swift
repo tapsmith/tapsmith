@@ -2548,6 +2548,9 @@ class CommandHandler {
                 readSize: { app.windows.firstMatch.frame.size }
             )
             snapshotFinder.invalidateScreenSize()
+            // The action executor keeps its own copy (dropdown options are
+            // judged against it): drop it too, so it reads the turned screen.
+            actionExecutor.cachedScreenSize = nil
             return ["success": true]
 
         case "getOrientation":
