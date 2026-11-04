@@ -3270,6 +3270,25 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                         self.hid_injector.shutdown(prev).await;
                     }
                 }
+                // Start the new simulator's HID helper now, in the background,
+                // so the run's first tap does not wait for it: on a loaded
+                // host CoreSimulator can take longer to hand the helper its
+                // device than a tap waits (a touch that arrives meanwhile
+                // waits for this start rather than spawning its own).
+                #[cfg(target_os = "macos")]
+                {
+                    let is_ios_sim = self
+                        .device_manager
+                        .read()
+                        .await
+                        .active_device()
+                        .is_some_and(|d| d.platform == Platform::Ios && d.is_emulator);
+                    if is_ios_sim {
+                        let hid = Arc::clone(&self.hid_injector);
+                        let udid = req.serial.clone();
+                        tokio::spawn(async move { hid.warm(&udid).await });
+                    }
+                }
                 if device_changed {
                     self.cleanup_network_proxy().await;
                     *self.started_agent_config.write().await = None;
