@@ -18,7 +18,7 @@ import type { ElementHandle } from "tapsmith"
  * the app as it happens: on a slow CI simulator the lift of a 10 ms press
  * reached React Native after the turn, and one of the taps was lost in every
  * attempt. Its taps are now pressed and lifted back to back, so the lift
- * arrives with the press and no turn can come between them. The switch's
+ * arrives with the press, well before the turn. The switch's
  * test checks only that setChecked() lands (a switch needs its 20 ms, and
  * XCTest's own tap also lifts within 50 ms).
  */

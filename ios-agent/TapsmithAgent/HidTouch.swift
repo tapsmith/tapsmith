@@ -11,10 +11,12 @@ enum HidTouch {
     /// a 10 ms gap: the helper sleeps between the press and the lift, and on a
     /// starved CI simulator that sleep runs long. Beside a carousel that turns
     /// 50 ms after a touch lands, a double tap held 10 ms lost a press in
-    /// every attempt on CI; with its taps pressed back to back, the press and
-    /// the lift reach React Native together, before the turn can start. So a
-    /// one-frame tap is pressed and lifted back to back. A control's
-    /// frame-spanning hold is kept, because the control needs it.
+    /// every attempt on CI. Pressed back to back, the lift reached React
+    /// Native with the press in 20 of 20 double taps locally. The press and
+    /// the lift are still two messages, so a scroll event between them is
+    /// rarer, not impossible. So a one-frame tap is pressed and lifted back to
+    /// back. A control's frame-spanning hold is kept, because the control
+    /// needs it.
     static func hold(forTapHold tapHold: TimeInterval) -> TimeInterval {
         tapHold <= TapTiming.oneFrameHold ? 0 : tapHold
     }
