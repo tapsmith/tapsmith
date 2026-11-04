@@ -24,15 +24,37 @@ expect("a shorter hold has none either", HidTouch.hold(forTapHold: 0.005) == 0)
 expect("a frame-spanning hold is kept", HidTouch.hold(forTapHold: 0.020) == 0.020)
 expect("a longer hold is kept", HidTouch.hold(forTapHold: 0.050) == 0.050)
 
-// The helper places points in the device's native portrait space.
-expect("a tall window, device upright: upright",
-       HidTouch.interfaceIsUpright(screen: CGSize(width: 402, height: 874), deviceUpsideDown: false))
+// The helper places points in the device's native portrait space; the
+// agent plans them in the app's interface space.
+let tall = CGSize(width: 402, height: 874)
+let wide = CGSize(width: 874, height: 402)
+let p = CGPoint(x: 100, y: 200)
+expect("a tall window, device upright: the point as planned",
+       HidTouch.nativePoint(p, screen: tall, device: .portrait) == p)
+expect("a tall window on a turned device (the app did not rotate): as planned",
+       HidTouch.nativePoint(p, screen: tall, device: .landscapeLeft) == p)
 expect("a square window counts as upright",
-       HidTouch.interfaceIsUpright(screen: CGSize(width: 500, height: 500), deviceUpsideDown: false))
-expect("a wide window: rotated",
-       !HidTouch.interfaceIsUpright(screen: CGSize(width: 874, height: 402), deviceUpsideDown: false))
-expect("a tall window, device upside down: not upright",
-       !HidTouch.interfaceIsUpright(screen: CGSize(width: 402, height: 874), deviceUpsideDown: true))
+       HidTouch.nativePoint(p, screen: CGSize(width: 500, height: 500), device: .portrait) == p)
+expect("a tall window, device upside down: no native point (did the app turn?)",
+       HidTouch.nativePoint(p, screen: tall, device: .portraitUpsideDown) == nil)
+// From iOS E2E (iPhone 16 Pro simulator, setOrientation("landscape") =
+// landscapeLeft, home button on the right): the Dark Mode switch planned at
+// (809.5, 156) in the 874x402 interface sits at (246, 809.5) in the portrait
+// screenshot. Pressed at (809.5, 156) unmapped, the tap missed it.
+expect("landscapeLeft maps the interface point into portrait space",
+       HidTouch.nativePoint(CGPoint(x: 809.5, y: 156), screen: wide, device: .landscapeLeft)
+           == CGPoint(x: 246, y: 809.5))
+expect("landscapeLeft: the interface's top-left is the native top-right",
+       HidTouch.nativePoint(.zero, screen: wide, device: .landscapeLeft) == CGPoint(x: 402, y: 0))
+expect("landscapeRight: the interface's top-left is the native bottom-left",
+       HidTouch.nativePoint(.zero, screen: wide, device: .landscapeRight) == CGPoint(x: 0, y: 874))
+expect("landscapeRight maps the interface point into portrait space",
+       HidTouch.nativePoint(CGPoint(x: 809.5, y: 156), screen: wide, device: .landscapeRight)
+           == CGPoint(x: 156, y: 64.5))
+expect("a wide window with no landscape device orientation: no native point",
+       HidTouch.nativePoint(p, screen: wide, device: .other) == nil)
+expect("a wide window on an upright device: no native point",
+       HidTouch.nativePoint(p, screen: wide, device: .portrait) == nil)
 
 if failures > 0 {
     print("\(failures) HidTouch test(s) failed")
