@@ -23,6 +23,13 @@ expect("a shorter hold has none either", HidTouch.hold(forTapHold: 0.005) == 0)
 // A control that reads a touch on a display frame keeps its hold.
 expect("a frame-spanning hold is kept", HidTouch.hold(forTapHold: 0.020) == 0.020)
 expect("a longer hold is kept", HidTouch.hold(forTapHold: 0.050) == 0.050)
+// What a tap's and a double tap's element types come to over HID.
+expect("a button's taps are pressed back to back",
+       HidTouch.hold(forTapHold: TapTiming.hold(for: .button)) == 0)
+expect("a switch's taps keep their frame-spanning hold",
+       HidTouch.hold(forTapHold: TapTiming.hold(for: .switch)) == TapTiming.frameSpanningHold)
+expect("an unknown target keeps the frame-spanning hold",
+       HidTouch.hold(forTapHold: TapTiming.hold(for: nil)) == TapTiming.frameSpanningHold)
 
 // The helper places points in the device's native portrait space; the
 // agent plans them in the app's interface space.

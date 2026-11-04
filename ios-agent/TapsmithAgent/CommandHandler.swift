@@ -1625,10 +1625,13 @@ class CommandHandler {
                     return ["tapped": true]
                 }
                 // holdMs: how long the daemon's HID tap, and each tap of its
-                // double tap, holds its touch (`TapTiming`, by the element's
-                // type; a tap's one-frame hold is pressed back to back over
-                // HID, `HidTouch.hold`).
-                let pressHold = forTap ? HidTouch.hold(forTapHold: hold) : hold
+                // double tap, holds its touch: `TapTiming`'s hold for the
+                // element's type, as HID presses it (`HidTouch.hold`: a
+                // one-frame tap is pressed and lifted back to back). This
+                // applies to the double tap as well as to the single tap: a
+                // double tap's 10 ms presses lost taps beside a moving scroll
+                // view on CI (PILOT-1005), so do not limit it to single taps.
+                let pressHold = HidTouch.hold(forTapHold: hold)
                 var answer: [String: Any] = [
                     "x": Double(native.x), "y": Double(native.y), "holdMs": Int((pressHold * 1000).rounded()),
                 ]
