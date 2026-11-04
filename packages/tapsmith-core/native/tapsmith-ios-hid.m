@@ -274,10 +274,13 @@ int main(int argc, char **argv) {
       // flick cut short): lift that finger first, or the tap's down would only
       // move it and the app would see no tap.
       if (hid_lifts_held_contact(ev.cmd, contactDown)) {
-        // If that lift failed, the finger may still be down: fail the tap
-        // rather than move it and report a tap the app never saw. The
-        // contact stays held, so the next tap tries the lift again.
-        if (!sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp)) {
+        // If that lift failed, the finger may still be down: fail a `t1`
+        // rather than move the finger and report a tap the app never saw (the
+        // contact stays held, so the next tap tries the lift again). A `t2`
+        // goes ahead: the daemon does not read its reply, so skipping it
+        // would report a double tap that never happened.
+        BOOL lifted = sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
+        if (!lifted && ev.cmd == HID_TAP) {
           printf("err send failed\n"); fflush(stdout);
           continue;
         }
