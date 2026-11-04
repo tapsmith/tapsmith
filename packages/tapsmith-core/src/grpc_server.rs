@@ -5739,11 +5739,11 @@ fn hid_tap_line(x: f64, y: f64, hold_ms: Option<u64>) -> String {
 }
 
 /// How long a HID tap waits for the helper to report the touch lifted: its
-/// hold (the helper's 20 ms default when None), plus the helper's own 2 s
-/// bound on delivering the lift, plus slack for a loaded host.
+/// hold (the helper's 20 ms default when None), plus the helper's own 4 s
+/// bound on confirming a tap's lift, plus slack for a loaded host.
 #[cfg(any(target_os = "macos", test))]
 fn hid_tap_reply_deadline(hold_ms: Option<u64>) -> Duration {
-    Duration::from_millis(hold_ms.unwrap_or(20) + 3_000)
+    Duration::from_millis(hold_ms.unwrap_or(20) + 5_000)
 }
 
 /// The environment variable that makes a missing or broken iOS simulator HID
@@ -7283,10 +7283,11 @@ mod tests {
 
     #[test]
     fn a_tap_waits_for_the_helper_past_its_hold() {
-        // The helper's own send timeout is 2 s for the lift; the wait covers
-        // that and the hold, so a slow-but-working helper is not given up on.
-        assert!(hid_tap_reply_deadline(Some(20)) >= Duration::from_millis(2_020));
-        assert!(hid_tap_reply_deadline(None) >= Duration::from_millis(2_500));
+        // The helper gives a tap's lift up to 4 s to be confirmed (a loaded
+        // runner confirms late); the wait covers that and the hold, so a
+        // slow-but-working helper is not given up on.
+        assert!(hid_tap_reply_deadline(Some(20)) > Duration::from_millis(4_020));
+        assert!(hid_tap_reply_deadline(None) > Duration::from_millis(4_020));
     }
 
     #[test]

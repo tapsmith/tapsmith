@@ -188,7 +188,8 @@ int main(int argc, char **argv) {
     SEL sendSel = NSSelectorFromString(@"sendWithMessage:freeWhenDone:completionQueue:completion:");
     dispatch_queue_t cq = dispatch_queue_create("tapsmith.hid.cq", DISPATCH_QUEUE_SERIAL);
 
-    BOOL (^sendTouch)(double, double, int) = ^BOOL(double rx, double ry, int dir) {
+    // Send one touch event and wait up to `waitSeconds` for its delivery.
+    BOOL (^sendTouchWithin)(double, double, int, int64_t) = ^BOOL(double rx, double ry, int dir, int64_t waitSeconds) {
       IndigoMessage *m = makeTouchMessage(rx, ry, dir);
       if (!m) return NO;  // couldn't build the touch message — report failure
       __block NSError *serr = nil;
@@ -201,9 +202,16 @@ int main(int argc, char **argv) {
       // the wait's return code too. If the block fires late it safely writes to
       // the ARC-retained __block serr box and signals an unwaited semaphore — a
       // harmless no-op nobody reads.
-      long rc = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+      long rc = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, waitSeconds * NSEC_PER_SEC));
       return rc == 0 && serr == nil;
     };
+    BOOL (^sendTouch)(double, double, int) = ^BOOL(double rx, double ry, int dir) {
+      return sendTouchWithin(rx, ry, dir, 2);
+    };
+    // A whole tap's lift gets longer to be confirmed: the daemon waits for
+    // this answer, and on a loaded host the confirmation of a delivered lift
+    // has come after 2 s, which would report a tap the app got as failed.
+    const int64_t kTapLiftWaitSeconds = 4;
 
     // Fire-and-forget send for the intermediate events of a composite
     // gesture (double-tap): the client delivers in order, and recognizers
@@ -283,7 +291,7 @@ int main(int argc, char **argv) {
               : (useconds_t)ev.holdMs * 1000;
           sendTouchNoWait(nx, ny, DirDown);
           usleep(holdUs);
-          ok = sendTouch(nx, ny, DirUp);
+          ok = sendTouchWithin(nx, ny, DirUp, kTapLiftWaitSeconds);
           break;
         }
         case HID_DOUBLE_TAP: {
