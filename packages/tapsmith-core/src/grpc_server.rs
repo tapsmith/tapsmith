@@ -2119,11 +2119,6 @@ impl TapsmithServiceImpl {
     ) -> HidOutcome {
         use std::sync::atomic::Ordering;
         const AGENT_TOO_OLD: &str = "the iOS agent predates HID taps (rebuild it)";
-        // TEMPORARY (PILOT-996 diagnosis, remove before merge): CI A/B switch
-        // that sends element taps down the agent's route.
-        if hid_required_from(std::env::var("TAPSMITH_AB_NO_HID_TAP").ok().as_deref()) {
-            return HidOutcome::NotHandled;
-        }
         let udid = {
             let dm = self.device_manager.read().await;
             match dm.active_device() {

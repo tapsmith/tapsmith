@@ -54,14 +54,6 @@ on:
   # Manual runs exist for the `Multi-device` job, which is disabled on push
   # and pull_request (see the job's comment).
   workflow_dispatch:
-    inputs:
-      # TEMPORARY (PILOT-996 diagnosis, remove before merge): shard 1 taps
-      # through the agent's XCTest touch instead of the HID helper, as an
-      # A/B for the api-request-fixture stall.
-      ab_no_hid_tap:
-        description: "TEMPORARY A/B: shard 1 skips HID element taps"
-        type: boolean
-        default: false
 
 # A PR's runs share its branch; pushes to main share refs/heads/main, so a
 # burst of merges finishes only the newest main run instead of one per merge.
@@ -654,8 +646,6 @@ jobs:
           # otherwise, so this adds only negligible file I/O.
           TAPSMITH_TIMING_LOG: ${{ runner.temp }}/ios-timing-${{ matrix.shard }}.log
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-${{ matrix.shard }}.log
-          # TEMPORARY (PILOT-996 diagnosis, remove before merge).
-          TAPSMITH_AB_NO_HID_TAP: ${{ (inputs.ab_no_hid_tap && matrix.shard == 1) && '1' || '' }}
         run: |
           npx tapsmith test -c tapsmith.config.ios-ci.mjs --shard=${{ matrix.shard }}/${{ env.SHARD_TOTAL }} --workers 1
 
@@ -789,7 +779,10 @@ jobs:
       # the app's side only. Keep the simulator's own trustd/securityd log,
       # with the app's network log beside it, so the other side can be read
       # too: on a failed run, and always on shard 1, where a test that fails
-      # and then passes on retry leaves the job green.
+      # and then passes on retry leaves the job green. Known cause so far:
+      # trustd updating its pinning database from a freshly downloaded
+      # PKITrustSupplementals asset blocks every evaluation for ~1.5-2.5 min,
+      # some 8-15 min after boot (mobileassetd is logged for the download).
       - name: Collect simulator trust logs
         if: ${{ !cancelled() && env.TAPSMITH_IOS_UDID != '' && (failure() || matrix.shard == 1) }}
         timeout-minutes: 5
@@ -801,7 +794,7 @@ jobs:
             xcrun simctl spawn "$TAPSMITH_IOS_UDID" launchctl list 2>&1 | grep -i trust || true
             echo "== log show"
             xcrun simctl spawn "$TAPSMITH_IOS_UDID" log show --last 90m --style compact --info --debug \
-              --predicate 'process == "trustd" OR process == "securityd" OR subsystem == "com.apple.securityd" OR subsystem == "com.apple.trustd" OR (process == "TapsmithTestApp" AND (subsystem == "com.apple.network" OR subsystem == "com.apple.CFNetwork" OR subsystem BEGINSWITH "com.apple.security"))' 2>&1 || true
+              --predicate 'process == "trustd" OR process == "securityd" OR process == "mobileassetd" OR subsystem == "com.apple.securityd" OR subsystem == "com.apple.trustd" OR (process == "TapsmithTestApp" AND (subsystem == "com.apple.network" OR subsystem == "com.apple.CFNetwork" OR subsystem BEGINSWITH "com.apple.security"))' 2>&1 || true
           } > "$out"
           echo "$(wc -l < "$out") lines in $out"
 
