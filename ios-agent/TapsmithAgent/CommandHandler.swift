@@ -1590,7 +1590,17 @@ class CommandHandler {
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
             // The daemon touches the point as soon as it has it, so the target
             // must have stopped changing first (PILOT-791).
-            switch try planSettledTouch(target, timeoutMs: remaining) {
+            let plan = try planSettledTouch(target, timeoutMs: remaining)
+            // The daemon's helper places a point in the device's native
+            // portrait space, while the plan's point is in the app's
+            // interface space: they agree only while the interface is upright.
+            // Otherwise XCTest touches, as it maps the orientation itself.
+            if case .point = plan, !Self.interfaceIsUpright(
+                screen: snapshotFinder.screenSize, device: XCUIDevice.shared.orientation
+            ) {
+                return ["useElement": true]
+            }
+            switch plan {
             case .point(let point, _, let hold):
                 // holdMs: how long the daemon's HID tap, and each tap of its
                 // double tap, holds its touch (`TapTiming`, by the element's
@@ -2670,6 +2680,13 @@ class CommandHandler {
         Thread.sleep(forTimeInterval: 0.35)
         snapshotFinder.clearFocusedTextInputHint()
         keyboardFirstGate.disarm()
+    }
+
+    /// Whether the app's interface is in the device's native portrait
+    /// orientation: its window taller than wide, and the device not upside
+    /// down (an app that rotates to upside-down portrait keeps a tall window).
+    static func interfaceIsUpright(screen: CGSize, device: UIDeviceOrientation) -> Bool {
+        screen.height >= screen.width && device != .portraitUpsideDown
     }
 
     private static let textInputClassNames: Set<String> = Set(

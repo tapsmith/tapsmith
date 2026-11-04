@@ -65,9 +65,10 @@ env:
   # Tapsmith's own CI is not a user; keep its runs out of the usage counts.
   TAPSMITH_TELEMETRY: "0"
   # Simulator taps, double taps and long presses go through the daemon's
-  # tapsmith-ios-hid helper. Without it they quietly fall back to the agent's
-  # slower XCTest touches; this makes that fallback fail the run instead, so
-  # the suite proves the HID route is the one taken.
+  # tapsmith-ios-hid helper. When the helper can't start (or the agent build
+  # predates HID taps) they quietly fall back to the agent's slower XCTest
+  # touches; this makes that fail the run instead, so the suite proves the
+  # HID route is the one taken.
   TAPSMITH_REQUIRE_IOS_HID: "1"
   # Fixed per-shard overhead (cache restores, simulator boot, app install,
   # agent start) is ~10 of a shard's ~20 min, so fewer shards spend fewer

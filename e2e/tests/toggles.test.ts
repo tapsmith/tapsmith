@@ -29,6 +29,19 @@ describe("Toggles screen", () => {
     await expect(togglesScreen.darkModeSwitch).not.toBeChecked()
   })
 
+  test("tap() lands on the switch after rotating to landscape", async ({ device, togglesScreen }) => {
+    // The switch sits at the right of its row, so a touch mapped as if the
+    // screen were still portrait would miss it.
+    await device.setOrientation("landscape")
+    try {
+      await expect(togglesScreen.darkModeSwitch).toBeVisible()
+      await togglesScreen.darkModeSwitch.tap()
+      await expect(togglesScreen.darkModeSwitch).toBeChecked()
+    } finally {
+      await device.setOrientation("portrait")
+    }
+  })
+
   test("isChecked() returns current state", async ({ togglesScreen }) => {
     const checked = await togglesScreen.notificationsSwitch.isChecked()
     expect(checked).toBe(true)
