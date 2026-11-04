@@ -323,7 +323,7 @@ enum EventSynthesizer {
         }
 
         let start = Date()
-        guard synthesizeTap(at: point, duration: hold) else { return .notStarted }
+        guard synthesizeTap(at: point, duration: hold, stationaryMove: true) else { return .notStarted }
         // The dispatch completion fires only after the first tap has been
         // synthesized, so the app-visible gap starts HERE — sleep the full
         // interval from this point. Crediting dispatch-1's duration against
@@ -353,7 +353,7 @@ enum EventSynthesizer {
         } else {
             second = point
         }
-        guard synthesizeTap(at: second, duration: hold) else { return .firstTapOnly }
+        guard synthesizeTap(at: second, duration: hold, stationaryMove: true) else { return .firstTapOnly }
         let elapsed = Date().timeIntervalSince(start)
         if elapsed > 0.5 {
             NSLog(
@@ -425,10 +425,9 @@ enum EventSynthesizer {
             let raw = unsafeBitCast(allocImp, to: AllocFn.self)(pathClass, allocSel)
             guard let path = unsafeBitCast(initImp, to: InitMethod.self)(raw, initSel, point, offset)?.takeRetainedValue()
             else { return nil }
-            // Stationary move mid-tap, mirroring synthesizeTap: a touch with
-            // no move event is intermittently misclassified/dropped by the
-            // gesture pipeline (observed as the app registering only one of
-            // the two taps).
+            // Stationary move mid-tap, as a double tap's sequential taps make
+            // (`synthesizeTap(stationaryMove:)`): kept from when a double tap
+            // was seen registering only one of its taps. A single tap has none.
             if path.responds(to: moveSel) {
                 let moveFunc = unsafeBitCast(path.method(for: moveSel), to: MoveMethod.self)
                 moveFunc(path, moveSel, point, offset + tapDuration * 0.5)
@@ -1041,7 +1040,9 @@ enum EventSynthesizer {
 
     // MARK: - Private
 
-    private static func synthesizeTap(at point: CGPoint, duration: TimeInterval) -> Bool {
+    /// `stationaryMove`: add a move to the same point mid-tap (a double tap's
+    /// taps, where a touch with no move has been seen dropped).
+    private static func synthesizeTap(at point: CGPoint, duration: TimeInterval, stationaryMove: Bool = false) -> Bool {
         // 1. Create XCPointerEventPath for touch
         guard let pathClass = objc_lookUpClass("XCPointerEventPath") else {
             NSLog("[EventSynth] XCPointerEventPath class not found")
@@ -1061,15 +1062,14 @@ enum EventSynthesizer {
         let initFunc = unsafeBitCast(initImp, to: InitMethod.self)
         let path = initFunc(pathObj, initSel, point, 0.0)
 
-        // Add a moveToPoint at the same location — this generates a touchesMoved
-        // event which helps UIScrollView's gesture recognizer classify the gesture
-        // as a stationary tap (not a scroll), allowing the event to pass through
-        // to child responders like TouchableOpacity. Re-checked with 20 ms taps:
-        // with or without it, every tap landed on the test app's list rows,
-        // switch, tap area and carousel button. Kept, as it costs no time and a
-        // touch with no move has been seen dropped in a double tap.
+        // A single tap has no move between the press and the lift. A stationary
+        // move mid-tap used to be added (to help a scroll view classify the
+        // touch as a tap), but with a one-frame hold it loses taps beside a
+        // self-paging carousel: the journey bench's "qty-plus" tap was lost in
+        // 6 of 7 runs with the move and none of 7 without it. A double tap's
+        // taps keep it.
         let moveSel = NSSelectorFromString("moveToPoint:atOffset:")
-        if path.responds(to: moveSel) {
+        if stationaryMove, path.responds(to: moveSel) {
             let moveImp = path.method(for: moveSel)
             typealias MoveMethod = @convention(c) (NSObject, Selector, CGPoint, TimeInterval) -> Void
             let moveFunc = unsafeBitCast(moveImp, to: MoveMethod.self)
