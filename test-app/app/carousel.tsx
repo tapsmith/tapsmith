@@ -219,7 +219,9 @@ export default function CarouselScreen() {
         <Text style={styles.buttonText}>Slide the button in</Text>
       </TouchableOpacity>
       <View style={styles.track}>
-        <Animated.View style={{ width: pageWidth * SLIDER_WIDTH_SHARE, transform: [{ translateX: slide }] }}>
+        <Animated.View
+          style={{ width: pageWidth * SLIDER_WIDTH_SHARE, transform: [{ translateX: slide }] }}
+        >
           <TouchableOpacity
             style={[styles.button, styles.slider]}
             onPress={() => setCaught((n) => n + 1)}
