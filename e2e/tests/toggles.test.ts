@@ -32,9 +32,17 @@ describe("Toggles screen", () => {
   test("tap() lands on the switch after rotating to landscape", async ({ device, togglesScreen }) => {
     // The switch sits at the right of its row, so a touch mapped as if the
     // screen were still portrait would miss it.
+    const portrait = await togglesScreen.darkModeSwitch.boundingBox()
     await device.setOrientation("landscape")
     try {
       await expect(togglesScreen.darkModeSwitch).toBeVisible()
+      // Some simulator runtimes turn the device but not the app: then there
+      // is no rotated screen to tap on.
+      const landscape = await togglesScreen.darkModeSwitch.boundingBox()
+      test.skip(
+        !portrait || !landscape || landscape.x <= portrait.x + 50,
+        "the app's UI did not rotate on this device, so its touches are not rotated either",
+      )
       await togglesScreen.darkModeSwitch.tap()
       await expect(togglesScreen.darkModeSwitch).toBeChecked()
     } finally {
