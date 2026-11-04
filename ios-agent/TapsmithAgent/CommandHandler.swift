@@ -1584,8 +1584,11 @@ class CommandHandler {
             switch try planSettledTouch(element, timeoutMs: remaining) {
             case .point(let point, _, let hold):
                 // holdMs: how long each tap of the daemon's HID double tap
-                // holds its touch (`TapTiming`, by the element's type).
-                return ["x": Double(point.x), "y": Double(point.y), "holdMs": Int((hold * 1000).rounded())]
+                // holds its touch: `TapTiming`'s hold for the element's type,
+                // as HID presses it (`HidTouch.hold`: a one-frame tap is
+                // pressed and lifted back to back).
+                let pressHold = HidTouch.hold(forTapHold: hold)
+                return ["x": Double(point.x), "y": Double(point.y), "holdMs": Int((pressHold * 1000).rounded())]
             case .hittableElement, .offScreen:
                 // No point to hand out (off screen, or hittable with no tree
                 // to choose one from): the daemon should use the agent's own
