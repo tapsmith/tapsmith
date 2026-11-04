@@ -170,6 +170,14 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/hid-touch-tests"
 "$OUT/hid-touch-tests"
 
+# Pins XCTest's private region screenshot (the touch settle's sampler).
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/RegionScreenshotTests/main.swift \
+  TapsmithAgent/RegionScreenshot.swift \
+  -o "$OUT/region-screenshot-tests"
+"$OUT/region-screenshot-tests"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/SnapshotRetryTests/main.swift \
   TapsmithAgent/SnapshotRetry.swift \
