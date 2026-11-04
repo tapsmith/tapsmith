@@ -774,6 +774,26 @@ jobs:
             echo "No daemon logs found."
           fi
 
+      # A request the app sends through the capture proxy can hang in the
+      # simulator's certificate check (trust evaluation handed to trustd,
+      # no answer): the trace shows the app's side only. On a failed run,
+      # keep the simulator's own trustd/securityd log so the other side can
+      # be read too.
+      - name: Collect simulator trust logs
+        if: failure() && env.TAPSMITH_IOS_UDID != ''
+        timeout-minutes: 5
+        run: |
+          mkdir -p e2e/tapsmith-results
+          out="e2e/tapsmith-results/simulator-trust-${{ matrix.shard }}.log"
+          {
+            echo "== launchctl (trustd)"
+            xcrun simctl spawn "$TAPSMITH_IOS_UDID" launchctl list 2>&1 | grep -i trust || true
+            echo "== log show"
+            xcrun simctl spawn "$TAPSMITH_IOS_UDID" log show --last 60m --style compact --info --debug \
+              --predicate 'process == "trustd" OR subsystem == "com.apple.securityd" OR subsystem == "com.apple.trustd"' 2>&1 || true
+          } > "$out"
+          echo "$(wc -l < "$out") lines in $out"
+
       - name: Upload blob report
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
