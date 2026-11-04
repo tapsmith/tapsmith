@@ -2149,7 +2149,7 @@ impl TapsmithServiceImpl {
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             HidTarget::AgentRoute => return HidOutcome::NotHandled,
             HidTarget::Tapped => {
-                debug!(%udid, "tap made by the agent: the screen is rotated");
+                debug!(%udid, "tap made by the agent: a rotated screen it could not map");
                 return HidOutcome::Injected;
             }
         };
@@ -5734,7 +5734,8 @@ enum HidTarget {
     /// the method.
     AgentRoute,
     /// The agent made the tap itself (asked with `for_tap`, on a rotated
-    /// screen, whose touches only XCTest places right): nothing to press.
+    /// screen whose turn it could not tell, so it had no point in the
+    /// helper's portrait space to hand out): nothing to press.
     Tapped,
 }
 
