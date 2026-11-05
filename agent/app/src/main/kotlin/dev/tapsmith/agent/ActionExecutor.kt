@@ -52,11 +52,15 @@ class ActionExecutor(
          */
         private const val SWIPE_SETTLE_QUIET_MS = 300L
 
+        /**
+         * The shortest coordinate swipe (the old 5-step floor): a few ticks,
+         * so a near-zero duration still moves between the press and the
+         * release (unless the device stalls for the whole swipe).
+         */
+        private const val MIN_COORDINATE_SWIPE_MS = 25L
+
         /** Upper bound on a swipe's settle, for a scroll view that keeps moving. */
         private const val SWIPE_SETTLE_MAX_MS = 3000L
-
-        /** How long each press of a double tap (and a retried tap) is held. */
-        private const val TAP_PRESS_MS = 50L
 
         /** Time reserved after a focusing tap for the work that follows it
          *  (setting or clearing text and its idle waits), so the tap is not
@@ -98,7 +102,11 @@ class ActionExecutor(
      * passes [resolvedBounds] from a resolve that just completed (WaitEngine
      * has already settle-checked them), the stability wait is skipped —
      * repeating the check would only stack more blocking accessibility
-     * round-trips (PILOT-278).
+     * round-trips (PILOT-278). An element addressed by id passes
+     * [findSample], the bounds the find that resolved it read: one read at
+     * least two frames after it that shows the same bounds is enough
+     * ([FindSampleStability]); bounds that moved fall back to the polling
+     * check.
      *
      * A tap lands on whatever is on top, so [OcclusionGuard] picks the point:
      * the visible part of an element the keyboard half covers, and never an
@@ -119,14 +127,23 @@ class ActionExecutor(
         budget: ActionBudget,
         expected: TargetIdentity?,
         followUpMs: Long = 0,
+        findSample: FindSample<Rect>? = null,
     ) {
         try {
             // Bounds from before the keyboard went away are stale: the screen
             // lays itself out again without it.
             val keyboardPutAway = occlusionGuard.putKeyboardAwayFirst(element, budget)
             val trusted = resolvedBounds?.takeIf { !it.isEmpty && !keyboardPutAway }
+            val sample = findSample?.takeIf { trusted == null && !keyboardPutAway }
             val stableStart = SystemClock.uptimeMillis()
-            val bounds = trusted ?: waitForStableBounds(element)
+            val check = sample?.let { checkFindSample(element, it) }
+            val bounds =
+                trusted ?: when (check) {
+                    is SampleCheck.Stable -> check.bounds
+                    // The read that showed the move is the polling check's first.
+                    is SampleCheck.Moved -> waitForStableBounds(element, first = check.current)
+                    null -> waitForStableBounds(element)
+                }
             val stableMs = SystemClock.uptimeMillis() - stableStart
             val planStart = SystemClock.uptimeMillis()
             val point = planTouchPoint(element, bounds, budget, expected, followUpMs)
@@ -135,7 +152,8 @@ class ActionExecutor(
             clickAt(point, "tap element")
             Log.d(
                 TAG,
-                "tap phases: stableBounds=${stableMs}ms (resolvedBoundsReused=${trusted != null}) " +
+                "tap phases: stableBounds=${stableMs}ms (resolvedBoundsReused=${trusted != null}, " +
+                    "findSample=${check?.javaClass?.simpleName ?: "none"}) " +
                     "occlusion=${planMs}ms inject=${SystemClock.uptimeMillis() - injectStart}ms",
             )
         } catch (e: StaleObjectException) {
@@ -166,9 +184,10 @@ class ActionExecutor(
     private fun waitForStableBounds(
         element: UiObject2,
         timeoutMs: Long = STABLE_BOUNDS_TIMEOUT_MS,
+        first: Rect? = null,
     ): Rect {
         val deadline = SystemClock.uptimeMillis() + timeoutMs
-        var prev = element.visibleBounds
+        var prev = first ?: element.visibleBounds
         while (SystemClock.uptimeMillis() < deadline) {
             CommandCancellation.sleep(STABLE_BOUNDS_POLL_MS)
             val readStart = SystemClock.uptimeMillis()
@@ -189,6 +208,22 @@ class ActionExecutor(
         // rather than failing.
         return prev
     }
+
+    /**
+     * One read of [element]'s bounds, at least two frames after the find that
+     * read [sample], compared with it ([FindSampleStability]).
+     */
+    private fun checkFindSample(
+        element: UiObject2,
+        sample: FindSample<Rect>,
+    ): SampleCheck<Rect> =
+        FindSampleStability.check(
+            sample,
+            isEmpty = { it.isEmpty },
+            now = SystemClock::uptimeMillis,
+            sleep = CommandCancellation::sleep,
+            read = { element.visibleBounds },
+        )
 
     /**
      * Tap at specific screen coordinates.
@@ -228,7 +263,9 @@ class ActionExecutor(
             // and the daemon's HID route (long_press_resolve_budget).
             val point =
                 planGesturePoint(element, bounds, budget.shortenedBy(durationMs), expected, "long press", reserveMs = durationMs)
-            input.swipe(point.x, point.y, point.x, point.y, (durationMs / 5).toInt().coerceAtLeast(1))
+            if (!input.longPress(point.x, point.y, durationMs.coerceAtLeast(0))) {
+                throw ActionFailedException("Failed to long press at (${point.x}, ${point.y})")
+            }
         } catch (e: StaleObjectException) {
             throw e
         } catch (e: ActionFailedException) {
@@ -264,8 +301,8 @@ class ActionExecutor(
     /**
      * Tap at a planned point. A refused injection (the input dispatcher
      * dropping the event during a window transition on a loaded device) is
-     * retried once, with a shorter press, at the same point — never by the
-     * node click, which would ignore what covers the element.
+     * retried once at the same point — never by the node click, which would
+     * ignore what covers the element.
      */
     private fun clickAt(
         point: TouchPlan.Point,
@@ -273,7 +310,7 @@ class ActionExecutor(
     ) {
         if (input.click(point.x, point.y)) return
         Log.w(TAG, "$what: click at (${point.x}, ${point.y}) was refused; retrying once")
-        if (!input.click(point.x, point.y, TAP_PRESS_MS)) {
+        if (!input.click(point.x, point.y)) {
             throw ActionFailedException("Failed to $what at (${point.x}, ${point.y})")
         }
     }
@@ -308,8 +345,10 @@ class ActionExecutor(
         y: Int,
         durationMs: Long = 1000L,
     ) {
-        // swipe from point to same point with steps proportional to duration
-        input.swipe(x, y, x, y, (durationMs / 5).toInt().coerceAtLeast(1))
+        // Held for durationMs of real time (PILOT-970).
+        if (!input.longPress(x, y, durationMs.coerceAtLeast(0))) {
+            throw ActionFailedException("Failed to long press at ($x, $y)")
+        }
     }
 
     /**
@@ -723,9 +762,10 @@ class ActionExecutor(
         y2: Int,
         durationMs: Long = 300,
     ) {
-        // UIAutomator swipe is step-based (~5ms/step). Convert duration to steps.
-        val steps = (durationMs / 5).coerceIn(5L, 200L).toInt()
-        input.swipe(x1, y1, x2, y2, steps)
+        // Lasts durationMs of real time (PILOT-970): a step swipe waits a
+        // display frame per step, so steps derived from a duration ran ~3x
+        // long at 60 Hz, and longer still on a slow emulator.
+        input.timedSwipe(x1, y1, x2, y2, durationMs.coerceAtLeast(MIN_COORDINATE_SWIPE_MS))
         settleAfterSwipe(vertical = kotlin.math.abs(y2 - y1) >= kotlin.math.abs(x2 - x1))
     }
 
@@ -911,7 +951,7 @@ class ActionExecutor(
                 }
             // Both presses and the gap between them must finish before the
             // daemon gives up, or the second tap lands in the next step.
-            val gestureMs = (if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS) + 2 * TAP_PRESS_MS
+            val gestureMs = if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS
             val point = planGesturePoint(element, bounds, budget, expected, "double tap", reserveMs = gestureMs)
             doubleTapCoordinates(point.x, point.y, intervalMs)
         } catch (e: StaleObjectException) {
@@ -927,6 +967,9 @@ class ActionExecutor(
 
     /**
      * Double-tap at specific screen coordinates with tightly controlled timing.
+     * Each tap is released as soon as it presses, as a single tap is: React
+     * Native's double-tap handlers landed 20 of 20 pairs with no hold, the same
+     * as with the 50 ms presses the pairs used to hold.
      */
     fun doubleTapCoordinates(
         x: Int,
@@ -934,9 +977,9 @@ class ActionExecutor(
         intervalMs: Long = DOUBLE_TAP_INTERVAL_MS,
     ) {
         val interval = if (intervalMs > 0) intervalMs else DOUBLE_TAP_INTERVAL_MS
-        if (input.click(x, y, TAP_PRESS_MS)) {
+        if (input.click(x, y)) {
             SystemClock.sleep(interval)
-            if (input.click(x, y, TAP_PRESS_MS)) return
+            if (input.click(x, y)) return
             // First tap already landed — complete the gesture with one more
             // try rather than leaving a lone single tap behind.
             if (input.click(x, y)) return

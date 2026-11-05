@@ -56,6 +56,16 @@ data class KeyPress(
     val time: Long,
 )
 
+/**
+ * The event time to inject [event] with at [now]: a press carries its own
+ * down time, as UiAutomator's do. React Native keys a gesture on the DOWN's
+ * event time and drops a later CANCEL whose down time differs from it.
+ */
+fun motionEventTime(
+    event: TouchEvent,
+    now: Long,
+): Long = if (event.action == TouchAction.DOWN) event.downTime else now
+
 /** Where the agent's input events go. True when the input system accepted the event. */
 interface InputSink {
     fun touch(event: TouchEvent): Boolean
@@ -118,6 +128,19 @@ class PointerPath(
         val dx = (dest.x - end.x).toDouble()
         val dy = (dest.y - end.y).toDouble()
         add(Segment(end, dest, (1000 * Math.sqrt(dx * dx + dy * dy) / speedPxPerSec).toLong()))
+        return this
+    }
+
+    /**
+     * Move in a straight line to [dest] over [durationMs], whatever the
+     * distance (a coordinate swipe's `duration`; PILOT-970).
+     */
+    fun travelTo(
+        dest: ScreenPoint,
+        durationMs: Long,
+    ): PointerPath {
+        require(durationMs >= 0) { "duration cannot be negative" }
+        add(Segment(end, dest, durationMs))
         return this
     }
 
@@ -220,11 +243,21 @@ class GestureInjector(
     private val tickMs: () -> Long = { DEFAULT_TICK_MS },
 ) {
     companion object {
-        /** How long a click holds the pointer down (UiAutomator's REGULAR_CLICK_LENGTH). */
-        const val CLICK_PRESS_MS = 100L
+        /**
+         * How long a tap holds the pointer down: not at all, DOWN then UP, as
+         * adb's `input tap` sends it (PILOT-974). UiAutomator holds 100 ms
+         * (REGULAR_CLICK_LENGTH), which only makes each tap slower: Views,
+         * Compose and React Native all act on the release, however soon it
+         * comes. (Unlike on iOS, React Native on Android did not cancel a held
+         * press when a carousel beside it turned, at holds up to 500 ms.)
+         */
+        const val CLICK_PRESS_MS = 0L
 
         /** A timed gesture's event interval when the display's refresh rate is unknown. */
         const val DEFAULT_TICK_MS = 8L
+
+        /** How often a long hold checks whether its command was cancelled. */
+        const val HOLD_CHECK_MS = 50L
 
         /** Key codes that set modifier meta state while they are held, as UiAutomator sends them. */
         private val KEY_MODIFIERS =
@@ -252,10 +285,17 @@ class GestureInjector(
     ) = sink.touch(TouchEvent(action, downTime, listOf(PointerState(0, x, y)), sync = sync))
 
     /**
-     * Press and release one pointer at ([x], [y]), held for [pressMs]. The
+     * Press and release one pointer at ([x], [y]), held for [pressMs] (a tap:
+     * no hold, [CLICK_PRESS_MS]). The
      * release is sent even when the press was refused (the input system may
      * have delivered it anyway), and a refused release is followed by a cancel,
      * so no pointer is left down. True only when both went through.
+     *
+     * A held press stops when its command is cancelled (checked every
+     * [HOLD_CHECK_MS], and once at the end of a shorter press): the pointer is
+     * cancelled, not released, so the abandoned press does not land as a
+     * click, and [CommandCancelledException] is thrown. A tap with no hold has
+     * nothing to stop: its release follows the press at once.
      */
     fun click(
         x: Int,
@@ -264,11 +304,57 @@ class GestureInjector(
     ): Boolean {
         val downTime = clock.now()
         val downOk = single(TouchAction.DOWN, downTime, x, y, sync = true)
-        clock.sleep(pressMs)
+        try {
+            // From when the press was delivered: a sync DOWN can block (window
+            // animations on API 30, a busy app), and that wait is not hold time.
+            hold(clock.now(), pressMs)
+        } catch (e: CommandCancelledException) {
+            single(TouchAction.CANCEL, downTime, x, y, sync = true)
+            throw e
+        }
         val upOk = single(TouchAction.UP, downTime, x, y, sync = true)
         if (!upOk) single(TouchAction.CANCEL, downTime, x, y, sync = true)
         return downOk && upOk
     }
+
+    /** Sleep until [ms] after [since], checking for cancellation every [HOLD_CHECK_MS]. */
+    private fun hold(
+        since: Long,
+        ms: Long,
+    ) {
+        while (true) {
+            val left = since + ms - clock.now()
+            if (left <= 0) return
+            clock.sleep(minOf(left, HOLD_CHECK_MS))
+            CommandCancellation.checkpoint()
+        }
+    }
+
+    /**
+     * A long press: press at ([x], [y]), hold for [holdMs] of real time, and
+     * release (PILOT-970). Not a step swipe from the point to itself: each
+     * step waits for a display frame, so `holdMs / 5` steps held ~3x as long
+     * as asked at 60 Hz, and longer still on a slow emulator. Refusals are
+     * handled as [click] handles them, so no pointer is left down.
+     */
+    fun longPress(
+        x: Int,
+        y: Int,
+        holdMs: Long,
+    ): Boolean = click(x, y, holdMs)
+
+    /**
+     * A swipe from ([x1], [y1]) to ([x2], [y2]) that lasts [durationMs] of real
+     * time (PILOT-970): a timed gesture ([perform]), with moves every tick,
+     * rather than [stepSwipe]'s one move per display frame.
+     */
+    fun timedSwipe(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        durationMs: Long,
+    ) = perform(PointerPath(ScreenPoint(x1, y1)).travelTo(ScreenPoint(x2, y2), durationMs), pacedByClock = true)
 
     /**
      * UiDevice.swipe: press at the start, [steps] - 1 moves along the line one
@@ -303,8 +389,26 @@ class GestureInjector(
      * has ended, move the rest, and press the ones whose delay has come.
      * Events are injected without waiting for the app (as there), so a long
      * gesture keeps its speed on a busy device.
+     *
+     * With [pacedByClock] (a gesture whose duration is the caller's contract,
+     * like [timedSwipe]) time is read from the clock, as UiAutomator's
+     * GestureController does, so sleeps that overrun do not stretch it
+     * (PILOT-970). Otherwise each tick advances the path by one tick, so no
+     * part of it is skipped however slow the device: an element pinch whose
+     * first two-finger move is already near its end is not seen as a pinch.
+     *
+     * A pointer is moved to its end point before it is released if its last
+     * MOVE left it elsewhere, so a tick that overran the rest of a path (a
+     * short drag, a stall on a loaded device) still ends in a drag to the end,
+     * not a tap or a jump. Each
+     * tick checks whether the command was cancelled: if it was, the pointers
+     * still down are cancelled (not released, which could fling or click) and
+     * [CommandCancelledException] is thrown.
      */
-    fun perform(vararg paths: PointerPath) {
+    fun perform(
+        vararg paths: PointerPath,
+        pacedByClock: Boolean = false,
+    ) {
         require(paths.isNotEmpty()) { "a gesture needs at least one pointer" }
         val ids = paths.withIndex().associate { (i, p) -> p to i }
         val position = paths.associateWith { it.start }.toMutableMap()
@@ -320,26 +424,40 @@ class GestureInjector(
             index: Int = 0,
         ) = sink.touch(TouchEvent(action, startTime, pointers(), index, sync = false))
 
+        val sent = mutableMapOf<PointerPath, ScreenPoint>() // where each pointer's last MOVE put it
         var elapsed = 0L
         while (pending.isNotEmpty() || down.isNotEmpty()) {
+            try {
+                CommandCancellation.checkpoint()
+            } catch (e: CommandCancelledException) {
+                if (down.isNotEmpty()) inject(TouchAction.CANCEL)
+                throw e
+            }
             while (true) {
                 val done = down.minByOrNull { it.delayMs + it.durationMs } ?: break
                 if (elapsed <= done.delayMs + done.durationMs) break
                 position[done] = done.end
                 for (other in down) if (other !== done) position[other] = other.pointAt(elapsed)
+                if ((sent[done] ?: done.start) != done.end) {
+                    inject(TouchAction.MOVE)
+                    for (p in down) sent[p] = position.getValue(p)
+                }
                 val index = down.indexOf(done)
                 inject(if (down.size > 1) TouchAction.POINTER_UP else TouchAction.UP, index)
                 down.removeAt(index)
             }
             for (p in down) position[p] = p.pointAt(elapsed)
-            if (down.isNotEmpty()) inject(TouchAction.MOVE)
+            if (down.isNotEmpty()) {
+                inject(TouchAction.MOVE)
+                for (p in down) sent[p] = position.getValue(p)
+            }
             while (pending.isNotEmpty() && elapsed >= pending.first().delayMs) {
                 val p = pending.removeAt(0)
                 down += p
                 inject(if (down.size > 1) TouchAction.POINTER_DOWN else TouchAction.DOWN, down.size - 1)
             }
             clock.sleep(tick)
-            elapsed += tick
+            elapsed = if (pacedByClock) clock.now() - startTime else elapsed + tick
         }
     }
 

@@ -127,9 +127,10 @@ class ActionExecutor {
         return drawn ? buffer : nil
     }
 
-    /// Tap at specific screen coordinates using event synthesis.
-    func tapCoordinates(x: Int, y: Int) {
-        if !EventSynthesizer.tap(at: CGPoint(x: x, y: y)) {
+    /// Tap at specific screen coordinates using event synthesis, holding the
+    /// touch `hold` seconds (`TapTiming.hold(for:)`, by what the tap lands on).
+    func tapCoordinates(x: Int, y: Int, hold: TimeInterval) {
+        if !EventSynthesizer.tap(at: CGPoint(x: x, y: y), hold: hold) {
             NSLog("[ActionExecutor] Event synthesis failed, falling back to XCUICoordinate.tap()")
             let normalized = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
             let point = normalized.withOffset(CGVector(dx: CGFloat(x), dy: CGFloat(y)))
@@ -151,10 +152,10 @@ class ActionExecutor {
     /// under CI load. Falls back to XCUICoordinate when synthesis is
     /// unavailable, completing a partially-delivered gesture with exactly one
     /// more tap rather than re-tapping twice (which would deliver three).
-    func doubleTapCoordinates(x: Int, y: Int, intervalMs: Int = 0) {
+    func doubleTapCoordinates(x: Int, y: Int, intervalMs: Int = 0, hold: TimeInterval) {
         let normalized = app.coordinate(withNormalizedOffset: CGVector(dx: 0, dy: 0))
         let point = normalized.withOffset(CGVector(dx: CGFloat(x), dy: CGFloat(y)))
-        switch EventSynthesizer.doubleTap(at: CGPoint(x: x, y: y), intervalMs: intervalMs) {
+        switch EventSynthesizer.doubleTap(at: CGPoint(x: x, y: y), intervalMs: intervalMs, hold: hold) {
         case .done:
             return
         case .firstTapOnly:
@@ -380,7 +381,7 @@ class ActionExecutor {
 
         // Fallback to a simple release on the source point instead of attempting
         // the XCUI drag APIs, which are what poison the XCTest session on Xcode 26.
-        tapCoordinates(x: Int(start.x), y: Int(start.y))
+        tapCoordinates(x: Int(start.x), y: Int(start.y), hold: TapTiming.hold(for: nil))
     }
 
     /// Drag between two element frames, biasing the path away from system-edge gestures.
@@ -406,29 +407,52 @@ class ActionExecutor {
 
     // MARK: - Select Option
 
-    /// Select an option from a picker/dropdown by text.
-    func selectOption(_ element: XCUIElement, optionText: String) throws {
-        element.tap()
+    /// Pick an option by text from a dropdown the caller has just opened.
+    /// `shownBefore`: the frames of the texts that showed it before the
+    /// dropdown opened (its trigger, the screen behind), which are not the
+    /// option.
+    func selectOption(_ optionText: String, shownBefore: [CGRect]) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
-        // Look for the option text in the app
-        let option = app.staticTexts[optionText]
-        if option.waitForExistence(timeout: 3) {
-            option.tap()
+        // The option's text, uncovered: more than one text can carry it (React
+        // Native can expose a text and the view around it).
+        // Wait only while it is not in the tree at all.
+        let deadline = Date().addingTimeInterval(3)
+        var option = findOption(optionText, excluding: shownBefore)
+        while option == .absent, Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.1)
+            option = findOption(optionText, excluding: shownBefore)
+        }
+        if case .touchable(let point, let ancestorTypes) = option {
+            tapCoordinates(
+                x: Int(point.x.rounded()),
+                y: Int(point.y.rounded()),
+                hold: TapTiming.hold(for: .staticText, within: ancestorTypes)
+            )
+            return
+        }
+        // Not touchable where it is (below the fold of a scrolling list):
+        // XCUIElement.tap() scrolls it into view. The first copy but those
+        // shown before, as for a touchable one.
+        let unshown = app.staticTexts.matching(identifier: optionText).allElementsBoundByIndex.first { text in
+            guard let frame = try? text.snapshot().frame else { return false }
+            return !shownBefore.contains { OcclusionAnalyzer.framesMatch($0, frame) }
+        }
+        if let unshown {
+            unshown.tap()
+            return
+        }
+        // Try in picker wheels
+        let pickerWheel = app.pickerWheels.firstMatch
+        if pickerWheel.exists {
+            pickerWheel.adjust(toPickerWheelValue: optionText)
         } else {
-            // Try in picker wheels
-            let pickerWheel = app.pickerWheels.firstMatch
-            if pickerWheel.exists {
-                pickerWheel.adjust(toPickerWheelValue: optionText)
-            } else {
-                throw AgentError.elementNotFound("Option '\(optionText)' not found in dropdown")
-            }
+            throw AgentError.elementNotFound("Option '\(optionText)' not found in dropdown")
         }
     }
 
-    /// Select an option from a picker/dropdown by index.
-    func selectOptionByIndex(_ element: XCUIElement, index: Int) throws {
-        element.tap()
+    /// Pick an option by index from a dropdown the caller has just opened.
+    func selectOptionByIndex(_ index: Int) throws {
         Thread.sleep(forTimeInterval: 0.3)
 
         // On iOS, pickers work differently. Try to find options in an action sheet or popup.
@@ -440,7 +464,48 @@ class ActionExecutor {
         guard index >= 0 && index < count else {
             throw AgentError.actionFailed("Index \(index) out of range (0..\(count - 1))")
         }
-        cells.element(boundBy: index).tap()
+        try tapOption(cells.element(boundBy: index))
+    }
+
+    private func optionAnalyzer() -> OcclusionAnalyzer? {
+        guard let snapshot = try? app.snapshot() else { return nil }
+        return OcclusionAnalyzer(snapshot: snapshot, screenSize: cachedScreenSize ?? snapshot.frame.size)
+    }
+
+    private func findOption(_ text: String, excluding: [CGRect]) -> OcclusionAnalyzer.OptionText {
+        optionAnalyzer()?.optionText(text, excluding: excluding) ?? .absent
+    }
+
+    /// The frames of the texts on screen that show `text` now.
+    func textFrames(_ text: String) -> [CGRect] {
+        optionAnalyzer()?.textFrames(text) ?? []
+    }
+
+    /// Tap a dropdown's option (a cell picked by index) at the uncovered
+    /// point the analyzer picks, held as its type and containers need
+    /// (`TapTiming`), rather than through `XCUIElement.tap()`, whose hold
+    /// XCTest picks. An option that cannot be touched where it is (below the
+    /// fold, scrolled out of its list, covered) or is not found in the tree is
+    /// left to `XCUIElement.tap()`, which scrolls it into view or fails.
+    private func tapOption(_ option: XCUIElement) throws {
+        guard let snap = try? option.snapshot(),
+              let appSnapshot = try? app.snapshot() else {
+            option.tap()
+            return
+        }
+        let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: cachedScreenSize ?? appSnapshot.frame.size)
+        let target = OcclusionAnalyzer.Target(
+            frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier
+        )
+        guard let point = analyzer.touchPoint(target) else {
+            option.tap()
+            return
+        }
+        tapCoordinates(
+            x: Int(point.x.rounded()),
+            y: Int(point.y.rounded()),
+            hold: TapTiming.hold(for: snap.elementType, within: analyzer.ancestorTypes(of: target))
+        )
     }
 
     // MARK: - Pinch Zoom
@@ -523,7 +588,8 @@ class ActionExecutor {
             tapY = 1
         }
 
-        tapCoordinates(x: Int(tapX), y: Int(tapY))
+        // Whatever is outside the element: an unknown target.
+        tapCoordinates(x: Int(tapX), y: Int(tapY), hold: TapTiming.hold(for: nil))
         Thread.sleep(forTimeInterval: Self.focusIdleTimeout)
     }
 
@@ -562,7 +628,7 @@ class ActionExecutor {
             if backButton.exists {
                 let frame = backButton.frame
                 if frame.width > 0 && frame.height > 0 {
-                    tapCoordinates(x: Int(frame.midX), y: Int(frame.midY))
+                    tapCoordinates(x: Int(frame.midX), y: Int(frame.midY), hold: TapTiming.hold(for: .button))
                 } else {
                     throw AgentError.actionFailed("Back button found but has zero frame")
                 }

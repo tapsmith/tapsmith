@@ -158,6 +158,9 @@ class ElementFinder(
     /** [TargetIdentity] of each cached element, evicted with it. */
     private val elementIdentities = ConcurrentHashMap<String, TargetIdentity>()
 
+    /** The bounds the find read for each cached element, and when; evicted with it. */
+    private val findSamples = ConcurrentHashMap<String, FindSample<Rect>>()
+
     /** Maximum number of cached elements before evicting oldest entries.
      *  Kept high so a broad query's own matches cannot evict ids the SDK is
      *  about to act on (`.first()` acts on the oldest-appended id of a batch). */
@@ -1608,15 +1611,18 @@ class ElementFinder(
         id: String,
         element: UiObject2,
         identity: TargetIdentity,
+        sample: FindSample<Rect>,
     ) {
         synchronized(elementCacheOrder) {
             elementCache[id] = element
             elementIdentities[id] = identity
+            findSamples[id] = sample
             elementCacheOrder.add(id)
             if (elementCacheOrder.size > maxCacheSize) {
                 val oldest = elementCacheOrder.removeFirst()
                 elementCache.remove(oldest)
                 elementIdentities.remove(oldest)
+                findSamples.remove(oldest)
             }
         }
     }
@@ -1628,6 +1634,12 @@ class ElementFinder(
     fun identityOf(elementId: String): TargetIdentity? = elementIdentities[elementId]
 
     /**
+     * The bounds the find that cached [elementId] read, and when, for a tap
+     * to use as its first stability sample; null for an unknown id.
+     */
+    fun findSampleOf(elementId: String): FindSample<Rect>? = findSamples[elementId]
+
+    /**
      * Clear the element cache. Called by the daemon between tests or on
      * navigation to release stale UiObject2 references.
      */
@@ -1635,6 +1647,7 @@ class ElementFinder(
         synchronized(elementCacheOrder) {
             elementCache.clear()
             elementIdentities.clear()
+            findSamples.clear()
             elementCacheOrder.clear()
         }
     }
@@ -1646,7 +1659,8 @@ class ElementFinder(
     ): ElementInfo {
         val elementId = UUID.randomUUID().toString()
         val (info, identity) = toElementInfo(obj, node, elementId, fresh)
-        cacheElement(elementId, obj, identity)
+        // Stamped after the read, so a tap's gap from it is never too short.
+        cacheElement(elementId, obj, identity, FindSample(Rect(info.bounds), SystemClock.uptimeMillis()))
         return info
     }
 }

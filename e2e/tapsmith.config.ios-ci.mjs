@@ -17,7 +17,7 @@ export default defineConfig({
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
   trace: {
-    mode: "retain-on-failure",
+    mode: "on-all-retries",
     daemonLogs: true,
     networkHosts: ["jsonplaceholder.typicode.com", "127.0.0.1"],
   },

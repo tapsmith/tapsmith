@@ -731,11 +731,16 @@ pub async fn install_ca_cert(
         // Push cert to a temp location
         push_file(serial, ca_pem_path, &tmp_cert).await?;
 
-        // Try the system CA store first (works on rooted emulators where
-        // `/system/etc/security/cacerts` is both writable and the effective
-        // runtime trust store — pre-Android-14, and CI's cold-booted images).
+        // Try the system CA store first where it is the runtime trust store
+        // (before Android 14, on rooted emulators where `adb remount` makes
+        // `/system/etc/security/cacerts` writable). From Android 14 apps read
+        // the APEX store below instead, so the remount and the writes there
+        // cost time and change nothing an app trusts.
+        let sdk = device_sdk_int(serial).await;
         let system_path = format!("{SYSTEM_CA_CERT_DIR}/{cert_filename}");
-        if try_install_system_ca(serial, cert_filename, &system_path, &tmp_cert).await {
+        if system_store_is_runtime_trust_store(sdk)
+            && try_install_system_ca(serial, cert_filename, &system_path, &tmp_cert).await
+        {
             return Ok(system_path);
         }
 
@@ -744,7 +749,7 @@ pub async fn install_ca_cert(
         // silently has no effect there. Overlay the APEX cacerts dir inside the
         // zygote mount namespace instead, so apps launched afterwards trust the
         // cert without needing a per-app network_security_config.xml.
-        if device_sdk_int(serial).await.map(|v| v >= 34).unwrap_or(false)
+        if !system_store_is_runtime_trust_store(sdk)
             && try_install_apex_ca(serial, cert_filename, &tmp_cert).await
         {
             // The APEX overlays live in the per-zygote mount namespaces and are
@@ -1093,6 +1098,14 @@ async fn try_install_system_ca(
     true
 }
 
+/// Whether `/system/etc/security/cacerts` is what apps trust at runtime:
+/// before Android 14 (API 34). From 14 on the Conscrypt APEX store is. An
+/// unreadable API level counts as before 14, which tries the system store
+/// first as every level used to.
+fn system_store_is_runtime_trust_store(sdk: Option<u32>) -> bool {
+    !matches!(sdk, Some(v) if v >= 34)
+}
+
 /// Read the device's API level (`ro.build.version.sdk`), if parseable.
 async fn device_sdk_int(serial: &str) -> Option<u32> {
     shell_lenient(serial, "getprop ro.build.version.sdk")
@@ -1290,6 +1303,25 @@ pub fn parse_keyguard_showing(dump: &str) -> Option<bool> {
         }
     }
     seen.then_some(false)
+}
+
+/// Whether the screen is on, from the output of `dumpsys power`:
+/// `mWakefulness=Awake` is on; `Asleep`, `Dozing` (always-on display) and
+/// `Dreaming` (a screen saver) all need the wake key. `None` when the dump
+/// has no `mWakefulness=` field (a failed command), so callers wake anyway.
+/// The first field decides: on multi-display builds the global state comes
+/// before the per-group ones.
+pub fn parse_screen_awake(dump: &str) -> Option<bool> {
+    dump.split_whitespace()
+        .find_map(|token| token.strip_prefix("mWakefulness="))
+        .map(|state| state == "Awake")
+}
+
+/// Ask the device whether its screen is on. See [`parse_screen_awake`] for
+/// the `None` case.
+pub async fn screen_awake(serial: &str) -> Option<bool> {
+    let dump = shell_lenient(serial, "dumpsys power").await.ok()?;
+    parse_screen_awake(&dump)
 }
 
 /// Ask the device whether its lock screen is showing. See
@@ -1837,6 +1869,47 @@ mod tests {
             parse_keyguard_showing("WINDOW MANAGER POLICY STATE\n  mAwake=true\n"),
             None
         );
+    }
+
+    // ─── CA trust store ───
+
+    #[test]
+    fn system_ca_store_is_the_trust_store_only_before_android_14() {
+        assert!(system_store_is_runtime_trust_store(Some(33)));
+        assert!(system_store_is_runtime_trust_store(Some(29)));
+        assert!(!system_store_is_runtime_trust_store(Some(34)));
+        assert!(!system_store_is_runtime_trust_store(Some(36)));
+        // Unknown level: try the system store first, as before.
+        assert!(system_store_is_runtime_trust_store(None));
+    }
+
+    // ─── Screen wakefulness ───
+
+    #[test]
+    fn screen_awake_only_when_wakefulness_is_awake() {
+        let dump = "POWER MANAGER (dumpsys power)\n\nPower Manager State:\n  mDirty=0x0\n  mWakefulness=Awake\n  mWakefulnessChanging=false\n";
+        assert_eq!(parse_screen_awake(dump), Some(true));
+        for state in ["Asleep", "Dozing", "Dreaming"] {
+            assert_eq!(
+                parse_screen_awake(&format!("  mWakefulness={state}\n")),
+                Some(false),
+                "{state} needs the wake key"
+            );
+        }
+    }
+
+    #[test]
+    fn screen_awake_reads_the_first_wakefulness_field() {
+        // `mWakefulnessChanging=` and `mWakefulnessRaw=` are other fields,
+        // and the global state comes before any per-group one.
+        let dump = "  mWakefulnessChanging=false\n  mWakefulnessRaw=Awake\n  mWakefulness=Asleep\n  groupId=0 mWakefulness=Awake\n";
+        assert_eq!(parse_screen_awake(dump), Some(false));
+    }
+
+    #[test]
+    fn screen_state_unknown_without_the_field() {
+        assert_eq!(parse_screen_awake(""), None);
+        assert_eq!(parse_screen_awake("Can't find service: power\n"), None);
     }
 
     // ─── IPv6 default-route detection ───

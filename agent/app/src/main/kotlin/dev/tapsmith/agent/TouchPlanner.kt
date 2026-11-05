@@ -72,6 +72,10 @@ interface GuardScreen {
     val bounds: Box
 
     fun windows(): List<OcclusionAnalyzer.WindowSpec>
+
+    /** Answer any system ANR / crash dialog on screen ([SystemDialogAnswerer]);
+     *  true when one was, so the cover may be gone (PILOT-977). */
+    fun answerSystemDialogs(): Boolean = false
 }
 
 sealed class TouchPlan {
@@ -178,6 +182,10 @@ class TouchPlanner(
                     clock.sleep(sleep)
                 }
                 is OcclusionAnalyzer.Verdict.Covered -> {
+                    // A system ANR / crash dialog that came up mid-test would
+                    // otherwise be waited out to the timeout: answer it and
+                    // look again at once (PILOT-977).
+                    if (verdict.kind == OcclusionAnalyzer.CoverKind.WINDOW && screen.answerSystemDialogs()) continue
                     val sleep =
                         deadlines.sleepBeforeNextPass(now)
                             ?: throw ElementCoveredException(
