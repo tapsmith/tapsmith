@@ -47,6 +47,7 @@
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* RoleName.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */; };
 		A75600000000000000000001 /* NonAppElements.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75600000000000000000002 /* NonAppElements.swift */; };
 		4C1A7E0D9B2F4E6A8D3C5B01 /* LaunchAccessibilityCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */; };
+		4C1A7E0D9B2F4E6A8D3C5C01 /* LaunchGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1A7E0D9B2F4E6A8D3C5C02 /* LaunchGate.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -84,6 +85,7 @@
 		F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleName.swift; sourceTree = "<group>"; };
 		A75600000000000000000002 /* NonAppElements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NonAppElements.swift; sourceTree = "<group>"; };
 		4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAccessibilityCheck.swift; sourceTree = "<group>"; };
+		4C1A7E0D9B2F4E6A8D3C5C02 /* LaunchGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchGate.swift; sourceTree = "<group>"; };
 		B20F42F1DA77FBEEC0F04F60 /* SocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketServer.swift; sourceTree = "<group>"; };
 		B4047824F41AA54563A432DC /* RoleMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleMapping.swift; sourceTree = "<group>"; };
 		BDD4545E80BE3B249F9D6B2F /* TapsmithAgent-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TapsmithAgent-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -136,6 +138,7 @@
 				F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */,
 				A75600000000000000000002 /* NonAppElements.swift */,
 				4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */,
+				4C1A7E0D9B2F4E6A8D3C5C02 /* LaunchGate.swift */,
 				C511FD447184FAEDC3739DB9 /* TouchSynthesizer.h */,
 				03BBAA69CD44B39C3AD6DA0F /* TouchSynthesizer.m */,
 				45B43D837B50F6CE9F2973A3 /* WaitEngine.swift */,
@@ -275,6 +278,7 @@
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* RoleName.swift in Sources */,
 				A75600000000000000000001 /* NonAppElements.swift in Sources */,
 				4C1A7E0D9B2F4E6A8D3C5B01 /* LaunchAccessibilityCheck.swift in Sources */,
+				4C1A7E0D9B2F4E6A8D3C5C01 /* LaunchGate.swift in Sources */,
 				17687791BBF6102D034AB942 /* TouchSynthesizer.m in Sources */,
 				6C50B1ECB9A19432E1A89D91 /* WaitEngine.swift in Sources */,
 			);

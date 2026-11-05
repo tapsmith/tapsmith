@@ -44,6 +44,7 @@ vi.mock('../device.js', () => ({
       unlock: vi.fn(async () => {}),
       installApk: vi.fn(async () => {}),
       startAgent: vi.fn(async () => {}),
+      _startAgent: vi.fn(async () => ({ appLaunchedFresh: false })),
       close: vi.fn(),
     };
   }),

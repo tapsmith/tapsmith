@@ -1571,6 +1571,7 @@ impl TapsmithServiceImpl {
             error_type: error_type.to_string(),
             error_message,
             screenshot,
+            app_launched_fresh: false,
         })
     }
 
@@ -1798,6 +1799,7 @@ impl TapsmithServiceImpl {
                 error_type: String::new(),
                 error_message: String::new(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             })),
             Ok(resp) => {
                 let screenshot = self.error_screenshot().await;
@@ -1807,6 +1809,7 @@ impl TapsmithServiceImpl {
                     error_type: resp.error_type.unwrap_or_default(),
                     error_message: resp.error.unwrap_or_else(|| "Unknown error".to_string()),
                     screenshot,
+                    app_launched_fresh: false,
                 }))
             }
             Err(status) => {
@@ -1817,6 +1820,7 @@ impl TapsmithServiceImpl {
                     error_type: "INTERNAL".to_string(),
                     error_message: status.message().to_string(),
                     screenshot,
+                    app_launched_fresh: false,
                 }))
             }
         }
@@ -1885,6 +1889,7 @@ impl TapsmithServiceImpl {
                 error_type: String::new(),
                 error_message: String::new(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             })),
             Err(e) => {
                 let screenshot = self.error_screenshot().await;
@@ -1894,6 +1899,7 @@ impl TapsmithServiceImpl {
                     error_type: "ADB_COMMAND_FAILED".to_string(),
                     error_message: e.to_string(),
                     screenshot,
+                    app_launched_fresh: false,
                 }))
             }
         }
@@ -1906,6 +1912,7 @@ impl TapsmithServiceImpl {
             error_type: String::new(),
             error_message: String::new(),
             screenshot: Vec::new(),
+            app_launched_fresh: false,
         })
     }
 
@@ -1936,6 +1943,7 @@ impl TapsmithServiceImpl {
                     error_type: "WAIT_FOR_IDLE_FAILED".to_string(),
                     error_message: format!("App launched but UI did not become idle: {e}"),
                     screenshot,
+                    app_launched_fresh: false,
                 }));
             }
         }
@@ -1966,6 +1974,7 @@ impl TapsmithServiceImpl {
                     error_type: "LAUNCH_FAILED".to_string(),
                     error_message: format!("Failed to launch app: {e}"),
                     screenshot,
+                    app_launched_fresh: false,
                 }))
             }
         }
@@ -2081,6 +2090,7 @@ impl TapsmithServiceImpl {
                         error_type: "LAUNCH_FAILED".to_string(),
                         error_message: format!("Failed to launch app: {monkey_err}"),
                         screenshot,
+                        app_launched_fresh: false,
                     }));
                 };
 
@@ -2103,6 +2113,7 @@ impl TapsmithServiceImpl {
                                 "Failed to launch app via launcher intent ({monkey_err}) and explicit activity {activity} ({fallback_err})"
                             ),
                             screenshot,
+                            app_launched_fresh: false,
                         }))
                     }
                 }
@@ -2399,6 +2410,7 @@ impl TapsmithServiceImpl {
             error_type: String::new(),
             error_message: String::new(),
             screenshot: Vec::new(),
+            app_launched_fresh: false,
         }))
     }
 }
@@ -3232,6 +3244,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_type: String::new(),
                 error_message: String::new(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             })),
             Err(e) => {
                 error!(error = %e, "APK installation failed");
@@ -3242,6 +3255,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_type: "INSTALL_FAILED".to_string(),
                     error_message: e.to_string(),
                     screenshot,
+                    app_launched_fresh: false,
                 }))
             }
         }
@@ -3376,6 +3390,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_type: String::new(),
                     error_message: String::new(),
                     screenshot: Vec::new(),
+                    app_launched_fresh: false,
                 }))
             }
             Err(e) => Ok(Response::new(proto::ActionResponse {
@@ -3384,6 +3399,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                 error_type: "DEVICE_NOT_FOUND".to_string(),
                 error_message: e.to_string(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             })),
         }
     }
@@ -3433,12 +3449,13 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             self.ensure_ios_animation_speed(&serial).await;
         }
 
-        if let Err(resp) = backend
+        let launched = match backend
             .launch_agent(request_id.clone(), serial.clone(), &req)
             .await
         {
-            return Ok(Response::new(resp));
-        }
+            Ok(launched) => launched,
+            Err(resp) => return Ok(Response::new(resp)),
+        };
 
         // Connect to the agent (iOS: direct TCP, Android: via ADB port forward)
         let mut agent = self.agent.write().await;
@@ -3449,7 +3466,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     .after_agent_connected(&serial, &desired_agent_config.target_package)
                     .await;
                 *self.started_agent_config.write().await = Some(desired_agent_config);
-                Ok(Self::success_action_response(request_id))
+                let mut response = Self::success_action_response(request_id);
+                response.get_mut().app_launched_fresh = launched.app_launched_fresh;
+                Ok(response)
             }
             Err(e) => {
                 error!(error = %e, "Failed to connect to agent");
@@ -3467,6 +3486,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_type: "AGENT_CONNECTION_FAILED".to_string(),
                     error_message,
                     screenshot,
+                    app_launched_fresh: false,
                 }))
             }
         }
@@ -5455,6 +5475,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             error_type: String::new(),
             error_message: String::new(),
             screenshot: Vec::new(),
+            app_launched_fresh: false,
         }))
     }
 
@@ -5505,6 +5526,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_type: String::new(),
                     error_message: String::new(),
                     screenshot: Vec::new(),
+                    app_launched_fresh: false,
                 }))
             }
             Err(e) => {
@@ -5515,6 +5537,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     error_type: "start_failed".into(),
                     error_message: e.to_string(),
                     screenshot: Vec::new(),
+                    app_launched_fresh: false,
                 }))
             }
         }
@@ -6869,6 +6892,7 @@ mod tests {
             ios_xctestrun_path: "Runner.xctestrun".to_string(),
             ios_app_path: String::new(),
             network_tracing_enabled: true,
+            clear_app_data_first: false,
         };
         let first = StartedAgentConfig::from_start_agent_request("device-1", Platform::Ios, &req);
 
@@ -6889,6 +6913,7 @@ mod tests {
             ios_xctestrun_path: "Runner.xctestrun".to_string(),
             ios_app_path: "Example.app".to_string(),
             network_tracing_enabled: false,
+            clear_app_data_first: false,
         };
 
         let base =

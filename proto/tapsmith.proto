@@ -220,6 +220,11 @@ message ActionResponse {
   string error_type = 3;
   string error_message = 4;
   bytes screenshot = 5;
+  // StartAgent only: the agent launched the target app as part of this start
+  // (a fresh runner, not a reused one), and, when the request set
+  // clear_app_data_first, only after the app's data was wiped. The caller can
+  // then take that launch as its clean startup launch. False everywhere else.
+  bool app_launched_fresh = 6;
 }
 
 // ─── Requests ───
@@ -515,6 +520,13 @@ message StartAgentRequest {
   // Same semantics as SetDeviceRequest.network_tracing_enabled — gates
   // `ensure_ios_physical_proxy` pre-arming on the start_agent path.
   bool network_tracing_enabled = 7;
+  // iOS simulators: when this start launches the agent afresh, wipe the
+  // target app's data (as ClearAppData does) while xcodebuild starts, before
+  // the runner launches the app. The response's app_launched_fresh says
+  // whether that happened; when it did not (a reused runner, a physical
+  // device, a failed wipe) the data is untouched or partly wiped, and the
+  // caller must clear and relaunch the app itself.
+  bool clear_app_data_first = 8;
 }
 
 message PingRequest {}

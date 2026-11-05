@@ -829,6 +829,12 @@ export interface CleanupStaleSimulatorsResult {
   reusable: string[]
   /** UDIDs of deleted clones. */
   killed: string[]
+  /**
+   * The simulators the sweep listed, less the ones it deleted — current
+   * enough for picking a booted one without listing again (~0.3 s). Absent
+   * when the sweep was skipped.
+   */
+  simulators?: SimulatorInfo[]
 }
 
 /**
@@ -928,7 +934,8 @@ export function cleanupStaleSimulators(
   // Phase 3: kill stale xcodebuild processes for deleted sims
   killAgentRunnersForSimulators(killed);
 
-  return { reusable, killed };
+  const deleted = new Set(killed);
+  return { reusable, killed, simulators: allSims.filter((sim) => !deleted.has(sim.udid)) };
 }
 
 // ─── Reuse helpers ───

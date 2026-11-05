@@ -64,6 +64,14 @@ impl PermissionChange {
     }
 }
 
+/// What [`DeviceBackend::launch_agent`] did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct AgentLaunched {
+    /// The agent launched the app under test as part of this start, from wiped
+    /// data when the request asked for that (`ActionResponse.app_launched_fresh`).
+    pub app_launched_fresh: bool,
+}
+
 /// Device operations whose implementation depends on the platform.
 ///
 /// Methods that act return an `ActionResponse` (failures carry an error
@@ -199,7 +207,7 @@ pub(super) trait DeviceBackend: Send + Sync {
         request_id: String,
         serial: String,
         req: &proto::StartAgentRequest,
-    ) -> Result<(), proto::ActionResponse>;
+    ) -> Result<AgentLaunched, proto::ActionResponse>;
     async fn connect_agent(&self, agent: &mut AgentConnection, serial: &str) -> anyhow::Result<()>;
     /// Best-effort session warm-up once the agent answers.
     async fn after_agent_connected(&self, serial: &str, target_package: &str);

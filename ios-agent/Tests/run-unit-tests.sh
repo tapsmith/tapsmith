@@ -71,6 +71,12 @@ xcrun swiftc -sdk "$SDK" \
 "$OUT/launch-accessibility-check-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/LaunchGateTests/main.swift \
+  TapsmithAgent/LaunchGate.swift \
+  -o "$OUT/launch-gate-tests"
+"$OUT/launch-gate-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/TextMatchTests/main.swift \
   TapsmithAgent/TextMatch.swift \
   -o "$OUT/text-match-tests"

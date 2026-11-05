@@ -39,6 +39,8 @@ const mocks = vi.hoisted(() => ({
   unreachableGraceMs: 0,
   /** Serials devicectl reports unreachable, until removed. */
   unreachable: new Set<string>(),
+  /** What the daemon answers about the agent's own launch of the app. */
+  appLaunchedFresh: false,
 }));
 
 // No real backoff between agent-start attempts — the retry is what matters here.
@@ -68,13 +70,14 @@ vi.mock('../device.js', () => ({
       wake: vi.fn(async () => {}),
       unlock: vi.fn(async () => {}),
       installApk: vi.fn(async () => {}),
-      startAgent: vi.fn(async () => {
+      _startAgent: vi.fn(async () => {
         if (mocks.failAgentFor.has(serial)) throw new Error('Failed to connect to agent socket on port 18700');
         if (mocks.noAgentFor.has(serial)) throw new Error('Tapsmith agent is not installed on the device. Set agentApk and agentTestApk in your Tapsmith config, or install manually with: adb install <path-to-agent.apk>');
         if (mocks.agentFailures > 0) {
           mocks.agentFailures--;
           throw new Error('Failed to connect to agent socket on port 18700');
         }
+        return { appLaunchedFresh: mocks.appLaunchedFresh };
       }),
       waitForIdle: vi.fn(async () => {}),
       terminateApp: vi.fn(async () => {}),
@@ -191,6 +194,7 @@ beforeEach(() => {
   mocks.unknownToDaemon.clear();
   mocks.unreachableGraceMs = 0;
   mocks.unreachable.clear();
+  mocks.appLaunchedFresh = false;
   mocks.preflight.ensureSessionReady.mockClear();
   mocks.preflight.launchConfiguredApp.mockClear();
   mocks.preflight.probeResetCapabilities.mockClear();
@@ -214,7 +218,10 @@ describe('openDeviceSession', () => {
     expect(device.setDevice).toHaveBeenCalledWith('emulator-5554', false, [], []);
     expect(device.wake).toHaveBeenCalled();
     expect(device.installApk).not.toHaveBeenCalled();
-    expect(device.startAgent).toHaveBeenCalledWith('com.example.app', '/agents/agent.apk', '/agents/agent-test.apk', undefined, undefined, false);
+    expect(device._startAgent).toHaveBeenCalledWith({
+      targetPackage: 'com.example.app', agentApkPath: '/agents/agent.apk', agentTestApkPath: '/agents/agent-test.apk',
+      iosXctestrunPath: undefined, iosAppPath: undefined, networkTracingEnabled: false, clearAppDataFirst: false,
+    });
     expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(
       expect.objectContaining({ deviceSerial: 'emulator-5554' }),
       'worker startup launch',
@@ -252,12 +259,13 @@ describe('openDeviceSession', () => {
       const Device = await mockedDevice();
       Device.mockImplementationOnce(function (this: unknown, ...args: unknown[]) {
         const device = (Device.getMockImplementation() as (...a: unknown[]) => MockDevice).apply(this, args);
-        const start = device.startAgent;
-        device.startAgent = vi.fn(async (...a: unknown[]) => {
+        const start = device._startAgent;
+        device._startAgent = vi.fn(async (...a: unknown[]) => {
           order.push('agent start');
-          await start(...a);
+          const started = await start(...a);
           // The launch finishes while the agent is still starting.
           finishLaunch(true);
+          return started;
         });
         return device;
       });
@@ -327,7 +335,7 @@ describe('openDeviceSession', () => {
       makeConfig(),
       { claimSession: SESSION, label: 'Worker 0' },
     );
-    expect(mocks.devices[0].startAgent).toHaveBeenCalledTimes(2);
+    expect(mocks.devices[0]._startAgent).toHaveBeenCalledTimes(2);
 
     mocks.agentFailures = 2;
     await expect(openDeviceSession(
@@ -348,7 +356,7 @@ describe('openDeviceSession', () => {
     );
     const device = mocks.devices[0];
     expect(device.installApk).not.toHaveBeenCalled();
-    expect(device.startAgent).not.toHaveBeenCalled();
+    expect(device._startAgent).not.toHaveBeenCalled();
     expect(mocks.preflight.ensureSessionReady).not.toHaveBeenCalled();
     // Already known: nothing to probe for.
     expect(mocks.preflight.probeResetCapabilities).not.toHaveBeenCalled();
@@ -467,7 +475,7 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     expect(client.close).not.toHaveBeenCalled();
   });
 
-  it('on an iOS simulator, overlaps the install with agent resolution and pre-launches the app before the agent', async () => {
+  it('on an iOS simulator, overlaps the install with agent resolution, and leaves the launch to the agent', async () => {
     mocks.simAppMatches = false;
     const seen = phases();
     await openDeviceSession(
@@ -478,9 +486,78 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     expect(mocks.simInstalls).toBe(1);
     expect(seen).toContainEqual(['install', 'complete', 'installed App.app']);
     expect(seen).toContainEqual(['agent', 'start', 'starting iOS agent (TapsmithAgent.xctestrun)']);
-    expect(mocks.execs).toContainEqual(['xcrun', 'simctl', 'launch', 'SIM-1', 'com.example.app']);
+    // The daemon terminates any running instance before the runner launches
+    // the app: a `simctl launch` ahead of the agent only cost time.
+    expect(mocks.execs).not.toContainEqual(['xcrun', 'simctl', 'launch', 'SIM-1', 'com.example.app']);
     const device = mocks.devices[0];
-    expect(device.startAgent).toHaveBeenCalledWith('com.example.app', '/agents/agent.apk', '/agents/agent-test.apk', '/derived/TapsmithAgent.xctestrun', '/proj/Build/App.app', false);
+    // A reinstall keeps the data container, so the agent is asked to wipe it.
+    expect(device._startAgent).toHaveBeenCalledWith({
+      targetPackage: 'com.example.app', agentApkPath: '/agents/agent.apk', agentTestApkPath: '/agents/agent-test.apk',
+      iosXctestrunPath: '/derived/TapsmithAgent.xctestrun', iosAppPath: '/proj/Build/App.app', networkTracingEnabled: false,
+      clearAppDataFirst: true,
+    });
+  });
+
+  describe('the iOS agent\'s own launch as the startup launch', () => {
+    const iosConfig = (overrides: Partial<TapsmithConfig> = {}) => makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app', ...overrides });
+    const open = (config: TapsmithConfig, opts: { appInstalledFresh?: boolean; serial?: string } = {}) => openDeviceSession(
+      { name: 'device-1', serial: opts.serial ?? 'SIM-1', daemonAddress: 'localhost:50052' },
+      config,
+      { claimSession: SESSION, label: 'Device', ...(opts.appInstalledFresh ? { appInstalledFresh: true } : {}) },
+    );
+    const clearFirst = () => (mocks.devices[0]._startAgent.mock.calls[0][0] as { clearAppDataFirst: boolean }).clearAppDataFirst;
+
+    it('takes a launch from wiped data as the clean startup launch: no clear and relaunch', async () => {
+      mocks.appLaunchedFresh = true;
+      await open(iosConfig());
+      expect(clearFirst()).toBe(true);
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: true });
+    });
+
+    it('clears and relaunches as before when the daemon cannot vouch for the launch', async () => {
+      // A reused or adopted runner, an older agent, a failed wipe.
+      mocks.appLaunchedFresh = false;
+      await open(iosConfig());
+      expect(clearFirst()).toBe(true);
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: false });
+    });
+
+    it('asks for no wipe after a fresh install, and launches the app itself when the agent did not', async () => {
+      mocks.appLaunchedFresh = false;
+      await open(iosConfig(), { appInstalledFresh: true });
+      expect(clearFirst()).toBe(false);
+      // A reused runner never launched the just-installed app.
+      expect(mocks.execs).toContainEqual(['xcrun', 'simctl', 'launch', 'SIM-1', 'com.example.app']);
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: true });
+    });
+
+    it('does not launch a freshly installed app twice when the agent launched it', async () => {
+      mocks.appLaunchedFresh = true;
+      await open(iosConfig(), { appInstalledFresh: true });
+      expect(mocks.execs).not.toContainEqual(['xcrun', 'simctl', 'launch', 'SIM-1', 'com.example.app']);
+    });
+
+    it('never asks without a package, nor on Android', async () => {
+      await open(iosConfig({ package: undefined }));
+      expect(clearFirst()).toBe(false);
+      mocks.devices.length = 0;
+      mocks.appLaunchedFresh = true;
+      await open(makeConfig(), { serial: 'emulator-5554' });
+      expect(clearFirst()).toBe(false);
+      // An Android answer is never taken as a launch (the agent does not launch the app).
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenLastCalledWith(
+        expect.anything(), 'startup launch', expect.objectContaining({ freshInstall: false }),
+      );
+    });
+
+    it('asks again on the retried agent start, and takes that start\'s answer', async () => {
+      mocks.agentFailures = 1;
+      mocks.appLaunchedFresh = true;
+      await open(iosConfig());
+      const calls = mocks.devices[0]._startAgent.mock.calls as Array<[{ clearAppDataFirst: boolean }]>;
+      expect(calls.map(([o]) => o.clearAppDataFirst)).toEqual([true, true]);
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: true });
+    });
   });
 
   it('on an iOS simulator, says a reinstall is for a differing build only when the build was compared and differed', async () => {
@@ -660,7 +737,7 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
     it('refuses `iosXctestrun`, naming the path resolved against rootDir', async () => {
       await expect(openDeviceSession(physical, iosConfig({ iosXctestrun: 'gone/Agent.xctestrun' }), { claimSession: SESSION, label: 'Device' }))
         .rejects.toThrow(/The xctestrun set by `iosXctestrun` does not exist: \/proj\/gone\/Agent\.xctestrun/);
-      expect(mocks.devices[0].startAgent).not.toHaveBeenCalled();
+      expect(mocks.devices[0]._startAgent).not.toHaveBeenCalled();
     });
 
     it('refuses TAPSMITH_IOS_XCTESTRUN by name, for simulators too', async () => {
