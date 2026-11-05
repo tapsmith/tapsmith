@@ -76,49 +76,60 @@ test("a failed shard with no blob does not fail the merge", () => {
   assert.deepEqual(verdict.accounted, ["Shard 2/3: job failure"])
 })
 
-test("a cancelled shard with no blob does not fail the merge", () => {
-  const verdict = judge(missing(1), shards("cancelled", "success", "success"))
-  assert.equal(verdict.ok, true)
-  assert.deepEqual(verdict.accounted, ["Shard 1/3: job cancelled"])
-})
-
 test("a timed-out shard with no blob does not fail the merge", () => {
   assert.equal(judge(missing(1), shards("timed_out", "success", "success")).ok, true)
 })
 
-test("no blobs after a build job failed or was cancelled does not fail the merge", () => {
-  for (const conclusion of ["failure", "cancelled"]) {
-    const verdict = judge(NO_BLOBS, [
-      job("Build SDK", "success"),
-      job("Build Daemon", conclusion),
-      job("Shard ${{ matrix.shard }}/3", "skipped"),
-    ])
-    assert.equal(verdict.ok, true, conclusion)
-    assert.deepEqual(verdict.accounted, [
-      `Shard 1/3: not run, Build Daemon ${conclusion}`,
-      `Shard 2/3: not run, Build Daemon ${conclusion}`,
-      `Shard 3/3: not run, Build Daemon ${conclusion}`,
-    ])
-  }
+test("no blobs after a build job failed does not fail the merge", () => {
+  const verdict = judge(NO_BLOBS, [
+    job("Build SDK", "success"),
+    job("Build Daemon", "failure"),
+    job("Shard ${{ matrix.shard }}/3", "skipped"),
+  ])
+  assert.equal(verdict.ok, true)
+  assert.deepEqual(verdict.accounted, [
+    "Shard 1/3: not run, Build Daemon failure",
+    "Shard 2/3: not run, Build Daemon failure",
+    "Shard 3/3: not run, Build Daemon failure",
+  ])
 })
 
 test("a build failure accounts for the matrix when no shard job was created at all", () => {
   assert.equal(judge(NO_BLOBS, [job("Build SDK", "success"), job("Build Agent", "failure")]).ok, true)
 })
 
-test("no blobs after a run cancelled before the matrix expanded does not fail the merge", () => {
-  const verdict = judge(NO_BLOBS, [
-    job("Build SDK", "success"),
-    job("Shard ${{ matrix.shard }}/3", "cancelled"),
-  ])
-  assert.equal(verdict.ok, true)
+test("a failed build accounts for a skipped shard row", () => {
+  assert.equal(judge(missing(2), [job("Build Agent", "failure"), ...shards("success", "skipped", "success")]).ok, true)
 })
 
-test("several accounted shards all pass", () => {
-  assert.equal(judge(missing(1, 3), shards("cancelled", "success", "failure")).ok, true)
+test("several failed shards all pass", () => {
+  assert.equal(judge(missing(1, 3), shards("failure", "success", "failure")).ok, true)
 })
 
 // ─── judgeMerge: missing shards nothing else shows ───
+
+test("a shard cancelled alone fails, naming it: the run would read as cancelled", () => {
+  const verdict = judge(missing(1), shards("cancelled", "success", "success"))
+  assert.equal(verdict.ok, false)
+  assert.equal(verdict.unaccounted.length, 1)
+  assert.match(verdict.unaccounted[0], /^Shard 1\/3: job cancelled while the run was not/)
+})
+
+test("a build cancelled alone fails, naming every shard it stopped", () => {
+  const verdict = judge(NO_BLOBS, [
+    job("Build SDK", "success"),
+    job("Build Daemon", "cancelled"),
+    job("Shard ${{ matrix.shard }}/3", "skipped"),
+  ])
+  assert.equal(verdict.ok, false)
+  assert.equal(verdict.unaccounted.length, 3)
+  assert.match(verdict.unaccounted[2], /^Shard 3\/3: not run, Build Daemon cancelled while the run was not/)
+})
+
+test("a failed build wins over a cancelled one: the run already fails", () => {
+  const verdict = judge(NO_BLOBS, [job("Build Agent", "cancelled"), job("Build Daemon", "failure")])
+  assert.equal(verdict.ok, true)
+})
 
 test("a shard that succeeded but left no blob fails, naming it", () => {
   const verdict = judge(missing(2), shards("success", "success", "success"))
@@ -165,6 +176,7 @@ test("a failed job that is not a shard or build accounts for nothing", () => {
 test("an unfinished shard job fails", () => {
   const verdict = judge(missing(2), shards("success", null, "success"))
   assert.equal(verdict.ok, false)
+  assert.deepEqual(verdict.unaccounted, ["Shard 2/3: job still unfinished"])
 })
 
 // ─── judgeMerge: failing closed ───

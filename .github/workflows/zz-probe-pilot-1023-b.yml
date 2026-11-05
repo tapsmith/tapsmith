@@ -48,7 +48,7 @@ jobs:
   e2e-report:
     name: Merge Reports
     needs: [ build-sdk, e2e-test ]
-    if: always() && needs.build-sdk.result == 'success'
+    if: ${{ !cancelled() && needs.build-sdk.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       actions: read

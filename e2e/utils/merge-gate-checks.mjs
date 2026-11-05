@@ -5,13 +5,21 @@
  * (`utils/__tests__/merge-gate-checks.test.mjs`).
  *
  * The job adds information in two cases only, and stays red for both: a real
- * merge error, and a shard that left no blob while nothing else in the run
- * shows it. A shard that failed, was cancelled or never ran because a build
- * failed already shows on its own job.
+ * merge error, and a shard that left no blob while nothing else makes the run
+ * fail. A shard that failed, or never ran because a build failed, already makes
+ * the run fail.
+ *
+ * A cancelled job does not: on its own it ends the run as `cancelled`, the same
+ * as a run a newer push replaced, so it reads as nothing to look at. The merge
+ * job doesn't run at all when the whole run is cancelled (`!cancelled()`), so a
+ * cancelled job seen here was cancelled alone: GitHub could not get it a runner,
+ * or it hit `timeout-minutes`. That stays red.
  */
 
-/** Conclusions that show on a job without the merge job's help. */
-const SHOWN_CONCLUSIONS = new Set(["failure", "cancelled", "timed_out"])
+/** Conclusions that make the run fail without the merge job's help. */
+const FAILING_CONCLUSIONS = new Set(["failure", "timed_out"])
+
+const CANCELLED_ALONE = "cancelled while the run was not (no runner, or timeout-minutes; see that job)"
 
 const ANSI_COLOUR = /\u001b\[[0-9;]*m/g
 
@@ -65,7 +73,7 @@ export function judgeMerge({ exitCode, mergeOutput, jobs, shardTotal }) {
     const names = missing.map((n) => shardName(n, shardTotal)).join(", ")
     return {
       ok: false,
-      reason: `Missing ${names}, and the job list could not be read to tell whether another job already shows it.`,
+      reason: `Missing ${names}, and the job list could not be read to tell whether another job already fails the run.`,
       accounted: [],
       unaccounted: missing.map((n) => `${shardName(n, shardTotal)}: job list unavailable`),
     }
@@ -82,7 +90,7 @@ export function judgeMerge({ exitCode, mergeOutput, jobs, shardTotal }) {
   if (unaccounted.length === 0) return { ok: true, accounted, unaccounted }
   return {
     ok: false,
-    reason: `No results, and no other job shows why:\n  ${unaccounted.join("\n  ")}`,
+    reason: `No results, and nothing else makes this run fail:\n  ${unaccounted.join("\n  ")}`,
     accounted,
     unaccounted,
   }
@@ -96,26 +104,33 @@ function shardName(shard, shardTotal) {
 /** @returns {{ accounted: boolean, detail: string }} */
 function explainMissingShard(shard, shardTotal, jobs) {
   const row = jobs.find((job) => job.name === shardName(shard, shardTotal))
-  if (row && SHOWN_CONCLUSIONS.has(row.conclusion)) {
+  if (row && FAILING_CONCLUSIONS.has(row.conclusion)) {
     return { accounted: true, detail: `job ${row.conclusion}` }
+  }
+  if (row?.conclusion === "cancelled") {
+    return { accounted: false, detail: `job ${CANCELLED_ALONE}` }
   }
   if (row?.conclusion === "success") {
     return { accounted: false, detail: "job succeeded but left no blob report" }
   }
+  if (row && row.conclusion !== "skipped") {
+    return { accounted: false, detail: `job still ${row.conclusion ?? "unfinished"}` }
+  }
 
-  // The rest never ran. GitHub leaves a matrix job that never expanded under
-  // its unexpanded name, or lists no row for it at all.
-  const unexpanded = jobs.find((job) => job.name === `Shard \${{ matrix.shard }}/${shardTotal}`)
-  if (!row && unexpanded && SHOWN_CONCLUSIONS.has(unexpanded.conclusion)) {
-    return { accounted: true, detail: `job ${unexpanded.conclusion} before the matrix expanded` }
+  // Never ran. GitHub lists a matrix that never expanded under the job's
+  // unexpanded name, or not at all, so there may be no row for this shard.
+  const failedBuild = jobs.find((job) => isBuild(job) && FAILING_CONCLUSIONS.has(job.conclusion))
+  if (failedBuild) {
+    return { accounted: true, detail: `not run, ${failedBuild.name} ${failedBuild.conclusion}` }
   }
-  const build = jobs.find((job) => job.name.startsWith("Build ") && SHOWN_CONCLUSIONS.has(job.conclusion))
-  if (build && (!row || row.conclusion === "skipped")) {
-    return { accounted: true, detail: `not run, ${build.name} ${build.conclusion}` }
+  const cancelledBuild = jobs.find((job) => isBuild(job) && job.conclusion === "cancelled")
+  if (cancelledBuild) {
+    return { accounted: false, detail: `not run, ${cancelledBuild.name} ${CANCELLED_ALONE}` }
   }
-  if (row?.conclusion === "skipped") {
-    return { accounted: false, detail: "job skipped with no failed build to explain it" }
-  }
-  if (row) return { accounted: false, detail: `job still ${row.conclusion ?? "unfinished"}` }
+  if (row) return { accounted: false, detail: "job skipped with no failed build to explain it" }
   return { accounted: false, detail: "GitHub has no job for it in this attempt" }
+}
+
+function isBuild(job) {
+  return job.name.startsWith("Build ")
 }

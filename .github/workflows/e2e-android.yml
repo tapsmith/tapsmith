@@ -768,7 +768,9 @@ jobs:
   e2e-report:
     name: Merge Reports
     needs: [ build-sdk, e2e-test ]
-    if: always() && needs.build-sdk.result == 'success'
+    # !cancelled(): a superseded run has nothing to report. It still runs after a
+    # single job was cancelled (no runner, timeout-minutes), when the gate needs it.
+    if: ${{ !cancelled() && needs.build-sdk.result == 'success' }}
     runs-on: ubuntu-latest
     # actions: merge-reports-gate.mjs reads this run's job list.
     permissions:
@@ -809,8 +811,8 @@ jobs:
         working-directory: e2e
         run: npm ci
 
-      # Fails only on a real merge error or a shard with no results that no
-      # other job shows. A failed or cancelled shard stays visible on its own job.
+      # Fails only on a real merge error or a shard with no results when nothing
+      # else makes the run fail. See e2e/utils/merge-gate-checks.mjs.
       - name: Merge reports
         working-directory: e2e
         env:

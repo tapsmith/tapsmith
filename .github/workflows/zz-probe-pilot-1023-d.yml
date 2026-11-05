@@ -1,0 +1,79 @@
+name: Probe PILOT-1023 d
+on:
+  push:
+    branches: [ fix/pilot-1023-merge-reports-signal ]
+env:
+  TAPSMITH_TELEMETRY: "0"
+  SHARD_TOTAL: 3
+jobs:
+  build-sdk:
+    name: Build SDK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: npm ci && npm run build
+        working-directory: packages/tapsmith
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sdk-dist
+          retention-days: 1
+          path: packages/tapsmith/dist/
+  e2e-test:
+    name: "Shard ${{ matrix.shard }}/3"
+    needs: [ build-sdk ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [ 1, 2, 3 ]
+    steps:
+      - name: Middle shard's behaviour
+        if: matrix.shard == 2
+        run: sleep 200
+      - name: Write blob
+        if: matrix.shard != 2
+        run: |
+          mkdir -p blob-report
+          printf '{"version":1,"startTime":"","config":{},"shard":{"current":%s,"total":3},"duration":1,"suites":[],"screenshots":{},"tests":[{"name":"t%s","fullName":"t%s","status":"passed","durationMs":1}]}' ${{ matrix.shard }} ${{ matrix.shard }} ${{ matrix.shard }} > blob-report/report-${{ matrix.shard }}.jsonl
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always() && matrix.shard != 2
+        with:
+          name: blob-report-${{ matrix.shard }}
+          retention-days: 1
+          path: blob-report/
+  e2e-report:
+    name: Merge Reports
+    needs: [ build-sdk, e2e-test ]
+    if: ${{ !cancelled() && needs.build-sdk.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: npm ci
+        working-directory: packages/tapsmith
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sdk-dist
+          path: packages/tapsmith/dist
+      - run: chmod +x packages/tapsmith/dist/bin.js packages/tapsmith/dist/cli.js
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: blob-report-*
+          path: all-blob-reports
+          merge-multiple: true
+      - run: npm ci
+        working-directory: e2e
+      - name: Merge reports
+        working-directory: e2e
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node merge-reports-gate.mjs ../all-blob-reports tapsmith.config.ios-ci.mjs

@@ -1,15 +1,14 @@
 #!/usr/bin/env node
 // Run `tapsmith merge-reports` for an E2E workflow's Merge Reports job, and
 // fail the job only when that adds something: a real merge error, or a shard
-// with no results that no other job shows (PILOT-1023). A shard that failed or
-// was cancelled, or never ran because a build did, is reported as a notice,
-// because its own job already shows it.
+// with no results when nothing else makes the run fail (PILOT-1023). A shard that
+// failed, or never ran because a build failed, is reported as a notice, because
+// the run already fails for it.
 //
 //   node merge-reports-gate.mjs <blob dir> <config file>
 //
 // Needs SHARD_TOTAL, and GITHUB_TOKEN with `actions: read` to list this run
-// attempt's jobs. Without them the job list reads as unavailable, which keeps a
-// missing shard red.
+// attempt's jobs. Without a job list, a missing shard stays red.
 //
 // The judging lives in utils/merge-gate-checks.mjs (unit-tested); this file
 // only runs the merge and gathers the job list.
