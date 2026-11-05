@@ -28,7 +28,8 @@ import XCTest
 /// (`ios-agent/Tests/run-unit-tests.sh`).
 enum NavigationTransition {
     /// Longest wait for a transition to end. It runs 0.5 s on a fast machine,
-    /// more on a starved CI simulator. A look-alike pays this once.
+    /// more on a starved CI simulator. A look-alike pays this whenever its
+    /// shape changes.
     static let maxWaitSeconds: TimeInterval = 2
     /// Pause between reads. A read takes about as long again.
     static let pollSeconds: TimeInterval = 0.05

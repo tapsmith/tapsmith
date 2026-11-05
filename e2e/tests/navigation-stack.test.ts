@@ -10,7 +10,7 @@ import { openScreen } from "../utils/app-reset.js"
  * control every screen has matched twice for that half second: a strict-mode
  * violation; `.last()` then missed in the live query, which by then saw one;
  * and `.first()` meant the outgoing screen's control. Each test acts with no
- * wait after the push, and checks which level reacted.
+ * wait after the push, and checks the level it ends on.
  */
 describe("Navigation stack: a control that every screen has", () => {
   test.beforeEach(async ({ device, stackScreen }) => {
