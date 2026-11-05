@@ -49,6 +49,8 @@ export interface ActionResponse {
   errorType: string;
   errorMessage: string;
   screenshot: Buffer;
+  /** StartAgent only: the agent launched the app afresh at this start (after the requested wipe). */
+  appLaunchedFresh?: boolean;
 }
 
 export interface FindElementResponse {
@@ -150,6 +152,14 @@ export interface GetCurrentActivityResponse {
 export interface GetAppStateResponse {
   requestId: string;
   state: string;
+}
+
+/** `WaitForAppReady`: whether the app drew real content in time. */
+export interface WaitForAppReadyResponse {
+  requestId: string;
+  ready: boolean;
+  /** False when the platform has no such wait; `ready` is then meaningless. */
+  supported: boolean;
 }
 
 export interface GetClipboardResponse {
@@ -460,6 +470,12 @@ export class TapsmithGrpcClient {
         'grpc.keepalive_time_ms': 30_000,                      // ping every 30s
         'grpc.keepalive_timeout_ms': 10_000,                   // 10s to respond
         'grpc.keepalive_permit_without_calls': 1,              // ping even when idle
+        // The daemon is local, so a reconnect attempt costs next to nothing.
+        // grpc-js waits 1 s before its first one by default: every daemon
+        // start paid that second, because the first connect is refused
+        // until the daemon listens (~30 ms after it is spawned).
+        'grpc.initial_reconnect_backoff_ms': 50,
+        'grpc.max_reconnect_backoff_ms': 1_000,
       },
     // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
     ) as grpc.Client & Record<string, Function>;
@@ -841,6 +857,7 @@ export class TapsmithGrpcClient {
     iosXctestrunPath?: string,
     iosAppPath?: string,
     networkTracingEnabled = false,
+    clearAppDataFirst = false,
   ): Promise<ActionResponse> {
     return this.call<ActionResponse>('startAgent', {
       requestId: requestId(),
@@ -850,6 +867,7 @@ export class TapsmithGrpcClient {
       iosXctestrunPath: iosXctestrunPath ?? '',
       iosAppPath: iosAppPath ?? '',
       networkTracingEnabled,
+      clearAppDataFirst,
       // Must comfortably exceed the daemon's internal agent-launch wait (150s
       // in agent_launch.rs) plus simulator configuration around it, so the
       // daemon's clean, retryable failure text reaches us instead of a bare
@@ -1034,6 +1052,19 @@ export class TapsmithGrpcClient {
     return this.call<GetAppStateResponse>('getAppState', {
       requestId: requestId(),
       packageName,
+    }, deadlineMs);
+  }
+
+  /**
+   * Wait up to `timeoutMs` for a just-(re)launched app to draw real content:
+   * a node of the package with text or a content description (Android).
+   * Rejects with gRPC `UNIMPLEMENTED` from a daemon that predates it.
+   */
+  async waitForAppReady(packageName: string, timeoutMs: number, deadlineMs?: number): Promise<WaitForAppReadyResponse> {
+    return this.call<WaitForAppReadyResponse>('waitForAppReady', {
+      requestId: requestId(),
+      packageName,
+      timeoutMs,
     }, deadlineMs);
   }
 

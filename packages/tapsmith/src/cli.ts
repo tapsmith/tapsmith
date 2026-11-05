@@ -54,6 +54,7 @@ import {
   resolveEmulatorLaunchSettings,
   prefilterDevicesForStrategy,
   probeDeviceHealth,
+  probeDeviceHealthIfSettled,
   provisionEmulators,
   type DeviceHealthResult,
   type LaunchedEmulator,
@@ -62,7 +63,7 @@ import {
   ensureAdbRoot,
 } from './emulator.js';
 import { isRecoverableInfrastructureError, serializeConfig } from './worker-protocol.js';
-import { DEFAULT_AGENT_PORT, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, pickFreePort } from './port-utils.js';
+import { connectionRefused, DEFAULT_AGENT_PORT, daemonsOnAgentPort, findPidsOnPort, freeStaleAgentPort, pickFreePort } from './port-utils.js';
 import { findDaemonBin } from './daemon-bin.js';
 import { awaitDaemonStart, captureDaemonOutput, daemonStartFailure, planDaemonPort, spawnDaemonBinary } from './daemon-start.js';
 import { splitHeadline } from './error-detail.js';
@@ -220,6 +221,7 @@ async function checkDeviceHealth(serial: string, progress?: LaunchProgressSink):
       encoding: 'utf-8',
       stdio: ['ignore', 'pipe', 'pipe'],
     }),
+    probeIfSettled: async (s) => probeDeviceHealthIfSettled(s),
     waitForStable: (s) => waitForDeviceStability(s, 20_000, probeDeviceHealth),
     heldElsewhere: () => {
       const session = currentSession();
@@ -381,7 +383,10 @@ async function ensureDaemonRunning(
     else console.log(dim(`Daemon ${why}; starting on ${address}`));
   };
   let answered = false;
-  try {
+  // Nothing listening is the usual case (no other session): a refused connect
+  // says so at once, where the gRPC wait would retry for its whole second.
+  const refused = await connectionRefused(address);
+  if (!refused) try {
     const probe = new TapsmithGrpcClient(address);
     answered = await probe.waitForReady(1_000);
     probe.close();
@@ -391,7 +396,7 @@ async function ensureDaemonRunning(
   const portPlan = planDaemonPort({
     port: requestedPort,
     answered,
-    listeners: answered ? [] : findPidsOnPort(port),
+    listeners: answered || refused ? [] : findPidsOnPort(port),
     ownDaemons: stoppedOwnDaemons,
   });
   if (portPlan.kind === 'move') {
@@ -1087,7 +1092,7 @@ async function ensureSequentialTargetDevice(
 
   // ─── iOS: use simulator instead of ADB device ───
   if (config.platform === 'ios') {
-    const { listBootedSimulators, provisionSimulator, cleanupStaleSimulators, installAppIfAbsent } = await import('./ios-simulator.js');
+    const { listSimulators, provisionSimulator, cleanupStaleSimulators, installAppIfAbsent } = await import('./ios-simulator.js');
     // If no simulator is configured, try to auto-resolve a single paired
     // physical device. Mirrors how simulators are picked by name — the
     // user should not have to hand-parse `devicectl` JSON in their config.
@@ -1124,7 +1129,7 @@ async function ensureSequentialTargetDevice(
     // provisionSimulator below passes over those too.
     // Claimed as it is picked, so a session starting at the same moment
     // takes another one rather than this one.
-    const booted = listBootedSimulators();
+    const booted = (staleResult.simulators ?? listSimulators()).filter((s) => s.state === 'Booted');
     const matchingUdid = claimFirstFree(
       booted.filter((s) => s.name === simulatorName || s.udid === simulatorName).map((s) => s.udid),
     );
@@ -1551,7 +1556,7 @@ async function provisionDevicesForBucketUnclaimed(
         );
       }
     }
-    const { provisionSimulators, listBootedSimulators, cleanupStaleSimulators } =
+    const { provisionSimulators, listSimulators, cleanupStaleSimulators } =
       await import('./ios-simulator.js');
 
     const stale = cleanupStaleSimulators(effectiveConfig.simulator);
@@ -1565,8 +1570,9 @@ async function provisionDevicesForBucketUnclaimed(
 
     // Find any already-booted matching simulators (no primary required)
     // Not one another live Tapsmith session holds (PILOT-381).
-    const heldElsewhere = new Set(withoutHeldDevices(listBootedSimulators().map((s) => s.udid)).held.map((c) => c.device));
-    const booted = listBootedSimulators().filter(
+    const bootedNow = (stale.simulators ?? listSimulators()).filter((s) => s.state === 'Booted');
+    const heldElsewhere = new Set(withoutHeldDevices(bootedNow.map((s) => s.udid)).held.map((c) => c.device));
+    const booted = bootedNow.filter(
       (s) => (s.name === effectiveConfig.simulator || s.udid === effectiveConfig.simulator) && !heldElsewhere.has(s.udid),
     );
     const existing = booted.map((s) => s.udid).slice(0, desiredWorkers);

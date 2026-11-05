@@ -2,8 +2,11 @@
 //! injection into the iOS simulator. See
 //! docs/superpowers/specs/2026-06-02-ios-live-touch-hid-design.md.
 //!
-//! `ensure` spawns a helper lazily on the first touch-down for a UDID and
-//! reuses it for subsequent events (persistent client = low streaming latency).
+//! `warm` starts a UDID's helper when the device is selected, so the first
+//! touch does not pay for the start (CoreSimulator can take seconds to hand it
+//! the device on a loaded host); `ensure` starts one lazily if none is running,
+//! waiting for a warm-up already under way, and reuses it for subsequent events
+//! (persistent client = low streaming latency).
 //! `send` writes one protocol line. Any failure drops the child so the next
 //! gesture re-spawns it; the caller falls back to the agent path on `ensure`
 //! failure. macOS-only (CoreSimulator).
@@ -58,12 +61,31 @@ impl std::fmt::Display for HidSendError {
     }
 }
 
+/// How long a touch that has to start the helper waits for it.
+const TOUCH_START_BOUND: Duration = Duration::from_secs(5);
+/// How long a warm-up waits for the helper. CI logs show simctl calls taking
+/// 10–15 s while CoreSimulator is loaded; the helper's start goes through it too.
+const WARM_START_BOUND: Duration = Duration::from_secs(30);
+
 pub struct HidInjector {
     helper_path: PathBuf,
     helpers: Mutex<HashMap<String, Helper>>,
     /// Devices whose helper failed to start and has been reported since it
     /// last started: the failure is logged once, not on every touch.
     unavailable_reported: std::sync::Mutex<HashSet<String>>,
+    /// One lock per device, held while its helper starts: a touch that
+    /// arrives during a warm-up waits for that start instead of spawning a
+    /// second helper against the same loaded CoreSimulator.
+    start_gates: std::sync::Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Bumped by `shutdown`, so a start that was in flight for a device that
+    /// has since been stopped drops its helper instead of installing it.
+    stop_epochs: std::sync::Mutex<HashMap<String, u64>>,
+    /// How long a touch waits for a helper it starts itself to report `ready`.
+    touch_start_bound: Duration,
+    /// How long a warm-up waits: nothing is held up by it, and a loaded
+    /// CoreSimulator can take well over the touch bound to hand the helper
+    /// its device.
+    warm_start_bound: Duration,
 }
 
 /// Resolve the helper binary as a sibling of the daemon executable (npm package
@@ -93,6 +115,10 @@ impl HidInjector {
             helper_path: resolve_helper_path(),
             helpers: Mutex::new(HashMap::new()),
             unavailable_reported: std::sync::Mutex::new(HashSet::new()),
+            start_gates: std::sync::Mutex::new(HashMap::new()),
+            stop_epochs: std::sync::Mutex::new(HashMap::new()),
+            touch_start_bound: TOUCH_START_BOUND,
+            warm_start_bound: WARM_START_BOUND,
         }
     }
 
@@ -102,6 +128,10 @@ impl HidInjector {
             helper_path,
             helpers: Mutex::new(HashMap::new()),
             unavailable_reported: std::sync::Mutex::new(HashSet::new()),
+            start_gates: std::sync::Mutex::new(HashMap::new()),
+            stop_epochs: std::sync::Mutex::new(HashMap::new()),
+            touch_start_bound: TOUCH_START_BOUND,
+            warm_start_bound: WARM_START_BOUND,
         }
     }
 
@@ -113,7 +143,7 @@ impl HidInjector {
     /// for real ones (a native double-tap recognizer ignores them on iOS 26 —
     /// PILOT-795), so this is worth seeing.
     pub async fn ensure(&self, udid: &str) -> anyhow::Result<()> {
-        let result = self.start_or_reuse(udid).await;
+        let result = self.start_or_reuse(udid, self.touch_start_bound).await;
         match &result {
             Ok(()) => self.note_available(udid),
             Err(e) => {
@@ -148,27 +178,83 @@ impl HidInjector {
             .remove(udid);
     }
 
-    async fn start_or_reuse(&self, udid: &str) -> anyhow::Result<()> {
-        // Fast path: reuse a live helper. Verify it's still running with
-        // try_wait() — a dead helper (simulator reload/crash) would otherwise
-        // linger in the map and make the next gesture's first event fail and
-        // fall back to the slow agent path. Crucially, do NOT hold the map lock
-        // across the spawn + handshake below: a helper that hangs before
-        // printing `ready` (e.g. CoreSimulator blocking) would otherwise freeze
-        // every other touch and shutdown — across all devices — for the timeout.
-        {
-            let mut map = self.helpers.lock().await;
-            if let Some(helper) = map.get_mut(udid) {
-                match helper.child.try_wait() {
-                    Ok(None) => return Ok(()), // still running
-                    _ => {
-                        // Exited or un-waitable → drop it and respawn below.
-                        map.remove(udid);
-                    }
-                }
+    #[cfg(test)]
+    fn with_bounds(mut self, touch: Duration, warm: Duration) -> Self {
+        self.touch_start_bound = touch;
+        self.warm_start_bound = warm;
+        self
+    }
+
+    /// Start `udid`'s helper ahead of the first touch, so that touch does not
+    /// pay for the start. `epoch` is [`Self::stop_epoch`] taken when the
+    /// warm-up was asked for: a device stopped since then keeps no helper.
+    /// Skipped while another start for the device is in flight (a touch, or
+    /// an earlier warm-up), so repeated selections don't queue starts. Quiet
+    /// on failure: the next touch tries again and reports it.
+    pub async fn warm(&self, udid: &str, epoch: u64) {
+        let gate = self.start_gate(udid);
+        let Ok(_starting) = gate.try_lock() else {
+            return;
+        };
+        if self.has_live_helper(udid).await {
+            return;
+        }
+        match self.start_locked(udid, self.warm_start_bound, epoch).await {
+            Ok(()) => self.note_available(udid),
+            Err(e) => debug!(udid, error = %e, "iOS HID helper warm-up failed"),
+        }
+    }
+
+    /// Whether `udid` has a running helper. Verified with try_wait() — a dead
+    /// helper (simulator reload/crash) would otherwise linger in the map and
+    /// make the next gesture's first event fail and fall back to the slow
+    /// agent path — and dropped if it has exited.
+    async fn has_live_helper(&self, udid: &str) -> bool {
+        let mut map = self.helpers.lock().await;
+        let Some(helper) = map.get_mut(udid) else {
+            return false;
+        };
+        match helper.child.try_wait() {
+            Ok(None) => true,
+            _ => {
+                map.remove(udid);
+                false
             }
         }
+    }
 
+    fn start_gate(&self, udid: &str) -> Arc<Mutex<()>> {
+        let mut gates = self.start_gates.lock().unwrap_or_else(|e| e.into_inner());
+        Arc::clone(gates.entry(udid.to_string()).or_default())
+    }
+
+    pub fn stop_epoch(&self, udid: &str) -> u64 {
+        let epochs = self.stop_epochs.lock().unwrap_or_else(|e| e.into_inner());
+        epochs.get(udid).copied().unwrap_or(0)
+    }
+
+    async fn start_or_reuse(&self, udid: &str, bound: Duration) -> anyhow::Result<()> {
+        if self.has_live_helper(udid).await {
+            return Ok(());
+        }
+        // One start per device at a time; a caller that waited here reuses
+        // the helper the start it waited on installed. The map lock is NOT
+        // held across the spawn + handshake below: a helper that hangs before
+        // printing `ready` (e.g. CoreSimulator blocking) would otherwise freeze
+        // every other touch and shutdown — across all devices — for the bound.
+        let gate = self.start_gate(udid);
+        let _starting = gate.lock().await;
+        if self.has_live_helper(udid).await {
+            return Ok(());
+        }
+        let epoch = self.stop_epoch(udid);
+        self.start_locked(udid, bound, epoch).await
+    }
+
+    /// Spawn `udid`'s helper and wait up to `bound` for it to report `ready`,
+    /// then install it — unless the device was stopped after `epoch` was
+    /// taken. The caller holds the device's start gate.
+    async fn start_locked(&self, udid: &str, bound: Duration, epoch: u64) -> anyhow::Result<()> {
         let mut child = tokio::process::Command::new(&self.helper_path)
             .arg(udid)
             .stdin(Stdio::piped())
@@ -192,8 +278,7 @@ impl HidInjector {
         let mut reader = BufReader::new(stdout).lines();
 
         // Bound the handshake so a stuck helper fails fast (caller falls back).
-        let ready =
-            tokio::time::timeout(std::time::Duration::from_secs(5), reader.next_line()).await;
+        let ready = tokio::time::timeout(bound, reader.next_line()).await;
         match ready {
             Err(_elapsed) => {
                 let _ = child.start_kill();
@@ -216,10 +301,16 @@ impl HidInjector {
             }
         }
 
-        // Re-acquire the lock to install the helper. If another `ensure` for the
-        // same udid won the race while we were spawning, drop ours and keep
-        // theirs (kill_on_drop also reaps the loser's child).
+        // Re-acquire the lock to install the helper — unless the device was
+        // stopped meanwhile (its helper would outlive it), or, defensively, a
+        // helper is already installed (kill_on_drop also reaps ours).
         let mut map = self.helpers.lock().await;
+        if self.stop_epoch(udid) != epoch {
+            let _ = child.start_kill();
+            return Err(anyhow::anyhow!(
+                "the device was stopped while its helper started"
+            ));
+        }
         if map.contains_key(udid) {
             let _ = child.start_kill();
             return Ok(());
@@ -331,6 +422,14 @@ impl HidInjector {
     /// Stop the helper for `udid` (device deselect / sim shutdown).
     pub async fn shutdown(&self, udid: &str) {
         let mut map = self.helpers.lock().await;
+        // Under the map lock, so a start in flight sees the bump before it
+        // can install (it checks under the same lock).
+        *self
+            .stop_epochs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(udid.to_string())
+            .or_default() += 1;
         if let Some(mut helper) = map.remove(udid) {
             let _ = helper.child.start_kill();
             debug!(udid, "iOS HID helper stopped");
@@ -544,6 +643,135 @@ mod tests {
                 .await,
             Err(HidSendError::NotSent(_))
         ));
+    }
+
+    /// A stub that logs each start to `starts`, takes `delay` seconds to come
+    /// up (CoreSimulator under load), then answers every line `ok`.
+    fn slow_stub(starts: &std::path::Path, delay: &str) -> (tempfile::TempDir, PathBuf) {
+        stub_helper(&format!(
+            "echo start >> '{}'\nsleep {delay}\necho 'ready 1 1 1'\n\
+             while IFS= read -r line; do echo ok; done\n",
+            starts.display()
+        ))
+    }
+
+    fn start_count(starts: &std::path::Path) -> usize {
+        std::fs::read_to_string(starts)
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    }
+
+    #[tokio::test]
+    async fn a_slow_helper_start_fails_a_touch_that_has_to_start_it() {
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = slow_stub(&starts, "1.5");
+        let injector = HidInjector::with_helper_path(path)
+            .with_bounds(Duration::from_millis(500), Duration::from_secs(10));
+        let err = injector.ensure("UDID-S").await.unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn the_first_touch_waits_for_a_warm_up_already_starting_the_helper() {
+        // The CI failure: the shard's first tap started the helper itself,
+        // under a loaded CoreSimulator, and missed the touch's bound.
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = slow_stub(&starts, "1.5");
+        let injector = Arc::new(
+            HidInjector::with_helper_path(path)
+                .with_bounds(Duration::from_millis(500), Duration::from_secs(10)),
+        );
+        let warming = {
+            let injector = Arc::clone(&injector);
+            tokio::spawn(async move { injector.warm("UDID-W1", 0).await })
+        };
+        // Let the warm-up spawn the helper before the touch arrives.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        injector.ensure("UDID-W1").await.unwrap();
+        injector
+            .send_and_wait("UDID-W1", "t1 1 2 10", Duration::from_secs(5))
+            .await
+            .unwrap();
+        warming.await.unwrap();
+        assert_eq!(start_count(&starts), 1, "one helper, not one per caller");
+        injector.shutdown("UDID-W1").await;
+    }
+
+    #[tokio::test]
+    async fn a_warm_up_reuses_a_running_helper() {
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = slow_stub(&starts, "0");
+        let injector = HidInjector::with_helper_path(path);
+        injector.ensure("UDID-W2").await.unwrap();
+        injector.warm("UDID-W2", 0).await;
+        assert_eq!(start_count(&starts), 1);
+        injector.shutdown("UDID-W2").await;
+    }
+
+    #[tokio::test]
+    async fn a_failed_warm_up_is_not_reported_as_unavailable() {
+        // The touch that then fails reports it, with its own error.
+        let (_dir, path) = stub_helper("exit 1\n");
+        let injector = HidInjector::with_helper_path(path);
+        injector.warm("UDID-W3", 0).await;
+        assert!(injector.note_unavailable("UDID-W3"));
+    }
+
+    #[tokio::test]
+    async fn a_device_stopped_during_its_warm_up_keeps_no_helper() {
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = slow_stub(&starts, "0.5");
+        let injector = Arc::new(HidInjector::with_helper_path(path));
+        let warming = {
+            let injector = Arc::clone(&injector);
+            tokio::spawn(async move { injector.warm("UDID-W4", 0).await })
+        };
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        injector.shutdown("UDID-W4").await;
+        warming.await.unwrap();
+        assert!(
+            !injector.helpers.lock().await.contains_key("UDID-W4"),
+            "a warm-up that finished after shutdown must not install its helper"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_warm_up_for_a_device_stopped_before_it_ran_keeps_no_helper() {
+        // SetDevice(A) spawns the warm-up; SetDevice(B) stops A before the
+        // task first runs.
+        let (_dir, path) = slow_stub(&tempfile::tempdir().unwrap().path().join("s"), "0");
+        let injector = HidInjector::with_helper_path(path);
+        let epoch = injector.stop_epoch("UDID-W5");
+        injector.shutdown("UDID-W5").await;
+        injector.warm("UDID-W5", epoch).await;
+        assert!(!injector.helpers.lock().await.contains_key("UDID-W5"));
+    }
+
+    #[tokio::test]
+    async fn a_warm_up_while_a_start_is_in_flight_does_not_queue_another() {
+        let log = tempfile::tempdir().unwrap();
+        let starts = log.path().join("starts");
+        let (_dir, path) = slow_stub(&starts, "0.6");
+        let injector = Arc::new(HidInjector::with_helper_path(path));
+        let first = {
+            let injector = Arc::clone(&injector);
+            tokio::spawn(async move { injector.warm("UDID-W6", 0).await })
+        };
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        let started = std::time::Instant::now();
+        injector.warm("UDID-W6", 0).await;
+        assert!(
+            started.elapsed() < Duration::from_millis(300),
+            "a second warm-up waited for the first: {:?}",
+            started.elapsed()
+        );
+        first.await.unwrap();
+        assert_eq!(start_count(&starts), 1);
+        injector.shutdown("UDID-W6").await;
     }
 
     #[tokio::test]

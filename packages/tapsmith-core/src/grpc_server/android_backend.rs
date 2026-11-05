@@ -1,7 +1,7 @@
 //! Android device work: ADB on the host plus the UIAutomator2 agent.
 
 use super::device_backend::{
-    ActionResult, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
+    ActionResult, AgentLaunched, CaptureRoute, CaptureStop, DeviceBackend, PermissionChange,
 };
 use super::*;
 
@@ -253,9 +253,18 @@ impl DeviceBackend for AndroidBackend<'_> {
 
     async fn unlock(&self, request_id: String) -> ActionResult {
         let serial = self.svc.active_serial().await?;
-        // Wake the screen first
-        let _ = adb::shell_lenient(&serial, "input keyevent KEYCODE_WAKEUP").await;
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let (awake, keyguard) =
+            tokio::join!(adb::screen_awake(&serial), adb::keyguard_showing(&serial));
+        match unlock_start(awake, keyguard) {
+            UnlockStart::AlreadyUnlocked => {
+                return Ok(TapsmithServiceImpl::success_action_response(request_id));
+            }
+            UnlockStart::Dismiss => {}
+            UnlockStart::WakeFirst => {
+                let _ = adb::shell_lenient(&serial, "input keyevent KEYCODE_WAKEUP").await;
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
         // Only dismiss a keyguard that is actually showing. The
         // legacy sequence below is a MENU key plus a swipe up, and
         // on an already-unlocked device both land on the foreground
@@ -294,6 +303,14 @@ impl DeviceBackend for AndroidBackend<'_> {
             .await
             .ok()?;
         Some(!out.trim().is_empty())
+    }
+
+    async fn wait_for_app_ready(&self, package: &str, timeout: Duration) -> Option<bool> {
+        Some(
+            self.svc
+                .wait_for_android_rendered_content(package, timeout)
+                .await,
+        )
     }
 
     async fn relaunch_app(
@@ -355,6 +372,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_type: "ADB_COMMAND_FAILED".to_string(),
                 error_message: e.to_string(),
                 screenshot,
+                app_launched_fresh: false,
             }));
         }
 
@@ -478,6 +496,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         error_type: "CLEAR_DATA_FAILED".to_string(),
                         error_message: format!("Failed to clear app data: {}", output.trim()),
                         screenshot,
+                        app_launched_fresh: false,
                     }));
                 }
                 Err(e) => {
@@ -489,6 +508,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         error_type: "CLEAR_DATA_FAILED".to_string(),
                         error_message: format!("Failed to clear app data: {e}"),
                         screenshot,
+                        app_launched_fresh: false,
                     }));
                 }
                 Ok(_) => {} // Success
@@ -544,6 +564,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_type: "FORCE_STOP_FAILED".to_string(),
                 error_message: format!("Failed to stop app: {e}"),
                 screenshot,
+                app_launched_fresh: false,
             }));
         }
 
@@ -1050,7 +1071,7 @@ impl DeviceBackend for AndroidBackend<'_> {
         request_id: String,
         serial: String,
         req: &proto::StartAgentRequest,
-    ) -> Result<(), proto::ActionResponse> {
+    ) -> Result<AgentLaunched, proto::ActionResponse> {
         // ─── Android: install APKs and launch instrumentation ───
         if let Err(e) = adb::wait_for_device_ready(&serial, Duration::from_secs(45)).await {
             return Err(proto::ActionResponse {
@@ -1059,6 +1080,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_type: "DEVICE_NOT_READY".to_string(),
                 error_message: format!("Android device was not ready before starting agent: {e}"),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             });
         }
 
@@ -1078,6 +1100,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                             or install manually with: adb install <path-to-agent.apk>"
                         .to_string(),
                     screenshot: Vec::new(),
+                    app_launched_fresh: false,
                 });
             }
         } else {
@@ -1102,6 +1125,7 @@ impl DeviceBackend for AndroidBackend<'_> {
                         error_type: "AGENT_INSTALL_FAILED".to_string(),
                         error_message: format!("Failed to install {label}: {e}"),
                         screenshot: Vec::new(),
+                        app_launched_fresh: false,
                     });
                 }
             }
@@ -1125,9 +1149,11 @@ impl DeviceBackend for AndroidBackend<'_> {
                 error_type: "AGENT_START_FAILED".to_string(),
                 error_message: e.to_string(),
                 screenshot: Vec::new(),
+                app_launched_fresh: false,
             });
         }
-        Ok(())
+        // The Android agent never launches the app.
+        Ok(AgentLaunched::default())
     }
 
     async fn connect_agent(&self, agent: &mut AgentConnection, serial: &str) -> anyhow::Result<()> {
@@ -1155,7 +1181,15 @@ impl DeviceBackend for AndroidBackend<'_> {
                     .await
                     .ok()
                     .flatten();
-                *self.svc.android_launcher_activity.write().await = activity;
+                let mut cache = self.svc.android_launcher_activity.write().await;
+                match activity {
+                    Some(activity) => {
+                        cache.insert(target_package.to_string(), activity);
+                    }
+                    None => {
+                        cache.remove(target_package);
+                    }
+                }
             }
         }
     }
@@ -1440,6 +1474,28 @@ async fn os_service_redirect(serial: &str, proxy: &NetworkProxy) -> Option<adb::
     })
 }
 
+/// Where `unlock` starts, from the screen's wakefulness and the keyguard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnlockStart {
+    /// The screen is on and no lock screen shows: nothing to do. Sending
+    /// any key or swipe here would land on the foreground app.
+    AlreadyUnlocked,
+    /// The screen is on but a lock screen shows (or the dump cannot tell):
+    /// dismiss it without the wake key and its settle wait.
+    Dismiss,
+    /// The screen is off, dozing or dreaming, or its state is unknown: wake
+    /// it first, as before.
+    WakeFirst,
+}
+
+fn unlock_start(awake: Option<bool>, keyguard_showing: Option<bool>) -> UnlockStart {
+    match (awake, keyguard_showing) {
+        (Some(true), Some(false)) => UnlockStart::AlreadyUnlocked,
+        (Some(true), _) => UnlockStart::Dismiss,
+        _ => UnlockStart::WakeFirst,
+    }
+}
+
 /// The agent's `takeSystemDialogEvents` result as proto events; malformed
 /// entries are skipped rather than failing the whole list.
 pub(super) fn system_dialog_events_from(data: &Value) -> Vec<proto::SystemDialogEvent> {
@@ -1475,6 +1531,24 @@ pub(super) fn system_dialog_events_from(data: &Value) -> Vec<proto::SystemDialog
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn unlock_skips_everything_only_when_awake_and_unlocked() {
+        assert_eq!(
+            unlock_start(Some(true), Some(false)),
+            UnlockStart::AlreadyUnlocked
+        );
+        // Awake with a lock screen up, or a keyguard dump that can't tell:
+        // dismiss, but there is nothing to wake.
+        assert_eq!(unlock_start(Some(true), Some(true)), UnlockStart::Dismiss);
+        assert_eq!(unlock_start(Some(true), None), UnlockStart::Dismiss);
+        // Asleep, or a power dump that can't tell, wakes first even when no
+        // keyguard shows: the screen must be on before anything else.
+        for keyguard in [Some(true), Some(false), None] {
+            assert_eq!(unlock_start(Some(false), keyguard), UnlockStart::WakeFirst);
+            assert_eq!(unlock_start(None, keyguard), UnlockStart::WakeFirst);
+        }
+    }
 
     #[test]
     fn system_dialog_events_map_every_field() {

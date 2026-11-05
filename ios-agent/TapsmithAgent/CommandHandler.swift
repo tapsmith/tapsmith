@@ -1600,35 +1600,40 @@ class CommandHandler {
             // must have stopped changing first (PILOT-791).
             plannedScreenSize = nil
             let plan = try planSettledTouch(target, timeoutMs: remaining)
-            // The daemon's helper places a point in the device's native
-            // portrait space, while the plan's point is in the app's
-            // interface space: they agree only while the interface is upright,
-            // as the snapshot the plan was made from shows it (the cached
-            // screen size misses a rotation Tapsmith did not make). Otherwise
-            // XCTest touches, as it maps the orientation itself: a tap is made
-            // here, at the planned point, as the `tap` command would make it
-            // (`tapped: true`), rather than handed back to be planned and
-            // settled all over again; other gestures go to the agent's own.
-            if case .point(let point, _, let hold) = plan, !HidTouch.interfaceIsUpright(
-                screen: plannedScreenSize ?? snapshotFinder.screenSize,
-                deviceUpsideDown: XCUIDevice.shared.orientation == .portraitUpsideDown
-            ) {
-                guard forTap else { return ["useElement": true] }
-                actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
-                snapshotFinder.recordFocusedTextInputHint(element)
-                if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
-                touchBarrier()
-                return ["tapped": true]
-            }
             switch plan {
             case .point(let point, _, let hold):
+                // The daemon's helper places a point in the device's native
+                // portrait space, while the plan's point is in the app's
+                // interface space, as the snapshot the plan was made from
+                // shows it (the cached screen size misses a rotation Tapsmith
+                // did not make): on a rotated screen the point is mapped by
+                // the way the device is turned. When that cannot be told,
+                // XCTest touches: a tap is made here, at the planned point, as
+                // the `tap` command would make it (`tapped: true`), rather
+                // than handed back to be planned and settled all over again;
+                // other gestures go to the agent's own.
+                guard let native = HidTouch.nativePoint(
+                    point,
+                    screen: plannedScreenSize ?? snapshotFinder.screenSize,
+                    device: Self.deviceTurn(XCUIDevice.shared.orientation)
+                ) else {
+                    guard forTap else { return ["useElement": true] }
+                    actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
+                    snapshotFinder.recordFocusedTextInputHint(element)
+                    if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
+                    touchBarrier()
+                    return ["tapped": true]
+                }
                 // holdMs: how long the daemon's HID tap, and each tap of its
-                // double tap, holds its touch (`TapTiming`, by the element's
-                // type; a tap's one-frame hold is pressed back to back over
-                // HID, `HidTouch.hold`).
-                let pressHold = forTap ? HidTouch.hold(forTapHold: hold) : hold
+                // double tap, holds its touch: `TapTiming`'s hold for the
+                // element's type, as HID presses it (`HidTouch.hold`: a
+                // one-frame tap is pressed and lifted back to back). This
+                // applies to the double tap as well as to the single tap: a
+                // double tap's 10 ms presses lost taps beside a moving scroll
+                // view on CI (PILOT-1005), so do not limit it to single taps.
+                let pressHold = HidTouch.hold(forTapHold: hold)
                 var answer: [String: Any] = [
-                    "x": Double(point.x), "y": Double(point.y), "holdMs": Int((pressHold * 1000).rounded()),
+                    "x": Double(native.x), "y": Double(native.y), "holdMs": Int((pressHold * 1000).rounded()),
                 ]
                 if forTap {
                     snapshotFinder.recordFocusedTextInputHint(element)
@@ -2269,7 +2274,18 @@ class CommandHandler {
             // If running in background, this brings it to foreground.
             let targetApp = rebindApp(bundleId: targetBundleId(fallback: params))
             targetApp.activate()
-            Thread.sleep(forTimeInterval: 0.5)
+            // Wait for the state instead of a fixed 0.5 s (PILOT-976).
+            // activate() normally returns with the app already in front, so
+            // this costs nothing; the bound only matters for an app that does
+            // not get there, which the daemon's session probe then judges.
+            var inForeground = false
+            let waitStarted = Date()
+            _ = ObjCExceptionCatcher.catchException {
+                inForeground = targetApp.wait(for: .runningForeground, timeout: 5)
+            }
+            NSLog(
+                "[TapsmithAgent] launchApp: foreground=\(inForeground) after \(Int(Date().timeIntervalSince(waitStarted) * 1000)) ms"
+            )
             // Dismiss "Save Password?" dialog from iOS Passwords framework.
             let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
             let notNow = springboard.buttons["Not Now"]
@@ -2537,7 +2553,27 @@ class CommandHandler {
                 XCUIDevice.shared.orientation = target
                 Thread.sleep(forTimeInterval: 0.4)
             }
+            // The screen size is cached and decides what counts as on screen,
+            // so re-read it only once the app's window has turned: on a
+            // loaded simulator it can still be portrait here (RotationSettle).
+            _ = RotationSettle.waitForWindow(
+                landscape: target.isLandscape,
+                deadline: Date(timeIntervalSinceNow: Self.rotationSettleTimeout),
+                readSize: {
+                    // A failed read (an AX timeout on a loaded simulator) counts
+                    // as not turned yet: the rotation itself has happened, and
+                    // the caches below must still be dropped.
+                    var size = CGSize.zero
+                    _ = ObjCExceptionCatcher.catchException {
+                        size = app.windows.firstMatch.frame.size
+                    }
+                    return size
+                }
+            )
             snapshotFinder.invalidateScreenSize()
+            // The action executor keeps its own copy (dropdown options are
+            // judged against it): drop it too, so it reads the turned screen.
+            actionExecutor.cachedScreenSize = nil
             return ["success": true]
 
         case "getOrientation":
@@ -2816,6 +2852,9 @@ class CommandHandler {
     /// How long a keyboard element with no on-screen area gets to slide in
     /// before isKeyboardShown and hideKeyboard treat it as not on screen.
     private static let keyboardAppearGrace: TimeInterval = 1.5
+    /// How long setOrientation waits for the app's window to turn. An app
+    /// that does not rotate waits it out, so it is kept short.
+    private static let rotationSettleTimeout: TimeInterval = 2
 
     /// Set by `dismissKeyboard`: whether any strategy touched the screen.
     private var touchedScreen = false
@@ -2930,6 +2969,17 @@ class CommandHandler {
         guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return (.absent, []) }
         let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
         return (planner.keyboardRegion == nil ? .offScreen : .onScreen, planner.keyboardFrames)
+    }
+
+    /// `XCUIDevice.orientation` as `HidTouch` takes it.
+    private static func deviceTurn(_ orientation: UIDeviceOrientation) -> HidTouch.DeviceTurn {
+        switch orientation {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        default: return .other
+        }
     }
 
     /// The screen as `snapshot` saw it: the application element's frame,

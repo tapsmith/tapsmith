@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { androidHierarchyHasRenderedContent, androidHierarchyHasText, collectAnsweredSystemDialogs, describeHierarchyForDiagnostics, ensureSessionReady, executeAppReset, launchConfiguredApp, probeResetCapabilities } from '../session-preflight.js';
+import { androidHierarchyHasRenderedContent, androidHierarchyHasText, collectAnsweredSystemDialogs, describeHierarchyForDiagnostics, ensureSessionReady, executeAppReset, launchConfiguredApp, probeResetCapabilities, startAndroidLaunchEarly } from '../session-preflight.js';
 import type { AppResetPolicy } from '../app-reset.js';
 import { onActionProgress, type ActionProgressEvent } from '../action-progress.js';
 import { isRecoverableInfrastructureError } from '../worker-protocol.js';
@@ -47,6 +47,9 @@ function makeContext(overrides: Partial<Parameters<typeof ensureSessionReady>[0]
       hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>',
       errorMessage: '',
     })),
+    // A daemon without the agent-side wait by default, so the dump-polling
+    // tests below keep exercising that path; the PILOT-976 tests opt in.
+    waitForAppReady: vi.fn(async () => ({ requestId: '1', ready: false, supported: false })),
     takeSystemDialogEvents: vi.fn(async (): Promise<import('../grpc-client.js').TakeSystemDialogEventsResponse> => ({ requestId: '1', events: [] })),
   };
 
@@ -209,6 +212,82 @@ describe('session-preflight', () => {
     });
     expect(prepared.policy).toEqual({ mode: 'clear', scope: 'file' });
   });
+
+  describe('Android startup launch alongside the agent start', () => {
+    it('clears before it returns, and launches without waiting for the launch', async () => {
+      const ctx = makeContext();
+      const order: string[] = [];
+      vi.mocked(ctx.device.terminateApp).mockImplementation(async () => { order.push('terminate'); });
+      vi.mocked(ctx.device.clearAppData).mockImplementation(async () => { order.push('clear'); });
+      let finishLaunch!: () => void;
+      vi.mocked(ctx.device.launchApp).mockImplementation(() => {
+        order.push('launch');
+        return new Promise<undefined>((resolve) => { finishLaunch = () => resolve(undefined); });
+      });
+
+      const early = await startAndroidLaunchEarly(ctx, { freshInstall: false });
+
+      // The clear has finished (it must come before the agent starts), and
+      // the launch is under way but not awaited.
+      expect(order).toEqual(['terminate', 'clear', 'launch']);
+      expect(ctx.device.launchApp).toHaveBeenCalledWith('com.example.app', { activity: '.MainActivity', waitForIdle: false });
+      let settled = false;
+      void early!.launched.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      finishLaunch();
+      await expect(early!.launched).resolves.toBe(true);
+      expect(ctx.device.startAgent).not.toHaveBeenCalled();
+    });
+
+    it('only launches a freshly installed app (nothing to clear)', async () => {
+      const ctx = makeContext();
+      const early = await startAndroidLaunchEarly(ctx, { freshInstall: true });
+      await expect(early!.launched).resolves.toBe(true);
+      expect(ctx.device.terminateApp).not.toHaveBeenCalled();
+      expect(ctx.device.clearAppData).not.toHaveBeenCalled();
+      expect(ctx.device.launchApp).toHaveBeenCalledTimes(1);
+    });
+
+    it('a terminate that fails (app not running) still clears and launches', async () => {
+      const ctx = makeContext();
+      vi.mocked(ctx.device.terminateApp).mockRejectedValueOnce(new Error('not running'));
+      const early = await startAndroidLaunchEarly(ctx, { freshInstall: false });
+      await expect(early!.launched).resolves.toBe(true);
+      expect(ctx.device.clearAppData).toHaveBeenCalled();
+    });
+
+    it('a failed clear launches nothing, so the usual launch path runs it all after the agent', async () => {
+      const ctx = makeContext();
+      vi.mocked(ctx.device.clearAppData).mockRejectedValueOnce(new Error('Failed to clear app data'));
+      await expect(startAndroidLaunchEarly(ctx, { freshInstall: false })).resolves.toBeUndefined();
+      expect(ctx.device.launchApp).not.toHaveBeenCalled();
+    });
+
+    it('a failed launch reports false instead of rejecting', async () => {
+      const ctx = makeContext();
+      vi.mocked(ctx.device.launchApp).mockRejectedValueOnce(new Error('Failed to launch app'));
+      const early = await startAndroidLaunchEarly(ctx, { freshInstall: false });
+      await expect(early!.launched).resolves.toBe(false);
+    });
+
+    it('launchConfiguredApp with appLaunched skips the clear and launch but still waits and probes', async () => {
+      const ctx = makeContext();
+      const prepared = await launchConfiguredApp(ctx, 'startup launch', { appLaunched: true, hooksProbeMs: 0 });
+      expect(ctx.device.terminateApp).not.toHaveBeenCalled();
+      expect(ctx.device.clearAppData).not.toHaveBeenCalled();
+      expect(ctx.device.startAgent).not.toHaveBeenCalled();
+      expect(ctx.device.launchApp).not.toHaveBeenCalled();
+      expect(ctx.client.ping).toHaveBeenCalled();
+      expect(ctx.client.getUiHierarchy).toHaveBeenCalled();
+      expect(prepared).toMatchObject({ policy: { mode: 'clear', scope: 'file' }, source: 'startup launch' });
+
+      const fresh = makeContext();
+      await launchConfiguredApp(fresh, 'startup launch', { freshInstall: true, appLaunched: true, hooksProbeMs: 0 });
+      expect(fresh.device.launchApp).not.toHaveBeenCalled();
+    });
+  });
+
   it('restore policy never clears app data (appState restore owns isolation)', async () => {
     // Regression: a scope that restores a non-empty appState must NOT pm-clear
     // first. On Android pm clear wipes the AndroidKeyStore keys that decrypt
@@ -450,6 +529,68 @@ describe('session-preflight', () => {
       const report = await executeAppReset(ctx, WARM_TEST, { phase: 'before test' });
 
       expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+    });
+
+    describe('agent-side readiness (PILOT-976)', () => {
+      it('a clear reset asks the daemon once instead of polling dumps', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+        const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledWith('com.example.app', 10_000, expect.any(Number));
+        // ensureSessionReady's own read only: no dump polling for content.
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(1);
+      });
+
+      it('an app that never shows text is let through with the breadcrumb, without dump polling', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: false, supported: true });
+        const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        try {
+          await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+          expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('showed no rendered content');
+        } finally {
+          stderr.mockRestore();
+        }
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(1);
+      });
+
+      it('a daemon that predates the RPC gets the dump polling', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockRejectedValue(Object.assign(new Error('12 UNIMPLEMENTED: unknown method'), { code: 12 }));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(rendered);
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(3);
+      });
+
+      it('a failed wait falls back to dump polling for what is left of the budget', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockRejectedValue(new Error('14 UNAVAILABLE: connection dropped'));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(rendered);
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(2);
+      });
+
+      it('iOS keeps its own readiness check', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'ios' } });
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
+      });
     });
 
     it('startup launch waits for rendered content before probing for hooks', async () => {
@@ -1832,6 +1973,78 @@ describe('session-preflight', () => {
       // Already concluded: a later probe is single-shot (watch/MCP re-probe per file).
       await probeResetCapabilities(ctx, { pollMs: 5_000 });
       expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(polled + 1);
+    });
+
+    describe('stopping early on an app that has rendered without the marker', () => {
+      const HOME = '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>';
+      const SPLASH = '<hierarchy><node package="com.example.app" text="" /><node package="com.android.systemui" text="12:00" /></hierarchy>';
+      const MARKER_XML = '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=0;url=exp://x/" /></hierarchy>';
+      const read = (xml: string) => ({ requestId: '1', hierarchyXml: xml, errorMessage: '' });
+      let tmp: string;
+      beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'tapsmith-hooks-probe-')); });
+      afterEach(() => { fs.rmSync(tmp, { recursive: true, force: true }); });
+
+      /** A project whose package.json lists `deps`. */
+      function project(deps: Record<string, string>): string {
+        fs.writeFileSync(path.join(tmp, 'package.json'), JSON.stringify({ dependencies: deps }));
+        return tmp;
+      }
+      function probeContext(rootDir: string | undefined, platform: 'android' | 'ios' = 'android') {
+        return makeContext({ config: { package: 'com.example.app', activity: '.MainActivity', platform, rootDir } });
+      }
+
+      it('stops after two reads of rendered UI without the marker, for a project without the hooks', async () => {
+        // Every app without @tapsmith/react-native paid the whole budget at
+        // each session start.
+        const ctx = probeContext(project({ expo: '~58.0.0' }));
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(read(HOME));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(2);
+      });
+
+      it('keeps the whole budget for a project that depends on the hooks, or one it cannot look up', async () => {
+        // A hooked app can render a screen before the root that mounts the marker.
+        for (const rootDir of [project({ expo: '~58.0.0', '@tapsmith/react-native': '^0.7.1' }), undefined]) {
+          const ctx = probeContext(rootDir);
+          vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(read(HOME));
+          await probeResetCapabilities(ctx, { pollMs: 700 });
+          expect(vi.mocked(ctx.client.getUiHierarchy).mock.calls.length).toBeGreaterThan(2);
+        }
+      });
+
+      it('counts only consecutive reads of the app\'s own rendered UI', async () => {
+        const ctx = probeContext(project({}));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(read(SPLASH))
+          .mockResolvedValueOnce(read(HOME))
+          .mockRejectedValueOnce(new Error('agent busy'))
+          .mockResolvedValueOnce(read(HOME))
+          .mockResolvedValueOnce(read(SPLASH))
+          .mockResolvedValue(read(HOME));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(7);
+      });
+
+      it('still finds a marker that mounts after the first rendered read', async () => {
+        const ctx = probeContext(project({}));
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce(read(HOME)).mockResolvedValue(read(MARKER_XML));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true });
+      });
+
+      it('on iOS, counts an element of the app with a label or identifier, not the application node or keyboard', async () => {
+        const app = (inner: string) => `<hierarchy><XCUIElementTypeApplication label="Example" identifier="" type="XCUIElementTypeApplication">${inner}</XCUIElementTypeApplication></hierarchy>`;
+        const ctx = probeContext(project({}), 'ios');
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(read(app('<XCUIElementTypeWindow label="" identifier="" type="XCUIElementTypeWindow" />')))
+          .mockResolvedValueOnce(read(app('<XCUIElementTypeKeyboard label="" identifier="" type="XCUIElementTypeKeyboard" tapsmith-non-app="true"><XCUIElementTypeKey label="q" identifier="q" type="XCUIElementTypeKey" /></XCUIElementTypeKeyboard>')))
+          .mockResolvedValue(read(app('<XCUIElementTypeStaticText label="Welcome" identifier="" type="XCUIElementTypeStaticText" />')));
+
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: false });
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(4);
+      });
     });
 
     it('a probe failure leaves the capabilities as they were', async () => {

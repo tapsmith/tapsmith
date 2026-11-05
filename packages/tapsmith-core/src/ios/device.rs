@@ -703,12 +703,26 @@ fn extract_devicectl_error_hint(json_body: Option<&str>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Launch an app on a simulator by bundle ID.
+/// `simctl launch --terminate-running-process`: simctl stops a running
+/// instance first and launches once it is gone, in one call (PILOT-976). The
+/// daemon used to run `simctl terminate`, sleep a fixed 300 ms, then launch.
+fn simctl_relaunch_args<'a>(udid: &'a str, bundle_id: &'a str) -> [&'a str; 5] {
+    [
+        "simctl",
+        "launch",
+        "--terminate-running-process",
+        udid,
+        bundle_id,
+    ]
+}
+
+/// Launch a fresh process of an app on a simulator, terminating the running
+/// one first if there is one.
 #[instrument]
-pub async fn launch_app(udid: &str, bundle_id: &str) -> Result<()> {
+pub async fn relaunch_app(udid: &str, bundle_id: &str) -> Result<()> {
     let output = bounded_output(
         "simctl launch",
-        Command::new("xcrun").args(["simctl", "launch", udid, bundle_id]),
+        Command::new("xcrun").args(simctl_relaunch_args(udid, bundle_id)),
         SIMCTL_TIMEOUT,
     )
     .await?;
@@ -1190,6 +1204,36 @@ pub async fn clear_container(container_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Wipe a simulator app's data — the `ClearAppData` RPC's simulator steps:
+/// its data container, then (unless keychain state is turned off) the
+/// simulator's device-global keychain, so keychain-backed auth state (e.g.
+/// Firebase Auth) does not survive a full clear and leave a half-signed-in
+/// app. Best-effort: each failure is logged and the rest still runs.
+/// Returns whether every step succeeded.
+pub async fn wipe_simulator_app_data(udid: &str, container: &str) -> bool {
+    let mut complete = true;
+    if let Err(e) = clear_container(container).await {
+        warn!(error = %e, "Failed to clear app container, continuing anyway");
+        complete = false;
+    }
+    if keychain_state_disabled() {
+        return complete;
+    }
+    match simulator_keychain_dir(container) {
+        Some(keychain_dir) => {
+            if let Err(e) = clear_keychain(udid, &keychain_dir).await {
+                warn!(error = %e, "Failed to clear simulator keychain, continuing anyway");
+                complete = false;
+            }
+        }
+        None => {
+            warn!(container = %container, "Could not derive simulator keychain dir; keychain not cleared");
+            complete = false;
+        }
+    }
+    complete
+}
+
 /// Whether a top-level entry of a data container belongs to the simulator's
 /// container manager rather than to the app — today exactly
 /// `.com.apple.mobile_container_manager.metadata.plist`, the record that ties
@@ -1434,23 +1478,93 @@ pub async fn clear_keychain(udid: &str, keychain_dir: &std::path::Path) -> Resul
     // the process dies), so the delete can't race a respawn. Then restart so a
     // fresh securityd opens the db by name, finds nothing, and recreates an
     // empty keychain.
-    let mut removed = 0;
-    for name in SIM_KEYCHAIN_FILES {
-        let path = keychain_dir.join(name);
-        if tokio::fs::try_exists(&path).await.unwrap_or(false) {
-            tokio::fs::remove_file(&path)
-                .await
-                .with_context(|| format!("Failed to delete keychain file {name}"))?;
-            removed += 1;
-        }
-    }
-    if removed == 0 {
-        debug!(udid, "No simulator keychain files to clear");
+    //
+    // A keychain that is exactly what a clear leaves — securityd's own two
+    // rows and nothing else — needs neither: skipping the restart saves ~1 s
+    // a clear. Any other row, in any access group (Apple's included), means
+    // something wrote to it since, so it is cleared.
+    if keychain_items_to_clear(keychain_dir).await == Some(0) {
+        debug!(
+            udid,
+            "Simulator keychain is as a clear leaves it; nothing to clear"
+        );
         return Ok(());
     }
-    restart_securityd(udid).await?;
-    info!(udid, "Simulator keychain cleared");
-    Ok(())
+    // The unlink and the restart run as one task of their own, so a caller
+    // that is cancelled (a timeout, an aborted agent start) cannot stop
+    // between them and leave securityd serving the deleted keychain — which
+    // every later clear would then miss, finding no files to delete.
+    let udid_owned = udid.to_string();
+    let dir = keychain_dir.to_path_buf();
+    tokio::spawn(async move {
+        let udid = udid_owned.as_str();
+        let mut removed = 0;
+        for name in SIM_KEYCHAIN_FILES {
+            let path = dir.join(name);
+            if tokio::fs::try_exists(&path).await.unwrap_or(false) {
+                tokio::fs::remove_file(&path)
+                    .await
+                    .with_context(|| format!("Failed to delete keychain file {name}"))?;
+                removed += 1;
+            }
+        }
+        if removed == 0 {
+            // No database while securityd runs: an earlier clear unlinked it
+            // and never got to the restart. securityd may still be serving
+            // the deleted one, so restart it anyway.
+            debug!(
+                udid,
+                "No simulator keychain files on disk; restarting securityd anyway"
+            );
+        }
+        restart_securityd(udid).await?;
+        info!(udid, "Simulator keychain cleared");
+        Ok(())
+    })
+    .await
+    .map_err(|e| anyhow!("keychain clear task failed: {e}"))?
+}
+
+/// How many items the simulator keychain at `keychain_dir` holds beyond the
+/// two that securityd writes when it creates an empty keychain (one
+/// `com.apple.security.securityd` password, one `com.apple.security.octagon`
+/// internet password) — `Some(0)` means the keychain is exactly as a clear
+/// leaves it — or `None` when that cannot be read (no database, a schema this
+/// query does not know, sqlite3 failing): the caller then clears it as if it
+/// held some. Every other item counts, whatever its access group: Apple's
+/// own groups included, since an app run can leave rows there too (saved
+/// passwords, CFNetwork credentials, a system service the app woke). Read-only.
+async fn keychain_items_to_clear(keychain_dir: &std::path::Path) -> Option<u64> {
+    let db = keychain_dir.join(SIM_KEYCHAIN_FILES[0]);
+    if !tokio::fs::try_exists(&db).await.unwrap_or(false) {
+        return None;
+    }
+    let uri = format!("file:{}?mode=ro", db.display());
+    let output = bounded_output(
+        "sqlite3 keychain items",
+        Command::new("/usr/bin/sqlite3").args(["-readonly", &uri, KEYCHAIN_ITEMS_TO_CLEAR_QUERY]),
+        Duration::from_secs(5),
+    )
+    .await
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    parse_keychain_item_count(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Counts the keychain's items (passwords, internet passwords, keys,
+/// certificates), less at most one row each of the two a freshly created
+/// keychain holds.
+const KEYCHAIN_ITEMS_TO_CLEAR_QUERY: &str = "select \
+     (select count(*) from genp) + (select count(*) from inet) \
+     + (select count(*) from keys) + (select count(*) from cert) \
+     - min(1, (select count(*) from genp where agrp = 'com.apple.security.securityd')) \
+     - min(1, (select count(*) from inet where agrp = 'com.apple.security.octagon'))";
+
+/// sqlite3's answer to [`KEYCHAIN_ITEMS_TO_CLEAR_QUERY`]: one count, or `None`.
+fn parse_keychain_item_count(stdout: &str) -> Option<u64> {
+    stdout.trim().parse().ok()
 }
 
 /// Restart securityd inside the simulator so it re-reads the keychain db
@@ -1630,6 +1744,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn simctl_relaunch_terminates_the_running_process_in_the_same_call() {
+        assert_eq!(
+            simctl_relaunch_args("UDID", "com.example"),
+            [
+                "simctl",
+                "launch",
+                "--terminate-running-process",
+                "UDID",
+                "com.example"
+            ]
+        );
+    }
+
+    #[test]
     fn keychain_dir_derived_from_standard_container_path() {
         let container = "/Users/sam/Library/Developer/CoreSimulator/Devices/ABC-123/data/Containers/Data/Application/DEF-456";
         assert_eq!(
@@ -1655,6 +1783,119 @@ mod tests {
     fn keychain_dir_rejects_unrecognized_path() {
         assert_eq!(simulator_keychain_dir("/some/random/path"), None);
         assert_eq!(simulator_keychain_dir(""), None);
+    }
+
+    #[test]
+    fn keychain_item_count_parses_one_number_only() {
+        assert_eq!(parse_keychain_item_count("0\n"), Some(0));
+        assert_eq!(parse_keychain_item_count("3"), Some(3));
+        assert_eq!(parse_keychain_item_count(""), None);
+        assert_eq!(
+            parse_keychain_item_count("Error: no such table: genp"),
+            None
+        );
+    }
+
+    /// A keychain database with the four item tables, holding `items`
+    /// (table, access group).
+    #[cfg(target_os = "macos")]
+    fn keychain_db(items: &[(&str, Option<&str>)]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let mut sql = String::from(
+            "create table genp(agrp text); create table inet(agrp text); \
+             create table keys(agrp text); create table cert(agrp text);",
+        );
+        for (table, agrp) in items {
+            match agrp {
+                Some(g) => sql.push_str(&format!("insert into {table} values('{g}');")),
+                None => sql.push_str(&format!("insert into {table} values(null);")),
+            }
+        }
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(dir.path().join(SIM_KEYCHAIN_FILES[0]))
+            .arg(sql)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        dir
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_freshly_created_keychain_holds_nothing_to_clear() {
+        // Exactly what securityd writes when it creates an empty keychain
+        // (seen on every simulator right after a clear): one securityd row
+        // and one octagon row.
+        let dir = keychain_db(&[
+            ("genp", Some("com.apple.security.securityd")),
+            ("inet", Some("com.apple.security.octagon")),
+        ]);
+        assert_eq!(keychain_items_to_clear(dir.path()).await, Some(0));
+        let empty = keychain_db(&[]);
+        assert_eq!(keychain_items_to_clear(empty.path()).await, Some(0));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn every_item_a_fresh_keychain_lacks_is_counted_whatever_its_group() {
+        // Apple's own groups too: an app run can leave rows under them
+        // (saved passwords, CFNetwork credentials, services the app woke),
+        // and the bare `apple` / `ichat` groups unentitled processes use.
+        for (table, agrp) in [
+            ("genp", "com.apple.findmy.findmylocated"),
+            ("genp", "com.apple.cfnetwork"),
+            ("inet", "com.apple.password-manager"),
+            ("genp", "apple"),
+            ("keys", "ichat"),
+            ("cert", "com.apple.security.sos"),
+        ] {
+            let dir = keychain_db(&[
+                ("genp", Some("com.apple.security.securityd")),
+                ("inet", Some("com.apple.security.octagon")),
+                (table, Some(agrp)),
+            ]);
+            assert_eq!(
+                keychain_items_to_clear(dir.path()).await,
+                Some(1),
+                "{table} {agrp}"
+            );
+        }
+        // A second row in a fresh keychain's own groups is not fresh either.
+        let dir = keychain_db(&[
+            ("genp", Some("com.apple.security.securityd")),
+            ("genp", Some("com.apple.security.securityd")),
+            ("inet", Some("com.apple.security.octagon")),
+        ]);
+        assert_eq!(keychain_items_to_clear(dir.path()).await, Some(1));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn an_apps_keychain_items_are_counted_in_every_table() {
+        let dir = keychain_db(&[
+            ("genp", Some("com.apple.security.securityd")),
+            ("genp", Some("ABCDE12345.dev.tapsmith.testapp")),
+            ("inet", Some("dev.tapsmith.testapp")),
+            ("keys", Some("ABCDE12345.com.example.shared")),
+            ("cert", None),
+        ]);
+        assert_eq!(keychain_items_to_clear(dir.path()).await, Some(4));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn an_unreadable_keychain_is_not_taken_for_an_empty_one() {
+        // No database at all, and one whose schema the query does not know.
+        let missing = tempfile::tempdir().unwrap();
+        assert_eq!(keychain_items_to_clear(missing.path()).await, None);
+        let other = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("/usr/bin/sqlite3")
+            .arg(other.path().join(SIM_KEYCHAIN_FILES[0]))
+            .arg("create table items(x text);")
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert_eq!(keychain_items_to_clear(other.path()).await, None);
     }
 
     #[test]

@@ -14,6 +14,9 @@ export default defineConfig({
   app: "./fixtures/TapsmithTestApp.app",
   package: "dev.tapsmith.testapp",
   timeout: 30_000,
+  // Speeds UIKit animations up on both simulators (each member's daemon
+  // applies and restores it).
+  reducedMotion: "reduce",
   typingDelay: 10,
   // Two retries (Playwright's CI convention): runner-scoped outages can
   // outlast a single retry even after the framework's own recovery.
@@ -21,7 +24,7 @@ export default defineConfig({
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
   trace: {
-    mode: "retain-on-failure",
+    mode: "on-all-retries",
     daemonLogs: true,
     networkHosts: ["jsonplaceholder.typicode.com", "127.0.0.1"],
   },

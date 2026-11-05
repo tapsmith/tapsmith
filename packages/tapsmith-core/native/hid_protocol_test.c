@@ -80,14 +80,22 @@ int main(void) {
   assert(!hid_lifts_held_contact(HID_MOVE, 1));
   assert(!hid_lifts_held_contact(HID_UP, 1));
   /* Which commands leave a contact down. */
-  assert(hid_contact_after(HID_DOWN, 0) == 1);
-  assert(hid_contact_after(HID_MOVE, 1) == 1);
-  assert(hid_contact_after(HID_UP, 1) == 0);
-  assert(hid_contact_after(HID_CANCEL, 1) == 0);
-  assert(hid_contact_after(HID_TAP, 1) == 0);
-  assert(hid_contact_after(HID_DOUBLE_TAP, 1) == 0);
-  assert(hid_contact_after(HID_INVALID, 1) == 1);  /* nothing sent: unchanged */
-  assert(hid_contact_after(HID_INVALID, 0) == 0);
+  assert(hid_contact_after(HID_DOWN, 0, 1) == 1);
+  assert(hid_contact_after(HID_MOVE, 1, 1) == 1);
+  assert(hid_contact_after(HID_UP, 1, 1) == 0);
+  assert(hid_contact_after(HID_CANCEL, 1, 1) == 0);
+  assert(hid_contact_after(HID_TAP, 1, 1) == 0);
+  assert(hid_contact_after(HID_DOUBLE_TAP, 1, 1) == 0);
+  assert(hid_contact_after(HID_INVALID, 1, 0) == 1);  /* nothing sent: unchanged */
+  assert(hid_contact_after(HID_INVALID, 0, 0) == 0);
+  /* A streamed lift that failed may have left the finger down: the next
+   * t1/t2 must still lift it first (the daemon sends no recovery lift). */
+  assert(hid_contact_after(HID_UP, 1, 0) == 1);
+  assert(hid_contact_after(HID_CANCEL, 1, 0) == 1);
+  /* A failed down may still have landed: assume a contact (an extra lift is
+   * harmless). A failed t1/t2 is followed by the daemon's own `c`. */
+  assert(hid_contact_after(HID_DOWN, 0, 0) == 1);
+  assert(hid_contact_after(HID_TAP, 1, 0) == 0);
 
   e = hid_parse_line("t 100 200");     /* bare 't' is not a command */
   assert(e.cmd == HID_INVALID);

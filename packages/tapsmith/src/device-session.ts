@@ -29,6 +29,8 @@ import {
 import {
   ensureSessionReady,
   launchConfiguredApp,
+  startAndroidLaunchEarly,
+  type EarlyLaunch,
   checkMissingResetHooks,
   probeResetCapabilities,
   type SessionPreflightContext,
@@ -522,11 +524,10 @@ export async function installConfiguredApp(
 }
 
 /**
- * Bring a simulator app to the foreground before the XCUITest agent attaches,
- * which avoids a brief black-screen flicker. Best-effort: the app may already
+ * Launch the configured app on a simulator. Best-effort: the app may already
  * be running. Physical devices are skipped — `simctl launch` is simulator-only.
  */
-async function prelaunchSimulatorApp(config: TapsmithConfig, serial: string): Promise<void> {
+async function launchSimulatorApp(config: TapsmithConfig, serial: string): Promise<void> {
   if (config.platform !== 'ios' || !config.package) return;
   const { isPhysicalDevice } = await import('./ios-devicectl.js');
   if (isPhysicalDevice(serial)) return;
@@ -717,31 +718,49 @@ export async function openDeviceSession(
     }
     Object.assign(session.context, artifacts);
     if (install.pending) await install.pending;
-    await prelaunchSimulatorApp(config, spec.serial);
-    const freshInstall = install.freshInstall;
+    let freshInstall = install.freshInstall;
+    // The iOS agent launches the app itself as it starts. Unless the app was
+    // just installed (no data to clear), it is asked to wipe the app's data
+    // first — while xcodebuild starts — so that launch can stand as the clean
+    // startup launch instead of being cleared and relaunched after it.
+    const isIos = config.platform === 'ios';
+    const clearAppDataFirst = isIos && !!config.package && !freshInstall;
+
+    // Android: clear the app and start its launch now, so its cold start
+    // overlaps the agent's start instead of following it. Not on an emulator
+    // this run just booted, which gets the whole sequence and a warm-up below.
+    // The launch never fails the open from here: if it did not go through,
+    // the launch below runs the usual sequence after the agent.
+    let earlyLaunch: EarlyLaunch | undefined;
+    if (config.platform !== 'ios' && config.package && !opts.freshDevice) {
+      progress(`launching ${config.package} while the agent starts`);
+      earlyLaunch = await startAndroidLaunchEarly(session.context, { freshInstall });
+    }
 
     progress('starting Tapsmith agent');
-    phase('agent', 'start', config.platform === 'ios'
+    phase('agent', 'start', isIos
       ? `starting iOS agent (${artifacts.iosXctestrunPath ? path.basename(artifacts.iosXctestrunPath) : 'xctestrun not set'})`
       : 'starting Android automation agent');
-    const startAgent = (): Promise<void> => device.startAgent(
-      config.package ?? '',
-      artifacts.agentApkPath,
-      artifacts.agentTestApkPath,
-      artifacts.iosXctestrunPath,
-      artifacts.iosAppPath,
+    const startAgent = (): Promise<{ appLaunchedFresh: boolean }> => device._startAgent({
+      targetPackage: config.package ?? '',
+      agentApkPath: artifacts.agentApkPath,
+      agentTestApkPath: artifacts.agentTestApkPath,
+      iosXctestrunPath: artifacts.iosXctestrunPath,
+      iosAppPath: artifacts.iosAppPath,
       networkTracingEnabled,
-    );
+      clearAppDataFirst,
+    });
+    let appLaunchedFresh = false;
     try {
       try {
-        await startAgent();
+        ({ appLaunchedFresh } = await startAgent());
       } catch (err) {
         if (!isRetryableAgentStartError(err)) throw err;
         progress(`agent startup failed, retrying once: ${err instanceof Error ? err.message : String(err)}`);
         // Let a transient agent-connection drop clear before the retry — an
         // immediate re-attempt lands inside the same drop window (PILOT-282).
         await new Promise((resolve) => setTimeout(resolve, AGENT_START_RETRY_DELAY_MS));
-        await startAgent();
+        ({ appLaunchedFresh } = await startAgent());
       }
     } catch (err) {
       let message = err instanceof Error ? err.message : String(err);
@@ -755,14 +774,27 @@ export async function openDeviceSession(
     }
     progress('agent connected');
     phase('agent', 'complete', 'agent connected');
+    if (isIos && config.package) {
+      if (appLaunchedFresh) {
+        // The agent launched the app from wiped (or never-written) data: that
+        // is the startup launch, verified and probed like a fresh install's.
+        freshInstall = true;
+      } else if (freshInstall) {
+        // A runner that was already running never launched the app just
+        // installed under it.
+        await launchSimulatorApp(config, spec.serial);
+      }
+    }
 
     const launchPhase = opts.launchPhase ?? 'startup launch';
     if (config.package) {
       progress(`launching ${config.package}`);
       phase('launch', 'start', `launching ${config.package}`);
       try {
+        const appLaunched = earlyLaunch ? await earlyLaunch.launched : false;
         session.prepared = await launchConfiguredApp(session.context, launchPhase, {
           freshInstall,
+          ...(appLaunched ? { appLaunched } : {}),
           ...(opts.readinessAttempts !== undefined ? { readinessAttempts: opts.readinessAttempts } : {}),
         });
       } catch (err) {

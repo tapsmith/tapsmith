@@ -2076,11 +2076,22 @@ export class ElementHandle {
    * single-element actions (tap, longPress, doubleTap, type, clear, setChecked,
    * selectOption, focus, blur, highlight, screenshot).
    *
+   * With `byResolvedId`, an unmodified handle on Android also addresses the
+   * element its auto-wait resolved, by id: strict mode and the enabled check
+   * already ran on it, and the agent takes that find's bounds as the first
+   * read of its stability check instead of finding the element again and
+   * waiting for a quiet screen. A stale id re-resolves by selector
+   * (`_dispatchTargeted`).
+   *
    * @param preResolved - Resolved ElementInfo from the auto-wait step (avoids a
    *   redundant resolution round-trip).
    */
-  private async _actionTarget(preResolved?: ElementInfo): Promise<ActionTarget> {
-    if (!this._hasModifiers()) return { selector: this._selector };
+  private async _actionTarget(preResolved?: ElementInfo, options?: { byResolvedId?: boolean }): Promise<ActionTarget> {
+    if (!this._hasModifiers()) {
+      return options?.byResolvedId && this._options.platform === 'android' && preResolved?.elementId
+        ? { elementId: preResolved.elementId }
+        : { selector: this._selector };
+    }
     const el = preResolved ?? await this._resolveOne();
     if (el.elementId) return { elementId: el.elementId };
     // Agent-resolved matches always carry an id; if one is somehow missing,
@@ -2673,7 +2684,7 @@ export class ElementHandle {
     remainingMs: number,
     first: ActionTarget,
     dispatch: (target: ActionTarget, element?: ElementInfo) => Promise<ActionResponse>,
-    options?: { offScreenOk?: (el: ElementInfo) => boolean },
+    options?: { offScreenOk?: (el: ElementInfo) => boolean; byResolvedId?: boolean },
   ): Promise<ActionResponse> {
     const deadline = Date.now() + remainingMs;
     const refusedAtDeadline = (res: ActionResponse): ActionResponse => ({
@@ -2699,8 +2710,8 @@ export class ElementHandle {
       // No retry is started at the deadline: its one read could misreport the
       // element, and its touch would land after the timeout.
       if (Date.now() >= deadline) return refusedAtDeadline(res);
-      const { element } = await this._waitForEnabled(action, { ...options, deadline });
-      res = await dispatch(await this._actionTarget(element), element);
+      const { element } = await this._waitForEnabled(action, { offScreenOk: options?.offScreenOk, deadline });
+      res = await dispatch(await this._actionTarget(element, { byResolvedId: options?.byResolvedId }), element);
     }
   }
 
@@ -2812,13 +2823,13 @@ export class ElementHandle {
     if (call !== this) return call.tap();
     const { target, remainingMs } = await this._tracedResolve('tap', 'tap', async () => {
       const { remainingMs, element } = await this._waitForEnabled('tap');
-      return { target: await this._actionTarget(element), remainingMs };
+      return { target: await this._actionTarget(element, { byResolvedId: true }), remainingMs };
     });
     const budget = actionBudget(remainingMs);
     return this._tracedAction('tap', 'tap',
       () => this._untilHittable('tap', remainingMs, target, (to) => this._dispatchTargeted(to, (t) => 'elementId' in t
         ? this._client.tap(undefined, budget(), t.elementId)
-        : this._client.tap(t.selector, budget()))),
+        : this._client.tap(t.selector, budget())), { byResolvedId: true }),
       'Tap failed');
   }
 

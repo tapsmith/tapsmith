@@ -1301,7 +1301,7 @@ describe('Device.startAgent()', () => {
     const client = makeMockClient({ startAgent });
     const device = new Device(client);
     await device.startAgent('com.example.app');
-    expect(startAgent).toHaveBeenCalledWith('com.example.app', undefined, undefined, undefined, undefined, false);
+    expect(startAgent).toHaveBeenCalledWith('com.example.app', undefined, undefined, undefined, undefined, false, false);
   });
 
   it('passes APK paths through', async () => {
@@ -1309,7 +1309,7 @@ describe('Device.startAgent()', () => {
     const client = makeMockClient({ startAgent });
     const device = new Device(client);
     await device.startAgent('com.example.app', '/path/agent.apk', '/path/test.apk');
-    expect(startAgent).toHaveBeenCalledWith('com.example.app', '/path/agent.apk', '/path/test.apk', undefined, undefined, false);
+    expect(startAgent).toHaveBeenCalledWith('com.example.app', '/path/agent.apk', '/path/test.apk', undefined, undefined, false, false);
   });
 
   it('throws on failure', async () => {
@@ -1318,6 +1318,18 @@ describe('Device.startAgent()', () => {
     });
     const device = new Device(client);
     await expect(device.startAgent('com.example.app')).rejects.toThrow('Agent not installed');
+  });
+
+  it('asks for the wipe-first launch and reports whether the agent launched the app afresh', async () => {
+    const startAgent = vi.fn(async () => ({ ...successResponse(), appLaunchedFresh: true }));
+    const device = new Device(makeMockClient({ startAgent }));
+    await expect(device._startAgent({ targetPackage: 'com.example.app', clearAppDataFirst: true }))
+      .resolves.toEqual({ appLaunchedFresh: true });
+    expect(startAgent).toHaveBeenCalledWith('com.example.app', undefined, undefined, undefined, undefined, false, true);
+    // A daemon that predates the answer leaves it unset: not fresh.
+    startAgent.mockResolvedValueOnce(successResponse() as never);
+    await expect(device._startAgent({ targetPackage: 'com.example.app', clearAppDataFirst: true }))
+      .resolves.toEqual({ appLaunchedFresh: false });
   });
 });
 

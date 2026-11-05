@@ -39,6 +39,7 @@
 		3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */; };
 		9740000000000000000000A1 /* TapTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9740000000000000000000A2 /* TapTiming.swift */; };
 		9960000000000000000000A1 /* HidTouch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9960000000000000000000A2 /* HidTouch.swift */; };
+		9960000000000000000000A3 /* RotationSettle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9960000000000000000000A4 /* RotationSettle.swift */; };
 		9970000000000000000000A1 /* RegionScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9970000000000000000000A2 /* RegionScreenshot.swift */; };
 		8C25A0F1D3E44B6A9F7E2C01 /* PinchPlan.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */; };
 		9D34B1A2E4F55C7BA08F3D01 /* SwipeGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */; };
@@ -48,6 +49,7 @@
 		A1B2C3D4E5F6A7B8C9D0E1F2 /* RoleName.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */; };
 		A75600000000000000000001 /* NonAppElements.swift in Sources */ = {isa = PBXBuildFile; fileRef = A75600000000000000000002 /* NonAppElements.swift */; };
 		4C1A7E0D9B2F4E6A8D3C5B01 /* LaunchAccessibilityCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */; };
+		4C1A7E0D9B2F4E6A8D3C5C01 /* LaunchGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C1A7E0D9B2F4E6A8D3C5C02 /* LaunchGate.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -77,6 +79,7 @@
 		9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoubleTapRoute.swift; sourceTree = "<group>"; };
 		9740000000000000000000A2 /* TapTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapTiming.swift; sourceTree = "<group>"; };
 		9960000000000000000000A2 /* HidTouch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HidTouch.swift; sourceTree = "<group>"; };
+		9960000000000000000000A4 /* RotationSettle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RotationSettle.swift; sourceTree = "<group>"; };
 		9970000000000000000000A2 /* RegionScreenshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegionScreenshot.swift; sourceTree = "<group>"; };
 		8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PinchPlan.swift; sourceTree = "<group>"; };
 		9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwipeGeometry.swift; sourceTree = "<group>"; };
@@ -86,6 +89,7 @@
 		F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleName.swift; sourceTree = "<group>"; };
 		A75600000000000000000002 /* NonAppElements.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NonAppElements.swift; sourceTree = "<group>"; };
 		4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchAccessibilityCheck.swift; sourceTree = "<group>"; };
+		4C1A7E0D9B2F4E6A8D3C5C02 /* LaunchGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LaunchGate.swift; sourceTree = "<group>"; };
 		B20F42F1DA77FBEEC0F04F60 /* SocketServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SocketServer.swift; sourceTree = "<group>"; };
 		B4047824F41AA54563A432DC /* RoleMapping.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RoleMapping.swift; sourceTree = "<group>"; };
 		BDD4545E80BE3B249F9D6B2F /* TapsmithAgent-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TapsmithAgent-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -130,6 +134,7 @@
 				9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */,
 				9740000000000000000000A2 /* TapTiming.swift */,
 				9960000000000000000000A2 /* HidTouch.swift */,
+				9960000000000000000000A4 /* RotationSettle.swift */,
 				9970000000000000000000A2 /* RegionScreenshot.swift */,
 				8C25A0F1D3E44B6A9F7E2C02 /* PinchPlan.swift */,
 				9D34B1A2E4F55C7BA08F3D02 /* SwipeGeometry.swift */,
@@ -139,6 +144,7 @@
 				F2E1D0C9B8A7F6E5D4C3B2A1 /* RoleName.swift */,
 				A75600000000000000000002 /* NonAppElements.swift */,
 				4C1A7E0D9B2F4E6A8D3C5B02 /* LaunchAccessibilityCheck.swift */,
+				4C1A7E0D9B2F4E6A8D3C5C02 /* LaunchGate.swift */,
 				C511FD447184FAEDC3739DB9 /* TouchSynthesizer.h */,
 				03BBAA69CD44B39C3AD6DA0F /* TouchSynthesizer.m */,
 				45B43D837B50F6CE9F2973A3 /* WaitEngine.swift */,
@@ -270,6 +276,7 @@
 				3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */,
 				9740000000000000000000A1 /* TapTiming.swift in Sources */,
 				9960000000000000000000A1 /* HidTouch.swift in Sources */,
+				9960000000000000000000A3 /* RotationSettle.swift in Sources */,
 				9970000000000000000000A1 /* RegionScreenshot.swift in Sources */,
 				8C25A0F1D3E44B6A9F7E2C01 /* PinchPlan.swift in Sources */,
 				9D34B1A2E4F55C7BA08F3D01 /* SwipeGeometry.swift in Sources */,
@@ -279,6 +286,7 @@
 				A1B2C3D4E5F6A7B8C9D0E1F2 /* RoleName.swift in Sources */,
 				A75600000000000000000001 /* NonAppElements.swift in Sources */,
 				4C1A7E0D9B2F4E6A8D3C5B01 /* LaunchAccessibilityCheck.swift in Sources */,
+				4C1A7E0D9B2F4E6A8D3C5C01 /* LaunchGate.swift in Sources */,
 				17687791BBF6102D034AB942 /* TouchSynthesizer.m in Sources */,
 				6C50B1ECB9A19432E1A89D91 /* WaitEngine.swift in Sources */,
 			);

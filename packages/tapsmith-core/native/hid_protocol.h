@@ -56,9 +56,12 @@ typedef struct {
 HidEvent hid_parse_line(const char *line);
 
 /* Whether the simulator has a contact down after `cmd` was sent, given
- * whether it had one before (`contactDown`). A d or m (sent as a down)
- * leaves one; u, c, t1 and t2 end with none; an invalid line sends nothing. */
-int hid_contact_after(HidCmd cmd, int contactDown);
+ * whether it had one before (`contactDown`) and whether the send succeeded
+ * (`sent`). A d or m (sent as a down) leaves one; u, c, t1 and t2 end with
+ * none; an invalid line sends nothing. A u or c that failed keeps the contact
+ * it was lifting: the daemon streams those without waiting, so it sends no
+ * recovery lift, and the next t1/t2 must lift the finger first. */
+int hid_contact_after(HidCmd cmd, int contactDown, int sent);
 
 /* Whether `cmd` must first lift a contact left down (a mirror gesture whose
  * u never came): a t1 or t2 down would otherwise only move that finger, and

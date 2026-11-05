@@ -15,13 +15,14 @@ double hid_normalize(double point, double extentPt) {
   return clamp01(point / extentPt);
 }
 
-int hid_contact_after(HidCmd cmd, int contactDown) {
+int hid_contact_after(HidCmd cmd, int contactDown, int sent) {
   switch (cmd) {
     case HID_DOWN:
     case HID_MOVE:
       return 1;
     case HID_UP:
     case HID_CANCEL:
+      return sent ? 0 : contactDown;
     case HID_TAP:
     case HID_DOUBLE_TAP:
       return 0;

@@ -71,6 +71,12 @@ xcrun swiftc -sdk "$SDK" \
 "$OUT/launch-accessibility-check-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/LaunchGateTests/main.swift \
+  TapsmithAgent/LaunchGate.swift \
+  -o "$OUT/launch-gate-tests"
+"$OUT/launch-gate-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/TextMatchTests/main.swift \
   TapsmithAgent/TextMatch.swift \
   -o "$OUT/text-match-tests"
@@ -177,6 +183,12 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   TapsmithAgent/RegionScreenshot.swift \
   -o "$OUT/region-screenshot-tests"
 "$OUT/region-screenshot-tests"
+
+xcrun swiftc -sdk "$SDK" \
+  Tests/RotationSettleTests/main.swift \
+  TapsmithAgent/RotationSettle.swift \
+  -o "$OUT/rotation-settle-tests"
+"$OUT/rotation-settle-tests"
 
 xcrun swiftc -sdk "$SDK" \
   Tests/SnapshotRetryTests/main.swift \
