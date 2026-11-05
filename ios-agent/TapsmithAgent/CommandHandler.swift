@@ -865,8 +865,9 @@ class CommandHandler {
             // The plan's rect is in the app's interface space, as the
             // snapshot it was made from shows it; the screenshots read the
             // device's native portrait space. When the way the screen is
-            // turned can't be told, the interface rect stands, as it does
-            // on an upright screen.
+            // turned can't be told (a wide window on a device lying flat),
+            // the interface rect is used as it was before this mapping:
+            // right only on an upright screen.
             let native = HidTouch.nativeRect(
                 visible,
                 screen: plannedScreenSize ?? snapshotFinder.screenSize,
