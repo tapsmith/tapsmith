@@ -1784,11 +1784,12 @@ mod tests {
         cmd.arg("-c")
             .arg(format!("echo $$ > {}; exec sleep 30", pid_file.display()));
 
-        let err = output_within(&mut cmd, Duration::from_millis(300))
+        // Long enough for a starved runner to get the shell as far as its pid file.
+        let err = output_within(&mut cmd, Duration::from_secs(3))
             .await
             .unwrap_err();
         assert!(err.downcast_ref::<AdbTimeout>().is_some());
-        assert_eq!(err.to_string(), "adb command timed out after 300ms");
+        assert_eq!(err.to_string(), "adb command timed out after 3s");
 
         let pid: i32 = std::fs::read_to_string(&pid_file)
             .unwrap()
