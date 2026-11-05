@@ -41,9 +41,6 @@ const ANDROID_REVERSE_PORT_FALLBACK_SPAN: u16 = 20_000;
 const ANDROID_REVERSE_PORT_FALLBACK_COUNT: usize = 8;
 const ANDROID_REVERSE_PORT_FALLBACK_STEP: u32 = 997;
 const WEBVIEW_ADB_TIMEOUT: Duration = Duration::from_secs(5);
-// The keyboard-state dumpsys check is polled interactively; fail fast rather
-// than hang on the 30s adb default if the device/daemon goes unresponsive.
-const KEYBOARD_STATE_TIMEOUT: Duration = Duration::from_secs(5);
 const WEBVIEW_ADB_CLEANUP_TIMEOUT: Duration = Duration::from_secs(2);
 const IOS_OPEN_URL_PROMPT_TIMEOUT: Duration = Duration::from_secs(28);
 const IOS_OPEN_DIALOG_ACCEPT_TIMEOUT_MS: u64 = 300;
@@ -636,20 +633,15 @@ impl TapsmithServiceImpl {
             .map_err(|e| Status::failed_precondition(e.to_string()))
     }
 
-    /// Whether the Android soft keyboard is currently shown, per the IME's
-    /// `mInputShown` flag. Propagates the dumpsys failure rather than defaulting
-    /// to a value, so callers can distinguish "not shown" from "check failed".
+    /// Whether the Android soft keyboard is currently shown. Propagates a failed
+    /// read rather than defaulting to a value, so callers can distinguish "not
+    /// shown" from "check failed".
     async fn android_is_keyboard_shown(&self, serial: &str) -> Result<bool, Status> {
-        // Strict `shell_with_timeout` (not lenient) so a transport failure (offline
-        // device) or a dumpsys failure surfaces as an error rather than empty output
-        // that reads as "keyboard hidden". We fetch the full dumpsys output and match
-        // the flag in Rust — no on-device `grep`, whose no-match exit code would
-        // otherwise mask a genuine dumpsys failure.
-        let output =
-            adb::shell_with_timeout(serial, "dumpsys input_method", KEYBOARD_STATE_TIMEOUT)
-                .await
-                .map_err(|e| Status::internal(e.to_string()))?;
-        Ok(output.contains("mInputShown=true"))
+        crate::android_keyboard::keyboard_shown(serial, |command, timeout| {
+            adb::shell_with_timeout(serial, command, timeout)
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))
     }
 
     /// Extract connection params under a brief read lock so TCP I/O
