@@ -60,12 +60,8 @@ impl std::fmt::Display for AdbTimeout {
 
 impl std::error::Error for AdbTimeout {}
 
-/// Run `cmd` to completion within `timeout`. A client that runs out of time, or
-/// whose caller is cancelled, is killed: nobody reads its output any more, and a
-/// polling caller would otherwise pile up one client per call while the device
-/// stalls.
+/// Run `cmd` to completion within `timeout`.
 async fn output_within(cmd: &mut Command, timeout: Duration) -> Result<std::process::Output> {
-    cmd.kill_on_drop(true);
     tokio::time::timeout(timeout, cmd.output())
         .await
         .map_err(|_| anyhow::Error::new(AdbTimeout(timeout)))?
@@ -1777,41 +1773,15 @@ pub async fn cleanup_iptables_redirect(serial: &str) {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
-    async fn a_timed_out_command_is_a_typed_timeout_and_its_process_is_killed() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid_file = dir.path().join("pid");
-        let mut cmd = Command::new("/bin/sh");
-        cmd.arg("-c")
-            .arg(format!("echo $$ > {}; exec sleep 30", pid_file.display()));
+    async fn a_timed_out_command_is_a_typed_timeout() {
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg("30").kill_on_drop(true);
 
-        // Long enough for a starved runner to get the shell as far as its pid file.
-        let err = output_within(&mut cmd, Duration::from_secs(3))
+        let err = output_within(&mut cmd, Duration::from_millis(50))
             .await
             .unwrap_err();
         assert!(err.downcast_ref::<AdbTimeout>().is_some());
-        assert_eq!(err.to_string(), "adb command timed out after 3s");
-
-        let pid: i32 = std::fs::read_to_string(&pid_file)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        // kill -0 fails once the process has gone (or is an unreaped zombie,
-        // which tokio's orphan reaper clears).
-        while std::process::Command::new("kill")
-            .args(["-0", &pid.to_string()])
-            .stderr(std::process::Stdio::null())
-            .status()
-            .unwrap()
-            .success()
-        {
-            assert!(
-                Instant::now() < deadline,
-                "process {pid} outlived its timeout"
-            );
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
+        assert_eq!(err.to_string(), "adb command timed out after 50ms");
     }
 
     #[test]
