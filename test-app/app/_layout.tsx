@@ -65,6 +65,7 @@ export default function RootLayout() {
           <Stack.Screen name="tabs" options={{ title: "Tabs" }} />
           <Stack.Screen name="native-tabs" options={{ title: "Native Tabs" }} />
           <Stack.Screen name="roles" options={{ title: "Roles" }} />
+          <Stack.Screen name="stack/[level]" options={{ title: "Stack" }} />
         </Stack>
         <TapsmithHooks />
       </View>

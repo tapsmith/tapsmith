@@ -190,6 +190,13 @@ xcrun swiftc -sdk "$SDK" \
   -o "$OUT/rotation-settle-tests"
 "$OUT/rotation-settle-tests"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/NavigationTransitionTests/main.swift \
+  TapsmithAgent/NavigationTransition.swift \
+  -o "$OUT/navigation-transition-tests"
+"$OUT/navigation-transition-tests"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/SnapshotRetryTests/main.swift \
   TapsmithAgent/SnapshotRetry.swift \
