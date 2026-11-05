@@ -81,7 +81,8 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: sdk-dist
-          retention-days: 1
+          # Outlives a next-day `--failed` re-run, whose Merge Reports needs it.
+          retention-days: 7
           path: packages/tapsmith/dist/
 
   build-daemon:
@@ -769,6 +770,10 @@ jobs:
     needs: [ build-sdk, e2e-test ]
     if: always() && needs.build-sdk.result == 'success'
     runs-on: ubuntu-latest
+    # actions: merge-reports-gate.mjs reads this run's job list.
+    permissions:
+      actions: read
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -804,10 +809,13 @@ jobs:
         working-directory: e2e
         run: npm ci
 
+      # Fails only on a real merge error or a shard with no results that no
+      # other job shows. A failed or cancelled shard stays visible on its own job.
       - name: Merge reports
         working-directory: e2e
-        run: npx tapsmith merge-reports ../all-blob-reports -c
-          tapsmith.config.android-ci.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node merge-reports-gate.mjs ../all-blob-reports tapsmith.config.android-ci.mjs
 
       # always(): merge-reports exits 1 when a shard's blob is missing, but it
       # still writes the report for the shards that did finish.
