@@ -59,7 +59,7 @@ class ActionExecutor {
             sample: { () -> SettleSample? in
                 let frame = element.frame
                 guard !frame.isEmpty,
-                      let pixels = Self.pixels(of: element.screenshot().image, in: nil) else { return nil }
+                      let pixels = Self.pixels(of: element.screenshot().image) else { return nil }
                 return SettleSample(frame: frame, pixels: pixels)
             }
         )
@@ -69,21 +69,96 @@ class ActionExecutor {
 
     /// `waitUntilSettled(_:deadline:)` for a touch planned at a fixed point:
     /// watches the screen region the touch lands in (the element's uncovered
-    /// part) — one full-screen screenshot per sample.
+    /// part). Each sample is a screenshot of just that region
+    /// (`RegionScreenshot`, ~10 ms on a simulator), or, where XCTest can't
+    /// take one, a whole-screen screenshot cropped to it (~120 ms).
+    ///
+    /// `region` is in the device's native portrait space
+    /// (`HidTouch.nativeRect`), which both captures read: on a rotated screen
+    /// a rect in the app's interface space lies elsewhere, or off the screen
+    /// (a landscape region screenshot of it came back all black, so the
+    /// settle never saw the target move).
     @discardableResult
     func waitUntilSettled(region: CGRect, deadline: Date) -> TouchSettle.Outcome {
         guard !region.isEmpty else { return .unreadable }
+        var sampler = RegionSampler.forRegion(region)
         let outcome = TouchSettle.wait(
             deadline: deadline,
             now: Date.init,
             sleep: Thread.sleep(forTimeInterval:),
             sample: { () -> SettleSample? in
-                Self.pixels(of: XCUIScreen.main.screenshot().image, in: region)
-                    .map { SettleSample(frame: region, pixels: $0) }
+                sampler.sample().map { SettleSample(frame: region, pixels: $0) }
             }
         )
         Self.logUnsettled(outcome, "region \(region)")
         return outcome
+    }
+
+    /// Takes one settle wait's samples of a screen region. All of a wait's
+    /// samples come from the same kind of capture, so two of them never
+    /// differ only in how they were taken — except once, when a region
+    /// screenshot fails partway through and the rest of the wait falls back
+    /// to the whole screen. That one difference reads as a change: it costs
+    /// a sample and a fresh touch plan (`sawChange`), never a touch on a
+    /// moving target.
+    private struct RegionSampler {
+        let region: CGRect
+        var useRegionScreenshot: Bool
+
+        static func forRegion(_ region: CGRect) -> RegionSampler {
+            RegionSampler(region: region, useRegionScreenshot: ActionExecutor.regionScreenshotUsable())
+        }
+
+        mutating func sample() -> [UInt8]? {
+            if useRegionScreenshot {
+                if let image = RegionScreenshot.capture(region, of: XCUIScreen.main) {
+                    return ActionExecutor.pixels(of: image, drawnAt: region.size)
+                }
+                useRegionScreenshot = false
+                ActionExecutor.logRegionScreenshotFailedOnce(region)
+            }
+            // The bitmap is in native portrait however the device is turned
+            // (the image's orientation turns it for display), as `region` is:
+            // its scale comes from the native width, the short side of a
+            // turned image.
+            let screen = XCUIScreen.main.screenshot().image
+            guard let cgImage = screen.cgImage else { return nil }
+            let sideways: Set<UIImage.Orientation> = [.left, .right, .leftMirrored, .rightMirrored]
+            let nativeWidth = sideways.contains(screen.imageOrientation) ? screen.size.height : screen.size.width
+            guard nativeWidth > 0 else { return nil }
+            let scale = CGFloat(cgImage.width) / nativeWidth
+            let pixelRect = CGRect(
+                x: region.minX * scale,
+                y: region.minY * scale,
+                width: region.width * scale,
+                height: region.height * scale
+            ).integral
+            guard let cropped = cgImage.cropping(to: pixelRect) else { return nil }
+            return ActionExecutor.pixels(of: cropped, drawnAt: region.size)
+        }
+    }
+
+    private static var loggedRegionScreenshotUnavailable = false
+    private static var loggedRegionScreenshotFailed = false
+
+    /// Whether `RegionScreenshot` can be used; says once why not.
+    private static func regionScreenshotUsable() -> Bool {
+        switch RegionScreenshot.api {
+        case .success:
+            return true
+        case .failure(let why):
+            if !loggedRegionScreenshotUnavailable {
+                loggedRegionScreenshotUnavailable = true
+                NSLog("[ActionExecutor] XCTest's region screenshot is unavailable (\(why)); settling touches on whole-screen screenshots, ~10x slower")
+            }
+            return false
+        }
+    }
+
+    private static func logRegionScreenshotFailedOnce(_ region: CGRect) {
+        guard !loggedRegionScreenshotFailed else { return }
+        loggedRegionScreenshotFailed = true
+        NSLog("[ActionExecutor] XCTest's region screenshot of \(region) failed; using a whole-screen screenshot (logged once)")
     }
 
     private static func logUnsettled(_ outcome: TouchSettle.Outcome, _ what: String) {
@@ -92,23 +167,19 @@ class ActionExecutor {
         }
     }
 
-    /// RGBA pixels of `image` (or of `rect` within it, in points), drawn at
-    /// point resolution so two samples compare by value. Drawn, not read
-    /// from the data provider: a cropped CGImage can share its parent's
-    /// whole buffer.
-    private static func pixels(of image: UIImage, in rect: CGRect?) -> [UInt8]? {
+    /// RGBA pixels of `image`, drawn at point resolution so two samples
+    /// compare by value.
+    private static func pixels(of image: UIImage) -> [UInt8]? {
         guard let cgImage = image.cgImage, image.size.width > 0 else { return nil }
-        let scale = CGFloat(cgImage.width) / image.size.width
-        let pointRect = rect ?? CGRect(origin: .zero, size: image.size)
-        let pixelRect = CGRect(
-            x: pointRect.minX * scale,
-            y: pointRect.minY * scale,
-            width: pointRect.width * scale,
-            height: pointRect.height * scale
-        ).integral
-        guard let source = rect == nil ? cgImage : cgImage.cropping(to: pixelRect) else { return nil }
-        let width = max(1, Int(pointRect.width.rounded()))
-        let height = max(1, Int(pointRect.height.rounded()))
+        return pixels(of: cgImage, drawnAt: image.size)
+    }
+
+    /// RGBA pixels of `image` drawn at `size` (points), so samples taken at
+    /// any pixel scale compare by value. Drawn, not read from the data
+    /// provider: a cropped CGImage can share its parent's whole buffer.
+    fileprivate static func pixels(of image: CGImage, drawnAt size: CGSize) -> [UInt8]? {
+        let width = max(1, Int(size.width.rounded()))
+        let height = max(1, Int(size.height.rounded()))
         var buffer = [UInt8](repeating: 0, count: width * height * 4)
         let drawn = buffer.withUnsafeMutableBytes { bytes -> Bool in
             guard let context = CGContext(
@@ -121,7 +192,7 @@ class ActionExecutor {
                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
             ) else { return false }
             context.interpolationQuality = .low
-            context.draw(source, in: CGRect(x: 0, y: 0, width: width, height: height))
+            context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
         return drawn ? buffer : nil
