@@ -65,7 +65,7 @@
     "fastest-levenshtein": "^1.0.16",
     "fflate": "^0.8.2",
     "figlet": "^1.11.0",
-    "glob": "^13.0.6",
+    "glob": "^14.0.0",
     "minimatch": "^10.2.4",
     "open": "^10.2.0",
     "package-manager-detector": "^1.8.0",
