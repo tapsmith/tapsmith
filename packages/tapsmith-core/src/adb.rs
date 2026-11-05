@@ -60,9 +60,10 @@ impl std::fmt::Display for AdbTimeout {
 
 impl std::error::Error for AdbTimeout {}
 
-/// Run `cmd` to completion within `timeout`. A client that runs out of time is
-/// killed: nobody reads its output any more, and a polling caller would
-/// otherwise pile up one client per call while the device stalls.
+/// Run `cmd` to completion within `timeout`. A client that runs out of time, or
+/// whose caller is cancelled, is killed: nobody reads its output any more, and a
+/// polling caller would otherwise pile up one client per call while the device
+/// stalls.
 async fn output_within(cmd: &mut Command, timeout: Duration) -> Result<std::process::Output> {
     cmd.kill_on_drop(true);
     tokio::time::timeout(timeout, cmd.output())

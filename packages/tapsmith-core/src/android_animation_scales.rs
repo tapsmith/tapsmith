@@ -470,7 +470,7 @@ pub async fn on_select(
         info!(%serial, "Turned the device's animation scales off for this session");
     } else {
         // The outcome is unknown, not "nothing changed": a timed-out adb
-        // call's remote shell keeps running and can still land. Keep the
+        // call's command may already have reached the device. Keep the
         // record and treat the scales as applied; the restore puts back only
         // what reads 0, so a put that never landed is simply left alone.
         warn!(%serial, "Keeping the animation-scale record to restore at session end");
@@ -863,8 +863,8 @@ mod tests {
         assert!(applied.record_path.exists());
     }
 
-    /// An apply whose adb call errors (a timeout) may still land: the remote
-    /// shell keeps running. So the session keeps its record and treats the
+    /// An apply whose adb call errors (a timeout) may still land: the command
+    /// may already be on the device. So the session keeps its record and treats the
     /// scales as applied; the restore puts back only what reads 0.
     #[tokio::test]
     async fn an_apply_that_errors_but_lands_later_is_still_restored() {

@@ -25,8 +25,8 @@ const FULL_DUMP_COMMAND: &str = "dumpsys input_method";
 const ATTEMPT_TIMEOUTS: [Duration; 2] = [Duration::from_secs(5), Duration::from_secs(10)];
 
 /// Whether the keyboard is shown, reading through `shell` (a strict adb shell
-/// with a timeout, so a transport or dumpsys failure is an error and never
-/// reads as "hidden").
+/// with a timeout, so a transport or dumpsys failure is an error). A dump that
+/// completes but never mentions the flag reads as "hidden".
 pub async fn keyboard_shown<S, Fut>(serial: &str, shell: S) -> Result<bool>
 where
     S: Fn(&'static str, Duration) -> Fut,
@@ -52,11 +52,13 @@ where
 {
     for timeout in ATTEMPT_TIMEOUTS {
         match shell(command, timeout).await {
-            Err(e) if e.downcast_ref::<AdbTimeout>().is_some() => {
-                warn!(%serial, command, ?timeout, "Reading the keyboard state timed out");
-            }
+            Err(e) if e.downcast_ref::<AdbTimeout>().is_some() => {}
+            // dumpsys gives up on a stuck service after 10 s of its own and
+            // still exits 0, which is no answer at all.
+            Ok(output) if input_shown(&output).is_none() && output.contains("DUMP TIMEOUT") => {}
             result => return result,
         }
+        warn!(%serial, command, ?timeout, "Reading the keyboard state timed out");
     }
     let total: Duration = ATTEMPT_TIMEOUTS.iter().sum();
     Err(anyhow!(
@@ -164,6 +166,28 @@ mod tests {
         ] {
             assert!(message.contains(part), "missing {part:?} in: {message}");
         }
+    }
+
+    #[tokio::test]
+    async fn a_dump_that_dumpsys_gave_up_on_is_a_timeout_and_not_hidden() {
+        let expired = || dump("*** SERVICE 'input_method' DUMP TIMEOUT (10000ms) EXPIRED ***");
+
+        let shell = FakeShell::new(vec![expired(), dump("mInputShown=true")]);
+        assert!(shell.read().await.unwrap());
+        assert_eq!(shell.calls().len(), 2);
+
+        let shell = FakeShell::new(vec![expired(), expired()]);
+        let message = shell.read().await.unwrap_err().to_string();
+        assert!(message.contains("did not answer"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn the_flag_wins_over_a_later_dump_timeout() {
+        let shell = FakeShell::new(vec![dump(
+            "mInputShown=true\n*** SERVICE 'input_method' DUMP TIMEOUT (10000ms) EXPIRED ***",
+        )]);
+        assert!(shell.read().await.unwrap());
+        assert_eq!(shell.calls().len(), 1);
     }
 
     #[tokio::test]
