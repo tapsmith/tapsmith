@@ -32,6 +32,7 @@ class CommandHandler(
     private val actionExecutor: ActionExecutor,
     private val waitEngine: WaitEngine,
     private val hierarchyDumper: HierarchyDumper,
+    private val appReadiness: AppReadinessProbe,
     private val systemDialogs: SystemDialogAnswerer,
 ) {
     companion object {
@@ -168,7 +169,8 @@ class CommandHandler(
      * compute tap coordinates from them without re-reading the node (each read
      * is a blocking accessibility round-trip on the app's main looper;
      * PILOT-278). Cached-elementId resolution performs no reads and leaves it
-     * null; actions then run their own bounded stability check.
+     * null; actions then run their own bounded stability check, which a tap
+     * starts from [findSample], the bounds the find that cached the id read.
      */
     private class ResolvedElement(
         val obj: UiObject2,
@@ -176,6 +178,7 @@ class CommandHandler(
         /** What identified the element when it was found, re-checked before
          *  it is touched (PILOT-362). */
         val identity: TargetIdentity?,
+        val findSample: FindSample<Rect>? = null,
     )
 
     /**
@@ -197,6 +200,7 @@ class CommandHandler(
                 elementFinder.getElement(elementId),
                 freshBounds = null,
                 identity = elementFinder.identityOf(elementId),
+                findSample = elementFinder.findSampleOf(elementId),
             )
         }
         // Selector-based: auto-wait then find
@@ -303,7 +307,7 @@ class CommandHandler(
                     actionExecutor.tapCoordinates(x, y)
                 } else {
                     actOnElement(params, budget) { element ->
-                        actionExecutor.tap(element.obj, element.freshBounds, budget, element.identity)
+                        actionExecutor.tap(element.obj, element.freshBounds, budget, element.identity, findSample = element.findSample)
                     }
                 }
                 JSONObject().put("success", true)
@@ -485,6 +489,18 @@ class CommandHandler(
                 val timeout = params.optLong("timeout", 10000L)
                 val element = waitEngine.waitForElement(selector, timeout, elementFinder)
                 element.toJson()
+            }
+
+            // Has the app drawn real content yet (PILOT-976)? Running out of
+            // time is `ready: false`, not an error: the callers go on anyway.
+            "waitForAppReady" -> {
+                val pkg = params.getString("package")
+                val timeout = params.optLong("timeout", 10000L)
+                val outcome = appReadiness.await(pkg, timeout)
+                JSONObject()
+                    .put("ready", outcome.ready)
+                    .put("elapsedMs", outcome.elapsedMs)
+                    .put("checks", outcome.checks)
             }
 
             "screenshot" -> {

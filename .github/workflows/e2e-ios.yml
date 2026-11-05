@@ -415,6 +415,19 @@ jobs:
       # simulator, where `simctl list` takes 25-45 s per call. Measured
       # net-zero either way on shard time (PILOT-303), so keep the layout the
       # SDK is happiest with.
+      # Keep the simulator off Apple's MobileAsset catalog servers. On each
+      # boot mobileassetd fetches trustd's PKITrustSupplementals update; when
+      # it lands (8-15 min after boot, depending on Apple's servers) trustd
+      # applies a pinning-database update and answers no certificate check,
+      # from any process, for ~2 min. A test whose HTTPS request falls in that
+      # window times out (seen on api-request-fixture's first attempt). With
+      # the catalog hosts unreachable the update never starts. The simulator
+      # resolves through the host, so /etc/hosts covers it.
+      - name: Block the simulator's MobileAsset catalog hosts
+        run: |
+          printf '0.0.0.0 mesu.apple.com\n0.0.0.0 gdmf.apple.com\n' | sudo tee -a /etc/hosts
+          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+
       - name: Select Xcode and start simulator boot
         id: xcode
         run: |
@@ -783,6 +796,8 @@ jobs:
       # trustd updating its pinning database from a freshly downloaded
       # PKITrustSupplementals asset blocks every evaluation for ~1.5-2.5 min,
       # some 8-15 min after boot (mobileassetd is logged for the download).
+      # The /etc/hosts step before boot now blocks that download; this log
+      # shows whether it still happens (a "should update" line from trustd).
       - name: Collect simulator trust logs
         if: ${{ !cancelled() && env.TAPSMITH_IOS_UDID != '' && (failure() || matrix.shard == 1) }}
         timeout-minutes: 5
@@ -866,6 +881,19 @@ jobs:
       # simulator, where `simctl list` takes 25-45 s per call. Measured
       # net-zero either way on shard time (PILOT-303), so keep the layout the
       # SDK is happiest with.
+      # Keep the simulator off Apple's MobileAsset catalog servers. On each
+      # boot mobileassetd fetches trustd's PKITrustSupplementals update; when
+      # it lands (8-15 min after boot, depending on Apple's servers) trustd
+      # applies a pinning-database update and answers no certificate check,
+      # from any process, for ~2 min. A test whose HTTPS request falls in that
+      # window times out (seen on api-request-fixture's first attempt). With
+      # the catalog hosts unreachable the update never starts. The simulator
+      # resolves through the host, so /etc/hosts covers it.
+      - name: Block the simulator's MobileAsset catalog hosts
+        run: |
+          printf '0.0.0.0 mesu.apple.com\n0.0.0.0 gdmf.apple.com\n' | sudo tee -a /etc/hosts
+          sudo dscacheutil -flushcache; sudo killall -HUP mDNSResponder || true
+
       - name: Select Xcode and start simulator boot
         id: xcode
         run: |

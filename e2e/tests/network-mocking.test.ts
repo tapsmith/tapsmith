@@ -16,6 +16,7 @@ import {
   type Route,
 } from "../fixtures.js"
 import { openScreen, resetApp } from "../utils/app-reset.js"
+import { startNetworkProxy } from "../utils/network-proxy.js"
 
 function routeFetchNoCacheOptions(route: Route) {
   const headers = { ...route.request().headers }
@@ -83,6 +84,7 @@ describe("Network mocking", () => {
   })
 
   test.beforeEach(async ({ device, apiCallsScreen }) => {
+    await startNetworkProxy(device)
     await openScreen(device, "/api-calls")
     await expect(apiCallsScreen.heading).toBeVisible()
   })

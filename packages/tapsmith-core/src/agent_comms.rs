@@ -634,6 +634,13 @@ pub enum AgentCommand {
     GetAppState {
         package: String,
     },
+    /// Wait up to `timeout_ms` for the app to show text or a description
+    /// (Android agent, PILOT-976). Answers `{ready: bool}`; running out of
+    /// time is `ready: false`, not an error.
+    WaitForAppReady {
+        package: String,
+        timeout_ms: u64,
+    },
     CaptureTraceState {
         screenshot: bool,
         hierarchy: bool,
@@ -701,6 +708,7 @@ impl AgentCommand {
             AgentCommand::GetOrientation {} => "getOrientation",
             AgentCommand::GetColorScheme {} => "getColorScheme",
             AgentCommand::GetAppState { .. } => "getAppState",
+            AgentCommand::WaitForAppReady { .. } => "waitForAppReady",
             AgentCommand::CaptureTraceState { .. } => "captureTraceState",
             AgentCommand::DismissSystemDialog => "dismissSystemDialogs",
         }
@@ -1081,6 +1089,13 @@ impl AgentCommand {
             AgentCommand::GetAppState { package } => {
                 ("getAppState", json!({ "bundleId": package }))
             }
+            AgentCommand::WaitForAppReady {
+                package,
+                timeout_ms,
+            } => (
+                "waitForAppReady",
+                json!({ "package": package, "timeout": timeout_ms }),
+            ),
             AgentCommand::CaptureTraceState {
                 screenshot,
                 hierarchy,
@@ -1243,6 +1258,17 @@ impl AgentConnection {
             Some(self.host_port)
         } else {
             None
+        }
+    }
+
+    /// A connection already marked connected to an agent on `host_port`,
+    /// for tests that talk to a mock agent.
+    #[cfg(test)]
+    pub(crate) fn connected_for_test(host_port: u16) -> Self {
+        Self {
+            connected: true,
+            device_serial: Some("test-device".to_string()),
+            ..Self::with_port(host_port)
         }
     }
 
@@ -1744,6 +1770,10 @@ mod tests {
             AgentCommand::LaunchApp {
                 package: "p".into(),
             },
+            AgentCommand::WaitForAppReady {
+                package: "p".into(),
+                timeout_ms: 1,
+            },
             AgentCommand::AcceptOpenInAppDialog { timeout_ms: None },
             AgentCommand::GetClipboard {},
             AgentCommand::GetOrientation {},
@@ -1762,6 +1792,19 @@ mod tests {
                 "method_name() disagrees with to_json for {cmd:?}"
             );
         }
+    }
+
+    #[test]
+    fn to_json_wait_for_app_ready() {
+        // PILOT-976: the Android agent reads `package` and `timeout`.
+        let j = AgentCommand::WaitForAppReady {
+            package: "com.example".into(),
+            timeout_ms: 7_500,
+        }
+        .to_json("r");
+        assert_eq!(j["method"], "waitForAppReady");
+        assert_eq!(j["params"]["package"], "com.example");
+        assert_eq!(j["params"]["timeout"], 7_500);
     }
 
     #[test]

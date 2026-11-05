@@ -88,6 +88,9 @@ Tapsmith launch the second member. Both start or end with a host check
 (`e2e/verify-provisioning.mjs`, checks unit-tested in `e2e/utils/provisioning-checks.mjs`), so an
 adopted device or an untracked leftover emulator/simulator fails the job even when every test passes.
 
+`notify-dashboard.yml` tells the private `tapsmith/dashboard` repo when an E2E run finishes, so it can
+collect the results for the flake dashboard. It needs the `DASHBOARD_DISPATCH_TOKEN` secret.
+
 Shard 1 of each device workflow also runs `e2e/verify-trace-archive.mjs`, which records one trace
 with `--trace on` and then asserts what is *inside* the archive — screenshots that decode at the
 device's real resolution, hierarchy dumps containing the element each action resolved, and the

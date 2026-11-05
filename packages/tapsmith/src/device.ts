@@ -687,18 +687,40 @@ export class Device {
     iosAppPath?: string,
     networkTracingEnabled = false,
   ): Promise<void> {
-    return withActionProgress('startAgent', targetPackage || undefined, async () => {
+    await this._startAgent({
+      targetPackage, agentApkPath, agentTestApkPath, iosXctestrunPath, iosAppPath, networkTracingEnabled,
+    });
+  }
+
+  /**
+   * @internal — {@link Device.startAgent} for the session opener: it may ask
+   * for the app's data to be wiped before the agent launches it, and learns
+   * whether that launch can stand as the session's clean startup launch.
+   */
+  async _startAgent(opts: {
+    targetPackage: string
+    agentApkPath?: string
+    agentTestApkPath?: string
+    iosXctestrunPath?: string
+    iosAppPath?: string
+    networkTracingEnabled?: boolean
+    /** iOS simulators: wipe the app's data before the agent launches it. */
+    clearAppDataFirst?: boolean
+  }): Promise<{ appLaunchedFresh: boolean }> {
+    return withActionProgress('startAgent', opts.targetPackage || undefined, async () => {
       const res = await this._client.startAgent(
-        targetPackage,
-        agentApkPath,
-        agentTestApkPath,
-        iosXctestrunPath,
-        iosAppPath,
-        networkTracingEnabled,
+        opts.targetPackage,
+        opts.agentApkPath,
+        opts.agentTestApkPath,
+        opts.iosXctestrunPath,
+        opts.iosAppPath,
+        opts.networkTracingEnabled ?? false,
+        opts.clearAppDataFirst ?? false,
       );
       if (!res.success) {
         throw new Error(res.errorMessage || 'Start agent failed');
       }
+      return { appLaunchedFresh: res.appLaunchedFresh === true };
     });
   }
 

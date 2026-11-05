@@ -18,6 +18,8 @@ const workerRunnerMocks = vi.hoisted(() => {
 const sessionPreflightMocks = vi.hoisted(() => ({
   ensureSessionReady: vi.fn(async () => {}),
   launchConfiguredApp: vi.fn(async () => {}),
+  // No early launch: the startup launch runs its usual sequence after the agent.
+  startAndroidLaunchEarly: vi.fn(async () => undefined),
 }));
 
 vi.mock('../runner.js', () => ({
@@ -42,6 +44,7 @@ vi.mock('../device.js', () => ({
       unlock: vi.fn(async () => {}),
       installApk: vi.fn(async () => {}),
       startAgent: vi.fn(async () => {}),
+      _startAgent: vi.fn(async () => ({ appLaunchedFresh: false })),
       close: vi.fn(),
     };
   }),

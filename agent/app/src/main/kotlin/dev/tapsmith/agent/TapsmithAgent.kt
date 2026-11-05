@@ -92,6 +92,7 @@ class TapsmithAgent : Instrumentation() {
                 actionExecutor = actionExecutor,
                 waitEngine = waitEngine,
                 hierarchyDumper = hierarchyDumper,
+                appReadiness = AppReadinessProbe(this),
                 systemDialogs = systemDialogs,
             )
 

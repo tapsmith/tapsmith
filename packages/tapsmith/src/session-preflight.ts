@@ -8,7 +8,7 @@ import { withActionProgress, type ActionProgressHandle } from './action-progress
 import { appDependsOnTapsmithHooks } from './init-detect.js';
 
 type SessionDevice = Pick<Device, 'startAgent' | 'terminateApp' | 'launchApp' | 'restartApp' | 'waitForIdle' | 'currentPackage' | 'getByText' | 'locator' | 'pressBack' | 'clearAppData' | 'restoreAppState' | 'openDeepLink' | 'getAppState' | '_resetApp'>
-type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy' | 'takeSystemDialogEvents'>
+type SessionClient = Pick<TapsmithGrpcClient, 'ping' | 'getUiHierarchy' | 'takeSystemDialogEvents' | 'waitForAppReady'>
 
 export interface SessionPreflightContext {
   label: string
@@ -515,6 +515,10 @@ const HIERARCHY_POLL_INTERVAL_MS = 500;
 /** How long a cold-launched Android app gets to render its first content
  * before we proceed anyway (see {@link waitForAndroidAppReady}). */
 const ANDROID_APP_READY_TIMEOUT_MS = 10_000;
+/** How much longer than its budget the `waitForAppReady` RPC may take: the
+ *  daemon answers at the end of the budget at the latest, plus its own agent
+ *  round-trip slack. */
+const APP_READY_RPC_SLACK_MS = 5_000;
 const DEFAULT_SOFT_RESET_WAIT_MS = 750;
 /**
  * Buttons that dismiss a system ANR/crash dialog, in the order we prefer them.
@@ -612,7 +616,17 @@ export async function ensureSessionReady(
 export async function launchConfiguredApp(
   ctx: SessionPreflightContext,
   phase: string,
-  options: { readinessAttempts?: number; freshInstall?: boolean; hooksProbeMs?: number } = {},
+  options: {
+    readinessAttempts?: number
+    freshInstall?: boolean
+    hooksProbeMs?: number
+    /**
+     * The app was already cleared (unless `freshInstall`) and launched for
+     * this phase, by `startAndroidLaunchEarly` before the agent started:
+     * skip straight to the readiness checks.
+     */
+    appLaunched?: boolean
+  } = {},
 ): Promise<PreparedState> {
   const readinessAttempts = options.readinessAttempts;
   const probe = { pollMs: options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS };
@@ -637,7 +651,7 @@ export async function launchConfiguredApp(
     // Fresh install: there's no state to clear. On Android,
     // explicitly launch the app (iOS auto-launches via the XCUITest agent
     // during startAgent), then go straight to ensuring the session is ready.
-    if (ctx.config.platform !== 'ios') {
+    if (ctx.config.platform !== 'ios' && !options.appLaunched) {
       await ctx.device.launchApp(ctx.config.package, launchOptions(ctx.config));
     }
     await ensureSessionReady(ctx, phase, readinessAttempts);
@@ -647,12 +661,51 @@ export async function launchConfiguredApp(
     return prepared();
   }
 
-  await hardClearAndLaunch(ctx);
+  if (!options.appLaunched) await hardClearAndLaunch(ctx);
   await ensureSessionReady(ctx, phase, readinessAttempts);
   await waitForAppReady(ctx);
   await probeResetCapabilities(ctx, probe);
   await checkMissingResetHooks(ctx, probe.pollMs);
   return prepared();
+}
+
+/** A startup launch started by `startAndroidLaunchEarly`. */
+export interface EarlyLaunch {
+  /** Whether the launch went through. Never rejects. */
+  launched: Promise<boolean>
+}
+
+/**
+ * Android startup launch, started before the agent: terminate and clear the
+ * app (unless it was just installed), then start its launch without waiting
+ * for it, so the app's cold start overlaps the agent's instrumentation start
+ * (each takes about a second). Resolves once the clear has finished, since a
+ * clear must not race the agent start; pass `appLaunched` to
+ * `launchConfiguredApp` once `launched` resolves true. Resolves undefined
+ * when the clear fails, having launched nothing, so the caller's usual
+ * launch path runs the whole sequence after the agent and reports the error
+ * as it always has.
+ */
+export async function startAndroidLaunchEarly(
+  ctx: Pick<SessionPreflightContext, 'config' | 'device'>,
+  options: { freshInstall: boolean },
+): Promise<EarlyLaunch | undefined> {
+  const pkg = ctx.config.package;
+  if (!pkg || ctx.config.platform === 'ios') return undefined;
+  if (!options.freshInstall) {
+    try {
+      await ctx.device.terminateApp(pkg);
+    } catch {
+      // App may not be running yet
+    }
+    try {
+      await ctx.device.clearAppData(pkg);
+    } catch {
+      return undefined;
+    }
+  }
+  const launched = ctx.device.launchApp(pkg, launchOptions(ctx.config)).then(() => true, () => false);
+  return { launched };
 }
 
 export interface ExecuteAppResetOptions {
@@ -1111,14 +1164,36 @@ export function androidHierarchyHasRenderedContent(hierarchyXml: string, package
  * After a cold launch on Android, `ensureSessionReady` returns as soon as
  * the app's window exists — for a React Native app that is the splash,
  * seconds before the JS bundle has rendered anything. Anything sent to the
- * app in that window (a deep link, the hooks-marker probe) is lost. Poll for
+ * app in that window (a deep link, the hooks-marker probe) is lost. Wait for
  * rendered content, bounded; a first screen with no text at all simply falls
  * through after the timeout — the tests' own auto-waiting takes over.
+ *
+ * The daemon's `WaitForAppReady` has the agent watch the live window roots
+ * (PILOT-976). A daemon that predates it, or a call that fails, gets the old
+ * polling of full hierarchy dumps for what is left of the budget.
  */
 async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<void> {
   const pkg = ctx.config.package;
   if (!pkg) return;
   const start = Date.now();
+  const noContent = (): void => {
+    process.stderr.write(
+      `[tapsmith] ${pkg} showed no rendered content ${ANDROID_APP_READY_TIMEOUT_MS}ms after launch; continuing\n`,
+    );
+  };
+  try {
+    const answer = await ctx.client.waitForAppReady(
+      pkg,
+      ANDROID_APP_READY_TIMEOUT_MS,
+      ANDROID_APP_READY_TIMEOUT_MS + APP_READY_RPC_SLACK_MS,
+    );
+    if (answer.supported) {
+      if (!answer.ready) noContent();
+      return;
+    }
+  } catch {
+    // An older daemon (UNIMPLEMENTED) or a failed call: poll dumps below.
+  }
   while (true) {
     try {
       const h = await ctx.client.getUiHierarchy(IOS_APP_READY_POLL_DEADLINE_MS);
@@ -1127,9 +1202,7 @@ async function waitForAndroidAppReady(ctx: SessionPreflightContext): Promise<voi
       // Agent may still be settling after the relaunch — keep polling.
     }
     if (Date.now() - start >= ANDROID_APP_READY_TIMEOUT_MS) {
-      process.stderr.write(
-        `[tapsmith] ${pkg} showed no rendered content ${ANDROID_APP_READY_TIMEOUT_MS}ms after launch; continuing\n`,
-      );
+      noContent();
       return;
     }
     await delay(HIERARCHY_POLL_INTERVAL_MS);

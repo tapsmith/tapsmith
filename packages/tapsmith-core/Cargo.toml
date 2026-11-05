@@ -57,6 +57,8 @@ tokio-util = { version = "0.7", features = ["codec"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink"] }
 
 [dev-dependencies]
+# Paused time in tests that wait out multi-second bounds.
+tokio = { version = "1", features = ["test-util"] }
 
 [build-dependencies]
 protoc-bin-vendored = "3"

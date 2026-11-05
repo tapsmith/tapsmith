@@ -239,9 +239,13 @@ export interface TapsmithConfig {
    * selected, and puts the device's own values back when the session ends
    * (after a crash, the next session on that device does). Apps see this as
    * the system "remove animations" setting, so one that reads it may behave
-   * differently. `'no-preference'` (the default) leaves the device's settings
-   * alone. Not yet applied on iOS. Root config only: every project on a
-   * device shares it.
+   * differently. On an iOS simulator it makes UIKit animations run ten times
+   * faster (UIKit's `UIAnimationDragCoefficient`) in apps launched from then
+   * on, and puts the simulator back the same way; apps do not see it as the
+   * Reduce Motion setting, and the keyboard's animation is not affected. Not
+   * applied on physical iOS devices. `'no-preference'` (the default) leaves
+   * the device's settings alone. Root config only: every project on a device
+   * shares it.
    */
   reducedMotion?: ReducedMotion;
 
