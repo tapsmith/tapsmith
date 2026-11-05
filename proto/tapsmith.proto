@@ -491,7 +491,10 @@ message SetDeviceRequest {
   // the session and restore the device's own values when it ends; false: undo
   // what this daemon turned off; unset: leave this daemon's setting as it is.
   // Either way the daemon restores scales left off by a daemon that died.
-  // iOS ignores it.
+  // On an iOS simulator, true speeds UIKit animations up tenfold for apps
+  // launched from then on (the UIKit/UIPreferences feature flag in launchd's
+  // environment and UIAnimationDragCoefficient 0.1 in the global defaults),
+  // restored the same way. Physical iOS devices ignore it.
   optional bool reduce_motion = 6;
 }
 

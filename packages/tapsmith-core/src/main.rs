@@ -301,7 +301,8 @@ async fn main() -> Result<()> {
         service_handle.cleanup_network_proxy().await;
         service_handle.cleanup_webview_state().await;
     };
-    // Independent of both, and bounded per adb call, so it runs alongside.
+    // Independent of both, and bounded per adb or simctl call, so it runs
+    // alongside.
     let restore_scales = service_handle.restore_animation_scales();
     let _ = tokio::join!(agent_teardown, cleanup, restore_scales);
 

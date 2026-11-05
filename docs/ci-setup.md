@@ -500,7 +500,8 @@ See [Android emulator image requirements](network.md#android-emulator-image-requ
 
 ### Turning animations off
 
-Set `reducedMotion: "reduce"` in the config to run Android tests with the system animations off:
+Set `reducedMotion: "reduce"` in the config to run Android tests with the system animations off,
+and iOS simulator tests with UIKit animations ten times faster:
 
 ```typescript
 import { defineConfig } from "tapsmith";
@@ -519,7 +520,19 @@ tests wait less, and fewer taps land on an element that is still moving. You no 
 
 It is opt-in because apps see it as the system's "Remove animations" setting: an app that reads
 that setting (React Native's `AccessibilityInfo.isReduceMotionEnabled()`, for example) or relies on
-animator callbacks can behave differently from a user's device. It is not applied on iOS yet.
+animator callbacks can behave differently from a user's device.
+
+On an iOS simulator, Tapsmith turns on UIKit's `UIAnimationDragCoefficient` (at 0.1) when it
+selects the simulator: it sets the `UIKit/UIPreferences` feature flag in the simulator's launchd
+environment and the coefficient in its global defaults, so every app launched from then on runs
+its UIKit and Core Animation animations ten times faster, however it is launched (including the
+cold deep-link resets). It puts the simulator back the same way when the session ends. Apps do
+not see this as the Reduce Motion setting, and the keyboard's and the Home screen's animations are
+not affected, so the gain is smaller than on Android: on a test-app screen push and back, about
+10%. An app that is already running keeps its speed until it is next launched, which Tapsmith does
+when it starts. If the simulator's launchd environment already has a `FEATUREFLAGS_ENABLED` value
+of its own, Tapsmith leaves it alone and does not speed animations up (the daemon log says so). It
+is not applied on physical iOS devices.
 
 ### ADB Setup
 
