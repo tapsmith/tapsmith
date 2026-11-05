@@ -862,7 +862,17 @@ class CommandHandler {
         case .hittableElement(let xcElem):
             return actionExecutor.waitUntilSettled(xcElem, deadline: deadline)
         case .point(_, let visible, _):
-            return actionExecutor.waitUntilSettled(region: visible, deadline: deadline)
+            // The plan's rect is in the app's interface space, as the
+            // snapshot it was made from shows it; the screenshots read the
+            // device's native portrait space. When the way the screen is
+            // turned can't be told, the interface rect stands, as it does
+            // on an upright screen.
+            let native = HidTouch.nativeRect(
+                visible,
+                screen: plannedScreenSize ?? snapshotFinder.screenSize,
+                device: Self.deviceTurn(XCUIDevice.shared.orientation)
+            )
+            return actionExecutor.waitUntilSettled(region: native ?? visible, deadline: deadline)
         case .offScreen:
             return .unreadable
         }

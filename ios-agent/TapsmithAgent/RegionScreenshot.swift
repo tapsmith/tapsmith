@@ -15,9 +15,11 @@ import ObjectiveC
 /// test (`Tests/RegionScreenshotTests`) checks the installed XCTest still has
 /// the method in this shape.
 ///
-/// `rect` is in points, in the same space as accessibility frames (what
-/// `XCUIElement.screenshot()` captures for an element's frame). PNG keeps the
-/// pixels exact, so two captures of an unchanged region compare equal.
+/// `rect` is in points, in the device's native portrait space: on an upright
+/// screen the same space as accessibility frames, on a rotated one not
+/// (`HidTouch.nativeRect` maps an interface rect; unmapped, a landscape
+/// capture came back all black). PNG keeps the pixels exact, so two captures
+/// of an unchanged region compare equal.
 ///
 /// Uses no UIKit or XCTest types, so the host unit tests compile it.
 enum RegionScreenshot {

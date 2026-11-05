@@ -72,6 +72,12 @@ class ActionExecutor {
     /// part). Each sample is a screenshot of just that region
     /// (`RegionScreenshot`, ~10 ms on a simulator), or, where XCTest can't
     /// take one, a whole-screen screenshot cropped to it (~120 ms).
+    ///
+    /// `region` is in the device's native portrait space
+    /// (`HidTouch.nativeRect`), which both captures read: on a rotated screen
+    /// a rect in the app's interface space lies elsewhere, or off the screen
+    /// (a landscape region screenshot of it came back all black, so the
+    /// settle never saw the target move).
     @discardableResult
     func waitUntilSettled(region: CGRect, deadline: Date) -> TouchSettle.Outcome {
         guard !region.isEmpty else { return .unreadable }
@@ -111,9 +117,16 @@ class ActionExecutor {
                 useRegionScreenshot = false
                 ActionExecutor.logRegionScreenshotFailedOnce(region)
             }
+            // The bitmap is in native portrait however the device is turned
+            // (the image's orientation turns it for display), as `region` is:
+            // its scale comes from the native width, the short side of a
+            // turned image.
             let screen = XCUIScreen.main.screenshot().image
-            guard let cgImage = screen.cgImage, screen.size.width > 0 else { return nil }
-            let scale = CGFloat(cgImage.width) / screen.size.width
+            guard let cgImage = screen.cgImage else { return nil }
+            let sideways: Set<UIImage.Orientation> = [.left, .right, .leftMirrored, .rightMirrored]
+            let nativeWidth = sideways.contains(screen.imageOrientation) ? screen.size.height : screen.size.width
+            guard nativeWidth > 0 else { return nil }
+            let scale = CGFloat(cgImage.width) / nativeWidth
             let pixelRect = CGRect(
                 x: region.minX * scale,
                 y: region.minY * scale,

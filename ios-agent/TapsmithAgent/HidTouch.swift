@@ -63,4 +63,20 @@ enum HidTouch {
             return nil
         }
     }
+
+    /// `nativePoint` for a rect: `rect` in the app's interface space as the
+    /// device's native portrait space places it (on a rotated screen its
+    /// sides swap). XCTest's region screenshot (`RegionScreenshot`) reads its
+    /// rect in that space too. nil when `nativePoint` can't tell.
+    static func nativeRect(_ rect: CGRect, screen: CGSize, device: DeviceTurn) -> CGRect? {
+        guard let corner = nativePoint(CGPoint(x: rect.minX, y: rect.minY), screen: screen, device: device),
+              let opposite = nativePoint(CGPoint(x: rect.maxX, y: rect.maxY), screen: screen, device: device)
+        else { return nil }
+        return CGRect(
+            x: min(corner.x, opposite.x),
+            y: min(corner.y, opposite.y),
+            width: abs(opposite.x - corner.x),
+            height: abs(opposite.y - corner.y)
+        )
+    }
 }

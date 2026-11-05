@@ -63,6 +63,28 @@ expect("a wide window with no landscape device orientation: no native point",
 expect("a wide window on an upright device: no native point",
        HidTouch.nativePoint(p, screen: wide, device: .portrait) == nil)
 
+// nativeRect: the touch settle's region, for XCTest's region screenshot,
+// which reads its rect in native portrait space too. From an iOS 26.5
+// simulator in landscapeLeft: the Dark Mode switch's visible rect
+// (778.67, 142, 63x28) in the 874x402 interface, captured unmapped, came
+// back all black (off the 402-wide portrait screen).
+let darkMode = CGRect(x: 778.5, y: 142, width: 63, height: 28)
+expect("an upright window's rect stands",
+       HidTouch.nativeRect(darkMode, screen: tall, device: .portrait) == darkMode)
+expect("landscapeLeft maps the rect into portrait space, its sides swapped",
+       HidTouch.nativeRect(darkMode, screen: wide, device: .landscapeLeft)
+           == CGRect(x: 232, y: 778.5, width: 28, height: 63))
+expect("landscapeRight maps the rect into portrait space, its sides swapped",
+       HidTouch.nativeRect(darkMode, screen: wide, device: .landscapeRight)
+           == CGRect(x: 142, y: 32.5, width: 28, height: 63))
+expect("the whole wide screen maps onto the whole portrait screen",
+       HidTouch.nativeRect(CGRect(origin: .zero, size: wide), screen: wide, device: .landscapeLeft)
+           == CGRect(origin: .zero, size: tall))
+expect("a rect whose rotation can't be told: no native rect",
+       HidTouch.nativeRect(darkMode, screen: wide, device: .other) == nil)
+expect("a tall window on an upside-down device: no native rect",
+       HidTouch.nativeRect(darkMode, screen: tall, device: .portraitUpsideDown) == nil)
+
 if failures > 0 {
     print("\(failures) HidTouch test(s) failed")
     exit(1)
