@@ -20,6 +20,9 @@ class TapsmithAgent : Instrumentation() {
         private const val DEFAULT_PORT = 18700
         private const val ARG_PORT = "port"
 
+        /** The app under test, passed by the daemon's `am instrument -e targetPackage`. */
+        private const val ARG_TARGET_PACKAGE = "targetPackage"
+
         @Volatile
         lateinit var device: UiDevice
             private set
@@ -64,9 +67,22 @@ class TapsmithAgent : Instrumentation() {
 
         val elementFinder = ElementFinder(device, this)
         val input = AgentInput(device, this)
-        val occlusionGuard = OcclusionGuard(device, this, elementFinder::nodeInfoFor, input)
+        // PILOT-977: system ANR / crash dialogs that come up mid-test.
+        val systemDialogs =
+            SystemDialogAnswerer(
+                screen = AndroidSystemDialogScreen(device, this),
+                targetPackage = arguments?.getString(ARG_TARGET_PACKAGE),
+                clock = SystemGuardClock,
+                log = { Log.i("TapsmithSystemDialog", it) },
+            )
+        val occlusionGuard = OcclusionGuard(device, this, elementFinder::nodeInfoFor, input, systemDialogs)
+        val waitEngine =
+            WaitEngine(
+                device,
+                settleIdle = { quietMs, timeoutMs -> uiAutomation.waitForIdle(quietMs, timeoutMs) },
+                answerSystemDialogs = systemDialogs::answer,
+            )
         val actionExecutor = ActionExecutor(device, this, occlusionGuard, input)
-        val waitEngine = WaitEngine(device)
         val hierarchyDumper = HierarchyDumper(device, this, elementFinder::composeShapeOf)
         val commandHandler =
             CommandHandler(
@@ -77,6 +93,7 @@ class TapsmithAgent : Instrumentation() {
                 waitEngine = waitEngine,
                 hierarchyDumper = hierarchyDumper,
                 appReadiness = AppReadinessProbe(this),
+                systemDialogs = systemDialogs,
             )
 
         socketServer = SocketServer(port, commandHandler)

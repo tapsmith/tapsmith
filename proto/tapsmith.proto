@@ -64,6 +64,10 @@ service TapsmithService {
   rpc GetOrientation(GetOrientationRequest) returns (GetOrientationResponse);
   rpc IsKeyboardShown(IsKeyboardShownRequest) returns (IsKeyboardShownResponse);
   rpc HideKeyboard(HideKeyboardRequest) returns (ActionResponse);
+  // System ANR / crash dialogs the Android agent answered on its own since
+  // the last call (PILOT-977), oldest first; taking them empties the list.
+  // iOS has no such dialogs and always returns none.
+  rpc TakeSystemDialogEvents(TakeSystemDialogEventsRequest) returns (TakeSystemDialogEventsResponse);
   rpc OpenNotifications(OpenNotificationsRequest) returns (ActionResponse);
   rpc OpenQuickSettings(OpenQuickSettingsRequest) returns (ActionResponse);
   rpc SetColorScheme(SetColorSchemeRequest) returns (ActionResponse);
@@ -733,6 +737,32 @@ message IsKeyboardShownRequest {
 message IsKeyboardShownResponse {
   string request_id = 1;
   bool shown = 2;
+}
+
+message TakeSystemDialogEventsRequest {
+  string request_id = 1;
+}
+
+// One system dialog the agent answered.
+message SystemDialogEvent {
+  // The dialog's title, e.g. "Pixel Launcher isn't responding". Empty when unknown.
+  string title = 1;
+  // The owning process, when the window list named exactly one (or it was
+  // the app under test's). Empty otherwise.
+  string owner = 2;
+  // The app under test owns it: its own ANR, answered with "Wait".
+  bool owned_by_target = 3;
+  // "anr" (isn't responding) or "crash" (keeps stopping).
+  string kind = 4;
+  // The button pressed: "Close app" or "Wait".
+  string button = 5;
+  // When it was answered, in device wall-clock ms since the epoch.
+  int64 timestamp_ms = 6;
+}
+
+message TakeSystemDialogEventsResponse {
+  string request_id = 1;
+  repeated SystemDialogEvent events = 2;
 }
 
 message HideKeyboardRequest {

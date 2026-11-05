@@ -11,6 +11,7 @@
  */
 import { describe, expect, test } from "../fixtures.js"
 import { openScreen } from "../utils/app-reset.js"
+import { startNetworkProxy } from "../utils/network-proxy.js"
 
 describe("request fixture", () => {
   test.use({ timeout: 15_000 })
@@ -57,6 +58,7 @@ describe("request fixture", () => {
 
   describe("combined device + request", () => {
     test.beforeEach(async ({ device, apiCallsScreen }) => {
+      await startNetworkProxy(device)
       await openScreen(device, "/api-calls")
       await expect(apiCallsScreen.heading).toBeVisible()
     })

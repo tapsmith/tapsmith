@@ -414,9 +414,11 @@ describe('tapsmith_tap', () => {
     expect(res.isError).toBeFalsy();
     expect(text(res)).toBe('OK');
     expect(daemon.tap).toHaveBeenCalledTimes(1);
+    expect(selectorToProto(daemon.findElements.mock.calls[0][0])).toEqual({ textContains: 'Sign in' });
+    // On Android the tap goes to the element strict mode just checked, by its id.
     const [selector, , elementId] = daemon.tap.mock.calls[0];
-    expect(selectorToProto(selector)).toEqual({ textContains: 'Sign in' });
-    expect(elementId).toBeUndefined();
+    expect(selector).toBeUndefined();
+    expect(elementId).toBe('el-1');
   });
 
   it('taps with getByRole\'s state filters, not without them (PILOT-655)', async () => {
@@ -428,7 +430,8 @@ describe('tapsmith_tap', () => {
     expect(res.isError).toBeFalsy();
     const expected = { role: { role: 'button', name: 'Space', exact: true, selected: true } };
     expect(selectorToProto(daemon.findElements.mock.calls[0][0])).toEqual(expected);
-    expect(selectorToProto(daemon.tap.mock.calls[0][0])).toEqual(expected);
+    // The tap goes to that find's match, by id.
+    expect(daemon.tap.mock.calls[0][2]).toBe('el-1');
   });
 
   it('refuses an ambiguous locator and taps nothing (PILOT-226)', async () => {

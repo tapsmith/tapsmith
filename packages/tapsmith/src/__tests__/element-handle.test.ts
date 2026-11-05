@@ -763,7 +763,9 @@ describe('exists()', () => {
       }
     })).toBe(true);
     expect(calls).toBe(13);
-    expect(elapsed).toBe(3000); // 12 retry gaps of 250ms — well past the 2s fault window
+    // 12 retry gaps of the action backoff (0, 20, 100, 100, then 500 ms) —
+    // well past the 2s fault window.
+    expect(elapsed).toBe(4220);
   });
 
   it('a persistent agent command timeout surfaces unchanged at the handle deadline, so session recovery still matches', async () => {
@@ -987,6 +989,80 @@ describe('tap()', () => {
     const remaining = (tap.mock.calls[0] as unknown as [unknown, number])[1];
     expect(remaining).toBeLessThanOrEqual(4000);
     expect(remaining).toBeGreaterThan(3000);
+  });
+
+  describe('on Android, by the id its auto-wait resolved', () => {
+    const android = { platform: 'android' } as never;
+
+    it('taps the element the auto-wait resolved, by id, without the agent finding it again', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: 'resolved-7' })]));
+      const client = makeMockClient({ findElements, tap });
+      await new ElementHandle(client, _text('Button'), 4000, android).tap();
+      expect(findElements).toHaveBeenCalledTimes(1);
+      expect(tap).toHaveBeenCalledTimes(1);
+      expect(tap).toHaveBeenCalledWith(undefined, expect.any(Number), 'resolved-7');
+    });
+
+    it('keeps strict mode in the SDK: two matches throw before anything is tapped', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const findElements = vi.fn(async () => makeFindElementsResponse([
+        makeElementInfo({ elementId: 'a', bounds: { left: 0, top: 0, right: 10, bottom: 10 } }),
+        makeElementInfo({ elementId: 'b', bounds: { left: 0, top: 20, right: 10, bottom: 30 } }),
+      ]));
+      const client = makeMockClient({ findElements, tap });
+      await expect(new ElementHandle(client, _text('Button'), 500, android).tap()).rejects.toBeInstanceOf(StrictModeViolationError);
+      expect(tap).not.toHaveBeenCalled();
+    });
+
+    it('re-resolves a stale id by selector, so the agent finds the element afresh', async () => {
+      const tap = vi.fn()
+        .mockResolvedValueOnce(failureResponse("Element 'resolved-7' not found. It may have gone stale."))
+        .mockResolvedValue(successResponse());
+      const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: 'resolved-7' })]));
+      const sel = _text('Button');
+      const client = makeMockClient({ findElements, tap });
+      await new ElementHandle(client, sel, 4000, android).tap();
+      expect(tap.mock.calls.map((c) => [c[0], c[2]])).toEqual([[undefined, 'resolved-7'], [sel, undefined]]);
+    });
+
+    it('a retry after a not-hittable refusal taps the id its fresh auto-wait resolved', async () => {
+      const tap = vi.fn()
+        .mockResolvedValueOnce(failureResponse('Element is not hittable'))
+        .mockResolvedValue(successResponse());
+      let n = 0;
+      const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: `resolved-${++n}` })]));
+      const client = makeMockClient({ findElements, tap });
+      await withFakeClock(5000, () => new ElementHandle(client, _text('Row'), 4000, android).tap());
+      expect(tap.mock.calls.map((c) => c[2])).toEqual(['resolved-1', 'resolved-2']);
+    });
+
+    it('a handle with a zero timeout resolves nothing first, so it still taps by selector', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const sel = _text('Button');
+      const client = makeMockClient({ tap });
+      await new ElementHandle(client, sel, 0, android).tap();
+      expect(tap).toHaveBeenCalledWith(sel, 0);
+    });
+
+    it('taps by selector when the resolved element carries no id', async () => {
+      const tap = vi.fn(async () => successResponse());
+      const sel = _text('Button');
+      const findElements = vi.fn(async () => makeFindElementsResponse([makeElementInfo({ elementId: '' })]));
+      const client = makeMockClient({ findElements, tap });
+      await new ElementHandle(client, sel, 4000, android).tap();
+      expect(tap).toHaveBeenCalledWith(sel, expect.any(Number));
+    });
+
+    it('leaves iOS taps, and the other tap-family actions, addressed by selector', async () => {
+      const sel = _text('Button');
+      const ios = makeMockClient();
+      await new ElementHandle(ios, sel, 4000, { platform: 'ios' } as never).tap();
+      expect(ios.tap).toHaveBeenCalledWith(sel, expect.any(Number));
+      const client = makeMockClient();
+      await new ElementHandle(client, sel, 4000, android).longPress();
+      expect(client.longPress).toHaveBeenCalledWith(sel, undefined, expect.any(Number));
+    });
   });
 
   it('throws on failure', async () => {
@@ -1653,7 +1729,9 @@ describe('isVisible()', () => {
       }
     })).rejects.toThrow(/findElements failed/);
     expect(elapsed).toBeLessThan(1000);
-    expect(findElements.mock.calls.length).toBeLessThanOrEqual(3);
+    // Reads at 0, 0, 20 and 120 ms (the action backoff); then less than one
+    // read budget is left.
+    expect(findElements.mock.calls.length).toBeLessThanOrEqual(4);
   });
 
   it('re-probes an agent command timeout until the handle deadline (slow agent), each read still tick-bounded, then surfaces it unchanged', async () => {
@@ -1678,7 +1756,8 @@ describe('isVisible()', () => {
         elapsed = Date.now() - start;
       }
     })).rejects.toThrow(/Agent command timed out/);
-    expect(findElements.mock.calls.length).toBeGreaterThan(100);
+    // Re-read the whole 30 s: the action backoff settles at one read per 500 ms.
+    expect(findElements.mock.calls.length).toBeGreaterThan(55);
     for (const b of budgets) expect(b).toBeLessThanOrEqual(250);
     expect(budgets.slice(0, -1).every((b) => b === 250)).toBe(true);
     expect(elapsed).toBeGreaterThanOrEqual(29_500);
@@ -1704,8 +1783,9 @@ describe('isVisible()', () => {
       return result;
     })).toBe(true);
     expect(calls).toBe(12);
-    // 11 retry gaps of 250ms: well past the 2s fault window, well short of the timeout.
-    expect(elapsed).toBe(2750);
+    // 11 retry gaps of the action backoff (0, 20, 100, 100, then 500 ms):
+    // well past the 2s fault window, well short of the timeout.
+    expect(elapsed).toBe(3720);
   });
 
   it('throws a descriptive error — never a silent answer — when the hierarchy never settles (review follow-up)', async () => {
@@ -1720,11 +1800,12 @@ describe('isVisible()', () => {
     const err = await withFakeClock(10_000, () => handle.isHidden()).catch((e) => e);
     expect(err).toBeInstanceOf(Error);
     expect(err.message).toMatch(/Could not read the state of .*Spinner/);
-    // Reports what happened (reads + elapsed), not a budget: reads every
-    // 250ms from 0 to 5000ms; after the read at 5000ms no poll gap fits.
-    expect(err.message).toMatch(/kept changing \(stale snapshot\) across 21 reads over 5000ms/);
+    // Reports what happened (reads + elapsed), not a budget: reads on the
+    // action backoff (0, 0, 20, 120, 220, then every 500ms to 4720, and the
+    // last capped at the deadline, 5000ms); after that no read fits.
+    expect(err.message).toMatch(/kept changing \(stale snapshot\) across 15 reads over 5000ms/);
     expect(err.message).toMatch(/not\.toBeVisible\(\) or waitFor\(\)/);
-    expect(findElements).toHaveBeenCalledTimes(21);
+    expect(findElements).toHaveBeenCalledTimes(15);
   });
 
   it('gives a short handle timeout its second tick, like find() (review follow-up)', async () => {
@@ -1743,7 +1824,9 @@ describe('isVisible()', () => {
     });
     const client = makeMockClient({ findElements });
     expect(await withFakeClock(5000, () => new ElementHandle(client, _text('X'), 400).isVisible())).toBe(true);
-    expect(budgets).toEqual([250, 150]);
+    // The re-read comes at once (the action backoff starts at 0 ms), so it
+    // still has a whole read budget.
+    expect(budgets).toEqual([250, 250]);
   });
 
   it('a momentary agent command timeout between a stale tick and a good read is ridden out (review follow-up)', async () => {
@@ -1806,10 +1889,12 @@ describe('isVisible()', () => {
         elapsed = Date.now() - start;
       }
     })).rejects.toThrow(/Not connected to agent/);
-    // Fault at 1500ms opens a window to 3500ms; reads at 1750 (fails 3250) and
-    // 3500 (fails 5000; 250ms was left when it was issued); then thrown.
+    // Fault at 1500ms opens a window to 3500ms; re-reads at once (fails at
+    // 3000) and 20ms later (fails at ~4520; 480ms was left when it was
+    // issued); then less than a read's budget is left, so it is thrown.
     expect(budgets).toEqual([250, 250, 250]);
-    expect(elapsed).toBe(5000);
+    expect(elapsed).toBeGreaterThanOrEqual(4520);
+    expect(elapsed).toBeLessThan(4600);
   });
 
   it('bounds the reads a filter({ has }) chain issues by the same budget (review follow-up)', async () => {
@@ -1869,8 +1954,9 @@ describe('isVisible()', () => {
     for (const handle of [base.first(), base.nth(2), base.filter({ hasText: 'Y' })]) {
       budgets.length = 0;
       await expect(withFakeClock(5000, () => handle.isVisible())).rejects.toThrow(/Could not read the state of/);
-      // One poll interval per read (the last gets what is left: 1ms floor).
-      expect(budgets.length).toBe(13);
+      // One read budget per read (the last gets what is left: 1ms floor);
+      // reads on the action backoff: 0, 0, 20, 120, 220, 720 … 2720, 3000 ms.
+      expect(budgets.length).toBe(11);
       for (const b of budgets.slice(0, -1)) expect(b).toBe(250);
       expect(budgets.at(-1)!).toBeGreaterThanOrEqual(1);
     }
@@ -1923,7 +2009,7 @@ describe('isVisible()', () => {
     const client = makeMockClient({ findElements });
     await expect(withFakeClock(5000, () => new ElementHandle(client, _text('X'), 3000).isVisible()))
       .rejects.toThrow(/kept changing/);
-    expect(budgets.length).toBe(13);
+    expect(budgets.length).toBe(11);
     for (const b of budgets) expect(b).toBeLessThanOrEqual(250);
   });
 
@@ -1942,8 +2028,8 @@ describe('isVisible()', () => {
     expect(err.message).toMatch(/Could not read the state of/);
     expect(err.message).not.toMatch(/Not connected to agent/);
     // The diagnostic counts stale reads as stale reads, and says a fault occurred.
-    expect(err.message).toMatch(/across 20 reads over 5000ms \(plus 1 momentary agent fault that cleared\)/);
-    expect(calls).toBe(21);
+    expect(err.message).toMatch(/across 14 reads over 5000ms \(plus 1 momentary agent fault that cleared\)/);
+    expect(calls).toBe(15);
   });
 
   it('a handle from all() is a live nth(i) locator, so a check and the tap it guards describe the same element — whatever is at that index NOW (PILOT-346)', async () => {
@@ -2944,7 +3030,7 @@ describe('count()/all()/allTextContents() re-read a stale snapshot until it sett
     const neverSettles = makeMockClient({ findElements: vi.fn(async () => stale()) });
     await expect(withFakeClock(5000, () => new ElementHandle(neverSettles, _role('listitem'), 1000).count()))
       .rejects.toThrow(/is stale \(UI changed\)/);
-    expect(neverSettles.findElements).toHaveBeenCalledTimes(5); // 0, 250, 500, 750, 1000 ms
+    expect(neverSettles.findElements).toHaveBeenCalledTimes(7); // 0, 0, 20, 120, 220, 720, 1000 ms
     const singleShot = makeMockClient({ findElements: vi.fn(async () => stale()) });
     await expect(new ElementHandle(singleShot, _role('listitem'), 0).allTextContents()).rejects.toThrow(/is stale/);
     expect(singleShot.findElements).toHaveBeenCalledTimes(1);
@@ -2952,7 +3038,9 @@ describe('count()/all()/allTextContents() re-read a stale snapshot until it sett
     // grace window and then surfaced — not hidden for the whole timeout.
     const faulting = makeMockClient({ findElements: vi.fn(async () => ({ requestId: '1', elements: [], errorMessage: 'UiAutomation not connected' })) });
     await expect(withFakeClock(10_000, () => new ElementHandle(faulting, _role('listitem'), 5000).all())).rejects.toThrow(/UiAutomation not connected/);
-    expect(faulting.findElements).toHaveBeenCalledTimes(9); // 0 … 2000 ms every 250 ms
+    // Reads at 0, 0, 20, 120, 220, 720, 1220, 1720 and 2220 ms: the first one
+    // past the 2 s window surfaces the fault.
+    expect(faulting.findElements).toHaveBeenCalledTimes(9);
     // A fatal error (a user stop) propagates at once.
     const aborted = makeMockClient({ findElements: vi.fn(async () => { throw new TestAbortedError('stopped'); }) });
     await expect(new ElementHandle(aborted, _role('listitem'), 5000).count()).rejects.toThrow(/stopped/);

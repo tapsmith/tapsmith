@@ -2235,16 +2235,18 @@ impl TapsmithServiceImpl {
             debug!(%udid, error = %e, "iOS HID helper unavailable for double-tap; using agent route");
             return HidOutcome::NotHandled;
         }
-        let (x, y) = match self
+        let (x, y, hold_ms) = match self
             .resolve_hid_point(selector, element_id, timeout_ms)
             .await
         {
-            HidTarget::Point { x, y } => (x, y),
+            HidTarget::Point { x, y, hold_ms } => (x, y, hold_ms),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             HidTarget::AgentRoute => return HidOutcome::NotHandled,
         };
         // One wire command: the helper owns the press/gap timing in-process
-        // (~40ms press, ~120ms gap), so the inter-tap gap stays inside the
+        // (each press held as the agent chose for the element, ~120ms gap:
+        // a press longer than a display frame is cancelled by React Native
+        // when a scroll view beside it moves), so the inter-tap gap stays inside the
         // app's double-tap recognizer window regardless of daemon-side load.
         // Host-paced down/up pairs were observed stretching the gap past the
         // window on loaded CI runners (both taps delivered, classified as
@@ -2253,13 +2255,13 @@ impl TapsmithServiceImpl {
         let _ = interval_ms;
         if self
             .hid_injector
-            .send(&udid, &format!("t2 {x} {y}"))
+            .send(&udid, &hid_double_tap_line(x, y, hold_ms))
             .await
             .is_err()
         {
             return HidOutcome::NotHandled;
         }
-        info!(%udid, x, y, "double-tap injected via HID");
+        info!(%udid, x, y, ?hold_ms, "double-tap injected via HID");
         HidOutcome::Injected
     }
 
@@ -2323,7 +2325,8 @@ impl TapsmithServiceImpl {
             )
             .await
         {
-            HidTarget::Point { x, y } => (x, y),
+            // A long press holds for its duration, not a tap's hold.
+            HidTarget::Point { x, y, .. } => (x, y),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
             HidTarget::AgentRoute => return HidOutcome::NotHandled,
         };
@@ -4269,6 +4272,21 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
     }
 
     #[instrument(skip_all, fields(request_id))]
+    async fn take_system_dialog_events(
+        &self,
+        request: Request<proto::TakeSystemDialogEventsRequest>,
+    ) -> Result<Response<proto::TakeSystemDialogEventsResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+
+        let events = self.backend().await?.take_system_dialog_events().await?;
+        Ok(Response::new(proto::TakeSystemDialogEventsResponse {
+            request_id,
+            events,
+        }))
+    }
+
+    #[instrument(skip_all, fields(request_id))]
     async fn hide_keyboard(
         &self,
         request: Request<proto::HideKeyboardRequest>,
@@ -5796,8 +5814,15 @@ async fn query_cdp_json(port: u16) -> anyhow::Result<Vec<serde_json::Value>> {
 #[cfg(any(target_os = "macos", test))]
 #[derive(Debug)]
 enum HidTarget {
-    /// Press here: the agent found no cover over this point.
-    Point { x: f64, y: f64 },
+    /// Press here: the agent found no cover over this point. `hold_ms`: how
+    /// long each tap of a double tap holds its touch, chosen by the agent from
+    /// the element's type (None: the helper's default, for an agent that
+    /// names none).
+    Point {
+        x: f64,
+        y: f64,
+        hold_ms: Option<u64>,
+    },
     /// Report this failure instead of pressing: the element is covered, gone,
     /// or the check failed or timed out — by then the agent may have waited
     /// out the whole budget, and the agent route would wait it all over again.
@@ -5806,6 +5831,21 @@ enum HidTarget {
     /// or hittable with no tree to choose one from), or is too old to know
     /// the method.
     AgentRoute,
+}
+
+/// The longest hold the HID helper accepts on a double tap's line
+/// (`HID_MAX_HOLD_MS` in `native/hid_protocol.h`).
+#[cfg(any(target_os = "macos", test))]
+const HID_MAX_HOLD_MS: u64 = 500;
+
+/// The HID helper's double-tap line: both taps at (`x`, `y`), each held
+/// `hold_ms` (the helper's default when None).
+#[cfg(any(target_os = "macos", test))]
+fn hid_double_tap_line(x: f64, y: f64, hold_ms: Option<u64>) -> String {
+    match hold_ms {
+        Some(ms) => format!("t2 {x} {y} {ms}"),
+        None => format!("t2 {x} {y}"),
+    }
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -5845,8 +5885,15 @@ fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
             .and_then(Value::as_f64)
             .filter(|v| v.is_finite() && v.abs() < 100_000.0)
     };
+    // Bounded as the helper bounds it, so a hold it would refuse falls back
+    // to its default instead of failing the gesture.
+    let hold_ms = resp
+        .data
+        .get("holdMs")
+        .and_then(Value::as_u64)
+        .filter(|ms| *ms <= HID_MAX_HOLD_MS);
     match (coord("x"), coord("y")) {
-        (Some(x), Some(y)) => HidTarget::Point { x, y },
+        (Some(x), Some(y)) => HidTarget::Point { x, y, hold_ms },
         _ => HidTarget::Refuse(AgentResponse {
             success: false,
             error: Some("Agent returned no usable touch point".to_string()),
@@ -7265,12 +7312,39 @@ mod tests {
     #[test]
     fn hid_target_presses_the_resolved_point() {
         match hid_target(agent_ok(json!({"x": 201.0, "y": 489.5}))) {
-            HidTarget::Point { x, y } => {
+            HidTarget::Point { x, y, hold_ms } => {
                 assert_eq!(x, 201.0);
                 assert_eq!(y, 489.5);
+                // An agent that names no hold leaves it to the helper.
+                assert_eq!(hold_ms, None);
             }
             other => panic!("expected a point, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn hid_target_carries_the_agents_hold_for_the_element() {
+        match hid_target(agent_ok(json!({"x": 1.0, "y": 2.0, "holdMs": 10}))) {
+            HidTarget::Point { hold_ms, .. } => assert_eq!(hold_ms, Some(10)),
+            other => panic!("expected a point, got {other:?}"),
+        }
+        // A hold the helper would refuse is left to the helper's default
+        // rather than failing the gesture.
+        for bad in [json!(-1), json!(501), json!("10"), json!(10.5)] {
+            match hid_target(agent_ok(json!({"x": 1.0, "y": 2.0, "holdMs": bad}))) {
+                HidTarget::Point { hold_ms, .. } => assert_eq!(hold_ms, None, "holdMs {bad}"),
+                other => panic!("expected a point, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn double_tap_line_names_the_hold_only_when_known() {
+        assert_eq!(hid_double_tap_line(201.0, 489.5, None), "t2 201 489.5");
+        assert_eq!(
+            hid_double_tap_line(201.0, 489.5, Some(10)),
+            "t2 201 489.5 10"
+        );
     }
 
     #[test]

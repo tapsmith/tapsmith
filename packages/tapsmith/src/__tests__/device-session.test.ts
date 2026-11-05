@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
     launchConfiguredApp: vi.fn(async () => ({ policy: { mode: 'clear', scope: 'file' }, preparedAt: 1, durationMs: 1, source: 'startup launch' })),
     probeResetCapabilities: vi.fn(async (ctx: { capabilities?: Record<string, unknown> }) => { (ctx.capabilities ??= {}).hooksDetected = true; return ctx.capabilities; }),
     checkMissingResetHooks: vi.fn(async () => {}),
+    startAndroidLaunchEarly: vi.fn(async (): Promise<{ launched: Promise<boolean> } | undefined> => ({ launched: Promise.resolve(true) })),
   },
   agentFailures: 0,
   /** Serials whose agent never starts (permanent failure). */
@@ -198,6 +199,7 @@ beforeEach(() => {
   mocks.preflight.launchConfiguredApp.mockClear();
   mocks.preflight.probeResetCapabilities.mockClear();
   mocks.preflight.checkMissingResetHooks.mockClear();
+  mocks.preflight.startAndroidLaunchEarly.mockClear();
 });
 
 describe('openDeviceSession', () => {
@@ -223,7 +225,7 @@ describe('openDeviceSession', () => {
     expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(
       expect.objectContaining({ deviceSerial: 'emulator-5554' }),
       'worker startup launch',
-      { freshInstall: false },
+      { freshInstall: false, appLaunched: true },
     );
     expect(session.prepared?.policy).toEqual({ mode: 'clear', scope: 'file' });
     expect(session.context.agentApkPath).toBe('/agents/agent.apk');
@@ -240,7 +242,90 @@ describe('openDeviceSession', () => {
       { claimSession: SESSION, label: 'Worker 0' },
     );
     expect(mocks.devices[0].installApk).toHaveBeenCalledWith('/proj/app.apk');
-    expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: true });
+    expect(mocks.preflight.startAndroidLaunchEarly).toHaveBeenCalledWith(expect.anything(), { freshInstall: true });
+    expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: true, appLaunched: true });
+  });
+
+  describe('Android app launch alongside the agent start', () => {
+    const spec = { name: 'device-1', serial: 'emulator-5554', daemonAddress: 'localhost:50052' };
+
+    it('clears and starts the launch before the agent starts, and lets the launch skip both', async () => {
+      const order: string[] = [];
+      let finishLaunch!: (ok: boolean) => void;
+      mocks.preflight.startAndroidLaunchEarly.mockImplementationOnce(async () => {
+        order.push('early launch');
+        return { launched: new Promise<boolean>((resolve) => { finishLaunch = resolve; }) };
+      });
+      const Device = await mockedDevice();
+      Device.mockImplementationOnce(function (this: unknown, ...args: unknown[]) {
+        const device = (Device.getMockImplementation() as (...a: unknown[]) => MockDevice).apply(this, args);
+        const start = device._startAgent;
+        device._startAgent = vi.fn(async (...a: unknown[]) => {
+          order.push('agent start');
+          const started = await start(...a);
+          // The launch finishes while the agent is still starting.
+          finishLaunch(true);
+          return started;
+        });
+        return device;
+      });
+      mocks.preflight.launchConfiguredApp.mockImplementationOnce(async () => {
+        order.push('launch');
+        return { policy: { mode: 'clear', scope: 'file' }, preparedAt: 1, durationMs: 1, source: 'startup launch' };
+      });
+
+      await openDeviceSession(spec, makeConfig(), { claimSession: SESSION, label: 'Device' });
+
+      expect(order).toEqual(['early launch', 'agent start', 'launch']);
+      expect(mocks.preflight.startAndroidLaunchEarly).toHaveBeenCalledWith(
+        expect.objectContaining({ deviceSerial: 'emulator-5554' }), { freshInstall: false },
+      );
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: false, appLaunched: true });
+    });
+
+    it('runs the usual launch after the agent when the early launch did not go through', async () => {
+      mocks.preflight.startAndroidLaunchEarly.mockResolvedValueOnce({ launched: Promise.resolve(false) });
+      await openDeviceSession(spec, makeConfig(), { claimSession: SESSION, label: 'Device' });
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: false });
+
+      mocks.preflight.launchConfiguredApp.mockClear();
+      // A failed clear launched nothing.
+      mocks.preflight.startAndroidLaunchEarly.mockResolvedValueOnce(undefined);
+      await openDeviceSession({ ...spec, serial: 'emulator-5556', daemonAddress: 'localhost:50053' }, makeConfig(), { claimSession: SESSION, label: 'Device' });
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenCalledWith(expect.anything(), 'startup launch', { freshInstall: false });
+    });
+
+    it('still fails with the agent error when the agent does not start after an early launch', async () => {
+      mocks.failAgentFor.add('emulator-5554');
+      await expect(openDeviceSession(spec, makeConfig(), { claimSession: SESSION, label: 'Device' }))
+        .rejects.toThrow(/Failed to start agent: Failed to connect to agent socket/);
+      expect(mocks.preflight.startAndroidLaunchEarly).toHaveBeenCalled();
+      expect(mocks.preflight.launchConfiguredApp).not.toHaveBeenCalled();
+    });
+
+    it('does not launch early on iOS, without a package, on a just-booted emulator, or when adopting', async () => {
+      await openDeviceSession(
+        { name: 'device-1', serial: 'SIM-1', daemonAddress: 'localhost:50052' },
+        makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app' }),
+        { claimSession: SESSION, label: 'Device' },
+      );
+      await openDeviceSession(
+        { ...spec, serial: 'emulator-5556', daemonAddress: 'localhost:50053' },
+        makeConfig({ package: undefined }),
+        { claimSession: SESSION, label: 'Device' },
+      );
+      await openDeviceSession(
+        { ...spec, serial: 'emulator-5558', daemonAddress: 'localhost:50054' },
+        makeConfig(),
+        { claimSession: SESSION, label: 'Device', freshDevice: true },
+      );
+      await openDeviceSession(
+        { ...spec, serial: 'emulator-5560', daemonAddress: 'localhost:50055' },
+        makeConfig(),
+        { claimSession: SESSION, label: 'Device', adopt: true },
+      );
+      expect(mocks.preflight.startAndroidLaunchEarly).not.toHaveBeenCalled();
+    });
   });
 
   it('retries a transient agent start once, then fails with the session label', async () => {
@@ -460,7 +545,9 @@ describe('openDeviceSession phases (the sequential CLI\'s step rows)', () => {
       await open(makeConfig(), { serial: 'emulator-5554' });
       expect(clearFirst()).toBe(false);
       // An Android answer is never taken as a launch (the agent does not launch the app).
-      expect(mocks.preflight.launchConfiguredApp).toHaveBeenLastCalledWith(expect.anything(), 'startup launch', { freshInstall: false });
+      expect(mocks.preflight.launchConfiguredApp).toHaveBeenLastCalledWith(
+        expect.anything(), 'startup launch', expect.objectContaining({ freshInstall: false }),
+      );
     });
 
     it('asks again on the retried agent start, and takes that start\'s answer', async () => {

@@ -23,7 +23,7 @@ export default defineConfig({
   reporter: [["list"], ["github"], ["html", { open: "never" }]],
   screenshot: "only-on-failure",
   workers: 1,
-  trace: { mode: "retain-on-failure", daemonLogs: true },
+  trace: { mode: "on-all-retries", daemonLogs: true },
   video: "on-first-retry",
   avd: "Tapsmith_Phone_API_36",
   agentApk: "../agent/app/build/outputs/apk/debug/app-debug.apk",

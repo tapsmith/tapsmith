@@ -105,6 +105,11 @@ pub(super) trait DeviceBackend: Send + Sync {
     async fn get_color_scheme(&self) -> Result<String, Status>;
     async fn is_keyboard_shown(&self) -> Result<bool, Status>;
     async fn hide_keyboard(&self, request_id: String) -> ActionResult;
+    /// System ANR / crash dialogs the agent answered on its own since the
+    /// last call (PILOT-977). Only Android shows such dialogs.
+    async fn take_system_dialog_events(&self) -> Result<Vec<proto::SystemDialogEvent>, Status> {
+        Ok(Vec::new())
+    }
 
     // ─── System UI ───
     async fn open_notifications(&self, request_id: String) -> ActionResult;

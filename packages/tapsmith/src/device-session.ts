@@ -29,6 +29,8 @@ import {
 import {
   ensureSessionReady,
   launchConfiguredApp,
+  startAndroidLaunchEarly,
+  type EarlyLaunch,
   checkMissingResetHooks,
   probeResetCapabilities,
   type SessionPreflightContext,
@@ -724,6 +726,17 @@ export async function openDeviceSession(
     const isIos = config.platform === 'ios';
     const clearAppDataFirst = isIos && !!config.package && !freshInstall;
 
+    // Android: clear the app and start its launch now, so its cold start
+    // overlaps the agent's start instead of following it. Not on an emulator
+    // this run just booted, which gets the whole sequence and a warm-up below.
+    // The launch never fails the open from here: if it did not go through,
+    // the launch below runs the usual sequence after the agent.
+    let earlyLaunch: EarlyLaunch | undefined;
+    if (config.platform !== 'ios' && config.package && !opts.freshDevice) {
+      progress(`launching ${config.package} while the agent starts`);
+      earlyLaunch = await startAndroidLaunchEarly(session.context, { freshInstall });
+    }
+
     progress('starting Tapsmith agent');
     phase('agent', 'start', isIos
       ? `starting iOS agent (${artifacts.iosXctestrunPath ? path.basename(artifacts.iosXctestrunPath) : 'xctestrun not set'})`
@@ -778,8 +791,10 @@ export async function openDeviceSession(
       progress(`launching ${config.package}`);
       phase('launch', 'start', `launching ${config.package}`);
       try {
+        const appLaunched = earlyLaunch ? await earlyLaunch.launched : false;
         session.prepared = await launchConfiguredApp(session.context, launchPhase, {
           freshInstall,
+          ...(appLaunched ? { appLaunched } : {}),
           ...(opts.readinessAttempts !== undefined ? { readinessAttempts: opts.readinessAttempts } : {}),
         });
       } catch (err) {

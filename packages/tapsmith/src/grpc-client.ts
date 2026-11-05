@@ -177,6 +177,27 @@ export interface IsKeyboardShownResponse {
   shown: boolean;
 }
 
+/** A system ANR / crash dialog the Android agent answered on its own. */
+export interface SystemDialogEvent {
+  /** The dialog's title, e.g. `Pixel Launcher isn't responding`; empty when unknown. */
+  title: string;
+  /** The owning process when the window list named exactly one (or it was the app's); empty otherwise. */
+  owner: string;
+  /** The app under test owns it: its own ANR, answered with Wait. */
+  ownedByTarget: boolean;
+  /** `anr` (isn't responding) or `crash` (keeps stopping). */
+  kind: string;
+  /** The button pressed: `Close app` or `Wait`. */
+  button: string;
+  /** When it was answered, device wall-clock ms since the epoch. */
+  timestampMs: number;
+}
+
+export interface TakeSystemDialogEventsResponse {
+  requestId: string;
+  events: SystemDialogEvent[];
+}
+
 export interface GetColorSchemeResponse {
   requestId: string;
   scheme: string;
@@ -449,6 +470,12 @@ export class TapsmithGrpcClient {
         'grpc.keepalive_time_ms': 30_000,                      // ping every 30s
         'grpc.keepalive_timeout_ms': 10_000,                   // 10s to respond
         'grpc.keepalive_permit_without_calls': 1,              // ping even when idle
+        // The daemon is local, so a reconnect attempt costs next to nothing.
+        // grpc-js waits 1 s before its first one by default: every daemon
+        // start paid that second, because the first connect is refused
+        // until the daemon listens (~30 ms after it is spawned).
+        'grpc.initial_reconnect_backoff_ms': 50,
+        'grpc.max_reconnect_backoff_ms': 1_000,
       },
     // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
     ) as grpc.Client & Record<string, Function>;
@@ -1079,6 +1106,13 @@ export class TapsmithGrpcClient {
     return this.call<IsKeyboardShownResponse>('isKeyboardShown', {
       requestId: requestId(),
     });
+  }
+
+  /** The system dialogs the agent answered since the last call, oldest first. */
+  async takeSystemDialogEvents(deadlineMs?: number): Promise<TakeSystemDialogEventsResponse> {
+    return this.call<TakeSystemDialogEventsResponse>('takeSystemDialogEvents', {
+      requestId: requestId(),
+    }, deadlineMs);
   }
 
   async hideKeyboard(): Promise<ActionResponse> {
