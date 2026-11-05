@@ -47,6 +47,9 @@ function makeContext(overrides: Partial<Parameters<typeof ensureSessionReady>[0]
       hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>',
       errorMessage: '',
     })),
+    // A daemon without the agent-side wait by default, so the dump-polling
+    // tests below keep exercising that path; the PILOT-976 tests opt in.
+    waitForAppReady: vi.fn(async () => ({ requestId: '1', ready: false, supported: false })),
     takeSystemDialogEvents: vi.fn(async (): Promise<import('../grpc-client.js').TakeSystemDialogEventsResponse> => ({ requestId: '1', events: [] })),
   };
 
@@ -526,6 +529,68 @@ describe('session-preflight', () => {
       const report = await executeAppReset(ctx, WARM_TEST, { phase: 'before test' });
 
       expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+    });
+
+    describe('agent-side readiness (PILOT-976)', () => {
+      it('a clear reset asks the daemon once instead of polling dumps', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+        const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledWith('com.example.app', 10_000, expect.any(Number));
+        // ensureSessionReady's own read only: no dump polling for content.
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(1);
+      });
+
+      it('an app that never shows text is let through with the breadcrumb, without dump polling', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: false, supported: true });
+        const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+        try {
+          await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+          expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('showed no rendered content');
+        } finally {
+          stderr.mockRestore();
+        }
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(1);
+      });
+
+      it('a daemon that predates the RPC gets the dump polling', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockRejectedValue(Object.assign(new Error('12 UNIMPLEMENTED: unknown method'), { code: 12 }));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(rendered);
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(3);
+      });
+
+      it('a failed wait falls back to dump polling for what is left of the budget', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
+        vi.mocked(ctx.client.waitForAppReady).mockRejectedValue(new Error('14 UNAVAILABLE: connection dropped'));
+        vi.mocked(ctx.client.getUiHierarchy)
+          .mockResolvedValueOnce(splash)
+          .mockResolvedValueOnce(rendered);
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(2);
+      });
+
+      it('iOS keeps its own readiness check', async () => {
+        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'ios' } });
+        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+
+        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
+      });
     });
 
     it('startup launch waits for rendered content before probing for hooks', async () => {

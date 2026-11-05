@@ -112,6 +112,10 @@ const ANDROID_DEEP_LINK_IDLE_TIMEOUT_MS: u64 = 2_000;
 /// falls through.
 const ANDROID_RENDER_READY_TIMEOUT: Duration = Duration::from_secs(10);
 const ANDROID_RENDER_READY_POLL: Duration = Duration::from_millis(250);
+/// How much longer than its own budget the daemon waits for the agent's
+/// `waitForAppReady` answer, which arrives at the end of that budget at the
+/// latest.
+const ANDROID_RENDER_READY_TRANSPORT_SLACK_MS: u64 = 2_000;
 
 /// How long StartAgent waits for a freshly launched Android agent to answer
 /// its first ping. UIAutomator's accessibility bootstrap on a cold
@@ -226,12 +230,13 @@ pub struct TapsmithServiceImpl {
     /// StartAgent idempotent when the daemon is already connected to the same
     /// live agent for the same device/configuration.
     started_agent_config: Arc<RwLock<Option<StartedAgentConfig>>>,
-    /// Cached Android launcher activity (`.MainActivity`) for the active
-    /// package, resolved once at StartAgent when the device is calm. Reused by
-    /// every clean-task relaunch so a restart never depends on a per-reset
-    /// `resolve-activity` call succeeding under load. Cleared on device/agent
-    /// change.
-    android_launcher_activity: Arc<RwLock<Option<String>>>,
+    /// Cached Android launcher activities (`.MainActivity`), by package. The
+    /// target package's is resolved at StartAgent when the device is calm, so
+    /// a clean-task relaunch never depends on a per-reset `resolve-activity`
+    /// call succeeding under load; others are resolved on their first launch.
+    /// Every launch then starts the component directly instead of running
+    /// `monkey` (PILOT-976). Cleared on device/agent change.
+    android_launcher_activity: Arc<RwLock<std::collections::HashMap<String, String>>>,
     /// Counters behind the warm/cold decision for declared app resets
     /// (`ResetApp`). Reset whenever the active device or agent session changes.
     reset_policy: Arc<RwLock<app_reset::ResetPolicyState>>,
@@ -420,7 +425,7 @@ impl TapsmithServiceImpl {
             ios_ca_cert_installed: Arc::new(RwLock::new(std::collections::HashSet::new())),
             ios_agent_config: Arc::new(RwLock::new(None)),
             started_agent_config: Arc::new(RwLock::new(None)),
-            android_launcher_activity: Arc::new(RwLock::new(None)),
+            android_launcher_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
             reset_policy: Arc::new(RwLock::new(app_reset::ResetPolicyState::default())),
             last_hooks_marker: Arc::new(RwLock::new(None)),
             nav_probe_found_no_marker: Arc::new(RwLock::new(false)),
@@ -927,9 +932,7 @@ impl TapsmithServiceImpl {
         idle_timeout_ms: u64,
     ) -> Result<(), String> {
         agent_comms::clear_stream_cache(&self.agent_stream).await;
-        let _ = ios::device::terminate_app(serial, package_name).await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        ios::device::launch_app(serial, package_name)
+        ios::device::relaunch_app(serial, package_name)
             .await
             .map_err(|e| e.to_string())?;
         let relaunch = self
@@ -977,7 +980,7 @@ impl TapsmithServiceImpl {
         wait_for_idle: bool,
         idle_timeout_ms: u64,
     ) -> Result<(), String> {
-        let _ = self
+        let terminated = self
             .send_agent_command_with_timeout(
                 &AgentCommand::TerminateApp {
                     package: package_name.to_string(),
@@ -985,7 +988,12 @@ impl TapsmithServiceImpl {
                 4_000,
             )
             .await;
-        tokio::time::sleep(Duration::from_millis(300)).await;
+        // The agent answers success only once the app reads as not running,
+        // so a confirmed terminate needs no pause (PILOT-976). An unconfirmed
+        // one keeps the old fixed pause before the launch.
+        if !matches!(terminated, Ok(ref resp) if resp.success) {
+            tokio::time::sleep(Duration::from_millis(300)).await;
+        }
 
         let launch = self
             .send_agent_command_with_timeout(
@@ -1068,9 +1076,7 @@ impl TapsmithServiceImpl {
         // `app.launch()` (inside the re-started agent) provides an equivalent
         // fresh launch — slower but correct.
         if !is_physical {
-            let _ = ios::device::terminate_app(serial, package_name).await;
-            tokio::time::sleep(Duration::from_millis(300)).await;
-            ios::device::launch_app(serial, package_name)
+            ios::device::relaunch_app(serial, package_name)
                 .await
                 .map_err(|e| {
                     format!("Failed to relaunch app via simctl before agent restart: {e}")
@@ -1380,28 +1386,15 @@ impl TapsmithServiceImpl {
         wait_for_idle: bool,
         idle_timeout_ms: u64,
     ) -> Result<(), String> {
-        let cached = self.android_launcher_activity.read().await.clone();
-        let activity = match cached {
-            Some(a) => Some(a),
-            None => {
-                let resolved = self
-                    .resolve_launcher_activity(serial, package_name)
-                    .await
-                    .ok()
-                    .flatten();
-                if let Some(ref a) = resolved {
-                    *self.android_launcher_activity.write().await = Some(a.clone());
-                }
-                resolved
-            }
-        };
+        let activity = self.launcher_activity(serial, package_name).await;
         let mut clean_started = false;
         if let Some(activity) = activity {
             let cmd = format!(
-                "am start -S -a android.intent.action.MAIN -c android.intent.category.LAUNCHER --activity-clear-task -n {package_name}/{activity}"
+                "am start -S -a android.intent.action.MAIN -c android.intent.category.LAUNCHER --activity-clear-task -n {}",
+                android_component_arg(package_name, &activity)
             );
             match adb::shell(serial, &cmd).await {
-                Ok(out) if !out.contains("Error") => {
+                Ok(out) if !am_start_reported_error(&out) => {
                     clean_started = true;
                     if wait_for_idle {
                         let timeout = if idle_timeout_ms > 0 {
@@ -1449,25 +1442,81 @@ impl TapsmithServiceImpl {
                 return Err(resp.error_message);
             }
         }
-        self.wait_for_android_rendered_content(serial, package_name)
+        self.wait_for_android_rendered_content(package_name, ANDROID_RENDER_READY_TIMEOUT)
             .await;
         Ok(())
     }
 
-    /// Poll the hierarchy until the app has drawn real content (a node of its
-    /// own package carrying text or a content description), so a deep link or
+    /// Wait until the app has drawn real content (a node of its own package
+    /// carrying text or a content description), so a deep link or
     /// interaction issued right after a relaunch isn't lost into a booting RN
-    /// app. Bounded and best-effort.
-    async fn wait_for_android_rendered_content(&self, _serial: &str, package_name: &str) {
+    /// app. Bounded and best-effort: returns whether the content appeared
+    /// within `timeout`.
+    ///
+    /// The agent's `waitForAppReady` polls the live window roots and stops at
+    /// the first such node (PILOT-976); an agent that predates it gets the
+    /// old full-dump polling. A failed agent call is retried within the
+    /// budget, as the dump polling ignored a failed dump.
+    pub(super) async fn wait_for_android_rendered_content(
+        &self,
+        package_name: &str,
+        timeout: Duration,
+    ) -> bool {
         let started = tokio::time::Instant::now();
+        let deadline = started + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining_ms = remaining.as_millis() as u64;
+            let result = self
+                .send_agent_command_with_timeout(
+                    &AgentCommand::WaitForAppReady {
+                        package: package_name.to_string(),
+                        timeout_ms: remaining_ms,
+                    },
+                    remaining_ms + ANDROID_RENDER_READY_TRANSPORT_SLACK_MS,
+                )
+                .await;
+            let answer = classify_agent_ready_answer(&result);
+            let ready = match answer {
+                AgentReadyAnswer::Ready => true,
+                AgentReadyAnswer::NotReady => false,
+                AgentReadyAnswer::Unsupported => {
+                    self.poll_hierarchy_for_rendered_content(package_name, deadline)
+                        .await
+                }
+                AgentReadyAnswer::Failed => {
+                    if tokio::time::Instant::now() < deadline {
+                        tokio::time::sleep(ANDROID_RENDER_READY_POLL.min(remaining)).await;
+                        continue;
+                    }
+                    false
+                }
+            };
+            crate::timing::timing_log!(
+                "kind=app_ready name={:?} dur_ms={} ready={}",
+                answer,
+                started.elapsed().as_millis(),
+                ready
+            );
+            return ready;
+        }
+    }
+
+    /// [`Self::wait_for_android_rendered_content`] for an agent without
+    /// `waitForAppReady`: a full hierarchy dump per poll.
+    async fn poll_hierarchy_for_rendered_content(
+        &self,
+        package_name: &str,
+        deadline: tokio::time::Instant,
+    ) -> bool {
         loop {
             if let Some(xml) = self.current_hierarchy_xml(5_000).await {
                 if android_hierarchy_has_rendered_content(&xml, package_name) {
-                    return;
+                    return true;
                 }
             }
-            if started.elapsed() >= ANDROID_RENDER_READY_TIMEOUT {
-                return;
+            if tokio::time::Instant::now() >= deadline {
+                return false;
             }
             tokio::time::sleep(ANDROID_RENDER_READY_POLL).await;
         }
@@ -1922,6 +1971,33 @@ impl TapsmithServiceImpl {
         }
     }
 
+    /// The cached launcher activity of `package_name`, if any.
+    async fn cached_launcher_activity(&self, package_name: &str) -> Option<String> {
+        self.android_launcher_activity
+            .read()
+            .await
+            .get(package_name)
+            .cloned()
+    }
+
+    /// The launcher activity of `package_name`: cached, or resolved now and
+    /// cached. `None` when it cannot be resolved.
+    async fn launcher_activity(&self, serial: &str, package_name: &str) -> Option<String> {
+        if let Some(activity) = self.cached_launcher_activity(package_name).await {
+            return Some(activity);
+        }
+        let resolved = self
+            .resolve_launcher_activity(serial, package_name)
+            .await
+            .ok()
+            .flatten()?;
+        self.android_launcher_activity
+            .write()
+            .await
+            .insert(package_name.to_string(), resolved.clone());
+        Some(resolved)
+    }
+
     async fn resolve_launcher_activity(
         &self,
         serial: &str,
@@ -1956,6 +2032,35 @@ impl TapsmithServiceImpl {
         // The relaunched process may render a marker an earlier probe missed
         // (see `nav_probe_found_no_marker`).
         *self.nav_probe_found_no_marker.write().await = false;
+
+        // Start the launcher component directly, with the intent a launcher
+        // tap sends (PILOT-976). `monkey` starts a VM of its own for the same
+        // intent; it stays the fallback for a package whose launcher activity
+        // cannot be resolved, or when the start is refused.
+        if let Some(activity) = self.launcher_activity(serial, package_name).await {
+            let cmd = android_launcher_intent_cmd(package_name, &activity);
+            match adb::shell(serial, &cmd).await {
+                Ok(out) if !am_start_reported_error(&out) => {
+                    return self
+                        .finish_launch(request_id, wait_for_idle, idle_timeout_ms)
+                        .await;
+                }
+                refused => {
+                    // A stale entry (the app was reinstalled with another
+                    // launcher activity) is resolved again next time.
+                    self.android_launcher_activity
+                        .write()
+                        .await
+                        .remove(package_name);
+                    let reason = match refused {
+                        Ok(out) => out.trim().to_string(),
+                        Err(e) => e.to_string(),
+                    };
+                    warn!(%activity, %reason, "launcher intent refused; falling back to monkey");
+                }
+            }
+        }
+
         let monkey_cmd = format!(
             "monkey -p {} -c android.intent.category.LAUNCHER 1",
             package_name
@@ -1979,8 +2084,10 @@ impl TapsmithServiceImpl {
                     }));
                 };
 
-                let fallback_cmd =
-                    format!("am start -S --activity-clear-task -n {package_name}/{activity}");
+                let fallback_cmd = format!(
+                    "am start -S --activity-clear-task -n {}",
+                    android_component_arg(package_name, &activity)
+                );
                 match adb::shell(serial, &fallback_cmd).await {
                     Ok(_) => {
                         self.finish_launch(request_id, wait_for_idle, idle_timeout_ms)
@@ -3218,7 +3325,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                     self.cleanup_network_proxy().await;
                     *self.started_agent_config.write().await = None;
                     *self.ios_agent_config.write().await = None;
-                    *self.android_launcher_activity.write().await = None;
+                    self.android_launcher_activity.write().await.clear();
                     *self.reset_policy.write().await = app_reset::ResetPolicyState::default();
                     *self.last_hooks_marker.write().await = None;
                     *self.nav_probe_found_no_marker.write().await = false;
@@ -3317,7 +3424,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         }
 
         *self.started_agent_config.write().await = None;
-        *self.android_launcher_activity.write().await = None;
+        self.android_launcher_activity.write().await.clear();
         // A fresh agent session starts a fresh warm window.
         *self.reset_policy.write().await = app_reset::ResetPolicyState::default();
         *self.last_hooks_marker.write().await = None;
@@ -3983,6 +4090,33 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         Ok(Response::new(proto::GetAppStateResponse {
             request_id,
             state,
+        }))
+    }
+
+    #[instrument(skip_all, fields(request_id))]
+    async fn wait_for_app_ready(
+        &self,
+        request: Request<proto::WaitForAppReadyRequest>,
+    ) -> Result<Response<proto::WaitForAppReadyResponse>, Status> {
+        let req = request.into_inner();
+        let request_id = Self::request_id(&req.request_id);
+
+        Self::validate_package_name(&req.package_name)?;
+
+        let timeout = if req.timeout_ms > 0 {
+            Duration::from_millis(req.timeout_ms)
+        } else {
+            ANDROID_RENDER_READY_TIMEOUT
+        };
+        let ready = self
+            .backend()
+            .await?
+            .wait_for_app_ready(&req.package_name, timeout)
+            .await;
+        Ok(Response::new(proto::WaitForAppReadyResponse {
+            request_id,
+            ready: ready.unwrap_or(false),
+            supported: ready.is_some(),
         }))
     }
 
@@ -5927,6 +6061,72 @@ fn parse_component_name(dumpsys_output: &str) -> Option<(String, String)> {
     None
 }
 
+/// `am start` of `package/activity` with the intent a launcher tap sends,
+/// as `monkey -c LAUNCHER` did: MAIN + LAUNCHER, with NEW_TASK and
+/// RESET_TASK_IF_NEEDED (0x10200000), so a running app's task comes to the
+/// front as it was (PILOT-976).
+fn android_launcher_intent_cmd(package_name: &str, activity: &str) -> String {
+    format!(
+        "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
+         -f 0x10200000 -n {}",
+        android_component_arg(package_name, activity)
+    )
+}
+
+/// `package/activity`, single-quoted for the device shell: a nested-class
+/// activity (`.Shell$HomeActivity`) would otherwise lose its `$…` part to
+/// variable expansion, and the start would be refused. Package and class
+/// names cannot contain a single quote.
+fn android_component_arg(package_name: &str, activity: &str) -> String {
+    format!("'{package_name}/{activity}'")
+}
+
+/// Whether `am start`'s output reports that it started nothing: a line of
+/// its own that starts with `Error` ("Error type 3", "Error: Activity class
+/// … does not exist"). Current Android writes those to stderr and exits 1,
+/// which `adb::shell` already returns as an error; an adb that merges stderr
+/// into stdout and drops the exit status (no shell protocol v2) leaves them
+/// here. A "Warning: … brought to the front" is a launch.
+fn am_start_reported_error(output: &str) -> bool {
+    output
+        .lines()
+        .any(|line| line.trim_start().starts_with("Error"))
+}
+
+/// What the Android agent's `waitForAppReady` answered (PILOT-976).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentReadyAnswer {
+    /// The app shows text or a description.
+    Ready,
+    /// The budget passed first: an answer, not a failure.
+    NotReady,
+    /// The agent predates the command: poll hierarchy dumps instead.
+    Unsupported,
+    /// The call failed: try again within the budget.
+    Failed,
+}
+
+fn classify_agent_ready_answer(result: &Result<AgentResponse, Status>) -> AgentReadyAnswer {
+    match result {
+        Ok(resp) if resp.success => {
+            if resp.data.get("ready").and_then(|v| v.as_bool()) == Some(true) {
+                AgentReadyAnswer::Ready
+            } else {
+                AgentReadyAnswer::NotReady
+            }
+        }
+        Ok(resp)
+            if resp
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("Unknown method")) =>
+        {
+            AgentReadyAnswer::Unsupported
+        }
+        _ => AgentReadyAnswer::Failed,
+    }
+}
+
 /// True when the UIAutomator hierarchy has at least one node belonging to
 /// `package_name` that carries text or a content description — i.e. the app
 /// has drawn real UI, not just its bare Activity/splash window.
@@ -7706,6 +7906,252 @@ mod tests {
         let (pkg, act) = parse_component_name(output).unwrap();
         assert_eq!(pkg, "com.foo");
         assert_eq!(act, ".Bar");
+    }
+
+    /// A mock Android agent: answers each JSON line with `respond(method)`
+    /// and records the methods it was sent.
+    async fn service_with_mock_agent(
+        respond: impl Fn(&str, usize) -> Value + Send + Sync + 'static,
+    ) -> (TapsmithServiceImpl, Arc<std::sync::Mutex<Vec<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+        let seen_by_agent = seen.clone();
+        let respond = Arc::new(respond);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let seen = seen_by_agent.clone();
+                let respond = respond.clone();
+                tokio::spawn(async move {
+                    let (read_half, mut write_half) = stream.into_split();
+                    let mut lines = BufReader::new(read_half).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        let req: Value = serde_json::from_str(&line).unwrap();
+                        let method = req["method"].as_str().unwrap_or("").to_string();
+                        let count = {
+                            let mut seen = seen.lock().unwrap();
+                            seen.push(method.clone());
+                            seen.iter().filter(|m| **m == method).count()
+                        };
+                        let mut reply = respond(&method, count);
+                        reply["id"] = req["id"].clone();
+                        let mut out = reply.to_string();
+                        out.push('\n');
+                        if write_half.write_all(out.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let svc = TapsmithServiceImpl::new(
+            Arc::new(RwLock::new(DeviceManager::new())),
+            Arc::new(RwLock::new(AgentConnection::connected_for_test(port))),
+            crate::daemon_log_bus::DaemonLogBus::new(16),
+        );
+        (svc, seen)
+    }
+
+    const SPLASH_XML: &str =
+        r#"<hierarchy><node package="com.example.app" text="" content-desc=""/></hierarchy>"#;
+    const RENDERED_XML: &str =
+        r#"<hierarchy><node package="com.example.app" text="Home"/></hierarchy>"#;
+
+    #[tokio::test]
+    async fn rendered_content_wait_asks_the_agent_and_pulls_no_dump() {
+        let (svc, seen) = service_with_mock_agent(|method, _| match method {
+            "waitForAppReady" => json!({"result": {"ready": true}}),
+            _ => json!({"result": {"hierarchy": RENDERED_XML}}),
+        })
+        .await;
+        assert!(
+            svc.wait_for_android_rendered_content("com.example.app", Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["waitForAppReady"]);
+    }
+
+    #[tokio::test]
+    async fn rendered_content_wait_takes_the_agents_not_ready_as_final() {
+        let (svc, seen) = service_with_mock_agent(|method, _| match method {
+            "waitForAppReady" => json!({"result": {"ready": false}}),
+            _ => json!({"result": {"hierarchy": RENDERED_XML}}),
+        })
+        .await;
+        assert!(
+            !svc.wait_for_android_rendered_content("com.example.app", Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["waitForAppReady"]);
+    }
+
+    #[tokio::test]
+    async fn rendered_content_wait_polls_dumps_for_an_agent_without_the_command() {
+        let (svc, seen) = service_with_mock_agent(|method, count| match method {
+            "waitForAppReady" => json!({"error": {"type": "ACTION_FAILED", "message": "Unknown method: waitForAppReady"}}),
+            _ if count < 3 => json!({"result": {"hierarchy": SPLASH_XML}}),
+            _ => json!({"result": {"hierarchy": RENDERED_XML}}),
+        })
+        .await;
+        assert!(
+            svc.wait_for_android_rendered_content("com.example.app", Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec![
+                "waitForAppReady",
+                "getUiHierarchy",
+                "getUiHierarchy",
+                "getUiHierarchy"
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_content_wait_retries_a_failed_agent_call() {
+        let (svc, seen) = service_with_mock_agent(|_, count| {
+            if count == 1 {
+                json!({"error": {"type": "INTERNAL_ERROR", "message": "window gone"}})
+            } else {
+                json!({"result": {"ready": true}})
+            }
+        })
+        .await;
+        assert!(
+            svc.wait_for_android_rendered_content("com.example.app", Duration::from_secs(5))
+                .await
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["waitForAppReady", "waitForAppReady"]
+        );
+    }
+
+    #[tokio::test]
+    async fn rendered_content_wait_gives_up_on_a_failing_agent_at_its_budget() {
+        let (svc, _) = service_with_mock_agent(
+            |_, _| json!({"error": {"type": "INTERNAL_ERROR", "message": "window gone"}}),
+        )
+        .await;
+        let started = std::time::Instant::now();
+        assert!(
+            !svc.wait_for_android_rendered_content("com.example.app", Duration::from_millis(600))
+                .await
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    fn agent_answer(success: bool, error: Option<&str>, data: Value) -> AgentResponse {
+        AgentResponse {
+            success,
+            error: error.map(str::to_string),
+            error_type: None,
+            data,
+        }
+    }
+
+    #[test]
+    fn agent_ready_answer_reads_the_ready_flag() {
+        assert_eq!(
+            classify_agent_ready_answer(&Ok(agent_answer(true, None, json!({"ready": true})))),
+            AgentReadyAnswer::Ready
+        );
+        // Running out of time is an answer, not a failure: no retry, no fallback.
+        assert_eq!(
+            classify_agent_ready_answer(&Ok(agent_answer(true, None, json!({"ready": false})))),
+            AgentReadyAnswer::NotReady
+        );
+    }
+
+    #[test]
+    fn agent_ready_answer_detects_an_agent_without_the_command() {
+        // An agent build that predates PILOT-976 falls back to dump polling.
+        assert_eq!(
+            classify_agent_ready_answer(&Ok(agent_answer(
+                false,
+                Some("Unknown method: waitForAppReady"),
+                json!({})
+            ))),
+            AgentReadyAnswer::Unsupported
+        );
+    }
+
+    #[test]
+    fn agent_ready_answer_retries_failures() {
+        assert_eq!(
+            classify_agent_ready_answer(&Ok(agent_answer(
+                false,
+                Some("Failed to read windows"),
+                json!({})
+            ))),
+            AgentReadyAnswer::Failed
+        );
+        assert_eq!(
+            classify_agent_ready_answer(&Err(Status::internal("Agent command timed out"))),
+            AgentReadyAnswer::Failed
+        );
+    }
+
+    #[test]
+    fn launcher_intent_matches_what_monkey_and_the_launcher_send() {
+        // PILOT-976: MAIN + LAUNCHER with NEW_TASK | RESET_TASK_IF_NEEDED
+        // (0x10200000) resumes the app's existing task like a launcher tap,
+        // and unlike the clean relaunch it neither force-stops (-S) nor
+        // clears the task.
+        let cmd = android_launcher_intent_cmd("com.example.app", ".MainActivity");
+        assert_eq!(
+            cmd,
+            "am start -a android.intent.action.MAIN -c android.intent.category.LAUNCHER \
+             -f 0x10200000 -n 'com.example.app/.MainActivity'"
+        );
+        // A nested-class activity keeps its `$` part on the device shell.
+        assert!(
+            android_launcher_intent_cmd("com.google.android.youtube", ".Shell$HomeActivity")
+                .ends_with("-n 'com.google.android.youtube/.Shell$HomeActivity'")
+        );
+        assert!(!cmd.contains(" -S"));
+        assert!(!cmd.contains("clear-task"));
+    }
+
+    #[test]
+    fn am_start_errors_are_read_from_its_output() {
+        // `am start` exits 0 when it fails to start anything.
+        assert!(am_start_reported_error(
+            "Starting: Intent { cmp=com.example.app/.Gone }\nError type 3\nError: Activity class {com.example.app/.Gone} does not exist.\n"
+        ));
+        assert!(am_start_reported_error(
+            "Error: Activity not started, unable to resolve Intent { act=android.intent.action.MAIN }"
+        ));
+        assert!(!am_start_reported_error(
+            "Starting: Intent { act=android.intent.action.MAIN cat=[android.intent.category.LAUNCHER] flg=0x10200000 cmp=com.example.app/.MainActivity }"
+        ));
+        // The app already in front is a successful launch.
+        assert!(!am_start_reported_error(
+            "Starting: Intent { cmp=com.example.app/.MainActivity }\nWarning: Activity not started, its current task has been brought to the front"
+        ));
+        // An activity whose name contains "Error" is not an error.
+        assert!(!am_start_reported_error(
+            "Starting: Intent { cmp=com.example.app/.ErrorReportActivity }"
+        ));
+    }
+
+    #[tokio::test]
+    async fn launcher_activity_cache_is_per_package() {
+        let svc = test_service();
+        svc.android_launcher_activity
+            .write()
+            .await
+            .insert("com.example.app".to_string(), ".MainActivity".to_string());
+        assert_eq!(
+            svc.cached_launcher_activity("com.example.app")
+                .await
+                .as_deref(),
+            Some(".MainActivity")
+        );
+        // launchApp("com.other") must not start the target's activity in it.
+        assert_eq!(svc.cached_launcher_activity("com.other").await, None);
     }
 
     #[test]

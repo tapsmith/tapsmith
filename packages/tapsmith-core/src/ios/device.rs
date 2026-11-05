@@ -703,12 +703,26 @@ fn extract_devicectl_error_hint(json_body: Option<&str>) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-/// Launch an app on a simulator by bundle ID.
+/// `simctl launch --terminate-running-process`: simctl stops a running
+/// instance first and launches once it is gone, in one call (PILOT-976). The
+/// daemon used to run `simctl terminate`, sleep a fixed 300 ms, then launch.
+fn simctl_relaunch_args<'a>(udid: &'a str, bundle_id: &'a str) -> [&'a str; 5] {
+    [
+        "simctl",
+        "launch",
+        "--terminate-running-process",
+        udid,
+        bundle_id,
+    ]
+}
+
+/// Launch a fresh process of an app on a simulator, terminating the running
+/// one first if there is one.
 #[instrument]
-pub async fn launch_app(udid: &str, bundle_id: &str) -> Result<()> {
+pub async fn relaunch_app(udid: &str, bundle_id: &str) -> Result<()> {
     let output = bounded_output(
         "simctl launch",
-        Command::new("xcrun").args(["simctl", "launch", udid, bundle_id]),
+        Command::new("xcrun").args(simctl_relaunch_args(udid, bundle_id)),
         SIMCTL_TIMEOUT,
     )
     .await?;
@@ -1628,6 +1642,20 @@ pub async fn clear_app_data(udid: &str, bundle_id: &str, app_path: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn simctl_relaunch_terminates_the_running_process_in_the_same_call() {
+        assert_eq!(
+            simctl_relaunch_args("UDID", "com.example"),
+            [
+                "simctl",
+                "launch",
+                "--terminate-running-process",
+                "UDID",
+                "com.example"
+            ]
+        );
+    }
 
     #[test]
     fn keychain_dir_derived_from_standard_container_path() {

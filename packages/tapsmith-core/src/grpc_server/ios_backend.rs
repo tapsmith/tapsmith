@@ -340,6 +340,12 @@ impl DeviceBackend for IosBackend<'_> {
         ))
     }
 
+    async fn wait_for_app_ready(&self, _package: &str, _timeout: Duration) -> Option<bool> {
+        // The SDK's iOS readiness check (a non-empty hierarchy, with a
+        // relaunch for an app stuck behind SpringBoard) stays its own.
+        None
+    }
+
     async fn relaunch_app(
         &self,
         serial: &str,

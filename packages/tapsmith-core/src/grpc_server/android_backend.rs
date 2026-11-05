@@ -305,6 +305,14 @@ impl DeviceBackend for AndroidBackend<'_> {
         Some(!out.trim().is_empty())
     }
 
+    async fn wait_for_app_ready(&self, package: &str, timeout: Duration) -> Option<bool> {
+        Some(
+            self.svc
+                .wait_for_android_rendered_content(package, timeout)
+                .await,
+        )
+    }
+
     async fn relaunch_app(
         &self,
         serial: &str,
@@ -1164,7 +1172,15 @@ impl DeviceBackend for AndroidBackend<'_> {
                     .await
                     .ok()
                     .flatten();
-                *self.svc.android_launcher_activity.write().await = activity;
+                let mut cache = self.svc.android_launcher_activity.write().await;
+                match activity {
+                    Some(activity) => {
+                        cache.insert(target_package.to_string(), activity);
+                    }
+                    None => {
+                        cache.remove(target_package);
+                    }
+                }
             }
         }
     }

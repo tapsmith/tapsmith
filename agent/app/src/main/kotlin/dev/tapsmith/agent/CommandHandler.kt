@@ -32,6 +32,7 @@ class CommandHandler(
     private val actionExecutor: ActionExecutor,
     private val waitEngine: WaitEngine,
     private val hierarchyDumper: HierarchyDumper,
+    private val appReadiness: AppReadinessProbe,
     private val systemDialogs: SystemDialogAnswerer,
 ) {
     companion object {
@@ -488,6 +489,18 @@ class CommandHandler(
                 val timeout = params.optLong("timeout", 10000L)
                 val element = waitEngine.waitForElement(selector, timeout, elementFinder)
                 element.toJson()
+            }
+
+            // Has the app drawn real content yet (PILOT-976)? Running out of
+            // time is `ready: false`, not an error: the callers go on anyway.
+            "waitForAppReady" -> {
+                val pkg = params.getString("package")
+                val timeout = params.optLong("timeout", 10000L)
+                val outcome = appReadiness.await(pkg, timeout)
+                JSONObject()
+                    .put("ready", outcome.ready)
+                    .put("elapsedMs", outcome.elapsedMs)
+                    .put("checks", outcome.checks)
             }
 
             "screenshot" -> {
