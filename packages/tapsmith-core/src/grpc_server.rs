@@ -8,6 +8,9 @@ use tokio::sync::RwLock;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::{debug, error, info, instrument, warn};
+
+#[cfg(target_os = "macos")]
+use crate::hid_injector::HidSendError;
 use uuid::Uuid;
 
 use crate::adb;
@@ -299,6 +302,13 @@ pub struct TapsmithServiceImpl {
     /// streamed touch here, falling back to the agent if it's unavailable.
     #[cfg(target_os = "macos")]
     hid_injector: Arc<crate::hid_injector::HidInjector>,
+    /// The connected iOS agent answered a `forTap` resolve without planning
+    /// the tap: it predates HID taps. Later taps go straight to its own tap
+    /// instead of paying for a resolve it will repeat. Cleared when
+    /// StartAgent launches an agent; the reset ladder's restart relaunches the
+    /// same build, so it keeps the flag.
+    #[cfg(target_os = "macos")]
+    agent_predates_hid_tap: Arc<std::sync::atomic::AtomicBool>,
     /// In-process broadcast of daemon `tracing` events, fanned out by the
     /// `StreamDaemonLogs` RPC so the SDK can fold daemon logs into traces.
     daemon_log_bus: crate::daemon_log_bus::DaemonLogBus,
@@ -441,6 +451,8 @@ impl TapsmithServiceImpl {
             video_recording: Arc::new(RwLock::new(None)),
             #[cfg(target_os = "macos")]
             hid_injector: Arc::new(crate::hid_injector::HidInjector::new()),
+            #[cfg(target_os = "macos")]
+            agent_predates_hid_tap: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -2232,16 +2244,16 @@ impl TapsmithServiceImpl {
             }
         };
         if let Err(e) = self.hid_injector.ensure(&udid).await {
-            debug!(%udid, error = %e, "iOS HID helper unavailable for double-tap; using agent route");
-            return HidOutcome::NotHandled;
+            return hid_unavailable(&udid, "double-tap", &e);
         }
         let (x, y, hold_ms) = match self
-            .resolve_hid_point(selector, element_id, timeout_ms)
+            .resolve_hid_point(selector, element_id, timeout_ms, false)
             .await
         {
-            HidTarget::Point { x, y, hold_ms } => (x, y, hold_ms),
+            HidTarget::Point { x, y, hold_ms, .. } => (x, y, hold_ms),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
-            HidTarget::AgentRoute => return HidOutcome::NotHandled,
+            // Only a resolve `for_tap` is answered with a tap already made.
+            HidTarget::AgentRoute | HidTarget::Tapped => return HidOutcome::NotHandled,
         };
         // One wire command: the helper owns the press/gap timing in-process
         // (each press held as the agent chose for the element, ~120ms gap:
@@ -2265,6 +2277,97 @@ impl TapsmithServiceImpl {
         HidOutcome::Injected
     }
 
+    /// Tap via the iOS-simulator HID helper: the agent plans the touch as its
+    /// own tap would (the uncovered point, the PILOT-791 settle, the hold for
+    /// the element's type) and does that tap's text-input bookkeeping, then
+    /// the helper presses, holds and lifts in-process. Skips the agent's
+    /// XCTest touch synthesis, which costs a few hundred milliseconds a tap.
+    /// The tap returns once the helper reports the touch lifted, plus
+    /// [`HID_TAP_BARRIER`].
+    ///
+    /// `Refused` when the agent reports the element covered or gone, or its
+    /// check failed or timed out; also when the helper took the tap but failed
+    /// to deliver it (part of it may have landed, so the agent's tap would
+    /// risk pressing twice), and when the helper is required
+    /// ([`REQUIRE_IOS_HID_ENV`]) but unavailable. `NotHandled` — caller falls
+    /// back to the agent's tap — when the device isn't an iOS simulator, the
+    /// helper is unavailable, or the agent asks for its own gesture or
+    /// predates HID taps (remembered for the agent session, so each later
+    /// tap skips the resolve that agent's own tap would repeat).
+    #[cfg(target_os = "macos")]
+    async fn try_hid_tap(
+        &self,
+        selector: &Value,
+        element_id: &Option<String>,
+        timeout_ms: u64,
+    ) -> HidOutcome {
+        use std::sync::atomic::Ordering;
+        const AGENT_TOO_OLD: &str = "the iOS agent predates HID taps (rebuild it)";
+        let udid = {
+            let dm = self.device_manager.read().await;
+            match dm.active_device() {
+                Some(d) if d.platform == Platform::Ios && d.is_emulator => d.serial.clone(),
+                _ => return HidOutcome::NotHandled,
+            }
+        };
+        if self.agent_predates_hid_tap.load(Ordering::Relaxed) {
+            return hid_unavailable(&udid, "tap", &AGENT_TOO_OLD);
+        }
+        if let Err(e) = self.hid_injector.ensure(&udid).await {
+            return hid_unavailable(&udid, "tap", &e);
+        }
+        let (x, y, hold_ms) = match self
+            .resolve_hid_point(selector, element_id, timeout_ms, true)
+            .await
+        {
+            HidTarget::Point {
+                x,
+                y,
+                hold_ms,
+                tap_ready: true,
+            } => (x, y, hold_ms),
+            HidTarget::Point { .. } => {
+                self.agent_predates_hid_tap.store(true, Ordering::Relaxed);
+                return hid_unavailable(&udid, "tap", &AGENT_TOO_OLD);
+            }
+            HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
+            HidTarget::AgentRoute => return HidOutcome::NotHandled,
+            HidTarget::Tapped => {
+                debug!(%udid, "tap made by the agent: a rotated screen it could not map");
+                return HidOutcome::Injected;
+            }
+        };
+        match self
+            .hid_injector
+            .send_and_wait(
+                &udid,
+                &hid_tap_line(x, y, hold_ms),
+                hid_tap_reply_deadline(hold_ms),
+            )
+            .await
+        {
+            Ok(()) => {}
+            // Nothing reached the helper, so nothing was touched.
+            Err(HidSendError::NotSent(e)) => return hid_unavailable(&udid, "tap", &e),
+            Err(HidSendError::Failed(msg)) => {
+                // Lift whatever may be down before reporting it.
+                let _ = self.hid_injector.send(&udid, "c").await;
+                warn!(%udid, x, y, error = %msg, "HID tap not delivered");
+                return HidOutcome::Refused(AgentResponse {
+                    success: false,
+                    error: Some(format!(
+                        "The tap could not be delivered through the iOS simulator's HID input: {msg}"
+                    )),
+                    error_type: Some("ACTION_FAILED".to_string()),
+                    data: Value::Null,
+                });
+            }
+        }
+        tokio::time::sleep(HID_TAP_BARRIER).await;
+        debug!(%udid, x, y, ?hold_ms, "tap injected via HID");
+        HidOutcome::Injected
+    }
+
     /// Ask the agent where a HID touch on `selector` can land without hitting
     /// something drawn over the element (PILOT-223). A raw HID press lands on
     /// whatever is on top, so the element's bounds center is not enough.
@@ -2276,11 +2379,13 @@ impl TapsmithServiceImpl {
         selector: &Value,
         element_id: &Option<String>,
         timeout_ms: u64,
+        for_tap: bool,
     ) -> HidTarget {
         let resolve = AgentCommand::ResolveActionPoint {
             selector: selector.clone(),
             timeout_ms: opt_timeout(timeout_ms),
             element_id: element_id.clone(),
+            for_tap,
         };
         hid_target(
             self.send_agent_command_with_timeout(&resolve, timeout_ms)
@@ -2314,21 +2419,22 @@ impl TapsmithServiceImpl {
             }
         };
         if let Err(e) = self.hid_injector.ensure(&udid).await {
-            debug!(%udid, error = %e, "iOS HID helper unavailable for long-press; using agent route");
-            return HidOutcome::NotHandled;
+            return hid_unavailable(&udid, "long-press", &e);
         }
         let (x, y) = match self
             .resolve_hid_point(
                 selector,
                 &None,
                 long_press_resolve_budget(timeout_ms, duration_ms),
+                false,
             )
             .await
         {
             // A long press holds for its duration, not a tap's hold.
             HidTarget::Point { x, y, .. } => (x, y),
             HidTarget::Refuse(resp) => return HidOutcome::Refused(resp),
-            HidTarget::AgentRoute => return HidOutcome::NotHandled,
+            // Only a resolve `for_tap` is answered with a tap already made.
+            HidTarget::AgentRoute | HidTarget::Tapped => return HidOutcome::NotHandled,
         };
         if self
             .hid_long_press_at(&udid, x as f32, y as f32, duration_ms)
@@ -2853,6 +2959,22 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
 
         let (selector, element_id) = action_target(req.selector.as_ref(), &req.element_id)?;
 
+        // iOS simulators: press through the HID helper once the agent has
+        // planned the touch, instead of the agent's XCTest touch synthesis
+        // (a few hundred milliseconds a tap). Physical devices, a missing
+        // helper and the agent's own-gesture cases take the agent's tap.
+        #[cfg(target_os = "macos")]
+        match self
+            .try_hid_tap(&selector, &element_id, req.timeout_ms)
+            .await
+        {
+            HidOutcome::Injected => return Ok(Self::success_action_response(request_id)),
+            HidOutcome::Refused(resp) => {
+                return self.make_action_response(request_id, Ok(resp)).await
+            }
+            HidOutcome::NotHandled => {}
+        }
+
         let command = AgentCommand::Tap {
             selector,
             timeout_ms: opt_timeout(req.timeout_ms),
@@ -3335,6 +3457,28 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
                         self.hid_injector.shutdown(prev).await;
                     }
                 }
+                // Start the new simulator's HID helper now, in the background,
+                // so the run's first tap does not wait for it: on a loaded
+                // host CoreSimulator can take longer to hand the helper its
+                // device than a tap waits (a touch that arrives meanwhile
+                // waits for this start rather than spawning its own).
+                #[cfg(target_os = "macos")]
+                {
+                    let is_ios_sim = self
+                        .device_manager
+                        .read()
+                        .await
+                        .active_device()
+                        .is_some_and(|d| d.platform == Platform::Ios && d.is_emulator);
+                    if is_ios_sim {
+                        let hid = Arc::clone(&self.hid_injector);
+                        let udid = req.serial.clone();
+                        // Taken now, so a deselect that runs before the task
+                        // does makes it drop its helper.
+                        let epoch = hid.stop_epoch(&udid);
+                        tokio::spawn(async move { hid.warm(&udid, epoch).await });
+                    }
+                }
                 if device_changed {
                     self.cleanup_network_proxy().await;
                     *self.started_agent_config.write().await = None;
@@ -3445,6 +3589,9 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
         *self.reset_policy.write().await = app_reset::ResetPolicyState::default();
         *self.last_hooks_marker.write().await = None;
         *self.nav_probe_found_no_marker.write().await = false;
+        #[cfg(target_os = "macos")]
+        self.agent_predates_hid_tap
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         if platform == Platform::Ios {
             self.ensure_ios_animation_speed(&serial).await;
         }
@@ -5822,6 +5969,9 @@ enum HidTarget {
         x: f64,
         y: f64,
         hold_ms: Option<u64>,
+        /// The agent planned the point as its own tap would and did that
+        /// tap's bookkeeping (asked with `for_tap`; an older agent doesn't).
+        tap_ready: bool,
     },
     /// Report this failure instead of pressing: the element is covered, gone,
     /// or the check failed or timed out — by then the agent may have waited
@@ -5831,12 +5981,47 @@ enum HidTarget {
     /// or hittable with no tree to choose one from), or is too old to know
     /// the method.
     AgentRoute,
+    /// The agent made the tap itself (asked with `for_tap`, on a rotated
+    /// screen whose turn it could not tell, so it had no point in the
+    /// helper's portrait space to hand out): nothing to press.
+    Tapped,
 }
 
 /// The longest hold the HID helper accepts on a double tap's line
 /// (`HID_MAX_HOLD_MS` in `native/hid_protocol.h`).
 #[cfg(any(target_os = "macos", test))]
 const HID_MAX_HOLD_MS: u64 = 500;
+
+/// The HID helper's single-tap line: down at (`x`, `y`), held `hold_ms`
+/// (the helper's default when None), up — timed in the helper.
+#[cfg(any(target_os = "macos", test))]
+fn hid_tap_line(x: f64, y: f64, hold_ms: Option<u64>) -> String {
+    match hold_ms {
+        Some(ms) => format!("t1 {x} {y} {ms}"),
+        None => format!("t1 {x} {y}"),
+    }
+}
+
+/// How long a HID tap waits for the helper to report the touch lifted: its
+/// hold (the helper's 20 ms default when None), plus the helper's own 4 s
+/// bound on confirming a tap's lift, plus slack for a loaded host.
+#[cfg(any(target_os = "macos", test))]
+fn hid_tap_reply_deadline(hold_ms: Option<u64>) -> Duration {
+    Duration::from_millis(hold_ms.unwrap_or(20) + 5_000)
+}
+
+/// The environment variable that makes a missing or broken iOS simulator HID
+/// helper fail the touch instead of falling back to the agent's touch. Tapsmith's
+/// own iOS E2E sets it, so a build that lost the helper fails there rather
+/// than passing on the slower route.
+#[cfg(target_os = "macos")]
+const REQUIRE_IOS_HID_ENV: &str = "TAPSMITH_REQUIRE_IOS_HID";
+
+/// Whether `TAPSMITH_REQUIRE_IOS_HID`'s value asks for the helper.
+#[cfg(any(target_os = "macos", test))]
+fn hid_required_from(value: Option<&str>) -> bool {
+    matches!(value.map(str::trim), Some(v) if !v.is_empty() && v != "0" && !v.eq_ignore_ascii_case("false"))
+}
 
 /// The HID helper's double-tap line: both taps at (`x`, `y`), each held
 /// `hold_ms` (the helper's default when None).
@@ -5877,6 +6062,9 @@ fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
     if resp.data.get("useElement").and_then(Value::as_bool) == Some(true) {
         return HidTarget::AgentRoute;
     }
+    if resp.data.get("tapped").and_then(Value::as_bool) == Some(true) {
+        return HidTarget::Tapped;
+    }
     // The helper parses coordinates with strtod, so only hand it sane
     // numbers — the same bound the agent puts on cached frames.
     let coord = |key: &str| {
@@ -5892,8 +6080,14 @@ fn hid_target(result: Result<AgentResponse, Status>) -> HidTarget {
         .get("holdMs")
         .and_then(Value::as_u64)
         .filter(|ms| *ms <= HID_MAX_HOLD_MS);
+    let tap_ready = resp.data.get("tap").and_then(Value::as_bool) == Some(true);
     match (coord("x"), coord("y")) {
-        (Some(x), Some(y)) => HidTarget::Point { x, y, hold_ms },
+        (Some(x), Some(y)) => HidTarget::Point {
+            x,
+            y,
+            hold_ms,
+            tap_ready,
+        },
         _ => HidTarget::Refuse(AgentResponse {
             success: false,
             error: Some("Agent returned no usable touch point".to_string()),
@@ -5945,6 +6139,35 @@ fn hold_ms(duration_ms: u64) -> u64 {
 fn double_tap_ms(interval_ms: u64) -> u64 {
     let gap = if interval_ms == 0 { 100 } else { interval_ms };
     gap.saturating_add(100)
+}
+
+/// How long a HID tap waits after the helper reports the touch lifted. The
+/// helper's answer means the simulator took the events; they still go through
+/// the simulator's input system to the app, as the agent's synthesized touches
+/// do after their completion (its `touchBarrier` waits the same), and a command
+/// sent at once (a non-waiting read, a `type()`) could otherwise run before the
+/// app has the touch.
+#[cfg(target_os = "macos")]
+const HID_TAP_BARRIER: Duration = Duration::from_millis(60);
+
+/// A gesture's outcome when the HID helper can't take it (`what` says why):
+/// the agent's route, or — when [`REQUIRE_IOS_HID_ENV`] is set — a failure
+/// naming the reason. The helper's own first start failure is already
+/// reported once per device (`HidInjector::ensure`).
+#[cfg(target_os = "macos")]
+fn hid_unavailable(udid: &str, gesture: &str, what: &dyn std::fmt::Display) -> HidOutcome {
+    if hid_required_from(std::env::var(REQUIRE_IOS_HID_ENV).ok().as_deref()) {
+        return HidOutcome::Refused(AgentResponse {
+            success: false,
+            error: Some(format!(
+                "{REQUIRE_IOS_HID_ENV} is set, but the {gesture} could not go through the iOS simulator's HID helper: {what}"
+            )),
+            error_type: Some("INTERNAL".to_string()),
+            data: Value::Null,
+        });
+    }
+    debug!(%udid, error = %what, gesture, "iOS HID route unavailable; using the agent's touch");
+    HidOutcome::NotHandled
 }
 
 /// Outcome of trying a gesture through the iOS-simulator HID helper.
@@ -7312,7 +7535,7 @@ mod tests {
     #[test]
     fn hid_target_presses_the_resolved_point() {
         match hid_target(agent_ok(json!({"x": 201.0, "y": 489.5}))) {
-            HidTarget::Point { x, y, hold_ms } => {
+            HidTarget::Point { x, y, hold_ms, .. } => {
                 assert_eq!(x, 201.0);
                 assert_eq!(y, 489.5);
                 // An agent that names no hold leaves it to the helper.
@@ -7336,6 +7559,67 @@ mod tests {
                 other => panic!("expected a point, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn hid_target_says_whether_the_agent_did_a_taps_bookkeeping() {
+        // Only an agent that planned the point as a tap (and recorded the
+        // focus a tap leaves behind) says so; an older one's point must not
+        // be tapped through HID, or that bookkeeping would be skipped.
+        match hid_target(agent_ok(
+            json!({"x": 1.0, "y": 2.0, "holdMs": 10, "tap": true}),
+        )) {
+            HidTarget::Point { tap_ready, .. } => assert!(tap_ready),
+            other => panic!("expected a point, got {other:?}"),
+        }
+        for data in [
+            json!({"x": 1.0, "y": 2.0, "holdMs": 10}),
+            json!({"x": 1.0, "y": 2.0, "holdMs": 10, "tap": "yes"}),
+        ] {
+            match hid_target(agent_ok(data.clone())) {
+                HidTarget::Point { tap_ready, .. } => assert!(!tap_ready, "{data}"),
+                other => panic!("expected a point, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn hid_target_knows_a_tap_the_agent_made_itself() {
+        assert!(matches!(
+            hid_target(agent_ok(json!({"tapped": true}))),
+            HidTarget::Tapped
+        ));
+        // Anything but a true flag still needs a point.
+        assert!(matches!(
+            hid_target(agent_ok(json!({"tapped": "yes"}))),
+            HidTarget::Refuse(_)
+        ));
+    }
+
+    #[test]
+    fn tap_line_holds_the_touch_as_the_agent_chose() {
+        assert_eq!(hid_tap_line(201.0, 489.5, Some(10)), "t1 201 489.5 10");
+        // No hold named: the helper's default (a control's hold).
+        assert_eq!(hid_tap_line(201.0, 489.5, None), "t1 201 489.5");
+    }
+
+    #[test]
+    fn requiring_the_hid_helper_takes_an_explicit_yes() {
+        assert!(!hid_required_from(None));
+        assert!(!hid_required_from(Some("")));
+        assert!(!hid_required_from(Some("0")));
+        assert!(!hid_required_from(Some("false")));
+        assert!(hid_required_from(Some("1")));
+        assert!(hid_required_from(Some("true")));
+    }
+
+    #[test]
+    fn a_tap_waits_for_the_helper_past_its_hold() {
+        // The helper gives a tap's lift up to 4 s to be confirmed (a loaded
+        // runner confirms late); the wait covers that and the hold, so a
+        // slow-but-working helper is not given up on.
+        assert!(hid_tap_reply_deadline(Some(20)) > Duration::from_millis(4_020));
+        assert!(hid_tap_reply_deadline(None) > Duration::from_millis(4_020));
     }
 
     #[test]

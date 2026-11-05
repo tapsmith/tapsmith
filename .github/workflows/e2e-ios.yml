@@ -64,6 +64,13 @@ concurrency:
 env:
   # Tapsmith's own CI is not a user; keep its runs out of the usage counts.
   TAPSMITH_TELEMETRY: "0"
+  # Simulator taps, double taps and long presses go through the daemon's
+  # tapsmith-ios-hid helper. When the helper can't start (or the agent build
+  # predates HID taps) they quietly fall back to the agent's slower XCTest
+  # touches; this makes that fail the run instead, so the suite proves the
+  # helper works. Taps the agent chooses to make itself (an XPath selector,
+  # a rotated screen it can't map) are not failed by it.
+  TAPSMITH_REQUIRE_IOS_HID: "1"
   # Fixed per-shard overhead (cache restores, simulator boot, app install,
   # agent start) is ~10 of a shard's ~20 min, so fewer shards spend fewer
   # macOS runner-minutes per run. Keep the matrix and the job name in sync.
@@ -779,6 +786,32 @@ jobs:
           if [ "$found" -eq 0 ]; then
             echo "No daemon logs found."
           fi
+
+      # A request the app sends can hang in the simulator's certificate
+      # check (trust evaluation handed to trustd, no answer): the trace shows
+      # the app's side only. Keep the simulator's own trustd/securityd log,
+      # with the app's network log beside it, so the other side can be read
+      # too: on a failed run, and always on shard 1, where a test that fails
+      # and then passes on retry leaves the job green. Known cause so far:
+      # trustd updating its pinning database from a freshly downloaded
+      # PKITrustSupplementals asset blocks every evaluation for ~1.5-2.5 min,
+      # some 8-15 min after boot (mobileassetd is logged for the download).
+      # The /etc/hosts step before boot now blocks that download; this log
+      # shows whether it still happens (a "should update" line from trustd).
+      - name: Collect simulator trust logs
+        if: ${{ !cancelled() && env.TAPSMITH_IOS_UDID != '' && (failure() || matrix.shard == 1) }}
+        timeout-minutes: 5
+        run: |
+          mkdir -p e2e/tapsmith-results
+          out="e2e/tapsmith-results/simulator-trust-${{ matrix.shard }}.log"
+          {
+            echo "== launchctl (trustd)"
+            xcrun simctl spawn "$TAPSMITH_IOS_UDID" launchctl list 2>&1 | grep -i trust || true
+            echo "== log show"
+            xcrun simctl spawn "$TAPSMITH_IOS_UDID" log show --last 90m --style compact --info --debug \
+              --predicate 'process == "trustd" OR process == "securityd" OR process == "mobileassetd" OR subsystem == "com.apple.securityd" OR subsystem == "com.apple.trustd" OR (process == "TapsmithTestApp" AND (subsystem == "com.apple.network" OR subsystem == "com.apple.CFNetwork" OR subsystem BEGINSWITH "com.apple.security"))' 2>&1 || true
+          } > "$out"
+          echo "$(wc -l < "$out") lines in $out"
 
       - name: Upload blob report
         if: always()

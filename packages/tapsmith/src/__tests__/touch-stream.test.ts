@@ -81,4 +81,32 @@ describe('touch stream (grpc-client)', () => {
       expect.objectContaining({ requestId: expect.any(String) }),
     );
   });
+
+  it('sends a stream\'s touches one after another, in the order they were made', async () => {
+    // A quick flick on the UI-mode mirror sends start and end back to back
+    // without awaiting either; the daemon must get the up after the down.
+    const { instance, callSpy } = makeClientWithCallSpy();
+    let finishDown!: () => void;
+    callSpy.mockImplementation((method: string) =>
+      method === 'touchDown'
+        ? new Promise((resolve) => { finishDown = () => resolve({ success: true }); })
+        : Promise.resolve({ success: true }),
+    );
+    const down = instance.touchDown(1, 2);
+    const up = instance.touchUp(1, 2);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(callSpy.mock.calls.map((c) => c[0])).toEqual(['touchDown']);
+    finishDown();
+    await Promise.all([down, up]);
+    expect(callSpy.mock.calls.map((c) => c[0])).toEqual(['touchDown', 'touchUp']);
+  });
+
+  it('keeps sending a stream\'s touches after one fails', async () => {
+    const { instance, callSpy } = makeClientWithCallSpy();
+    callSpy.mockImplementation((method: string) =>
+      method === 'touchDown' ? Promise.reject(new Error('boom')) : Promise.resolve({ success: true }),
+    );
+    await expect(instance.touchDown(1, 2)).rejects.toThrow('boom');
+    await expect(instance.touchCancel()).resolves.toEqual({ success: true });
+  });
 });

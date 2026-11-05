@@ -725,20 +725,35 @@ export class TapsmithGrpcClient {
   }
 
   async touchDown(x: number, y: number, tMs = 0): Promise<ActionResponse> {
-    return this.call<ActionResponse>('touchDown', { requestId: requestId(), x, y, tMs });
+    return this._inTouchOrder(() => this.call<ActionResponse>('touchDown', { requestId: requestId(), x, y, tMs }));
   }
 
   async touchMove(x: number, y: number, tMs = 0): Promise<ActionResponse> {
-    return this.call<ActionResponse>('touchMove', { requestId: requestId(), x, y, tMs });
+    return this._inTouchOrder(() => this.call<ActionResponse>('touchMove', { requestId: requestId(), x, y, tMs }));
   }
 
   async touchUp(x: number, y: number, tMs = 0): Promise<ActionResponse> {
-    return this.call<ActionResponse>('touchUp', { requestId: requestId(), x, y, tMs });
+    return this._inTouchOrder(() => this.call<ActionResponse>('touchUp', { requestId: requestId(), x, y, tMs }));
   }
 
   async touchCancel(): Promise<ActionResponse> {
-    return this.call<ActionResponse>('touchCancel', { requestId: requestId() });
+    return this._inTouchOrder(() => this.call<ActionResponse>('touchCancel', { requestId: requestId() }));
   }
+
+  /**
+   * Send a touch-stream call once the one before it has finished. Callers
+   * (the UI-mode mirror) fire a quick flick's start and end without awaiting
+   * either, and the daemon does not answer them in order: a touch-down first
+   * starts the iOS simulator's HID helper, so the up could reach the
+   * simulator before the down and leave a finger held down.
+   */
+  private _inTouchOrder<T>(send: () => Promise<T>): Promise<T> {
+    const result = (this._touchChain ?? Promise.resolve()).then(send);
+    this._touchChain = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  private _touchChain: Promise<void> | undefined;
 
   async scroll(
     container: Selector | undefined,

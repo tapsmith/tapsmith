@@ -26,6 +26,7 @@
 #import <dlfcn.h>
 #import <mach/mach_time.h>
 #include <locale.h>
+#include <stdatomic.h>
 #include "hid_protocol.h"
 
 #pragma pack(push, 4)
@@ -61,6 +62,12 @@ enum { DirDown = 1, DirUp = 2 };
 
 typedef IndigoMessage *(*MouseNSEventFn)(CGPoint *, CGPoint *, int, int, BOOL);
 static MouseNSEventFn gMouseFn = NULL;
+
+/* Delivery failures reported by fire-and-forget sends (a t1/t2's down and
+ * inner events), counted from the completion queue. Reset at the start of
+ * each t1/t2 and read after its waited final lift: the client delivers in
+ * order, so the earlier events' completions have run by then. */
+static atomic_int gNoWaitFailures;
 
 // Build the canonical 320-byte touch Indigo message (verbatim from the spike).
 static IndigoMessage *makeTouchMessage(double xRatio, double yRatio, int direction) {
@@ -188,7 +195,8 @@ int main(int argc, char **argv) {
     SEL sendSel = NSSelectorFromString(@"sendWithMessage:freeWhenDone:completionQueue:completion:");
     dispatch_queue_t cq = dispatch_queue_create("tapsmith.hid.cq", DISPATCH_QUEUE_SERIAL);
 
-    BOOL (^sendTouch)(double, double, int) = ^BOOL(double rx, double ry, int dir) {
+    // Send one touch event and wait up to `waitSeconds` for its delivery.
+    BOOL (^sendTouchWithin)(double, double, int, int64_t) = ^BOOL(double rx, double ry, int dir, int64_t waitSeconds) {
       IndigoMessage *m = makeTouchMessage(rx, ry, dir);
       if (!m) return NO;  // couldn't build the touch message — report failure
       __block NSError *serr = nil;
@@ -201,9 +209,16 @@ int main(int argc, char **argv) {
       // the wait's return code too. If the block fires late it safely writes to
       // the ARC-retained __block serr box and signals an unwaited semaphore — a
       // harmless no-op nobody reads.
-      long rc = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC));
+      long rc = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, waitSeconds * NSEC_PER_SEC));
       return rc == 0 && serr == nil;
     };
+    BOOL (^sendTouch)(double, double, int) = ^BOOL(double rx, double ry, int dir) {
+      return sendTouchWithin(rx, ry, dir, 2);
+    };
+    // A whole tap's lift gets longer to be confirmed: the daemon waits for
+    // this answer, and on a loaded host the confirmation of a delivered lift
+    // has come after 2 s, which would report a tap the app got as failed.
+    const int64_t kTapLiftWaitSeconds = 4;
 
     // Fire-and-forget send for the intermediate events of a composite
     // gesture (double-tap): the client delivers in order, and recognizers
@@ -211,11 +226,16 @@ int main(int argc, char **argv) {
     // the creations paces the gesture, while waiting on each completion
     // (up to 2s under CI load) stretched the app-visible inter-tap gap
     // past double-tap recognizer windows.
-    void (^sendTouchNoWait)(double, double, int) = ^(double rx, double ry, int dir) {
+    // NO when the event could not be built; a delivery failure is counted
+    // in gNoWaitFailures when its completion reports it.
+    BOOL (^sendTouchNoWait)(double, double, int) = ^BOOL(double rx, double ry, int dir) {
       IndigoMessage *m = makeTouchMessage(rx, ry, dir);
-      if (!m) return;
+      if (!m) return NO;
       ((void(*)(id, SEL, IndigoMessage *, BOOL, dispatch_queue_t, void(^)(NSError *)))objc_msgSend)(
-          hidClient, sendSel, m, YES, cq, ^(NSError *e) { (void)e; });
+          hidClient, sendSel, m, YES, cq, ^(NSError *e) {
+            if (e) atomic_fetch_add(&gNoWaitFailures, 1);
+          });
+      return YES;
     };
 
     // Announce readiness; the daemon reads this line to confirm the helper is up.
@@ -224,6 +244,8 @@ int main(int argc, char **argv) {
 
     // Process stdin events. Track the last point so a bare `c` can lift there.
     double lastX = 0, lastY = 0;
+    // Whether a d/m left a finger down that no u/c has lifted yet.
+    int contactDown = 0;
     // Pace injections to at least ~a frame apart. iOS never engages the pan
     // recognizer for a gesture whose entire path lands within a single frame:
     // a synthetic stream written back-to-back (e.g. a test replaying a drag
@@ -234,6 +256,9 @@ int main(int argc, char **argv) {
     const uint64_t kMinEventSpacingUs = 12000;
     // A double tap's press when its line gives no hold (an older daemon).
     const useconds_t kDefaultDoubleTapHoldUs = 40000;
+    // A single tap's press when its line gives no hold: long enough for a
+    // control that reads a touch on a display frame (a UISwitch).
+    const useconds_t kDefaultTapHoldUs = 20000;
     uint64_t lastInjectUs = 0;
     char buf[1024];
     while (fgets(buf, sizeof(buf), stdin)) {
@@ -245,6 +270,22 @@ int main(int argc, char **argv) {
         }
       }
       BOOL ok = NO;
+      // A whole tap after a gesture whose lift never came (a UI-mode mirror
+      // flick cut short): lift that finger first, or the tap's down would only
+      // move it and the app would see no tap.
+      if (hid_lifts_held_contact(ev.cmd, contactDown)) {
+        // If that lift failed, the finger may still be down: fail a `t1`
+        // rather than move the finger and report a tap the app never saw (the
+        // contact stays held, so the next tap tries the lift again). A `t2`
+        // goes ahead: the daemon does not read its reply, so skipping it
+        // would report a double tap that never happened.
+        BOOL lifted = sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
+        if (!lifted && ev.cmd == HID_TAP) {
+          printf("err send failed\n"); fflush(stdout);
+          continue;
+        }
+        contactDown = 0;
+      }
       switch (ev.cmd) {
         case HID_DOWN:
         case HID_MOVE:  // moves keep contact: same DirDown direction as the spike
@@ -258,6 +299,26 @@ int main(int argc, char **argv) {
         case HID_CANCEL:
           ok = sendTouch(hid_normalize(lastX, widthPt), hid_normalize(lastY, heightPt), DirUp);
           break;
+        case HID_TAP: {
+          // Down, hold, up timed in-process: the down is fire-and-forget so
+          // the hold between the two events' creation timestamps (what the
+          // app's touch handling sees) is the usleep, not the down's delivery
+          // round trip. The up waits, so `ok` means the touch was lifted, and
+          // that the down's delivery reported no failure.
+          lastX = ev.x; lastY = ev.y;
+          double nx = hid_normalize(ev.x, widthPt);
+          double ny = hid_normalize(ev.y, heightPt);
+          useconds_t holdUs = ev.holdMs == HID_DEFAULT_HOLD
+              ? kDefaultTapHoldUs
+              : (useconds_t)ev.holdMs * 1000;
+          // `ok` also needs the down: a lift alone presses nothing.
+          atomic_store(&gNoWaitFailures, 0);
+          if (!sendTouchNoWait(nx, ny, DirDown)) break;
+          usleep(holdUs);
+          ok = sendTouchWithin(nx, ny, DirUp, kTapLiftWaitSeconds)
+              && atomic_load(&gNoWaitFailures) == 0;
+          break;
+        }
         case HID_DOUBLE_TAP: {
           // Full double-tap with in-process timing: each press held as the
           // line asks (kDefaultDoubleTapHoldUs without a hold), ~120ms
@@ -272,13 +333,14 @@ int main(int argc, char **argv) {
           useconds_t holdUs = ev.holdMs == HID_DEFAULT_HOLD
               ? kDefaultDoubleTapHoldUs
               : (useconds_t)ev.holdMs * 1000;
-          sendTouchNoWait(nx, ny, DirDown);
+          atomic_store(&gNoWaitFailures, 0);
+          if (!sendTouchNoWait(nx, ny, DirDown)) break;
           usleep(holdUs);
-          sendTouchNoWait(nx, ny, DirUp);
+          BOOL sent = sendTouchNoWait(nx, ny, DirUp);
           usleep(120000);
-          sendTouchNoWait(nx, ny, DirDown);
+          sent = sent && sendTouchNoWait(nx, ny, DirDown);
           usleep(holdUs);
-          ok = sendTouch(nx, ny, DirUp);
+          ok = sendTouch(nx, ny, DirUp) && sent && atomic_load(&gNoWaitFailures) == 0;
           break;
         }
         case HID_INVALID:
@@ -286,6 +348,7 @@ int main(int argc, char **argv) {
           continue;
       }
       lastInjectUs = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000;
+      contactDown = hid_contact_after(ev.cmd, contactDown, ok);
       printf(ok ? "ok\n" : "err send failed\n");
       fflush(stdout);
     }

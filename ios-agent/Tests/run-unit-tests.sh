@@ -177,6 +177,12 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
 "$OUT/hid-touch-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/RotationSettleTests/main.swift \
+  TapsmithAgent/RotationSettle.swift \
+  -o "$OUT/rotation-settle-tests"
+"$OUT/rotation-settle-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/SnapshotRetryTests/main.swift \
   TapsmithAgent/SnapshotRetry.swift \
   -o "$OUT/snapshot-retry-tests"

@@ -454,6 +454,9 @@ pub enum AgentCommand {
         selector: Value,
         timeout_ms: Option<u64>,
         element_id: Option<String>,
+        /// The point is for a tap: plan it as the agent's own tap would, and
+        /// do the bookkeeping the agent's tap does after its touch.
+        for_tap: bool,
     },
     LongPress {
         selector: Value,
@@ -753,12 +756,16 @@ impl AgentCommand {
                 selector,
                 timeout_ms,
                 element_id,
+                for_tap,
             } => {
                 let mut p = selector.clone();
                 if let Some(t) = timeout_ms {
                     p["timeout"] = json!(t);
                 }
                 add_element_id(&mut p, element_id);
+                if *for_tap {
+                    p["forTap"] = json!(true);
+                }
                 ("resolveActionPoint", p)
             }
             AgentCommand::LongPress {
@@ -1844,13 +1851,30 @@ mod tests {
             selector: json!({"text": "Item"}),
             timeout_ms: Some(4000),
             element_id: None,
+            for_tap: false,
         };
         let j = cmd.to_json("rap");
+        assert!(j["params"].get("forTap").is_none());
         assert_eq!(j["method"], "resolveActionPoint");
         assert_eq!(cmd.method_name(), "resolveActionPoint");
         assert_eq!(j["params"]["text"], "Item");
         assert_eq!(j["params"]["timeout"], 4000);
         assert!(j["params"].get("elementId").is_none());
+    }
+
+    #[test]
+    fn to_json_resolve_action_point_for_a_tap() {
+        // A HID tap asks the agent to plan the point as its own tap would and
+        // to do the tap's bookkeeping; other gestures send no flag.
+        let cmd = AgentCommand::ResolveActionPoint {
+            selector: json!({"text": "Item"}),
+            timeout_ms: Some(4000),
+            element_id: None,
+            for_tap: true,
+        };
+        let j = cmd.to_json("rap3");
+        assert_eq!(j["params"]["forTap"], true);
+        assert_eq!(j["params"]["text"], "Item");
     }
 
     #[test]
@@ -1862,6 +1886,7 @@ mod tests {
             selector: json!({}),
             timeout_ms: Some(4000),
             element_id: Some("el-7".into()),
+            for_tap: false,
         };
         let j = cmd.to_json("rap2");
         assert_eq!(j["method"], "resolveActionPoint");

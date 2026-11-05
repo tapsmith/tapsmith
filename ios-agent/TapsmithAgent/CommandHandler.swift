@@ -27,6 +27,9 @@ class CommandHandler {
     /// `KeyboardFirstGate`). A keyboard the app raises by itself
     /// (`autoFocus`) is not seen until the test types into the field.
     private var keyboardFirstGate = KeyboardFirstGate()
+    /// The screen as the last touch plan's app snapshot saw it (it follows a
+    /// rotation, unlike the cached `screenSize`); nil before a plan read one.
+    private var plannedScreenSize: CGSize?
 
     // Interactive-mirror live-drag: iOS can't stream touches, so buffer the
     // path during the drag and dispatch it as one gesture on touchUp.
@@ -884,6 +887,7 @@ class CommandHandler {
         let screenSize = snapshotFinder.screenSize
         // takeSnapshot retries a transiently failing or empty snapshot.
         guard let appSnapshot = try? snapshotFinder.takeSnapshot() else { return nil }
+        plannedScreenSize = self.screenSize(of: appSnapshot)
         let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
         let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
         return (analyzer.analyze(target, isHittable: isHittable), hold)
@@ -1568,30 +1572,75 @@ class CommandHandler {
             // Resolve like findElement (which this replaces on the HID path):
             // dismiss a blocking system dialog, wait for a missing element.
             // Whatever the wait used comes off the cover-wait budget.
+            //
+            // `forTap`: the point is for a tap (the daemon's HID tap on a
+            // simulator), so plan it as the `tap` command plans its touch — on
+            // a SwiftUI Toggle's knob — and do the bookkeeping `tap` does
+            // after touching, since the daemon touches straight after this
+            // answer and tells the agent nothing more. The answer says
+            // `tap: true`, so the daemon knows this agent did both.
             let started = Date()
             let budget = actionTimeoutMs(params)
+            let forTap = (params["forTap"] as? Bool) == true
+            // XPath resolves only through the live element finder, which the
+            // agent's own gestures use (and which refuses it on iOS); the
+            // snapshot finder below would ignore it and match anything.
+            if params["xpath"] != nil { return ["useElement": true] }
             let element: ElementInfo
             if let elementId = params["elementId"] as? String, !elementId.isEmpty {
                 element = try resolveElement(params)
             } else {
                 element = try findTopLevelElement(SelectorParser.parse(params), timeoutMs: budget)
             }
-            // The daemon's HID double tap and long press land at this point.
-            putKeyboardAwayIfItWouldEatTheTouch(element)
+            let target = forTap ? (switchKnob(of: element) ?? element) : element
+            // The daemon's HID tap, double tap and long press land at this point.
+            putKeyboardAwayIfItWouldEatTheTouch(target)
             let remaining = max(0, budget - Int64(Date().timeIntervalSince(started) * 1000))
             // The daemon touches the point as soon as it has it, so the target
             // must have stopped changing first (PILOT-791).
-            switch try planSettledTouch(element, timeoutMs: remaining) {
+            plannedScreenSize = nil
+            let plan = try planSettledTouch(target, timeoutMs: remaining)
+            switch plan {
             case .point(let point, _, let hold):
-                // holdMs: how long each tap of the daemon's HID double tap
-                // holds its touch: `TapTiming`'s hold for the element's type,
-                // as HID presses it (`HidTouch.hold`: a one-frame tap is
-                // pressed and lifted back to back). This applies to the double
-                // tap as well as to any HID single tap: a double tap's 10 ms
-                // presses lost taps beside a moving scroll view on CI
-                // (PILOT-1005), so do not limit it to single taps.
+                // The daemon's helper places a point in the device's native
+                // portrait space, while the plan's point is in the app's
+                // interface space, as the snapshot the plan was made from
+                // shows it (the cached screen size misses a rotation Tapsmith
+                // did not make): on a rotated screen the point is mapped by
+                // the way the device is turned. When that cannot be told,
+                // XCTest touches: a tap is made here, at the planned point, as
+                // the `tap` command would make it (`tapped: true`), rather
+                // than handed back to be planned and settled all over again;
+                // other gestures go to the agent's own.
+                guard let native = HidTouch.nativePoint(
+                    point,
+                    screen: plannedScreenSize ?? snapshotFinder.screenSize,
+                    device: Self.deviceTurn(XCUIDevice.shared.orientation)
+                ) else {
+                    guard forTap else { return ["useElement": true] }
+                    actionExecutor.tapCoordinates(x: Int(point.x.rounded()), y: Int(point.y.rounded()), hold: hold)
+                    snapshotFinder.recordFocusedTextInputHint(element)
+                    if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
+                    touchBarrier()
+                    return ["tapped": true]
+                }
+                // holdMs: how long the daemon's HID tap, and each tap of its
+                // double tap, holds its touch: `TapTiming`'s hold for the
+                // element's type, as HID presses it (`HidTouch.hold`: a
+                // one-frame tap is pressed and lifted back to back). This
+                // applies to the double tap as well as to the single tap: a
+                // double tap's 10 ms presses lost taps beside a moving scroll
+                // view on CI (PILOT-1005), so do not limit it to single taps.
                 let pressHold = HidTouch.hold(forTapHold: hold)
-                return ["x": Double(point.x), "y": Double(point.y), "holdMs": Int((pressHold * 1000).rounded())]
+                var answer: [String: Any] = [
+                    "x": Double(native.x), "y": Double(native.y), "holdMs": Int((pressHold * 1000).rounded()),
+                ]
+                if forTap {
+                    snapshotFinder.recordFocusedTextInputHint(element)
+                    if Self.textInputClassNames.contains(element.className) { keyboardFirstGate.arm() }
+                    answer["tap"] = true
+                }
+                return answer
             case .hittableElement, .offScreen:
                 // No point to hand out (off screen, or hittable with no tree
                 // to choose one from): the daemon should use the agent's own
@@ -2504,7 +2553,27 @@ class CommandHandler {
                 XCUIDevice.shared.orientation = target
                 Thread.sleep(forTimeInterval: 0.4)
             }
+            // The screen size is cached and decides what counts as on screen,
+            // so re-read it only once the app's window has turned: on a
+            // loaded simulator it can still be portrait here (RotationSettle).
+            _ = RotationSettle.waitForWindow(
+                landscape: target.isLandscape,
+                deadline: Date(timeIntervalSinceNow: Self.rotationSettleTimeout),
+                readSize: {
+                    // A failed read (an AX timeout on a loaded simulator) counts
+                    // as not turned yet: the rotation itself has happened, and
+                    // the caches below must still be dropped.
+                    var size = CGSize.zero
+                    _ = ObjCExceptionCatcher.catchException {
+                        size = app.windows.firstMatch.frame.size
+                    }
+                    return size
+                }
+            )
             snapshotFinder.invalidateScreenSize()
+            // The action executor keeps its own copy (dropdown options are
+            // judged against it): drop it too, so it reads the turned screen.
+            actionExecutor.cachedScreenSize = nil
             return ["success": true]
 
         case "getOrientation":
@@ -2783,6 +2852,9 @@ class CommandHandler {
     /// How long a keyboard element with no on-screen area gets to slide in
     /// before isKeyboardShown and hideKeyboard treat it as not on screen.
     private static let keyboardAppearGrace: TimeInterval = 1.5
+    /// How long setOrientation waits for the app's window to turn. An app
+    /// that does not rotate waits it out, so it is kept short.
+    private static let rotationSettleTimeout: TimeInterval = 2
 
     /// Set by `dismissKeyboard`: whether any strategy touched the screen.
     private var touchedScreen = false
@@ -2897,6 +2969,17 @@ class CommandHandler {
         guard hasKeyboardInSnapshot(snapshot.dictionaryRepresentation) else { return (.absent, []) }
         let planner = KeyboardDismissPlanner(snapshot: snapshot, screenSize: screenSize(of: snapshot))
         return (planner.keyboardRegion == nil ? .offScreen : .onScreen, planner.keyboardFrames)
+    }
+
+    /// `XCUIDevice.orientation` as `HidTouch` takes it.
+    private static func deviceTurn(_ orientation: UIDeviceOrientation) -> HidTouch.DeviceTurn {
+        switch orientation {
+        case .portrait: return .portrait
+        case .portraitUpsideDown: return .portraitUpsideDown
+        case .landscapeLeft: return .landscapeLeft
+        case .landscapeRight: return .landscapeRight
+        default: return .other
+        }
     }
 
     /// The screen as `snapshot` saw it: the application element's frame,
