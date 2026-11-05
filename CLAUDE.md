@@ -90,7 +90,7 @@ adopted device or an untracked leftover emulator/simulator fails the job even wh
 
 Each device workflow's `Merge Reports` job runs `e2e/merge-reports-gate.mjs` (checks unit-tested in
 `e2e/utils/merge-gate-checks.mjs`). It stays red only for a real merge error or a shard with no
-results when nothing else fails the run; `tapsmith merge-reports` itself still exits 1 on any missing shard.
+results that no failed job accounts for; `tapsmith merge-reports` itself still exits 1 on any missing shard.
 
 `notify-dashboard.yml` tells the private `tapsmith/dashboard` repo when an E2E run finishes, so it can
 collect the results for the flake dashboard. It needs the `DASHBOARD_DISPATCH_TOKEN` secret.

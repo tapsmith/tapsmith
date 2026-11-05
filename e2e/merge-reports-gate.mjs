@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Run `tapsmith merge-reports` for an E2E workflow's Merge Reports job, and
 // fail the job only when that adds something: a real merge error, or a shard
-// with no results when nothing else makes the run fail (PILOT-1023). A shard that
+// with no results that no failed job accounts for (PILOT-1023). A shard that
 // failed, or never ran because a build failed, is reported as a notice, because
 // the run already fails for it.
 //

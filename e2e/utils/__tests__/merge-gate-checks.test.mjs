@@ -102,6 +102,13 @@ test("a failed build accounts for a skipped shard row", () => {
   assert.equal(judge(missing(2), [job("Build Agent", "failure"), ...shards("success", "skipped", "success")]).ok, true)
 })
 
+test("a cancelled shard passes when another job already fails the run", () => {
+  const verdict = judge(missing(2), shards("failure", "cancelled", "success"))
+  assert.equal(verdict.ok, true)
+  assert.deepEqual(verdict.accounted, ["Shard 2/3: job cancelled, and another job fails the run"])
+  assert.equal(judge(missing(2), [job("Multi-device", "failure"), ...shards("success", "cancelled", "success")]).ok, true)
+})
+
 test("several failed shards all pass", () => {
   assert.equal(judge(missing(1, 3), shards("failure", "success", "failure")).ok, true)
 })
@@ -155,6 +162,7 @@ test("no blobs with every build fine fails, naming every shard", () => {
   assert.equal(verdict.ok, false)
   assert.equal(verdict.unaccounted.length, 3)
   assert.match(verdict.reason, /Shard 1\/3[\s\S]*Shard 2\/3[\s\S]*Shard 3\/3/)
+  assert.doesNotMatch(verdict.reason, /nothing else/)
 })
 
 test("a skipped shard with every build fine fails", () => {

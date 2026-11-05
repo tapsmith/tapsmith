@@ -811,8 +811,8 @@ jobs:
         working-directory: e2e
         run: npm ci
 
-      # Fails only on a real merge error or a shard with no results when nothing
-      # else makes the run fail. See e2e/utils/merge-gate-checks.mjs.
+      # Fails only on a real merge error or a shard with no results that no failed
+      # job accounts for. See e2e/utils/merge-gate-checks.mjs.
       - name: Merge reports
         working-directory: e2e
         env:

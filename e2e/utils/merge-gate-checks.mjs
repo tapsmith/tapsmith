@@ -5,15 +5,16 @@
  * (`utils/__tests__/merge-gate-checks.test.mjs`).
  *
  * The job adds information in two cases only, and stays red for both: a real
- * merge error, and a shard that left no blob while nothing else makes the run
- * fail. A shard that failed, or never ran because a build failed, already makes
- * the run fail.
+ * merge error, and a shard that left no blob with no failed job to account for
+ * it. A shard that failed, or never ran because a build failed, is accounted for.
+ * A failed job elsewhere doesn't excuse a shard that vanished without a trace.
  *
- * A cancelled job does not: on its own it ends the run as `cancelled`, the same
- * as a run a newer push replaced, so it reads as nothing to look at. The merge
- * job doesn't run at all when the whole run is cancelled (`!cancelled()`), so a
- * cancelled job seen here was cancelled alone: GitHub could not get it a runner,
- * or it hit `timeout-minutes`. That stays red.
+ * A cancelled job is different: it is visible, but with no failed job next to it
+ * the run ends as `cancelled`, the same as a run a newer push replaced, so it
+ * reads as nothing to look at. The merge job doesn't run at all when the whole
+ * run is cancelled (`!cancelled()`), so a cancelled job seen here was cancelled
+ * alone: GitHub could not get it a runner, or it hit `timeout-minutes`. That stays
+ * red unless another job already fails the run.
  */
 
 /** Conclusions that make the run fail without the merge job's help. */
@@ -90,7 +91,7 @@ export function judgeMerge({ exitCode, mergeOutput, jobs, shardTotal }) {
   if (unaccounted.length === 0) return { ok: true, accounted, unaccounted }
   return {
     ok: false,
-    reason: `No results, and nothing else makes this run fail:\n  ${unaccounted.join("\n  ")}`,
+    reason: `These shards left no results, and no failed job accounts for them:\n  ${unaccounted.join("\n  ")}`,
     accounted,
     unaccounted,
   }
@@ -107,8 +108,11 @@ function explainMissingShard(shard, shardTotal, jobs) {
   if (row && FAILING_CONCLUSIONS.has(row.conclusion)) {
     return { accounted: true, detail: `job ${row.conclusion}` }
   }
+  const runFails = jobs.some((job) => FAILING_CONCLUSIONS.has(job.conclusion))
   if (row?.conclusion === "cancelled") {
-    return { accounted: false, detail: `job ${CANCELLED_ALONE}` }
+    return runFails
+      ? { accounted: true, detail: "job cancelled, and another job fails the run" }
+      : { accounted: false, detail: `job ${CANCELLED_ALONE}` }
   }
   if (row?.conclusion === "success") {
     return { accounted: false, detail: "job succeeded but left no blob report" }
@@ -125,7 +129,9 @@ function explainMissingShard(shard, shardTotal, jobs) {
   }
   const cancelledBuild = jobs.find((job) => isBuild(job) && job.conclusion === "cancelled")
   if (cancelledBuild) {
-    return { accounted: false, detail: `not run, ${cancelledBuild.name} ${CANCELLED_ALONE}` }
+    return runFails
+      ? { accounted: true, detail: `not run, ${cancelledBuild.name} cancelled, and another job fails the run` }
+      : { accounted: false, detail: `not run, ${cancelledBuild.name} ${CANCELLED_ALONE}` }
   }
   if (row) return { accounted: false, detail: "job skipped with no failed build to explain it" }
   return { accounted: false, detail: "GitHub has no job for it in this attempt" }
