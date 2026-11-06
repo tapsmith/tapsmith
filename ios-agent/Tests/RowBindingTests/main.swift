@@ -15,11 +15,64 @@ func check<T: Equatable>(_ name: String, _ got: T, _ want: T) {
     }
 }
 
-// ─── needsCheck ───
+// ─── tags ───
 
-check("a row's repeated button is checked", RowBinding.needsCheck(inRow: true, uniqueInQuery: false), true)
-check("a row's one-of-a-kind text is not", RowBinding.needsCheck(inRow: true, uniqueInQuery: true), false)
-check("outside a row nothing is", RowBinding.needsCheck(inRow: false, uniqueInQuery: false), false)
+typealias Tags = RowBinding.Tags
+// A row with an anchor of its own is found as the row holding it.
+check("an anchored row", RowBinding.tags(
+    ownAnchor: "t\u{1}Row 1", ownListExposesEveryRow: true, enclosing: nil, index: nil,
+    innermostAnchored: true, listExposesEveryRow: true
+), Tags(anchor: "t\u{1}Row 1", index: nil, nested: false, anchorListExposesEveryRow: true, listExposesEveryRow: true))
+// A button in an anchored row is found inside it, at its index.
+check("content of an anchored row", RowBinding.tags(
+    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Row 1", true), index: 2,
+    innermostAnchored: true, listExposesEveryRow: true
+), Tags(anchor: "t\u{1}Row 1", index: 2, nested: false, anchorListExposesEveryRow: true, listExposesEveryRow: true))
+// A carousel cell's button in a table row: found inside the table row, by a
+// place the carousel's reuse can change, and in a list that does not show
+// every row.
+check("content of an unanchored row nested in an anchored one", RowBinding.tags(
+    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Featured", true), index: 4,
+    innermostAnchored: false, listExposesEveryRow: false
+), Tags(anchor: "t\u{1}Featured", index: 4, nested: true, anchorListExposesEveryRow: true, listExposesEveryRow: false))
+// The carousel cell itself, matched as a row with no anchor of its own.
+check("an unanchored row nested in an anchored one", RowBinding.tags(
+    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Featured", true), index: 1,
+    innermostAnchored: false, listExposesEveryRow: false
+).nested, true)
+check("a row with no anchor anywhere", RowBinding.tags(
+    ownAnchor: nil, ownListExposesEveryRow: true, enclosing: nil, index: nil,
+    innermostAnchored: false, listExposesEveryRow: true
+), Tags(anchor: nil, index: nil, nested: false, anchorListExposesEveryRow: false, listExposesEveryRow: true))
+
+// ─── plan ───
+
+typealias Plan = RowBinding.Plan
+let tableRow = Tags(anchor: "t\u{1}Row 70", index: 0, anchorListExposesEveryRow: true, listExposesEveryRow: true)
+let listRow = Tags(anchor: "t\u{1}Alice", index: 0, anchorListExposesEveryRow: false, listExposesEveryRow: false)
+let nestedRow = Tags(anchor: "t\u{1}Featured", index: 4, nested: true,
+                     anchorListExposesEveryRow: true, listExposesEveryRow: false)
+let noAnchorTable = Tags(listExposesEveryRow: true)
+let noAnchorList = Tags(listExposesEveryRow: false)
+check("outside a row: as before", RowBinding.plan(bound: true, inRow: false, uniqueInQuery: false, tags: Tags()), Plan())
+check("no live element on purpose stays none",
+      RowBinding.plan(bound: false, inRow: true, uniqueInQuery: false, tags: tableRow), Plan())
+check("a table row's repeated button goes through its row",
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: false, tags: tableRow), Plan(throughAnchor: true))
+check("a binding unique in a table stands",
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: tableRow), Plan())
+check("a collection view's anchor is checked",
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: listRow),
+      Plan(throughAnchor: true, checkAnchor: true))
+check("nested in an unanchored row: anchored and frame-checked",
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: nestedRow),
+      Plan(throughAnchor: true, checkFrame: true))
+check("no anchor: frame-checked",
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: false, tags: noAnchorTable), Plan(checkFrame: true))
+check("no anchor, unique in a table: as before",
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: noAnchorTable), Plan())
+check("no anchor, unique in a collection view: frame-checked",
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: noAnchorList), Plan(checkFrame: true))
 
 // ─── isFoundElement ───
 

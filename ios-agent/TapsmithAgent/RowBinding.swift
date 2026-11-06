@@ -24,10 +24,74 @@ import CoreGraphics
 /// is still there. A binding nothing else could be bound to (the only node
 /// its query returns, in a list that shows every row) needs no check.
 enum RowBinding {
-    /// Whether a match's live element must be checked whenever it is used:
-    /// it is a row or inside one, and its query returns other nodes too.
-    static func needsCheck(inRow: Bool, uniqueInQuery: Bool) -> Bool {
-        inRow && !uniqueInQuery
+    /// What the match walk records about a match's row (RowAnchor).
+    struct Tags: Equatable {
+        /// The anchor of the row it is found through, if any.
+        var anchor: String?
+        /// Its index among that row's nodes the query inside the row returns;
+        /// nil when it is that row itself.
+        var index: Int?
+        /// Whether it is found by position inside an enclosing row, past an
+        /// unanchored row nested in it (a carousel cell in a table row):
+        /// that inner list reuses its cells too, so the place can change.
+        var nested = false
+        /// Whether the anchoring row's list exposes every row (a
+        /// UITableView), so the anchor, unique in the snapshot, is unique.
+        var anchorListExposesEveryRow = false
+        /// Whether the innermost row's list exposes every row.
+        var listExposesEveryRow = false
+    }
+
+    /// The tags of a match in a row. `ownAnchor`: the match is a row with an
+    /// anchor of its own. `enclosing`: the innermost enclosing row with an
+    /// anchor, and its list's flag; `index`: the match's index in it.
+    /// `innermostAnchored`: whether the innermost row around the match (the
+    /// match itself, for a row) has an anchor of its own.
+    static func tags(
+        ownAnchor: String?,
+        ownListExposesEveryRow: Bool,
+        enclosing: (anchor: String, listExposesEveryRow: Bool)?,
+        index: Int?,
+        innermostAnchored: Bool,
+        listExposesEveryRow: Bool
+    ) -> Tags {
+        if let ownAnchor {
+            return Tags(
+                anchor: ownAnchor, index: nil, nested: false,
+                anchorListExposesEveryRow: ownListExposesEveryRow, listExposesEveryRow: ownListExposesEveryRow
+            )
+        }
+        if let enclosing, let index {
+            return Tags(
+                anchor: enclosing.anchor, index: index, nested: !innermostAnchored,
+                anchorListExposesEveryRow: enclosing.listExposesEveryRow,
+                listExposesEveryRow: listExposesEveryRow && enclosing.listExposesEveryRow
+            )
+        }
+        return Tags(listExposesEveryRow: listExposesEveryRow)
+    }
+
+    /// How a match's live element is bound and checked.
+    struct Plan: Equatable {
+        /// Found through its row's anchor instead of by its place in a query.
+        var throughAnchor = false
+        /// Checked on every use to be at the frame it was found at.
+        var checkFrame = false
+        /// Checked once per command that its anchor still names one row.
+        var checkAnchor = false
+    }
+
+    /// The plan for a match. `bound`: the usual query found a live element
+    /// for it (it keeps none on purpose otherwise: a switch beside SwiftUI
+    /// Toggle knobs, a getByLabel match). `uniqueInQuery`: that query returns
+    /// no other node. The anchor replaces only a binding by place among
+    /// others; one the usual query alone finds, in a list that shows every
+    /// row, stands.
+    static func plan(bound: Bool, inRow: Bool, uniqueInQuery: Bool, tags: Tags) -> Plan {
+        guard bound, inRow else { return Plan() }
+        if uniqueInQuery && tags.listExposesEveryRow { return Plan() }
+        guard tags.anchor != nil else { return Plan(checkFrame: true) }
+        return Plan(throughAnchor: true, checkFrame: tags.nested, checkAnchor: !tags.anchorListExposesEveryRow)
     }
 
     /// Whether the live element, read at `live` (nil: it could not be read),

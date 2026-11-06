@@ -19,11 +19,13 @@ import XCTest
 /// A UITableView exposes every row, loaded or not, so an anchor unique in
 /// its snapshot is unique. A collection view (a SwiftUI List or Form)
 /// exposes only loaded cells, so another cell with the same anchor could
-/// load later: there the anchor is checked to still name one cell when the
-/// match is used.
+/// load later: there the anchor is checked to still name one cell, once in
+/// each command that uses the match.
 ///
-/// A row with no anchor (identical to another in all of these, or holding
-/// none) is found as before, with `RowBinding`'s check.
+/// The anchor replaces only a binding by place among others, and where the
+/// usual query keeps no live element on purpose there still is none
+/// (`RowBinding.plan`). A row with no anchor (identical to another in all of
+/// these, or holding none) is found as before, with `RowBinding`'s check.
 enum RowAnchor {
     /// What tells a row apart, as a key: `kind`, then the value.
     enum Kind: String {
