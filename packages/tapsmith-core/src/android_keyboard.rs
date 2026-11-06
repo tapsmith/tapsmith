@@ -24,6 +24,11 @@ const FULL_DUMP_COMMAND: &str = "dumpsys input_method";
 /// so repeating it is safe, and a loaded device gets more time on the second.
 const ATTEMPT_TIMEOUTS: [Duration; 2] = [Duration::from_secs(5), Duration::from_secs(10)];
 
+/// Each stuck process costs the full dump about 5 s, so a bound just above that
+/// lets one stuck process report itself, and two count as a timeout, the same result.
+const BACK_CHECK_TIMEOUT: Duration = Duration::from_secs(6);
+const BACK_CHECK_ATTEMPTS: u32 = 3;
+
 /// Whether the keyboard is shown, reading through `shell` (a strict adb shell
 /// with a timeout, so a transport or dumpsys failure is an error). A dump that
 /// completes but never mentions the flag reads as "hidden".
@@ -78,6 +83,40 @@ fn input_shown(dump: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+/// Wait until BACK will reach the keyboard, or say why it won't. Call this just
+/// before pressing BACK with the keyboard up.
+///
+/// BACK goes through the focused app to the keyboard, and if the keyboard doesn't
+/// answer, Android hands it on to the app, which navigates back and pops the
+/// screen. The full dump asks both processes for an answer, which makes it the
+/// check for this. A process that fails it may only be busy (Gboard's first dump
+/// in a session can take over 5 s), so it gets more tries.
+pub async fn wait_until_back_reaches_keyboard<S, Fut>(serial: &str, shell: S) -> Result<()>
+where
+    S: Fn(&'static str, Duration) -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
+    for _ in 0..BACK_CHECK_ATTEMPTS {
+        match shell(FULL_DUMP_COMMAND, BACK_CHECK_TIMEOUT).await {
+            Err(e) if e.downcast_ref::<AdbTimeout>().is_some() => {}
+            Err(e) => return Err(e),
+            Ok(output) if both_processes_answered(&output) => return Ok(()),
+            Ok(_) => {}
+        }
+        warn!(%serial, "The keyboard or the app did not answer; not pressing BACK yet");
+    }
+    Err(anyhow!(
+        "hideKeyboard() did not press BACK on {serial}: the keyboard or the app is not responding \
+         (`adb shell {FULL_DUMP_COMMAND}` got no answer from them in {BACK_CHECK_ATTEMPTS} \
+         attempts), and a BACK they don't handle would navigate the app back. The device is probably overloaded: give the emulator more CPU or run fewer \
+         workers, and check logcat for an ANR from the app or the keyboard."
+    ))
+}
+
+fn both_processes_answered(full_dump: &str) -> bool {
+    !full_dump.contains("Failed to dump input method") && !full_dump.contains("DUMP TIMEOUT")
 }
 
 #[cfg(test)]
@@ -218,5 +257,76 @@ mod tests {
     async fn no_flag_in_either_dump_reads_as_hidden() {
         let shell = FakeShell::new(vec![dump(""), dump("")]);
         assert!(!shell.read().await.unwrap());
+    }
+
+    const STUCK_KEYBOARD: &str =
+        "Failed to dump input method service: java.io.IOException: Timeout";
+    const STUCK_APP: &str = "Failed to dump input method client: java.io.IOException: Timeout";
+
+    fn full_dump(line: &str) -> Result<String> {
+        Ok(format!("mInputShown=true\n{line}\n"))
+    }
+
+    impl FakeShell {
+        async fn wait_for_back(&self) -> Result<()> {
+            wait_until_back_reaches_keyboard("emulator-5554", |command, timeout| {
+                self.calls.lock().unwrap().push((command, timeout));
+                let answer = self.answers.lock().unwrap().pop_front();
+                async move { answer.expect("no scripted answer left") }
+            })
+            .await
+        }
+    }
+
+    #[tokio::test]
+    async fn back_is_safe_once_both_processes_answer_the_full_dump() {
+        let shell = FakeShell::new(vec![full_dump("Input method service state for x:")]);
+        shell.wait_for_back().await.unwrap();
+        assert_eq!(shell.calls()[0].0, "dumpsys input_method");
+        assert_eq!(shell.calls().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_process_that_stops_stalling_makes_back_safe() {
+        for stuck in [
+            full_dump(STUCK_KEYBOARD),
+            full_dump(STUCK_APP),
+            timed_out(),
+            dump("*** SERVICE 'input_method' DUMP TIMEOUT (10000ms) EXPIRED ***"),
+        ] {
+            let shell = FakeShell::new(vec![stuck, full_dump("all answered")]);
+            shell.wait_for_back().await.unwrap();
+            assert_eq!(shell.calls().len(), 2);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_process_that_stays_stuck_refuses_back_and_says_why() {
+        let shell = FakeShell::new(vec![
+            full_dump(STUCK_KEYBOARD),
+            timed_out(),
+            full_dump(STUCK_APP),
+        ]);
+        let message = shell.wait_for_back().await.unwrap_err().to_string();
+        assert_eq!(shell.calls().len(), 3);
+        for part in [
+            "did not press BACK on emulator-5554",
+            "keyboard or the app is not responding",
+            "in 3 attempts",
+            "navigate the app back",
+            "more CPU",
+        ] {
+            assert!(message.contains(part), "missing {part:?} in: {message}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_full_dump_is_an_error_and_is_not_retried() {
+        let shell = FakeShell::new(vec![Err(anyhow!(
+            "adb command failed (exit 1): device offline"
+        ))]);
+        let error = shell.wait_for_back().await.unwrap_err().to_string();
+        assert_eq!(error, "adb command failed (exit 1): device offline");
+        assert_eq!(shell.calls().len(), 1);
     }
 }

@@ -225,6 +225,12 @@ impl DeviceBackend for AndroidBackend<'_> {
         let serial = self.svc.active_serial().await?;
         let shown = self.svc.android_is_keyboard_shown(&serial).await?;
         if shown {
+            crate::android_keyboard::wait_until_back_reaches_keyboard(
+                &serial,
+                |command, timeout| adb::shell_with_timeout(&serial, command, timeout),
+            )
+            .await
+            .map_err(|e| Status::internal(e.to_string()))?;
             self.svc
                 .adb_action(request_id, "input keyevent KEYCODE_BACK")
                 .await
