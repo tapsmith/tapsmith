@@ -617,7 +617,7 @@ Hide the soft keyboard if it is visible. Resolves at once when no keyboard is sh
 await device.hideKeyboard();
 ```
 
-On Android this presses BACK, which normally dismisses the soft keyboard.
+On Android this presses BACK, which normally dismisses the soft keyboard. A BACK that the keyboard doesn't answer goes on to the app and navigates back, so `hideKeyboard()` first checks that the keyboard and the app respond, and waits while they don't. If they still don't after about 15 s, it throws without pressing BACK.
 
 iOS has no API that puts the keyboard away, so `hideKeyboard()` does what a user would. It tries these in order and stops as soon as the keyboard is gone:
 

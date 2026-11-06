@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use tokio::process::Command;
 use tracing::{debug, info, instrument, warn};
 
@@ -47,6 +47,27 @@ impl AdbDevice {
     }
 }
 
+/// An adb command did not finish within its timeout. Callers can tell this
+/// apart from a command that failed with `downcast_ref`.
+#[derive(Debug)]
+pub struct AdbTimeout(pub Duration);
+
+impl std::fmt::Display for AdbTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "adb command timed out after {:?}", self.0)
+    }
+}
+
+impl std::error::Error for AdbTimeout {}
+
+/// Run `cmd` to completion within `timeout`.
+async fn output_within(cmd: &mut Command, timeout: Duration) -> Result<std::process::Output> {
+    tokio::time::timeout(timeout, cmd.output())
+        .await
+        .map_err(|_| anyhow::Error::new(AdbTimeout(timeout)))?
+        .context("Failed to execute adb")
+}
+
 /// Run an adb command targeting a specific device, returning stdout bytes.
 async fn run_adb(serial: Option<&str>, args: &[&str], timeout: Duration) -> Result<Vec<u8>> {
     let mut cmd = Command::new("adb");
@@ -59,10 +80,7 @@ async fn run_adb(serial: Option<&str>, args: &[&str], timeout: Duration) -> Resu
 
     debug!(serial = serial, args = ?args, "Running adb command");
 
-    let output = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .map_err(|_| anyhow!("adb command timed out after {timeout:?}"))?
-        .context("Failed to execute adb")?;
+    let output = output_within(&mut cmd, timeout).await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1267,10 +1285,7 @@ async fn run_adb_lenient(serial: &str, args: &[&str]) -> Result<Vec<u8>> {
 
     debug!(serial = serial, args = ?args, "Running adb command (lenient)");
 
-    let output = tokio::time::timeout(DEFAULT_TIMEOUT, cmd.output())
-        .await
-        .map_err(|_| anyhow!("adb command timed out after {DEFAULT_TIMEOUT:?}"))?
-        .context("Failed to execute adb")?;
+    let output = output_within(&mut cmd, DEFAULT_TIMEOUT).await?;
 
     let mut combined = output.stdout;
     if !output.stderr.is_empty() {
@@ -1357,10 +1372,7 @@ pub async fn shell_lenient_with_timeout(
         "Running adb shell (lenient)"
     );
 
-    let output = tokio::time::timeout(timeout, cmd.output())
-        .await
-        .map_err(|_| anyhow!("adb command timed out after {timeout:?}"))?
-        .context("Failed to execute adb")?;
+    let output = output_within(&mut cmd, timeout).await?;
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -1760,6 +1772,18 @@ pub async fn cleanup_iptables_redirect(serial: &str) {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn a_timed_out_command_is_a_typed_timeout() {
+        let mut cmd = Command::new("/bin/sleep");
+        cmd.arg("30").kill_on_drop(true);
+
+        let err = output_within(&mut cmd, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert!(err.downcast_ref::<AdbTimeout>().is_some());
+        assert_eq!(err.to_string(), "adb command timed out after 50ms");
+    }
+
     #[test]
     fn capture_ports_keep_defaults_and_loopback_exclusion() {
         let commands = super::iptables_redirect_commands(45678, &[8080, 9099, 8080, 80], None);
