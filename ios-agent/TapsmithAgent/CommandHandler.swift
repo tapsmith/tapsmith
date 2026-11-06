@@ -2355,6 +2355,23 @@ class CommandHandler {
             }
             return ["state": state]
 
+        // Has the app drawn real content yet (PILOT-1058)? Read with the
+        // warm deep-link path's own test (`snapshotContainsContent`), so
+        // "ready" means a warm delivery right after it is applicable. Never
+        // launches the app: a snapshot of one that is not running reads as
+        // "not yet". Running out of time is `ready: false`, not an error.
+        case "waitForAppReady":
+            let targetApp = XCUIApplication(bundleIdentifier: targetBundleId(fallback: params))
+            let timeoutMs = (params["timeout"] as? NSNumber)?.intValue ?? 10_000
+            let outcome = AppReadiness.wait(
+                timeoutMs: timeoutMs,
+                now: { Date() },
+                sleep: { Thread.sleep(forTimeInterval: $0) },
+                check: { appHasRenderedContent(targetApp) }
+            )
+            NSLog("[Tapsmith] waitForAppReady ready=\(outcome.ready) in \(outcome.elapsedMs)ms (\(outcome.checks) checks)")
+            return ["ready": outcome.ready, "elapsedMs": outcome.elapsedMs, "checks": outcome.checks]
+
         case "currentPackage":
             // On iOS, report the target app's bundle ID
             // XCUIApplication doesn't expose bundleID directly.
