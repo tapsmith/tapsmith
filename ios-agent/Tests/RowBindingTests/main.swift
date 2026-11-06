@@ -25,20 +25,26 @@ check("an anchored row", RowBinding.tags(
 ), Tags(anchor: "t\u{1}Row 1", index: nil, nested: false, anchorListExposesEveryRow: true, listExposesEveryRow: true))
 // A button in an anchored row is found inside it, at its index.
 check("content of an anchored row", RowBinding.tags(
-    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Row 1", true), index: 2,
+    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Row 1", true, false), index: 2,
     innermostAnchored: true, listExposesEveryRow: true
 ), Tags(anchor: "t\u{1}Row 1", index: 2, nested: false, anchorListExposesEveryRow: true, listExposesEveryRow: true))
 // A carousel cell's button in a table row: found inside the table row, by a
 // place the carousel's reuse can change, and in a list that does not show
 // every row.
 check("content of an unanchored row nested in an anchored one", RowBinding.tags(
-    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Featured", true), index: 4,
+    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Featured", true, true), index: 4,
     innermostAnchored: false, listExposesEveryRow: false
 ), Tags(anchor: "t\u{1}Featured", index: 4, nested: true, anchorListExposesEveryRow: true, listExposesEveryRow: false))
 // The carousel cell itself, matched as a row with no anchor of its own.
 check("an unanchored row nested in an anchored one", RowBinding.tags(
-    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Featured", true), index: 1,
+    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Featured", true, true), index: 1,
     innermostAnchored: false, listExposesEveryRow: false
+).nested, true)
+// The row's own button after its carousel: counted past the carousel's
+// loaded cells, so its place can change too.
+check("content of an anchored row that holds rows", RowBinding.tags(
+    ownAnchor: nil, ownListExposesEveryRow: false, enclosing: ("t\u{1}Featured", true, true), index: 3,
+    innermostAnchored: true, listExposesEveryRow: true
 ).nested, true)
 check("a row with no anchor anywhere", RowBinding.tags(
     ownAnchor: nil, ownListExposesEveryRow: true, enclosing: nil, index: nil,

@@ -84,6 +84,11 @@ check("identifier before placeholder", RowAnchor.anchor(
     ofCell: (both["children"] as! [[String: Any]])[0], counts: RowAnchor.cellCounts(in: both)
 ), RowAnchor.key(.identifier, "f"))
 
+check("a row holding a carousel holds rows", RowAnchor.holdsRows(
+    node(.cell, [node(.staticText, label: "Featured"), node(.collectionView, [node(.cell)])])
+), true)
+check("a plain row holds none", RowAnchor.holdsRows(rows[1]), false)
+
 // ─── predicate ───
 
 check("a text anchor's predicate",

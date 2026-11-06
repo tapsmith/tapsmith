@@ -99,14 +99,18 @@ enum RowAnchor {
         let anchor: String
         /// Whether the cell's list exposes every row (a UITableView).
         let listExposesEveryRow: Bool
+        /// Whether the cell holds rows of its own (a carousel): their list
+        /// loads and reuses cells, so a place counted past them can change.
+        let holdsRows: Bool
         private var byTypeLabel: [String: Int] = [:]
         private var byTypeLabelId: [String: Int] = [:]
         private var byLabel: [String: Int] = [:]
         private var byLabelId: [String: Int] = [:]
 
-        init(anchor: String, listExposesEveryRow: Bool) {
+        init(anchor: String, listExposesEveryRow: Bool, holdsRows: Bool = false) {
             self.anchor = anchor
             self.listExposesEveryRow = listExposesEveryRow
+            self.holdsRows = holdsRows
         }
 
         /// Record a node of the cell (not the cell itself), in tree order,
@@ -168,6 +172,15 @@ enum RowAnchor {
     static func walk(_ dict: [String: Any], _ visit: ([String: Any]) -> Void) {
         visit(dict)
         for child in dict["children"] as? [[String: Any]] ?? [] { walk(child, visit) }
+    }
+
+    /// Whether `cell` holds another cell among its descendants.
+    static func holdsRows(_ cell: [String: Any]) -> Bool {
+        var found = false
+        walkDescendants(cell) { node in
+            if !found, elementType(of: node) == .cell { found = true }
+        }
+        return found
     }
 
     /// Pre-order over `dict`'s descendants, not `dict` itself.

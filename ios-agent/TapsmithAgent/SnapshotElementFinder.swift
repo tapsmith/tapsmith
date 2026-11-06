@@ -1394,7 +1394,9 @@ class SnapshotElementFinder {
         }.last
         let ownScope = nodeType == .cell
             ? rowCounts.flatMap { RowAnchor.anchor(ofCell: nodeDict, counts: $0) }.map {
-                RowAnchor.Scope(anchor: $0, listExposesEveryRow: listExposesEveryRow)
+                RowAnchor.Scope(
+                    anchor: $0, listExposesEveryRow: listExposesEveryRow, holdsRows: RowAnchor.holdsRows(nodeDict)
+                )
             }
             : nil
         let ownRow: RowContext? = nodeType == .cell
@@ -1482,7 +1484,7 @@ class SnapshotElementFinder {
                 SnapshotElementFinder.setRowTags(RowBinding.tags(
                     ownAnchor: ownScope?.anchor,
                     ownListExposesEveryRow: listExposesEveryRow,
-                    enclosing: enclosing.map { ($0.anchor, $0.listExposesEveryRow) },
+                    enclosing: enclosing.map { ($0.anchor, $0.listExposesEveryRow, $0.holdsRows) },
                     index: rowIndex,
                     innermostAnchored: context.innermostAnchored,
                     listExposesEveryRow: context.listExposesEveryRow

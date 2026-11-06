@@ -44,13 +44,15 @@ enum RowBinding {
 
     /// The tags of a match in a row. `ownAnchor`: the match is a row with an
     /// anchor of its own. `enclosing`: the innermost enclosing row with an
-    /// anchor, and its list's flag; `index`: the match's index in it.
+    /// anchor, its list's flag, and whether it holds rows of its own;
+    /// `index`: the match's index in it. A place counted in a row that holds
+    /// rows can change as their list loads cells, wherever the match sits.
     /// `innermostAnchored`: whether the innermost row around the match (the
     /// match itself, for a row) has an anchor of its own.
     static func tags(
         ownAnchor: String?,
         ownListExposesEveryRow: Bool,
-        enclosing: (anchor: String, listExposesEveryRow: Bool)?,
+        enclosing: (anchor: String, listExposesEveryRow: Bool, holdsRows: Bool)?,
         index: Int?,
         innermostAnchored: Bool,
         listExposesEveryRow: Bool
@@ -63,7 +65,7 @@ enum RowBinding {
         }
         if let enclosing, let index {
             return Tags(
-                anchor: enclosing.anchor, index: index, nested: !innermostAnchored,
+                anchor: enclosing.anchor, index: index, nested: !innermostAnchored || enclosing.holdsRows,
                 anchorListExposesEveryRow: enclosing.listExposesEveryRow,
                 listExposesEveryRow: listExposesEveryRow && enclosing.listExposesEveryRow
             )
