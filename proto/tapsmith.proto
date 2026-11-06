@@ -336,6 +336,12 @@ message SwipeRequest {
   // container it picked, so the swipe cannot land outside a dialog or on a
   // header above the list.
   Bounds region = 7;
+  // End without momentum: the finger rests at the end before it lifts, so the
+  // content stops where the finger does, and the swipe returns as soon as it
+  // lifts instead of waiting for a fling to settle. scrollIntoView() sends it
+  // for vertical swipes on Android (PILOT-973); the iOS agent ignores it. Only for a region or
+  // screen swipe.
+  bool drag = 8;
 }
 
 // Coordinate-based gestures. Coordinates are logical points (Android: pixels,

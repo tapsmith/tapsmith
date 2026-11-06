@@ -485,6 +485,9 @@ pub enum AgentCommand {
         /// Screen bounds to swipe inside instead of the whole screen:
         /// `{"left","top","right","bottom"}`.
         region: Option<Value>,
+        /// End without momentum: a drag that rests before it lifts, so
+        /// nothing flings (scrollIntoView, PILOT-973). Sent only when true.
+        drag: bool,
     },
     TapCoordinates {
         x: f32,
@@ -821,8 +824,12 @@ impl AgentCommand {
                 distance,
                 timeout_ms,
                 region,
+                drag,
             } => {
                 let mut p = json!({"direction": direction});
+                if *drag {
+                    p["drag"] = json!(true);
+                }
                 if let Some(se) = start_element {
                     p["startElement"] = se.clone();
                 }
@@ -1986,6 +1993,7 @@ mod tests {
             distance: Some(0.8),
             timeout_ms: Some(5000),
             region: None,
+            drag: false,
         };
         let j = cmd.to_json("sw1");
         assert_eq!(j["method"], "swipe");
@@ -2005,6 +2013,7 @@ mod tests {
             distance: None,
             timeout_ms: None,
             region: None,
+            drag: false,
         };
         let j = cmd.to_json("sw2");
         assert_eq!(j["params"]["direction"], "down");
@@ -2022,6 +2031,7 @@ mod tests {
             distance: Some(0.6),
             timeout_ms: None,
             region: Some(json!({"left": 10, "top": 200, "right": 1070, "bottom": 1800})),
+            drag: false,
         };
         let j = cmd.to_json("sw3");
         assert_eq!(j["method"], "swipe");
@@ -2029,6 +2039,24 @@ mod tests {
             j["params"]["region"],
             json!({"left": 10, "top": 200, "right": 1070, "bottom": 1800})
         );
+        assert!(j["params"].get("drag").is_none());
+    }
+
+    #[test]
+    fn to_json_swipe_drag() {
+        // scrollIntoView's drags (PILOT-973): sent only when asked for, so
+        // every other swipe keeps the agent's fling-and-settle swipe.
+        let cmd = AgentCommand::Swipe {
+            direction: "up".into(),
+            start_element: None,
+            speed: Some(2000.0),
+            distance: Some(0.6),
+            timeout_ms: None,
+            region: None,
+            drag: true,
+        };
+        let j = cmd.to_json("sw4");
+        assert_eq!(j["params"]["drag"], json!(true));
     }
 
     #[test]

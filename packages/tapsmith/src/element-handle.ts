@@ -90,10 +90,12 @@ const SCROLL_SCREEN_READ_DEADLINE_MS = 5000;
  *  does not wait for idle. Bounded for a screen that never goes idle. */
 const SCROLL_END_CONFIRM_IDLE_MS = 1000;
 /** The swipe scrollIntoView() makes once momentum has carried its element
- *  past where it should stop (PILOT-935): a shorter one, and slow enough to
- *  leave little momentum. The iOS agent turns a speed of 1000 or less into an
- *  0.8 s drag instead of an 0.3 s fling; the Android agent settles after every
- *  swipe, and at 1000 its drag is about as fast per pixel as the default. */
+ *  past where it should stop (PILOT-935), and to nudge an element its list's
+ *  edge cuts: a shorter one, and slow enough to leave little momentum. The
+ *  iOS agent turns a speed of 1000 or less into an 0.8 s drag instead of an
+ *  0.3 s fling; on Android a vertical scrollIntoView() swipe is a drag that
+ *  leaves no momentum (PILOT-973; a sideways one still flings), and at 1000 it
+ *  is about as fast per pixel as the default. */
 const SCROLL_GENTLE_DISTANCE = 0.3;
 /** How often scrollIntoView() looks for its element while a swipe's momentum
  *  is still moving the list (PILOT-935). One default fling moves a Flutter
@@ -3750,12 +3752,15 @@ export class ElementHandle {
    * `"down"`, which reveals what is below.
    *
    * @param options.direction - The way the view scrolls, as {@link scroll} takes it: `"down"` reveals what is below, `"up"` what is above, `"left"` and `"right"` likewise (the finger swipes the opposite way). Default: chosen from the element's position, else `"down"`.
-   * After the last swipe it waits for the list to stop. If the momentum
+   * On Android each vertical swipe is a drag that leaves no momentum, so it
+   * looks again as soon as the drag ends; sideways on Android, and on iOS, it
+   * watches the list while the momentum carries it. Once the element shows, it waits for the list to
+   * stop. If the momentum
    * carried the element off screen, it scrolls back for it, and if an edge of
    * the scroll container cuts it, it moves it inside, with shorter, slower
    * swipes that count toward `maxScrolls`.
    *
-   * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`.
+   * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`, or `10` on Android, where each vertical swipe is a drag that moves the list less than a fling.
    * @param options.speed - Swipe speed in pixels/second. Default `2000`.
    */
   async scrollIntoView(options?: {
@@ -3765,7 +3770,10 @@ export class ElementHandle {
   }): Promise<void> {
     checkOptions('scrollIntoView()', options, ['direction', 'maxScrolls', 'speed']);
     const explicitDirection = scrollDirectionOption(options?.direction);
-    const maxScrolls = options?.maxScrolls ?? 5;
+    // On Android each vertical swipe is a drag that moves the list about its
+    // own length and stops (PILOT-973); a fling carried it further. So the
+    // default budget there is larger, to reach as far as the flings did.
+    const maxScrolls = options?.maxScrolls ?? (this._options.platform === 'android' ? 10 : 5);
     const speed = options?.speed ?? 2000;
 
     this._emitQueryStarted('scrollIntoView');
@@ -3900,16 +3908,32 @@ export class ElementHandle {
       // SCROLL_SETTLE_MS has passed, so the settle waits at least as long
       // after a swipe as it did when a fixed sleep came first.
       let settleExtraTicks = 0;
+      // On Android a vertical swipe is a drag that leaves no momentum
+      // (PILOT-973): the agent rests the finger before it lifts and returns as
+      // soon as it has, so the list is already where it stops and the next
+      // read can come at once. A sideways swipe still flings, so a pager turns
+      // its page (an androidx ViewPager released slowly turns only past 0.6 of
+      // a page, which a 0.6 drag never reaches), and is watched like an iOS
+      // swipe, which always flings (PILOT-886).
+      const android = this._options.platform === 'android';
       const swipe = async (): Promise<void> => {
         settleExtraTicks = 0;
         const opts = gentle
           ? { speed: Math.min(speed, SCROLL_GENTLE_MAX_SPEED), distance: SCROLL_GENTLE_DISTANCE }
           : { speed, distance: 0.6 };
-        const swipeRes = await this._client.swipe(OPPOSITE_DIRECTION[direction], region ? { ...opts, region } : opts);
+        const drags = android && (direction === 'up' || direction === 'down');
+        const swipeRes = await this._client.swipe(OPPOSITE_DIRECTION[direction], {
+          ...opts,
+          ...(region ? { region } : {}),
+          ...(drags ? { drag: true } : {}),
+        });
         if (!swipeRes.success) {
           throw new Error(swipeRes.errorMessage || 'Swipe failed during scrollIntoView');
         }
         swipes++;
+        // Nothing moves on after a drag; a snap or a late layout that does is
+        // caught by the settle below once the element shows.
+        if (drags) return;
         // Watch for the element while the momentum carries the list on
         // (PILOT-935), rather than sleeping through it: a row the list moves
         // past between two reads is never seen, and the scroll would go on

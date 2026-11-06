@@ -109,6 +109,15 @@ class AgentInput(
         steps: Int,
     ): Boolean = gestures.stepSwipe(x1, y1, x2, y2, steps)
 
+    /** [swipe]'s moves, then a rest at the end before the lift, so nothing flings (PILOT-973). */
+    fun drag(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        steps: Int,
+    ): Boolean = gestures.stepDrag(x1, y1, x2, y2, steps)
+
     /** UiDevice.pressKeyCode. */
     fun pressKey(keyCode: Int): Boolean = gestures.pressKey(keyCode)
 

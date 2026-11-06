@@ -3143,6 +3143,7 @@ impl proto::tapsmith_service_server::TapsmithService for TapsmithServiceImpl {
             },
             timeout_ms: opt_timeout(req.timeout_ms),
             region: req.region.as_ref().and_then(swipe_region_to_json),
+            drag: req.drag,
         };
 
         let result = self
