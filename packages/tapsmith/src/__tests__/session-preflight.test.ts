@@ -571,6 +571,18 @@ describe('session-preflight', () => {
         expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(1);
       });
 
+      it('a clear on a daemon known to wait for rendering skips the repeat wait', async () => {
+        const ctx = {
+          ...makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } }),
+          capabilities: { daemonWaitsForRender: true } as import('../app-reset.js').ResetCapabilities,
+        };
+
+        const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+        expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
+        expect(report.steps.map((s) => s.name)).not.toContain('waitForAppReady');
+      });
+
       it('a daemon that predates the RPC gets the dump polling', async () => {
         const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
         vi.mocked(ctx.client.waitForAppReady).mockRejectedValue(Object.assign(new Error('12 UNIMPLEMENTED: unknown method'), { code: 12 }));
@@ -649,6 +661,43 @@ describe('session-preflight', () => {
       expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
       expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
       expect(ctx.client.waitForAppReady).toHaveBeenCalledWith('com.example.app', 10_000, expect.any(Number));
+    });
+
+    it('records that the daemon waits for rendering once it answers the RPC', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect((ctx as { capabilities?: { daemonWaitsForRender?: boolean } }).capabilities?.daemonWaitsForRender).toBe(true);
+    });
+
+    it('a clear on a daemon known to wait for rendering skips the repeat wait, keeping the hierarchy check', async () => {
+      const ctx = {
+        ...iosCtx(),
+        capabilities: { daemonWaitsForRender: true } as import('../app-reset.js').ResetCapabilities,
+      };
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+
+      const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
+      expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+    });
+
+    it('a warm reset delivered cold still waits on a daemon known to wait: only its relaunch rungs do', async () => {
+      const ctx = {
+        ...iosCtx(),
+        capabilities: { hooksDetected: true, daemonWaitsForRender: true } as import('../app-reset.js').ResetCapabilities,
+      };
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, coldLaunch: true }));
+
+      await executeAppReset(ctx, WARM_TEST, { phase: 'before test' });
+
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
     });
 
     it('without the daemon wait, polls past the empty React Native shell until the app renders', async () => {

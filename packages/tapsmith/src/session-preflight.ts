@@ -851,14 +851,19 @@ export async function executeAppReset(
   }
 
   await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
-  if (processRecreated || ctx.config.platform === 'ios') {
-    // A relaunched process is "ready" only once the app has drawn something:
-    // the session check above is satisfied by a bare Activity/splash window,
-    // and a deep link or hooks probe fired into a still-booting React Native
-    // app is silently lost. An acknowledged warm reset needs none of this —
-    // the marker epoch is the proof of rendering — so iOS keeps only its
-    // non-empty-hierarchy check there.
-    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered: processRecreated }));
+  // A relaunched process is "ready" only once the app has drawn something:
+  // the session check above is satisfied by a bare Activity/splash window,
+  // and a deep link or hooks probe fired into a still-booting React Native
+  // app is silently lost. An acknowledged warm reset needs none of this —
+  // the marker epoch is the proof of rendering — and neither does a ladder
+  // restart/clear on a daemon that already waited for it before answering:
+  // a second agent round trip there costs every relaunch, never helps. iOS
+  // keeps only its non-empty-hierarchy check in both cases.
+  const daemonRendered = (modeUsed === 'restart' || modeUsed === 'clear')
+    && ctx.capabilities?.daemonWaitsForRender === true;
+  const rendered = processRecreated && !daemonRendered;
+  if (rendered || ctx.config.platform === 'ios') {
+    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered }));
   }
   if (
     action.kind !== 'warm'
@@ -1202,6 +1207,7 @@ async function waitForRenderedContent(
       APP_RENDER_READY_TIMEOUT_MS + APP_READY_RPC_SLACK_MS,
     );
     if (answer.supported) {
+      (ctx.capabilities ??= {}).daemonWaitsForRender = true;
       if (!answer.ready) noContent();
       return;
     }

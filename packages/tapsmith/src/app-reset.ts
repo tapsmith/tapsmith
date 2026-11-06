@@ -36,6 +36,13 @@ export interface AppResetPolicy {
 export interface ResetCapabilities {
   /** `@tapsmith/react-native` reset hooks were detected in the app's UI hierarchy. */
   hooksDetected?: boolean;
+  /**
+   * The daemon answered `WaitForAppReady` for this session's app, so its
+   * restart/clear rungs already wait for rendered content before returning
+   * (Android PILOT-976, iOS PILOT-1058; the RPC and that wait shipped
+   * together). The SDK then skips its own repeat of that wait.
+   */
+  daemonWaitsForRender?: boolean;
   /** Physical device (not a simulator/emulator). */
   isPhysical?: boolean;
 }
