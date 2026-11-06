@@ -2361,13 +2361,20 @@ class CommandHandler {
         // launches the app: a snapshot of one that is not running reads as
         // "not yet". Running out of time is `ready: false`, not an error.
         case "waitForAppReady":
-            let targetApp = XCUIApplication(bundleIdentifier: targetBundleId(fallback: params))
+            let bundleId = targetBundleId(fallback: params)
             let timeoutMs = (params["timeout"] as? NSNumber)?.intValue ?? 10_000
+            // A process launched outside the runner (simctl launch / openurl)
+            // can stay invisible to an XCUIApplication bound while it was
+            // still registering, and XCTest learns of it through XPC callbacks
+            // on the main RunLoop. So wait by running the RunLoop, not
+            // Thread.sleep, and read through a fresh binding each check. With
+            // either alone, 1–4 of 20 such relaunches read no content for the
+            // whole wait while the app was rendered (PILOT-1062 spike).
             let outcome = AppReadiness.wait(
                 timeoutMs: timeoutMs,
                 now: { Date() },
-                sleep: { Thread.sleep(forTimeInterval: $0) },
-                check: { appHasRenderedContent(targetApp) }
+                sleep: { RunLoop.current.run(until: Date(timeIntervalSinceNow: $0)) },
+                check: { appHasRenderedContent(XCUIApplication(bundleIdentifier: bundleId)) }
             )
             NSLog("[Tapsmith] waitForAppReady ready=\(outcome.ready) in \(outcome.elapsedMs)ms (\(outcome.checks) checks)")
             return ["ready": outcome.ready, "elapsedMs": outcome.elapsedMs, "checks": outcome.checks]
