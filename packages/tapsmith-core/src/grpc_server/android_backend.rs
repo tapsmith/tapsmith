@@ -229,8 +229,9 @@ impl DeviceBackend for AndroidBackend<'_> {
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
         if press_back {
+            // To the device that was checked, even if setDevice switched since.
             self.svc
-                .adb_action(request_id, "input keyevent KEYCODE_BACK")
+                .adb_action_on(request_id, &serial, "input keyevent KEYCODE_BACK")
                 .await
         } else {
             Ok(TapsmithServiceImpl::success_action_response(request_id))

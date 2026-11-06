@@ -1886,7 +1886,17 @@ impl TapsmithServiceImpl {
         command: &str,
     ) -> Result<Response<proto::ActionResponse>, Status> {
         let serial = self.active_serial().await?;
-        match adb::shell(&serial, command).await {
+        self.adb_action_on(request_id, &serial, command).await
+    }
+
+    /// [`Self::adb_action`] on `serial` rather than the active device.
+    async fn adb_action_on(
+        &self,
+        request_id: String,
+        serial: &str,
+        command: &str,
+    ) -> Result<Response<proto::ActionResponse>, Status> {
+        match adb::shell(serial, command).await {
             Ok(_) => Ok(Response::new(proto::ActionResponse {
                 request_id,
                 success: true,

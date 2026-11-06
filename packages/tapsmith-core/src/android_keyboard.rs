@@ -133,14 +133,20 @@ where
 /// How a dump reports a process that didn't answer. System_server writes the first
 /// when it gives up on a process, the process itself writes the second when its main
 /// thread doesn't get to the dump, and dumpsys writes the third when it gives up.
+/// A dump with no keyboard bound but the flag still up has no keyboard to take
+/// BACK; unbinding normally clears the flag in the same step, and then the re-read
+/// in [`should_press_back`] skips BACK.
 fn both_processes_answered(full_dump: &str) -> bool {
-    ![
+    let stuck = [
         "Failed to dump input method",
         "waiting for dump",
         "DUMP TIMEOUT",
     ]
     .iter()
-    .any(|stuck| full_dump.contains(stuck))
+    .any(|stuck| full_dump.contains(stuck));
+    let unbound_but_shown =
+        full_dump.contains("No input method service.") && input_shown(full_dump) == Some(true);
+    !stuck && !unbound_but_shown
 }
 
 #[cfg(test)]
@@ -330,6 +336,7 @@ mod tests {
             full_dump(STUCK_APP),
             full_dump("Timeout waiting for dump"),
             full_dump("Interrupted waiting for dump"),
+            full_dump("No input method service."),
             timed_out(),
             dump("*** SERVICE 'input_method' DUMP TIMEOUT (10000ms) EXPIRED ***"),
         ] {
@@ -337,6 +344,15 @@ mod tests {
             shell.wait_for_back().await.unwrap();
             assert_eq!(shell.calls().len(), 2);
         }
+    }
+
+    #[tokio::test]
+    async fn an_unbound_keyboard_with_the_flag_down_is_an_answer() {
+        let shell = FakeShell::new(vec![Ok(
+            "mInputShown=false\nNo input method service.\n".to_string()
+        )]);
+        shell.wait_for_back().await.unwrap();
+        assert_eq!(shell.calls().len(), 1);
     }
 
     #[tokio::test]
