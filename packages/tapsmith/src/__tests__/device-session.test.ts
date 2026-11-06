@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
     startAndroidLaunchEarly: vi.fn(async (): Promise<{ launched: Promise<boolean> } | undefined> => ({ launched: Promise.resolve(true) })),
   },
   agentFailures: 0,
+  /** Errors the next agent starts throw, in order (then they succeed). */
+  agentErrors: [] as string[],
   /** Serials whose agent never starts (permanent failure). */
   failAgentFor: new Set<string>(),
   /** Serials the daemon reports have no agent installed (and no APKs were given). */
@@ -73,6 +75,8 @@ vi.mock('../device.js', () => ({
       _startAgent: vi.fn(async () => {
         if (mocks.failAgentFor.has(serial)) throw new Error('Failed to connect to agent socket on port 18700');
         if (mocks.noAgentFor.has(serial)) throw new Error('Tapsmith agent is not installed on the device. Set agentApk and agentTestApk in your Tapsmith config, or install manually with: adb install <path-to-agent.apk>');
+        const queued = mocks.agentErrors.shift();
+        if (queued !== undefined) throw new Error(queued);
         if (mocks.agentFailures > 0) {
           mocks.agentFailures--;
           throw new Error('Failed to connect to agent socket on port 18700');
@@ -186,6 +190,7 @@ beforeEach(() => {
   mocks.clientReady = true;
   mocks.installed = true;
   mocks.agentFailures = 0;
+  mocks.agentErrors = [];
   mocks.failAgentFor.clear();
   mocks.simInstalls = 0;
   mocks.simAppMatches = true;
@@ -326,6 +331,21 @@ describe('openDeviceSession', () => {
       );
       expect(mocks.preflight.startAndroidLaunchEarly).not.toHaveBeenCalled();
     });
+  });
+
+  it("retries an iOS agent start whose runner timed out launching the app (PILOT-948)", async () => {
+    const launchTimeout = 'The iOS agent could not launch com.example.app on simulator SIM-1: '
+      + 'Failed to launch com.example.app: Timed out attempting to launch app.';
+    mocks.agentErrors = ['14 UNAVAILABLE: Connection dropped'];
+    const ios = makeConfig({ platform: 'ios', apk: undefined, app: './Build/App.app' });
+    await openDeviceSession({ name: 'device-1', serial: 'SIM-1', daemonAddress: 'localhost:50052' }, ios, { claimSession: SESSION, label: 'Device' });
+    expect(mocks.devices.at(-1)!._startAgent).toHaveBeenCalledTimes(2);
+
+    mocks.agentErrors = [launchTimeout, launchTimeout];
+    await expect(openDeviceSession(
+      { name: 'device-1', serial: 'SIM-2', daemonAddress: 'localhost:50053' }, ios, { claimSession: SESSION, label: 'Device' },
+    )).rejects.toThrow(/Failed to start agent: The iOS agent could not launch .*Timed out attempting to launch app\.\nThe agent did not start in 2 attempts\. .*load average/s);
+    expect(mocks.devices.at(-1)!._startAgent).toHaveBeenCalledTimes(2);
   });
 
   it('retries a transient agent start once, then fails with the session label', async () => {
