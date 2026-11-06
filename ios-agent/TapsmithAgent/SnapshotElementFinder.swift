@@ -37,6 +37,9 @@ class SnapshotElementFinder {
     /// query for the cells holding it and the command it was last checked
     /// in: checked to name one cell once per command (RowAnchor, PILOT-952).
     private var anchorChecks: [String: (rows: XCUIElementQuery, checkedIn: Int?)] = [:]
+    /// Ids found through their row's anchor (RowAnchor, PILOT-952): a touch
+    /// is planned on a live read of one only where it was found.
+    private var anchoredBindings: Set<String> = []
     /// Counts commands, for checks made once per command.
     private var commandSerial = 0
     private var focusedTextInputHint: FocusedTextInputHint?
@@ -552,6 +555,7 @@ class SnapshotElementFinder {
         identityCache.removeAll()
         cacheOrder.removeAll()
         rowBindings.removeAll()
+        anchoredBindings.removeAll()
         anchorChecks.removeAll()
         focusedTextInputHint = nil
         lock.unlock()
@@ -610,6 +614,7 @@ class SnapshotElementFinder {
             boundsCache.removeValue(forKey: candidate)
             identityCache.removeValue(forKey: candidate)
             rowBindings.remove(candidate)
+            anchoredBindings.remove(candidate)
             anchorChecks.removeValue(forKey: candidate)
             overflow -= 1
         }
@@ -694,15 +699,19 @@ class SnapshotElementFinder {
 
     /// Whether a live read of `elementId` at `liveFrame`, which a touch is
     /// about to be planned on, is the element it was found as (PILOT-952):
-    /// always, unless it is a row's element checked as `RowBinding.plan`
-    /// says. One bound by its place among others must be where it was found
-    /// (no IPC); one found through its row's anchor in a tree with a
-    /// collection view must still have its anchor name one cell (one count
-    /// of the cells holding it, as the cells can have changed since
-    /// `getElement` checked them in this command).
+    /// always, unless it is a row's element bound by its place among others
+    /// or through its row's anchor. Such a read must be where the element
+    /// was found (no IPC): a collection view's reused cell has been seen to
+    /// report a neighbour row's frame, and a touch planned on that read
+    /// would land on the neighbour. Otherwise the touch is planned on the
+    /// found frame, checked against a fresh tree. One found through its
+    /// row's anchor in a tree with a collection view must also still have
+    /// its anchor name one cell (one count of the cells holding it, as the
+    /// cells can have changed since `getElement` checked them in this
+    /// command).
     func isFoundElement(_ elementId: String, liveFrame: CGRect) -> Bool {
         lock.lock()
-        let checked = rowBindings.contains(elementId)
+        let checked = rowBindings.contains(elementId) || anchoredBindings.contains(elementId)
         let anchoredRows = anchorChecks[elementId]?.rows
         let found = boundsCache[elementId]
         lock.unlock()
@@ -2148,6 +2157,7 @@ class SnapshotElementFinder {
             lock.lock()
             elementCache[elementId] = element
             if plan.checkFrame { rowBindings.insert(elementId) }
+            if plan.throughAnchor { anchoredBindings.insert(elementId) }
             if plan.checkAnchor, let anchoredRows { anchorChecks[elementId] = (anchoredRows, nil) }
             lock.unlock()
         }
