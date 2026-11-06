@@ -152,13 +152,13 @@ describe("UIKit: table view", () => {
     // has scrolled, a row's button is still the one in that row, not the
     // one at its place among the others (PILOT-952).
     test("a More Info tap on a scrolled-in row reaches that row's button", async ({ uikitTable }) => {
-      await uikitTable.rowText(70).scrollIntoView({ maxScrolls: 30 })
-      await uikitTable.moreInfo(70).tap()
-      await expect(uikitTable.selection).toHaveText("Info: Row 70")
-      await uikitTable.moreInfo(68).tap()
-      await expect(uikitTable.selection).toHaveText("Info: Row 68")
-      await uikitTable.moreInfo(73).tap()
-      await expect(uikitTable.selection).toHaveText("Info: Row 73")
+      for (const n of [70, 68, 73]) {
+        // Taps don't scroll: bring each row on screen, wherever the last
+        // scroll stopped.
+        await uikitTable.rowText(n).scrollIntoView({ maxScrolls: 30 })
+        await uikitTable.moreInfo(n).tap()
+        await expect(uikitTable.selection).toHaveText(`Info: Row ${n}`)
+      }
     })
 
     // A swipe action's button sits beside its row in the tree, and only one
@@ -171,7 +171,7 @@ describe("UIKit: table view", () => {
       await device.dragXY({ x: 360, y }, { x: 200, y })
       await uikitTable.delete(60).tap()
       await expect(uikitTable.rowText(60)).toHaveCount(0)
-      await expect(uikitTable.rowText(59)).toBeVisible()
+      await expect(uikitTable.rowText(59)).toHaveCount(1)
       await expect(uikitTable.rowText(61)).toBeVisible()
     })
   })
