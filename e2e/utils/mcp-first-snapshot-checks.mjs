@@ -69,6 +69,33 @@ export function checkSnapshotResponse(response, { expectText }) {
   return problems
 }
 
+// ─── The server process (PILOT-708) ───
+
+/**
+ * Settles when the server process has gone, however it went. A process that
+ * could not be started never emits "exit", and an "error" event with no
+ * listener would crash the script instead of failing the check.
+ *
+ * @param {import("node:child_process").ChildProcess} child
+ * @returns {Promise<{ code: number | null, signal: string | null } | { spawnError: string }>}
+ */
+export function waitForChildExit(child) {
+  return new Promise((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }))
+    // The other "error" causes (a failed kill or send) leave the process
+    // running, and "exit" still comes.
+    child.on("error", (err) => {
+      if (child.pid === undefined) resolve({ spawnError: err.message })
+    })
+  })
+}
+
+/** How the server went, in words, from what `waitForChildExit` settled with. */
+export function describeServerExit(info) {
+  if (info.spawnError) return `the MCP server failed to start: ${info.spawnError}`
+  return `the MCP server exited (${info.code != null ? `code ${info.code}` : `signal ${info.signal}`})`
+}
+
 // ─── Handshake timing (PILOT-580) ───
 //
 // The check used to fail now and then with "initialize got no response within

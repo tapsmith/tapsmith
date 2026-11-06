@@ -41,10 +41,13 @@ import { fileURLToPath } from "node:url"
 import {
   checkSnapshotResponse,
   describeHandshake,
+  describeServerExit,
   resultText,
   splitJsonRpcLines,
   summarizeHostLoad,
+  waitForChildExit,
 } from "./utils/mcp-first-snapshot-checks.mjs"
+import { rebootSimulator, runBounded } from "./utils/simulator-reboot.mjs"
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const CLI = path.join(HERE, "node_modules", "tapsmith", "dist", "cli.js")
@@ -86,12 +89,17 @@ function log(msg) {
   console.log(`[mcp-first-snapshot] ${msg}`)
 }
 
+const runSimctl = (args, timeoutMs) => runBounded("xcrun", ["simctl", ...args], timeoutMs)
+
+/** Reinstalling the app is the only other simctl work; well under a minute on CI. */
+const INSTALL_TIMEOUT_MS = 300_000
+
 function simctl(...args) {
-  const res = spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8" })
+  const res = runSimctl(args, INSTALL_TIMEOUT_MS)
+  if (res.timedOut) throw new Error(`xcrun simctl ${args.join(" ")} did not finish within ${INSTALL_TIMEOUT_MS / 1000}s`)
   if (res.status !== 0) {
-    throw new Error(`xcrun simctl ${args.join(" ")} failed (${res.status}): ${res.stderr?.trim()}`)
+    throw new Error(`xcrun simctl ${args.join(" ")} failed (${res.status}): ${res.stderr.trim()}`)
   }
-  return res.stdout
 }
 
 /**
@@ -113,12 +121,34 @@ function sampleHostLoad() {
   })
 }
 
+/**
+ * For a simctl call stuck on a CI runner: log what the host can say about it,
+ * then restart CoreSimulator, which launchd brings back on the next simctl
+ * call. That ends every simulator on the machine, so it never happens outside
+ * CI, where this one is the only simulator.
+ */
+function restartCoreSimulator() {
+  const show = (cmd, args) => {
+    const res = spawnSync(cmd, args, { encoding: "utf8", timeout: 30_000, killSignal: "SIGKILL" })
+    return (res.stdout || res.error?.message || "").trim()
+  }
+  const simProcesses = show("ps", ["-Ao", "pid,etime,pcpu,command"])
+    .split("\n")
+    .filter((line) => /simctl|launchd_sim|CoreSimulatorService|xcodebuild/.test(line))
+    .map((line) => line.slice(0, 200))
+  log(`  simulator processes:\n${simProcesses.map((line) => `    | ${line}`).join("\n") || "    | (none)"}`)
+  log("  restarting CoreSimulator")
+  show("killall", ["-9", "com.apple.CoreSimulator.CoreSimulatorService"])
+}
+
 function reboot(udid) {
   log(`rebooting simulator ${udid}`)
   const started = Date.now()
-  spawnSync("xcrun", ["simctl", "shutdown", udid], { encoding: "utf8" }) // already shut down is fine
-  simctl("boot", udid)
-  simctl("bootstatus", udid, "-b")
+  rebootSimulator(udid, {
+    run: runSimctl,
+    log,
+    recover: process.env.CI ? restartCoreSimulator : undefined,
+  })
   log(`  booted in ${((Date.now() - started) / 1000).toFixed(1)}s`)
 }
 
@@ -148,15 +178,12 @@ async function mcpSession(config, calls, { handshakeTimeoutMs = HANDSHAKE_TIMEOU
 
   const pending = new Map()
   let exitInfo = null
-  const exited = new Promise((resolve) =>
-    child.on("exit", (code, signal) => {
-      exitInfo = { code, signal }
-      // A server that dies mid-call fails its pending requests now, not at their timeout.
-      for (const settle of pending.values()) settle(null)
-      pending.clear()
-      resolve(exitInfo)
-    }),
-  )
+  const exited = waitForChildExit(child).then((info) => {
+    exitInfo = info
+    // A server that dies mid-call fails its pending requests now, not at their timeout.
+    for (const settle of pending.values()) settle(null)
+    pending.clear()
+  })
   const nonJsonStdout = []
   let buf = ""
   child.stdout.on("data", (d) => {
@@ -175,7 +202,7 @@ async function mcpSession(config, calls, { handshakeTimeoutMs = HANDSHAKE_TIMEOU
   const request = (method, params, timeoutMs = 30_000) =>
     new Promise((resolve, reject) => {
       if (exitInfo) {
-        reject(new Error(`${method}: the MCP server already exited (${JSON.stringify(exitInfo)})`))
+        reject(new Error(`${method}: ${describeServerExit(exitInfo)}`))
         return
       }
       const id = nextId++
@@ -185,7 +212,7 @@ async function mcpSession(config, calls, { handshakeTimeoutMs = HANDSHAKE_TIMEOU
       }, timeoutMs)
       pending.set(id, (msg) => {
         clearTimeout(timer)
-        if (msg === null) reject(new Error(`${method}: the MCP server exited (${JSON.stringify(exitInfo)})`))
+        if (msg === null) reject(new Error(`${method}: ${describeServerExit(exitInfo)}`))
         else resolve(msg)
       })
       child.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, method, params })}\n`)
@@ -229,8 +256,8 @@ async function mcpSession(config, calls, { handshakeTimeoutMs = HANDSHAKE_TIMEOU
   } finally {
     // The server shuts itself (and its daemon and agent) down on stdin EOF.
     child.stdin.end()
-    const timeout = new Promise((resolve) => setTimeout(() => resolve(null), 20_000))
-    if ((await Promise.race([exited, timeout])) === null) {
+    const timeout = new Promise((resolve) => setTimeout(() => resolve("timeout"), 20_000))
+    if ((await Promise.race([exited, timeout])) === "timeout") {
       log("  MCP server did not exit within 20s of stdin closing; killing it")
       child.kill("SIGKILL")
       await exited
