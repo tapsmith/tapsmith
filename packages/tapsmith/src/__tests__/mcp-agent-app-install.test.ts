@@ -339,9 +339,11 @@ describe('an agent start that a slow runner timed out', () => {
     expect(stderr).toContain('Agent started');
   });
 
-  it('fails the target with the machine load when the retry times out too', async () => {
+  // The load note on the final error depends on the host's load; its rule is
+  // pinned in agent-start-retry.test.ts.
+  it('fails the target with the runner error when the retry times out too', async () => {
     startAgentResponse = () => Promise.resolve({ success: false, errorMessage: LAUNCH_TIMEOUT });
-    await expect(target()).rejects.toThrow(/Failed to start the agent on SIM-1: The iOS agent could not launch .*\nThe agent did not start in 2 attempts\. .*load average/s);
+    await expect(target()).rejects.toThrow(`Failed to start the agent on SIM-1: ${LAUNCH_TIMEOUT}`);
     expect(calls.filter((c) => c === 'startAgent')).toHaveLength(2);
   });
 

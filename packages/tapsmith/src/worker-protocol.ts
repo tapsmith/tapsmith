@@ -341,10 +341,10 @@ function isSlowAgentStartError(message: string): boolean {
 
 /**
  * Start the agent, retrying once after {@link isRetryableAgentStartError}
- * failures. When the retry times out as well, the error says how loaded the
- * machine is: on a CI runner short of CPU every step of an iOS agent start
+ * failures. When the retry times out as well on a machine with more runnable
+ * work than CPUs, the error says how loaded the machine is: on a CI runner short of CPU every step of an iOS agent start
  * (xcodebuild, the runner, the app's launch) slows down together, and the
- * cause is the host, not the agent (PILOT-948). Shared by the test-run
+ * cause is the host, not the agent. Shared by the test-run
  * session opener and the MCP server, which start the agent separately.
  */
 export async function startAgentWithRetry<T>(
@@ -371,6 +371,9 @@ export async function startAgentWithRetry<T>(
     const message = err instanceof Error ? err.message : String(err);
     if (!isSlowAgentStartError(message)) throw err;
     const { load, cpus } = (options.loadAverage ?? hostLoad)();
+    // On an idle machine the cause is elsewhere (an app that hangs at launch,
+    // say): blaming the CPU would point the user the wrong way.
+    if (!(cpus > 0 && load / cpus >= 1)) throw err;
     const note = `The agent did not start in 2 attempts. Starting it is slow when the machine is short of CPU `
       + `(load average ${load.toFixed(1)} on ${cpus} CPUs now): on CI, use a larger runner or run fewer jobs on it.`;
     throw new Error(`${message}\n${note}`, { cause: err });

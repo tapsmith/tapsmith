@@ -66,6 +66,14 @@ describe('startAgentWithRetry', () => {
     expect(start).toHaveBeenCalledTimes(2);
   });
 
+  it('adds no load note when the machine is not short of CPU', async () => {
+    const start = vi.fn().mockRejectedValue(new Error(LAUNCH_TIMEOUT));
+    const failure = startAgentWithRetry(start, vi.fn(), { delayMs: 0, loadAverage: () => ({ load: 0.5, cpus: 10 }) });
+    await expect(failure).rejects.toThrow(LAUNCH_TIMEOUT);
+    await expect(failure).rejects.not.toThrow(/load average/);
+    expect(start).toHaveBeenCalledTimes(2);
+  });
+
   it('adds no load note when the retry fails some other way', async () => {
     const start = vi.fn()
       .mockRejectedValueOnce(new Error(AGENT_TIMEOUT))

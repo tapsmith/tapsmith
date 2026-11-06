@@ -344,7 +344,7 @@ describe('openDeviceSession', () => {
     mocks.agentErrors = [launchTimeout, launchTimeout];
     await expect(openDeviceSession(
       { name: 'device-1', serial: 'SIM-2', daemonAddress: 'localhost:50053' }, ios, { claimSession: SESSION, label: 'Device' },
-    )).rejects.toThrow(/Failed to start agent: The iOS agent could not launch .*Timed out attempting to launch app\.\nThe agent did not start in 2 attempts\. .*load average/s);
+    )).rejects.toThrow(/Failed to start agent: The iOS agent could not launch .*Timed out attempting to launch app\./s);
     expect(mocks.devices.at(-1)!._startAgent).toHaveBeenCalledTimes(2);
   });
 
