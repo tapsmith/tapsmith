@@ -15,14 +15,21 @@
 import { spawnSync } from "node:child_process"
 
 /**
- * Far above the slowest reboots seen on CI runners (82 s for the whole
- * reboot at a load average of 300), so only a call that is stuck reaches them.
+ * Well above the slowest healthy reboot seen on CI runners (82 s for all
+ * three calls, at a load average of 300), so only a call that is stuck
+ * reaches them. They are also sized so that a hang, the recovery and a
+ * second hang (both attempts in full, about 10 minutes) still leave the rest
+ * of the check time to finish inside its CI step's timeout: a bound the step
+ * kills first never gets to say what hung.
  */
 export const REBOOT_TIMEOUTS_MS = {
-  shutdown: 120_000,
-  boot: 120_000,
-  bootstatus: 300_000,
+  shutdown: 60_000,
+  boot: 90_000,
+  bootstatus: 150_000,
 }
+
+/** The longest a reboot can take: both attempts reaching every bound. */
+export const REBOOT_WORST_CASE_MS = 2 * Object.values(REBOOT_TIMEOUTS_MS).reduce((a, b) => a + b, 0)
 
 /**
  * Run a command for at most `timeoutMs`. A command that overruns is killed

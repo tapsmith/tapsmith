@@ -690,7 +690,11 @@ jobs:
       - name: Verify first MCP snapshot after clearData and reboots
         if: ${{ !cancelled() && matrix.shard == 2 && steps.mcp-snapshot-gate.outputs.run == 'true' }}
         working-directory: e2e
-        timeout-minutes: 15
+        # ~9 min healthy. The headroom lets a simulator reboot that hangs be
+        # recovered, or fail naming the stuck simctl call, before this kills
+        # it (PILOT-708; e2e/utils/simulator-reboot.mjs, whose test checks
+        # its worst case against this value).
+        timeout-minutes: 20
         env:
           TAPSMITH_DAEMON_LOG: /tmp/tapsmith-daemon-ios-${{ matrix.shard }}-mcp.log
         run: node verify-mcp-first-snapshot.mjs -c tapsmith.config.ios-ci.mjs --udid "$TAPSMITH_IOS_UDID" --app ./fixtures/TapsmithTestApp.app

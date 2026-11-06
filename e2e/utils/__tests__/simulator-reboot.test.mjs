@@ -5,7 +5,10 @@
  */
 import test from "node:test"
 import assert from "node:assert/strict"
-import { rebootSimulator, runBounded } from "../simulator-reboot.mjs"
+import * as fs from "node:fs"
+import * as path from "node:path"
+import { fileURLToPath } from "node:url"
+import { REBOOT_WORST_CASE_MS, rebootSimulator, runBounded } from "../simulator-reboot.mjs"
 
 const UDID = "SIM-1"
 
@@ -103,4 +106,21 @@ test("runBounded reports a normal exit, and a command that cannot start", () => 
   assert.equal(missing.timedOut, false)
   assert.notEqual(missing.status, 0)
   assert.match(missing.stderr, /ENOENT/)
+})
+
+test("a reboot that hangs twice still fails inside the CI step's timeout, with time to spare", () => {
+  // The second reboot starts about 5 minutes into the step on CI, and the
+  // session after it takes about 2.5 more. A hang → recovery → hang must end
+  // the script before the step's timeout does, or its message never prints.
+  const workflow = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "../../../.github/workflows/e2e-ios.yml"),
+    "utf8",
+  )
+  const step = /- name: Verify first MCP snapshot[^\n]*\n(?:\s+[^-\s][^\n]*\n)*?\s+timeout-minutes: (\d+)/.exec(workflow)
+  assert.ok(step, "the workflow step's timeout-minutes was not found")
+  const stepMs = Number(step[1]) * 60_000
+  assert.ok(
+    5 * 60_000 + REBOOT_WORST_CASE_MS + 2.5 * 60_000 <= stepMs,
+    `worst-case reboot ${REBOOT_WORST_CASE_MS / 1000}s does not fit a ${step[1]}-minute step`,
+  )
 })
