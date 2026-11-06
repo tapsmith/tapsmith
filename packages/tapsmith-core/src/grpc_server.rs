@@ -116,6 +116,17 @@ const ANDROID_RENDER_READY_POLL: Duration = Duration::from_millis(250);
 /// `waitForAppReady` answer, which arrives at the end of that budget at the
 /// latest.
 const ANDROID_RENDER_READY_TRANSPORT_SLACK_MS: u64 = 2_000;
+/// After an iOS relaunch, how long to wait for the app to draw real content
+/// before handing it back (PILOT-1058) — the iOS twin of
+/// [`ANDROID_RENDER_READY_TIMEOUT`], with the same trade: a text-free first
+/// screen just falls through.
+const IOS_RENDER_READY_TIMEOUT: Duration = Duration::from_secs(10);
+/// Transport slack over the iOS agent's own `waitForAppReady` budget: one
+/// snapshot can overrun the budget on a loaded simulator, and the XCUITest
+/// agent drains commands one at a time.
+const IOS_RENDER_READY_TRANSPORT_SLACK_MS: u64 = 5_000;
+/// Pause before re-asking an iOS agent whose `waitForAppReady` call failed.
+const IOS_RENDER_READY_RETRY: Duration = Duration::from_millis(250);
 
 /// How long StartAgent waits for a freshly launched Android agent to answer
 /// its first ping. UIAutomator's accessibility bootstrap on a cold
@@ -1498,6 +1509,60 @@ impl TapsmithServiceImpl {
             };
             crate::timing::timing_log!(
                 "kind=app_ready name={:?} dur_ms={} ready={}",
+                answer,
+                started.elapsed().as_millis(),
+                ready
+            );
+            return ready;
+        }
+    }
+
+    /// Wait until the iOS app has drawn real content (PILOT-1058): the
+    /// agent's `waitForAppReady` reads the app's snapshot with the warm
+    /// deep-link path's own content test. Right after a launch a React
+    /// Native app is a bare shell (application, window, empty containers)
+    /// until its bundle renders; a warm deep link sent then finds no content
+    /// and falls back to a cold relaunch, and the hooks marker is not there
+    /// to read.
+    ///
+    /// `Some(ready)` is the agent's answer (`false` when the budget passed
+    /// first, or every call failed); `None` means the agent predates the
+    /// command, and the caller uses its own readiness check. Bounded and
+    /// best-effort: never an error.
+    pub(super) async fn wait_for_ios_rendered_content(
+        &self,
+        package_name: &str,
+        timeout: Duration,
+    ) -> Option<bool> {
+        let started = tokio::time::Instant::now();
+        let deadline = started + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining_ms = remaining.as_millis() as u64;
+            let result = self
+                .send_agent_command_with_timeout(
+                    &AgentCommand::WaitForAppReady {
+                        package: package_name.to_string(),
+                        timeout_ms: remaining_ms,
+                    },
+                    remaining_ms + IOS_RENDER_READY_TRANSPORT_SLACK_MS,
+                )
+                .await;
+            let answer = classify_agent_ready_answer(&result);
+            let ready = match answer {
+                AgentReadyAnswer::Ready => Some(true),
+                AgentReadyAnswer::NotReady => Some(false),
+                AgentReadyAnswer::Unsupported => None,
+                AgentReadyAnswer::Failed => {
+                    if tokio::time::Instant::now() < deadline {
+                        tokio::time::sleep(IOS_RENDER_READY_RETRY.min(remaining)).await;
+                        continue;
+                    }
+                    Some(false)
+                }
+            };
+            crate::timing::timing_log!(
+                "kind=app_ready name={:?} dur_ms={} ready={:?}",
                 answer,
                 started.elapsed().as_millis(),
                 ready
@@ -8350,6 +8415,84 @@ mod tests {
         assert!(
             !svc.wait_for_android_rendered_content("com.example.app", Duration::from_millis(600))
                 .await
+        );
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[tokio::test]
+    async fn ios_rendered_content_wait_asks_the_agent_once() {
+        let (svc, seen) = service_with_mock_agent(|method, _| match method {
+            "waitForAppReady" => json!({"result": {"ready": true}}),
+            _ => json!({"result": {}}),
+        })
+        .await;
+        assert_eq!(
+            svc.wait_for_ios_rendered_content("com.example.app", Duration::from_secs(5))
+                .await,
+            Some(true)
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["waitForAppReady"]);
+    }
+
+    #[tokio::test]
+    async fn ios_rendered_content_wait_takes_the_agents_not_ready_as_final() {
+        let (svc, seen) = service_with_mock_agent(|_, _| json!({"result": {"ready": false}})).await;
+        assert_eq!(
+            svc.wait_for_ios_rendered_content("com.example.app", Duration::from_secs(5))
+                .await,
+            Some(false)
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["waitForAppReady"]);
+    }
+
+    #[tokio::test]
+    async fn ios_rendered_content_wait_is_unsupported_on_an_agent_without_the_command() {
+        // An iOS agent that predates PILOT-1058: no answer here, so the SDK
+        // falls back to its own hierarchy polling.
+        let (svc, seen) = service_with_mock_agent(|_, _| {
+            json!({"error": {"type": "ACTION_FAILED", "message": "Unknown method: waitForAppReady"}})
+        })
+        .await;
+        assert_eq!(
+            svc.wait_for_ios_rendered_content("com.example.app", Duration::from_secs(5))
+                .await,
+            None
+        );
+        assert_eq!(*seen.lock().unwrap(), vec!["waitForAppReady"]);
+    }
+
+    #[tokio::test]
+    async fn ios_rendered_content_wait_retries_a_failed_agent_call() {
+        let (svc, seen) = service_with_mock_agent(|_, count| {
+            if count == 1 {
+                json!({"error": {"type": "INTERNAL_ERROR", "message": "snapshot failed"}})
+            } else {
+                json!({"result": {"ready": true}})
+            }
+        })
+        .await;
+        assert_eq!(
+            svc.wait_for_ios_rendered_content("com.example.app", Duration::from_secs(5))
+                .await,
+            Some(true)
+        );
+        assert_eq!(
+            *seen.lock().unwrap(),
+            vec!["waitForAppReady", "waitForAppReady"]
+        );
+    }
+
+    #[tokio::test]
+    async fn ios_rendered_content_wait_gives_up_on_a_failing_agent_at_its_budget() {
+        let (svc, _) = service_with_mock_agent(
+            |_, _| json!({"error": {"type": "INTERNAL_ERROR", "message": "snapshot failed"}}),
+        )
+        .await;
+        let started = std::time::Instant::now();
+        assert_eq!(
+            svc.wait_for_ios_rendered_content("com.example.app", Duration::from_millis(600))
+                .await,
+            Some(false)
         );
         assert!(started.elapsed() < Duration::from_secs(3));
     }

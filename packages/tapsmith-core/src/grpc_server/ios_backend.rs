@@ -340,10 +340,12 @@ impl DeviceBackend for IosBackend<'_> {
         ))
     }
 
-    async fn wait_for_app_ready(&self, _package: &str, _timeout: Duration) -> Option<bool> {
-        // The SDK's iOS readiness check (a non-empty hierarchy, with a
-        // relaunch for an app stuck behind SpringBoard) stays its own.
-        None
+    async fn wait_for_app_ready(&self, package: &str, timeout: Duration) -> Option<bool> {
+        // The agent's rendered-content wait (PILOT-1058); `None` from an
+        // agent that predates it, and the SDK polls dumps instead.
+        self.svc
+            .wait_for_ios_rendered_content(package, timeout)
+            .await
     }
 
     async fn relaunch_app(
@@ -355,7 +357,17 @@ impl DeviceBackend for IosBackend<'_> {
     ) -> Result<(), String> {
         self.svc
             .reset_ios_app(serial, package_name, wait_for_idle, idle_timeout_ms)
-            .await
+            .await?;
+        // A restart/clear rung hands back an app ready for input, as the
+        // Android rung does: the relaunched React Native app is a bare shell
+        // until its bundle renders, and the warm deep link or hooks-marker
+        // read that follows a reset would misfire into it (PILOT-1058).
+        // Best-effort and bounded — a text-free first screen falls through.
+        let _ = self
+            .svc
+            .wait_for_ios_rendered_content(package_name, IOS_RENDER_READY_TIMEOUT)
+            .await;
+        Ok(())
     }
 
     async fn wipe_app_data(&self, serial: &str, package_name: &str) -> Result<(), String> {
