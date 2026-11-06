@@ -18,6 +18,28 @@ enum AppReadiness {
     /// Pause between checks. A not-yet-rendered app's snapshot is small.
     static let pollInterval: TimeInterval = 0.1
 
+    /// Whether one element of the app's tree shows the app has drawn real
+    /// content: a text, input or control type (`isContentType`, decided by the
+    /// caller from the XCTest element type), or any element other than the
+    /// application node with a non-blank label or identifier. The second
+    /// clause covers screens built only from labelled containers — React
+    /// Native Pressables and testID'd Views come through as
+    /// `XCUIElementTypeOther` — which would otherwise never read as ready.
+    /// The bare shell after a launch (window and containers with neither)
+    /// still does not count, nor does the application node, which carries the
+    /// app's name from launch on. Matches the SDK's dump-based fallback.
+    static func isRenderedContent(
+        _ isContentType: Bool,
+        _ isApplication: Bool,
+        _ label: String,
+        _ identifier: String
+    ) -> Bool {
+        if isContentType { return true }
+        if isApplication { return false }
+        return !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !identifier.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     /// What `wait` found: whether the app became ready, after how long and
     /// how many checks.
     struct Outcome {

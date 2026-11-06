@@ -83,6 +83,21 @@ do {
     expect("slow check: no sleep after the budget is spent", clock.sleeps.isEmpty)
 }
 
+// What counts as rendered content, one element at a time.
+do {
+    let counts = AppReadiness.isRenderedContent
+    expect("text/control types count", counts(true, false, "", ""))
+    // RN Pressables and testID'd Views come through as labelled or
+    // identified XCUIElementTypeOther: a screen of only those is rendered.
+    expect("labelled container counts", counts(false, false, "Open settings", ""))
+    expect("identified container counts", counts(false, false, "", "home-screen"))
+    // The bare shell: windows and containers with neither.
+    expect("blank container does not count", !counts(false, false, "", ""))
+    expect("whitespace label does not count", !counts(false, false, "  ", ""))
+    // The application node carries the app's name from launch on.
+    expect("application node does not count", !counts(false, true, "Example", ""))
+}
+
 if failures > 0 {
     print("\(failures) AppReadiness test(s) failed")
     exit(1)

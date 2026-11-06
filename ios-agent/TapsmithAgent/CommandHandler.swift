@@ -107,14 +107,24 @@ class CommandHandler {
     }
 
     /// Recursively check whether a snapshot tree contains any rendered,
-    /// user-meaningful element (text, input, or control).
+    /// user-meaningful element: text, input or control, or a labelled or
+    /// identified container (`AppReadiness.isRenderedContent`).
     private func snapshotContainsContent(_ snapshot: XCUIElementSnapshot) -> Bool {
+        let isContentType: Bool
         switch snapshot.elementType {
         case .staticText, .textField, .secureTextField, .textView, .searchField,
              .button, .link, .image, .switch:
-            return true
+            isContentType = true
         default:
-            break
+            isContentType = false
+        }
+        if AppReadiness.isRenderedContent(
+            isContentType,
+            snapshot.elementType == .application,
+            snapshot.label,
+            snapshot.identifier
+        ) {
+            return true
         }
         for child in snapshot.children where snapshotContainsContent(child) {
             return true
