@@ -174,6 +174,19 @@ enum RowAnchor {
         for child in dict["children"] as? [[String: Any]] ?? [] { walk(child, visit) }
     }
 
+    /// How many nodes of the tree carry each identifier: an upper bound on
+    /// what a live query narrowed by that identifier returns, whatever else
+    /// the selector filtered on (PILOT-952).
+    static func identifierCounts(in dict: [String: Any]) -> [String: Int] {
+        var counts: [String: Int] = [:]
+        walk(dict) { node in
+            if let identifier = node["identifier"] as? String, !identifier.isEmpty {
+                counts[identifier, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
     /// Whether the tree holds a collection view, which exposes only the
     /// cells it has loaded.
     static func containsLazyList(_ dict: [String: Any]) -> Bool {

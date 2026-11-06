@@ -343,6 +343,19 @@ class SnapshotElementFinder {
             )
         }
 
+        // How many nodes of the whole tree carry each identifier, computed
+        // once and only for a registered match that has one: whether a live
+        // query narrowed by an identifier can return another node (the match
+        // set counts only nodes that passed the selector's filters).
+        var cachedTreeIdCounts: [String: Int]?
+        let tree = snapshotDict
+        let treeIdCounts = { () -> [String: Int] in
+            if let cachedTreeIdCounts { return cachedTreeIdCounts }
+            let counts = RowAnchor.identifierCounts(in: tree)
+            cachedTreeIdCounts = counts
+            return counts
+        }
+
         let results = matches.enumerated().map { (matchIndex, match) in
             let (nodeDict, frame) = match
             let bounds = ElementBounds(
@@ -393,8 +406,9 @@ class SnapshotElementFinder {
                 // This is deferred — the query object is created but not evaluated until
                 // a property (like .isHittable) is accessed. Pass the snapshot node so the
                 // query can use element type + identifier for more precise matching.
-                cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, matchCount: matches.count,
-                    idIndex: idIndices[matchIndex], idCount: idSeen[identifier, default: 0],
+                cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex,
+                    idIndex: idIndices[matchIndex],
+                    treeIdCount: identifier.isEmpty ? 0 : treeIdCounts()[identifier, default: 0],
                     labelIndex: labelBindings[matchIndex].index,
                     labelIndexUnique: labelBindings[matchIndex].unique, snapshotNode: nodeDict,
                     treeHasSwitchPart: treeHasSwitchPart, treeHasReadOnlyTextView: treeHasReadOnlyTextView,
@@ -678,17 +692,25 @@ class SnapshotElementFinder {
         throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
     }
 
-    /// Whether a live read of `elementId` at `liveFrame` is the element it
-    /// was found as: always, unless it is a row's element bound by its place
-    /// among others (`RowBinding.plan`'s frame check), which must be where
-    /// it was found. No IPC.
+    /// Whether a live read of `elementId` at `liveFrame`, which a touch is
+    /// about to be planned on, is the element it was found as (PILOT-952):
+    /// always, unless it is a row's element checked as `RowBinding.plan`
+    /// says. One bound by its place among others must be where it was found
+    /// (no IPC); one found through its row's anchor in a tree with a
+    /// collection view must still have its anchor name one cell (one count
+    /// of the cells holding it, as the cells can have changed since
+    /// `getElement` checked them in this command).
     func isFoundElement(_ elementId: String, liveFrame: CGRect) -> Bool {
         lock.lock()
         let checked = rowBindings.contains(elementId)
+        let anchoredRows = anchorChecks[elementId]?.rows
         let found = boundsCache[elementId]
         lock.unlock()
-        guard checked else { return true }
-        return found.map { RowBinding.isFoundElement(found: $0, live: liveFrame) } ?? false
+        if checked, !(found.map { RowBinding.isFoundElement(found: $0, live: liveFrame) } ?? false) {
+            return false
+        }
+        if let anchoredRows, anchoredRows.count != 1 { return false }
+        return true
     }
 
     /// Get cached snapshot bounds for an element (for coordinate-based actions).
@@ -1825,9 +1847,8 @@ class SnapshotElementFinder {
         elementId: String,
         selector: ElementSelector,
         matchIndex: Int,
-        matchCount: Int,
         idIndex: Int,
-        idCount: Int,
+        treeIdCount: Int,
         labelIndex: Int?,
         labelIndexUnique: Bool = false,
         snapshotNode: [String: Any]? = nil,
@@ -1880,7 +1901,7 @@ class SnapshotElementFinder {
         func resolve(_ query: XCUIElementQuery) -> XCUIElement? {
             let base = query.excludingHooksMarker()
             if !nodeIdentifier.isEmpty {
-                uniqueInQuery = idCount == 1
+                uniqueInQuery = treeIdCount == 1
                 // Narrow to the identifier, then index WITHIN that id group so a
                 // non-unique identifier still resolves positionally. For a unique
                 // id, idIndex == 0, i.e. equivalent to firstMatch.
@@ -1921,13 +1942,13 @@ class SnapshotElementFinder {
             // which selects its own row.
             element = nil
         } else if let testId = selector.testId {
-            uniqueInQuery = matchCount == 1 && keyboardOffset == 0
+            uniqueInQuery = treeIdCount == 1 && keyboardOffset == 0
             element = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", testId))
                 .excludingHooksMarker()
                 .element(boundBy: matchIndex + keyboardOffset)
         } else if let id = selector.id {
-            uniqueInQuery = matchCount == 1 && keyboardOffset == 0
+            uniqueInQuery = treeIdCount == 1 && keyboardOffset == 0
             element = app.descendants(matching: .any)
                 .matching(NSPredicate(format: "identifier == %@", id))
                 .excludingHooksMarker()

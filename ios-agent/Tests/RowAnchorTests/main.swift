@@ -92,6 +92,14 @@ check("a plain row holds none", RowAnchor.holdsRows(rows[1]), false)
 check("a table alone holds no lazy list", RowAnchor.containsLazyList(table), false)
 check("a collection view is a lazy list", RowAnchor.containsLazyList(nested), true)
 
+// Every node with an identifier counts, whatever a selector filtered on.
+let ids = RowAnchor.identifierCounts(in: node(.table, [
+    node(.cell, [node(.button, id: "delete")]), node(.cell, [node(.button, id: "delete")]),
+    node(.cell, [node(.button, id: "only")]),
+]))
+check("a repeated identifier counts every node", ids["delete"], 2)
+check("a unique identifier counts one", ids["only"], 1)
+
 // ─── predicate ───
 
 check("a text anchor's predicate",

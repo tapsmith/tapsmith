@@ -901,7 +901,10 @@ class CommandHandler {
         plannedScreenSize = self.screenSize(of: appSnapshot)
         let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
         let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
-        return (analyzer.analyze(target, isHittable: isHittable), hold)
+        // A target identified from what was cached (its live read was another
+        // element's, or none) is judged by the tree alone: the live element's
+        // hit test was not this element's (PILOT-952).
+        return (analyzer.analyze(target, isHittable: target.isLive && isHittable), hold)
     }
 
     /// The element as the occlusion analyzer identifies it: read live, or from
