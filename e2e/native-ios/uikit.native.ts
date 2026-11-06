@@ -147,6 +147,33 @@ describe("UIKit: table view", () => {
       await uikitTable.rowText(1).scrollIntoView({ direction: "up", maxScrolls: 30 })
       await expect(uikitTable.selection).toHaveText("Selected: Row 80")
     })
+
+    // Rows 50 to 100 each have a "More Info" detail button. Once the table
+    // has scrolled, a row's button is still the one in that row, not the
+    // one at its place among the others (PILOT-952).
+    test("a More Info tap on a scrolled-in row reaches that row's button", async ({ uikitTable }) => {
+      for (const n of [70, 68, 73]) {
+        // Taps don't scroll: bring each row on screen, wherever the last
+        // scroll stopped.
+        await uikitTable.rowText(n).scrollIntoView({ maxScrolls: 30 })
+        await uikitTable.moreInfo(n).tap()
+        await expect(uikitTable.selection).toHaveText(`Info: Row ${n}`)
+      }
+    })
+
+    // A swipe action's button sits beside its row in the tree, and only one
+    // row's actions show at a time, so the row's bounds pick it (PILOT-952).
+    test("a swipe action's Delete on a scrolled-in row deletes that row", async ({ device, uikitTable }) => {
+      await uikitTable.rowText(60).scrollIntoView({ maxScrolls: 30 })
+      const box = await uikitTable.rowText(60).boundingBox()
+      if (!box) throw new Error("Row 60 has no bounds")
+      const y = box.y + box.height / 2
+      await device.dragXY({ x: 360, y }, { x: 200, y })
+      await uikitTable.delete(60).tap()
+      await expect(uikitTable.rowText(60)).toHaveCount(0)
+      await expect(uikitTable.rowText(59)).toHaveCount(1)
+      await expect(uikitTable.rowText(61)).toBeVisible()
+    })
   })
 })
 

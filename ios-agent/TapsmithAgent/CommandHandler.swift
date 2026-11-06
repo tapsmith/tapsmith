@@ -901,14 +901,22 @@ class CommandHandler {
         plannedScreenSize = self.screenSize(of: appSnapshot)
         let analyzer = OcclusionAnalyzer(snapshot: appSnapshot, screenSize: screenSize)
         let hold = TapTiming.hold(for: target.elementType, within: analyzer.ancestorTypes(of: target))
-        return (analyzer.analyze(target, isHittable: isHittable), hold)
+        // A target identified from what was cached (its live read was another
+        // element's, or none) is judged by the tree alone: the live element's
+        // hit test was not this element's (PILOT-952).
+        return (analyzer.analyze(target, isHittable: target.isLive && isHittable), hold)
     }
 
     /// The element as the occlusion analyzer identifies it: read live, or from
     /// what was cached when it was found.
     private func occlusionTarget(for element: ElementInfo, xcElem: XCUIElement?) -> OcclusionAnalyzer.Target {
         let target: OcclusionAnalyzer.Target
-        if let snap = try? xcElem?.snapshot() {
+        // A row's element bound by its place among others is read again
+        // here, and the table can have reused its cells since getElement
+        // checked it: plan on this read only if it is still where the match
+        // was found (RowBinding, PILOT-952).
+        if let snap = try? xcElem?.snapshot(),
+           snapshotFinder.isFoundElement(element.elementId, liveFrame: snap.frame) {
             target = .init(frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier)
         } else {
             // The live element can't be read (it unmounted, or an iOS 26 live
