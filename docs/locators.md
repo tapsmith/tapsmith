@@ -83,6 +83,8 @@ Other windows on Android do match: a notification shade or quick settings panel 
 
 XPath (`locator({ xpath })`, Android only) is the exception: it evaluates the raw hierarchy dump.
 
+On iOS, the screen a navigation stack is leaving is in the tree too until its push or pop animation ends. Locators wait out that animation, for up to 2 seconds, so a control on every screen, such as a custom header's back button, matches once. It works on a `UINavigationController`'s standard animation (a native stack in React Native, a SwiftUI `NavigationStack`). A transition that keeps both screens lined up, such as a fade, is not recognised.
+
 ## Priority 1 — Accessible Locators (Preferred)
 
 These match what real users and assistive technologies see. They should be your default choice.

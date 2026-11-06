@@ -31,6 +31,8 @@ class SnapshotElementFinder {
     private var cacheOrder: [String] = []
     private var focusedTextInputHint: FocusedTextInputHint?
     private let lock = NSLock()
+    /// The shape that last outlasted `NavigationTransition.settle`.
+    private var outlastedTransition: String?
 
     struct CachedIdentity {
         let elementType: XCUIElement.ElementType
@@ -126,9 +128,26 @@ class SnapshotElementFinder {
     /// node count. The wrapper-suppression pass is folded into the
     /// walk via the ancestor stack, so it does not add an extra
     /// O(N²) post-pass.
+    ///
+    /// A navigation stack's transition in progress costs up to
+    /// `NavigationTransition.maxWaitSeconds` more: the tree still holds the
+    /// outgoing screen, so the same IPC and walk again until it has gone.
     func findElements(_ selector: ElementSelector, parentId: String? = nil) throws -> [ElementInfo] {
-        let resolvedSnapshot = try takeSnapshot()
-        return try findElements(selector, fromSnapshot: resolvedSnapshot)
+        var snapshotDict = try takeMatchableDict()
+        snapshotDict = try NavigationTransition.settle(
+            first: snapshotDict,
+            signature: NavigationTransition.signature(of:),
+            known: &outlastedTransition,
+            readDeadline: commandDeadline,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:),
+            next: { try takeMatchableDict() }
+        )
+        return try findElements(selector, in: &snapshotDict, register: true)
+    }
+
+    private func takeMatchableDict() throws -> [String: Any] {
+        matchableDict(of: try takeSnapshot())
     }
 
     /// Find all elements from a pre-taken snapshot (avoids an extra IPC).

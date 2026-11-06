@@ -3,6 +3,7 @@ import { AccessibilityScreen } from "./screens/accessibility.screen.js"
 import { AnimatingScreen } from "./screens/animating.screen.js"
 import { ApiCallsScreen } from "./screens/api-calls.screen.js"
 import { CarouselScreen } from "./screens/carousel.screen.js"
+import { StackScreen } from "./screens/stack.screen.js"
 import { DialogsScreen } from "./screens/dialogs.screen.js"
 import { GesturesScreen } from "./screens/gestures.screen.js"
 import { HomeScreen } from "./screens/home.screen.js"
@@ -23,6 +24,7 @@ type ScreenFixtures = {
   animatingScreen: AnimatingScreen
   apiCallsScreen: ApiCallsScreen
   carouselScreen: CarouselScreen
+  stackScreen: StackScreen
   dialogsScreen: DialogsScreen
   gesturesScreen: GesturesScreen
   homeScreen: HomeScreen
@@ -51,6 +53,9 @@ export const test = base.extend<ScreenFixtures>({
   },
   carouselScreen: async ({ device }, use) => {
     await use(new CarouselScreen(device))
+  },
+  stackScreen: async ({ device }, use) => {
+    await use(new StackScreen(device))
   },
   dialogsScreen: async ({ device }, use) => {
     await use(new DialogsScreen(device))
