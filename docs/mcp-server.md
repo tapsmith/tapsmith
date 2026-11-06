@@ -178,6 +178,8 @@ Returns a text representation of the accessibility tree with suggested locators 
 
 Each suggestion is checked by the device's automation agent, with the same matching a test resolves locators with, and is offered only when it resolves to exactly the element it is listed against. They are checked in a few short batches; if checking stops early (the agent errors, or a slow device is still being checked after about 20 seconds, when no further batch is started), the elements checked so far keep their suggestions and a note says why the rest have none or are pinned by position. When nothing else singles an element out, its suggestion ends in `.first()`, `.nth(i)` or `.last()`, counted in the order the agent matches elements, so it depends on what else is on screen. If the agent cannot check any suggestion, or none resolves to its element (the screen changed while it was checked), the tree is still returned, without suggestions, followed by a note that says why; elements that were no longer on screen when the agent checked them are counted in a note too. A character that does not survive copy-paste, such as the icon-font glyph in a React Navigation tab's name, is written as a `\uXXXX` escape: JavaScript and `tapsmith_test_locator` read it back to the same character.
 
+An app that is still launching has nothing on screen yet, so a screen with no elements is read again for up to 15 seconds before the result says `(empty screen)`.
+
 #### `tapsmith_screenshot`
 
 Capture a PNG screenshot of the device screen. Use when you need to visually verify what's on screen or when the accessibility tree is insufficient.
