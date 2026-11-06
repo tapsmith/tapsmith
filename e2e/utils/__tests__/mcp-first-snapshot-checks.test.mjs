@@ -6,12 +6,15 @@
  */
 import test from "node:test"
 import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
 import {
   checkSnapshotResponse,
   describeHandshake,
+  describeServerExit,
   resultText,
   splitJsonRpcLines,
   summarizeHostLoad,
+  waitForChildExit,
 } from "../mcp-first-snapshot-checks.mjs"
 
 const ok = (text) => ({ jsonrpc: "2.0", id: 2, result: { content: [{ type: "text", text }] } })
@@ -122,4 +125,22 @@ test("summarizeHostLoad leaves out what it could not sample", () => {
     summarizeHostLoad({ nodeBootMs: null, loadavg: "garbage", ps: "not a ps line\n" }),
     "(no host sample)",
   )
+})
+
+// ─── A server process that never started (PILOT-708) ───
+
+test("a server that cannot be spawned settles instead of crashing the script", async () => {
+  const child = spawn("/nonexistent/tapsmith-mcp-server", [], { stdio: ["pipe", "pipe", "pipe"] })
+  child.stdin.on("error", () => {})
+  const info = await waitForChildExit(child)
+  assert.match(info.spawnError, /ENOENT/)
+  assert.match(describeServerExit(info), /the MCP server failed to start: .*ENOENT/)
+})
+
+test("a server that ran reports how it exited", async () => {
+  const child = spawn(process.execPath, ["-e", "process.exit(4)"], { stdio: "ignore" })
+  const info = await waitForChildExit(child)
+  assert.deepEqual(info, { code: 4, signal: null })
+  assert.equal(describeServerExit(info), "the MCP server exited (code 4)")
+  assert.equal(describeServerExit({ code: null, signal: "SIGKILL" }), "the MCP server exited (signal SIGKILL)")
 })

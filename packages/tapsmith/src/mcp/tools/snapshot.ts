@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { TapsmithGrpcClient, UiHierarchyResponse } from '../../grpc-client.js';
 import { deviceClientFor, DEVICE_ARG_DESCRIPTION, PROJECT_ARG_DESCRIPTION } from './device-target.js';
 import type { TestDispatcher } from '../test-dispatcher.js';
 import { parseHierarchyXml } from '../../trace-viewer/components/hierarchy-utils.js';
@@ -8,6 +9,39 @@ import { agentValidatedSuggestions } from '../agent-suggestions.js';
 
 /** Selectors per agent call on iOS, where each call costs one snapshot. */
 const IOS_CHUNK_SIZE = 500;
+
+/**
+ * How long an empty screen is read again before it is reported as empty. An
+ * app still launching has nothing in its accessibility tree: a React Native
+ * app shows only its splash until the JS bundle has rendered, some seconds
+ * later on a busy machine. The first snapshot of a session lands right there,
+ * since the agent's start launches the app (PILOT-708). A screen that really
+ * is empty is rare, and costs this much once per snapshot.
+ */
+const EMPTY_SCREEN_WAIT_MS = 15_000;
+const EMPTY_SCREEN_POLL_MS = 500;
+
+/**
+ * Read the screen, reading again while it has nothing on it yet. An error on
+ * the first read is the answer; after an empty read it may be the launch
+ * still going on, so it is reported only if it lasts until the bound.
+ */
+async function readScreen(client: Pick<TapsmithGrpcClient, 'getUiHierarchy'>): Promise<UiHierarchyResponse> {
+  const first = await client.getUiHierarchy();
+  if (first.errorMessage || !isEmptyScreen(first.hierarchyXml)) return first;
+  const deadline = Date.now() + EMPTY_SCREEN_WAIT_MS;
+  let latest = first;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, EMPTY_SCREEN_POLL_MS));
+    latest = await client.getUiHierarchy();
+    if (!latest.errorMessage && !isEmptyScreen(latest.hierarchyXml)) return latest;
+  }
+  return latest;
+}
+
+function isEmptyScreen(hierarchyXml: string): boolean {
+  return formatHierarchy(parseHierarchyXml(hierarchyXml), new Map()).tree === '';
+}
 
 export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatcher): void {
   server.tool(
@@ -20,7 +54,7 @@ export function registerSnapshotTool(server: McpServer, dispatcher?: TestDispatc
     async ({ device, project }) => {
       const client = await deviceClientFor({ device, project }, dispatcher);
 
-      const { hierarchyXml, errorMessage } = await client.getUiHierarchy();
+      const { hierarchyXml, errorMessage } = await readScreen(client);
       if (errorMessage) {
         return { content: [{ type: 'text' as const, text: `Error: ${errorMessage}` }], isError: true };
       }

@@ -235,6 +235,79 @@ beforeEach(() => {
 // ─── tapsmith_snapshot ───
 
 describe('tapsmith_snapshot', () => {
+  describe('a screen with nothing on it yet (PILOT-708)', () => {
+    const EMPTY = { requestId: '1', hierarchyXml: '<hierarchy />', errorMessage: '' };
+    const HOME = { requestId: '1', hierarchyXml: SIGN_IN_XML, errorMessage: '' };
+    let fake: FakeDaemon;
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      fake = makeDaemon({ evaluate: signInAgent });
+      hoisted.client = fake.client;
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('reads again until the app has drawn something, as a launching app has not yet', async () => {
+      fake.getUiHierarchy
+        .mockResolvedValueOnce(EMPTY)
+        .mockResolvedValueOnce(EMPTY)
+        .mockResolvedValue(HOME);
+      const pending = callTool('tapsmith_snapshot');
+      await vi.advanceTimersByTimeAsync(5_000);
+      const out = text(await pending);
+      expect(out).toContain('Sign in to continue to DreamSpinner');
+      expect(out).not.toContain('(empty screen)');
+      expect(fake.getUiHierarchy).toHaveBeenCalledTimes(3);
+    });
+
+    it('reports a screen that stays empty after the bound, as empty, and not as a failure', async () => {
+      fake.getUiHierarchy.mockResolvedValue(EMPTY);
+      const pending = callTool('tapsmith_snapshot');
+      await vi.advanceTimersByTimeAsync(20_000);
+      const res = await pending;
+      expect(res.isError).toBeFalsy();
+      expect(text(res)).toBe('(empty screen)');
+      const reads = fake.getUiHierarchy.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fake.getUiHierarchy.mock.calls.length).toBe(reads);
+    });
+
+    it('does not wait on a screen that already has something on it', async () => {
+      fake.getUiHierarchy.mockResolvedValue(HOME);
+      await callTool('tapsmith_snapshot');
+      expect(fake.getUiHierarchy).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps waiting through an error while the app is launching, and reports one that lasts', async () => {
+      fake.getUiHierarchy
+        .mockResolvedValueOnce(EMPTY)
+        .mockResolvedValueOnce({ requestId: '1', hierarchyXml: '', errorMessage: 'Unable to lookup in current state' })
+        .mockResolvedValue(HOME);
+      const recovering = callTool('tapsmith_snapshot');
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(text(await recovering)).toContain('Sign in to continue to DreamSpinner');
+
+      fake.getUiHierarchy.mockReset();
+      fake.getUiHierarchy
+        .mockResolvedValueOnce(EMPTY)
+        .mockResolvedValue({ requestId: '1', hierarchyXml: '', errorMessage: 'Unable to lookup in current state' });
+      const stuck = callTool('tapsmith_snapshot');
+      await vi.advanceTimersByTimeAsync(20_000);
+      const res = await stuck;
+      expect(res.isError).toBe(true);
+      expect(text(res)).toContain('Unable to lookup in current state');
+    });
+
+    it('fails at once on an error from the first read', async () => {
+      fake.getUiHierarchy.mockResolvedValue({ requestId: '1', hierarchyXml: '', errorMessage: 'no accessibility server' });
+      const res = await callTool('tapsmith_snapshot');
+      expect(res.isError).toBe(true);
+      expect(fake.getUiHierarchy).toHaveBeenCalledTimes(1);
+    });
+  });
+
   it('returns the tree and the locators an agent is meant to copy', async () => {
     hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent }).client;
     const res = await callTool('tapsmith_snapshot');
@@ -294,7 +367,15 @@ describe('tapsmith_snapshot', () => {
 
   it('says nothing about refs when the screen has no element to suggest for', async () => {
     hoisted.client = makeDaemon({ hierarchyXml: '<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][10,10]" /></hierarchy>' }).client;
-    expect(text(await callTool('tapsmith_snapshot'))).not.toContain('No suggested locators');
+    // A screen with nothing to list is read again for a while first (PILOT-708).
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+    try {
+      const pending = callTool('tapsmith_snapshot');
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(text(await pending)).not.toContain('No suggested locators');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps the activity-feed count right when checking stopped partway', async () => {
@@ -357,18 +438,14 @@ describe('tapsmith_snapshot', () => {
     expect(text(res)).toBe('Error: device offline');
   });
 
-  it('says the screen is empty when the hierarchy genuinely is', async () => {
-    const res = await callTool('tapsmith_snapshot');
-    expect(res.isError).toBeFalsy();
-    expect(text(res)).toBe('(empty screen)');
-  });
-
   it('passes the requested device through to the daemon target', async () => {
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent }).client;
     await callTool('tapsmith_snapshot', { device: 'emulator-5556' });
     expect(hoisted.requests.at(-1)).toMatchObject({ device: 'emulator-5556' });
   });
 
   it('resolves a project name to its platform before picking a device', async () => {
+    hoisted.client = makeDaemon({ hierarchyXml: SIGN_IN_XML, evaluate: signInAgent }).client;
     const dispatcher = makeDispatcher({
       getSessionInfo: () => ({
         timeout: 0,
