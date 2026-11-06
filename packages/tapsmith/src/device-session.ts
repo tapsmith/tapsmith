@@ -23,8 +23,8 @@ import { findAgentApk, findAgentTestApk, missingAndroidAgentError } from './agen
 import {
   AGENT_START_RETRY_DELAY_MS,
   DEVICE_SELECT_UNREACHABLE_GRACE_MS,
-  isRetryableAgentStartError,
   retryDeviceSelection,
+  startAgentWithRetry,
 } from './worker-protocol.js';
 import {
   ensureSessionReady,
@@ -752,16 +752,11 @@ export async function openDeviceSession(
     });
     let appLaunchedFresh = false;
     try {
-      try {
-        ({ appLaunchedFresh } = await startAgent());
-      } catch (err) {
-        if (!isRetryableAgentStartError(err)) throw err;
-        progress(`agent startup failed, retrying once: ${err instanceof Error ? err.message : String(err)}`);
-        // Let a transient agent-connection drop clear before the retry — an
-        // immediate re-attempt lands inside the same drop window (PILOT-282).
-        await new Promise((resolve) => setTimeout(resolve, AGENT_START_RETRY_DELAY_MS));
-        ({ appLaunchedFresh } = await startAgent());
-      }
+      ({ appLaunchedFresh } = await startAgentWithRetry(
+        startAgent,
+        (err) => progress(`agent startup failed, retrying once: ${err instanceof Error ? err.message : String(err)}`),
+        { delayMs: AGENT_START_RETRY_DELAY_MS },
+      ));
     } catch (err) {
       let message = err instanceof Error ? err.message : String(err);
       // No agent on the device and no APKs to install it from: say why the

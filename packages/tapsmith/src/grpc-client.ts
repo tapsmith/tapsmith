@@ -384,6 +384,27 @@ const PROTO_PATH = (() => {
 })();
 const DEFAULT_ADDRESS = 'localhost:50051';
 
+/** @internal — the channel options of every connection to the daemon. */
+export const DAEMON_CHANNEL_OPTIONS = {
+  'grpc.max_receive_message_length': 64 * 1024 * 1024,  // 64MB
+  'grpc.max_send_message_length': 64 * 1024 * 1024,     // 64MB
+  'grpc.keepalive_time_ms': 30_000,                      // ping every 30s
+  // How long a ping may go unanswered before the connection is dropped. The
+  // daemon is local, so an unanswered ping means a starved process, not a lost
+  // network: on a loaded CI runner the daemon or this process can stall past
+  // 10 s, and a call issued meanwhile then failed "14 UNAVAILABLE: Connection
+  // dropped" before the daemon saw it (PILOT-948). The daemon waits 30 s for
+  // its own pings; this side is no stricter.
+  'grpc.keepalive_timeout_ms': 30_000,
+  'grpc.keepalive_permit_without_calls': 1,              // ping even when idle
+  // The daemon is local, so a reconnect attempt costs next to nothing.
+  // grpc-js waits 1 s before its first one by default: every daemon
+  // start paid that second, because the first connect is refused
+  // until the daemon listens (~30 ms after it is spawned).
+  'grpc.initial_reconnect_backoff_ms': 50,
+  'grpc.max_reconnect_backoff_ms': 1_000,
+} as const;
+
 /**
  * Deadline for cleanup RPCs dispatched after the run has been aborted
  * (PILOT-235). Must stay under the UI server's STOP_GRACE_MS (5s) so a
@@ -464,19 +485,7 @@ export class TapsmithGrpcClient {
     this.client = new TapsmithService(
       this.address,
       grpc.credentials.createInsecure(),
-      {
-        'grpc.max_receive_message_length': 64 * 1024 * 1024,  // 64MB
-        'grpc.max_send_message_length': 64 * 1024 * 1024,     // 64MB
-        'grpc.keepalive_time_ms': 30_000,                      // ping every 30s
-        'grpc.keepalive_timeout_ms': 10_000,                   // 10s to respond
-        'grpc.keepalive_permit_without_calls': 1,              // ping even when idle
-        // The daemon is local, so a reconnect attempt costs next to nothing.
-        // grpc-js waits 1 s before its first one by default: every daemon
-        // start paid that second, because the first connect is refused
-        // until the daemon listens (~30 ms after it is spawned).
-        'grpc.initial_reconnect_backoff_ms': 50,
-        'grpc.max_reconnect_backoff_ms': 1_000,
-      },
+      DAEMON_CHANNEL_OPTIONS,
     // eslint-disable-next-line @typescript-eslint/no-unsafe-function-type
     ) as grpc.Client & Record<string, Function>;
   }

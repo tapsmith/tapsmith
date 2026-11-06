@@ -4,6 +4,7 @@
  * sent to it by the dispatcher.
  */
 
+import * as os from 'node:os';
 import type { TestResult, SuiteResult, RunOptions } from './runner.js';
 import type { GrepFilters } from './test-filter.js';
 import { normalizeGrep, type AppResetMode, type AppResetScope, type TapsmithConfig } from './config.js';
@@ -312,6 +313,11 @@ export function isRetryableAgentStartError(err: unknown): boolean {
   return (
     message.includes('xcodebuild exited') ||
     message.includes('Timed out waiting for iOS agent') ||
+    // XCTest gave up launching the app under test. On a loaded runner the
+    // daemon's own in-place relaunch has no time left in its bound by then;
+    // a second start runs on a simulator the first one warmed (PILOT-948).
+    // Only this runner error: "could not launch" also covers a missing app.
+    message.includes('Timed out attempting to launch app') ||
     // The daemon's post-launch handshake ping can miss a runner that is
     // still initializing (the launch-time socket probe passed moments
     // earlier) — a second StartAgent either fast-paths onto the now-ready
@@ -326,6 +332,57 @@ export function isRetryableAgentStartError(err: unknown): boolean {
  *  same drop window and fails identically. Shared by the CLI
  *  startup path and worker init so both retry with the same tolerance. */
 export const AGENT_START_RETRY_DELAY_MS = 2_000;
+
+/** Agent-start errors that mean the start was slow, not broken. */
+function isSlowAgentStartError(message: string): boolean {
+  return message.includes('Timed out waiting for iOS agent')
+    || message.includes('Timed out attempting to launch app');
+}
+
+/**
+ * Start the agent, retrying once after {@link isRetryableAgentStartError}
+ * failures. When the retry times out as well on a machine with more runnable
+ * work than CPUs, the error says how loaded the machine is: on a CI runner short of CPU every step of an iOS agent start
+ * (xcodebuild, the runner, the app's launch) slows down together, and the
+ * cause is the host, not the agent. Shared by the test-run
+ * session opener and the MCP server, which start the agent separately.
+ */
+export async function startAgentWithRetry<T>(
+  start: () => Promise<T>,
+  onRetry: (err: unknown) => void,
+  options: {
+    delayMs?: number
+    /** @internal — for tests. */
+    loadAverage?: () => { load: number; cpus: number }
+  } = {},
+): Promise<T> {
+  try {
+    return await start();
+  } catch (err) {
+    if (!isRetryableAgentStartError(err)) throw err;
+    onRetry(err);
+    // Let a transient agent-connection drop clear before the retry — an
+    // immediate re-attempt lands inside the same drop window (PILOT-282).
+    await new Promise((resolve) => setTimeout(resolve, options.delayMs ?? AGENT_START_RETRY_DELAY_MS));
+  }
+  try {
+    return await start();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!isSlowAgentStartError(message)) throw err;
+    const { load, cpus } = (options.loadAverage ?? hostLoad)();
+    // On an idle machine the cause is elsewhere (an app that hangs at launch,
+    // say): blaming the CPU would point the user the wrong way.
+    if (!(cpus > 0 && load / cpus >= 1)) throw err;
+    const note = `The agent did not start in 2 attempts. Starting it is slow when the machine is short of CPU `
+      + `(load average ${load.toFixed(1)} on ${cpus} CPUs now): on CI, use a larger runner or run fewer jobs on it.`;
+    throw new Error(`${message}\n${note}`, { cause: err });
+  }
+}
+
+function hostLoad(): { load: number; cpus: number } {
+  return { load: os.loadavg()[0], cpus: os.cpus().length };
+}
 
 // ─── Serialized types (safe for IPC / structured clone) ───
 

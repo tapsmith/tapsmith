@@ -52,6 +52,12 @@ vi.mock('../grpc-client.js', () => ({
   },
 }));
 
+// No real pause before an agent-start retry.
+vi.mock('../worker-protocol.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../worker-protocol.js')>()),
+  AGENT_START_RETRY_DELAY_MS: 0,
+}));
+
 vi.mock('../daemon-bin.js', () => ({ findDaemonBin: () => '/fake/tapsmith-core' }));
 vi.mock('../ios-simulator-build.js', () => ({
   ensureSimulatorAgent: async () => '/fake/Agent_iphonesimulator27.0-arm64.xctestrun',
@@ -315,5 +321,45 @@ describe('confirmAgentAnswers', () => {
     ];
     await confirmAgentAnswers(client(), { attempts: 3, delayMs: 1 });
     expect(calls.filter((c) => c === 'getUiHierarchy')).toHaveLength(2);
+  });
+});
+
+// PILOT-948: the verify step's MCP session failed on a slow CI runner where a
+// test run's start would have retried — this path had no retry at all.
+describe('an agent start that a slow runner timed out', () => {
+  const LAUNCH_TIMEOUT = 'The iOS agent could not launch com.example.ShopNotes on simulator SIM-1: '
+    + 'Failed to launch com.example.ShopNotes: Timed out attempting to launch app.';
+
+  it('is retried once, and the target is ready when the retry starts it', async () => {
+    const answers = [{ success: false, errorMessage: LAUNCH_TIMEOUT }, { success: true }];
+    startAgentResponse = () => Promise.resolve(answers.shift()!);
+    await target();
+    expect(calls).toEqual(['installApp ShopNotes.app', 'startAgent', 'startAgent']);
+    expect(stderr).toContain(`agent startup failed, retrying once: ${LAUNCH_TIMEOUT}`);
+    expect(stderr).toContain('Agent started');
+  });
+
+  // The load note on the final error depends on the host's load; its rule is
+  // pinned in agent-start-retry.test.ts.
+  it('fails the target with the runner error when the retry times out too', async () => {
+    startAgentResponse = () => Promise.resolve({ success: false, errorMessage: LAUNCH_TIMEOUT });
+    await expect(target()).rejects.toThrow(`Failed to start the agent on SIM-1: ${LAUNCH_TIMEOUT}`);
+    expect(calls.filter((c) => c === 'startAgent')).toHaveLength(2);
+  });
+
+  it('is not retried when the refusal is permanent', async () => {
+    startAgentResponse = () => Promise.resolve({ success: false, errorMessage: LAUNCH_REFUSAL });
+    await target().catch(() => undefined);
+    expect(calls.filter((c) => c === 'startAgent')).toHaveLength(1);
+  });
+
+  it('is retried after a dropped daemon connection', async () => {
+    const answers: Array<() => Promise<{ success: boolean }>> = [
+      () => Promise.reject(new Error('14 UNAVAILABLE: Connection dropped')),
+      () => Promise.resolve({ success: true }),
+    ];
+    startAgentResponse = () => answers.shift()!();
+    await target();
+    expect(calls.filter((c) => c === 'startAgent')).toHaveLength(2);
   });
 });
