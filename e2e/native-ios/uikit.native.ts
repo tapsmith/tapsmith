@@ -161,7 +161,8 @@ describe("UIKit: table view", () => {
       await expect(uikitTable.selection).toHaveText("Info: Row 73")
     })
 
-    // A swipe action's button is found in its own row too (PILOT-952).
+    // A swipe action's button sits beside its row in the tree, and only one
+    // row's actions show at a time, so the row's bounds pick it (PILOT-952).
     test("a swipe action's Delete on a scrolled-in row deletes that row", async ({ device, uikitTable }) => {
       await uikitTable.rowText(60).scrollIntoView({ maxScrolls: 30 })
       const box = await uikitTable.rowText(60).boundingBox()

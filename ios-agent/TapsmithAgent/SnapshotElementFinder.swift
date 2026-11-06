@@ -33,6 +33,10 @@ class SnapshotElementFinder {
     /// returns other nodes too, so checked against where it was found on
     /// every use (RowBinding, PILOT-952).
     private var rowBindings: Set<String> = []
+    /// Ids found through their row's anchor in a collection view, with the
+    /// query for the cells holding it: checked to name one cell on every use
+    /// (RowAnchor, PILOT-952).
+    private var anchorChecks: [String: XCUIElementQuery] = [:]
     private var focusedTextInputHint: FocusedTextInputHint?
     private let lock = NSLock()
     /// The shape that last outlasted `NavigationTransition.settle`.
@@ -526,6 +530,7 @@ class SnapshotElementFinder {
         identityCache.removeAll()
         cacheOrder.removeAll()
         rowBindings.removeAll()
+        anchorChecks.removeAll()
         focusedTextInputHint = nil
         lock.unlock()
     }
@@ -583,6 +588,7 @@ class SnapshotElementFinder {
             boundsCache.removeValue(forKey: candidate)
             identityCache.removeValue(forKey: candidate)
             rowBindings.remove(candidate)
+            anchorChecks.removeValue(forKey: candidate)
             overflow -= 1
         }
     }
@@ -596,7 +602,9 @@ class SnapshotElementFinder {
     ///
     /// **Cost:** no IPC, except for a row's live element bound by its place
     /// among others (RowBinding, PILOT-952): one `snapshot()` of it on each
-    /// call, to check it is still the element found. The query behind it is
+    /// call, to check it is still the element found; and for one found
+    /// through its row's anchor in a collection view (RowAnchor): one count
+    /// of the cells holding the anchor. The query behind it is
     /// evaluated again on every read, so a check made once would not hold
     /// once the table moves and reuses its cells (within one touch, while it
     /// waits for the row to settle).
@@ -607,8 +615,21 @@ class SnapshotElementFinder {
             touchLocked(elementId)
         }
         let checked = cached != nil && rowBindings.contains(elementId)
+        let anchoredRows = cached != nil ? anchorChecks[elementId] : nil
         let found = boundsCache[elementId]
         lock.unlock()
+
+        if anchoredRows != nil, anchoredRows?.count != 1 {
+            // Another cell with the anchor has loaded (or the row is gone):
+            // the anchor no longer names the row found. Keep no live element,
+            // as for a binding that fails its check below.
+            lock.lock()
+            anchorChecks.removeValue(forKey: elementId)
+            elementCache.removeValue(forKey: elementId)
+            lock.unlock()
+            NSLog("[TapsmithSnapshot] \(elementId)'s row anchor no longer names one cell; dropping its live element")
+            throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
+        }
 
         if let elem = cached, checked {
             let live = try? elem.snapshot().frame
@@ -1215,11 +1236,14 @@ class SnapshotElementFinder {
     static let rowIndexKey = "tapsmithRowIndex"
     static let rowListExposesEveryRowKey = "tapsmithRowListExposesEveryRow"
 
-    /// The row (table or collection cell) a node of the match walk is in.
+    /// The rows (table or collection cells) a node of the match walk is in.
     struct RowContext {
-        /// The row's anchor and its nodes seen so far; nil when it has none.
-        let scope: RowAnchor.Scope?
-        /// Whether the row's list is a UITableView, which exposes every row.
+        /// Every enclosing row that has an anchor, outermost first, with the
+        /// nodes of each seen so far: a query inside a row returns the nodes
+        /// of the rows nested in it too. A match is found through the last.
+        let scopes: [RowAnchor.Scope]
+        /// Whether the innermost row's list is a UITableView, which exposes
+        /// every row.
         let listExposesEveryRow: Bool
     }
 
@@ -1306,7 +1330,7 @@ class SnapshotElementFinder {
         ) {
             if nodeType == .keyboard { keyboardTop = parseFrame(nodeDict).minY }
             // A query inside an anchored row returns them too.
-            row?.scope?.visitSubtree(nodeDict)
+            row?.scopes.forEach { $0.visitSubtree(nodeDict) }
             // Not matches, but counted: a live query re-resolving a later
             // match by its position sees the keyboard's nodes that match too.
             keyboardMatches += matchingTypes(
@@ -1329,15 +1353,22 @@ class SnapshotElementFinder {
         // finding it inside the row returns (RowAnchor, PILOT-952), and, for
         // a row, its own context.
         let rawType = parseUInt(nodeDict["elementType"]) ?? 0
-        let rowIndex = row?.scope?.visit(
-            typeRaw: rawType,
-            label: nodeDict["label"] as? String ?? "",
-            identifier: nodeDict["identifier"] as? String ?? "",
-            typed: RowAnchor.isTyped(rawType)
-        )
+        let rowIndex = row?.scopes.map {
+            $0.visit(
+                typeRaw: rawType,
+                label: nodeDict["label"] as? String ?? "",
+                identifier: nodeDict["identifier"] as? String ?? "",
+                typed: RowAnchor.isTyped(rawType)
+            )
+        }.last
+        let ownScope = nodeType == .cell
+            ? rowCounts.flatMap { RowAnchor.anchor(ofCell: nodeDict, counts: $0) }.map {
+                RowAnchor.Scope(anchor: $0, listExposesEveryRow: listExposesEveryRow)
+            }
+            : nil
         let ownRow: RowContext? = nodeType == .cell
             ? RowContext(
-                scope: rowCounts.flatMap { RowAnchor.anchor(ofCell: nodeDict, counts: $0) }.map(RowAnchor.Scope.init),
+                scopes: (row?.scopes ?? []) + (ownScope.map { [$0] } ?? []),
                 listExposesEveryRow: listExposesEveryRow
             )
             : nil
@@ -1409,17 +1440,22 @@ class SnapshotElementFinder {
             var matched = nodeDict
             if inTabBar { matched[SnapshotElementFinder.inTabBarKey] = true }
             if inAlert || nodeType == .alert { matched[SnapshotElementFinder.inAlertKey] = true }
-            if let ownRow {
+            if let ownRow, let ownScope {
+                // A row with an anchor of its own: found as the row holding it.
                 matched[SnapshotElementFinder.inRowKey] = true
-                matched[SnapshotElementFinder.rowAnchorKey] = ownRow.scope?.anchor
+                matched[SnapshotElementFinder.rowAnchorKey] = ownScope.anchor
                 matched[SnapshotElementFinder.rowListExposesEveryRowKey] = ownRow.listExposesEveryRow
-            } else if let row {
+            } else if let context = ownRow ?? row {
+                // In a row, or a row with no anchor: found inside the
+                // innermost enclosing row that has one, if any.
                 matched[SnapshotElementFinder.inRowKey] = true
-                if let scope = row.scope, let rowIndex {
+                if let scope = row?.scopes.last, let rowIndex {
                     matched[SnapshotElementFinder.rowAnchorKey] = scope.anchor
                     matched[SnapshotElementFinder.rowIndexKey] = rowIndex
+                    matched[SnapshotElementFinder.rowListExposesEveryRowKey] = scope.listExposesEveryRow
+                } else {
+                    matched[SnapshotElementFinder.rowListExposesEveryRowKey] = context.listExposesEveryRow
                 }
-                matched[SnapshotElementFinder.rowListExposesEveryRowKey] = row.listExposesEveryRow
             }
             if !keyboardMatches.isEmpty { matched[SnapshotElementFinder.keyboardMatchesKey] = keyboardMatches }
             results.append((matched, frame))
@@ -1790,6 +1826,8 @@ class SnapshotElementFinder {
         // Whether the element is found by a query that returns no other node,
         // so its place in that query cannot pick another (RowBinding).
         var uniqueInQuery = false
+        // The cells holding the row's anchor, when found through it.
+        var anchoredRows: XCUIElementQuery?
         func resolve(_ query: XCUIElementQuery) -> XCUIElement? {
             let base = query.excludingHooksMarker()
             if !nodeIdentifier.isEmpty {
@@ -1833,14 +1871,14 @@ class SnapshotElementFinder {
             // Cache nothing, so a touch goes to the frame it was found at,
             // which selects its own row.
             element = nil
-        } else if let anchor = snapshotNode?[SnapshotElementFinder.rowAnchorKey] as? String {
+        } else if let anchor = snapshotNode?[SnapshotElementFinder.rowAnchorKey] as? String,
+                  let anchorPredicate = RowAnchor.predicate(forAnchor: anchor) {
             // In a row that shows a text no other row does: found again
             // through that row, wherever the table has scrolled it and
             // whichever cell shows it (RowAnchor, PILOT-952).
-            let staticText = NSNumber(value: XCUIElement.ElementType.staticText.rawValue)
-            let row = app.descendants(matching: .cell)
-                .containing(NSPredicate(format: "elementType == %@ AND label == %@", staticText, anchor))
-                .element(boundBy: 0)
+            let rows = app.descendants(matching: .cell).containing(anchorPredicate)
+            anchoredRows = rows
+            let row = rows.element(boundBy: 0)
             if let rowIndex = snapshotNode?[SnapshotElementFinder.rowIndexKey] as? Int {
                 var predicates = [NSPredicate(format: "label == %@", snapshotNode?["label"] as? String ?? "")]
                 if !nodeIdentifier.isEmpty {
@@ -2034,12 +2072,18 @@ class SnapshotElementFinder {
             // can be another row's. One its query alone returns needs no
             // check, if the list shows every row to accessibility (a
             // UITableView): a collection view's could load another later.
+            //
+            // A row found through its anchor needs no such check in a
+            // UITableView, which exposes every row, so the anchor is unique.
+            // A collection view's could load another cell with the same
+            // anchor, so there the anchor must still name one cell.
             let inRow = snapshotNode?[SnapshotElementFinder.inRowKey] as? Bool ?? false
-            let anchored = snapshotNode?[SnapshotElementFinder.rowAnchorKey] != nil
             let exposesEveryRow = snapshotNode?[SnapshotElementFinder.rowListExposesEveryRowKey] as? Bool ?? false
             lock.lock()
             elementCache[elementId] = element
-            if RowBinding.needsCheck(inRow: inRow && !anchored, uniqueInQuery: uniqueInQuery && exposesEveryRow) {
+            if let anchoredRows {
+                if !exposesEveryRow { anchorChecks[elementId] = anchoredRows }
+            } else if RowBinding.needsCheck(inRow: inRow, uniqueInQuery: uniqueInQuery && exposesEveryRow) {
                 rowBindings.insert(elementId)
             }
             lock.unlock()

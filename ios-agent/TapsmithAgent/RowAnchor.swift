@@ -9,35 +9,85 @@ import XCTest
 /// snapshot's order as the table reuses its cells, so the n-th is another
 /// row's. A row is told apart by what it shows, which is also how a test
 /// picks it (`getByRole("listitem").filter({ hasText: "Row 40" })`). So a
-/// match in a row that shows a static text no other row shows (its
-/// *anchor*) is found again as: the cell containing that text, then, inside
-/// it, the node with the match's type, label and identifier, at its index
-/// among the cell's nodes that have them. That follows the row wherever it
+/// match in a row that holds something no other row holds (its *anchor*: a
+/// static text, an identifier, or a text field's placeholder, the first in
+/// tree order) is found again as: the cell containing it, then, inside it,
+/// the node with the match's type, label and identifier, at its index among
+/// the cell's nodes that have them. That follows the row wherever it
 /// scrolls, and whichever cell shows it.
 ///
-/// A row with no such text (its texts are shared with other rows, or it
-/// shows none) gets no anchor, and its matches are found as before, with
-/// `RowBinding`'s check.
+/// A UITableView exposes every row, loaded or not, so an anchor unique in
+/// its snapshot is unique. A collection view (a SwiftUI List or Form)
+/// exposes only loaded cells, so another cell with the same anchor could
+/// load later: there the anchor is checked to still name one cell when the
+/// match is used.
+///
+/// A row with no anchor (identical to another in all of these, or holding
+/// none) is found as before, with `RowBinding`'s check.
 enum RowAnchor {
-    /// How many cells hold each static text label, each cell counted once
-    /// per label (a cell nested in another counts for both). Empty labels are
-    /// left out.
+    /// What tells a row apart, as a key: `kind`, then the value.
+    enum Kind: String {
+        case text = "t"
+        case identifier = "i"
+        case placeholder = "p"
+    }
+
+    static func key(_ kind: Kind, _ value: String) -> String { "\(kind.rawValue)\u{1}\(value)" }
+
+    /// The anchor keys a node offers, in order of preference: a static
+    /// text's label, an identifier, a placeholder. Empty values offer none.
+    static func keys(of node: [String: Any]) -> [String] {
+        var keys: [String] = []
+        if elementType(of: node) == .staticText, let label = node["label"] as? String, !label.isEmpty {
+            keys.append(key(.text, label))
+        }
+        if let identifier = node["identifier"] as? String, !identifier.isEmpty {
+            keys.append(key(.identifier, identifier))
+        }
+        if let placeholder = node["placeholderValue"] as? String, !placeholder.isEmpty {
+            keys.append(key(.placeholder, placeholder))
+        }
+        return keys
+    }
+
+    /// How many cells hold each anchor key (`keys(of:)`), each cell counted
+    /// once per key (a cell nested in another counts for both).
     static func cellCounts(in dict: [String: Any]) -> [String: Int] {
         var counts: [String: Int] = [:]
         countCells(dict, into: &counts)
         return counts
     }
 
-    /// The anchor of `cell`: the first static text label in its subtree, in
-    /// tree order, that no other cell holds (`counts`, from `cellCounts`).
+    /// The anchor of `cell`: the first key of its descendants, in tree
+    /// order, that no other cell holds (`counts`, from `cellCounts`). The
+    /// cell's own identifier is not one: a live `containing` query looks at
+    /// descendants only.
     static func anchor(ofCell cell: [String: Any], counts: [String: Int]) -> String? {
         var found: String?
-        walk(cell) { node in
-            guard found == nil, elementType(of: node) == .staticText else { return }
-            let label = node["label"] as? String ?? ""
-            if !label.isEmpty, counts[label] == 1 { found = label }
+        walkDescendants(cell) { node in
+            guard found == nil else { return }
+            found = keys(of: node).first { counts[$0] == 1 }
         }
         return found
+    }
+
+    /// The predicate a live query finds the anchored cell's anchor node by;
+    /// nil for a malformed key.
+    static func predicate(forAnchor anchor: String) -> NSPredicate? {
+        let parts = anchor.split(separator: "\u{1}", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, let kind = Kind(rawValue: String(parts[0])) else { return nil }
+        let value = String(parts[1])
+        switch kind {
+        case .text:
+            return NSPredicate(
+                format: "elementType == %@ AND label == %@",
+                NSNumber(value: XCUIElement.ElementType.staticText.rawValue), value
+            )
+        case .identifier:
+            return NSPredicate(format: "identifier == %@", value)
+        case .placeholder:
+            return NSPredicate(format: "placeholderValue == %@", value)
+        }
     }
 
     /// The nodes of one anchored cell seen so far in tree order, to number a
@@ -45,12 +95,17 @@ enum RowAnchor {
     /// returns (`index`).
     final class Scope {
         let anchor: String
+        /// Whether the cell's list exposes every row (a UITableView).
+        let listExposesEveryRow: Bool
         private var byTypeLabel: [String: Int] = [:]
         private var byTypeLabelId: [String: Int] = [:]
         private var byLabel: [String: Int] = [:]
         private var byLabelId: [String: Int] = [:]
 
-        init(anchor: String) { self.anchor = anchor }
+        init(anchor: String, listExposesEveryRow: Bool) {
+            self.anchor = anchor
+            self.listExposesEveryRow = listExposesEveryRow
+        }
 
         /// Record a node of the cell (not the cell itself), in tree order,
         /// and return its index among the earlier ones that a query inside
@@ -100,13 +155,9 @@ enum RowAnchor {
 
     private static func countCells(_ dict: [String: Any], into counts: inout [String: Int]) {
         if elementType(of: dict) == .cell {
-            var labels = Set<String>()
-            walk(dict) { node in
-                guard elementType(of: node) == .staticText else { return }
-                let label = node["label"] as? String ?? ""
-                if !label.isEmpty { labels.insert(label) }
-            }
-            for label in labels { counts[label, default: 0] += 1 }
+            var held = Set<String>()
+            walkDescendants(dict) { node in held.formUnion(keys(of: node)) }
+            for key in held { counts[key, default: 0] += 1 }
         }
         for child in dict["children"] as? [[String: Any]] ?? [] { countCells(child, into: &counts) }
     }
@@ -114,6 +165,11 @@ enum RowAnchor {
     /// Pre-order over `dict` and its descendants.
     static func walk(_ dict: [String: Any], _ visit: ([String: Any]) -> Void) {
         visit(dict)
+        for child in dict["children"] as? [[String: Any]] ?? [] { walk(child, visit) }
+    }
+
+    /// Pre-order over `dict`'s descendants, not `dict` itself.
+    static func walkDescendants(_ dict: [String: Any], _ visit: ([String: Any]) -> Void) {
         for child in dict["children"] as? [[String: Any]] ?? [] { walk(child, visit) }
     }
 
