@@ -230,6 +230,9 @@ class SnapshotElementFinder {
         // textfield query returns and the match set leaves out (PILOT-697).
         let treeHasReadOnlyTextView = register && selector.roleOnlyTextField
             && SnapshotElementFinder.containsReadOnlyTextView(snapshotDict)
+        // Whether the tree holds a collection view, which can load a cell
+        // with a row's anchor later (RowBinding.plan).
+        let treeHasLazyList = register && RowAnchor.containsLazyList(snapshotDict)
         var queryNodes: [QueryNode] = []
         if register && (selector.reResolvesByLabel || selector.roleOnlyReResolvesByLabel
             || selector.roleOnlySwitch || treeHasReadOnlyTextView) {
@@ -394,7 +397,8 @@ class SnapshotElementFinder {
                     idIndex: idIndices[matchIndex], idCount: idSeen[identifier, default: 0],
                     labelIndex: labelBindings[matchIndex].index,
                     labelIndexUnique: labelBindings[matchIndex].unique, snapshotNode: nodeDict,
-                    treeHasSwitchPart: treeHasSwitchPart, treeHasReadOnlyTextView: treeHasReadOnlyTextView
+                    treeHasSwitchPart: treeHasSwitchPart, treeHasReadOnlyTextView: treeHasReadOnlyTextView,
+                    treeHasLazyList: treeHasLazyList
                 )
             }
             // The snapshot's hasFocus is unreliable on Xcode 26 — it can
@@ -1815,7 +1819,8 @@ class SnapshotElementFinder {
         labelIndexUnique: Bool = false,
         snapshotNode: [String: Any]? = nil,
         treeHasSwitchPart: Bool = false,
-        treeHasReadOnlyTextView: Bool = false
+        treeHasReadOnlyTextView: Bool = false,
+        treeHasLazyList: Bool = false
     ) {
         // Build a query that matches this element
         var element: XCUIElement?
@@ -2078,7 +2083,10 @@ class SnapshotElementFinder {
         // place among others can be another row's.
         let inRow = snapshotNode?[SnapshotElementFinder.inRowKey] as? Bool ?? false
         let tags = snapshotNode.map(SnapshotElementFinder.rowTags(of:)) ?? RowBinding.Tags()
-        let plan = RowBinding.plan(bound: element != nil, inRow: inRow, uniqueInQuery: uniqueInQuery, tags: tags)
+        let plan = RowBinding.plan(
+            bound: element != nil, inRow: inRow, uniqueInQuery: uniqueInQuery, tags: tags,
+            treeHasLazyList: treeHasLazyList
+        )
         var anchoredRows: XCUIElementQuery?
         if plan.throughAnchor, let anchor = tags.anchor, let anchorPredicate = RowAnchor.predicate(forAnchor: anchor) {
             let rows = app.descendants(matching: .cell).containing(anchorPredicate)

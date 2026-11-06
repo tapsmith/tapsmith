@@ -174,6 +174,16 @@ enum RowAnchor {
         for child in dict["children"] as? [[String: Any]] ?? [] { walk(child, visit) }
     }
 
+    /// Whether the tree holds a collection view, which exposes only the
+    /// cells it has loaded.
+    static func containsLazyList(_ dict: [String: Any]) -> Bool {
+        var found = false
+        walk(dict) { node in
+            if !found, elementType(of: node) == .collectionView { found = true }
+        }
+        return found
+    }
+
     /// Whether `cell` holds another cell among its descendants.
     static func holdsRows(_ cell: [String: Any]) -> Bool {
         var found = false

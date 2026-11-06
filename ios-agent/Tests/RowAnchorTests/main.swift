@@ -89,6 +89,9 @@ check("a row holding a carousel holds rows", RowAnchor.holdsRows(
 ), true)
 check("a plain row holds none", RowAnchor.holdsRows(rows[1]), false)
 
+check("a table alone holds no lazy list", RowAnchor.containsLazyList(table), false)
+check("a collection view is a lazy list", RowAnchor.containsLazyList(nested), true)
+
 // ─── predicate ───
 
 check("a text anchor's predicate",

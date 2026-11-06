@@ -60,25 +60,30 @@ let nestedRow = Tags(anchor: "t\u{1}Featured", index: 4, nested: true,
                      anchorListExposesEveryRow: true, listExposesEveryRow: false)
 let noAnchorTable = Tags(listExposesEveryRow: true)
 let noAnchorList = Tags(listExposesEveryRow: false)
-check("outside a row: as before", RowBinding.plan(bound: true, inRow: false, uniqueInQuery: false, tags: Tags()), Plan())
+check("outside a row: as before", RowBinding.plan(bound: true, inRow: false, uniqueInQuery: false, tags: Tags(), treeHasLazyList: false), Plan())
 check("no live element on purpose stays none",
-      RowBinding.plan(bound: false, inRow: true, uniqueInQuery: false, tags: tableRow), Plan())
+      RowBinding.plan(bound: false, inRow: true, uniqueInQuery: false, tags: tableRow, treeHasLazyList: false), Plan())
 check("a table row's repeated button goes through its row",
-      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: false, tags: tableRow), Plan(throughAnchor: true))
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: false, tags: tableRow, treeHasLazyList: false), Plan(throughAnchor: true))
 check("a binding unique in a table stands",
-      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: tableRow), Plan())
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: tableRow, treeHasLazyList: false), Plan())
 check("a collection view's anchor is checked",
-      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: listRow),
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: listRow, treeHasLazyList: false),
+      Plan(throughAnchor: true, checkAnchor: true))
+// A collection view elsewhere in the tree could load a cell with the same
+// anchor: a table's anchor is checked too.
+check("a table row's anchor beside a collection view is checked",
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: false, tags: tableRow, treeHasLazyList: true),
       Plan(throughAnchor: true, checkAnchor: true))
 check("nested in an unanchored row: anchored and frame-checked",
-      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: nestedRow),
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: nestedRow, treeHasLazyList: false),
       Plan(throughAnchor: true, checkFrame: true))
 check("no anchor: frame-checked",
-      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: false, tags: noAnchorTable), Plan(checkFrame: true))
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: false, tags: noAnchorTable, treeHasLazyList: false), Plan(checkFrame: true))
 check("no anchor, unique in a table: as before",
-      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: noAnchorTable), Plan())
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: noAnchorTable, treeHasLazyList: false), Plan())
 check("no anchor, unique in a collection view: frame-checked",
-      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: noAnchorList), Plan(checkFrame: true))
+      RowBinding.plan(bound: true, inRow: true, uniqueInQuery: true, tags: noAnchorList, treeHasLazyList: false), Plan(checkFrame: true))
 
 // ─── isFoundElement ───
 

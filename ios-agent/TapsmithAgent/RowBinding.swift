@@ -88,12 +88,18 @@ enum RowBinding {
     /// Toggle knobs, a getByLabel match). `uniqueInQuery`: that query returns
     /// no other node. The anchor replaces only a binding by place among
     /// others; one the usual query alone finds, in a list that shows every
-    /// row, stands.
-    static func plan(bound: Bool, inRow: Bool, uniqueInQuery: Bool, tags: Tags) -> Plan {
+    /// row, stands. `treeHasLazyList`: the tree holds a collection view
+    /// somewhere, which can load a cell with the same anchor later: the
+    /// query for the anchor's row looks at every cell of the app, so even a
+    /// UITableView's anchor is then checked.
+    static func plan(bound: Bool, inRow: Bool, uniqueInQuery: Bool, tags: Tags, treeHasLazyList: Bool) -> Plan {
         guard bound, inRow else { return Plan() }
         if uniqueInQuery && tags.listExposesEveryRow { return Plan() }
         guard tags.anchor != nil else { return Plan(checkFrame: true) }
-        return Plan(throughAnchor: true, checkFrame: tags.nested, checkAnchor: !tags.anchorListExposesEveryRow)
+        return Plan(
+            throughAnchor: true, checkFrame: tags.nested,
+            checkAnchor: !tags.anchorListExposesEveryRow || treeHasLazyList
+        )
     }
 
     /// Whether the live element, read at `live` (nil: it could not be read),
