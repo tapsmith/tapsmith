@@ -617,6 +617,28 @@ describe('session-preflight', () => {
   describe('iOS rendered-content readiness (PILOT-1058)', () => {
     const iosCtx = () => makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'ios' } });
 
+    it('an acknowledged warm reset keeps only the hierarchy check: the epoch proves rendering', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosShell);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, epochBefore: 3, epochAfter: 4 }));
+
+      await executeAppReset(ctx, WARM_TEST, { phase: 'before test' });
+
+      expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
+    });
+
+    it('a warm reset the daemon delivered cold waits for rendered content like a relaunch', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, coldLaunch: true }));
+
+      await executeAppReset(ctx, WARM_TEST, { phase: 'before test' });
+
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+    });
+
     it('a clear reset asks the daemon to wait for rendered content', async () => {
       const ctx = iosCtx();
       vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosShell);

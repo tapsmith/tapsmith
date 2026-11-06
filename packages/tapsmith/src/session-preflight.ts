@@ -856,8 +856,9 @@ export async function executeAppReset(
     // the session check above is satisfied by a bare Activity/splash window,
     // and a deep link or hooks probe fired into a still-booting React Native
     // app is silently lost. An acknowledged warm reset needs none of this —
-    // the marker epoch is the proof of rendering.
-    await step('waitForAppReady', () => waitForAppReady(ctx));
+    // the marker epoch is the proof of rendering — so iOS keeps only its
+    // non-empty-hierarchy check there.
+    await step('waitForAppReady', () => waitForAppReady(ctx, { rendered: processRecreated }));
   }
   if (
     action.kind !== 'warm'
@@ -1139,8 +1140,8 @@ async function verifySession(
  * dispatch: iOS first needs a non-empty hierarchy ({@link waitForIosAppReady});
  * both then wait, bounded, for rendered content ({@link waitForRenderedContent}).
  */
-async function waitForAppReady(ctx: SessionPreflightContext): Promise<void> {
-  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx);
+async function waitForAppReady(ctx: SessionPreflightContext, options: { rendered?: boolean } = {}): Promise<void> {
+  if (ctx.config.platform === 'ios') return waitForIosAppReady(ctx, options);
   return waitForAndroidAppReady(ctx);
 }
 
@@ -1227,7 +1228,8 @@ async function waitForRenderedContent(
  * accessibility hierarchy (the app is up), then, bounded, rendered content.
  * Used at the file level (after launchConfiguredApp) where we know the app
  * should be in the foreground; not used per-test because tests may
- * intentionally leave the app stopped.
+ * intentionally leave the app stopped. `rendered: false` (an acknowledged warm
+ * reset, whose epoch already proves rendering) skips the second phase.
  *
  * A non-empty hierarchy alone is not "ready": a relaunched React Native app
  * is a bare shell (application, window, empty containers) until its bundle
@@ -1235,9 +1237,11 @@ async function waitForRenderedContent(
  * cold relaunch, and the hooks-marker read misses, pinning a hooked session
  * to clear resets (PILOT-1058).
  */
-async function waitForIosAppReady(ctx: SessionPreflightContext): Promise<void> {
+async function waitForIosAppReady(ctx: SessionPreflightContext, options: { rendered?: boolean } = {}): Promise<void> {
   await waitForIosAppHierarchy(ctx);
-  if (ctx.config.package) await waitForRenderedContent(ctx, ctx.config.package, iosHierarchyHasRenderedContent);
+  if (options.rendered !== false && ctx.config.package) {
+    await waitForRenderedContent(ctx, ctx.config.package, iosHierarchyHasRenderedContent);
+  }
 }
 
 /** The first phase of {@link waitForIosAppReady}: a non-empty hierarchy. */
