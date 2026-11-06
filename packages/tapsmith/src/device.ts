@@ -1001,7 +1001,8 @@ export class Device {
 
   /**
    * Dismiss the soft keyboard if it is showing; resolves at once when it is not.
-   * On Android it presses BACK. On iOS it tries each way of dismissing it and
+   * On Android it presses BACK, and throws without pressing it if the keyboard
+   * or the app stays unresponsive. On iOS it tries each way of dismissing it and
    * throws if the keyboard is still up after all of them.
    */
   async hideKeyboard(): Promise<void> {

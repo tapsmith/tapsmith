@@ -223,14 +223,12 @@ impl DeviceBackend for AndroidBackend<'_> {
         // Flutter). Only send BACK when the keyboard is actually shown,
         // otherwise BACK would pop the current screen / background the app.
         let serial = self.svc.active_serial().await?;
-        let shown = self.svc.android_is_keyboard_shown(&serial).await?;
-        if shown {
-            crate::android_keyboard::wait_until_back_reaches_keyboard(
-                &serial,
-                |command, timeout| adb::shell_with_timeout(&serial, command, timeout),
-            )
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
+        let press_back = crate::android_keyboard::should_press_back(&serial, |command, timeout| {
+            adb::shell_with_timeout(&serial, command, timeout)
+        })
+        .await
+        .map_err(|e| Status::internal(e.to_string()))?;
+        if press_back {
             self.svc
                 .adb_action(request_id, "input keyevent KEYCODE_BACK")
                 .await

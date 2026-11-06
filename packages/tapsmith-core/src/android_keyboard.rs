@@ -32,18 +32,18 @@ const BACK_CHECK_ATTEMPTS: u32 = 3;
 /// Whether the keyboard is shown, reading through `shell` (a strict adb shell
 /// with a timeout, so a transport or dumpsys failure is an error). A dump that
 /// completes but never mentions the flag reads as "hidden".
-pub async fn keyboard_shown<S, Fut>(serial: &str, shell: S) -> Result<bool>
+pub async fn keyboard_shown<S, Fut>(serial: &str, shell: &S) -> Result<bool>
 where
     S: Fn(&'static str, Duration) -> Fut,
     Fut: Future<Output = Result<String>>,
 {
-    let output = read_with_retry(serial, IME_STATE_COMMAND, &shell).await?;
+    let output = read_with_retry(serial, IME_STATE_COMMAND, shell).await?;
     if let Some(shown) = input_shown(&output) {
         return Ok(shown);
     }
     // We can only run this on the Android versions we have, so a build that
     // leaves the flag out of the critical section must not read as "hidden".
-    let output = read_with_retry(serial, FULL_DUMP_COMMAND, &shell).await?;
+    let output = read_with_retry(serial, FULL_DUMP_COMMAND, shell).await?;
     Ok(input_shown(&output).unwrap_or_else(|| {
         warn!(%serial, "dumpsys input_method has no mInputShown; reporting the keyboard as hidden");
         false
@@ -85,15 +85,30 @@ fn input_shown(dump: &str) -> Option<bool> {
     }
 }
 
-/// Wait until BACK will reach the keyboard, or say why it won't. Call this just
-/// before pressing BACK with the keyboard up.
+/// Whether to press BACK to hide the keyboard: only with the keyboard up, and an
+/// error if BACK wouldn't reach it. The check can take a while, and an abandoned
+/// test's call keeps running into the next test, so read the flag again at the end:
+/// a keyboard that has gone by then must not get a BACK.
+pub async fn should_press_back<S, Fut>(serial: &str, shell: S) -> Result<bool>
+where
+    S: Fn(&'static str, Duration) -> Fut,
+    Fut: Future<Output = Result<String>>,
+{
+    if !keyboard_shown(serial, &shell).await? {
+        return Ok(false);
+    }
+    wait_until_back_reaches_keyboard(serial, &shell).await?;
+    keyboard_shown(serial, &shell).await
+}
+
+/// Wait until BACK will reach the keyboard, or say why it won't.
 ///
 /// BACK goes through the focused app to the keyboard, and if the keyboard doesn't
 /// answer, Android hands it on to the app, which navigates back and pops the
 /// screen. The full dump asks both processes for an answer, which makes it the
 /// check for this. A process that fails it may only be busy (Gboard's first dump
 /// in a session can take over 5 s), so it gets more tries.
-pub async fn wait_until_back_reaches_keyboard<S, Fut>(serial: &str, shell: S) -> Result<()>
+async fn wait_until_back_reaches_keyboard<S, Fut>(serial: &str, shell: &S) -> Result<()>
 where
     S: Fn(&'static str, Duration) -> Fut,
     Fut: Future<Output = Result<String>>,
@@ -115,8 +130,17 @@ where
     ))
 }
 
+/// How a dump reports a process that didn't answer. System_server writes the first
+/// when it gives up on a process, the process itself writes the second when its main
+/// thread doesn't get to the dump, and dumpsys writes the third when it gives up.
 fn both_processes_answered(full_dump: &str) -> bool {
-    !full_dump.contains("Failed to dump input method") && !full_dump.contains("DUMP TIMEOUT")
+    ![
+        "Failed to dump input method",
+        "waiting for dump",
+        "DUMP TIMEOUT",
+    ]
+    .iter()
+    .any(|stuck| full_dump.contains(stuck))
 }
 
 #[cfg(test)]
@@ -140,7 +164,7 @@ mod tests {
         }
 
         async fn read(&self) -> Result<bool> {
-            keyboard_shown("emulator-5554", |command, timeout| {
+            keyboard_shown("emulator-5554", &|command, timeout| {
                 self.calls.lock().unwrap().push((command, timeout));
                 let answer = self.answers.lock().unwrap().pop_front();
                 async move { answer.expect("no scripted answer left") }
@@ -269,12 +293,25 @@ mod tests {
 
     impl FakeShell {
         async fn wait_for_back(&self) -> Result<()> {
-            wait_until_back_reaches_keyboard("emulator-5554", |command, timeout| {
+            wait_until_back_reaches_keyboard("emulator-5554", &|command, timeout| {
                 self.calls.lock().unwrap().push((command, timeout));
                 let answer = self.answers.lock().unwrap().pop_front();
                 async move { answer.expect("no scripted answer left") }
             })
             .await
+        }
+
+        async fn should_press_back(&self) -> Result<bool> {
+            should_press_back("emulator-5554", |command, timeout| {
+                self.calls.lock().unwrap().push((command, timeout));
+                let answer = self.answers.lock().unwrap().pop_front();
+                async move { answer.expect("no scripted answer left") }
+            })
+            .await
+        }
+
+        fn commands(&self) -> Vec<&'static str> {
+            self.calls().iter().map(|c| c.0).collect()
         }
     }
 
@@ -291,6 +328,8 @@ mod tests {
         for stuck in [
             full_dump(STUCK_KEYBOARD),
             full_dump(STUCK_APP),
+            full_dump("Timeout waiting for dump"),
+            full_dump("Interrupted waiting for dump"),
             timed_out(),
             dump("*** SERVICE 'input_method' DUMP TIMEOUT (10000ms) EXPIRED ***"),
         ] {
@@ -328,5 +367,51 @@ mod tests {
         let error = shell.wait_for_back().await.unwrap_err().to_string();
         assert_eq!(error, "adb command failed (exit 1): device offline");
         assert_eq!(shell.calls().len(), 1);
+    }
+
+    const CRITICAL: &str = "dumpsys input_method --dump-priority CRITICAL";
+    const FULL: &str = "dumpsys input_method";
+
+    #[tokio::test]
+    async fn a_hidden_keyboard_gets_no_back_and_no_full_dump() {
+        let shell = FakeShell::new(vec![dump("mInputShown=false")]);
+        assert!(!shell.should_press_back().await.unwrap());
+        assert_eq!(shell.commands(), vec![CRITICAL]);
+    }
+
+    #[tokio::test]
+    async fn back_is_pressed_after_the_check_when_the_keyboard_is_still_up() {
+        let shell = FakeShell::new(vec![
+            dump("mInputShown=true"),
+            full_dump("all answered"),
+            dump("mInputShown=true"),
+        ]);
+        assert!(shell.should_press_back().await.unwrap());
+        assert_eq!(shell.commands(), vec![CRITICAL, FULL, CRITICAL]);
+    }
+
+    #[tokio::test]
+    async fn a_keyboard_that_goes_during_the_check_gets_no_back() {
+        let shell = FakeShell::new(vec![
+            dump("mInputShown=true"),
+            full_dump(STUCK_KEYBOARD),
+            full_dump("all answered"),
+            dump("mInputShown=false"),
+        ]);
+        assert!(!shell.should_press_back().await.unwrap());
+        assert_eq!(shell.commands(), vec![CRITICAL, FULL, FULL, CRITICAL]);
+    }
+
+    #[tokio::test]
+    async fn a_refused_check_is_an_error() {
+        let shell = FakeShell::new(vec![
+            dump("mInputShown=true"),
+            full_dump(STUCK_APP),
+            full_dump(STUCK_APP),
+            full_dump(STUCK_APP),
+        ]);
+        let message = shell.should_press_back().await.unwrap_err().to_string();
+        assert!(message.contains("did not press BACK"), "{message}");
+        assert_eq!(shell.commands(), vec![CRITICAL, FULL, FULL, FULL]);
     }
 }

@@ -637,7 +637,7 @@ impl TapsmithServiceImpl {
     /// read rather than defaulting to a value, so callers can distinguish "not
     /// shown" from "check failed".
     async fn android_is_keyboard_shown(&self, serial: &str) -> Result<bool, Status> {
-        crate::android_keyboard::keyboard_shown(serial, |command, timeout| {
+        crate::android_keyboard::keyboard_shown(serial, &|command, timeout| {
             adb::shell_with_timeout(serial, command, timeout)
         })
         .await
