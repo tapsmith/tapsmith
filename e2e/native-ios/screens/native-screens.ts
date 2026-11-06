@@ -181,6 +181,8 @@ export class UIKitTableScreen {
   chevron(n: number) { return this.row(n).getByRole("button", { name: "chevron", exact: true }) }
   checkmark(n: number) { return this.row(n).getByRole("button", { name: "checkmark", exact: true }) }
   moreInfo(n: number) { return this.row(n).getByRole("button", { name: "More Info", exact: true }) }
+  /** The "Delete" swipe action, shown once the row is swiped left. */
+  delete(n: number) { return this.row(n).getByRole("button", { name: "Delete", exact: true }) }
   /** Row 8's custom accessory: a UIButton that really is disabled. */
   get buy() { return this.device.getByRole("button", { name: "Buy", exact: true }) }
   /** Row 9's custom accessory: a disabled image-only button showing a checkmark. */

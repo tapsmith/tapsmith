@@ -135,6 +135,12 @@ expect("same id, different label: own label only", QueryIndex.liveIndex(of: 1, i
 let saves = [node(staticText, "Save"), node(other, "Save"), node(button, "Save"), node(other, "Save")]
 expect(".any scope counts every same-label node", QueryIndex.liveIndex(of: 3, in: saves, scopeTypeRaw: nil) == 3)
 expect("a specific scope counts only its type", QueryIndex.liveIndex(of: 2, in: saves, scopeTypeRaw: button) == 0)
+// How many nodes that query returns in all (PILOT-952): one means the index
+// cannot pick the wrong node.
+expect("count: every same-label node", QueryIndex.liveCount(of: 1, in: saves, scopeTypeRaw: nil) == 4)
+expect("count: a specific scope counts only its type", QueryIndex.liveCount(of: 2, in: saves, scopeTypeRaw: button) == 1)
+expect("count: an id'd node counts only its id", QueryIndex.liveCount(of: 0, in: deletes, scopeTypeRaw: nil) == 1)
+expect("count: a no-id node counts id'd same-label nodes", QueryIndex.liveCount(of: 1, in: deletes, scopeTypeRaw: nil) == 2)
 
 // A substring getByText match found only through its value (an RN field's
 // placeholder, empty label) is re-resolved by the selector's own query, so

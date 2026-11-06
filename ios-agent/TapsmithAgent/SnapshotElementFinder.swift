@@ -29,6 +29,10 @@ class SnapshotElementFinder {
     /// it from a same-frame cover.
     private var identityCache: [String: CachedIdentity] = [:]
     private var cacheOrder: [String] = []
+    /// Ids whose live element is a row's, bound by its place in a query that
+    /// returns other nodes too, and not yet checked against where it was
+    /// found (RowBinding, PILOT-952).
+    private var uncheckedRowBindings: Set<String> = []
     private var focusedTextInputHint: FocusedTextInputHint?
     private let lock = NSLock()
     /// The shape that last outlasted `NavigationTransition.settle`.
@@ -291,10 +295,12 @@ class SnapshotElementFinder {
             substringMatched = QueryIndex.exactMatches(in: queryNodes, query: text)
         }
         // Each role+name match's index within the live query that
-        // cacheQueryElement re-resolves it with (nil: no numbered node).
-        let labelIndices: [Int?] = matches.map { (nodeDict, _) in
+        // cacheQueryElement re-resolves it with (nil: no numbered node), and
+        // whether that query returns no other node (RowBinding), known only
+        // for the query by its own label.
+        let labelBindings: [(index: Int?, unique: Bool)] = matches.map { (nodeDict, _) in
             guard let ordinal = nodeDict[SnapshotElementFinder.ordinalKey] as? Int,
-                  ordinal < queryNodes.count else { return nil }
+                  ordinal < queryNodes.count else { return (nil, false) }
             let raw = queryNodes[ordinal].typeRaw
             let type = XCUIElement.ElementType(rawValue: raw)
             let specific = type != nil && type != .other && type != .any
@@ -303,18 +309,22 @@ class SnapshotElementFinder {
             if let substringMatched, queryNodes[ordinal].label.isEmpty {
                 // Matched in a way that query can't return (a joined title
                 // child): no index, no live element.
-                guard substringMatched[ordinal] else { return nil }
-                return QueryIndex.substringLiveIndex(
+                guard substringMatched[ordinal] else { return (nil, false) }
+                return (QueryIndex.substringLiveIndex(
                     of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil, matched: substringMatched
-                )
+                ), false)
             }
             // A role+name match named by its placeholder (RoleName) is found
             // again by that placeholder, so index it there.
             if selector.role != nil, selector.hasNameFilter, let type,
                SnapshotElementFinder.placeholderNamed(queryNodes[ordinal], type: type) {
-                return QueryIndex.placeholderLiveIndex(of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil)
+                return (QueryIndex.placeholderLiveIndex(of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil), false)
             }
-            return QueryIndex.liveIndex(of: ordinal, in: queryNodes, scopeTypeRaw: specific ? raw : nil)
+            let scope = specific ? raw : nil
+            return (
+                QueryIndex.liveIndex(of: ordinal, in: queryNodes, scopeTypeRaw: scope),
+                QueryIndex.liveCount(of: ordinal, in: queryNodes, scopeTypeRaw: scope) == 1
+            )
         }
 
         let results = matches.enumerated().map { (matchIndex, match) in
@@ -368,7 +378,8 @@ class SnapshotElementFinder {
                 // a property (like .isHittable) is accessed. Pass the snapshot node so the
                 // query can use element type + identifier for more precise matching.
                 cacheQueryElement(elementId: elementId, selector: selector, matchIndex: matchIndex, idIndex: idIndices[matchIndex],
-                    labelIndex: labelIndices[matchIndex], snapshotNode: nodeDict,
+                    labelIndex: labelBindings[matchIndex].index,
+                    labelIndexUnique: labelBindings[matchIndex].unique, snapshotNode: nodeDict,
                     treeHasSwitchPart: treeHasSwitchPart, treeHasReadOnlyTextView: treeHasReadOnlyTextView
                 )
             }
@@ -506,6 +517,7 @@ class SnapshotElementFinder {
         boundsCache.removeAll()
         identityCache.removeAll()
         cacheOrder.removeAll()
+        uncheckedRowBindings.removeAll()
         focusedTextInputHint = nil
         lock.unlock()
     }
@@ -562,6 +574,7 @@ class SnapshotElementFinder {
             elementCache.removeValue(forKey: candidate)
             boundsCache.removeValue(forKey: candidate)
             identityCache.removeValue(forKey: candidate)
+            uncheckedRowBindings.remove(candidate)
             overflow -= 1
         }
     }
@@ -572,14 +585,37 @@ class SnapshotElementFinder {
     }
 
     /// Get a cached XCUIElement by its stable ID (for actions like tap).
+    ///
+    /// **Cost:** no IPC, except on the first use of a row's live element
+    /// bound by its place among others (RowBinding, PILOT-952): one
+    /// `snapshot()` of it, to check it is the element found.
     func getElement(_ elementId: String) throws -> XCUIElement {
         lock.lock()
         let cached = elementCache[elementId]
         if cached != nil {
             touchLocked(elementId)
         }
+        let unchecked = cached != nil && uncheckedRowBindings.contains(elementId)
+        let found = boundsCache[elementId]
         lock.unlock()
 
+        if let elem = cached, unchecked {
+            let live = try? elem.snapshot().frame
+            let bound = found.map { RowBinding.isFoundElement(found: $0, live: live) } ?? false
+            lock.lock()
+            uncheckedRowBindings.remove(elementId)
+            if !bound { elementCache.removeValue(forKey: elementId) }
+            lock.unlock()
+            if !bound {
+                // Another row's element (the live query's order changed as
+                // the table reused its cells), or none: keep no live element,
+                // so a touch goes to the frame it was found at, checked
+                // against a fresh tree (OcclusionAnalyzer), as a row's
+                // accessory indicator's does.
+                NSLog("[TapsmithSnapshot] \(elementId) found at \(found.map { "\($0)" } ?? "nil") but its live element is at \(live.map { "\($0)" } ?? "nothing"); dropping it")
+                throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
+            }
+        }
         if let elem = cached {
             return elem
         }
@@ -1152,6 +1188,11 @@ class SnapshotElementFinder {
     /// alert or has one as an ancestor (ElementInfo.inAlert, PILOT-862).
     static let inAlertKey = "tapsmithInAlert"
 
+    /// Key under which `findMatches` marks a matched node that is a table or
+    /// collection row (`.cell`) or has one as an ancestor (RowBinding,
+    /// PILOT-952).
+    static let inRowKey = "tapsmithInRow"
+
     /// Key under which `findMatches` records, on a match after the keyboard
     /// in tree order, the element types of the keyboard's nodes that match
     /// the selector: a live query re-resolving the match by position returns
@@ -1202,6 +1243,7 @@ class SnapshotElementFinder {
         inTabBar: Bool,
         insideSwitch: Bool = false,
         inAlert: Bool = false,
+        inRow: Bool = false,
         containerLabel: String,
         selector: ElementSelector,
         results: inout [([String: Any], CGRect)],
@@ -1317,6 +1359,7 @@ class SnapshotElementFinder {
             var matched = nodeDict
             if inTabBar { matched[SnapshotElementFinder.inTabBarKey] = true }
             if inAlert || nodeType == .alert { matched[SnapshotElementFinder.inAlertKey] = true }
+            if inRow || nodeType == .cell { matched[SnapshotElementFinder.inRowKey] = true }
             if !keyboardMatches.isEmpty { matched[SnapshotElementFinder.keyboardMatchesKey] = keyboardMatches }
             results.append((matched, frame))
             let myIndex = results.count - 1
@@ -1353,6 +1396,7 @@ class SnapshotElementFinder {
                     // Inside a native alert only the alert is an alert
                     // (RoleMapping.matches, PILOT-919).
                     inAlert: inAlert || nodeType == .alert,
+                    inRow: inRow || nodeType == .cell,
                     containerLabel: childContainerLabel,
                     selector: selector,
                     results: &results,
@@ -1633,6 +1677,7 @@ class SnapshotElementFinder {
         matchIndex: Int,
         idIndex: Int,
         labelIndex: Int?,
+        labelIndexUnique: Bool = false,
         snapshotNode: [String: Any]? = nil,
         treeHasSwitchPart: Bool = false,
         treeHasReadOnlyTextView: Bool = false
@@ -1698,7 +1743,11 @@ class SnapshotElementFinder {
 
         // The matched node found again by its own label (and identifier), at
         // its index among the nodes that query returns (QueryIndex.liveIndex).
+        // Whether the element is found by a query that returns no other node,
+        // so its place in that query cannot pick another (RowBinding).
+        var uniqueInQuery = false
         func byOwnLabel(_ nodeLabel: String, at labelIndex: Int) -> XCUIElement {
+            uniqueInQuery = labelIndexUnique
             var predicates = [NSPredicate(format: "label == %@", nodeLabel)]
             if !nodeIdentifier.isEmpty {
                 predicates.append(NSPredicate(format: "identifier == %@", nodeIdentifier))
@@ -1884,8 +1933,16 @@ class SnapshotElementFinder {
         }
 
         if let element = element {
+            // A row's element bound by its place among others is checked
+            // against where it was found before it is used (RowBinding,
+            // PILOT-952): once a table has scrolled, that place can be
+            // another row's.
+            let inRow = snapshotNode?[SnapshotElementFinder.inRowKey] as? Bool ?? false
             lock.lock()
             elementCache[elementId] = element
+            if RowBinding.needsCheck(inRow: inRow, uniqueInQuery: uniqueInQuery) {
+                uncheckedRowBindings.insert(elementId)
+            }
             lock.unlock()
         }
     }

@@ -162,6 +162,18 @@ enum QueryIndex {
         return count
     }
 
+    /// How many of `nodes` the live query that `liveIndex` indexes returns
+    /// in all, `nodes[ordinal]` included (PILOT-952). With one, its index
+    /// cannot pick another node, whatever order the query returns them in.
+    static func liveCount(of ordinal: Int, in nodes: [QueryNode], scopeTypeRaw: UInt?) -> Int {
+        let target = nodes[ordinal]
+        return nodes.reduce(0) { count, node in
+            node.label == target.label
+                && (target.identifier.isEmpty || node.identifier == target.identifier)
+                && (scopeTypeRaw == nil || node.typeRaw == scopeTypeRaw) ? count + 1 : count
+        }
+    }
+
     /// The index of `nodes[ordinal]` — a text field named by its placeholder
     /// (RoleName, PILOT-834) — within the live query that re-finds it by
     /// that placeholder (`placeholderValue == p`, and its identifier when it

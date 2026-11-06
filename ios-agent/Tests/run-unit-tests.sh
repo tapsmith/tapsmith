@@ -144,6 +144,12 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
 "$OUT/cell-accessories-tests"
 
 xcrun swiftc -sdk "$SDK" \
+  Tests/RowBindingTests/main.swift \
+  TapsmithAgent/RowBinding.swift \
+  -o "$OUT/row-binding-tests"
+"$OUT/row-binding-tests"
+
+xcrun swiftc -sdk "$SDK" \
   Tests/DoubleTapRouteTests/main.swift \
   TapsmithAgent/DoubleTapRoute.swift \
   -o "$OUT/double-tap-route-tests"
