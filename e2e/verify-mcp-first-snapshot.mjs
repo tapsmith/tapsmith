@@ -287,7 +287,9 @@ async function main() {
   // Uninstall first: `simctl install` over an existing install keeps its data
   // container, which may already be orphaned — the check must start healthy.
   log(`reinstalling ${app}`)
-  spawnSync("xcrun", ["simctl", "uninstall", opts.udid, opts.bundleId], { encoding: "utf8" })
+  // Not installed is fine, so only a hang matters here.
+  const uninstall = runSimctl(["uninstall", opts.udid, opts.bundleId], INSTALL_TIMEOUT_MS)
+  if (uninstall.timedOut) throw new Error(`xcrun simctl uninstall did not finish within ${INSTALL_TIMEOUT_MS / 1000}s`)
   simctl("install", opts.udid, app)
 
   log("session 1: tapsmith_launch_app with clear_data")
