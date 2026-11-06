@@ -6346,28 +6346,37 @@ describe('scrollIntoView() drags without momentum on Android (PILOT-973)', () =>
   });
 
   it('reads the screen again as soon as a drag returns: there is no momentum to watch', async () => {
-    const reads: number[] = [];
-    let swipedAt = 0;
-    const swipe = vi.fn(async () => {
-      swipedAt = performance.now();
-      return successResponse();
-    });
-    // Probe and confirmation miss; after the drag a miss, then after the
-    // second the row, then two equal reads that settle it.
-    const client = makeMockClient({
-      findElements: scripted([null, null, null, row(1000)], reads),
-      swipe,
-      getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1), listScreen(2)])),
-    });
+    // Fake timers (performance.now included), so the gap below is the time
+    // the implementation waits, not how busy the host is.
+    vi.useFakeTimers();
+    try {
+      const reads: number[] = [];
+      let swipedAt = 0;
+      const swipe = vi.fn(async () => {
+        swipedAt = performance.now();
+        return successResponse();
+      });
+      // Probe and confirmation miss; after the drag a miss, then after the
+      // second the row, then two equal reads that settle it.
+      const client = makeMockClient({
+        findElements: scripted([null, null, null, row(1000)], reads),
+        swipe,
+        getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1), listScreen(2)])),
+      });
 
-    await handle(client, 'android').scrollIntoView();
+      const done = handle(client, 'android').scrollIntoView();
+      await vi.runAllTimersAsync();
+      await done;
 
-    // Two before the first drag, one after each drag, two to settle: no watch reads.
-    expect(reads).toHaveLength(2 + 1 + 1 + 2);
-    expect(swipe).toHaveBeenCalledTimes(2);
-    // The read after the last drag comes straight away, not after the 100 ms
-    // watch interval.
-    expect(reads[4 - 1] - swipedAt).toBeLessThan(50);
+      // Two before the first drag, one after each drag, two to settle: no watch reads.
+      expect(reads).toHaveLength(2 + 1 + 1 + 2);
+      expect(swipe).toHaveBeenCalledTimes(2);
+      // The read after the last drag comes at once, with no fake time passing:
+      // not after the 100 ms watch interval.
+      expect(reads[4 - 1] - swipedAt).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('allows 10 drags by default on Android, where a drag moves the list less than a fling did; 5 elsewhere', async () => {

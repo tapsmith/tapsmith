@@ -482,6 +482,9 @@ class GestureInjector(
                 ok = move()
             }
         }
+        // A cancel that came during the last move or its wait cancels the
+        // pointer rather than lifting it, so the app sees no release.
+        checkpoint()
         val upOk = single(TouchAction.UP, downTime, x, y, sync = true)
         if (!upOk) single(TouchAction.CANCEL, downTime, x, y, sync = true)
         return ok && upOk

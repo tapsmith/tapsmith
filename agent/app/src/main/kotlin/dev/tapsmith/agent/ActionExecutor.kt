@@ -691,7 +691,11 @@ class ActionExecutor(
         val p = SwipeGeometry.points(region, direction, distance)
         val steps = (speed / 100).coerceIn(5, 100)
         if (drag) {
-            input.drag(p.fromX, p.fromY, p.toX, p.toY, steps)
+            // A refused drag moved nothing: report it, rather than let
+            // scrollIntoView() read the unchanged screen as the end of the list.
+            if (!input.drag(p.fromX, p.fromY, p.toX, p.toY, steps)) {
+                throw ActionFailedException("Failed to swipe $direction: the device refused the drag")
+            }
             return
         }
         input.swipe(p.fromX, p.fromY, p.toX, p.toY, steps)

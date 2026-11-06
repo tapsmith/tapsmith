@@ -560,6 +560,40 @@ class GestureInjectorTest {
     }
 
     @Test
+    fun `a drag cancelled during its last rest move cancels its pointer instead of lifting it`() {
+        // DOWN at 1000, two moves a frame apart, the last at 1032: the rest
+        // runs from 1032. Cancel on the wait that ends the rest, after the
+        // loop's last checkpoint.
+        val restEnds = 1_032L + GestureInjector.DRAG_REST_MS
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    if (clock.nowMs >= restEnds) token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        try {
+            CommandCancellation.runWith(token) {
+                GestureInjector(sink, cancelling) { 8L }.stepDrag(0, 0, 0, 100, steps = 2)
+            }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertTrue("the rest had begun", sink.actions().count { it == TouchAction.MOVE } > 2)
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+    }
+
+    @Test
     fun `a refused move stops a drag's moves but still lifts, and a refused lift is cancelled`() {
         var moves = 0
         val refusedMove = FakeSink(clock, refuse = { it.action == TouchAction.MOVE && ++moves == 2 })
