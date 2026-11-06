@@ -191,6 +191,17 @@ enum QueryIndex {
         return count
     }
 
+    /// How many of `nodes` the live query that `placeholderLiveIndex`
+    /// indexes returns in all, `nodes[ordinal]` included (PILOT-952).
+    static func placeholderLiveCount(of ordinal: Int, in nodes: [QueryNode], scopeTypeRaw: UInt?) -> Int {
+        let target = nodes[ordinal]
+        return nodes.reduce(0) { count, node in
+            node.placeholder == target.placeholder
+                && (target.identifier.isEmpty || node.identifier == target.identifier)
+                && (scopeTypeRaw == nil || node.typeRaw == scopeTypeRaw) ? count + 1 : count
+        }
+    }
+
     /// Which `nodes` a live substring-text query
     /// (`label/title/value MATCHES containsPattern(query)`, PILOT-522)
     /// returns, ignoring its type scope. Computed once per find.

@@ -141,6 +141,13 @@ expect("count: every same-label node", QueryIndex.liveCount(of: 1, in: saves, sc
 expect("count: a specific scope counts only its type", QueryIndex.liveCount(of: 2, in: saves, scopeTypeRaw: button) == 1)
 expect("count: an id'd node counts only its id", QueryIndex.liveCount(of: 0, in: deletes, scopeTypeRaw: nil) == 1)
 expect("count: a no-id node counts id'd same-label nodes", QueryIndex.liveCount(of: 1, in: deletes, scopeTypeRaw: nil) == 2)
+func field(_ placeholder: String, _ id: String = "") -> QueryNode {
+    QueryNode(typeRaw: 49, label: "", identifier: id, placeholder: placeholder)
+}
+let fields = [field("Email"), field("Password"), field("Email", "email-2")]
+expect("placeholder count: same placeholder, no id", QueryIndex.placeholderLiveCount(of: 0, in: fields, scopeTypeRaw: 49) == 2)
+expect("placeholder count: one of its kind", QueryIndex.placeholderLiveCount(of: 1, in: fields, scopeTypeRaw: 49) == 1)
+expect("placeholder count: an id narrows it", QueryIndex.placeholderLiveCount(of: 2, in: fields, scopeTypeRaw: 49) == 1)
 
 // A substring getByText match found only through its value (an RN field's
 // placeholder, empty label) is re-resolved by the selector's own query, so

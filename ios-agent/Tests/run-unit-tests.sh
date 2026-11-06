@@ -143,6 +143,13 @@ xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
   -o "$OUT/cell-accessories-tests"
 "$OUT/cell-accessories-tests"
 
+xcrun swiftc -sdk "$SDK" -F "$FRAMEWORKS" \
+  -Xlinker -rpath -Xlinker "$FRAMEWORKS" -framework XCTest \
+  Tests/RowAnchorTests/main.swift \
+  TapsmithAgent/RowAnchor.swift \
+  -o "$OUT/row-anchor-tests"
+"$OUT/row-anchor-tests"
+
 xcrun swiftc -sdk "$SDK" \
   Tests/RowBindingTests/main.swift \
   TapsmithAgent/RowBinding.swift \
