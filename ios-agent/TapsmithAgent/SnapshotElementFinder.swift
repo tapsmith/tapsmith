@@ -678,6 +678,19 @@ class SnapshotElementFinder {
         throw AgentError.elementNotFound("Element '\(elementId)' not found. It may have gone stale.")
     }
 
+    /// Whether a live read of `elementId` at `liveFrame` is the element it
+    /// was found as: always, unless it is a row's element bound by its place
+    /// among others (`RowBinding.plan`'s frame check), which must be where
+    /// it was found. No IPC.
+    func isFoundElement(_ elementId: String, liveFrame: CGRect) -> Bool {
+        lock.lock()
+        let checked = rowBindings.contains(elementId)
+        let found = boundsCache[elementId]
+        lock.unlock()
+        guard checked else { return true }
+        return found.map { RowBinding.isFoundElement(found: $0, live: liveFrame) } ?? false
+    }
+
     /// Get cached snapshot bounds for an element (for coordinate-based actions).
     ///
     /// **Cost:** O(1) dictionary lookup, no IPC. Bounds were captured
