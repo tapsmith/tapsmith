@@ -30,9 +30,9 @@ class SnapshotElementFinder {
     private var identityCache: [String: CachedIdentity] = [:]
     private var cacheOrder: [String] = []
     /// Ids whose live element is a row's, bound by its place in a query that
-    /// returns other nodes too, and not yet checked against where it was
-    /// found (RowBinding, PILOT-952).
-    private var uncheckedRowBindings: Set<String> = []
+    /// returns other nodes too, so checked against where it was found on
+    /// every use (RowBinding, PILOT-952).
+    private var rowBindings: Set<String> = []
     private var focusedTextInputHint: FocusedTextInputHint?
     private let lock = NSLock()
     /// The shape that last outlasted `NavigationTransition.settle`.
@@ -517,7 +517,7 @@ class SnapshotElementFinder {
         boundsCache.removeAll()
         identityCache.removeAll()
         cacheOrder.removeAll()
-        uncheckedRowBindings.removeAll()
+        rowBindings.removeAll()
         focusedTextInputHint = nil
         lock.unlock()
     }
@@ -574,7 +574,7 @@ class SnapshotElementFinder {
             elementCache.removeValue(forKey: candidate)
             boundsCache.removeValue(forKey: candidate)
             identityCache.removeValue(forKey: candidate)
-            uncheckedRowBindings.remove(candidate)
+            rowBindings.remove(candidate)
             overflow -= 1
         }
     }
@@ -586,26 +586,31 @@ class SnapshotElementFinder {
 
     /// Get a cached XCUIElement by its stable ID (for actions like tap).
     ///
-    /// **Cost:** no IPC, except on the first use of a row's live element
-    /// bound by its place among others (RowBinding, PILOT-952): one
-    /// `snapshot()` of it, to check it is the element found.
+    /// **Cost:** no IPC, except for a row's live element bound by its place
+    /// among others (RowBinding, PILOT-952): one `snapshot()` of it on each
+    /// call, to check it is still the element found. The query behind it is
+    /// evaluated again on every read, so a check made once would not hold
+    /// once the table moves and reuses its cells (within one touch, while it
+    /// waits for the row to settle).
     func getElement(_ elementId: String) throws -> XCUIElement {
         lock.lock()
         let cached = elementCache[elementId]
         if cached != nil {
             touchLocked(elementId)
         }
-        let unchecked = cached != nil && uncheckedRowBindings.contains(elementId)
+        let checked = cached != nil && rowBindings.contains(elementId)
         let found = boundsCache[elementId]
         lock.unlock()
 
-        if let elem = cached, unchecked {
+        if let elem = cached, checked {
             let live = try? elem.snapshot().frame
             let bound = found.map { RowBinding.isFoundElement(found: $0, live: live) } ?? false
-            lock.lock()
-            uncheckedRowBindings.remove(elementId)
-            if !bound { elementCache.removeValue(forKey: elementId) }
-            lock.unlock()
+            if !bound {
+                lock.lock()
+                rowBindings.remove(elementId)
+                elementCache.removeValue(forKey: elementId)
+                lock.unlock()
+            }
             if !bound {
                 // Another row's element (the live query's order changed as
                 // the table reused its cells), or none: keep no live element,
@@ -1934,14 +1939,14 @@ class SnapshotElementFinder {
 
         if let element = element {
             // A row's element bound by its place among others is checked
-            // against where it was found before it is used (RowBinding,
+            // against where it was found whenever it is used (RowBinding,
             // PILOT-952): once a table has scrolled, that place can be
             // another row's.
             let inRow = snapshotNode?[SnapshotElementFinder.inRowKey] as? Bool ?? false
             lock.lock()
             elementCache[elementId] = element
             if RowBinding.needsCheck(inRow: inRow, uniqueInQuery: uniqueInQuery) {
-                uncheckedRowBindings.insert(elementId)
+                rowBindings.insert(elementId)
             }
             lock.unlock()
         }

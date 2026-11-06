@@ -13,14 +13,15 @@ import CoreGraphics
 /// sent through it reached Row 67's button for Row 68's, and reported
 /// success.
 ///
-/// So such a binding is checked before it is first used: the live element
-/// must be where the match was found. One that is elsewhere is dropped, and
+/// So such a binding is checked each time it is used (its query is evaluated
+/// again on every read, so one check would not hold while the table moves):
+/// the live element must be where the match was found. One that is elsewhere is dropped, and
 /// the element is touched at the frame it was found at, as a row's accessory
 /// indicator always is (`CellAccessories`, PILOT-895), which checks against a
 /// fresh tree that it is still there. A binding nothing else could be bound
 /// to (the only node its query returns) needs no check.
 enum RowBinding {
-    /// Whether a match's live element must be checked before it is used:
+    /// Whether a match's live element must be checked whenever it is used:
     /// it is a row or inside one, and its query returns other nodes too.
     static func needsCheck(inRow: Bool, uniqueInQuery: Bool) -> Bool {
         inRow && !uniqueInQuery
