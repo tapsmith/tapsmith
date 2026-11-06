@@ -14,6 +14,7 @@ import { uiPortFilePath, allUiPortFiles, mcpDaemonRegistryPath } from './port-fi
 import { openDaemonLog, readDaemonLogSince } from './daemon-log.js';
 import { awaitDaemonStart, daemonStartFailure, spawnDaemonBinary, type DaemonStartFailed } from '../daemon-start.js';
 import { withDetail } from '../error-detail.js';
+import { AGENT_START_RETRY_DELAY_MS, startAgentWithRetry } from '../worker-protocol.js';
 import {
   DaemonClaimedError,
   DeviceClaimedError,
@@ -2525,14 +2526,22 @@ async function startAgentFromConfig(
   let failure: string | undefined;
   try {
     log('Starting agent on device...');
-    const res = await client.startAgent(
-      config?.package ?? '',
-      agentApk,
-      agentTestApk,
-      iosXctestrun,
+    // A transient failure (a slow runner's launch timeout, a dropped daemon
+    // connection) gets the one retry a test run's start gets (PILOT-948).
+    await startAgentWithRetry(
+      async () => {
+        const res = await client.startAgent(
+          config?.package ?? '',
+          agentApk,
+          agentTestApk,
+          iosXctestrun,
+        );
+        // A refusal is an answer, not an error: the daemon's reason is in it.
+        if (res?.success === false) throw new Error(res.errorMessage || 'the daemon refused to start the agent');
+      },
+      (err) => log(`agent startup failed, retrying once: ${err instanceof Error ? err.message : String(err)}`),
+      { delayMs: AGENT_START_RETRY_DELAY_MS },
     );
-    // A refusal is an answer, not an error: the daemon's reason is in it.
-    if (res?.success === false) failure = res.errorMessage || 'the daemon refused to start the agent';
   } catch (err) {
     failure = err instanceof Error ? err.message : String(err);
   }
