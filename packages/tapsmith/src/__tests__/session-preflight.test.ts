@@ -63,7 +63,19 @@ function makeContext(overrides: Partial<Parameters<typeof ensureSessionReady>[0]
   };
 }
 
-const iosHierarchy = { requestId: '1', hierarchyXml: '<hierarchy><node /></hierarchy>', errorMessage: '' };
+/** An iOS app that has drawn its first screen. */
+const iosHierarchy = {
+  requestId: '1',
+  hierarchyXml: '<hierarchy><XCUIElementTypeApplication label="Example"><XCUIElementTypeStaticText label="Home" /></XCUIElementTypeApplication></hierarchy>',
+  errorMessage: '',
+};
+/** A React Native app on iOS right after launch, before its bundle renders:
+ *  the application, a window and empty containers (PILOT-1058). */
+const iosShell = {
+  requestId: '1',
+  hierarchyXml: '<hierarchy><XCUIElementTypeApplication label="Example"><XCUIElementTypeWindow label=""><XCUIElementTypeOther label="" identifier="" /></XCUIElementTypeWindow></XCUIElementTypeApplication></hierarchy>',
+  errorMessage: '',
+};
 
 /** A daemon ResetApp outcome as Device._resetApp reports it. */
 function resetResult(
@@ -441,6 +453,7 @@ describe('session-preflight', () => {
         resetAppWaitMs: 321,
       },
     });
+    vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
 
     const report = await executeAppReset(ctx, WARM_FILE, { phase: 'file reset' });
 
@@ -583,15 +596,8 @@ describe('session-preflight', () => {
         expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(2);
       });
 
-      it('iOS keeps its own readiness check', async () => {
-        const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'ios' } });
-        vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosHierarchy);
-
-        await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
-
-        expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
-      });
     });
+
 
     it('startup launch waits for rendered content before probing for hooks', async () => {
       const ctx = makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } });
@@ -605,6 +611,87 @@ describe('session-preflight', () => {
       await launchConfiguredApp(ctx, 'startup', { freshInstall: true, hooksProbeMs: 0 });
 
       expect((ctx as { capabilities?: { hooksDetected?: boolean } }).capabilities?.hooksDetected).toBe(true);
+    });
+  });
+
+  describe('iOS rendered-content readiness (PILOT-1058)', () => {
+    const iosCtx = () => makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'ios' } });
+
+    it('a clear reset asks the daemon to wait for rendered content', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosShell);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+      const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledWith('com.example.app', 10_000, expect.any(Number));
+    });
+
+    it('without the daemon wait, polls past the empty React Native shell until the app renders', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValue(iosHierarchy);
+
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      // Every shell read is spent waiting; the first rendered read ends the wait.
+      const reads = vi.mocked(ctx.client.getUiHierarchy).mock.calls.length;
+      expect(reads).toBeGreaterThanOrEqual(4);
+    });
+
+    it('an app that never draws content is let through after the bound, with the breadcrumb', async () => {
+      const ctx = iosCtx();
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue(iosShell);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: false, supported: true });
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        await expect(executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' })).resolves.toBeDefined();
+        expect(stderr.mock.calls.map((c) => String(c[0])).join('')).toContain('showed no rendered content');
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it('an empty hierarchy is still not ready: the content wait runs only once the app is up', async () => {
+      const ctx = iosCtx();
+      const empty = { requestId: '1', hierarchyXml: '', errorMessage: 'Unable to lookup in current state' };
+      vi.mocked(ctx.client.getUiHierarchy)
+        .mockResolvedValueOnce(empty)
+        .mockResolvedValue(iosHierarchy);
+      vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
+
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+    });
+
+    it('a hooked session stuck on clear upgrades to warm once the relaunched app has rendered (regression)', async () => {
+      const ctx = {
+        ...iosCtx(),
+        capabilities: { hooksDetected: false } as import('../app-reset.js').ResetCapabilities,
+      };
+      const markerScreen = {
+        requestId: '1',
+        hierarchyXml: '<hierarchy><XCUIElementTypeApplication label="Example"><XCUIElementTypeStaticText label="Home" />'
+          + '<XCUIElementTypeOther label="tapsmith-hooks:1;epoch=0;nav=0;boot=abc;url=app:///" /></XCUIElementTypeApplication></hierarchy>',
+        errorMessage: '',
+      };
+      // The relaunched app is the bare shell for the first reads, then renders.
+      vi.mocked(ctx.client.getUiHierarchy)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValueOnce(iosShell)
+        .mockResolvedValue(markerScreen);
+
+      await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
+
+      expect(ctx.capabilities.hooksDetected).toBe(true);
     });
   });
 
@@ -1229,12 +1316,13 @@ describe('session-preflight', () => {
     vi.mocked(ctx.client.getUiHierarchy)
       .mockResolvedValueOnce({ requestId: '1', hierarchyXml: '', errorMessage: '' })
       .mockResolvedValueOnce({ requestId: '1', hierarchyXml: '  ', errorMessage: '' })
-      .mockResolvedValueOnce({ requestId: '1', hierarchyXml: '<hierarchy><node /></hierarchy>', errorMessage: '' });
+      .mockResolvedValue(iosHierarchy);
 
     await launchConfiguredApp(ctx, 'startup', { hooksProbeMs: 0 });
 
-    // 3 hierarchy calls (2 empty + 1 non-empty) + the reset-capabilities probe
-    expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(4);
+    // 3 hierarchy calls (2 empty + 1 non-empty), one rendered-content read
+    // (this daemon has no agent-side wait), and the reset-capabilities probe
+    expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(5);
   });
   describe('blocking system dialogs (PILOT-398)', () => {
     const PKG = 'com.example.app';
