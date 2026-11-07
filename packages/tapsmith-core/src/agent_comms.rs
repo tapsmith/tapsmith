@@ -451,6 +451,7 @@ pub enum AgentCommand {
     /// space, for the agent to map into the HID helper's native portrait
     /// space, as it maps a tap's point. It answers `{"points": null}` when the
     /// way the screen is turned cannot be told.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     ScrollStepPoints {
         points: Vec<[f64; 2]>,
     },
@@ -458,6 +459,7 @@ pub enum AgentCommand {
     /// HID drag: wait for `region` to stop changing (unless the element is
     /// still far off), find `selector`, and report whether the tree inside
     /// `region` changed since the agent's previous snapshot.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     ScrollStepFind {
         selector: Value,
         /// `{"left","top","right","bottom"}`, in points.

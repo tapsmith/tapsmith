@@ -95,6 +95,7 @@ fn bounds_from_json(v: &Value) -> Option<proto::Bounds> {
     (b.right > b.left && b.bottom > b.top).then_some(b)
 }
 
+#[cfg(any(target_os = "macos", test))]
 /// One sample of a HID drag: where the finger is `at_ms` after the press.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct DragSample {
@@ -106,25 +107,34 @@ pub(super) struct DragSample {
 /// Moves are this far apart in time: the HID helper injects events at least
 /// 12 ms apart, so a faster timeline would only queue up behind it and the
 /// drag would end (and the step's find start) before the helper had made it.
+#[cfg(any(target_os = "macos", test))]
 const DRAG_MOVE_INTERVAL_MS: f64 = 12.0;
 /// The drag's three segments: a short kick that gets past the scroll view's
 /// touch slop, the bulk of the length, then a slow tail. Each ends on the
 /// move interval's grid, so no two samples are closer than it.
+#[cfg(any(target_os = "macos", test))]
 const DRAG_KICK_PT: f64 = 12.0;
+#[cfg(any(target_os = "macos", test))]
 const DRAG_KICK_END_MS: f64 = 36.0;
+#[cfg(any(target_os = "macos", test))]
 const DRAG_BULK_END_MS: f64 = 192.0;
+#[cfg(any(target_os = "macos", test))]
 const DRAG_TAIL_PT: f64 = 40.0;
+#[cfg(any(target_os = "macos", test))]
 const DRAG_TAIL_END_MS: f64 = 396.0;
 /// The finger holds still at the end for this long before it lifts, so the
 /// velocity UIKit measures at the lift is ~0 and the list does not decelerate
 /// on its own (a 200 pt/s tail alone still flung a long list ~600 pt).
+#[cfg(any(target_os = "macos", test))]
 pub(super) const DRAG_HOLD_MS: f64 = 60.0;
 /// A drag shorter than half the region is a nudge (scrollIntoView()'s
 /// scroll-back and cut-by-edge moves, PILOT-935): centred on the region.
+#[cfg(any(target_os = "macos", test))]
 const NUDGE_BELOW: f32 = 0.5;
 /// Where a full drag starts, as a fraction of the region from the edge the
 /// finger moves away from: clear of the region's edge, so it does not start
 /// on a header or the home indicator.
+#[cfg(any(target_os = "macos", test))]
 const DRAG_START_INSET: f64 = 0.1;
 
 /// The path of an iOS scroll step's drag through the HID helper, idea from
@@ -134,6 +144,7 @@ const DRAG_START_INSET: f64 = 0.1;
 /// the finger moves away from; a shorter one is centred on the region. The
 /// last sample is where the finger lifts. None for an empty region, an
 /// unknown direction or a non-positive distance.
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn hid_drag_path(
     direction: &str,
     region: &proto::Bounds,
@@ -217,6 +228,7 @@ pub(super) fn hid_drag_path(
 }
 
 /// The drag's points as `scrollStepPoints` takes them.
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn drag_points(path: &[DragSample]) -> Vec<[f64; 2]> {
     path.iter().map(|s| [s.x, s.y]).collect()
 }
@@ -225,6 +237,7 @@ pub(super) fn drag_points(path: &[DragSample]) -> Vec<[f64; 2]> {
 /// `scrollStepPoints` answer: the same timeline at the mapped points. None
 /// when the agent could not map them (it cannot tell how the screen is
 /// turned) or answered something else.
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn native_path(path: &[DragSample], answer: &Value) -> Option<Vec<DragSample>> {
     let points = answer.get("points")?.as_array()?;
     if points.len() != path.len() {
