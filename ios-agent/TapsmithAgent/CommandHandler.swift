@@ -107,14 +107,24 @@ class CommandHandler {
     }
 
     /// Recursively check whether a snapshot tree contains any rendered,
-    /// user-meaningful element (text, input, or control).
+    /// user-meaningful element: text, input or control, or a labelled or
+    /// identified container (`AppReadiness.isRenderedContent`).
     private func snapshotContainsContent(_ snapshot: XCUIElementSnapshot) -> Bool {
+        let isContentType: Bool
         switch snapshot.elementType {
         case .staticText, .textField, .secureTextField, .textView, .searchField,
              .button, .link, .image, .switch:
-            return true
+            isContentType = true
         default:
-            break
+            isContentType = false
+        }
+        if AppReadiness.isRenderedContent(
+            isContentType,
+            snapshot.elementType == .application,
+            snapshot.label,
+            snapshot.identifier
+        ) {
+            return true
         }
         for child in snapshot.children where snapshotContainsContent(child) {
             return true
@@ -2354,6 +2364,30 @@ class CommandHandler {
             @unknown default: state = "stopped"
             }
             return ["state": state]
+
+        // Has the app drawn real content yet (PILOT-1058)? Read with the
+        // warm deep-link path's own test (`snapshotContainsContent`), so
+        // "ready" means a warm delivery right after it is applicable. Never
+        // launches the app: a snapshot of one that is not running reads as
+        // "not yet". Running out of time is `ready: false`, not an error.
+        case "waitForAppReady":
+            let bundleId = targetBundleId(fallback: params)
+            let timeoutMs = (params["timeout"] as? NSNumber)?.intValue ?? 10_000
+            // A process launched outside the runner (simctl launch / openurl)
+            // can stay invisible to an XCUIApplication bound while it was
+            // still registering, and XCTest learns of it through XPC callbacks
+            // on the main RunLoop. So wait by running the RunLoop, not
+            // Thread.sleep, and read through a fresh binding each check. With
+            // either alone, 1–4 of 20 such relaunches read no content for the
+            // whole wait while the app was rendered (PILOT-1062 spike).
+            let outcome = AppReadiness.wait(
+                timeoutMs: timeoutMs,
+                now: { Date() },
+                sleep: { RunLoop.current.run(until: Date(timeIntervalSinceNow: $0)) },
+                check: { appHasRenderedContent(XCUIApplication(bundleIdentifier: bundleId)) }
+            )
+            NSLog("[Tapsmith] waitForAppReady ready=\(outcome.ready) in \(outcome.elapsedMs)ms (\(outcome.checks) checks)")
+            return ["ready": outcome.ready, "elapsedMs": outcome.elapsedMs, "checks": outcome.checks]
 
         case "currentPackage":
             // On iOS, report the target app's bundle ID

@@ -91,6 +91,7 @@ function makeDevice(name: string) {
       hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>',
       errorMessage: '',
     })),
+    waitForAppReady: vi.fn(async () => ({ requestId: '1', ready: true, supported: true })),
   };
   const sessionContext: SessionPreflightContext = {
     label: name,
