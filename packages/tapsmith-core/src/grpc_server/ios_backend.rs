@@ -593,20 +593,16 @@ impl DeviceBackend for IosBackend<'_> {
             // can't tell that apart from a legitimate delivery whose
             // destination renders like the current screen — the app
             // silently stays where it was while the reset "succeeds".
-            // The agent now confirms the process died; when it can't
-            // (observed under CoreSimulator pressure with agent
-            // commands running 10-40s), force it host-side before
+            // The terminate is `simctl terminate` confirmed by the agent's
+            // app state, falling back to the agent's own terminate
+            // (PILOT-1062); when neither confirms the process died
+            // (observed under CoreSimulator pressure with agent commands
+            // running 10-40s), force it host-side once more before
             // delivering.
-            let terminate_confirmed = matches!(
-                self.svc.send_agent_command_with_timeout(
-                    &AgentCommand::TerminateApp {
-                        package: bundle_id.clone(),
-                    },
-                    10_000,
-                )
-                .await,
-                Ok(resp) if resp.success
-            );
+            let terminate_confirmed = self
+                .svc
+                .terminate_ios_app_confirmed(&serial, &bundle_id, 10_000)
+                .await;
             if !terminate_confirmed {
                 warn!(
                     %serial, uri = %uri,
