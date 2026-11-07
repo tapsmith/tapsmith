@@ -529,6 +529,9 @@ class SnapshotElementFinder {
             do {
                 let s = try app.snapshot()
                 if !s.dictionaryRepresentation.isEmpty {
+                    lock.lock()
+                    lastSnapshot = s
+                    lock.unlock()
                     return s
                 }
             } catch {
@@ -542,6 +545,26 @@ class SnapshotElementFinder {
             ?? "Snapshot returned empty tree after retries"
         NSLog("[TapsmithSnapshot] \(msg)")
         throw AgentError.elementNotFound(msg)
+    }
+
+    /// The last snapshot taken, for a scroll step's "did the list move"
+    /// (PILOT-998): taken before the step's drag, by the read before it.
+    private var lastSnapshot: XCUIElementSnapshot?
+
+    /// `ScrollStepWatch.fingerprint` of the last snapshot's nodes inside
+    /// `region`; nil before any snapshot.
+    func lastSnapshotFingerprint(in region: CGRect) -> Int? {
+        lock.lock()
+        let last = lastSnapshot
+        lock.unlock()
+        guard let root = last else { return nil }
+        var nodes: [(frame: CGRect, label: String)] = []
+        var stack: [XCUIElementSnapshot] = [root]
+        while let node = stack.popLast() {
+            nodes.append((frame: node.frame, label: node.label))
+            stack.append(contentsOf: node.children.reversed())
+        }
+        return ScrollStepWatch.fingerprint(nodes, in: region)
     }
 
     /// Clear all caches (call after app relaunch).

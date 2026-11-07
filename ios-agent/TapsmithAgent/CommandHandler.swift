@@ -1506,6 +1506,57 @@ class CommandHandler {
             let elements = try elementFinder.findElements(selector, parentId: parentId)
             return ["elements": elements.map { $0.toDict() }]
 
+        case "scrollStepFind":
+            // The find half of an iOS scroll step (PILOT-998), after the
+            // daemon's HID drag: wait for the list to stop re-laying out when
+            // the element is near, find, and say whether the list moved since
+            // the snapshot before the drag.
+            let selector = SelectorParser.parse(params["selector"] as? [String: Any] ?? [:])
+            guard let r = params["region"] as? [String: Any] else {
+                throw AgentError.invalidSelector("scrollStepFind needs a region")
+            }
+            func coord(_ key: String) -> CGFloat { CGFloat((r[key] as? NSNumber)?.doubleValue ?? 0) }
+            let region = CGRect(
+                x: coord("left"),
+                y: coord("top"),
+                width: coord("right") - coord("left"),
+                height: coord("bottom") - coord("top")
+            )
+            let before = snapshotFinder.lastSnapshotFingerprint(in: region)
+            var elements = try snapshotFinder.findElements(selector)
+            let matches = elements.map { e in
+                (frame: CGRect(
+                    x: CGFloat(e.bounds.left),
+                    y: CGFloat(e.bounds.top),
+                    width: CGFloat(e.bounds.right - e.bounds.left),
+                    height: CGFloat(e.bounds.bottom - e.bounds.top)
+                ), visible: e.isVisible)
+            }
+            var waited = "far, no wait"
+            if !ScrollStepWatch.isFar(matches, region: region) {
+                let band = ScrollStepWatch.band(of: region)
+                let native = HidTouch.nativeRect(
+                    band,
+                    screen: snapshotFinder.screenSize,
+                    device: Self.deviceTurn(XCUIDevice.shared.orientation)
+                ) ?? band
+                var deadline = Date().addingTimeInterval(ScrollStepWatch.maxWaitSeconds)
+                if let read = commandReadDeadline {
+                    // Leave the find after the wait its time before the daemon gives up.
+                    deadline = min(deadline, read.addingTimeInterval(-(TouchPlanClock.readDeadlineMarginSeconds + 0.5)))
+                }
+                let started = Date()
+                let outcome = actionExecutor.waitUntilStill(region: native, deadline: deadline)
+                waited = "\(outcome) in \(Int(Date().timeIntervalSince(started) * 1000)) ms"
+                elements = try snapshotFinder.findElements(selector)
+            }
+            var out: [String: Any] = ["elements": elements.map { $0.toDict() }]
+            if let before, let after = snapshotFinder.lastSnapshotFingerprint(in: region) {
+                out["moved"] = before != after
+            }
+            NSLog("[TapsmithScrollStep] \(waited); \(elements.count) match(es), moved=\(String(describing: out["moved"]))")
+            return out
+
         case "evaluateSelectors":
             // PILOT-848: one snapshot, every selector matched by the walk
             // findElements uses; a failing selector fails only its entry.

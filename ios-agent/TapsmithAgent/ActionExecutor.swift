@@ -94,6 +94,22 @@ class ActionExecutor {
         return outcome
     }
 
+    /// Wait until the pixels of `region` (native portrait space, as for
+    /// `waitUntilSettled(region:deadline:)`) have not changed for
+    /// `ScrollStepWatch.holdSeconds`, or `deadline` passes: a scroll step's
+    /// wait for its list to stop re-laying out (PILOT-998).
+    @discardableResult
+    func waitUntilStill(region: CGRect, deadline: Date) -> ScrollStepWatch.Outcome {
+        guard !region.isEmpty else { return .unreadable }
+        var sampler = RegionSampler.forRegion(region)
+        return ScrollStepWatch.waitUntilStill(
+            deadline: deadline,
+            now: Date.init,
+            sleep: Thread.sleep(forTimeInterval:),
+            sample: { sampler.sample() }
+        )
+    }
+
     /// Takes one settle wait's samples of a screen region. All of a wait's
     /// samples come from the same kind of capture, so two of them never
     /// differ only in how they were taken — except once, when a region
