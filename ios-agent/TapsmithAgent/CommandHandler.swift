@@ -1381,11 +1381,12 @@ class CommandHandler {
         let plan = TypingCheck.plan(text, multiline: initialElement.className == "XCUIElementTypeTextView")
         let before = initialElement.text ?? ""
         if let first = plan.keys.first {
-            let field = try typeFirstKey(String(first), before: before, secure: secure, selectorParams: selectorParams)
-            // From here on part of the text is in the field: no error may
-            // read as a stale element, which the SDK answers by typing the
-            // whole text again (it spots one by "stale" in the message).
+            // From the first key on, part of the text can be in the field: no
+            // error may read as a stale element (`TypingCheck.notStale`).
             do {
+                let field = try typeFirstKey(
+                    String(first), before: before, secure: secure, selectorParams: selectorParams
+                )
                 let rest = String(plan.keys.dropFirst())
                 let rate = TypingCheck.charactersPerSecond(delayMs: delayMs)
                 if !rest.isEmpty, focusMovedOn(from: field) {
@@ -1400,10 +1401,8 @@ class CommandHandler {
                     }
                     try checkTyped(plan.keys, before: before, secure: secure, rate: rate, selectorParams: selectorParams)
                 }
-            } catch let error as AgentError where Self.readsAsStale(error) {
-                throw AgentError.actionFailed(
-                    "typeText could not read the field back after typing into it (\(error.type))"
-                )
+            } catch let error as AgentError where TypingCheck.readsAsStale(error.message) {
+                throw AgentError.actionFailed(TypingCheck.notStale(error.message))
             }
         }
         // Return submits a single-line field, which then usually gives up
@@ -1414,10 +1413,6 @@ class CommandHandler {
             }
             Thread.sleep(forTimeInterval: max(0.05, TimeInterval(delayMs) / 1000.0))
         }
-    }
-
-    private static func readsAsStale(_ error: AgentError) -> Bool {
-        error.message.range(of: "stale", options: .caseInsensitive) != nil
     }
 
     /// Send the first key and wait for the field to show it, sending it again

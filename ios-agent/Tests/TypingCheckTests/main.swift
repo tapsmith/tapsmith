@@ -94,6 +94,23 @@ do {
            TypingCheck.read(["1", "2", "3", "4"].joined(), before: "", typed: "1234", secure: false) == .complete)
 }
 
+// After a key is in the field, no error may read as a stale element (the
+// SDK would type the whole text again), but it still says what happened.
+do {
+    let changed = "typeText: after the first key the field shows \"Stale bread. X\", not \"Stale bread. x\""
+    let kept = TypingCheck.notStale(changed)
+    expect("field text with Stale in it no longer reads as stale", !TypingCheck.readsAsStale(kept))
+    expect("and reads the same once the zero-width space is gone",
+           kept.replacingOccurrences(of: "\u{200B}", with: "") == changed)
+    let lookup = "Element 'abc' not found. It may have gone stale."
+    let lost = TypingCheck.notStale(lookup)
+    expect("a lost field is said so, without reading as stale",
+           !TypingCheck.readsAsStale(lost) && lost.hasPrefix("typeText lost the field after typing into it: "))
+    expect("STALEMATE in any case", !TypingCheck.readsAsStale(TypingCheck.notStale("typeText: STALEMATE, StAlE")))
+    expect("a message without it is unchanged", TypingCheck.notStale("typeText: short") == "typeText: short")
+    expect("readsAsStale matches the SDK's case-insensitive check", TypingCheck.readsAsStale("x STALE y"))
+}
+
 // Errors describe a secure field's content by its length only.
 do {
     expect("plain text is quoted", TypingCheck.describe("abc", secure: false) == "\"abc\"")

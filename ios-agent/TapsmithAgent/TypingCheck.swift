@@ -131,6 +131,29 @@ enum TypingCheck {
         TimeInterval(count) / TimeInterval(max(rate, 1))
     }
 
+    /// Whether the SDK would take an action error with this message for a
+    /// stale element: it looks for "stale" anywhere in it, then finds the
+    /// element again and repeats the whole action.
+    static func readsAsStale(_ message: String) -> Bool {
+        message.range(of: "stale", options: .caseInsensitive) != nil
+    }
+
+    /// `message`, reading the same but no longer taken for a stale element:
+    /// once a key may be in the field, repeating the action would type the
+    /// text twice. "stale" can come from the field's own text quoted in the
+    /// message, or from a lookup that lost the field (then said so first).
+    /// Each "stale" gets a zero-width space after its "s".
+    static func notStale(_ message: String) -> String {
+        let marked = message.hasPrefix("typeText")
+            ? message
+            : "typeText lost the field after typing into it: \(message)"
+        guard let pattern = try? NSRegularExpression(pattern: "(s)(tale)", options: .caseInsensitive) else {
+            return marked
+        }
+        let range = NSRange(marked.startIndex..., in: marked)
+        return pattern.stringByReplacingMatches(in: marked, range: range, withTemplate: "$1\u{200B}$2")
+    }
+
     /// How the field's content is described in an error: a secure field's
     /// only by its length.
     static func describe(_ value: String, secure: Bool) -> String {
