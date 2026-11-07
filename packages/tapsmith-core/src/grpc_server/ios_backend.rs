@@ -467,18 +467,18 @@ impl DeviceBackend for IosBackend<'_> {
         // land; the worst case is the status quo plus one bounded
         // warm window (IOS_OPEN_DEEP_LINK_WARM_TIMEOUT_MS).
         //
-        // `force_cold_launch` skips the warm attempt entirely. The SDK
-        // sets it for the between-file soft reset: a July 2026 local
-        // soak of the full E2E suite showed that sessions running
-        // all-warm for ~60+ deliveries accumulate native navigation
-        // state that observably diverges from a cold launch (screen
-        // a11y trees stop being flattened — strict-mode selectors that
-        // matched one element start matching two — and element ids go
-        // stale), while every file-sized warm window (~20-30
-        // deliveries from a cold start) stayed green. Cold-launching
-        // at file boundaries pins each file to the exact starting
-        // state it had before warm delivery existed and bounds the
-        // warm window to one file.
+        // A `Cold` delivery skips the warm attempt entirely. The SDK asks
+        // for it only on retry attempts (and `openDeepLink`'s
+        // `forceColdLaunch`); between-file resets with the in-app hooks
+        // are warm. Long all-warm runs are bounded instead by the reset
+        // ladder's warm-window valve (`appResetColdEvery`, default 10),
+        // which delivers every Nth consecutive warm reset cold: a July
+        // 2026 local soak of the full E2E suite showed that sessions
+        // running all-warm for ~60+ deliveries accumulate native
+        // navigation state that diverges from a cold launch (screen a11y
+        // trees stop being flattened, so strict-mode selectors that
+        // matched one element start matching two, and element ids go
+        // stale).
         if delivery != DeepLinkDelivery::Cold {
             let warm_command = AgentCommand::OpenDeepLink {
                 url: uri.to_string(),

@@ -1,5 +1,4 @@
 import { describe, expect, test } from "../fixtures.js"
-import { openScreen } from "../utils/app-reset.js"
 
 // getByRole matches the role itself, not whatever element type can carry it
 // (PILOT-608). On iOS a heading used to be any static text, and a checkbox,
@@ -9,10 +8,9 @@ import { openScreen } from "../utils/app-reset.js"
 // buttons.
 describe("getByRole role matching", () => {
   // The last test changes the selected radio button.
-  test.use({ appResetScope: "test" })
+  test.use({ appResetScope: "test", appResetRoute: "/toggles" })
 
   test.beforeEach(async ({ device, togglesScreen }) => {
-    await openScreen(device, "/toggles")
     await expect(togglesScreen.switchesHeading).toBeVisible()
   })
 

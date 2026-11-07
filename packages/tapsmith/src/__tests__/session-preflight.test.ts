@@ -77,6 +77,7 @@ function resetResult(
     coldLaunch: mode !== 'warm',
     durationMs: 120,
     hooksDetected: false,
+    targetReached: false,
     steps: [{ name: mode === 'warm' ? 'warm-deep-link' : mode, durationMs: 120, ok: true }],
     ...overrides,
   };
@@ -451,6 +452,147 @@ describe('session-preflight', () => {
     expect(ctx.device.clearAppData).not.toHaveBeenCalled();
     expect(report).toMatchObject({ origin: 'inline', modeUsed: 'warm', fellBack: false });
     expect(report.steps.map((s) => s.name)).toEqual(['warm-deep-link', 'resetApp', 'settle', 'ensureSessionReady', 'waitForAppReady']);
+  });
+
+  describe('start route (appResetRoute, PILOT-1064)', () => {
+    const HOOKED = '<hierarchy><node package="com.example.app" text="tapsmith-hooks:1;epoch=3;url=app:///" /></hierarchy>';
+    const hooked = (overrides: Partial<Parameters<typeof makeContext>[0]> = {}) => {
+      const ctx = makeContext(overrides);
+      ctx.capabilities = { hooksDetected: true, hooksUrlPrefix: 'app:///' };
+      return ctx;
+    };
+    const route = (policy: AppResetPolicy, r: string): AppResetPolicy => ({ ...policy, route: r });
+
+    it('a warm hooks reset carries the route, and lands on it in one delivery', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+
+      const report = await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test' });
+
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ mode: 'warm', target: '/settings' }));
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+      expect(report.steps.map((s) => s.name)).not.toContain('openRoute');
+    });
+
+    it('a warm reset that fell back to clear opens the route afterwards', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', {
+        modeUsed: 'clear', fellBack: true, coldLaunch: true, hooksDetected: true, targetReached: false,
+      }));
+      const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        const report = await executeAppReset(ctx, route(WARM_TEST, '/settings?tab=2'), { phase: 'before test' });
+
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings?tab=2');
+        expect(report.steps.at(-1)).toMatchObject({ name: 'openRoute', ok: true, detail: 'app:///settings?tab=2' });
+      } finally {
+        stderr.mockRestore();
+      }
+    });
+
+    it('a warm reset the daemon could only confirm on "/" opens the route afterwards', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: false }));
+
+      await executeAppReset(ctx, route(WARM_TEST, '/modal'), { phase: 'before test' });
+
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///modal');
+    });
+
+    it('clear, restart and restore policies open the route once the app is ready', async () => {
+      for (const policy of [CLEAR_FILE, { mode: 'restart' as const, scope: 'test' as const }, { ...CLEAR_FILE, appState: '/abs/auth.tar.gz' }]) {
+        const ctx = hooked();
+        const report = await executeAppReset(ctx, route(policy, '/profile'), { phase: 'file reset' });
+
+        expect(vi.mocked(ctx.device._resetApp).mock.calls.every(([, o]) => !('target' in o))).toBe(true);
+        expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///profile');
+        const names = report.steps.map((s) => s.name);
+        expect(names.indexOf('openRoute')).toBeGreaterThan(names.indexOf('ensureSessionReady'));
+      }
+    });
+
+    it('a prepared device at another route is navigated, not reset again', async () => {
+      const ctx = hooked();
+      const prepared = { policy: WARM_FILE, preparedAt: Date.now(), durationMs: 1_000, source: 'the file-entry reset' };
+
+      const report = await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared });
+
+      expect(report.origin).toBe('prepared');
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+    });
+
+    it('a prepared device already at the route needs nothing', async () => {
+      const ctx = hooked();
+      const prepared = { policy: route(WARM_FILE, '/settings'), preparedAt: Date.now(), durationMs: 1_000, source: 'the entry reset' };
+
+      await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared });
+
+      expect(ctx.device._resetApp).not.toHaveBeenCalled();
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
+
+    it('appReset none does not navigate (no reset ran to land anywhere)', async () => {
+      const ctx = hooked();
+      const prepared = { policy: CLEAR_FILE, preparedAt: Date.now(), durationMs: 1, source: 'startup launch' };
+
+      await executeAppReset(ctx, route({ mode: 'none', scope: 'file' }, '/settings'), { phase: 'file reset' });
+      await executeAppReset(ctx, route({ mode: 'none', scope: 'file' }, '/settings'), { phase: 'file reset', prepared });
+
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
+
+    it('a full deep link under the hooks prefix is sent warm as a path', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+
+      await executeAppReset(ctx, route(WARM_TEST, 'app:///settings'), { phase: 'before test' });
+
+      expect(ctx.device._resetApp).toHaveBeenCalledWith('com.example.app', expect.objectContaining({ target: '/settings' }));
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
+
+    it('a full deep link outside the hooks prefix resets to "/" and opens the link', async () => {
+      const ctx = hooked();
+      vi.mocked(ctx.device._resetApp).mockResolvedValueOnce(resetResult('warm', { hooksDetected: true, targetReached: true }));
+
+      await executeAppReset(ctx, route(WARM_TEST, 'https://example.com/promo'), { phase: 'before test' });
+
+      expect(vi.mocked(ctx.device._resetApp).mock.calls[0][1]).not.toHaveProperty('target');
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('https://example.com/promo');
+    });
+
+    it('an app without hooks opens a full deep link after its clear reset', async () => {
+      const ctx = makeContext();
+      ctx.capabilities = { hooksDetected: false };
+
+      await executeAppReset(ctx, route(CLEAR_FILE, 'app:///settings'), { phase: 'file reset' });
+
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+    });
+
+    it('a path learns the prefix from the marker when the session has not recorded it', async () => {
+      const ctx = makeContext();
+      ctx.capabilities = { hooksDetected: true };
+      vi.mocked(ctx.client.getUiHierarchy).mockResolvedValue({ requestId: '1', hierarchyXml: HOOKED, errorMessage: '' });
+
+      await executeAppReset(ctx, route(CLEAR_FILE, '/settings'), { phase: 'file reset' });
+
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      expect(ctx.capabilities.hooksUrlPrefix).toBe('app:///');
+    });
+
+    it('a path on an app without hooks fails, naming the full-link form', async () => {
+      const ctx = makeContext({ config: { package: 'com.example.app', activity: '.MainActivity', appReset: 'clear' } });
+      ctx.capabilities = { hooksDetected: false };
+
+      const err = await executeAppReset(ctx, route(CLEAR_FILE, '/settings'), { phase: 'file reset', hooksProbeMs: 0 }).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(Error);
+      expect((err as Error).message).toMatch(/appResetRoute '\/settings' is a path/);
+      expect((err as Error).message).toMatch(/myapp:\/\/\/settings/);
+      expect(ctx.device.openDeepLink).not.toHaveBeenCalled();
+    });
   });
 
   describe('Android app readiness after a cold launch', () => {
@@ -1683,7 +1825,7 @@ describe('session-preflight', () => {
 
       await launchConfiguredApp(ctx, 'startup launch', { freshInstall: true, hooksProbeMs: 0 });
 
-      expect(ctx.capabilities).toEqual({ hooksDetected: true });
+      expect(ctx.capabilities).toEqual({ hooksDetected: true, hooksUrlPrefix: 'app:///' });
     });
 
     it('a marker without a URL prefix does not count as usable hooks', async () => {
@@ -1956,7 +2098,7 @@ describe('session-preflight', () => {
           errorMessage: '',
         });
 
-      expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true });
+      expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true, hooksUrlPrefix: 'exp://x/' });
       expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(3);
     });
 
@@ -2031,7 +2173,7 @@ describe('session-preflight', () => {
         const ctx = probeContext(project({}));
         vi.mocked(ctx.client.getUiHierarchy).mockResolvedValueOnce(read(HOME)).mockResolvedValue(read(MARKER_XML));
 
-        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true });
+        expect(await probeResetCapabilities(ctx, { pollMs: 5_000 })).toEqual({ hooksDetected: true, hooksUrlPrefix: 'exp://x/' });
       });
 
       it('on iOS, counts an element of the app with a label or identifier, not the application node or keyboard', async () => {

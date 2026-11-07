@@ -30,6 +30,12 @@ export interface AppResetPolicy {
    * declared no app state and `mode` alone applies.
    */
   appState?: string;
+  /**
+   * Where the reset leaves the app (`appResetRoute`): a path resolved against
+   * the hooks' URL prefix, or a full deep link. `undefined` = the app's launch
+   * route, with no navigation.
+   */
+  route?: string;
 }
 
 /** What the device/session can offer, discovered at runtime. */
@@ -38,6 +44,12 @@ export interface ResetCapabilities {
   hooksDetected?: boolean;
   /** Physical device (not a simulator/emulator). */
   isPhysical?: boolean;
+  /**
+   * The URL prefix the hooks marker publishes (`myapp:///`), read with the
+   * marker. Resolves a path `appResetRoute` into a deep link when the reset
+   * itself could not land on it.
+   */
+  hooksUrlPrefix?: string;
 }
 
 /**
@@ -90,7 +102,7 @@ export interface AppResetReport {
  */
 export function resolveAppResetPolicy(
   scopeOptions: { appState?: string } | undefined,
-  config: Pick<TapsmithConfig, 'appReset' | 'appResetScope' | 'resetAppDeepLink' | 'rootDir'>,
+  config: Pick<TapsmithConfig, 'appReset' | 'appResetScope' | 'appResetRoute' | 'resetAppDeepLink' | 'rootDir'>,
   caps: ResetCapabilities = {},
 ): AppResetPolicy {
   const warmAvailable = !!caps.hooksDetected || !!config.resetAppDeepLink;
@@ -111,6 +123,7 @@ export function resolveAppResetPolicy(
   const scope: ResolvedAppResetScope = requestedScope === 'auto' ? 'file' : requestedScope;
 
   const policy: AppResetPolicy = { mode, scope };
+  if (config.appResetRoute) policy.route = config.appResetRoute;
   if (appState !== undefined) {
     policy.appState = appState === ''
       ? ''
@@ -157,15 +170,52 @@ export function satisfies(have: AppResetPolicy, want: AppResetPolicy): boolean {
 
 export function appResetPolicyEquals(a: AppResetPolicy | undefined, b: AppResetPolicy | undefined): boolean {
   if (!a || !b) return a === b;
-  return a.mode === b.mode && a.scope === b.scope && a.appState === b.appState;
+  return a.mode === b.mode && a.scope === b.scope && a.appState === b.appState && a.route === b.route;
 }
 
-/** Trace-friendly action label: "App reset (clear)". */
+/** Trace-friendly action label: "App reset (clear)", "App reset (warm → /settings)". */
 export function describeAction(policy: AppResetPolicy): string {
   const action = appResetAction(policy);
-  return action.kind === 'restore'
-    ? `App reset (restore ${path.basename(action.archive)})`
-    : `App reset (${action.kind})`;
+  const label = action.kind === 'restore' ? `restore ${path.basename(action.archive)}` : action.kind;
+  return policy.route !== undefined && action.kind !== 'none'
+    ? `App reset (${label} → ${policy.route})`
+    : `App reset (${label})`;
+}
+
+// ─── Start route (appResetRoute) ───
+
+/** A route given as a full deep link (`myapp:///settings`) rather than a path. */
+export function isDeepLinkRoute(route: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:/i.test(route);
+}
+
+function prefixBase(urlPrefix: string): string {
+  return urlPrefix.endsWith('/') ? urlPrefix : `${urlPrefix}/`;
+}
+
+/**
+ * The in-app path a warm reset should carry for `route`: a path as given, or
+ * a deep link relative to the hooks' URL prefix. `undefined` when a deep link
+ * is not under the prefix (or the prefix is not known yet) — the reset then
+ * lands on `/` and the runner opens the link itself.
+ */
+export function warmResetTarget(route: string, urlPrefix: string | undefined): string | undefined {
+  if (!isDeepLinkRoute(route)) return route;
+  if (!urlPrefix) return undefined;
+  const base = prefixBase(urlPrefix);
+  if (route === urlPrefix || route === base) return '/';
+  return route.startsWith(base) ? `/${route.slice(base.length)}` : undefined;
+}
+
+/**
+ * The deep link that opens `route`: a deep link as given, or a path joined to
+ * the hooks' URL prefix the way the daemon builds reset links (one `/`
+ * between them). `undefined` for a path when no prefix is known.
+ */
+export function routeDeepLink(route: string, urlPrefix: string | undefined): string | undefined {
+  if (isDeepLinkRoute(route)) return route;
+  if (!urlPrefix) return undefined;
+  return prefixBase(urlPrefix) + route.trim().replace(/^\/+/, '');
 }
 
 // ─── @tapsmith/react-native hooks marker ───

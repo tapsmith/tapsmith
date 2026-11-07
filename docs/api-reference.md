@@ -473,7 +473,7 @@ await device.resetApp({ target: "/settings" })                 // warm reset lan
 |---|---|---|---|
 | `mode` | `'warm' \| 'restart' \| 'clear'` | `'warm'` | How far to reset |
 | `fallback` | `boolean` | `true` | Escalate warm → restart → clear when a rung fails |
-| `target` | `string` | `'/'` | Route to land on after an in-app (warm) reset — it is the reset deep link's path. A `restart`/`clear` rung leaves the app at its launch route; check `modeUsed` and navigate if needed. |
+| `target` | `string` | `'/'` | Route to land on after an in-app (warm) reset — it is the reset deep link's path. A `restart`/`clear` rung leaves the app at its launch route; check `targetReached` and navigate if needed. |
 
 **`AppResetResult`**
 
@@ -486,6 +486,7 @@ await device.resetApp({ target: "/settings" })                 // warm reset lan
 | `durationMs` | `number` | Wall time of the whole ladder |
 | `hooksDetected` | `boolean` | `@tapsmith/react-native` hooks were found in the app |
 | `epochBefore` / `epochAfter` | `number?` | In-app reset counter (hooks only) |
+| `targetReached` | `boolean` | The app ended on `target`: an in-app reset was acknowledged on that route. `false` after a `restart`/`clear` rung (the app is at its launch route), and when the target screen hid the hooks marker, so the reset was confirmed on `/` instead |
 | `steps` | `{ name, durationMs, ok, detail? }[]` | Per-rung timings |
 
 The call is recorded in the trace as a `resetApp` action whose detail line names the rung and reason. Throws when the ladder is exhausted (or `fallback: false` and the requested rung failed).
@@ -1909,6 +1910,7 @@ describe("custom config", () => {
 | `appState`   | `string`                                    | Path to saved app state archive to restore; `""` means clear |
 | `appReset`   | `'auto' \| 'clear' \| 'restart' \| 'warm' \| 'none'` | How the app is reset before tests in this scope. See [Test isolation](./writing-tests.md#test-isolation). |
 | `appResetScope` | `'auto' \| 'file' \| 'test'`            | Reset once per file or before every test (`auto` resolves to per file; opt into per-test with `'test'`) |
+| `appResetRoute` | `string`                                   | Screen the declared reset leaves the app on: a path (`'/settings'`) resolved against the hooks' URL prefix, or a full deep link. See [Starting on a screen](writing-tests.md#starting-on-a-screen). |
 | `appResetColdEvery` | `number`                               | Cold-relaunch every N warm resets (default 10; 0 = off) |
 
 The following device-shaping fields may **only** be set on a project's

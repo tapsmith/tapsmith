@@ -878,6 +878,11 @@ message ResetAppResponse {
   uint64 epoch_before = 13;
   uint64 epoch_after = 14;
   repeated ResetStep steps = 15;
+  // The app ended on the requested `target_path`: an in-app hooks reset was
+  // acknowledged on that route. False after a restart or clear (the app is at
+  // its launch route), a legacy reset deep link, or a hooks reset the daemon
+  // had to re-deliver to "/" because the target screen hid the marker.
+  bool target_reached = 16;
 }
 
 // ─── App State Snapshot (PILOT-115) ───

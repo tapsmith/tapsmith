@@ -1,5 +1,4 @@
 import { describe, expect, test } from "../fixtures.js"
-import { openScreen } from "../utils/app-reset.js"
 import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 
 // PILOT-363: on a screen without a scroll view, iOS hideKeyboard() used to
@@ -13,10 +12,9 @@ import { expectSoftwareKeyboardShown } from "../utils/software-keyboard.js"
 // tell what hideKeyboard() touched, not just whether it resolved.
 
 describe("hideKeyboard() on a screen without a scroll view", () => {
-  test.use({ appResetScope: "test" })
+  test.use({ appResetScope: "test", appResetRoute: "/keyboard" })
 
   test.beforeEach(async ({ device, keyboardScreen }) => {
-    await openScreen(device, "/keyboard")
     await expect(keyboardScreen.counts).toBeVisible()
   })
 

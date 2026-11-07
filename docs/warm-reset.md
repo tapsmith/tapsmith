@@ -96,6 +96,10 @@ The whole ladder — warm → restart → clear — runs in the daemon (`ResetAp
 
 Long all-warm sessions on a simulator can drift from a fresh launch (accessibility trees stop being flattened, element ids go stale). Tapsmith therefore relaunches cold every `appResetColdEvery` warm resets (default 10), on every retry attempt, and after two warm resets in a row fail to verify. The trace says so: *"cold relaunch: warm-window bound reached (10 resets)"*. Set `appResetColdEvery: 0` to disable the valve.
 
+### Landing on the test's screen
+
+The reset link already carries a route, so a scope whose tests all start on one screen can have the reset land there instead of on `/` and then pay a second deep link: `test.use({ appResetScope: 'test', appResetRoute: '/settings' })`. See [Starting on a screen](writing-tests.md#starting-on-a-screen).
+
 ## Without the module
 
 Everything still works: `appReset: 'auto'` resolves to `clear · per file`. The legacy `resetAppDeepLink` option (a route your app handles by resetting itself) also still gives you `warm · per file`, without acknowledgement — Tapsmith waits `resetAppWaitMs` after opening it.

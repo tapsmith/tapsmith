@@ -121,12 +121,13 @@ The reset is **declared**, not written by hand: it runs as fixture setup, appear
 
 ### Declaring the reset policy
 
-Two options control it, at any level — config, `projects[].use`, or `test.use()`:
+These options control it, at any level — config, `projects[].use`, or `test.use()`:
 
 | Option | Values | Default |
 |---|---|---|
 | `appReset` | `'auto'` \| `'clear'` \| `'restart'` \| `'warm'` \| `'none'` | `'auto'` |
 | `appResetScope` | `'auto'` \| `'file'` \| `'test'` | `'auto'` |
+| `appResetRoute` | a path (`'/settings'`) or a full deep link (`'myapp:///settings'`) | the app's launch route |
 
 | Mode | What happens | Typical cost |
 |---|---|---|
@@ -153,6 +154,20 @@ test.use({ appReset: "clear", appResetScope: "test" })
 test("first launch shows onboarding", async ({ device }) => { /* … */ })
 test("skipping onboarding lands on home", async ({ device }) => { /* … */ })
 ```
+
+### Starting on a screen
+
+When every test in a scope starts on the same screen, declare it with `appResetRoute` instead of opening it from a `beforeEach`. With [`@tapsmith/react-native`](warm-reset.md), the warm reset's own deep link carries the route, so the app is reset and on the screen in one delivery rather than two — about 1.5 s saved per test on an iOS simulator:
+
+```typescript
+describe("settings", () => {
+  test.use({ appResetScope: "test", appResetRoute: "/settings" })
+
+  test("dark mode starts off", async ({ device }) => { /* already on /settings */ })
+})
+```
+
+A path is resolved against the URL prefix the hooks publish (the `urlPrefix`/`scheme` you gave `<TapsmithTestHooks />`). An app without the hooks gives the full deep link instead (`appResetRoute: "myapp:///settings"`); a path there fails the reset with a message saying so. Whenever the reset itself cannot land on the route — a `clear`, `restart` or restored `appState`, a warm reset that fell back, or a device that was already prepared — Tapsmith opens the route as a deep link right after it, so the test starts on the screen either way. The trace's **APP RESET** section names the route (`App reset (warm → /settings)`). `appResetRoute` has no effect with `appReset: "none"`, since no reset runs to land anywhere.
 
 ```typescript
 // tests that deliberately share state across the file
@@ -713,7 +728,7 @@ describe("App", () => {
 |---|---|---|
 | `beforeAll` | Once per `describe` | Navigating to a screen, one-time setup |
 | `afterAll` | Once per `describe` | Cleaning up shared resources |
-| `beforeEach` | Before every test | Navigating to the test's starting screen (reset the app with `appResetScope: "test"` instead) |
+| `beforeEach` | Before every test | Bringing each test to its starting point (reset the app with `appResetScope: "test"`, and land on a screen with `appResetRoute`, instead) |
 | `afterEach` | After every test | Cleaning up test-specific side effects |
 
 **Caution:** `beforeAll` runs once, so all tests in that block share whatever state it creates. If one test modifies the screen, subsequent tests see that modification. When in doubt, use `beforeEach`.

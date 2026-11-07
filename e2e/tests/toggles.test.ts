@@ -1,13 +1,12 @@
 import { describe, expect, test } from "../fixtures.js"
-import { openScreen } from "../utils/app-reset.js"
 
 describe("Toggles screen", () => {
   // Tests toggle persisted state and scroll the screen; the beforeEach
-  // asserts a clean top-of-screen, so reset before every test.
-  test.use({ appResetScope: "test" })
+  // asserts a clean top-of-screen, so reset before every test. A full deep
+  // link rather than a path: the hook-less Android lane runs this file too.
+  test.use({ appResetScope: "test", appResetRoute: "tapsmithtest:///toggles" })
 
   test.beforeEach(async ({ device, togglesScreen }) => {
-    await openScreen(device, "/toggles")
     await expect(togglesScreen.switchesHeading).toBeVisible()
   })
 

@@ -1,7 +1,7 @@
 import * as path from 'node:path';
 import { DEFAULT_APP_RESET_COLD_EVERY, type TapsmithConfig } from './config.js';
 import type { Device } from './device.js';
-import { appResetAction, parseHooksMarker, satisfies, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
+import { appResetAction, parseHooksMarker, routeDeepLink, satisfies, warmResetTarget, type AppResetPolicy, type AppResetReport, type AppResetStep, type PreparedState, type ResetCapabilities } from './app-reset.js';
 import type { AppState, LaunchAppOptions, TapsmithGrpcClient } from './grpc-client.js';
 import { blockingDialogOwnersViaAdb, detectBlockingSystemDialog, dismissSystemDialogsViaAdb, formatBlockingDialog, GENERIC_BLOCKING_DIALOG, isSystemDrawnDialog } from './emulator.js';
 import { withActionProgress, type ActionProgressHandle } from './action-progress.js';
@@ -189,7 +189,9 @@ async function readHooksMarker(ctx: SessionPreflightContext, options: { strict?:
     // app whose startup dumps all failed.
     if (options.strict && (h.errorMessage || !h.hierarchyXml)) return undefined;
     const marker = parseHooksMarker(h.hierarchyXml);
-    return !!marker && marker.urlPrefix.length > 0;
+    if (!marker?.urlPrefix) return false;
+    (ctx.capabilities ??= {}).hooksUrlPrefix = marker.urlPrefix;
+    return true;
   } catch {
     return undefined;
   }
@@ -207,6 +209,7 @@ async function readHooksMarkerAndContent(ctx: SessionPreflightContext): Promise<
     return undefined;
   }
   const marker = parseHooksMarker(xml);
+  if (marker?.urlPrefix) (ctx.capabilities ??= {}).hooksUrlPrefix = marker.urlPrefix;
   const rendered = ctx.config.platform === 'ios'
     ? iosHierarchyHasRenderedContent(xml)
     : !!ctx.config.package && androidHierarchyHasRenderedContent(xml, ctx.config.package);
@@ -771,6 +774,11 @@ export async function executeAppReset(
 
   if (options.prepared && satisfies(options.prepared.policy, policy)) {
     await step('ensureSessionReady', () => ensureSessionReady(ctx, options.phase));
+    // The prepared state stands, but not necessarily on this scope's start
+    // route: one navigation instead of a whole reset.
+    if (policy.route !== undefined && action.kind !== 'none' && options.prepared.policy.route !== policy.route) {
+      await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
+    }
     const when = new Date(options.prepared.preparedAt).toLocaleTimeString();
     return finish({
       origin: 'prepared',
@@ -793,6 +801,9 @@ export async function executeAppReset(
   let fellBack = false;
   let reason: string | undefined;
   let processRecreated = true;
+  // Whether the reset itself left the app on the declared start route (only
+  // an acknowledged in-app reset can carry it).
+  let routeReached = false;
 
   if (action.kind === 'restore') {
     await step('restoreAppState', () => ctx.device.restoreAppState(pkg, action.archive));
@@ -802,6 +813,12 @@ export async function executeAppReset(
     // advertises in-app reset hooks, owns the warm-window cold policy, and
     // reports exactly which rung ran so the trace stays honest.
     let result: Awaited<ReturnType<SessionDevice['_resetApp']>> | undefined;
+    // A warm reset lands on the start route in the same delivery: the in-app
+    // hook's reset link carries the route. A deep link outside the hooks' URL
+    // prefix cannot ride on it — reset to "/" and open the link afterwards.
+    const target = policy.route !== undefined && action.kind === 'warm'
+      ? warmResetTarget(policy.route, ctx.capabilities?.hooksUrlPrefix)
+      : undefined;
     await step('resetApp', async () => {
       result = await ctx.device._resetApp(pkg, {
         mode: action.kind,
@@ -818,6 +835,7 @@ export async function executeAppReset(
         // it — fall to clear. Explicit device.resetApp() calls keep the
         // gentler restart fallback.
         fallbackToClear: action.kind === 'warm',
+        ...(target !== undefined ? { target } : {}),
       });
       for (const s of result.steps) {
         steps.push({ name: s.name, durationMs: s.durationMs, ok: s.ok, ...(s.detail ? { detail: s.detail } : {}) });
@@ -828,6 +846,7 @@ export async function executeAppReset(
       fellBack = result.fellBack;
       reason = result.reason;
       processRecreated = result.modeUsed !== 'warm' || result.coldLaunch;
+      routeReached = target !== undefined && result.modeUsed === 'warm' && result.targetReached;
       // The daemon seeing the marker is fresh proof of hooks. The reverse is
       // not: a missed read under load plans a fallback without disproving the
       // hooks, so detection only ever upgrades (sticky, like the probe).
@@ -872,7 +891,50 @@ export async function executeAppReset(
     await probeResetCapabilities(ctx, { pollMs: 0 });
     if (action.kind === 'clear') await checkMissingResetHooks(ctx, options.hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
   }
+  // Last, on a ready app (a link sent into a still-booting app is lost), and
+  // after the hooks re-read above, which may have just learnt the URL prefix.
+  if (policy.route !== undefined && !routeReached) {
+    await openStartRoute(ctx, policy.route, step, options.hooksProbeMs);
+  }
   return finish({ origin: 'inline', modeUsed, fellBack, ...(reason ? { reason } : {}) });
+}
+
+/**
+ * Open the declared start route (`appResetRoute`) as a deep link, for a reset
+ * that could not land on it itself (a restart, clear or restore, a fallback,
+ * or a prepared device). A path needs the hooks' URL prefix; a session that
+ * has not recorded it yet looks at the marker for it.
+ */
+async function openStartRoute(
+  ctx: SessionPreflightContext,
+  route: string,
+  step: StepRunner,
+  hooksProbeMs: number | undefined,
+): Promise<void> {
+  let url = routeDeepLink(route, ctx.capabilities?.hooksUrlPrefix);
+  if (url === undefined) {
+    await step('readHooksUrlPrefix', async () => {
+      // A session that has seen the hooks keeps looking for the budget (the
+      // marker may be mid-transition); one known to have none reads once.
+      const pollMs = ctx.capabilities?.hooksDetected === false ? 0 : (hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
+      const deadline = Date.now() + pollMs;
+      for (;;) {
+        if ((await readHooksMarker(ctx)) || Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+        await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
+      }
+    });
+    url = routeDeepLink(route, ctx.capabilities?.hooksUrlPrefix);
+  }
+  if (url === undefined) {
+    const example = `myapp://${route.startsWith('/') ? route : `/${route}`}`;
+    throw new Error(
+      `appResetRoute '${route}' is a path, which Tapsmith resolves against the URL prefix that `
+        + '@tapsmith/react-native publishes in its hooks marker, but the app shows no hooks marker. '
+        + `Mount <TapsmithTestHooks /> in the app, or give the full deep link instead (e.g. appResetRoute: '${example}').`,
+    );
+  }
+  const link = url;
+  await step('openRoute', () => ctx.device.openDeepLink(link), link);
 }
 
 type StepRunner = (name: string, fn: () => Promise<void>, detail?: string) => Promise<void>;

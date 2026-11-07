@@ -121,6 +121,8 @@ describe("App reset (declared isolation)", () => {
     const result = await device.resetApp({ target: "/no-such-route-xyz" })
     expect(result.modeUsed).toBe("warm")
     expect(result.fellBack).toBe(false)
+    // Confirmed on "/", not on the target: the caller must navigate itself.
+    expect(result.targetReached).toBe(false)
     // Budget: the 11s warm window on the unreadable route, then the root
     // re-confirmation — itself up to a warm window plus one cold relaunch on a
     // slow CI simulator (observed 48s there, ~23s locally). The regression
@@ -131,5 +133,44 @@ describe("App reset (declared isolation)", () => {
     // The reset cleared state despite the unreadable target screen.
     await device.openDeepLink("tapsmithtest:///profile")
     await expect(device.getByText("Sign In", { exact: true })).toBeVisible()
+  })
+})
+
+/**
+ * PILOT-1064: a scope's declared start route. The warm reset's own deep link
+ * carries the route, so each test starts on its screen, reset, without a
+ * second deep link; any other reset is followed by opening the route.
+ */
+describe("Declared start route (appResetRoute)", () => {
+  async function signInHere(device: Device, loginScreen: LoginScreen) {
+    await loginScreen.emailField.clearAndType("test@example.com")
+    await loginScreen.passwordField.clearAndType("password123")
+    await device.hideKeyboard()
+    await loginScreen.signInButton.tap()
+    await expect(device.getByText("Login successful!", { exact: true })).toBeVisible()
+  }
+
+  describe("with a per-test reset", () => {
+    test.use({ appResetScope: "test", appResetRoute: "/login" })
+
+    test("the reset lands on the route", async ({ device, loginScreen }) => {
+      await expect(loginScreen.heading).toBeVisible()
+      // Leave state behind for the next test's reset to clear.
+      await signInHere(device, loginScreen)
+    })
+
+    test("the next test starts on the route again, signed out", async ({ loginScreen }) => {
+      await expect(loginScreen.heading).toBeVisible()
+    })
+  })
+
+  describe("after a reset that cannot carry the route", () => {
+    // A clear relaunches the app at its launch route; the runner opens the
+    // route afterwards.
+    test.use({ appReset: "clear", appResetRoute: "/login" })
+
+    test("the app is still on the route, cleared", async ({ loginScreen }) => {
+      await expect(loginScreen.heading).toBeVisible()
+    })
   })
 })

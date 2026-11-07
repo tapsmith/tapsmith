@@ -333,6 +333,8 @@ export interface ResetAppResponse extends ActionResponse {
   epochBefore: number;
   epochAfter: number;
   steps: ResetAppStep[];
+  /** The app ended on the requested `targetPath` (a hooks reset acknowledged there). */
+  targetReached: boolean;
 }
 
 const APP_RESET_WIRE_MODE: Record<AppResetRequestMode, string> = {
