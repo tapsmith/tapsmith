@@ -66,7 +66,7 @@ export interface FindElementsResponse {
   errorMessage: string;
 }
 
-/** What one scrollIntoView() step did (PILOT-998): see {@link TapsmithGrpcClient.scrollStep}. */
+/** What one scrollIntoView() step did: see {@link TapsmithGrpcClient.scrollStep}. */
 export interface ScrollStepResponse {
   requestId: string;
   elements: ElementInfo[];
@@ -656,7 +656,7 @@ export class TapsmithGrpcClient {
   }
 
   /**
-   * One scrollIntoView() step in one device call (PILOT-998): drag the list,
+   * One scrollIntoView() step in one device call: drag the list,
    * wait for it to stop changing, then find `selector` as
    * {@link findElements} does. `timeoutMs` is the find's read budget; the
    * drag and the quiet wait come on top of it.

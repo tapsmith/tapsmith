@@ -3769,7 +3769,7 @@ export class ElementHandle {
    * `"down"`, which reveals what is below.
    *
    * @param options.direction - The way the view scrolls, as {@link scroll} takes it: `"down"` reveals what is below, `"up"` what is above, `"left"` and `"right"` likewise (the finger swipes the opposite way). Default: chosen from the element's position, else `"down"`.
-   * Each swipe is one device call where it can be (PILOT-998): on Android a
+   * Each swipe is one device call where it can be: on Android a
    * vertical drag, and on the iOS simulator a drag inside the scroll
    * container, that leave no momentum; the device waits for the list to stop
    * changing, looks for the element, and says whether the list moved. Other
