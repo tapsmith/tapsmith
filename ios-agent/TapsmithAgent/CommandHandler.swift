@@ -921,7 +921,8 @@ class CommandHandler {
         // (LiveQueryPin, PILOT-1065).
         if let snap = try? xcElem?.snapshot(),
            snapshotFinder.isFoundElement(
-               element.elementId, liveFrame: snap.frame, liveLabel: snap.label, liveIdentifier: snap.identifier
+               element.elementId, liveFrame: snap.frame, liveLabel: snap.label, liveIdentifier: snap.identifier,
+               livePlaceholder: snap.placeholderValue ?? ""
            ) {
             target = .init(frame: snap.frame, elementType: snap.elementType, label: snap.label, identifier: snap.identifier)
         } else {
