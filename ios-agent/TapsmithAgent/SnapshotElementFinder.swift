@@ -567,6 +567,15 @@ class SnapshotElementFinder {
         return ScrollStepWatch.fingerprint(nodes, in: region)
     }
 
+    /// The app's frame in the last snapshot taken: the interface size a
+    /// rotation Tapsmith did not make has already changed.
+    func lastSnapshotFrameSize() -> CGSize? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let size = lastSnapshot?.frame.size, size.width > 0, size.height > 0 else { return nil }
+        return size
+    }
+
     /// Clear all caches (call after app relaunch).
     func clearCaches() {
         lock.lock()

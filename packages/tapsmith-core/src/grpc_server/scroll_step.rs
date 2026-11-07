@@ -8,12 +8,12 @@ use super::{parse_element_list, proto, AgentResponse};
 use tonic::Status;
 
 /// How long the device may spend on a step beyond the find's own read budget:
-/// the drag (~0.2 s on Android, ~0.45 s through the iOS HID helper), the
-/// quiet waits (at most 0.5 s on Android, plus up to two re-finds, each after
-/// another quiet wait; on iOS at most 0.9 s), and the first step's confirm
-/// (Android: 0.3 s of waiting and a find). A loaded emulator's finds take
-/// ~0.5 s each, so this covers four of them with room to spare.
-pub(super) const SCROLL_STEP_WORK_MS: u64 = 4_000;
+/// the first Android step's confirm (a find, up to 1.5 s waiting for quiet as
+/// the SDK's `waitForIdle(1500)` did, and a find), the drag (~0.2 s on
+/// Android, ~0.45 s through the iOS HID helper), the quiet wait (at most
+/// 0.5 s on Android, 0.9 s on iOS), the find, and up to two re-finds, each
+/// after another quiet wait. A loaded emulator's finds take ~0.5 s each.
+pub(super) const SCROLL_STEP_WORK_MS: u64 = 6_000;
 
 /// The answer of an agent that predates the step's command.
 pub(super) fn is_unknown_method(resp: &AgentResponse, method: &str) -> bool {
@@ -214,6 +214,33 @@ pub(super) fn hid_drag_path(
     Some(path)
 }
 
+/// The drag's points as `scrollStepPoints` takes them.
+pub(super) fn drag_points(path: &[DragSample]) -> Vec<[f64; 2]> {
+    path.iter().map(|s| [s.x, s.y]).collect()
+}
+
+/// The drag in the HID helper's native portrait space, from the agent's
+/// `scrollStepPoints` answer: the same timeline at the mapped points. None
+/// when the agent could not map them (it cannot tell how the screen is
+/// turned) or answered something else.
+pub(super) fn native_path(path: &[DragSample], answer: &Value) -> Option<Vec<DragSample>> {
+    let points = answer.get("points")?.as_array()?;
+    if points.len() != path.len() {
+        return None;
+    }
+    path.iter()
+        .zip(points)
+        .map(|(s, p)| {
+            let p = p.as_array()?;
+            Some(DragSample {
+                at_ms: s.at_ms,
+                x: p.first()?.as_f64()?,
+                y: p.get(1)?.as_f64()?,
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -311,6 +338,18 @@ mod tests {
     }
 
     #[test]
+    fn an_ios_agent_without_the_point_mapping_is_unsupported_before_any_drag() {
+        // Asked before the drag, so an older agent's answer means nothing moved.
+        let r = step_response(
+            "r".into(),
+            "scrollStepPoints",
+            answer(false, Some("Unknown method: scrollStepPoints"), json!({})),
+            None,
+        );
+        assert!(r.unsupported);
+    }
+
+    #[test]
     fn agent_failures_and_transport_errors_are_errors() {
         let r = step_response(
             "r".into(),
@@ -397,6 +436,32 @@ mod tests {
         let p = hid_drag_path("down", &REGION, 0.3).unwrap();
         assert!((p[0].y - 380.0).abs() < 1e-6, "{:?}", p[0]);
         assert!((p.last().unwrap().y - 620.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_drag_is_made_at_the_points_the_agent_mapped_on_its_timeline() {
+        // A landscape app: the agent maps each interface point into the
+        // helper's portrait space (x' = W - y, y' = x for landscapeLeft).
+        let path = hid_drag_path("up", &REGION, 0.8).unwrap();
+        let mapped: Vec<Value> = drag_points(&path)
+            .iter()
+            .map(|[x, y]| json!([400.0 - y, x]))
+            .collect();
+        let native = native_path(&path, &json!({ "points": mapped })).unwrap();
+        assert_eq!(native.len(), path.len());
+        for (n, s) in native.iter().zip(&path) {
+            assert_eq!(n.at_ms, s.at_ms);
+            assert_eq!(n.x, 400.0 - s.y);
+            assert_eq!(n.y, s.x);
+        }
+    }
+
+    #[test]
+    fn no_drag_when_the_agent_cannot_map_the_points() {
+        let path = hid_drag_path("up", &REGION, 0.8).unwrap();
+        assert!(native_path(&path, &json!({ "points": null })).is_none());
+        assert!(native_path(&path, &json!({})).is_none());
+        assert!(native_path(&path, &json!({ "points": [[1.0, 2.0]] })).is_none());
     }
 
     #[test]

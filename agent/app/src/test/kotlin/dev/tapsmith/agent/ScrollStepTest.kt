@@ -58,25 +58,34 @@ class ScrollStepTest {
     }
 
     @Test
-    fun `the first step confirms the first miss and does not drag for an element on screen`() {
+    fun `the first step answers at once for an element already on screen, with no wait and no drag`() {
         val d = FakeDevice(listOf(listOf("visible row")))
         val r = ScrollStep.run(d, findFirst = true, isVisible = visible)
-        assertEquals(listOf("quiet 500/300", "find"), d.log)
+        assertEquals(listOf("find"), d.log)
         assertFalse(r.swiped)
         assertNull(r.moved)
     }
 
     @Test
-    fun `the first step drags once its confirming find misses`() {
+    fun `the first step confirms a miss after the screen goes quiet, and does not drag when it shows then`() {
+        // PILOT-283: right after navigation the tree can lag the screen.
         val d = FakeDevice(listOf(emptyList(), listOf("visible row")))
         val r = ScrollStep.run(d, findFirst = true, isVisible = visible)
-        assertEquals(listOf("quiet 500/300", "find", "drag", "quiet 120/500", "find"), d.log)
+        assertEquals(listOf("find", "quiet 500/1500", "find"), d.log)
+        assertFalse(r.swiped)
+    }
+
+    @Test
+    fun `the first step drags once its confirming find misses too`() {
+        val d = FakeDevice(listOf(emptyList(), emptyList(), listOf("visible row")))
+        val r = ScrollStep.run(d, findFirst = true, isVisible = visible)
+        assertEquals(listOf("find", "quiet 500/1500", "find", "drag", "quiet 120/500", "find"), d.log)
         assertTrue(r.swiped)
     }
 
     @Test
     fun `an element in the tree but off screen does not stop the first step's drag`() {
-        val d = FakeDevice(listOf(listOf("hidden row"), listOf("visible row")))
+        val d = FakeDevice(listOf(listOf("hidden row"), listOf("hidden row"), listOf("visible row")))
         val r = ScrollStep.run(d, findFirst = true, isVisible = visible)
         assertTrue(r.swiped)
         assertEquals(listOf("visible row"), r.elements)

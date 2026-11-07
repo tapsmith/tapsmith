@@ -300,8 +300,9 @@ message ScrollStepResponse {
   // False when find_first found the element on screen, so nothing was dragged.
   bool swiped = 6;
   // The device cannot make a scroll step (an agent that predates it, a
-  // physical iOS device, an iOS step without a region): nothing was done,
-  // and the caller scrolls the old way.
+  // physical iOS device, an iOS step without a region, an iOS screen whose
+  // turn the agent cannot tell): nothing was done, and the caller scrolls
+  // the old way.
   bool unsupported = 7;
 }
 

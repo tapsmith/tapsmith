@@ -447,6 +447,13 @@ pub enum AgentCommand {
         /// Wait for quiet and find first; drag only when it is not on screen.
         find_first: bool,
     },
+    /// An iOS scroll step's drag points (PILOT-998), in the app's interface
+    /// space, for the agent to map into the HID helper's native portrait
+    /// space, as it maps a tap's point. It answers `{"points": null}` when the
+    /// way the screen is turned cannot be told.
+    ScrollStepPoints {
+        points: Vec<[f64; 2]>,
+    },
     /// The find half of an iOS scroll step (PILOT-998), after the daemon's
     /// HID drag: wait for `region` to stop changing (unless the element is
     /// still far off), find `selector`, and report whether the tree inside
@@ -693,6 +700,7 @@ impl AgentCommand {
             AgentCommand::FindElement { .. } => "findElement",
             AgentCommand::FindElements { .. } => "findElements",
             AgentCommand::ScrollStep { .. } => "scrollStep",
+            AgentCommand::ScrollStepPoints { .. } => "scrollStepPoints",
             AgentCommand::ScrollStepFind { .. } => "scrollStepFind",
             AgentCommand::EvaluateSelectors { .. } => "evaluateSelectors",
             AgentCommand::Tap { .. } => "tap",
@@ -783,6 +791,9 @@ impl AgentCommand {
                     p["findFirst"] = json!(true);
                 }
                 ("scrollStep", p)
+            }
+            AgentCommand::ScrollStepPoints { points } => {
+                ("scrollStepPoints", json!({ "points": points }))
             }
             AgentCommand::ScrollStepFind { selector, region } => (
                 "scrollStepFind",
@@ -1780,6 +1791,7 @@ mod tests {
                 selector: json!({}),
                 region: json!({}),
             },
+            AgentCommand::ScrollStepPoints { points: vec![] },
             AgentCommand::Tap {
                 selector: json!({}),
                 timeout_ms: None,

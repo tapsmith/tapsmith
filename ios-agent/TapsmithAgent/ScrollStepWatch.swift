@@ -88,16 +88,18 @@ enum ScrollStepWatch {
         }
     }
 
-    /// A fingerprint of the nodes inside `region`: their frames and labels.
-    /// Rows moving or new rows mounting change it; a drag at the end of the
-    /// content does not.
+    /// A fingerprint of the nodes inside `region`: their frames, to whole
+    /// points, and labels. Rows moving or new rows mounting change it; a drag
+    /// at the end of the content does not, once the list is back at rest
+    /// (frames are read to fractions of a point, which a list settling from a
+    /// bounce changes long after anyone can see it move).
     static func fingerprint(_ nodes: [(frame: CGRect, label: String)], in region: CGRect) -> Int {
         var h = Hasher()
         for n in nodes where n.frame.intersects(region) {
-            h.combine(n.frame.minX)
-            h.combine(n.frame.minY)
-            h.combine(n.frame.width)
-            h.combine(n.frame.height)
+            h.combine(Int(n.frame.minX.rounded()))
+            h.combine(Int(n.frame.minY.rounded()))
+            h.combine(Int(n.frame.width.rounded()))
+            h.combine(Int(n.frame.height.rounded()))
             h.combine(n.label)
         }
         return h.finalize()

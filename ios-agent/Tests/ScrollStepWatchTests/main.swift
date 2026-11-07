@@ -106,6 +106,10 @@ expect("a row's new label changes it",
        ScrollStepWatch.fingerprint(rows, in: list)
            != ScrollStepWatch.fingerprint([rows[0], (frame: frame(244), label: "Row 3")], in: list))
 
+expect("a sub-point difference does not change it",
+       ScrollStepWatch.fingerprint(rows, in: list)
+           == ScrollStepWatch.fingerprint(rows.map { (frame: $0.frame.offsetBy(dx: 0, dy: 0.3), label: $0.label) }, in: list))
+
 if failures > 0 {
     print("\(failures) failure(s)")
     exit(1)

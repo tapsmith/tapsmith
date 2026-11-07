@@ -55,14 +55,14 @@ object ScrollStep {
     const val MAX_REFINDS = 2
 
     /**
-     * The first step's confirmation of the first miss (PILOT-283): the wait
-     * the SDK's `waitForIdle(300)` made — 500 ms of quiet, at most 300 ms — so
-     * a screen that has not started its transition yet still gets the time.
-     * A 120 ms window once returned before a list screen had started to show,
+     * The first step's confirmation of a first miss (PILOT-283): the wait the
+     * SDK's `waitForIdle(1500)` made — 500 ms of quiet, at most 1.5 s — so a
+     * screen that has not started its transition yet still gets the time. A
+     * 120 ms window once returned before a list screen had started to show,
      * and the first drag went across the previous screen.
      */
     const val CONFIRM_QUIET_MS = 500L
-    const val CONFIRM_CAP_MS = 300L
+    const val CONFIRM_CAP_MS = 1_500L
 
     fun <T> run(
         device: ScrollStepDevice<T>,
@@ -70,9 +70,13 @@ object ScrollStep {
         isVisible: (T) -> Boolean,
     ): ScrollStepResult<T> {
         if (findFirst) {
-            device.waitForQuiet(CONFIRM_QUIET_MS, CONFIRM_CAP_MS)
+            // An element already on screen is answered at once, as the SDK's
+            // first probe answered it; only a miss waits and looks again.
             val first = device.find()
             if (first.any(isVisible)) return ScrollStepResult(first, swiped = false, moved = null, refinds = 0)
+            device.waitForQuiet(CONFIRM_QUIET_MS, CONFIRM_CAP_MS)
+            val confirmed = device.find()
+            if (confirmed.any(isVisible)) return ScrollStepResult(confirmed, swiped = false, moved = null, refinds = 0)
         }
         val dragStart = device.now()
         device.dragList()

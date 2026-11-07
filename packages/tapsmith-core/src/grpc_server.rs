@@ -2524,9 +2524,38 @@ impl TapsmithServiceImpl {
         };
         #[cfg(target_os = "macos")]
         {
+            let on_simulator = matches!(
+                self.device_manager.read().await.active_device(),
+                Some(d) if d.platform == Platform::Ios && d.is_emulator
+            );
+            if !on_simulator {
+                return scroll_step::unsupported(request_id);
+            }
             let Some(path) = scroll_step::hid_drag_path(&req.direction, &region, req.distance)
             else {
                 return scroll_step::unsupported(request_id);
+            };
+            // The helper places points in the device's native portrait space;
+            // the region is in the app's interface space. The agent maps them
+            // as it maps a tap's point, before anything is touched, so an agent
+            // that predates scroll steps answers before a drag is made.
+            let mapped = self
+                .send_agent_command_with_timeout(
+                    &AgentCommand::ScrollStepPoints {
+                        points: scroll_step::drag_points(&path),
+                    },
+                    deadline_ms,
+                )
+                .await;
+            let path = match mapped {
+                Ok(resp) if resp.success => match scroll_step::native_path(&path, &resp.data) {
+                    Some(native) => native,
+                    // The way the screen is turned cannot be told.
+                    None => return scroll_step::unsupported(request_id),
+                },
+                other => {
+                    return scroll_step::step_response(request_id, "scrollStepPoints", other, None)
+                }
             };
             match self.hid_scroll_drag(&path).await {
                 HidOutcome::Injected => {}
