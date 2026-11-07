@@ -118,14 +118,10 @@ const ANDROID_RENDER_READY_POLL: Duration = Duration::from_millis(250);
 const ANDROID_RENDER_READY_TRANSPORT_SLACK_MS: u64 = 2_000;
 /// Bound on the host-side `simctl terminate` that stops a simulator app
 /// before a relaunch or a cold deep link (PILOT-1062). It normally returns in
-/// about 0.3 s; this only matters when CoreSimulator is wedged, and matches
-/// the agent terminate's own budget so the fallback is no slower than before.
-const IOS_SIMCTL_TERMINATE_TIMEOUT: Duration = Duration::from_secs(4);
-/// How long the agent's `getAppState` may take to read a `simctl terminate`d
-/// app as stopped before the daemon stops trusting simctl and asks the agent
-/// to terminate it instead.
-const IOS_TERMINATE_CONFIRM_WINDOW: Duration = Duration::from_millis(1_500);
-const IOS_TERMINATE_CONFIRM_POLL: Duration = Duration::from_millis(100);
+/// about 0.3 s. Only a wedged CoreSimulator reaches the bound, and then the
+/// agent's terminate runs after it with its own full budget, so that
+/// (rare) path is up to this much slower than the agent terminate alone.
+const IOS_SIMCTL_TERMINATE_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// How long StartAgent waits for a freshly launched Android agent to answer
 /// its first ping. UIAutomator's accessibility bootstrap on a cold
@@ -992,13 +988,16 @@ impl TapsmithServiceImpl {
     /// before an in-runner relaunch and before a cold `simctl openurl`, both
     /// of which misbehave against a still-running app.
     ///
-    /// On a simulator this is `simctl terminate` (about 0.3 s) checked by the
-    /// agent's `getAppState`, instead of the agent's own terminate
-    /// (`XCUIApplication.terminate()` plus its state poll, about 1 s on CI):
-    /// PILOT-1062. CoreSimulator can silently no-op a terminate, so a simctl
-    /// terminate the agent does not read as stopped falls back to the agent's
-    /// terminate, which verifies and retries itself. A physical device has
-    /// no simctl and always uses the agent.
+    /// On a simulator this is `simctl terminate` (about 0.3 s) instead of the
+    /// agent's own terminate (`XCUIApplication.terminate()` plus its state
+    /// poll, about 1 s on CI): PILOT-1062. simctl's exit status is the
+    /// confirmation — it exits 0 once launchd has reaped the app, and says
+    /// "found nothing to terminate" when it was not running. The agent's
+    /// `XCUIApplication.state` is no substitute: it misreads an app XCTest did
+    /// not launch (one `simctl openurl` started) as not running. Any other
+    /// simctl result, or a simctl that hangs, falls back to the agent's
+    /// terminate, which verifies and retries itself. A physical device has no
+    /// simctl and always uses the agent.
     pub(super) async fn terminate_ios_app_confirmed(
         &self,
         serial: &str,
@@ -1011,7 +1010,7 @@ impl TapsmithServiceImpl {
             package_name,
             agent_timeout_ms,
             IOS_SIMCTL_TERMINATE_TIMEOUT,
-            || ios::device::terminate_app(serial, package_name),
+            || ios::device::terminate_app_reporting(serial, package_name),
         )
         .await
     }
@@ -1027,23 +1026,19 @@ impl TapsmithServiceImpl {
     ) -> bool
     where
         F: FnOnce() -> Fut,
-        Fut: std::future::Future<Output = Result<()>>,
+        Fut: std::future::Future<Output = ios::device::SimTerminate>,
     {
         let started = std::time::Instant::now();
         if !is_physical {
-            match tokio::time::timeout(simctl_timeout, simctl_terminate()).await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => debug!(package_name, error = %e, "simctl terminate failed"),
-                Err(_) => warn!(
-                    package_name,
-                    timeout_ms = simctl_timeout.as_millis() as u64,
-                    "simctl terminate timed out (CoreSimulator under pressure?)"
-                ),
-            }
-            if self
-                .wait_for_ios_app_stopped(package_name, IOS_TERMINATE_CONFIRM_WINDOW)
+            let outcome = tokio::time::timeout(simctl_timeout, simctl_terminate())
                 .await
-            {
+                .unwrap_or_else(|_| {
+                    ios::device::SimTerminate::Failed(format!(
+                        "timed out after {} ms (CoreSimulator under pressure?)",
+                        simctl_timeout.as_millis()
+                    ))
+                });
+            if outcome.app_is_stopped() {
                 crate::timing::timing_log!(
                     "kind=terminate name=simctl dur_ms={} ok=true",
                     started.elapsed().as_millis()
@@ -1052,8 +1047,8 @@ impl TapsmithServiceImpl {
             }
             warn!(
                 package_name,
-                "the app still reads as running after simctl terminate; \
-                 terminating it through the agent"
+                ?outcome,
+                "simctl terminate did not confirm the app stopped; terminating it through the agent"
             );
         }
         let confirmed = matches!(
@@ -1072,36 +1067,6 @@ impl TapsmithServiceImpl {
             confirmed
         );
         confirmed
-    }
-
-    /// Poll the agent's `getAppState` until it reads the app as stopped, for
-    /// up to `window`. Any other state, a failed call, or an answer without a
-    /// state reads as "not confirmed".
-    async fn wait_for_ios_app_stopped(&self, package_name: &str, window: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + window;
-        loop {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            let call_timeout_ms = (remaining.as_millis() as u64).max(250);
-            let stopped = matches!(
-                self.send_agent_command_with_timeout(
-                    &AgentCommand::GetAppState {
-                        package: package_name.to_string(),
-                    },
-                    call_timeout_ms,
-                )
-                .await,
-                Ok(resp) if resp.success
-                    && resp.data.get("state").and_then(|v| v.as_str()) == Some("stopped")
-            );
-            if stopped {
-                return true;
-            }
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            tokio::time::sleep(IOS_TERMINATE_CONFIRM_POLL.min(remaining)).await;
-        }
     }
 
     async fn relaunch_ios_app_via_agent(
@@ -8387,124 +8352,81 @@ mod tests {
         (svc, seen)
     }
 
+    use crate::ios::device::SimTerminate;
+
     /// A stand-in for `simctl terminate` that records that it ran.
-    fn recording_simctl(
+    fn fake_simctl(
         ran: &Arc<std::sync::atomic::AtomicBool>,
-    ) -> impl FnOnce() -> std::future::Ready<Result<()>> {
+        outcome: SimTerminate,
+    ) -> impl FnOnce() -> std::future::Ready<SimTerminate> {
         let ran = ran.clone();
         move || {
             ran.store(true, std::sync::atomic::Ordering::SeqCst);
-            std::future::ready(Ok(()))
+            std::future::ready(outcome)
         }
     }
 
-    // PILOT-1062: on a simulator, `simctl terminate` plus one cheap
-    // `getAppState` replaces the agent's ~1 s terminate.
-    #[tokio::test]
-    async fn simulator_terminate_uses_simctl_confirmed_by_app_state() {
-        let (svc, seen) = service_with_mock_agent(|method, _| match method {
-            "getAppState" => json!({"result": {"state": "stopped"}}),
-            _ => json!({"result": {"success": true}}),
-        })
-        .await;
+    async fn terminate_with(
+        svc: &TapsmithServiceImpl,
+        is_physical: bool,
+        outcome: SimTerminate,
+    ) -> (bool, bool) {
         let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        assert!(
-            svc.terminate_ios_app_confirmed_with(
-                false,
+        let confirmed = svc
+            .terminate_ios_app_confirmed_with(
+                is_physical,
                 "com.example.app",
                 4_000,
-                Duration::from_secs(4),
-                recording_simctl(&ran),
+                Duration::from_secs(3),
+                fake_simctl(&ran, outcome),
             )
-            .await
-        );
-        assert!(ran.load(std::sync::atomic::Ordering::SeqCst));
-        assert_eq!(*seen.lock().unwrap(), vec!["getAppState"]);
+            .await;
+        (confirmed, ran.load(std::sync::atomic::Ordering::SeqCst))
     }
 
+    // PILOT-1062: on a simulator, a `simctl terminate` that reports the app
+    // gone (or never running) replaces the agent's ~1 s terminate outright.
     #[tokio::test]
-    async fn simulator_terminate_polls_app_state_until_stopped() {
-        let (svc, seen) = service_with_mock_agent(|method, count| match method {
-            "getAppState" if count < 3 => json!({"result": {"state": "foreground"}}),
-            "getAppState" => json!({"result": {"state": "stopped"}}),
-            _ => json!({"result": {"success": true}}),
-        })
-        .await;
-        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        assert!(
-            svc.terminate_ios_app_confirmed_with(
-                false,
-                "com.example.app",
-                4_000,
-                Duration::from_secs(4),
-                recording_simctl(&ran),
-            )
-            .await
-        );
+    async fn simulator_terminate_trusts_simctl_when_it_reports_the_app_stopped() {
+        for outcome in [SimTerminate::Terminated, SimTerminate::NotRunning] {
+            let (svc, seen) =
+                service_with_mock_agent(|_, _| json!({"result": {"success": true}})).await;
+            assert_eq!(
+                terminate_with(&svc, false, outcome.clone()).await,
+                (true, true),
+                "{outcome:?}"
+            );
+            assert!(seen.lock().unwrap().is_empty(), "{outcome:?}");
+        }
+    }
+
+    // Any other simctl result leaves the app's state unknown, so the agent's
+    // verifying terminate decides — and its answer is the result.
+    #[tokio::test]
+    async fn simulator_terminate_that_simctl_cannot_confirm_falls_back_to_the_agent() {
+        let (svc, seen) =
+            service_with_mock_agent(|_, _| json!({"result": {"success": true}})).await;
         assert_eq!(
-            *seen.lock().unwrap(),
-            vec!["getAppState", "getAppState", "getAppState"]
+            terminate_with(&svc, false, SimTerminate::Failed("boom".into())).await,
+            (true, true)
         );
-    }
+        assert_eq!(*seen.lock().unwrap(), vec!["terminateApp"]);
 
-    // CoreSimulator can silently no-op a terminate: an app that still reads
-    // as running goes to the agent's verifying terminate, not to the launch.
-    #[tokio::test]
-    async fn simulator_terminate_that_leaves_the_app_running_falls_back_to_the_agent() {
-        let (svc, seen) = service_with_mock_agent(|method, _| match method {
-            "getAppState" => json!({"result": {"state": "foreground"}}),
-            _ => json!({"result": {"success": true}}),
-        })
-        .await;
-        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let started = std::time::Instant::now();
-        assert!(
-            svc.terminate_ios_app_confirmed_with(
-                false,
-                "com.example.app",
-                4_000,
-                Duration::from_secs(4),
-                recording_simctl(&ran),
-            )
-            .await
-        );
-        assert!(started.elapsed() >= IOS_TERMINATE_CONFIRM_WINDOW);
-        assert!(started.elapsed() < Duration::from_secs(4));
-        let seen = seen.lock().unwrap();
-        assert_eq!(seen.last().map(String::as_str), Some("terminateApp"));
-        assert_eq!(seen.iter().filter(|m| *m == "terminateApp").count(), 1);
-    }
-
-    #[tokio::test]
-    async fn simulator_terminate_is_unconfirmed_when_app_state_and_agent_both_fail() {
         let (svc, seen) = service_with_mock_agent(
             |_, _| json!({"error": {"type": "ACTION_FAILED", "message": "still running"}}),
         )
         .await;
-        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        assert!(
-            !svc.terminate_ios_app_confirmed_with(
-                false,
-                "com.example.app",
-                4_000,
-                Duration::from_secs(4),
-                recording_simctl(&ran),
-            )
-            .await
-        );
         assert_eq!(
-            seen.lock().unwrap().last().map(String::as_str),
-            Some("terminateApp")
+            terminate_with(&svc, false, SimTerminate::Failed("boom".into())).await,
+            (false, true)
         );
+        assert_eq!(*seen.lock().unwrap(), vec!["terminateApp"]);
     }
 
     #[tokio::test]
-    async fn simulator_terminate_bounds_a_hung_simctl() {
-        let (svc, seen) = service_with_mock_agent(|method, _| match method {
-            "getAppState" => json!({"result": {"state": "stopped"}}),
-            _ => json!({"result": {"success": true}}),
-        })
-        .await;
+    async fn simulator_terminate_bounds_a_hung_simctl_and_falls_back_to_the_agent() {
+        let (svc, seen) =
+            service_with_mock_agent(|_, _| json!({"result": {"success": true}})).await;
         let started = std::time::Instant::now();
         assert!(
             svc.terminate_ios_app_confirmed_with(
@@ -8514,31 +8436,23 @@ mod tests {
                 Duration::from_millis(200),
                 || async {
                     tokio::time::sleep(Duration::from_secs(60)).await;
-                    Ok(())
+                    SimTerminate::Terminated
                 },
             )
             .await
         );
         assert!(started.elapsed() < Duration::from_secs(3));
-        assert_eq!(*seen.lock().unwrap(), vec!["getAppState"]);
+        assert_eq!(*seen.lock().unwrap(), vec!["terminateApp"]);
     }
 
     #[tokio::test]
     async fn physical_device_terminate_goes_through_the_agent_only() {
         let (svc, seen) =
             service_with_mock_agent(|_, _| json!({"result": {"success": true}})).await;
-        let ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        assert!(
-            svc.terminate_ios_app_confirmed_with(
-                true,
-                "com.example.app",
-                4_000,
-                Duration::from_secs(4),
-                recording_simctl(&ran),
-            )
-            .await
+        assert_eq!(
+            terminate_with(&svc, true, SimTerminate::Terminated).await,
+            (true, false)
         );
-        assert!(!ran.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(*seen.lock().unwrap(), vec!["terminateApp"]);
     }
 
