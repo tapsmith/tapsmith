@@ -14,4 +14,8 @@ export class TypingScreen {
   get firstCodeBox() { return this.device.getByTestId("typing-code-1") }
   /** What the code boxes hold, as `code=<digits>`. */
   get codeValue() { return this.device.getByTestId("typing-code-value") }
+  /** The first of the code boxes that move the focus on half a second after each digit. */
+  get firstSlowCodeBox() { return this.device.getByTestId("typing-slow-code-1") }
+  /** What the slow code boxes hold, as `slowcode=<digits>`. */
+  get slowCodeValue() { return this.device.getByTestId("typing-slow-code-value") }
 }

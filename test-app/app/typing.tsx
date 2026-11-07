@@ -16,8 +16,12 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - The code boxes take one digit each and move the focus on to the next box
 //   by themselves, as a one-time-code field does. What they hold is echoed in
 //   "code=<digits>".
+// - The slow code boxes do the same half a second after each digit, as a
+//   busy app does: keys typed before the focus moves go to the box being
+//   left. What they hold is echoed in "slowcode=<digits>".
 const BUSY_MS = 40
 const CODE_LENGTH = 4
+const SLOW_FOCUS_MS = 500
 
 function busyWait(ms: number) {
   const end = Date.now() + ms
@@ -31,6 +35,8 @@ export default function TypingScreen() {
   const [secure, setSecure] = useState("")
   const [code, setCode] = useState<string[]>(Array(CODE_LENGTH).fill(""))
   const boxes = useRef<(TextInput | null)[]>([])
+  const [slowCode, setSlowCode] = useState<string[]>(Array(CODE_LENGTH).fill(""))
+  const slowBoxes = useRef<(TextInput | null)[]>([])
 
   // A warm reset navigates here rather than remounting.
   const resetEpoch = useTapsmithResetEpoch()
@@ -39,12 +45,21 @@ export default function TypingScreen() {
     setSlow("")
     setSecure("")
     setCode(Array(CODE_LENGTH).fill(""))
+    setSlowCode(Array(CODE_LENGTH).fill(""))
   }, [resetEpoch])
 
   const setDigit = (index: number, text: string) => {
     const digit = text.slice(-1)
     setCode((current) => current.map((d, i) => (i === index ? digit : d)))
     if (digit && index < CODE_LENGTH - 1) boxes.current[index + 1]?.focus()
+  }
+
+  const setSlowDigit = (index: number, text: string) => {
+    const digit = text.slice(-1)
+    setSlowCode((current) => current.map((d, i) => (i === index ? digit : d)))
+    if (digit && index < CODE_LENGTH - 1) {
+      setTimeout(() => slowBoxes.current[index + 1]?.focus(), SLOW_FOCUS_MS)
+    }
   }
 
   return (
@@ -96,6 +111,25 @@ export default function TypingScreen() {
         ))}
       </View>
       <Text testID="typing-code-value">{`code=${code.join("")}`}</Text>
+
+      <View style={styles.row}>
+        {slowCode.map((digit, index) => (
+          <TextInput
+            key={index}
+            ref={(box) => {
+              slowBoxes.current[index] = box
+            }}
+            style={[styles.input, styles.box]}
+            value={digit}
+            onChangeText={(text) => setSlowDigit(index, text)}
+            keyboardType="number-pad"
+            maxLength={1}
+            accessibilityLabel={`Slow code digit ${index + 1}`}
+            testID={`typing-slow-code-${index + 1}`}
+          />
+        ))}
+      </View>
+      <Text testID="typing-slow-code-value">{`slowcode=${slowCode.join("")}`}</Text>
     </View>
   )
 }

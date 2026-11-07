@@ -107,6 +107,12 @@ enum TypingCheck {
     /// input must hold still before a key is sent, and how long a key may
     /// take to show (a changed value, or the focus moving on).
     static let focusStillWait: TimeInterval = 0.4
+    /// Typing a key at a time while the focus moves: how long the app gets to
+    /// move the focus on after a key changed the input it went to (a React
+    /// Native field moves it from its JavaScript change handler, which a busy
+    /// app runs late). Spent in full only where the focus stays: the last
+    /// field, or a field that takes several keys.
+    static let focusHandOffWait: TimeInterval = 1.0
     /// Times a key that changed nothing is sent again.
     static let keyTries = 3
 

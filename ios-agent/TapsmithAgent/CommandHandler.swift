@@ -1394,7 +1394,7 @@ class CommandHandler {
                     // digit): keys sent while the focus moves are lost, and
                     // the text ends up spread over several fields.
                     NSLog("[typeText] the focus moved on after the first key: typing the rest a key at a time")
-                    try typeFollowingFocus(rest, from: field, before: before, firstKey: String(first))
+                    try typeFollowingFocus(rest, from: field, before: before, typedBefore: String(first))
                 } else {
                     if !rest.isEmpty && !EventSynthesizer.typeKeys(rest, charactersPerSecond: rate) {
                         NSLog("[typeText] the burst of \(rest.count) key(s) could not be synthesized")
@@ -1478,12 +1478,17 @@ class CommandHandler {
     /// sent while the focus moves are lost), then waited for until the
     /// focused input shows a change or the focus moves on. A key that changed
     /// nothing is sent again (a field just focused can drop keys for a
-    /// while). A focus move can look like a key landing when it came late
-    /// (the key went to the field the app was about to leave), so the inputs
-    /// the focus went through, `field` first, are read back at the end: in
-    /// the order the focus reached them they must hold `before`, `firstKey`
-    /// and `keys`.
-    private func typeFollowingFocus(_ keys: String, from field: ElementInfo, before: String, firstKey: String) throws {
+    /// while). A key that changed the input it went to is given the moment
+    /// the app takes to move the focus on (a React Native field moves it from
+    /// its JavaScript change handler, after the value shows), so the next key
+    /// is not sent to the input being left. Each input the focus reaches is
+    /// emptied first with `clearing` (typing the text again after a burst
+    /// went astray). The inputs the focus went through, `field` first, are
+    /// read back at the end: in the order the focus reached them they must
+    /// hold `before`, `typedBefore` (already typed into `field`) and `keys`.
+    private func typeFollowingFocus(
+        _ keys: String, from field: ElementInfo, before: String, typedBefore: String, clearing: Bool = false
+    ) throws {
         func now() -> TypingCheck.FocusedInput? { snapshotFinder.liveFocusedInputState() }
         let b = field.bounds
         var visited = [CGRect(x: b.left, y: b.top, width: b.width, height: b.height)]
@@ -1496,25 +1501,44 @@ class CommandHandler {
                 if again == at { break }
                 at = again
             }
+            if clearing, let input = at, !input.value.isEmpty {
+                _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
+                _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                let emptyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+                repeat {
+                    at = now()
+                    if at?.value.isEmpty == true { break }
+                    Thread.sleep(forTimeInterval: 0.01)
+                } while Date() < emptyBy
+            }
             if let frame = at?.frame { visited.append(frame) }
-            var landed = false
+            var after: TypingCheck.FocusedInput?
             for _ in 0..<TypingCheck.keyTries {
                 _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
                 let keyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
                 repeat {
-                    if now() != at { landed = true; break }
+                    let read = now()
+                    if read != at { after = read; break }
                     Thread.sleep(forTimeInterval: 0.01)
                 } while Date() < keyBy
-                if landed { break }
+                if after != nil { break }
             }
-            guard landed else {
+            guard let after else {
                 throw AgentError.actionFailed(
                     "typeText: the focus moved on by itself while typing, and a key changed nothing " +
                         "after \(TypingCheck.keyTries) tries"
                 )
             }
+            // The key changed the input it went to, which still has the
+            // focus: give the app its moment to move the focus on.
+            if let at, after.frame == at.frame {
+                let handOffBy = Date(timeIntervalSinceNow: TypingCheck.focusHandOffWait)
+                while Date() < handOffBy, now()?.frame == at.frame {
+                    Thread.sleep(forTimeInterval: 0.015)
+                }
+            }
         }
-        try checkTypedAcross(TypingCheck.inVisitOrder(visited), before: before, typed: firstKey + keys)
+        try checkTypedAcross(TypingCheck.inVisitOrder(visited), before: before, typed: typedBefore + keys)
     }
 
     /// Read back the inputs at `frames` (the inputs typing went through, in
@@ -1589,6 +1613,21 @@ class CommandHandler {
                 )
             }
             tries += 1
+            let target = try resolveElement(selectorParams)
+            if focusMovedOn(from: target) {
+                // The field moved the focus on by itself after the first key
+                // was checked (its app was slow to): the burst went astray
+                // across the fields. Type it again following the focus,
+                // emptying each field first.
+                NSLog("[typeText] the focus moved on during the burst: typing it again following the focus")
+                do {
+                    try refocusForTyping(target, settleTime: 0.25)
+                } catch let error as AgentError {
+                    throw AgentError.actionFailed("typeText could not refocus the field to type into it again (\(error.type))")
+                }
+                try typeFollowingFocus(before + keys, from: target, before: "", typedBefore: "", clearing: true)
+                return
+            }
             NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: secure)) after typing: typing it again a key at a time (try \(tries))")
             try retypeKeyByKey(before + keys, secure: secure, selectorParams: selectorParams)
             (reading, shown) = try waitForTyped(keys, before: before, secure: secure, selectorParams: selectorParams,
