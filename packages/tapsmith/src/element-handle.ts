@@ -4171,9 +4171,14 @@ export class ElementHandle {
               settled = stabilityTick.element;
               noteSize(settled);
               if (curFrame === lastFrame) {
-                // After a step one equal pair settles it: the device waited
-                // for the list to go quiet before its find, and nothing flings.
-                if (++stableTicks >= (lastStepMoved === undefined ? 2 : 1)) break;
+                // After a step that saw its list settle, one equal pair
+                // settles it: the device waited for the list to go quiet
+                // before its find, and nothing flings. A step that could not
+                // tell (an iOS list still moving at the end of the wait) gets
+                // the full settle, so a tap does not land on a list still
+                // creeping, which takes the tap as "stop scrolling".
+                const stepSettled = lastStepMoved === 'MOVED_YES' || lastStepMoved === 'MOVED_NO';
+                if (++stableTicks >= (stepSettled ? 1 : 2)) break;
               } else {
                 stableTicks = 0;
                 lastFrame = curFrame;

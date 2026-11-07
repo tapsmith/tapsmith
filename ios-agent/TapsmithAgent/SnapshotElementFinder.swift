@@ -567,6 +567,28 @@ class SnapshotElementFinder {
         return ScrollStepWatch.fingerprint(nodes, in: region)
     }
 
+    /// The last snapshot taken, to look at again after a later one replaces it.
+    func lastSnapshotTaken() -> XCUIElementSnapshot? {
+        lock.lock()
+        defer { lock.unlock() }
+        return lastSnapshot
+    }
+
+    /// The frames of `selector`'s matches in `snapshot`, by the same match
+    /// walk as `findElements`, registering nothing (no element ids, no cache).
+    func matchFrames(_ selector: ElementSelector, in snapshot: XCUIElementSnapshot) -> [CGRect] {
+        var dict = matchableDict(of: snapshot)
+        let found = (try? findElements(selector, in: &dict, register: false)) ?? []
+        return found.map { e in
+            CGRect(
+                x: CGFloat(e.bounds.left),
+                y: CGFloat(e.bounds.top),
+                width: CGFloat(e.bounds.right - e.bounds.left),
+                height: CGFloat(e.bounds.bottom - e.bounds.top)
+            )
+        }
+    }
+
     /// The app's frame in the last snapshot taken: the interface size a
     /// rotation Tapsmith did not make has already changed.
     func lastSnapshotFrameSize() -> CGSize? {

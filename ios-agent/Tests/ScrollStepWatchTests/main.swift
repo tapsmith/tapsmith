@@ -33,6 +33,19 @@ expect("no match is not far: the row may be about to show",
 expect("one near match among far ones makes it near",
        !ScrollStepWatch.isFar([(frame(3000), false), (frame(900), false)], region: list))
 
+// ─── movedFar ───
+
+expect("a step that moved the element most of a list's length moved it",
+       ScrollStepWatch.movedFar(before: [frame(2900)], after: [frame(2340)], region: list))
+expect("a bounce caught part-way did not",
+       !ScrollStepWatch.movedFar(before: [frame(2900)], after: [frame(2960)], region: list))
+expect("sideways counts along the width",
+       ScrollStepWatch.movedFar(before: [CGRect(x: 1200, y: 300, width: 100, height: 44)],
+                                after: [CGRect(x: 800, y: 300, width: 100, height: 44)], region: list))
+expect("no match before or after: not known to have moved",
+       !ScrollStepWatch.movedFar(before: [], after: [frame(100)], region: list)
+           && !ScrollStepWatch.movedFar(before: [frame(100)], after: [], region: list))
+
 // ─── band ───
 
 let band = ScrollStepWatch.band(of: list)

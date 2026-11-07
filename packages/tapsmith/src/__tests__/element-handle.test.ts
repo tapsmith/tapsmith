@@ -6520,6 +6520,18 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
     expect(scrollStep).toHaveBeenCalledTimes(3);
   });
 
+  it("settles a row found by a step that could not tell whether its list stopped with two equal pairs, not one", async () => {
+    // An iOS list still moving when the step's wait ran out: the row is
+    // watched as after a fling, so a tap does not land on a creeping list.
+    const scrollStep = steps([{ region: listRegion }, { elements: [row(1000)], moved: 'MOVED_UNSPECIFIED' }]);
+    const findElements = vi.fn(async () => makeFindElementsResponse([row(1000)]));
+    const client = makeMockClient({ scrollStep, findElements, getUiHierarchy: vi.fn(hierarchySequence([listScreen(0)])) });
+
+    await handle(client).scrollIntoView();
+
+    expect(findElements).toHaveBeenCalledTimes(2);
+  });
+
   it("takes a step's region as the scroll container when it could not tell whether the list moved", async () => {
     const scrollStep = steps([{ region: listRegion, moved: 'MOVED_UNSPECIFIED' }, { elements: [row(1000)] }]);
     const getUiHierarchy = vi.fn(hierarchySequence([listScreen(0), listScreen(1)]));

@@ -1542,6 +1542,7 @@ class CommandHandler {
                 height: coord("bottom") - coord("top")
             )
             let before = snapshotFinder.lastSnapshotFingerprint(in: region)
+            let beforeSnapshot = snapshotFinder.lastSnapshotTaken()
             var elements = try snapshotFinder.findElements(selector)
             let matches = elements.map { e in
                 (frame: CGRect(
@@ -1554,9 +1555,15 @@ class CommandHandler {
             var waited = "far, no wait"
             // Whether the list's tree can be compared with the one before the
             // drag: not while it is still moving, as a list bouncing back from
-            // an overscroll at its end is after the 0.9 s cap.
+            // an overscroll at its end is (after the 0.9 s cap, or caught at
+            // once on the far path below).
             var settled = true
-            if !ScrollStepWatch.isFar(matches, region: region) {
+            if ScrollStepWatch.isFar(matches, region: region) {
+                // No wait: the list may be mid-motion, so it moved only if the
+                // element itself moved about a step's length.
+                let beforeFrames = beforeSnapshot.map { snapshotFinder.matchFrames(selector, in: $0) } ?? []
+                settled = ScrollStepWatch.movedFar(before: beforeFrames, after: matches.map(\.frame), region: region)
+            } else {
                 let band = ScrollStepWatch.band(of: region)
                 let native = HidTouch.nativeRect(
                     band,

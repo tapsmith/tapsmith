@@ -42,6 +42,23 @@ enum ScrollStepWatch {
         }
     }
 
+    /// The share of the list's length the element must have moved for a step
+    /// that did not wait (`isFar`) to count as the list moving. A step drags
+    /// 0.8 of the list, so a real step moves the element about that far; a
+    /// list bouncing back from an overscroll at its end is caught part-way
+    /// and has moved it much less.
+    static let farMoveShare: CGFloat = 0.25
+
+    /// Whether the element moved far enough between the snapshot before the
+    /// drag (`before`) and the step's find (`after`) to say the list scrolled,
+    /// for a step that answered without waiting for the list to stop. The
+    /// first match of each is compared. False when either has none.
+    static func movedFar(before: [CGRect], after: [CGRect], region: CGRect) -> Bool {
+        guard let b = before.first, let a = after.first else { return false }
+        return abs(a.minY - b.minY) >= region.height * farMoveShare
+            || abs(a.minX - b.minX) >= region.width * farMoveShare
+    }
+
     /// The part of the list watched for stillness: a band across its middle
     /// third, short of its trailing edge. Rows moving cross it.
     static func band(of region: CGRect) -> CGRect {
