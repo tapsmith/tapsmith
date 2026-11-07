@@ -28,7 +28,7 @@ import type { SwipeDirection } from './input-names.js';
 import { onScreenSignature } from './screen-signature.js';
 import { scrollRegion, type Rect } from './scroll-container.js';
 import type { Platform } from './config.js';
-import type { TapsmithGrpcClient, ElementInfo, ActionResponse } from './grpc-client.js';
+import type { TapsmithGrpcClient, ElementInfo, ActionResponse, ScrollStepResponse } from './grpc-client.js';
 import { type TraceCapture, extractStack } from './trace/trace-collector.js';
 import type { ActionCategory } from './trace/types.js';
 import { tracedAction } from './trace/traced-action.js';
@@ -103,6 +103,12 @@ const SCROLL_GENTLE_DISTANCE = 0.3;
  *  reading only once it stops never sees the rows it went past. */
 const SCROLL_WATCH_INTERVAL_MS = 100;
 const SCROLL_GENTLE_MAX_SPEED = 1000;
+/** How much of its list one scroll step drags (PILOT-998). An element shows,
+ *  at least in part, in some step's read as long as a drag is shorter than the
+ *  list (the agents' `visible` means "any part on screen"), and one an edge
+ *  cuts is nudged inside (PILOT-935). 0.8 reached Row 60 of the bench list in
+ *  4 steps where 0.6 took 6. */
+const SCROLL_STEP_DISTANCE = 0.8;
 /** Cap for the best-effort screenshot/hierarchy capture taken when an action's
  *  element resolution has *already* failed. Tighter than the normal 5s
  *  TRACE_CAPTURE_TIMEOUT_MS so a slow/unresponsive device can't add seconds of
@@ -450,7 +456,7 @@ export function isRetryableResolutionError(err: unknown): boolean {
   // budget-long stale stall still reports "not found" rather than a raw
   // agent error.
   if (isStaleSnapshotError(err)) return false;
-  return err instanceof Error && /^find(Element|Elements) failed:/.test(err.message);
+  return err instanceof Error && /^(find(Element|Elements)|scrollStep) failed:/.test(err.message);
 }
 
 /**
@@ -853,6 +859,10 @@ const OPPOSITE_DIRECTION: Record<SwipeDirection, SwipeDirection> = {
   left: 'right',
   right: 'left',
 };
+
+function isVertical(direction: SwipeDirection): boolean {
+  return direction === 'up' || direction === 'down';
+}
 
 /**
  * `scrollIntoView()`'s `direction`, lowercased, or an error naming the valid
@@ -1684,11 +1694,18 @@ export class ElementHandle {
    * undefined when there is none yet.
    */
   private async _findOneStrict(timeoutMs: number): Promise<ElementInfo | undefined> {
-    const res = await this._client.findElements(this._selector, timeoutMs);
+    return this._oneStrict(await this._client.findElements(this._selector, timeoutMs), 'findElements');
+  }
+
+  /** The one match of an unmodified handle's read, strictly (see {@link _findOneStrict}). */
+  private _oneStrict(
+    res: { elements: ElementInfo[]; errorMessage: string },
+    call: 'findElements' | 'scrollStep',
+  ): ElementInfo | undefined {
     if (res.errorMessage) {
       // Daemon-level failure (agent dead, command error) — not "no match".
       // Must not look like a pollable not-found, so the real cause surfaces.
-      throw new Error(`findElements failed: ${res.errorMessage}`);
+      throw new Error(`${call} failed: ${res.errorMessage}`);
     }
     const elements = collapseSameTargetDuplicates(res.elements ?? []);
     if (elements.length > 1) {
@@ -3752,16 +3769,19 @@ export class ElementHandle {
    * `"down"`, which reveals what is below.
    *
    * @param options.direction - The way the view scrolls, as {@link scroll} takes it: `"down"` reveals what is below, `"up"` what is above, `"left"` and `"right"` likewise (the finger swipes the opposite way). Default: chosen from the element's position, else `"down"`.
-   * On Android each vertical swipe is a drag that leaves no momentum, so it
-   * looks again as soon as the drag ends; sideways on Android, and on iOS, it
-   * watches the list while the momentum carries it. Once the element shows, it waits for the list to
-   * stop. If the momentum
+   * Each swipe is one device call where it can be (PILOT-998): on Android a
+   * vertical drag, and on the iOS simulator a drag inside the scroll
+   * container, that leave no momentum; the device waits for the list to stop
+   * changing, looks for the element, and says whether the list moved. Other
+   * swipes (sideways on Android, a physical iPhone, a modified locator) fling,
+   * and it watches the list while the momentum carries it. Once the element
+   * shows, it waits for the list to stop. If the momentum
    * carried the element off screen, it scrolls back for it, and if an edge of
    * the scroll container cuts it, it moves it inside, with shorter, slower
    * swipes that count toward `maxScrolls`.
    *
-   * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `5`, or `10` on Android, where each vertical swipe is a drag that moves the list less than a fling.
-   * @param options.speed - Swipe speed in pixels/second. Default `2000`.
+   * @param options.maxScrolls - Maximum number of swipe attempts before throwing. Default `10` (a drag moves the list less than a fling), or `5` when the platform is not known.
+   * @param options.speed - Swipe speed in pixels/second, for swipes that are not one-call steps. Default `2000`.
    */
   async scrollIntoView(options?: {
     direction?: SwipeDirection | (string & {});
@@ -3773,7 +3793,10 @@ export class ElementHandle {
     // On Android each vertical swipe is a drag that moves the list about its
     // own length and stops (PILOT-973); a fling carried it further. So the
     // default budget there is larger, to reach as far as the flings did.
-    const maxScrolls = options?.maxScrolls ?? (this._options.platform === 'android' ? 10 : 5);
+    // On iOS each step is a drag too, through the simulator's HID helper
+    // (PILOT-998), so the default is the same there.
+    const platform = this._options.platform;
+    const maxScrolls = options?.maxScrolls ?? (platform === 'android' || platform === 'ios' ? 10 : 5);
     const speed = options?.speed ?? 2000;
 
     this._emitQueryStarted('scrollIntoView');
@@ -3802,15 +3825,7 @@ export class ElementHandle {
       | { outcome: 'visible'; el: ElementInfo }
       | { outcome: 'miss'; el?: ElementInfo }
       | { outcome: 'unreliable' };
-    const probe = async (): Promise<Probe> => {
-      // One modifier-aware read: filter/and/or/scope and the positional index
-      // all apply, so the scroll is judged against the element the handle
-      // actually denotes — not the raw selector's first match (PILOT-345).
-      // Strict mode (PILOT-226) applies too: scrolling toward an ambiguous
-      // selector is an error — which match should end up on screen? — and
-      // propagates, as does any other fatal error (gRPC transport failure,
-      // user stop).
-      const tick = await this._resolveTick(TICK_READ_BUDGET_MS);
+    const toProbe = (tick: ResolveTick): Probe => {
       switch (tick.kind) {
         case 'fault':
           // A momentary agent fault or agent command timeout is retried by
@@ -3836,6 +3851,14 @@ export class ElementHandle {
             : { outcome: 'miss', el: tick.element };
       }
     };
+    // One modifier-aware read: filter/and/or/scope and the positional index
+    // all apply, so the scroll is judged against the element the handle
+    // actually denotes — not the raw selector's first match (PILOT-345).
+    // Strict mode (PILOT-226) applies too: scrolling toward an ambiguous
+    // selector is an error — which match should end up on screen? — and
+    // propagates, as does any other fatal error (gRPC transport failure,
+    // user stop).
+    const probe = async (): Promise<Probe> => toProbe(await this._resolveTick(TICK_READ_BUDGET_MS));
 
     // What is on screen, as the device describes it: its signature, to tell
     // whether a swipe moved anything (PILOT-929) — a swipe that leaves it
@@ -3915,9 +3938,62 @@ export class ElementHandle {
       // its page (an androidx ViewPager released slowly turns only past 0.6 of
       // a page, which a 0.6 drag never reaches), and is watched like an iOS
       // swipe, which always flings (PILOT-886).
-      const android = this._options.platform === 'android';
+      const android = platform === 'android';
+      // One device call per scroll step (PILOT-998): the device drags, waits
+      // for the list to stop changing, finds the element, and says whether
+      // the list under the finger moved, where a swipe was a find, a full
+      // screen read and the swipe. Only for an unmodified handle (a modified
+      // one resolves through several reads); on Android only up and down,
+      // whose steps stop dead (sideways still flings, so a pager turns); on
+      // iOS only inside a scroll container, which the step drags in through
+      // the simulator's HID helper, so nothing flings anywhere in the scroll.
+      // A device that cannot make steps (a physical iPhone, an older agent)
+      // says so, and the scroll goes on the old way.
+      let stepsUnsupported = false;
+      const stepsFit = (): boolean =>
+        !stepsUnsupported &&
+        !this._hasModifiers() &&
+        (android ? direction === 'up' || direction === 'down' : platform === 'ios' && region !== undefined);
+      // What the last swipe's step said about the list under the finger;
+      // undefined after a plain swipe.
+      let lastStepMoved: ScrollStepResponse['moved'] | undefined;
+      // One step: true when the device made it (its find stands as the next
+      // probe), false when it cannot make steps.
+      const step = async (findFirst: boolean): Promise<boolean> => {
+        const res = await this._client.scrollStep(this._selector, TICK_READ_BUDGET_MS, {
+          direction: OPPOSITE_DIRECTION[direction],
+          distance: gentle ? SCROLL_GENTLE_DISTANCE : SCROLL_STEP_DISTANCE,
+          ...(region ? { region } : {}),
+          ...(findFirst ? { findFirst: true } : {}),
+        });
+        if (res.unsupported) {
+          stepsUnsupported = true;
+          return false;
+        }
+        if (res.swiped) {
+          swipes++;
+          lastStepMoved = res.moved;
+          if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
+          // The container the agent picked, when the step had none.
+          const r = res.region;
+          if (r && r.right > r.left && r.bottom > r.top) {
+            region = { left: r.left, top: r.top, right: r.right, bottom: r.bottom };
+          }
+        }
+        let tick: ResolveTick;
+        try {
+          const el = this._oneStrict(res, 'scrollStep');
+          tick = el ? { kind: 'found', element: el } : { kind: 'miss' };
+        } catch (err) {
+          tick = ElementHandle._classifyTickError(err);
+        }
+        nextProbe = toProbe(tick);
+        return true;
+      };
       const swipe = async (): Promise<void> => {
         settleExtraTicks = 0;
+        lastStepMoved = undefined;
+        if (stepsFit() && (await step(false))) return;
         const opts = gentle
           ? { speed: Math.min(speed, SCROLL_GENTLE_MAX_SPEED), distance: SCROLL_GENTLE_DISTANCE }
           : { speed, distance: 0.6 };
@@ -3967,7 +4043,19 @@ export class ElementHandle {
         }
       };
       for (;;) {
-        let result = nextProbe ?? (await probe());
+        let result: Probe;
+        if (nextProbe) {
+          result = nextProbe;
+        } else if (swipes === 0 && !confirmedFirstMiss && android && stepsFit() && (await step(true))) {
+          // The first Android step confirms the first miss itself (PILOT-283):
+          // the agent waits as the idle wait below does, finds afresh, and
+          // drags only when the element is not on screen. So it needs no
+          // probe before it, and, picking the list itself, no screen read.
+          confirmedFirstMiss = true;
+          result = nextProbe as Probe | undefined ?? { outcome: 'unreliable' };
+        } else {
+          result = await probe();
+        }
         nextProbe = undefined;
 
         // Right after navigation or app launch the accessibility tree can lag
@@ -4083,7 +4171,9 @@ export class ElementHandle {
               settled = stabilityTick.element;
               noteSize(settled);
               if (curFrame === lastFrame) {
-                if (++stableTicks >= 2) break;
+                // After a step one equal pair settles it: the device waited
+                // for the list to go quiet before its find, and nothing flings.
+                if (++stableTicks >= (lastStepMoved === undefined ? 2 : 1)) break;
               } else {
                 stableTicks = 0;
                 lastFrame = curFrame;
@@ -4134,6 +4224,26 @@ export class ElementHandle {
           if (++unreliableTicks > maxScrolls) break;
           await sleep(SCROLL_SETTLE_MS, this._client._getAbortSignal?.());
           continue;
+        }
+        // A step that saw the list move is not at the end of the content, and
+        // its container is the one it dragged in: the next step needs no
+        // screen read (PILOT-998). One that saw nothing move, or could not
+        // tell, is judged by the screen below, as a swipe is.
+        if (lastStepMoved === 'MOVED_YES' && swipes < maxScrolls && !overshot) {
+          const toward = explicitDirection === undefined ? scrollToward(result.el) : undefined;
+          // A turn onto the other axis needs that element's own container.
+          if (!toward || isVertical(toward) === isVertical(direction)) {
+            if (toward) {
+              if (toward === OPPOSITE_DIRECTION[direction]) gentle = true;
+              direction = toward;
+              positioned = true;
+            }
+            if (directionsUsed[directionsUsed.length - 1] !== direction) directionsUsed.push(direction);
+            screenBeforeSwipe = undefined;
+            lastNudge = undefined;
+            await swipe();
+            continue;
+          }
         }
         // Affirmative miss. Read the screen: unchanged since before the last
         // swipe means that swipe moved nothing, so more of them will not

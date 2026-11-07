@@ -14,6 +14,7 @@ import type {
   ElementInfo,
   ScreenshotResponse,
   UiHierarchyResponse,
+  ScrollStepResponse,
 } from '../grpc-client.js';
 
 // ─── Mock helpers ───
@@ -103,8 +104,15 @@ function makeMockClient(overrides: Partial<TapsmithGrpcClient> = {}): TapsmithGr
     // A screen that changes after every swipe, so scrollIntoView() never
     // sees the end of the content unless a test says so (PILOT-929).
     getUiHierarchy: vi.fn(hierarchySequence()),
+    // A device that cannot make scroll steps, so scrollIntoView() swipes
+    // unless a test gives it one (PILOT-998).
+    scrollStep: vi.fn(async () => unsupportedStep()),
     ...overrides,
   } as unknown as TapsmithGrpcClient;
+}
+
+function unsupportedStep(): ScrollStepResponse {
+  return { requestId: '1', elements: [], errorMessage: '', moved: 'MOVED_UNSPECIFIED', swiped: false, unsupported: true };
 }
 
 /**
@@ -6379,8 +6387,8 @@ describe('scrollIntoView() drags without momentum on Android (PILOT-973)', () =>
     }
   });
 
-  it('allows 10 drags by default on Android, where a drag moves the list less than a fling did; 5 elsewhere', async () => {
-    for (const [platform, budget] of [['android', 10], ['ios', 5], [undefined, 5]] as const) {
+  it('allows 10 drags by default on Android and iOS, where a drag moves the list less than a fling did; 5 elsewhere', async () => {
+    for (const [platform, budget] of [['android', 10], ['ios', 10], [undefined, 5]] as const) {
       const swipe = vi.fn(async () => successResponse());
       const client = makeMockClient({ findElements: scripted([null]), swipe });
 
@@ -6390,7 +6398,7 @@ describe('scrollIntoView() drags without momentum on Android (PILOT-973)', () =>
       expect(swipe).toHaveBeenCalledTimes(budget);
     }
     // The iOS swipes each watch the list for 500 ms.
-  }, 15_000);
+  }, 20_000);
 
   it('keeps an explicit maxScrolls on Android', async () => {
     const swipe = vi.fn(async () => successResponse());
@@ -6431,6 +6439,212 @@ describe('scrollIntoView() drags without momentum on Android (PILOT-973)', () =>
 
     expect(findElements).toHaveBeenCalledTimes(8);
     expect(swipe).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', () => {
+  const listScreen = (n: number) =>
+    `<hierarchy><node class="android.widget.FrameLayout" bounds="[0,0][1080,2400]">` +
+    `<node class="android.widget.TextView" text="30 items ${n}" bounds="[0,63][1080,563]"/>` +
+    `<node class="android.widget.ScrollView" scrollable="true" bounds="[0,563][1080,2400]"/></node></hierarchy>`;
+  const listRegion = { left: 0, top: 563, right: 1080, bottom: 2400 };
+  const row = (top: number, visible = true) =>
+    makeElementInfo({ text: 'Item 25', visible, bounds: { left: 0, top, right: 1080, bottom: top + 150 } });
+  const handle = (client: TapsmithGrpcClient, platform: 'android' | 'ios' = 'android') =>
+    new ElementHandle(client, _text('Item 25'), 5000, { platform } as never);
+  type Step = Partial<ScrollStepResponse>;
+  /** scrollStep answers from `script` in order, repeating the last entry. */
+  function steps(script: Step[]) {
+    let i = 0;
+    return vi.fn(async (): Promise<ScrollStepResponse> => ({
+      requestId: '1',
+      elements: [],
+      errorMessage: '',
+      moved: 'MOVED_YES',
+      swiped: true,
+      unsupported: false,
+      ...script[Math.min(i++, script.length - 1)],
+    }));
+  }
+  const stepArgs = (scrollStep: ReturnType<typeof steps>) =>
+    scrollStep.mock.calls.map((c) => (c as unknown[])[2]);
+
+  it('confirms the first miss inside the first Android step, and does not drag for an element on screen', async () => {
+    const scrollStep = steps([{ elements: [row(1000)], swiped: false, moved: 'MOVED_UNSPECIFIED' }]);
+    const findElements = vi.fn(async () => makeFindElementsResponse([]));
+    const getUiHierarchy = vi.fn(hierarchySequence());
+    const waitForIdle = vi.fn(async () => successResponse());
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ scrollStep, findElements, getUiHierarchy, waitForIdle, swipe });
+
+    await handle(client).scrollIntoView();
+
+    expect(stepArgs(scrollStep)).toEqual([{ direction: 'up', distance: 0.8, findFirst: true }]);
+    // No probe, no idle wait, no screen read, no swipe: the step did all of it.
+    expect(findElements).not.toHaveBeenCalled();
+    expect(waitForIdle).not.toHaveBeenCalled();
+    expect(getUiHierarchy).not.toHaveBeenCalled();
+    expect(swipe).not.toHaveBeenCalled();
+  });
+
+  it('steps in the list the agent picked until the element shows, with no screen read while the list moves', async () => {
+    const scrollStep = steps([
+      { region: listRegion },
+      { region: listRegion },
+      { elements: [row(1000)], region: listRegion },
+    ]);
+    const findElements = vi.fn(async () => makeFindElementsResponse([row(1000)]));
+    const getUiHierarchy = vi.fn(hierarchySequence());
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ scrollStep, findElements, getUiHierarchy, swipe });
+
+    await handle(client).scrollIntoView();
+
+    expect(stepArgs(scrollStep)).toEqual([
+      { direction: 'up', distance: 0.8, findFirst: true },
+      { direction: 'up', distance: 0.8, region: listRegion },
+      { direction: 'up', distance: 0.8, region: listRegion },
+    ]);
+    expect(getUiHierarchy).not.toHaveBeenCalled();
+    expect(swipe).not.toHaveBeenCalled();
+    // One equal read settles a row a step found: nothing flings after a step.
+    expect(findElements).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the screen after a step that saw nothing move, and stops at the end of the content (PILOT-929)', async () => {
+    const scrollStep = steps([{ region: listRegion }, { region: listRegion, moved: 'MOVED_NO' }]);
+    const getUiHierarchy = vi.fn(hierarchySequence([listScreen(0)]));
+    const client = makeMockClient({ scrollStep, getUiHierarchy });
+
+    await expect(handle(client).scrollIntoView()).rejects.toThrow(/reached the end of the scrollable content.*after 3 scroll\(s\)/);
+    expect(scrollStep).toHaveBeenCalledTimes(3);
+  });
+
+  it("takes a step's region as the scroll container when it could not tell whether the list moved", async () => {
+    const scrollStep = steps([{ region: listRegion, moved: 'MOVED_UNSPECIFIED' }, { elements: [row(1000)] }]);
+    const getUiHierarchy = vi.fn(hierarchySequence([listScreen(0), listScreen(1)]));
+    const client = makeMockClient({ scrollStep, getUiHierarchy, findElements: vi.fn(async () => makeFindElementsResponse([row(1000)])) });
+
+    await handle(client).scrollIntoView();
+
+    expect(getUiHierarchy).toHaveBeenCalledTimes(1);
+    expect(stepArgs(scrollStep)[1]).toEqual({ direction: 'up', distance: 0.8, region: listRegion });
+  });
+
+  it('scrolls the old way on a device that cannot make steps, asking only once', async () => {
+    const scrollStep = vi.fn(async () => unsupportedStep());
+    const swipe = vi.fn(async () => successResponse());
+    let probes = 0;
+    const findElements = vi.fn(async () => makeFindElementsResponse(probes++ < 3 ? [] : [row(1000)]));
+    const waitForIdle = vi.fn(async () => successResponse());
+    const client = makeMockClient({
+      scrollStep,
+      swipe,
+      findElements,
+      waitForIdle,
+      getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1), listScreen(2)])),
+    });
+
+    await handle(client).scrollIntoView();
+
+    expect(scrollStep).toHaveBeenCalledTimes(1);
+    // The first-miss confirmation the step would have made is made here.
+    expect(waitForIdle).toHaveBeenCalledTimes(1);
+    expect(swipe.mock.calls[0]).toEqual(['up', { speed: 2000, distance: 0.6, region: listRegion, drag: true }]);
+  });
+
+  it('never steps for a modified handle, or sideways on Android', async () => {
+    const scrollStep = steps([{ elements: [row(1000)] }]);
+    const swipe = vi.fn(async () => successResponse());
+    const client = makeMockClient({ scrollStep, swipe, findElements: vi.fn(async () => makeFindElementsResponse([])) });
+
+    await expect(handle(client).first().scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(/not visible after 1 scroll/);
+    await expect(handle(client).scrollIntoView({ direction: 'right', maxScrolls: 1 })).rejects.toThrow(/not visible after 1 scroll/);
+    expect(scrollStep).not.toHaveBeenCalled();
+    expect(swipe).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a step that failed on the device as a momentary fault, and surfaces it when it persists', async () => {
+    const scrollStep = steps([{ swiped: false, errorMessage: 'Failed to swipe up: the device refused the drag' }]);
+    const client = makeMockClient({ scrollStep, findElements: vi.fn(async () => makeFindElementsResponse([])) });
+
+    await expect(handle(client).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(/scrollStep failed: Failed to swipe up/);
+  });
+
+  it('holds a step to strict mode', async () => {
+    const other = makeElementInfo({ text: 'Item 25', visible: true, bounds: { left: 0, top: 1500, right: 1080, bottom: 1650 } });
+    const scrollStep = steps([{ region: listRegion }, { elements: [row(1000), other] }]);
+    const client = makeMockClient({ scrollStep, findElements: vi.fn(async () => makeFindElementsResponse([])) });
+
+    await expect(handle(client).scrollIntoView()).rejects.toThrow(/strict mode violation/i);
+  });
+
+  describe('on iOS', () => {
+    const table = (n: number) =>
+      `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
+      `<XCUIElementTypeTable type="XCUIElementTypeTable" label="${n}" bounds="[0,100][402,874]"/>` +
+      `</XCUIElementTypeApplication></hierarchy>`;
+    const tableRegion = { left: 0, top: 100, right: 402, bottom: 874 };
+    const cell = (top: number, visible: boolean) =>
+      makeElementInfo({ text: 'Item 25', visible, bounds: { left: 0, top, right: 402, bottom: top + 44 } });
+
+    it('steps in the container the first screen read found, after confirming the first miss', async () => {
+      const scrollStep = steps([{ elements: [cell(2000, false)] }, { elements: [cell(500, true)] }]);
+      const waitForIdle = vi.fn(async () => successResponse());
+      const client = makeMockClient({
+        scrollStep,
+        waitForIdle,
+        findElements: vi.fn(async () => makeFindElementsResponse([cell(2400, false)])),
+        getUiHierarchy: vi.fn(hierarchySequence([table(0)])),
+      });
+      // The settle reads after the step find the row where the step left it.
+      client.findElements = vi.fn()
+        .mockResolvedValueOnce(makeFindElementsResponse([cell(2400, false)]))
+        .mockResolvedValueOnce(makeFindElementsResponse([cell(2400, false)]))
+        .mockResolvedValue(makeFindElementsResponse([cell(500, true)]));
+
+      await handle(client, 'ios').scrollIntoView();
+
+      expect(waitForIdle).toHaveBeenCalledTimes(1);
+      expect(stepArgs(scrollStep)).toEqual([
+        { direction: 'up', distance: 0.8, region: tableRegion },
+        { direction: 'up', distance: 0.8, region: tableRegion },
+      ]);
+    });
+
+    it('scrolls back for a row carried off screen with a short step: a drag, not a fling (PILOT-935)', async () => {
+      // The step finds the row, then the list re-lays out and pushes it above.
+      const scrollStep = steps([{ elements: [cell(500, true)] }, { elements: [cell(300, true)] }]);
+      let reads = 0;
+      const findElements = vi.fn(async () => {
+        reads++;
+        if (reads <= 2) return makeFindElementsResponse([cell(2400, false)]);
+        if (reads <= 4) return makeFindElementsResponse([cell(-60, false)]);
+        return makeFindElementsResponse([cell(300, true)]);
+      });
+      const swipe = vi.fn(async () => successResponse());
+      const client = makeMockClient({ scrollStep, findElements, swipe, getUiHierarchy: vi.fn(hierarchySequence([table(0), table(1)])) });
+
+      await handle(client, 'ios').scrollIntoView();
+
+      expect(stepArgs(scrollStep)[1]).toEqual({ direction: 'down', distance: 0.3, region: tableRegion });
+      expect(swipe).not.toHaveBeenCalled();
+    });
+
+    it('swipes when nothing on screen scrolls, as there is no container to step in', async () => {
+      const scrollStep = steps([{ elements: [cell(500, true)] }]);
+      const swipe = vi.fn(async () => successResponse());
+      const client = makeMockClient({
+        scrollStep,
+        swipe,
+        findElements: vi.fn(async () => makeFindElementsResponse([])),
+        getUiHierarchy: vi.fn(hierarchySequence()),
+      });
+
+      await expect(handle(client, 'ios').scrollIntoView({ maxScrolls: 1 })).rejects.toThrow(/not visible after 1 scroll/);
+      expect(scrollStep).not.toHaveBeenCalled();
+      expect(swipe).toHaveBeenCalledTimes(1);
+    });
   });
 });
 
