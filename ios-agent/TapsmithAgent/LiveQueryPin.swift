@@ -65,6 +65,15 @@ struct LiveQueryPin: Equatable {
     /// A query keyed on neither (by type, or by place): pins nothing.
     static let none = LiveQueryPin()
 
+    /// The pin of the wait engine's query for a selector it fully represents
+    /// (`WaitEngine.buildSelectorQuery`): a description is matched as
+    /// `label ==`, an id or testId as `identifier ==`, in that order.
+    static func waitQuery(contentDesc: String?, id: String?, testId: String?) -> LiveQueryPin {
+        if let contentDesc { return LiveQueryPin(label: .exact(contentDesc)) }
+        if let identifier = id ?? testId { return LiveQueryPin(identifier: identifier) }
+        return .none
+    }
+
     /// Whether a live read with this label, identifier and placeholder can be
     /// one the query returned.
     func admits(label: String, identifier: String, placeholder: String = "") -> Bool {

@@ -152,7 +152,15 @@ class WaitEngine {
 
             // Cache and return the element we already found — avoid a redundant
             // full tree traversal which can take 10+ seconds on React Native.
-            return elementFinder.cacheElement(element)
+            let info = elementFinder.cacheElement(element)
+            // A touch planned on this id checks its live reads against what
+            // the query is keyed on, as for an id the snapshot finder minted
+            // (LiveQueryPin, PILOT-1065).
+            snapshotFinder?.pinLiveQuery(
+                info.elementId,
+                LiveQueryPin.waitQuery(contentDesc: selector.contentDesc, id: selector.id, testId: selector.testId)
+            )
+            return info
         } else {
             // For selectors we can't express as a query (e.g., xpath, hint),
             // use a brief idle wait then check

@@ -726,6 +726,19 @@ class SnapshotElementFinder {
         return true
     }
 
+    /// Record what the live query behind `elementId` is keyed on, for an id
+    /// minted outside this finder (the wait engine's, held by `ElementFinder`)
+    /// whose touch is still planned through `isFoundElement`.
+    func pinLiveQuery(_ elementId: String, _ pin: LiveQueryPin) {
+        guard pin != .none else { return }
+        lock.lock()
+        queryPins[elementId] = pin
+        // Evicted with this finder's own entries, so a long run's pins stay bounded.
+        cacheOrder.append(elementId)
+        pruneCacheLocked(protecting: [elementId])
+        lock.unlock()
+    }
+
     /// Get cached snapshot bounds for an element (for coordinate-based actions).
     ///
     /// **Cost:** O(1) dictionary lookup, no IPC. Bounds were captured

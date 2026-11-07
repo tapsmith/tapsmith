@@ -60,6 +60,19 @@ check("placeholder: another field's placeholder is refused",
 check("placeholder: a label change is not checked",
       byPlaceholder.admits(label: "typed text", identifier: "", placeholder: "Email"), true)
 
+// The wait engine's own queries (an element that appears only after the
+// first look): a description is `label ==` there, ids are `identifier ==`.
+check("wait query: description", LiveQueryPin.waitQuery(contentDesc: "Covered action", id: nil, testId: nil),
+      LiveQueryPin(label: .exact("Covered action")))
+check("wait query: id", LiveQueryPin.waitQuery(contentDesc: nil, id: "save", testId: nil),
+      LiveQueryPin(identifier: "save"))
+check("wait query: testId", LiveQueryPin.waitQuery(contentDesc: nil, id: nil, testId: "countdown"),
+      LiveQueryPin(identifier: "countdown"))
+check("wait query: nothing keyed", LiveQueryPin.waitQuery(contentDesc: nil, id: nil, testId: nil), LiveQueryPin.none)
+check("wait query: a relabelled read of a description match is refused",
+      LiveQueryPin.waitQuery(contentDesc: "Covered action", id: nil, testId: nil)
+          .admits(label: "Replacement action", identifier: ""), false)
+
 // A query keyed on neither (by type, or by place) pins nothing.
 let none = LiveQueryPin.none
 check("an empty pin admits any read", none.admits(label: "x", identifier: "y"), true)
