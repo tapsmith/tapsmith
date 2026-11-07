@@ -67,7 +67,7 @@ In a bare React Native app, which does not inline `EXPO_PUBLIC_*` variables, pas
 
 ## What a warm reset does not clear
 
-The reset clears storage and re-navigates, but React keeps component-local state that survives navigation: a `ScrollView` offset, an uncontrolled `TextInput`, an animation value. If a test relies on such state being fresh (for example, tapping a link at the top of a home list that an earlier test scrolled), reset it when the epoch changes:
+The reset clears storage and re-navigates, but React keeps component-local state that survives navigation — and a reset that lands on the screen already showing (a per-test `appResetRoute`, after the previous test on the same screen) does not remount it at all: a `ScrollView` offset, an uncontrolled `TextInput`, an animation value. If a test relies on such state being fresh (for example, tapping a link at the top of a home list that an earlier test scrolled), reset it when the epoch changes:
 
 ```tsx
 import { useTapsmithResetEpoch } from "@tapsmith/react-native"
@@ -98,7 +98,7 @@ Long all-warm sessions on a simulator can drift from a fresh launch (accessibili
 
 ### Landing on the test's screen
 
-The reset link already carries a route, so a scope whose tests all start on one screen can have the reset land there instead of on `/` and then pay a second deep link: `test.use({ appResetScope: 'test', appResetRoute: '/settings' })`. See [Starting on a screen](writing-tests.md#starting-on-a-screen).
+The reset link already carries a route, so a scope whose tests all start on one screen can have the reset land there instead of on `/` and then pay a second deep link: `test.use({ appResetScope: 'test', appResetRoute: '/settings' })`. The screen stays mounted when the previous test left the app on it, so reset its own state on the epoch, as in [What a warm reset does not clear](#what-a-warm-reset-does-not-clear). See [Starting on a screen](writing-tests.md#starting-on-a-screen).
 
 ## Without the module
 

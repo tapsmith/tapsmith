@@ -157,7 +157,7 @@ test("skipping onboarding lands on home", async ({ device }) => { /* … */ })
 
 ### Starting on a screen
 
-When every test in a scope starts on the same screen, declare it with `appResetRoute` instead of opening it from a `beforeEach`. With [`@tapsmith/react-native`](warm-reset.md), the warm reset's own deep link carries the route, so the app is reset and on the screen in one delivery rather than two — about 1.5 s saved per test on an iOS simulator:
+When every test in a scope starts on the same screen, declare it with `appResetRoute` instead of opening it from a `beforeEach`. With [`@tapsmith/react-native`](warm-reset.md), the warm reset's own deep link carries the route, so the app is reset and on the screen in one delivery rather than two:
 
 ```typescript
 describe("settings", () => {
@@ -167,7 +167,7 @@ describe("settings", () => {
 })
 ```
 
-A path is resolved against the URL prefix the hooks publish (the `urlPrefix`/`scheme` you gave `<TapsmithTestHooks />`). An app without the hooks gives the full deep link instead (`appResetRoute: "myapp:///settings"`); a path there fails the reset with a message saying so. Whenever the reset itself cannot land on the route — a `clear`, `restart` or restored `appState`, a warm reset that fell back, or a device that was already prepared — Tapsmith opens the route as a deep link right after it, so the test starts on the screen either way. The trace's **APP RESET** section names the route (`App reset (warm → /settings)`). `appResetRoute` has no effect with `appReset: "none"`, since no reset runs to land anywhere.
+A path is resolved against the URL prefix the hooks publish (the `urlPrefix`/`scheme` you gave `<TapsmithTestHooks />`). An app without the hooks gives the full deep link instead (`appResetRoute: "myapp:///settings"`); a path there fails the reset with a message saying so. Whenever the reset itself cannot land on the route — a `clear`, `restart` or restored `appState`, a warm reset that fell back, or a device that was already prepared — Tapsmith opens the route as a deep link right after it, so the test starts on the screen either way. A warm reset that lands on the screen the previous test left open keeps that screen mounted, so the screen's own React state (counters, form fields, scroll offset) is only fresh if the screen resets it when the reset epoch changes; see [What a warm reset does not clear](warm-reset.md#what-a-warm-reset-does-not-clear). The trace's **APP RESET** section names the route (`App reset (warm → /settings)`). `appResetRoute` has no effect with `appReset: "none"`, since no reset runs to land anywhere.
 
 ```typescript
 // tests that deliberately share state across the file
