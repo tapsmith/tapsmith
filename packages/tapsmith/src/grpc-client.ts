@@ -66,6 +66,32 @@ export interface FindElementsResponse {
   errorMessage: string;
 }
 
+/** What one scrollIntoView() step did (PILOT-998): see {@link TapsmithGrpcClient.scrollStep}. */
+export interface ScrollStepResponse {
+  requestId: string;
+  elements: ElementInfo[];
+  errorMessage: string;
+  /** Whether the list under the finger scrolled; `MOVED_UNSPECIFIED` when the device cannot tell. */
+  moved: 'MOVED_UNSPECIFIED' | 'MOVED_YES' | 'MOVED_NO';
+  /** The region the step dragged in, when it dragged in one. */
+  region?: { left: number; top: number; right: number; bottom: number };
+  /** False when `findFirst` found the element on screen and nothing was dragged. */
+  swiped: boolean;
+  /** The device cannot make a scroll step: nothing was done. */
+  unsupported: boolean;
+}
+
+export interface ScrollStepOptions {
+  /** The way the finger moves, as {@link TapsmithGrpcClient.swipe} takes it. */
+  direction: string;
+  /** The scroll container to drag in; without one the Android agent picks it. */
+  region?: { left: number; top: number; right: number; bottom: number };
+  /** The drag's length as a fraction of the region; below 0.5 a short nudge. */
+  distance: number;
+  /** Wait for quiet and find before dragging; no drag when the element shows. */
+  findFirst?: boolean;
+}
+
 /** One selector's matches from {@link TapsmithGrpcClient.evaluateSelectors},
  *  in the agent's match order. `elementId` is empty: nothing is cached. */
 export interface SelectorEvaluation {
@@ -627,6 +653,25 @@ export class TapsmithGrpcClient {
       selector: this.selectorProto(selector),
       timeoutMs: timeoutMs ?? 0,
     });
+  }
+
+  /**
+   * One scrollIntoView() step in one device call (PILOT-998): drag the list,
+   * wait for it to stop changing, then find `selector` as
+   * {@link findElements} does. `timeoutMs` is the find's read budget; the
+   * drag and the quiet wait come on top of it.
+   */
+  async scrollStep(selector: Selector, timeoutMs: number, options: ScrollStepOptions): Promise<ScrollStepResponse> {
+    const request: Record<string, unknown> = {
+      requestId: requestId(),
+      selector: this.selectorProto(selector),
+      timeoutMs,
+      direction: options.direction,
+      distance: options.distance,
+    };
+    if (options.region) request.region = options.region;
+    if (options.findFirst) request.findFirst = true;
+    return this.call<ScrollStepResponse>('scrollStep', request);
   }
 
   /**
