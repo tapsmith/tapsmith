@@ -1492,6 +1492,7 @@ class CommandHandler {
         func now() -> TypingCheck.FocusedInput? { snapshotFinder.liveFocusedInputState() }
         let b = field.bounds
         var visited = [CGRect(x: b.left, y: b.top, width: b.width, height: b.height)]
+        var typedKeys = 0
         for key in keys {
             var at = now()
             let stillBy = Date(timeIntervalSinceNow: TypingCheck.focusStillWait)
@@ -1511,14 +1512,24 @@ class CommandHandler {
                     Thread.sleep(forTimeInterval: 0.01)
                 } while Date() < emptyBy
             }
-            if let frame = at?.frame { visited.append(frame) }
-            var after: TypingCheck.FocusedInput?
+            // Keys sent with no text input focused go nowhere.
+            guard let focused = at else {
+                throw AgentError.actionFailed(
+                    "typeText: the focus moved on by itself while typing, then left the text fields " +
+                        "with \(keys.count - typedKeys) key(s) still to type"
+                )
+            }
+            visited.append(focused.frame)
+            // A change to the focused input, or the focus moving on: to
+            // another input, or out of them all (an app that blurs or submits
+            // on its last digit).
+            var after: TypingCheck.FocusedInput??
             for _ in 0..<TypingCheck.keyTries {
                 _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
                 let keyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
                 repeat {
                     let read = now()
-                    if read != at { after = read; break }
+                    if read != focused { after = .some(read); break }
                     Thread.sleep(forTimeInterval: 0.01)
                 } while Date() < keyBy
                 if after != nil { break }
@@ -1529,11 +1540,12 @@ class CommandHandler {
                         "after \(TypingCheck.keyTries) tries"
                 )
             }
+            typedKeys += 1
             // The key changed the input it went to, which still has the
             // focus: give the app its moment to move the focus on.
-            if let at, after.frame == at.frame {
+            if let after, after.frame == focused.frame {
                 let handOffBy = Date(timeIntervalSinceNow: TypingCheck.focusHandOffWait)
-                while Date() < handOffBy, now()?.frame == at.frame {
+                while Date() < handOffBy, now()?.frame == focused.frame {
                     Thread.sleep(forTimeInterval: 0.015)
                 }
             }

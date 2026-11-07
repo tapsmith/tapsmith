@@ -14,8 +14,8 @@ import { useTapsmithResetEpoch } from "@tapsmith/react-native"
 // - "Secure input" reads back only as bullets; its length is echoed in
 //   "secure=<length>".
 // - The code boxes take one digit each and move the focus on to the next box
-//   by themselves, as a one-time-code field does. What they hold is echoed in
-//   "code=<digits>".
+//   by themselves, as a one-time-code field does, and give up the focus once
+//   the last one is filled. What they hold is echoed in "code=<digits>".
 // - The slow code boxes do the same half a second after each digit, as a
 //   busy app does: keys typed before the focus moves go to the box being
 //   left. What they hold is echoed in "slowcode=<digits>".
@@ -52,6 +52,8 @@ export default function TypingScreen() {
     const digit = text.slice(-1)
     setCode((current) => current.map((d, i) => (i === index ? digit : d)))
     if (digit && index < CODE_LENGTH - 1) boxes.current[index + 1]?.focus()
+    // Done: let go of the keyboard, as many code fields do.
+    if (digit && index === CODE_LENGTH - 1) boxes.current[index]?.blur()
   }
 
   const setSlowDigit = (index: number, text: string) => {
