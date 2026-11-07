@@ -118,6 +118,15 @@ class AgentInput(
         steps: Int,
     ): Boolean = gestures.stepDrag(x1, y1, x2, y2, steps)
 
+    /** scrollIntoView()'s step drag: short, backdated, ending in a CANCEL (PILOT-998). */
+    fun scrollStepDrag(
+        x1: Int,
+        y1: Int,
+        x2: Int,
+        y2: Int,
+        steps: Int,
+    ): Boolean = gestures.scrollStepDrag(x1, y1, x2, y2, steps)
+
     /** UiDevice.pressKeyCode. */
     fun pressKey(keyCode: Int): Boolean = gestures.pressKey(keyCode)
 

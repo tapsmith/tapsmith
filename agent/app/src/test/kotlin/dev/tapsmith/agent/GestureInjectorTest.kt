@@ -605,6 +605,132 @@ class GestureInjectorTest {
         assertEquals(listOf(TouchAction.UP, TouchAction.CANCEL), refusedUp.actions().takeLast(2))
     }
 
+    // ─── scrollStepDrag (scrollIntoView's step drags, PILOT-998) ───
+
+    private fun eventTimes(sink: FakeSink) = sink.touches.map { (sentAt, e) -> motionEventTime(e, sentAt) }
+
+    @Test
+    fun `a step drag moves to its end and cancels instead of lifting`() {
+        val sink = FakeSink(clock)
+        assertTrue(injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20))
+        val actions = sink.actions()
+        assertEquals(TouchAction.DOWN, actions.first())
+        assertEquals(TouchAction.CANCEL, actions.last())
+        assertFalse(TouchAction.UP in actions)
+        val moves = sink.touches.filter { it.second.action == TouchAction.MOVE }
+        // At most STEP_DRAG_MAX_MOVES moving samples, then the two still ones.
+        assertEquals(GestureInjector.STEP_DRAG_MAX_MOVES + 2, moves.size)
+        assertTrue(moves.takeLast(3).all { it.second.pointers.single() == PointerState(0, 0, 200) })
+        assertEquals(
+            1,
+            sink.touches
+                .map { it.second.downTime }
+                .toSet()
+                .size,
+        )
+    }
+
+    @Test
+    fun `a step drag is quick, as only its first moves wait for a frame`() {
+        val sink = FakeSink(clock)
+        val start = clock.nowMs
+        injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20)
+        // The press and the two moves past slop wait a frame each.
+        assertEquals(1 + GestureInjector.DRAG_FRAME_MOVES, clock.frames)
+        assertTrue("took ${clock.nowMs - start} ms", clock.nowMs - start < 150)
+        // The moves after them are not synchronous, except the last.
+        val moves = sink.touches.filter { it.second.action == TouchAction.MOVE }.map { it.second }
+        assertTrue(moves.take(GestureInjector.DRAG_FRAME_MOVES).all { it.sync })
+        assertFalse(moves[GestureInjector.DRAG_FRAME_MOVES].sync)
+        assertTrue(moves[GestureInjector.STEP_DRAG_MAX_MOVES - 1].sync)
+    }
+
+    @Test
+    fun `a step drag's event times run forward and are never later than when each event is sent`() {
+        val sink = FakeSink(clock)
+        injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20)
+        val times = eventTimes(sink)
+        assertTrue("times $times", times.zipWithNext().all { (a, b) -> b >= a })
+        sink.touches.zip(times).forEach { (sent, t) -> assertTrue("$t sent at ${sent.first}", t <= sent.first) }
+        // The moves span STEP_DRAG_MOVE_MS of event time from the press.
+        val down = times.first()
+        val moving =
+            sink.touches.indexOfLast {
+                it.second.pointers
+                    .single()
+                    .y != 200
+            }
+        assertTrue(times[moving + 1] - down <= GestureInjector.STEP_DRAG_MOVE_MS)
+    }
+
+    @Test
+    fun `a step drag's still samples clear the velocity tracker before the cancel`() {
+        val sink = FakeSink(clock)
+        injector(sink).scrollStepDrag(0, 1000, 0, 200, steps = 20)
+        val times = eventTimes(sink)
+        val moves = sink.touches.withIndex().filter { it.value.second.action == TouchAction.MOVE }
+        val lastMoving = moves[moves.size - 3].index
+        val firstStill = moves[moves.size - 2].index
+        val lastStill = moves[moves.size - 1].index
+        assertTrue(times[firstStill] - times[lastMoving] > 40)
+        assertTrue(times[lastStill] - times[firstStill] > 100)
+    }
+
+    @Test
+    fun `a step drag makes at least enough moves to pass slop`() {
+        val sink = FakeSink(clock)
+        injector(sink).scrollStepDrag(0, 0, 0, 300, steps = 1)
+        val moving = sink.touches.count { it.second.action == TouchAction.MOVE } - 2
+        assertEquals(GestureInjector.STEP_DRAG_MIN_MOVES, moving)
+    }
+
+    @Test
+    fun `a refused move stops a step drag's moves, and its pointer is still cancelled`() {
+        var moves = 0
+        val sink = FakeSink(clock, refuse = { it.action == TouchAction.MOVE && ++moves == 2 })
+        assertFalse(injector(sink).scrollStepDrag(0, 0, 0, 500, steps = 20))
+        assertEquals(
+            listOf(TouchAction.DOWN, TouchAction.MOVE, TouchAction.MOVE, TouchAction.CANCEL),
+            sink.actions(),
+        )
+    }
+
+    @Test
+    fun `a cancelled command cancels a step drag's pointer and throws`() {
+        val token = CommandCancellation()
+        val sink = FakeSink(clock)
+        val cancelling =
+            object : GestureClock {
+                override fun now(): Long = clock.nowMs
+
+                override fun sleep(ms: Long) {
+                    clock.nowMs += ms
+                    token.cancel("the daemon closed the connection")
+                }
+
+                override fun waitForNextFrame() {
+                    clock.nowMs += 16
+                }
+            }
+        try {
+            CommandCancellation.runWith(token) {
+                GestureInjector(sink, cancelling) { 8L }.scrollStepDrag(0, 0, 0, 500, steps = 20)
+            }
+            throw AssertionError("expected CommandCancelledException")
+        } catch (e: CommandCancelledException) {
+            // expected
+        }
+        assertEquals(TouchAction.CANCEL, sink.actions().last())
+        assertFalse(TouchAction.UP in sink.actions())
+    }
+
+    @Test
+    fun `an event with its own time is injected with it`() {
+        val move = TouchEvent(TouchAction.MOVE, 1_000, listOf(PointerState(0, 1, 1)), sync = true, eventTime = 1_020)
+        assertEquals(1_020L, motionEventTime(move, now = 1_100))
+        assertEquals(1_000L, motionEventTime(move.copy(action = TouchAction.DOWN), now = 1_100))
+    }
+
     // ─── perform (UiObject2 gestures) ───
 
     @Test
