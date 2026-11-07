@@ -6565,6 +6565,14 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
     expect(swipe.mock.calls[0]).toEqual(['up', { speed: 2000, distance: 0.6, region: listRegion, drag: true }]);
   });
 
+  it('only checks, never drags, with maxScrolls: 0', async () => {
+    const scrollStep = steps([{ elements: [row(1000)], region: listRegion }]);
+    const client = makeMockClient({ scrollStep, findElements: vi.fn(async () => makeFindElementsResponse([])) });
+
+    await expect(handle(client).scrollIntoView({ maxScrolls: 0 })).rejects.toThrow(/not visible after 0 scroll\(s\)/);
+    expect(scrollStep).not.toHaveBeenCalled();
+  });
+
   it('never steps for a modified handle, or sideways on Android', async () => {
     const scrollStep = steps([{ elements: [row(1000)] }]);
     const swipe = vi.fn(async () => successResponse());

@@ -4046,11 +4046,13 @@ export class ElementHandle {
         let result: Probe;
         if (nextProbe) {
           result = nextProbe;
-        } else if (swipes === 0 && !confirmedFirstMiss && android && stepsFit() && (await step(true))) {
+        } else if (swipes === 0 && !confirmedFirstMiss && maxScrolls > 0 && android && stepsFit() && (await step(true))) {
           // The first Android step confirms the first miss itself (PILOT-283):
           // the agent waits as the idle wait below does, finds afresh, and
           // drags only when the element is not on screen. So it needs no
           // probe before it, and, picking the list itself, no screen read.
+          // Not with no budget: a step that misses drags, and `maxScrolls: 0`
+          // asks for a check only.
           confirmedFirstMiss = true;
           result = nextProbe as Probe | undefined ?? { outcome: 'unreliable' };
         } else {
