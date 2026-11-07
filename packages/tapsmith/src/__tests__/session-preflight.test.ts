@@ -571,16 +571,17 @@ describe('session-preflight', () => {
         expect(ctx.client.getUiHierarchy).toHaveBeenCalledTimes(1);
       });
 
-      it('a clear on a daemon known to wait for rendering skips the repeat wait', async () => {
+      it('a clear keeps its own wait even on a daemon known to wait for rendering', async () => {
         const ctx = {
           ...makeContext({ config: { package: 'com.example.app', activity: undefined, platform: 'android' } }),
           capabilities: { daemonWaitsForRender: true } as import('../app-reset.js').ResetCapabilities,
         };
+        vi.mocked(ctx.client.waitForAppReady).mockResolvedValue({ requestId: '1', ready: true, supported: true });
 
         const report = await executeAppReset(ctx, CLEAR_FILE, { phase: 'file reset' });
 
-        expect(ctx.client.waitForAppReady).not.toHaveBeenCalled();
-        expect(report.steps.map((s) => s.name)).not.toContain('waitForAppReady');
+        expect(ctx.client.waitForAppReady).toHaveBeenCalledTimes(1);
+        expect(report.steps.map((s) => s.name)).toContain('waitForAppReady');
       });
 
       it('a daemon that predates the RPC gets the dump polling', async () => {

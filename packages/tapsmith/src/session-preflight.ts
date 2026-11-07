@@ -855,11 +855,15 @@ export async function executeAppReset(
   // the session check above is satisfied by a bare Activity/splash window,
   // and a deep link or hooks probe fired into a still-booting React Native
   // app is silently lost. An acknowledged warm reset needs none of this —
-  // the marker epoch is the proof of rendering — and neither does a ladder
-  // restart/clear on a daemon that already waited for it before answering:
-  // a second agent round trip there costs every relaunch, never helps. iOS
-  // keeps only its non-empty-hierarchy check in both cases.
-  const daemonRendered = (modeUsed === 'restart' || modeUsed === 'clear')
+  // the marker epoch is the proof of rendering — and on iOS neither does a
+  // ladder restart/clear on a daemon that already waited for it before
+  // answering: a second agent round trip there (a full snapshot) costs every
+  // relaunch. iOS keeps only its non-empty-hierarchy check in both cases.
+  // Android keeps its own wait: its agent stops at the first rendered node,
+  // so the repeat is nearly free, and skipping it left CI's hook-less
+  // emulator still landscape after a rotation test restored portrait.
+  const daemonRendered = ctx.config.platform === 'ios'
+    && (modeUsed === 'restart' || modeUsed === 'clear')
     && ctx.capabilities?.daemonWaitsForRender === true;
   const rendered = processRecreated && !daemonRendered;
   if (rendered || ctx.config.platform === 'ios') {
