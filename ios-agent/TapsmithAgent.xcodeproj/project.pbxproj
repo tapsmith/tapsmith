@@ -38,6 +38,7 @@
 		9520000000000000000000A1 /* RowBinding.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9520000000000000000000A2 /* RowBinding.swift */; };
 		9520000000000000000000B1 /* RowAnchor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9520000000000000000000B2 /* RowAnchor.swift */; };
 		9780000000000000000000A5 /* SnapshotRetry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9780000000000000000000A6 /* SnapshotRetry.swift */; };
+		A1D2E3F4B5C6478899AA1012 /* TypingCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1D2E3F4B5C6478899AA1012 /* TypingCheck.swift */; };
 		5C29D8A1B7E44F0A9D3E6B21 /* TypingFocus.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */; };
 		3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */; };
 		9740000000000000000000A1 /* TapTiming.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9740000000000000000000A2 /* TapTiming.swift */; };
@@ -81,6 +82,7 @@
 		9520000000000000000000A2 /* RowBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RowBinding.swift; sourceTree = "<group>"; };
 		9520000000000000000000B2 /* RowAnchor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RowAnchor.swift; sourceTree = "<group>"; };
 		9780000000000000000000A6 /* SnapshotRetry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SnapshotRetry.swift; sourceTree = "<group>"; };
+		B1D2E3F4B5C6478899AA1012 /* TypingCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingCheck.swift; sourceTree = "<group>"; };
 		7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TypingFocus.swift; sourceTree = "<group>"; };
 		9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DoubleTapRoute.swift; sourceTree = "<group>"; };
 		9740000000000000000000A2 /* TapTiming.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TapTiming.swift; sourceTree = "<group>"; };
@@ -139,6 +141,7 @@
 				9850000000000000000000A2 /* NavigationTransition.swift */,
 				9520000000000000000000A2 /* RowBinding.swift */,
 				9520000000000000000000B2 /* RowAnchor.swift */,
+				B1D2E3F4B5C6478899AA1012 /* TypingCheck.swift */,
 				7F3A1C9E2B8D4E6FA1C5B302 /* TypingFocus.swift */,
 				9A4C6E2F1B7D4C3A8F5E0B19 /* DoubleTapRoute.swift */,
 				9740000000000000000000A2 /* TapTiming.swift */,
@@ -284,6 +287,7 @@
 				9850000000000000000000A1 /* NavigationTransition.swift in Sources */,
 				9520000000000000000000A1 /* RowBinding.swift in Sources */,
 				9520000000000000000000B1 /* RowAnchor.swift in Sources */,
+				A1D2E3F4B5C6478899AA1012 /* TypingCheck.swift in Sources */,
 				5C29D8A1B7E44F0A9D3E6B21 /* TypingFocus.swift in Sources */,
 				3D7B2E91C4A84F6B8E1D5A07 /* DoubleTapRoute.swift in Sources */,
 				9740000000000000000000A1 /* TapTiming.swift in Sources */,
