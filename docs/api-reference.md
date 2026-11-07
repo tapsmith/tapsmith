@@ -1211,7 +1211,7 @@ await device.getByText("Item 1", { exact: true }).longPress({ duration: 2000, ti
 
 Type text into this element.
 
-- `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay).
+- `options.delay?`: `number` — delay in milliseconds between keystrokes. Overrides the global `typingDelay` config for this call. Defaults to `0` (no delay). On iOS a delay above `0` also checks what arrived (see [`typingDelay`](configuration.md)).
 - `options.timeout?`: `number` — see [Per-call timeout](#per-call-timeout).
 
 ```typescript
