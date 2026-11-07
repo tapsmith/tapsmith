@@ -103,16 +103,18 @@ pub(super) struct DragSample {
     pub y: f64,
 }
 
-/// Moves are this far apart in time (a 120 Hz frame), so UIKit sees a
-/// smooth drag rather than jumps.
-const DRAG_MOVE_INTERVAL_MS: f64 = 8.0;
+/// Moves are this far apart in time: the HID helper injects events at least
+/// 12 ms apart, so a faster timeline would only queue up behind it and the
+/// drag would end (and the step's find start) before the helper had made it.
+const DRAG_MOVE_INTERVAL_MS: f64 = 12.0;
 /// The drag's three segments: a short kick that gets past the scroll view's
-/// touch slop, the bulk of the length, then a slow tail.
+/// touch slop, the bulk of the length, then a slow tail. Each ends on the
+/// move interval's grid, so no two samples are closer than it.
 const DRAG_KICK_PT: f64 = 12.0;
-const DRAG_KICK_END_MS: f64 = 40.0;
-const DRAG_BULK_END_MS: f64 = 190.0;
+const DRAG_KICK_END_MS: f64 = 36.0;
+const DRAG_BULK_END_MS: f64 = 192.0;
 const DRAG_TAIL_PT: f64 = 40.0;
-const DRAG_TAIL_END_MS: f64 = 390.0;
+const DRAG_TAIL_END_MS: f64 = 396.0;
 /// The finger holds still at the end for this long before it lifts, so the
 /// velocity UIKit measures at the lift is ~0 and the list does not decelerate
 /// on its own (a 200 pt/s tail alone still flung a long list ~600 pt).
@@ -126,8 +128,8 @@ const NUDGE_BELOW: f32 = 0.5;
 const DRAG_START_INSET: f64 = 0.1;
 
 /// The path of an iOS scroll step's drag through the HID helper, idea from
-/// Speedrun's iOS agent (Apache-2.0; our own code): a 12 pt kick in 40 ms, the
-/// bulk in 150 ms, the last 40 pt slowly, then a still hold before the lift,
+/// Speedrun's iOS agent (Apache-2.0; our own code): a 12 pt kick in 36 ms, the
+/// bulk in 156 ms, the last 40 pt slowly, then a still hold before the lift,
 /// so nothing flings. A drag of `distance` ≥ 0.5 starts 10% in from the edge
 /// the finger moves away from; a shorter one is centred on the region. The
 /// last sample is where the finger lifts. None for an empty region, an
@@ -403,6 +405,19 @@ mod tests {
             .filter(|s| s.at_ms >= hold_from - 1e-9)
             .all(|s| s.y == last.y));
         assert!(last.at_ms >= DRAG_TAIL_END_MS + DRAG_HOLD_MS - DRAG_MOVE_INTERVAL_MS);
+    }
+
+    #[test]
+    fn samples_are_no_closer_than_the_helper_injects_them() {
+        // The helper spaces its injections at least 12 ms apart; a faster
+        // timeline would leave the drag queued behind it when the step's find
+        // starts.
+        for (dir, distance) in [("up", 0.8), ("down", 0.3), ("left", 0.8)] {
+            let path = hid_drag_path(dir, &REGION, distance).unwrap();
+            for w in path.windows(2) {
+                assert!(w[1].at_ms - w[0].at_ms >= 12.0 - 1e-9, "{dir}: {w:?}");
+            }
+        }
     }
 
     #[test]

@@ -2498,10 +2498,18 @@ impl TapsmithServiceImpl {
                 return failed(e);
             }
         }
-        if let Err(e) = self.hid_injector.send(&udid, &line("u", &last)).await {
+        // The lift waits for the helper's answer, and then for the app to have
+        // it, as a HID tap does: the step's find must not read the list while
+        // the finger is still down, or before the helper has caught up.
+        if let Err(e) = self
+            .hid_injector
+            .send_and_wait(&udid, &line("u", &last), hid_tap_reply_deadline(None))
+            .await
+        {
             let _ = self.hid_injector.send(&udid, "c").await;
-            return failed(e);
+            return failed(anyhow::anyhow!("{e}"));
         }
+        tokio::time::sleep(HID_TAP_BARRIER).await;
         debug!(
             ms = started.elapsed().as_millis() as u64,
             "scroll step: HID drag injected"

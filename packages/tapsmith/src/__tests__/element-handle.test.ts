@@ -6581,6 +6581,63 @@ describe('scrollIntoView() makes each scroll step one device call (PILOT-998)', 
     const client = makeMockClient({ scrollStep, findElements: vi.fn(async () => makeFindElementsResponse([])) });
 
     await expect(handle(client).scrollIntoView({ maxScrolls: 2 })).rejects.toThrow(/scrollStep failed: Failed to swipe up/);
+    // Retried, not given up on at the first failure: the first step and the
+    // steps after it, each on a miss read in between.
+    expect(scrollStep.mock.calls.length).toBeGreaterThan(1);
+    expect(stepArgs(scrollStep)[0]).toEqual({ direction: 'up', distance: 0.8, findFirst: true });
+    expect(stepArgs(scrollStep).slice(1).every((a) => (a as { findFirst?: boolean }).findFirst === undefined)).toBe(true);
+  });
+
+  it('goes on after a step that failed once, judging the next miss by a fresh read', async () => {
+    // A step whose device answer failed (a find that timed out after the
+    // drag) says nothing about where the row is: the scroll probes and steps
+    // again rather than giving up, and only a step that answered counts.
+    const scrollStep = steps([
+      { region: listRegion },
+      { swiped: false, errorMessage: 'Agent command timed out' },
+      { elements: [row(1000)], region: listRegion },
+    ]);
+    const findElements = vi.fn(async () => makeFindElementsResponse([]));
+    const client = makeMockClient({ scrollStep, findElements, getUiHierarchy: vi.fn(hierarchySequence([listScreen(0), listScreen(1)])) });
+    findElements.mockResolvedValueOnce(makeFindElementsResponse([]));
+    findElements.mockResolvedValue(makeFindElementsResponse([row(1000)]));
+
+    await handle(client).scrollIntoView();
+
+    expect(scrollStep).toHaveBeenCalledTimes(3);
+    expect(findElements).toHaveBeenCalled();
+  });
+
+  it("reads the screen for the element's own container when a moved step finds it off to the side", async () => {
+    // iOS: the element turns up in the tree to the left of a vertical list
+    // (a carousel above it). The fast path does not turn onto the other axis
+    // in the vertical list's region: it reads the screen for that element's
+    // container.
+    const tableRegion = { left: 0, top: 100, right: 402, bottom: 874 };
+    const screen = (n: number) =>
+      `<hierarchy><XCUIElementTypeApplication type="XCUIElementTypeApplication" bounds="[0,0][402,874]">` +
+      `<XCUIElementTypeTable type="XCUIElementTypeTable" label="${n}" bounds="[0,100][402,874]">` +
+      `<XCUIElementTypeCollectionView type="XCUIElementTypeCollectionView" bounds="[0,300][402,500]">` +
+      `<XCUIElementTypeCell type="XCUIElementTypeCell" label="Item 25" bounds="[-900,320][-700,480]"/>` +
+      `</XCUIElementTypeCollectionView>` +
+      `</XCUIElementTypeTable></XCUIElementTypeApplication></hierarchy>`;
+    const card = (left: number, visible: boolean) =>
+      makeElementInfo({ text: 'Item 25', visible, bounds: { left, top: 320, right: left + 200, bottom: 480 } });
+    const scrollStep = steps([{ elements: [card(-900, false)] }, { elements: [card(100, true)] }]);
+    const getUiHierarchy = vi.fn(hierarchySequence([screen(0), screen(1), screen(2)]));
+    const findElements = vi.fn()
+      .mockResolvedValueOnce(makeFindElementsResponse([]))
+      .mockResolvedValueOnce(makeFindElementsResponse([]))
+      .mockResolvedValue(makeFindElementsResponse([card(100, true)]));
+    const client = makeMockClient({ scrollStep, getUiHierarchy, findElements });
+
+    await handle(client, 'ios').scrollIntoView();
+
+    expect(getUiHierarchy).toHaveBeenCalledTimes(2);
+    expect(stepArgs(scrollStep)).toEqual([
+      { direction: 'up', distance: 0.8, region: tableRegion },
+      { direction: 'right', distance: 0.8, region: { left: 0, top: 300, right: 402, bottom: 500 } },
+    ]);
   });
 
   it('holds a step to strict mode', async () => {
