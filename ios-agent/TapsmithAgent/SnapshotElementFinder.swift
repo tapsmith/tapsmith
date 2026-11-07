@@ -887,6 +887,22 @@ class SnapshotElementFinder {
         )
     }
 
+    /// Where the text input with keyboard focus is and what it shows, from
+    /// one snapshot of the same live query as `liveFocusedTypingInput`: what
+    /// typing into a field that moves the focus on by itself watches
+    /// (PILOT-1012). Nil when no text input has focus.
+    func liveFocusedInputState() -> TypingCheck.FocusedInput? {
+        let textInputTypes: Set<XCUIElement.ElementType> = [
+            .textField, .secureTextField, .textView, .searchField,
+        ]
+        let element = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "hasKeyboardFocus == true"))
+            .firstMatch
+        guard element.exists, let snap = try? element.snapshot(),
+              textInputTypes.contains(snap.elementType) else { return nil }
+        return TypingCheck.FocusedInput(frame: snap.frame, value: snap.value as? String ?? "")
+    }
+
     private func findLiveFocusedTextInput() -> LiveFocusedTextInput? {
         let textInputTypes: Set<XCUIElement.ElementType> = [
             .textField, .secureTextField, .textView, .searchField,

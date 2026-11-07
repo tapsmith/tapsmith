@@ -939,6 +939,18 @@ enum EventSynthesizer {
         return true
     }
 
+    /// Type `text` as keyboard key events (XCPointerEventPath typeText), all
+    /// in one synthesized record at `charactersPerSecond`: one confirmation
+    /// for the whole burst rather than one per key, and none of
+    /// `_XCT_sendString`'s dropped keys (PILOT-1012). Returns once
+    /// testmanagerd confirms the record was played (~0.3 s after its last
+    /// key). It plays one record at a time and refuses another while one is
+    /// in flight, so the confirmation is always waited for.
+    static func typeKeys(_ text: String, charactersPerSecond: Int) -> Bool {
+        guard !text.isEmpty else { return true }
+        return typeViaEventPath(text, typingSpeed: max(1, charactersPerSecond))
+    }
+
     /// Send text via _XCT_sendString:maximumFrequency:completion: on daemon proxy.
     /// This is a higher-level API that types through the keyboard system.
     private static func sendStringViaDaemon(_ text: String) -> Bool {
