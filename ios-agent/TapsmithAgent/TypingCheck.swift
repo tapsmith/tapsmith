@@ -87,6 +87,22 @@ enum TypingCheck {
         var value: String
     }
 
+    /// The inputs typing went through, each once, in the order it first
+    /// reached them (`frames` as read, repeats included). Frames read from
+    /// the tree and from an element's whole-point bounds differ by rounding.
+    static func inVisitOrder(_ frames: [CGRect]) -> [CGRect] {
+        var order: [CGRect] = []
+        for frame in frames where !order.contains(where: { sameFrame($0, frame) }) {
+            order.append(frame)
+        }
+        return order
+    }
+
+    private static func sameFrame(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) <= 1.5 && abs(a.minY - b.minY) <= 1.5
+            && abs(a.width - b.width) <= 1.5 && abs(a.height - b.height) <= 1.5
+    }
+
     /// Typing a key at a time while the focus moves: how long the focused
     /// input must hold still before a key is sent, and how long a key may
     /// take to show (a changed value, or the focus moving on).

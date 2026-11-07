@@ -1,6 +1,7 @@
 // Unit tests for TypingCheck (PILOT-1012): how a paced typeText reads back
 // what it typed, and when it types it again.
 
+import CoreGraphics
 import Foundation
 
 var failures = 0
@@ -72,6 +73,25 @@ do {
     expect("an empty secure field is typed again", TypingCheck.retypes(.short, before: "", secure: true))
     expect("a secure field with content is not (it cannot be read back)",
            !TypingCheck.retypes(.short, before: "••", secure: true))
+}
+
+// Typing across fields that move the focus on: each field once, in the
+// order typing reached it, and their values read together.
+do {
+    let box1 = CGRect(x: 16, y: 300, width: 48, height: 44)
+    let box2 = box1.offsetBy(dx: 56, dy: 0)
+    let box3 = box2.offsetBy(dx: 56, dy: 0)
+    let rounded = CGRect(x: 16, y: 300.4, width: 48.6, height: 44)
+    expect("each field once, first visit first",
+           TypingCheck.inVisitOrder([box1, box2, box2, box3, box2]) == [box1, box2, box3])
+    expect("whole-point bounds match the tree's frame",
+           TypingCheck.inVisitOrder([rounded, box1, box2]) == [rounded, box2])
+    // A key sent to a box the app was about to leave is lost: "3" never
+    // lands, and the boxes together read short.
+    expect("a key lost between boxes reads short",
+           TypingCheck.read(["1", "2", "4"].joined(), before: "", typed: "1234", secure: false) == .short)
+    expect("every box holding its digit reads complete",
+           TypingCheck.read(["1", "2", "3", "4"].joined(), before: "", typed: "1234", secure: false) == .complete)
 }
 
 // Errors describe a secure field's content by its length only.

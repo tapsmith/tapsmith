@@ -1393,7 +1393,7 @@ class CommandHandler {
                     // digit): keys sent while the focus moves are lost, and
                     // the text ends up spread over several fields.
                     NSLog("[typeText] the focus moved on after the first key: typing the rest a key at a time")
-                    try typeFollowingFocus(rest)
+                    try typeFollowingFocus(rest, from: field, before: before, firstKey: String(first))
                 } else {
                     if !rest.isEmpty && !EventSynthesizer.typeKeys(rest, charactersPerSecond: rate) {
                         NSLog("[typeText] the burst of \(rest.count) key(s) could not be synthesized")
@@ -1483,9 +1483,15 @@ class CommandHandler {
     /// sent while the focus moves are lost), then waited for until the
     /// focused input shows a change or the focus moves on. A key that changed
     /// nothing is sent again (a field just focused can drop keys for a
-    /// while). There is no one field to read the text back from.
-    private func typeFollowingFocus(_ keys: String) throws {
+    /// while). A focus move can look like a key landing when it came late
+    /// (the key went to the field the app was about to leave), so the inputs
+    /// the focus went through, `field` first, are read back at the end: in
+    /// the order the focus reached them they must hold `before`, `firstKey`
+    /// and `keys`.
+    private func typeFollowingFocus(_ keys: String, from field: ElementInfo, before: String, firstKey: String) throws {
         func now() -> TypingCheck.FocusedInput? { snapshotFinder.liveFocusedInputState() }
+        let b = field.bounds
+        var visited = [CGRect(x: b.left, y: b.top, width: b.width, height: b.height)]
         for key in keys {
             var at = now()
             let stillBy = Date(timeIntervalSinceNow: TypingCheck.focusStillWait)
@@ -1495,6 +1501,7 @@ class CommandHandler {
                 if again == at { break }
                 at = again
             }
+            if let frame = at?.frame { visited.append(frame) }
             var landed = false
             for _ in 0..<TypingCheck.keyTries {
                 _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
@@ -1512,6 +1519,61 @@ class CommandHandler {
                 )
             }
         }
+        try checkTypedAcross(TypingCheck.inVisitOrder(visited), before: before, typed: firstKey + keys)
+    }
+
+    /// Read back the inputs at `frames` (the inputs typing went through, in
+    /// order) until together they hold `before` + `typed`, or hold still
+    /// short of it. Skipped, with a log line, when one of them can no longer
+    /// be found where the focus met it (the layout moved).
+    private func checkTypedAcross(_ frames: [CGRect], before: String, typed: String) throws {
+        let deadline = Date(timeIntervalSinceNow: TypingCheck.burstWait)
+        var last: String?
+        var since = Date()
+        while true {
+            guard let inputs = textInputs(at: frames) else {
+                NSLog("[typeText] an input the focus went through moved; not reading the text back")
+                return
+            }
+            let secure = inputs.contains { $0.secure }
+            let shown = inputs.map(\.value).joined()
+            let reading = TypingCheck.read(shown, before: before, typed: typed, secure: secure)
+            if reading == .complete { return }
+            if shown != last {
+                last = shown
+                since = Date()
+            }
+            if Date().timeIntervalSince(since) >= TypingCheck.stillWait || Date() >= deadline {
+                throw AgentError.actionFailed(
+                    "typeText: the focus moved on by itself while typing, and the \(frames.count) fields it went " +
+                        "through show \(TypingCheck.describe(shown, secure: secure)) together, " +
+                        "not \(TypingCheck.describe(before + typed, secure: secure))"
+                )
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
+
+    /// The value of the text input at each of `frames`, from one snapshot (an
+    /// empty field's placeholder reads as empty). Nil when any is missing.
+    private func textInputs(at frames: [CGRect]) -> [(value: String, secure: Bool)]? {
+        guard let root = try? app.snapshot() else { return nil }
+        let types: Set<XCUIElement.ElementType> = [.textField, .secureTextField, .textView, .searchField]
+        var inputs: [XCUIElementSnapshot] = []
+        func walk(_ node: XCUIElementSnapshot) {
+            if types.contains(node.elementType) { inputs.append(node) }
+            node.children.forEach(walk)
+        }
+        walk(root)
+        var values: [(value: String, secure: Bool)] = []
+        for frame in frames {
+            guard let input = inputs.first(where: { OcclusionAnalyzer.framesMatch($0.frame, frame, tolerance: 1.5) })
+            else { return nil }
+            var value = input.value as? String ?? ""
+            if let placeholder = input.placeholderValue, value == placeholder { value = "" }
+            values.append((value, input.elementType == .secureTextField))
+        }
+        return values
     }
 
     /// Read the field back once the burst is in, and repair a short or
