@@ -53,3 +53,39 @@ describe('enabled gate', () => {
     }
   });
 });
+
+describe('reset pipeline with a blur to settle (keyboard dismissal)', () => {
+  it('starts the clear at once, ahead of the blur, then clears again once a focused input has blurred', async () => {
+    const order: string[] = [];
+    const store = { clear: vi.fn(async () => { order.push('clear'); }) };
+    const handler = vi.fn(async () => { order.push('handler'); });
+    // The clear is issued in the same tick as the reset link, so a screen the
+    // link mounts reads cleared storage; the blur's onBlur write-back lands
+    // during the settle and the second clear removes it.
+    const settle = vi.fn(async () => {
+      order.push('settle:start');
+      await new Promise<void>((r) => { setTimeout(r, 5); });
+      order.push('onBlur write');
+      return true;
+    });
+
+    const run = runResetPipeline({ target: '/', nonce: 'n' }, [store], [handler], settle);
+    expect(order).toEqual(['clear', 'settle:start']);
+    await run;
+
+    expect(order).toEqual(['clear', 'settle:start', 'onBlur write', 'clear', 'handler']);
+  });
+
+  it('clears once when no input had focus', async () => {
+    const store = { clear: vi.fn(async () => undefined) };
+    await runResetPipeline({ target: '/', nonce: 'n' }, [store], [], async () => false);
+    expect(store.clear).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failing settle does not fail the reset', async () => {
+    const store = { clear: vi.fn(async () => undefined) };
+    const handler = vi.fn();
+    await runResetPipeline({ target: '/', nonce: 'n' }, [store], [handler], async () => { throw new Error('keyboard'); });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+});

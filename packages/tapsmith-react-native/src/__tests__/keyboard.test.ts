@@ -21,9 +21,9 @@ function fakeKeyboard(opts: { focused: boolean; visible: boolean; hideAfterMs?: 
 describe('blurFocusedInput', () => {
   afterEach(() => { vi.useRealTimers(); });
 
-  it('lets a focused input\'s onBlur run before returning, so it cannot land after the reset clears storage', async () => {
+  it('lets a focused input\'s onBlur run before returning true, so the reset\'s second clear comes after it', async () => {
     const { deps, order, listeners } = fakeKeyboard({ focused: true, visible: true, hideAfterMs: 50 });
-    await blurFocusedInput(deps);
+    expect(await blurFocusedInput(deps)).toBe(true);
     order.push('clear');
     expect(order).toEqual(['dismiss', 'onBlur', 'clear']);
     expect(listeners.size).toBe(0);
@@ -42,7 +42,7 @@ describe('blurFocusedInput', () => {
 
   it('waits out the blur for a focused input with no on-screen keyboard (hardware keyboard)', async () => {
     const { deps, order } = fakeKeyboard({ focused: true, visible: false });
-    await blurFocusedInput(deps);
+    expect(await blurFocusedInput(deps)).toBe(true);
     order.push('clear');
     expect(order).toEqual(['dismiss', 'onBlur', 'clear']);
   });
@@ -50,10 +50,10 @@ describe('blurFocusedInput', () => {
   it('costs nothing when no input has focus', async () => {
     vi.useFakeTimers();
     const { deps, order } = fakeKeyboard({ focused: false, visible: false });
-    let done = false;
-    void blurFocusedInput(deps).then(() => { done = true; });
+    let result: boolean | undefined;
+    void blurFocusedInput(deps).then((r) => { result = r; });
     await vi.advanceTimersByTimeAsync(0);
-    expect(done).toBe(true);
+    expect(result).toBe(false);
     expect(order).toEqual(['dismiss']);
   });
 });

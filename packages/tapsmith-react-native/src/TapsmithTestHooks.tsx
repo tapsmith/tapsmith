@@ -37,15 +37,7 @@ export interface TapsmithTestHooksProps {
   enabled?: boolean;
 }
 
-/**
- * Mount once at the root of the app. Renders an invisible, always-present
- * marker in the accessibility tree that tells Tapsmith the app can be reset
- * in-process (and acknowledges each reset by bumping an epoch), and listens
- * for the reset deep links Tapsmith opens. Tapsmith reads the marker from the
- * hierarchy; no locator matches it.
- *
- * Renders nothing and registers nothing when disabled (production).
- */
+/** React Native's keyboard, for blurring the focused input on reset. */
 const keyboardDeps: KeyboardDeps = {
   focusedInput: () => TextInput.State?.currentlyFocusedInput?.() ?? null,
   isVisible: () => Keyboard.isVisible?.() ?? false,
@@ -56,6 +48,15 @@ const keyboardDeps: KeyboardDeps = {
   },
 };
 
+/**
+ * Mount once at the root of the app. Renders an invisible, always-present
+ * marker in the accessibility tree that tells Tapsmith the app can be reset
+ * in-process (and acknowledges each reset by bumping an epoch), and listens
+ * for the reset deep links Tapsmith opens. Tapsmith reads the marker from the
+ * hierarchy; no locator matches it.
+ *
+ * Renders nothing and registers nothing when disabled (production).
+ */
 export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enabled }: TapsmithTestHooksProps) {
   const active = enabled ?? hooksEnabledByDefault();
   const [epoch, setEpoch] = useState(0);
@@ -95,15 +96,10 @@ export function TapsmithTestHooks({ onReset, clear = [], urlPrefix, scheme, enab
       // A fresh app has no focused input. A reset that lands on the screen
       // already showing keeps it mounted, and with it whatever input had focus
       // and the keyboard over it, which the next test would start under.
-      // Blur it before the clear, and let the blur's handlers run first.
-      try {
-        await blurFocusedInput(keyboardDeps);
-      } catch {
-        // Best effort: a reset must not fail over the keyboard.
-      }
+      // Blur it alongside the clear (see runResetPipeline for the order).
       try {
         const handlers: ResetHandler[] = [...(latest.current.onReset ? [latest.current.onReset] : []), ...registeredHandlers()];
-        await runResetPipeline(request, latest.current.clear, handlers);
+        await runResetPipeline(request, latest.current.clear, handlers, () => blurFocusedInput(keyboardDeps));
         if (disposed && !initial) return;
         setError(undefined);
       } catch (err) {

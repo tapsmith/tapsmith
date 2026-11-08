@@ -18,17 +18,19 @@ const BLUR_SETTLE_MS = 100;
 /**
  * Blur the focused input (and dismiss its keyboard) and let the blur land
  * before returning. The native blur event reaches JS a frame or more after
- * `dismiss()`, so an app whose `onBlur`/`onEndEditing` saves a draft would
- * otherwise write it back into the storage the reset is about to clear.
+ * `dismiss()`, so an app whose `onBlur`/`onEndEditing` saves a draft writes
+ * it back after the reset's clear; the reset clears again once this returns
+ * true.
  * `keyboardDidHide` follows the blur on both platforms; without an on-screen
  * keyboard (a simulator's hardware keyboard) a short settle stands in for it.
- * Returns at once when nothing has focus.
+ * Returns at once, with false, when nothing has focus; true once a focused
+ * input has blurred.
  */
-export async function blurFocusedInput(deps: KeyboardDeps): Promise<void> {
+export async function blurFocusedInput(deps: KeyboardDeps): Promise<boolean> {
   const focused = deps.focusedInput() != null;
   if (!focused) {
     deps.dismiss();
-    return;
+    return false;
   }
   const visible = deps.isVisible();
   await new Promise<void>((resolve) => {
@@ -42,6 +44,8 @@ export async function blurFocusedInput(deps: KeyboardDeps): Promise<void> {
     if (visible) unsubscribe = deps.onDidHide(done);
     deps.dismiss();
   });
-  // One more turn, so work the blur handlers queued starts ahead of the clear.
+  // One more turn, so work the blur handlers queued starts ahead of the
+  // second clear.
   await new Promise<void>((resolve) => { setTimeout(resolve, 0); });
+  return true;
 }
