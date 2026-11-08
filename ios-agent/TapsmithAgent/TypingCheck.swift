@@ -92,7 +92,7 @@ enum TypingCheck {
     /// the tree and from an element's whole-point bounds differ by rounding.
     static func inVisitOrder(_ frames: [CGRect]) -> [CGRect] {
         var order: [CGRect] = []
-        for frame in frames where !order.contains(where: { sameFrame($0, frame) }) {
+        for frame in frames where !contains(order, frame) {
             order.append(frame)
         }
         return order
@@ -135,6 +135,30 @@ enum TypingCheck {
     /// How long the burst of `count` keys takes to type at `rate`.
     static func burstDuration(count: Int, charactersPerSecond rate: Int) -> TimeInterval {
         TimeInterval(count) / TimeInterval(max(rate, 1))
+    }
+
+    /// Whether the keys after the first go as one burst. A burst's rate is
+    /// whole keys a second, so a delay over a second would come out shorter
+    /// than asked for: those keys are sent one at a time, the delay apart.
+    static func burstsAtOnce(delayMs: Int) -> Bool { delayMs <= 1000 }
+
+    /// How long `count` keys take to send with `delayMs` between them.
+    static func typingDuration(count: Int, delayMs: Int) -> TimeInterval {
+        burstsAtOnce(delayMs: delayMs)
+            ? burstDuration(count: count, charactersPerSecond: charactersPerSecond(delayMs: delayMs))
+            : TimeInterval(count) * TimeInterval(delayMs) / 1000
+    }
+
+    /// Typing a key at a time: how long to wait before the next key so keys
+    /// stay at least `delayMs` apart (`lastSentAt` nil: none sent yet).
+    static func waitBeforeKey(lastSentAt: Date?, delayMs: Int, now: Date) -> TimeInterval {
+        guard let lastSentAt, delayMs > 0 else { return 0 }
+        return max(0, TimeInterval(delayMs) / 1000 - now.timeIntervalSince(lastSentAt))
+    }
+
+    /// Whether `frame` is one of `frames` (the same input, read again).
+    static func contains(_ frames: [CGRect], _ frame: CGRect) -> Bool {
+        frames.contains { sameFrame($0, frame) }
     }
 
     /// Whether the SDK would take an action error with this message for a

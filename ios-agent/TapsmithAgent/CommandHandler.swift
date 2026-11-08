@@ -1388,18 +1388,19 @@ class CommandHandler {
                     String(first), before: before, secure: secure, selectorParams: selectorParams
                 )
                 let rest = String(plan.keys.dropFirst())
-                let rate = TypingCheck.charactersPerSecond(delayMs: delayMs)
                 if !rest.isEmpty, focusMovedOn(from: field) {
                     // A field that moves the focus on by itself (one box per
                     // digit): keys sent while the focus moves are lost, and
                     // the text ends up spread over several fields.
                     NSLog("[typeText] the focus moved on after the first key: typing the rest a key at a time")
-                    try typeFollowingFocus(rest, from: field, before: before, typedBefore: String(first))
+                    try typeFollowingFocus(rest, from: field, before: before, typedBefore: String(first),
+                                           delayMs: delayMs, lastSentAt: Date())
                 } else {
-                    if !rest.isEmpty && !EventSynthesizer.typeKeys(rest, charactersPerSecond: rate) {
+                    if !rest.isEmpty && !sendRest(rest, delayMs: delayMs) {
                         NSLog("[typeText] the burst of \(rest.count) key(s) could not be synthesized")
                     }
-                    try checkTyped(plan.keys, before: before, secure: secure, rate: rate, selectorParams: selectorParams)
+                    try checkTyped(plan.keys, before: before, secure: secure, delayMs: delayMs,
+                                   selectorParams: selectorParams)
                 }
             } catch let error as AgentError where TypingCheck.readsAsStale(error.message) {
                 throw AgentError.actionFailed(TypingCheck.notStale(error.message))
@@ -1413,6 +1414,25 @@ class CommandHandler {
             }
             Thread.sleep(forTimeInterval: max(0.05, TimeInterval(delayMs) / 1000.0))
         }
+    }
+
+    /// Send the keys after the first, `delayMs` apart: one burst of key
+    /// events, or, for a delay over a second, a key at a time
+    /// (`TypingCheck.burstsAtOnce`).
+    /// The first key has just shown in the field: the delay counts from there.
+    private func sendRest(_ keys: String, delayMs: Int) -> Bool {
+        var lastSentAt = Date()
+        if TypingCheck.burstsAtOnce(delayMs: delayMs) {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            return EventSynthesizer.typeKeys(keys, charactersPerSecond: TypingCheck.charactersPerSecond(delayMs: delayMs))
+        }
+        var sent = true
+        for key in keys {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
+            sent = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond) && sent
+            lastSentAt = Date()
+        }
+        return sent
     }
 
     /// Send the first key and wait for the field to show it, sending it again
@@ -1483,16 +1503,22 @@ class CommandHandler {
     /// its JavaScript change handler, after the value shows), so the next key
     /// is not sent to the input being left. Each input the focus reaches is
     /// emptied first with `clearing` (typing the text again after a burst
-    /// went astray). The inputs the focus went through, `field` first, are
+    /// went astray), once: a field that takes several keys keeps the ones
+    /// typed into it. Keys go at least `delayMs` apart, counting from
+    /// `lastSentAt`. The inputs the focus went through, `field` first, are
     /// read back at the end: in the order the focus reached them they must
     /// hold `before`, `typedBefore` (already typed into `field`) and `keys`.
     private func typeFollowingFocus(
-        _ keys: String, from field: ElementInfo, before: String, typedBefore: String, clearing: Bool = false
+        _ keys: String, from field: ElementInfo, before: String, typedBefore: String, clearing: Bool = false,
+        delayMs: Int, lastSentAt: Date?
     ) throws {
         func now() -> TypingCheck.FocusedInput? { snapshotFinder.liveFocusedInputState() }
         let b = field.bounds
         var visited = [CGRect(x: b.left, y: b.top, width: b.width, height: b.height)]
         var typedKeys = 0
+        var lastSentAt = lastSentAt
+        // The inputs emptied (or found empty) so far, when `clearing`.
+        var cleared: [CGRect] = []
         for key in keys {
             var at = now()
             let stillBy = Date(timeIntervalSinceNow: TypingCheck.focusStillWait)
@@ -1502,15 +1528,20 @@ class CommandHandler {
                 if again == at { break }
                 at = again
             }
-            if clearing, let input = at, !input.value.isEmpty {
-                _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
-                _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
-                let emptyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
-                repeat {
-                    at = now()
-                    if at?.value.isEmpty == true { break }
-                    Thread.sleep(forTimeInterval: 0.01)
-                } while Date() < emptyBy
+            // Each input once, when the focus first reaches it, even one
+            // found empty: what is in it later was typed here.
+            if clearing, let input = at, !TypingCheck.contains(cleared, input.frame) {
+                cleared.append(input.frame)
+                if !input.value.isEmpty {
+                    _ = EventSynthesizer.keyPress(key: "a", modifiers: .command)
+                    _ = EventSynthesizer.typeKeys("\u{8}", charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                    let emptyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
+                    repeat {
+                        at = now()
+                        if at?.value.isEmpty == true { break }
+                        Thread.sleep(forTimeInterval: 0.01)
+                    } while Date() < emptyBy
+                }
             }
             // Keys sent with no text input focused go nowhere.
             guard let focused = at else {
@@ -1525,7 +1556,9 @@ class CommandHandler {
             // on its last digit).
             var after: TypingCheck.FocusedInput??
             for _ in 0..<TypingCheck.keyTries {
+                Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
                 _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+                lastSentAt = Date()
                 let keyBy = Date(timeIntervalSinceNow: TypingCheck.keyWait)
                 repeat {
                     let read = now()
@@ -1610,9 +1643,9 @@ class CommandHandler {
     /// Read the field back once the burst is in, and repair a short or
     /// scrambled result by typing the text again a key at a time.
     private func checkTyped(
-        _ keys: String, before: String, secure: Bool, rate: Int, selectorParams: [String: Any]
+        _ keys: String, before: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]
     ) throws {
-        let window = TypingCheck.burstWait + TypingCheck.burstDuration(count: keys.count, charactersPerSecond: rate)
+        let window = TypingCheck.burstWait + TypingCheck.typingDuration(count: keys.count, delayMs: delayMs)
         var (reading, shown) = try waitForTyped(keys, before: before, secure: secure,
                                                 selectorParams: selectorParams, within: window)
         var tries = 0
@@ -1637,11 +1670,12 @@ class CommandHandler {
                 } catch let error as AgentError {
                     throw AgentError.actionFailed("typeText could not refocus the field to type into it again (\(error.type))")
                 }
-                try typeFollowingFocus(before + keys, from: target, before: "", typedBefore: "", clearing: true)
+                try typeFollowingFocus(before + keys, from: target, before: "", typedBefore: "", clearing: true,
+                                       delayMs: delayMs, lastSentAt: nil)
                 return
             }
             NSLog("[typeText] the field shows \(TypingCheck.describe(shown, secure: secure)) after typing: typing it again a key at a time (try \(tries))")
-            try retypeKeyByKey(before + keys, secure: secure, selectorParams: selectorParams)
+            try retypeKeyByKey(before + keys, secure: secure, delayMs: delayMs, selectorParams: selectorParams)
             (reading, shown) = try waitForTyped(keys, before: before, secure: secure, selectorParams: selectorParams,
                                                 within: TypingCheck.keyWait + TypingCheck.stillWait)
         }
@@ -1675,7 +1709,8 @@ class CommandHandler {
     /// sent once the one before shows. Select-all and delete, so it does not
     /// matter where the caret is (scrambled keys can leave it mid-text); a
     /// field that does not take select-all is emptied a delete at a time.
-    private func retypeKeyByKey(_ value: String, secure: Bool, selectorParams: [String: Any]) throws {
+    /// Keys go at least `delayMs` apart.
+    private func retypeKeyByKey(_ value: String, secure: Bool, delayMs: Int, selectorParams: [String: Any]) throws {
         let field = try resolveElement(selectorParams)
         // ⌘A and delete go to whichever input has focus.
         if !isLiveFocused(field) {
@@ -1711,8 +1746,11 @@ class CommandHandler {
             )
         }
         var typed = ""
+        var lastSentAt: Date?
         for key in value {
+            Thread.sleep(forTimeInterval: TypingCheck.waitBeforeKey(lastSentAt: lastSentAt, delayMs: delayMs, now: Date()))
             _ = EventSynthesizer.typeKeys(String(key), charactersPerSecond: TypingCheck.maxCharactersPerSecond)
+            lastSentAt = Date()
             typed.append(key)
             _ = try waitUntilShown(typed)
         }

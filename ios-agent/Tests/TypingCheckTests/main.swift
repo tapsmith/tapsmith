@@ -24,6 +24,31 @@ do {
     expect("a delay over a second still types a key a second", TypingCheck.charactersPerSecond(delayMs: 5000) == 1)
     expect("20 keys at 100 a second take 0.2 s",
            abs(TypingCheck.burstDuration(count: 20, charactersPerSecond: 100) - 0.2) < 0.0001)
+    expect("a delay up to a second goes as one burst", TypingCheck.burstsAtOnce(delayMs: 1000))
+    expect("a delay over a second sends key by key (a burst's rate is whole keys a second)",
+           !TypingCheck.burstsAtOnce(delayMs: 2000))
+    expect("5 keys with a 2 s delay take 10 s", abs(TypingCheck.typingDuration(count: 5, delayMs: 2000) - 10) < 0.0001)
+    expect("20 keys with a 10 ms delay take 0.2 s", abs(TypingCheck.typingDuration(count: 20, delayMs: 10) - 0.2) < 0.0001)
+}
+
+// Typing a key at a time keeps the delay between keys.
+do {
+    let sent = Date(timeIntervalSinceReferenceDate: 100)
+    expect("no wait before the first key", TypingCheck.waitBeforeKey(lastSentAt: nil, delayMs: 2000, now: sent) == 0)
+    expect("a 2 s delay waits out what is left of it",
+           abs(TypingCheck.waitBeforeKey(lastSentAt: sent, delayMs: 2000, now: sent.addingTimeInterval(0.5)) - 1.5) < 0.0001)
+    expect("no wait once the delay has passed",
+           TypingCheck.waitBeforeKey(lastSentAt: sent, delayMs: 2000, now: sent.addingTimeInterval(3)) == 0)
+    expect("no delay, no wait", TypingCheck.waitBeforeKey(lastSentAt: sent, delayMs: 0, now: sent) == 0)
+}
+
+// Retyping across fields empties each field once.
+do {
+    let a = CGRect(x: 10, y: 10, width: 40, height: 40)
+    let b = CGRect(x: 60, y: 10, width: 40, height: 40)
+    let aRounded = CGRect(x: 10.4, y: 9.7, width: 40, height: 40)
+    expect("a field met before is known again (rounding)", TypingCheck.contains([a], aRounded))
+    expect("another field is not", !TypingCheck.contains([a], b))
 }
 
 // Return ends typing in a single-line field; a multi-line one types it.

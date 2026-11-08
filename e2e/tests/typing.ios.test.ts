@@ -58,4 +58,18 @@ describe("type() with a typing delay checks what arrived (iOS)", () => {
     await typingScreen.firstSlowCodeBox.type("1234", { delay })
     await expect(typingScreen.slowCodeValue).toHaveText("slowcode=1234")
   })
+
+  test("a delay over a second keeps every key that far apart", async ({ typingScreen }) => {
+    const started = Date.now()
+    await typingScreen.slowInput.type("abc", { delay: 1500 })
+    expect(Date.now() - started).toBeGreaterThanOrEqual(3000)
+    await expect(typingScreen.slowValue).toHaveText("slow=abc")
+  })
+
+  test("a code field that moves the focus on keeps the delay between digits", async ({ typingScreen }) => {
+    const started = Date.now()
+    await typingScreen.firstCodeBox.type("1234", { delay: 1500 })
+    expect(Date.now() - started).toBeGreaterThanOrEqual(4500)
+    await expect(typingScreen.codeValue).toHaveText("code=1234")
+  })
 })
