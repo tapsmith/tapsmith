@@ -651,6 +651,26 @@ describe('session-preflight', () => {
       expect(ctx.capabilities.hooksUrlPrefix).toBe('app:///');
     });
 
+    // E2E iOS (PR #521): a session whose startup probe missed the marker under
+    // load records hooksDetected=false. That is "never seen", not proof of no
+    // hooks, so a path still looks for the marker for the whole budget.
+    it('a path keeps looking for the marker when the session never saw it, and upgrades detection', async () => {
+      const ctx = makeContext();
+      ctx.capabilities = { hooksDetected: false };
+      const prepared = { policy: WARM_FILE, preparedAt: Date.now(), durationMs: 1_000, source: 'the file-entry reset' };
+      const missed = { requestId: '1', hierarchyXml: '<hierarchy><node package="com.example.app" text="Home" /></hierarchy>', errorMessage: '' };
+      // The marker shows up only after a moment (mid-transition, a slow dump).
+      const showsAt = Date.now() + 400;
+      vi.mocked(ctx.client.getUiHierarchy).mockImplementation(async () => (
+        Date.now() < showsAt ? missed : { requestId: '2', hierarchyXml: HOOKED, errorMessage: '' }
+      ));
+
+      await executeAppReset(ctx, route(WARM_TEST, '/settings'), { phase: 'before test', prepared });
+
+      expect(ctx.device.openDeepLink).toHaveBeenCalledExactlyOnceWith('app:///settings');
+      expect(ctx.capabilities).toMatchObject({ hooksDetected: true, hooksUrlPrefix: 'app:///' });
+    });
+
     it('a route that cannot be opened fails naming appResetRoute', async () => {
       const ctx = hooked();
       vi.mocked(ctx.device.openDeepLink).mockRejectedValueOnce(new Error('openDeepLink: navigation was not acknowledged'));

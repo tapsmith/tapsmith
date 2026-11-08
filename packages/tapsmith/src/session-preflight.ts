@@ -934,12 +934,19 @@ async function openStartRoute(
   let url = routeDeepLink(route, ctx.capabilities?.hooksUrlPrefix);
   if (url === undefined) {
     await step('readHooksUrlPrefix', async () => {
-      // A session that has seen the hooks keeps looking for the budget (the
-      // marker may be mid-transition); one known to have none reads once.
-      const pollMs = ctx.capabilities?.hooksDetected === false ? 0 : (hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
-      const deadline = Date.now() + pollMs;
+      // Look for the whole budget even when the session recorded no hooks:
+      // that `false` only says the startup probe never saw the marker (a
+      // probe can miss it under load), and a path on a hooked app must not
+      // fail on one missed read. Only a misconfigured hookless app pays the
+      // budget, on its way to the error below.
+      const deadline = Date.now() + (hooksProbeMs ?? HOOKS_PROBE_POLL_MS);
       for (;;) {
-        if ((await readHooksMarker(ctx)) || Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
+        if (await readHooksMarker(ctx)) {
+          // Fresh proof of hooks: detection only ever upgrades.
+          (ctx.capabilities ??= {}).hooksDetected = true;
+          break;
+        }
+        if (Date.now() + HOOKS_PROBE_POLL_INTERVAL_MS > deadline) break;
         await delay(HOOKS_PROBE_POLL_INTERVAL_MS);
       }
     });
